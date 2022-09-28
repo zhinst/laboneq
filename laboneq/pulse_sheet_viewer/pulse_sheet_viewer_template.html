@@ -1,0 +1,2199 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ramda/0.25.0/ramda.min.js"></script>
+  <script type="text/javascript" src="https://ajax.googleapis.com/ajax/libs/angularjs/1.4.3/angular.min.js"></script>
+
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet"
+    integrity="sha384-1BmE4kWBq78iYhFldvKuhfTAU6auU8tT94WrHftjDbrCEXSU1oBoqyl2QvZ6jIW3" crossorigin="anonymous">
+
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.4.1/font/bootstrap-icons.css">
+
+  <style>
+    body {
+      font-family: Verdana, sans-serif;
+    }
+
+    line.tick_hdawg {
+      stroke: blue;
+    }
+
+    line.tick_uhfqa {
+      stroke: rgb(168, 121, 0);
+    }
+
+    line.tick_shfqa {
+      stroke: rgb(130, 35, 159);
+    }
+
+    line.tick_shfsg {
+      stroke: rgb(130, 35, 159);
+    }
+
+    line.tick_line {
+      /* stroke:black; */
+      stroke-width: 0.5;
+    }
+
+    line.pulse_marker {
+      stroke: rgb(0, 158, 224);
+      stroke-width: 1.5;
+    }
+
+    line.iteration_marker {
+      stroke: #555555;
+      stroke-width: 0.5;
+    }
+
+    text.pulse_text {
+      font-size: 9px;
+      fill: black;
+    }
+
+    text.iteration_marker_text {
+      font-size: 9px;
+      fill: black;
+    }
+
+    .btn-primary {
+      color: #fff;
+      background-color: rgb(0, 158, 224);
+      border-color: rgb(0, 158, 224);
+    }
+
+    .btn-primary:hover {
+      color: #fff;
+      background-color: #000000;
+      border-color: #000000;
+    }
+
+    .form-check-input:checked {
+      background-color: rgb(0, 158, 224);
+      border-color: rgb(0, 158, 224);
+    }
+
+    .loader {
+      border: 16px solid #f3f3f3;
+      /* Light grey */
+      border-top: 16px solid #009ee0;
+      /* Blue */
+      border-radius: 50%;
+      width: 120px;
+      height: 120px;
+      animation: spin 2s linear infinite;
+    }
+
+    @keyframes spin {
+      0% {
+        transform: rotate(0deg);
+      }
+
+      100% {
+        transform: rotate(360deg);
+      }
+    }
+
+    rect.section-style-1 {
+      fill: #1ac938;
+    }
+
+    rect.section-style-2 {
+      fill: #ff7f00;
+    }
+
+    rect.section-style-3 {
+      fill: rgb(0, 158, 224);
+    }
+
+    rect.section-style-4 {
+      fill: #e8000b;
+    }
+
+    rect.section-style-5 {
+      fill: #8b2be2;
+    }
+
+    rect.section-style-6 {
+      fill: #9f4800;
+    }
+
+    rect.section-style-7 {
+      fill: #f14cc1;
+    }
+
+    rect.section-style-8 {
+      fill: #a3a3a3;
+    }
+
+    rect.section-style-9 {
+      fill: #ffc400;
+    }
+
+    rect.section-style-10 {
+      fill: #00d7ff;
+    }
+
+    rect.section-style-11 {
+      fill: #66c2a5;
+    }
+
+    rect.section-style-12 {
+      fill: #8da0cb;
+    }
+
+    rect.section-style-13 {
+      fill: #fc8d62;
+    }
+
+    rect.section-style-14 {
+      fill: #e78ac3;
+    }
+
+    rect.section-style-15 {
+      fill: #a6d854;
+    }
+
+    rect.section-style-16 {
+      fill: #ffd92f;
+    }
+
+    rect.section-style-17 {
+      fill: #e5c494;
+    }
+
+    rect.section-style-18 {
+      fill: #b3b3b3;
+    }
+
+    rect.section-style-19 {
+      fill: #66c2a5;
+    }
+
+    text.section-marker-selected {
+      font-weight: bold;
+    }
+
+    rect.signal-section-marker {
+      stroke: none
+    }
+
+    rect.signal-section-marker-selected {
+      stroke: rgb(0, 0, 0);
+      stroke-width: 0.6;
+    }
+
+    rect.section-marker {
+      stroke: rgb(0, 0, 0);
+      stroke-width: 0.1;
+    }
+
+    rect.section-marker-selected {
+      stroke: rgb(0, 0, 0);
+      stroke-width: 0.9;
+    }
+
+    rect.section-navigator-selected {
+      stroke: rgb(0, 0, 0);
+      stroke-width: 0.9;
+    }
+
+
+    rect.section-navigator {
+      stroke: rgb(0, 0, 0);
+      stroke-width: 0.1;
+    }
+
+    rect.pulse-marker-bg {
+      fill-opacity: 0.0;
+      fill: white;
+
+    }
+
+    .slider {
+      -webkit-appearance: none;
+      width: 100%;
+      height: 25px;
+      background: #d3d3d3;
+      outline: none;
+      opacity: 0.7;
+      -webkit-transition: .2s;
+      transition: opacity .2s;
+    }
+
+
+    .slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 25px;
+      height: 25px;
+      background: rgb(0, 158, 224);
+      cursor: pointer;
+    }
+
+    .slider::-moz-range-thumb {
+      width: 25px;
+      height: 25px;
+      background: rgb(0, 158, 224);
+      cursor: pointer;
+    }
+
+    .zi-title {
+      color: rgb(0, 158, 224);
+    }
+  </style>
+
+
+  <title>Pulse Sheet Viewer </title>
+</head>
+
+<body>
+
+
+
+  <div class="container-fluid" ng-app="qccs" ng-controller="QccsController">
+    <div class="row">
+      <div class="col-md-10 col-xs-12">
+        <h1 class="zi-title">Pulse Sheet Viewer</h1>
+        <h3 class="zi-title">{{pulse_sheet_title}}</h2>
+      </div>
+      <div class="col-md-2 d-none d-lg-block">
+        <img
+          src="data:image/svg+xml;base64,PHN2ZyB2ZXJzaW9uPSIxLjEiIGlkPSJMYXllcl8xIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIgogICAgICAgICAgeD0iMHB4IiB5PSIwcHgiIHdpZHRoPSIxMDAlIiBoZWlnaHQ9IjEwMCUiIHZpZXdCb3g9IjAgMCAyODkuMSA3OS40IgogICAgICAgICAgc3R5bGU9ImVuYWJsZS1iYWNrZ3JvdW5kOm5ldyAwIDAgMjg5LjEgNzkuNDsiIHhtbDpzcGFjZT0icHJlc2VydmUiPgogICAgICAgICAgPHN0eWxlIHR5cGU9InRleHQvY3NzIj4KICAgICAgICAgICAgLnN0MCB7CiAgICAgICAgICAgICAgZmlsbDogIzAwQUVFRjsKICAgICAgICAgICAgfQoKICAgICAgICAgICAgLnN0MSB7CiAgICAgICAgICAgICAgY2xpcC1wYXRoOiB1cmwoI1NWR0lEXzJfKTsKICAgICAgICAgICAgICBmaWxsOiAjMDBBRUVGOwogICAgICAgICAgICB9CgogICAgICAgICAgICAuc3QyIHsKICAgICAgICAgICAgICBjbGlwLXBhdGg6IHVybCgjU1ZHSURfMl8pOwogICAgICAgICAgICAgIGZpbGw6ICMyRTMxOTI7CiAgICAgICAgICAgIH0KICAgICAgICAgIDwvc3R5bGU+CiAgICAgICAgICA8cG9seWdvbiBjbGFzcz0ic3QwIiBwb2ludHM9IjExMy4zLDMzLjYgMTEzLjMsMzUuNCA5NC4zLDM1LjQgOTQuMywzMy40IDExMC45LDExLjIgOTQuNiwxMS4yIDk0LjYsOS40IDExMy4xLDkuNCAxMTMuMSwxMS40CiAgICAgICAgICA5Ni40LDMzLjYgIiAvPgogICAgICAgICAgPGc+CiAgICAgICAgICAgIDxkZWZzPgogICAgICAgICAgICAgIDxyZWN0IGlkPSJTVkdJRF8xXyIgeT0iMCIgd2lkdGg9IjI4OS4xIiBoZWlnaHQ9Ijc5LjQiIC8+CiAgICAgICAgICAgIDwvZGVmcz4KICAgICAgICAgICAgPGNsaXBQYXRoIGlkPSJTVkdJRF8yXyI+CiAgICAgICAgICAgICAgPHVzZSB4bGluazpocmVmPSIjU1ZHSURfMV8iIHN0eWxlPSJvdmVyZmxvdzp2aXNpYmxlOyIgLz4KICAgICAgICAgICAgPC9jbGlwUGF0aD4KICAgICAgICAgICAgPHBhdGggY2xhc3M9InN0MSIgZD0iTTExNi44LDI4LjlWMTdoMS44djExLjhjMCwzLjIsMS42LDUuMyw0LjgsNS4zYzQuMywwLDYtMy40LDYtNy41VjE3aDEuOHYxOC40aC0xLjdsLTAuMS0zLjUKICAgICAgICAgICAgYy0xLDIuNC0zLjQsNC02LjEsNEMxMTkuMSwzNiwxMTYuOCwzMy4xLDExNi44LDI4LjkiIC8+CiAgICAgICAgICAgIDxwYXRoIGNsYXNzPSJzdDEiIGQ9Ik0xMzYuOSwxN2gxLjdsMC4xLDMuOGMwLjgtMi42LDMuMy00LDUuOS00YzAuNiwwLDEuMiwwLDEuNywwLjJ2MS44Yy0wLjYtMC4xLTEuMi0wLjItMS44LTAuMgogICAgICAgICAgICBjLTQuMywwLTUuOSwzLjUtNS45LDcuNnY5LjJoLTEuOFYxN3oiIC8+CiAgICAgICAgICAgIDxwYXRoIGNsYXNzPSJzdDEiIGQ9Ik0xNTEuNywxMi4xaC0yLjVWOS40aDIuNVYxMi4xeiBNMTUxLjQsMzUuNGgtMS45VjE3aDEuOVYzNS40eiIgLz4KICAgICAgICAgICAgPHBhdGggY2xhc3M9InN0MSIgZD0iTTE1OC40LDMzLjhjLTItMS45LTIuNy00LjQtMi43LTcuNWMwLTMuMiwwLjctNS42LDIuNy03LjVjMS4zLTEuMywzLjItMi4yLDUuNi0yLjJjMy45LDAsNi45LDIuNCw3LjMsNi4yCiAgICAgICAgICAgIGgtMS45Yy0wLjQtMi41LTIuNS00LjQtNS40LTQuNGMtMS44LDAtMy4yLDAuNi00LjIsMS42Yy0xLjcsMS43LTIuMSwzLjktMi4xLDYuM2MwLDIuNCwwLjQsNC42LDIuMSw2LjNjMSwxLDIuNCwxLjYsNC4yLDEuNgogICAgICAgICAgICBjMi45LDAsNS0xLjksNS40LTQuNGgxLjljLTAuNSwzLjgtMy41LDYuMi03LjMsNi4yQzE2MS42LDM1LjksMTU5LjcsMzUuMSwxNTguNCwzMy44IiAvPgogICAgICAgICAgICA8cGF0aCBjbGFzcz0ic3QxIiBkPSJNMTc3LjIsOC44djExLjZjMS0yLjQsMy44LTMuOSw2LjMtMy45YzQuMiwwLDYuNiwyLjcsNi42LDYuOHYxMi4xaC0xLjh2LTEyYzAtMy4yLTEuNS01LjItNC45LTUuMgogICAgICAgICAgICBjLTQuNSwwLTYuMiw0LTYuMiw4djkuMmgtMS44VjguOEgxNzcuMnoiIC8+CiAgICAgICAgICAgIDxyZWN0IHg9Ijk2LjciIHk9IjQ3IiBjbGFzcz0ic3QxIiB3aWR0aD0iMiIgaGVpZ2h0PSIyNi4xIiAvPgogICAgICAgICAgICA8cGF0aCBjbGFzcz0ic3QxIiBkPSJNMTA0LjcsNTQuNmgxLjdsMC4xLDMuNWMxLTIuNSwzLjgtNCw2LjQtNGM0LjIsMCw2LjUsMi44LDYuNSw2Ljl2MTJoLTEuOFY2MS4yYzAtMy4xLTEuNi01LjMtNC45LTUuMwogICAgICAgICAgICBjLTQuMSwwLTYuMiwzLjQtNi4yLDcuNVY3M2gtMS44VjU0LjZ6IiAvPgogICAgICAgICAgICA8cGF0aCBjbGFzcz0ic3QxIgogICAgICAgICAgICAgIGQ9Ik0xMjMuMiw2Ny41aDEuOWMwLjMsMywyLjcsNC4zLDUuNyw0LjNjMy4xLDAsNS4zLTEuMyw1LjMtMy44YzAtMS42LTEuMS0zLTMuNC0zLjNsLTMuNi0wLjUKICAgICAgICAgICAgYy0zLjEtMC40LTUuMi0xLjktNS4yLTQuN2MwLTMuMywzLjItNS40LDYuNi01LjRjNCwwLDYuOCwyLjMsNyw1LjZoLTEuOGMtMC4zLTIuNi0yLjQtMy45LTUuMS0zLjljLTIuNywwLTQuNywxLjQtNC43LDMuNQogICAgICAgICAgICBjMCwxLjUsMC44LDIuNywzLjYsM2wzLjUsMC41YzMuNSwwLjUsNS4xLDIuOCw1LjEsNWMwLDMuOC0zLjQsNS43LTcuMiw1LjdDMTI2LjQsNzMuNiwxMjMuMyw3MS4yLDEyMy4yLDY3LjUiIC8+CiAgICAgICAgICAgIDxwYXRoIGNsYXNzPSJzdDEiIGQ9Ik0xNDMuOCw2OC4zVjU2LjNoLTQuM3YtMS43aDQuM3YtNS4xbDEuOC0wLjR2NS41aDUuOHYxLjdoLTUuOFY2OGMwLDIsMC42LDMuNiwzLjMsMy42YzEsMCwxLjgtMC4xLDIuNy0wLjMKICAgICAgICAgICAgdjEuNmMtMC45LDAuMy0xLjgsMC40LTIuOSwwLjRDMTQ1LjIsNzMuMywxNDMuOCw3MS4yLDE0My44LDY4LjMiIC8+CiAgICAgICAgICAgIDxwYXRoIGNsYXNzPSJzdDEiIGQ9Ik0xNTQuOSw1NC42aDEuN2wwLjEsMy44YzAuOC0yLjYsMy4zLTQsNS45LTRjMC42LDAsMS4yLDAsMS43LDAuMnYxLjhjLTAuNi0wLjEtMS4yLTAuMi0xLjgtMC4yCiAgICAgICAgICAgIGMtNC4zLDAtNS45LDMuNS01LjksNy42VjczaC0xLjhWNTQuNnoiIC8+CiAgICAgICAgICAgIDxwYXRoIGNsYXNzPSJzdDEiIGQ9Ik0xNjcuMyw2Ni41VjU0LjZoMS44djExLjhjMCwzLjIsMS42LDUuMyw0LjgsNS4zYzQuMywwLDYtMy40LDYtNy41di05LjZoMS44VjczaC0xLjdsLTAuMS0zLjUKICAgICAgICAgICAgYy0xLDIuNC0zLjQsNC02LjEsNEMxNjkuNyw3My42LDE2Ny4zLDcwLjcsMTY3LjMsNjYuNSIgLz4KICAgICAgICAgICAgPHBhdGggY2xhc3M9InN0MSIgZD0iTTE4Ny41LDU0LjZoMS43bDAuMSwzLjZjMC44LTIuNSwzLjEtNC4xLDUuOC00LjFjMy4yLDAsNSwxLjYsNS43LDRjMS0yLjMsMy00LDYuMS00YzQuMywwLDYuMSwyLjgsNi4xLDYuOFY3MwogICAgICAgICAgICBoLTEuOFY2MS4xYzAtMy4yLTEuMy01LjMtNC41LTUuM2MtMy41LDAtNS41LDMuMS01LjUsNi44VjczaC0xLjlWNjEuMWMwLTMuMi0xLjQtNS4zLTQuNS01LjNjLTMuNSwwLTUuNiwzLjMtNS42LDcuMlY3M2gtMS44VjU0LjYKICAgICAgICAgICAgeiIgLz4KICAgICAgICAgICAgPHBhdGggY2xhc3M9InN0MSIgZD0iTTIxOS41LDcxYy0xLjUtMS44LTIuNC00LjMtMi40LTcuMWMwLTIuMywwLjQtNC42LDEuOC02LjZjMS42LTIuMSwzLjgtMy4yLDYuNC0zLjJjNS4xLDAsOC4xLDQsOC4xLDguOQogICAgICAgICAgICBjMCwwLjQsMCwwLjcsMCwxLjJIMjE5YzAuMSw0LjEsMi41LDcuNSw2LjYsNy41YzIuOSwwLDUuMi0xLjksNS42LTQuM2gxLjljLTAuNiwzLjUtMy45LDYtNy41LDZDMjIyLjksNzMuNiwyMjAuOCw3Mi40LDIxOS41LDcxCiAgICAgICAgICAgICBNMjMxLjYsNjIuNmMtMC4xLTMuNS0yLjItNi44LTYuMi02LjhjLTMuOSwwLTYuMywzLjItNi40LDYuOEgyMzEuNnoiIC8+CiAgICAgICAgICAgIDxwYXRoIGNsYXNzPSJzdDEiIGQ9Ik0yMzcuNyw1NC42aDEuN2wwLjEsMy41YzEtMi41LDMuOC00LDYuNC00YzQuMiwwLDYuNSwyLjgsNi41LDYuOXYxMmgtMS44VjYxLjJjMC0zLjEtMS42LTUuMy00LjktNS4zCiAgICAgICAgICAgIGMtNC4xLDAtNi4yLDMuNC02LjIsNy41VjczaC0xLjhWNTQuNnoiIC8+CiAgICAgICAgICAgIDxwYXRoIGNsYXNzPSJzdDEiIGQ9Ik0yNTkuNyw2OC4zVjU2LjNoLTQuM3YtMS43aDQuM3YtNS4xbDEuOC0wLjR2NS41aDUuOHYxLjdoLTUuOFY2OGMwLDIsMC42LDMuNiwzLjMsMy42YzEsMCwxLjgtMC4xLDIuNy0wLjMKICAgICAgICAgICAgdjEuNmMtMC45LDAuMy0xLjgsMC40LTIuOSwwLjRDMjYxLjEsNzMuMywyNTkuNyw3MS4yLDI1OS43LDY4LjMiIC8+CiAgICAgICAgICAgIDxwYXRoIGNsYXNzPSJzdDEiCiAgICAgICAgICAgICAgZD0iTTI2OS4xLDY3LjVoMS45YzAuMywzLDIuNyw0LjMsNS43LDQuM2MzLjEsMCw1LjMtMS4zLDUuMy0zLjhjMC0xLjYtMS4xLTMtMy40LTMuM2wtMy42LTAuNQogICAgICAgICAgICBjLTMuMS0wLjQtNS4yLTEuOS01LjItNC43YzAtMy4zLDMuMi01LjQsNi42LTUuNGM0LDAsNi44LDIuMyw3LDUuNmgtMS44Yy0wLjMtMi42LTIuNC0zLjktNS4xLTMuOWMtMi43LDAtNC43LDEuNC00LjcsMy41CiAgICAgICAgICAgIGMwLDEuNSwwLjgsMi43LDMuNiwzbDMuNSwwLjVjMy41LDAuNSw1LjEsMi44LDUuMSw1YzAsMy44LTMuNCw1LjctNy4yLDUuN0MyNzIuMyw3My42LDI2OS4zLDcxLjIsMjY5LjEsNjcuNSIgLz4KICAgICAgICAgICAgPHBvbHlnb24gY2xhc3M9InN0MiIgcG9pbnRzPSI3LjgsNC43IDI1LjksMjIuOCAyMy42LDI1IDMzLjMsMzQuNyAzMiwzNiAyMi40LDI2LjMgMjAuMSwyOC42IDIsMTAuNSAJIiAvPgogICAgICAgICAgICA8cG9seWdvbiBjbGFzcz0ic3QyIiBwb2ludHM9IjIsNjguNSAyMC4xLDUwLjQgMjIuNCw1Mi42IDMyLDQyLjkgMzMuMyw0NC4yIDIzLjYsNTMuOSAyNS45LDU2LjIgNy44LDc0LjMgCSIgLz4KICAgICAgICAgICAgPHBvbHlnb24gY2xhc3M9InN0MiIKICAgICAgICAgICAgICBwb2ludHM9IjcxLjYsMTAuNSA1My41LDI4LjYgNTEuMiwyNi4zIDQxLjUsMzYgNDAuMiwzNC43IDQ5LjksMjUgNDcuNywyMi44IDY1LjgsNC43IAkiIC8+CiAgICAgICAgICAgIDxwb2x5Z29uIGNsYXNzPSJzdDIiCiAgICAgICAgICAgICAgcG9pbnRzPSI2NS44LDc0LjMgNDcuNyw1Ni4yIDQ5LjksNTMuOSA0MC4yLDQ0LjIgNDEuNSw0Mi45IDUxLjIsNTIuNiA1My41LDUwLjQgNzEuNiw2OC41IAkiIC8+CiAgICAgICAgICA8L2c+CiAgICAgICAgPC9zdmc+" alt="Zurich Instruments Logo">
+      </div>
+    </div>
+    <div class=" row">
+      <div class="col-md-12">
+        <div>
+          <h2>{{title}}</h2>
+        </div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col-md-12" ng-mouse-wheel-up="decreaseZoom()" ng-mouse-wheel-down="increaseZoom()">
+        <div class="svg" ng-if="pulse_sheet_height">
+          <svg height="{{pulse_sheet_height}}" version="1.1" width="{{pulse_sheet_width}}"
+            xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+
+            <g ng-repeat="section_navigator in section_navigators">
+              <rect class="section-style-{{section_navigator.style_nr}} {{section_navigator.class_}}"
+                x="{{section_navigator.x1}}" y="{{section_navigator.y1}}" width="{{section_navigator.width}}"
+                height="{{section_navigator.height}}" ng-click="toggleSectionCollapse(section_navigator.section)">
+                <title>{{section_navigator.section}}</title>
+              </rect>
+            </g>
+
+
+            <g ng-repeat="signal in signal_lines">
+              <line style="stroke:rgb(0,0,0);stroke-width:2" x1="{{signal.x1}}" x2="{{signal.x2}}" y1="{{signal.y}}"
+                y2="{{signal.y}}" />
+              <text fill="{'rgb(0,0,0)'}" font-size="12px" x="{{signal.x1}}"
+                y="{{signal.text_y}}">{{signal.signal}}</text>
+            </g>
+
+
+            <g ng-repeat="section_marker in section_markers">
+
+              <rect class="section-marker section-style-{{section_marker.style_nr}} {{section_marker.class_}}"
+                x="{{section_marker.x1}}" y="{{section_marker.y1}}" width="{{section_marker.width}}"
+                height="{{section_marker.height}}"
+                sglclick="selectSection(section_marker.section,section_marker.loop_iteration)"
+                ng-dblclick="selectAndFocusSection(section_marker.section,section_marker.loop_iteration)">
+                <title>{{section_marker.section}} {{section_marker.loop_iteration}}</title>
+              </rect>
+              <!-- ng-click="selectSection(section_marker.section,section_marker.loop_iteration)" -->
+
+              <text fill="{'rgb(0,0,0)'}" font-size="12px"
+                class="section-style-{{section_marker.style_nr}} section-marker-text {{section_marker.class_}}"
+                x="{{section_marker.x_text}}" text-anchor="{{section_marker.text_anchor}}" y="{{section_marker.y_text}}"
+                ng-click="selectSection(section_marker.section,section_marker.loop_iteration)">{{section_marker.text}}</text>
+
+            </g>
+
+            <g ng-repeat="iteration_marker in iteration_markers">
+
+              <line class="iteration_marker" x1="{{iteration_marker.x1}}" x2="{{iteration_marker.x1}}"
+                y1="{{iteration_marker.y1}}" y2="{{iteration_marker.y2}}" />
+
+              <text fill="{'rgb(0,0,0)'}" font-size="12px" class="iteration_marker_text" text-anchor="end"
+                x="{{iteration_marker.x_text}}" y="{{iteration_marker.y_text}}">{{iteration_marker.text}}</text>
+
+
+            </g>
+
+            <g ng-repeat="signal_section_marker in signal_section_markers">
+
+              <rect
+                class="signal-section-marker section-style-{{signal_section_marker.style_nr}} {{signal_section_marker.class_}}"
+                x="{{signal_section_marker.x1}}" y="{{signal_section_marker.y1}}"
+                width="{{signal_section_marker.width}}" height="{{signal_section_marker.height}}">
+              </rect>
+            </g>
+
+            <g ng-repeat="pulse_marker in pulse_markers">
+              <rect class="pulse-marker-bg" x="{{pulse_marker.x1}}" y="{{pulse_marker.y2}}"
+                width="{{pulse_marker.x2-pulse_marker.x1}}" height="{{pulse_marker.y1-pulse_marker.y2}}">
+                <title>{{pulse_marker.play_wave_id}} {{pulse_marker.t1}}-{{pulse_marker.t2}}</title>
+              </rect>
+
+              <line ng-show="pulse_marker.left_closed" class="pulse_marker" x1="{{pulse_marker.x1}}"
+                x2="{{pulse_marker.x1}}" y1="{{pulse_marker.y1}}" y2="{{pulse_marker.y2}}" />
+              <line ng-show="pulse_marker.right_closed" class="pulse_marker" x1="{{pulse_marker.x2}}"
+                x2="{{pulse_marker.x2}}" y1="{{pulse_marker.y1}}" y2="{{pulse_marker.y2}}" />
+              <line class="pulse_marker" x1="{{pulse_marker.x1}}" x2="{{pulse_marker.x2}}" y1="{{pulse_marker.y2}}"
+                y2="{{pulse_marker.y2}}" />
+              <text ng-if="pulse_marker.text" class="pulse_text" text-anchor="middle" x="{{pulse_marker.xtext}}"
+                y="{{pulse_marker.ytext}}">{{pulse_marker.text}}</text>
+            </g>
+            <g ng-repeat="tick_header in tick_headers">
+              <text class="sample-text" fill="{'rgb(0,0,0)'}" font-size="9px" x="{{tick_header.x}}" text-anchor="end"
+                y="{{tick_header.y}}">{{tick_header.text}}</text>
+            </g>
+            <g ng-repeat="tick in ticks">
+              <line class="tick_line {{tick.class_}}" x1="{{tick.x}}" y1="{{tick.y1}}" x2="{{tick.x}}"
+                y2="{{tick.y2}}" />
+
+              <text ng-if="tick.has_sample_number" class="sample-text" fill="{'rgb(0,0,0)'}" font-size="9px"
+                x="{{tick.x}}" text-anchor="middle" y="{{tick.text_y}}">{{tick.hd_samples}}</text>
+              <text ng-if="tick.has_text" class="sample-text" fill="{'rgb(0,0,0)'}" font-size="9px" x="{{tick.x}}"
+                text-anchor="middle" y="{{tick.time_text_y}}">{{tick.time_text}}</text>
+            </g>
+          </svg>
+        </div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col-md-12">
+        <input type="range" min="0" max="100" ng-model="start_relative" class="slider" id="myRange">
+      </div>
+    </div>
+    <div class="row">
+
+      <div class="col-md-4">Zoom <input type="range" min="100" max="30000" ng-model="zoom" class="slider"
+          id="zoom_slider"> {{zoom}} %</div>
+      <div class="col-md-2"><button class="btn btn-primary" role="button" ng-click="resetZoom()">Reset Zoom</button>
+      </div>
+      <div class="col-md-2"><button ng-show="selectedSection" class="btn btn-primary" role="button"
+          ng-click="focusOnSelectedSection()">Focus on {{selectedSection.section}}</button></div>
+      <div class="col-md-4">
+        Selected Section: {{selectedSection.section}} {{selectedSection.loop_iteration}}
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="col-md-12">
+        <div class="well">
+
+        </div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col-md-12">
+        <div class="well">
+
+        </div>
+      </div>
+    </div>
+
+    <div class=" row">
+      <div class="col-md-4">
+        <h4>Signals</h4>
+        <div ng-repeat="signal in signals">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="selectedSignals[]" value="{{signal}}"
+              ng-checked="selectedSignals.indexOf(signal) > -1" ng-click="toggleSignalSelection(signal)">
+            <label class="form-check-label" for="selectedSignals[]">{{signal}}</label>
+          </div>
+        </div>
+      </div>
+
+
+      <div class="col-md-4">
+        <H4>Sections</H4>
+        <div ng-repeat="section in sections">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="selectedSections[]" value="{{section}}"
+              ng-checked="selectedSections.indexOf(section) > -1" ng-click="toggleSectionSelection(section)">
+            <label class="form-check-label" for="selectedSections[]">{{section}}</label>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div>
+          <input class="form-check-input" type="checkbox" name="includeShadow" value="{{includeShadow}}"
+            ng-model="includeShadow">
+          <label class="form-check-label" for="selectedSignals[]">Include Shadow Events</label>
+        </div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col-md-12">
+
+        <table class="table">
+          <tr>
+            <th>Id</th>
+            <th>Time</th>
+
+            <th ng-repeat="sr in samplingRateHeaders">{{sr.title}}</th>
+            <th>Type</th>
+            <th>Section</th>
+            <th>Signal</th>
+            <th>Pulse</th>
+          </tr>
+          <tr ng-repeat="event in result.events">
+            <td>{{event.id}}</td>
+
+            <td>{{PulseSheet.engineering_text(event.time,3)}}s</td>
+            <td ng-repeat="sr in samplingRateHeaders">{{round(event.time*sr.rate)}}</td>
+            <td>{{event.event_type}}</td>
+            <td>{{event.section_name}}</td>
+            <td>{{event.signal}}</td>
+            <td>{{event.play_wave_id}}</td>
+          </tr>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+
+
+
+  </div>
+  </div>
+  </div>
+
+  <script type="text/javascript">
+    // %%%START qccs_current_events
+    qccs_current_events =
+      [
+        {
+          "id": 0,
+          "device_id": "device_hdawg",
+          "event_type": "RESET_PHASE",
+          "time": 0.0
+        },
+        {
+          "id": 1,
+          "device_id": "device_pqsc",
+          "event_type": "RESET_PHASE",
+          "time": 0.0
+        },
+        {
+          "id": 2,
+          "device_id": "device_uhfqa",
+          "event_type": "RESET_PHASE",
+          "time": 0.0
+        },
+        {
+          "id": 29,
+          "section_name": "sweep",
+          "event_type": "PARAMETER_SET",
+          "parameter": {
+            "id": "amplitude",
+            "start": null,
+            "step": null,
+            "values": [
+              0.1,
+              1.0
+            ]
+          },
+          "iteration": 0,
+          "value": 0.1,
+          "time": 0.0
+        },
+        {
+          "id": 3,
+          "section_name": "shots",
+          "event_type": "SECTION_START",
+          "time": 0.0
+        },
+        {
+          "id": 50,
+          "section_name": "shots",
+          "event_type": "LOOP_STEP_START",
+          "iteration": 0,
+          "nesting_level": 1,
+          "time": 0.0
+        },
+        {
+          "id": 5,
+          "section_name": "sweep",
+          "event_type": "SECTION_START",
+          "time": 0.0
+        },
+        {
+          "id": 27,
+          "section_name": "sweep",
+          "event_type": "LOOP_STEP_START",
+          "iteration": 0,
+          "nesting_level": 2,
+          "time": 0.0
+        },
+        {
+          "id": 7,
+          "section_name": "qubit_excitation",
+          "event_type": "SECTION_START",
+          "time": 0.0
+        },
+        {
+          "id": 9,
+          "signal": "q0_drive",
+          "play_wave_id": "x90",
+          "amplitude": 0.10000002384185791,
+          "section_name": "qubit_excitation",
+          "event_type": "PLAY_START",
+          "signal_offset": null,
+          "parameterized_with": "amplitude",
+          "time": 0.0,
+          "oscillator_phase": []
+        },
+        {
+          "id": 10,
+          "signal": "q0_drive",
+          "play_wave_id": "x90",
+          "section_name": "qubit_excitation",
+          "event_type": "PLAY_END",
+          "time": 1e-07
+        },
+        {
+          "id": 8,
+          "section_name": "qubit_excitation",
+          "event_type": "SECTION_END",
+          "time": 1e-07
+        },
+        {
+          "id": 11,
+          "section_name": "qubit_readout",
+          "event_type": "SECTION_START",
+          "time": 1.0666666666666667e-07
+        },
+        {
+          "id": 13,
+          "signal": "q0_measure",
+          "play_wave_id": "DELAY",
+          "section_name": "qubit_readout",
+          "event_type": "DELAY_END",
+          "time": 1.1666666666666667e-07
+        },
+        {
+          "id": 14,
+          "signal": "q0_measure",
+          "play_wave_id": "readout_pulse",
+          "amplitude": null,
+          "section_name": "qubit_readout",
+          "event_type": "PLAY_START",
+          "signal_offset": null,
+          "parameterized_with": null,
+          "time": 1.1666666666666667e-07,
+          "oscillator_phase": []
+        },
+        {
+          "id": 16,
+          "signal": "q0_acquire",
+          "play_wave_id": "offset_q0_acquire",
+          "section_name": "qubit_readout",
+          "event_type": "DELAY_END",
+          "time": 2.0666666666666666e-07
+        },
+        {
+          "id": 17,
+          "signal": "q0_acquire",
+          "play_wave_id": "readout_weighting_function",
+          "amplitude": null,
+          "section_name": "qubit_readout",
+          "event_type": "ACQUIRE_START",
+          "signal_offset": 1e-07,
+          "parameterized_with": null,
+          "time": 2.0666666666666666e-07
+        },
+        {
+          "id": 18,
+          "signal": "q0_acquire",
+          "play_wave_id": "readout_weighting_function",
+          "section_name": "qubit_readout",
+          "event_type": "ACQUIRE_END",
+          "time": 4.0666666666666666e-07
+        },
+        {
+          "id": 15,
+          "signal": "q0_measure",
+          "play_wave_id": "readout_pulse",
+          "section_name": "qubit_readout",
+          "event_type": "PLAY_END",
+          "time": 5.166666666666667e-07
+        },
+        {
+          "id": 12,
+          "section_name": "qubit_readout",
+          "event_type": "SECTION_END",
+          "time": 5.2e-07
+        },
+        {
+          "id": 19,
+          "section_name": "relax",
+          "event_type": "SECTION_START",
+          "time": 5.2e-07
+        },
+        {
+          "id": 21,
+          "signal": "q0_measure",
+          "play_wave_id": "140514129533456",
+          "amplitude": null,
+          "section_name": "relax",
+          "event_type": "PLAY_START",
+          "signal_offset": null,
+          "parameterized_with": null,
+          "time": 5.2e-07,
+          "oscillator_phase": []
+        },
+        {
+          "id": 22,
+          "signal": "q0_measure",
+          "play_wave_id": "140514129533456",
+          "section_name": "relax",
+          "event_type": "PLAY_END",
+          "time": 1.5199999999999998e-06
+        },
+        {
+          "id": 20,
+          "section_name": "relax",
+          "event_type": "SECTION_END",
+          "time": 1.5199999999999998e-06
+        },
+        {
+          "id": 28,
+          "section_name": "sweep",
+          "event_type": "LOOP_STEP_END",
+          "iteration": 0,
+          "nesting_level": 2,
+          "time": 1.5199999999999998e-06
+        },
+        {
+          "id": 32,
+          "section_name": "sweep",
+          "event_type": "PARAMETER_SET",
+          "parameter": {
+            "id": "amplitude",
+            "start": null,
+            "step": null,
+            "values": [
+              0.1,
+              1.0
+            ]
+          },
+          "iteration": 1,
+          "value": 1.0,
+          "time": 1.5199999999999998e-06
+        },
+        {
+          "id": 23,
+          "section_name": "sweep",
+          "event_type": "LOOP_ITERATION_END",
+          "num_repeats": 2,
+          "parameter_list": [
+            {
+              "id": "amplitude",
+              "start": null,
+              "step": null,
+              "values": [
+                0.1,
+                1.0
+              ]
+            }
+          ],
+          "loop_start_node": 5,
+          "nesting_level": 2,
+          "events_in_iteration": [
+            5,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22
+          ],
+          "compressed": false,
+          "time": 1.52e-06
+        },
+        {
+          "id": 30,
+          "section_name": "sweep",
+          "event_type": "LOOP_STEP_START",
+          "iteration": 1,
+          "nesting_level": 2,
+          "time": 1.52e-06
+        },
+        {
+          "id": 33,
+          "section_name": "sweep",
+          "event_type": "SECTION_START",
+          "orig_event": 5,
+          "shadow": true,
+          "loop_iteration": "sweep_1",
+          "time": 1.52e-06
+        },
+        {
+          "id": 34,
+          "section_name": "qubit_excitation",
+          "event_type": "SECTION_START",
+          "orig_event": 7,
+          "shadow": true,
+          "loop_iteration": "sweep_1",
+          "time": 1.52e-06
+        },
+        {
+          "id": 36,
+          "section_name": "qubit_excitation",
+          "event_type": "PLAY_START",
+          "orig_event": 9,
+          "shadow": true,
+          "loop_iteration": "sweep_1",
+          "signal": "q0_drive",
+          "play_wave_id": "x90",
+          "amplitude": 1.0,
+          "signal_offset": null,
+          "parameterized_with": "amplitude",
+          "time": 1.52e-06,
+          "oscillator_phase": []
+        },
+        {
+          "id": 37,
+          "section_name": "qubit_excitation",
+          "event_type": "PLAY_END",
+          "orig_event": 10,
+          "shadow": true,
+          "loop_iteration": "sweep_1",
+          "signal": "q0_drive",
+          "play_wave_id": "x90",
+          "time": 1.6200000000000002e-06
+        },
+        {
+          "id": 35,
+          "section_name": "qubit_excitation",
+          "event_type": "SECTION_END",
+          "orig_event": 8,
+          "shadow": true,
+          "loop_iteration": "sweep_1",
+          "time": 1.6200000000000002e-06
+        },
+        {
+          "id": 38,
+          "section_name": "qubit_readout",
+          "event_type": "SECTION_START",
+          "orig_event": 11,
+          "shadow": true,
+          "loop_iteration": "sweep_1",
+          "time": 1.6266666666666666e-06
+        },
+        {
+          "id": 40,
+          "section_name": "qubit_readout",
+          "event_type": "DELAY_END",
+          "orig_event": 13,
+          "shadow": true,
+          "loop_iteration": "sweep_1",
+          "signal": "q0_measure",
+          "play_wave_id": "DELAY",
+          "time": 1.6366666666666665e-06
+        },
+        {
+          "id": 41,
+          "section_name": "qubit_readout",
+          "event_type": "PLAY_START",
+          "orig_event": 14,
+          "shadow": true,
+          "loop_iteration": "sweep_1",
+          "signal": "q0_measure",
+          "play_wave_id": "readout_pulse",
+          "amplitude": null,
+          "signal_offset": null,
+          "parameterized_with": null,
+          "time": 1.6366666666666665e-06,
+          "oscillator_phase": []
+        },
+        {
+          "id": 43,
+          "section_name": "qubit_readout",
+          "event_type": "DELAY_END",
+          "orig_event": 16,
+          "shadow": true,
+          "loop_iteration": "sweep_1",
+          "signal": "q0_acquire",
+          "play_wave_id": "offset_q0_acquire",
+          "time": 1.7266666666666665e-06
+        },
+        {
+          "id": 44,
+          "section_name": "qubit_readout",
+          "event_type": "ACQUIRE_START",
+          "orig_event": 17,
+          "shadow": true,
+          "loop_iteration": "sweep_1",
+          "signal": "q0_acquire",
+          "play_wave_id": "readout_weighting_function",
+          "amplitude": null,
+          "signal_offset": 1e-07,
+          "parameterized_with": null,
+          "time": 1.7266666666666665e-06
+        },
+        {
+          "id": 45,
+          "section_name": "qubit_readout",
+          "event_type": "ACQUIRE_END",
+          "orig_event": 18,
+          "shadow": true,
+          "loop_iteration": "sweep_1",
+          "signal": "q0_acquire",
+          "play_wave_id": "readout_weighting_function",
+          "time": 1.9266666666666663e-06
+        },
+        {
+          "id": 42,
+          "section_name": "qubit_readout",
+          "event_type": "PLAY_END",
+          "orig_event": 15,
+          "shadow": true,
+          "loop_iteration": "sweep_1",
+          "signal": "q0_measure",
+          "play_wave_id": "readout_pulse",
+          "time": 2.0366666666666665e-06
+        },
+        {
+          "id": 39,
+          "section_name": "qubit_readout",
+          "event_type": "SECTION_END",
+          "orig_event": 12,
+          "shadow": true,
+          "loop_iteration": "sweep_1",
+          "time": 2.04e-06
+        },
+        {
+          "id": 46,
+          "section_name": "relax",
+          "event_type": "SECTION_START",
+          "orig_event": 19,
+          "shadow": true,
+          "loop_iteration": "sweep_1",
+          "time": 2.04e-06
+        },
+        {
+          "id": 48,
+          "section_name": "relax",
+          "event_type": "PLAY_START",
+          "orig_event": 21,
+          "shadow": true,
+          "loop_iteration": "sweep_1",
+          "signal": "q0_measure",
+          "play_wave_id": "140514129533456",
+          "amplitude": null,
+          "signal_offset": null,
+          "parameterized_with": null,
+          "time": 2.04e-06,
+          "oscillator_phase": []
+        },
+        {
+          "id": 49,
+          "section_name": "relax",
+          "event_type": "PLAY_END",
+          "orig_event": 22,
+          "shadow": true,
+          "loop_iteration": "sweep_1",
+          "signal": "q0_measure",
+          "play_wave_id": "140514129533456",
+          "time": 3.0399999999999997e-06
+        },
+        {
+          "id": 47,
+          "section_name": "relax",
+          "event_type": "SECTION_END",
+          "orig_event": 20,
+          "shadow": true,
+          "loop_iteration": "sweep_1",
+          "time": 3.0399999999999997e-06
+        },
+        {
+          "id": 31,
+          "section_name": "sweep",
+          "event_type": "LOOP_STEP_END",
+          "iteration": 1,
+          "nesting_level": 2,
+          "time": 3.0399999999999997e-06
+        },
+        {
+          "id": 24,
+          "section_name": "sweep",
+          "event_type": "LOOP_END",
+          "num_repeats": 2,
+          "nesting_level": 2,
+          "time": 3.0399999999999997e-06
+        },
+        {
+          "id": 6,
+          "section_name": "sweep",
+          "event_type": "SECTION_END",
+          "time": 3.04e-06
+        },
+        {
+          "id": 51,
+          "section_name": "shots",
+          "event_type": "LOOP_STEP_END",
+          "iteration": 0,
+          "nesting_level": 1,
+          "time": 3.04e-06
+        },
+        {
+          "id": 25,
+          "section_name": "shots",
+          "event_type": "LOOP_ITERATION_END",
+          "num_repeats": 2,
+          "parameter_list": [],
+          "loop_start_node": 3,
+          "nesting_level": 1,
+          "events_in_iteration": [
+            3,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49
+          ],
+          "compressed": true,
+          "time": 3.04e-06
+        },
+        {
+          "id": 52,
+          "section_name": "shots",
+          "event_type": "LOOP_STEP_START",
+          "iteration": 1,
+          "nesting_level": 1,
+          "time": 3.04e-06
+        },
+        {
+          "id": 53,
+          "section_name": "shots",
+          "event_type": "LOOP_STEP_END",
+          "iteration": 1,
+          "nesting_level": 1,
+          "time": 6.08e-06
+        },
+        {
+          "id": 26,
+          "section_name": "shots",
+          "event_type": "LOOP_END",
+          "num_repeats": 2,
+          "nesting_level": 1,
+          "time": 6.08e-06
+        },
+        {
+          "id": 4,
+          "section_name": "shots",
+          "event_type": "SECTION_END",
+          "time": 6.08e-06
+        }
+      ]
+
+    qccs_current_section_graph =
+      [
+        {
+          "from": "qubit_excitation",
+          "to": "qubit_readout",
+          "type": "previous"
+        },
+        {
+          "from": "qubit_readout",
+          "to": "relax",
+          "type": "previous"
+        },
+        {
+          "from": "sweep",
+          "to": "qubit_excitation",
+          "type": "parent"
+        },
+        {
+          "from": "sweep",
+          "to": "qubit_readout",
+          "type": "parent"
+        },
+        {
+          "from": "sweep",
+          "to": "relax",
+          "type": "parent"
+        },
+        {
+          "from": "shots_loop",
+          "to": "sweep",
+          "type": "parent"
+        }
+      ]
+  // %%%END qccs_current_events
+  </script>
+
+  <!-- %%%START pulse_sheet.js -->
+  <script type="text/javascript">
+
+
+    var HEIGHT = 700
+    var WIDTH = 1400
+    var SIGNAL_HEIGHT = 30
+
+    function PulseSheet(HEIGHT) {
+      var self = {};
+      var SIGNAL_HEIGHT = 30
+
+      self.engineering_text = function engineering_text(number, precision) {
+        if (precision === undefined) {
+          precision = 0;
+        }
+        var unitMap = {
+          G: 1e9,
+          M: 1e6,
+          k: 1e3,
+          m: 1e-3,
+          u: 1e-6,
+          n: 1e-9,
+          p: 1e-12,
+          f: 1e-15
+        };
+        var space = "";
+        var sign = ""
+        if (Math.sign(number) == -1) {
+          sign = "-"
+        }
+        var absNumber = Math.abs(number)
+
+        for (var unit in unitMap) {
+          if (unitMap.hasOwnProperty(unit)) {
+            var unit_base = unitMap[unit];
+
+            if (absNumber >= unit_base * 100) {
+              return sign + (number / unitMap[unit]).toFixed(precision) + space + unit;
+            }
+
+            if (absNumber >= unit_base * 10) {
+              return sign + (number / unitMap[unit]).toFixed(precision + 1) + space + unit;
+            }
+
+            if (absNumber >= unit_base) {
+              return sign + (number / unitMap[unit]).toFixed(precision + 1) + space + unit;
+            }
+          }
+        }
+        return "" + number
+      };
+
+      self.signal_transformer_function = function signal_transformer_function(height, offset, signals, spacer_ratio) {
+        var num_signals = signals.length - 1;
+        var signals_list = signals;
+
+
+        function retval(signal) {
+          var pos = R.findIndex(R.equals(signal))(signals_list);
+
+          return height * (1 - spacer_ratio) - pos * SIGNAL_HEIGHT + offset;
+        }
+
+        return retval;
+      };
+
+      self.get_signals = function get_signals(events) {
+        var signals = {};
+        events.forEach(function (element) {
+          var signal_name = element["signal"];
+
+          if (signal_name) {
+            signals[signal_name] = 1;
+          }
+        });
+        return Object.keys(signals).sort();
+      };
+
+      self.get_sections = function get_sections(events) {
+        var sections = {};
+        events.forEach(function (element) {
+          var section_name = element["section_name"];
+
+          if (section_name) {
+            sections[section_name] = 1;
+          }
+        });
+        return Object.keys(sections).sort();
+      };
+
+      self.drawSignals = function drawSignals(events, time_axis, offset) {
+        var retval = [];
+        var signals = self.get_signals(events);
+        var signal_transformer = self.signal_transformer_function(HEIGHT, offset, signals, 0.1);
+        signals.forEach(function (signal) {
+          var y = signal_transformer(signal);
+          var x2 = time_axis.time_transformer(time_axis.max_time);
+          var x1 = time_axis.x0;
+          var text_x = x1;
+          retval.push({
+            y: y,
+            x1: x1,
+            x2: x2,
+            signal: signal,
+            text_x: text_x,
+            text_y: y - 5
+          });
+        });
+        return retval;
+      };
+
+      self.time_axis = function time_axis(WIDTH, min_time, max_time, events, spacer_ratio, compressTime) {
+        var retval = {};
+        retval.x0 = WIDTH * 0.02;
+        retval.x_start = WIDTH * spacer_ratio;
+        retval.x_end = WIDTH - 50;
+        var distinct_times = new Set();
+        events.forEach(function (event) {
+          if (R.contains(event.event_type, ["PLAY_START", "PLAY_END", "SECTION_START", "SECTION_END"])) {
+            distinct_times.add(event.time);
+          }
+        });
+        var distinct_times_sorted = R.sort(function (a, b) {
+          return a - b;
+        }, Array.from(distinct_times));
+        var pairs = R.slice(1, distinct_times_sorted.length, R.zip(R.append(0, distinct_times_sorted), R.prepend(0, distinct_times_sorted)));
+        var deltas = R.map(R.apply(R.subtract, R.__), pairs);
+        var deltas_compressed = deltas.slice();
+        var largest_delta_relative = 1.0;
+        var downsized_delta_indices = [];
+        var full_span = max_time - min_time;
+        var guard = 20;
+
+        do {
+          var largest_delta = R.apply(Math.max, deltas_compressed);
+          var span = R.sum(deltas_compressed);
+          var largest_delta_relative = largest_delta / span;
+
+          if (largest_delta_relative > 0.3 && compressTime) {
+            index = R.findIndex(R.equals(largest_delta), deltas);
+            downsized_delta_indices.push(index);
+            deltas_compressed[index] = Math.pow(span / full_span, 0.8) * full_span * 0.02;
+          } else {
+            break;
+          }
+
+          guard -= 1;
+        } while (true && guard > 0);
+
+        var cut_intervals = [];
+        downsized_delta_indices.forEach(function (deltaIndex) {
+          cut_intervals.push([distinct_times_sorted[deltaIndex], distinct_times_sorted[deltaIndex + 1]]);
+        });
+        var compressed_span = R.sum(deltas_compressed);
+        var running_transformed_t = distinct_times_sorted[0];
+        var runnning_sum = distinct_times_sorted[0];
+        var running_sum_deltas_compressed = [runnning_sum];
+        deltas_compressed.forEach(function (delta) {
+          runnning_sum += delta;
+          running_sum_deltas_compressed.push(runnning_sum);
+        });
+        var fringe = 0.02;
+
+        function time_warper(t) {
+          var transformed_t = t;
+
+          for (var i = 0; i < distinct_times_sorted.length - 1; i++) {
+            span = distinct_times_sorted[i + 1] - distinct_times_sorted[i];
+
+            if (distinct_times_sorted[i] <= t && t <= distinct_times_sorted[i + 1]) {
+              if (false && t >= distinct_times_sorted[i + 1] - fringe * span && t < distinct_times_sorted[i + 1]) {
+                // in the right fringe
+                transformed_t = running_sum_deltas_compressed[i + 1] - (distinct_times_sorted[i + 1] - t);
+              } else if (false && t <= distinct_times_sorted[i] + fringe * span && t > distinct_times_sorted[i]) {
+                // in the left fringe
+                transformed_t = running_sum_deltas_compressed[i] + deltas[i] * (t - distinct_times_sorted[i]) / deltas[i];
+              } else {
+                transformed_t = running_sum_deltas_compressed[i] + deltas_compressed[i] * (t - distinct_times_sorted[i]) / deltas[i];
+              }
+            }
+          }
+
+          return transformed_t;
+        }
+
+        function compressed_time_transformer(t) {
+          var transformed_t = time_warper(t);
+          var transformed_min_time = time_warper(min_time);
+          var transformed_max_time = time_warper(max_time);
+          var raw_x = retval.x_start + (transformed_t - transformed_min_time) / (transformed_max_time - transformed_min_time) * (retval.x_end - retval.x_start);
+          return Math.round(raw_x);
+        }
+
+        function is_compressed(t) {
+          var retval = false;
+          cut_intervals.forEach(function (interval) {
+            span = interval[1] - interval[0]; // if(interval[0] <= t + fringe*span  && t <= interval[1]-fringe*span ) {
+
+            if (interval[0] + fringe * span <= t && t <= interval[1] - fringe * span) {
+              retval = true;
+            }
+          });
+          return retval;
+        }
+
+        function is_strictly_compressed(t) {
+          var retval = false;
+          cut_intervals.forEach(function (interval) {
+            span = interval[1] - interval[0];
+
+            if (interval[0] <= t && t <= interval[1]) {
+              retval = true;
+            }
+          });
+          return retval;
+        }
+
+        retval.time_transformer = compressed_time_transformer;
+        retval.cut_intervals = cut_intervals;
+        retval.is_compressed = is_compressed;
+        retval.is_strictly_compressed = is_strictly_compressed;
+        retval.min_time = min_time;
+        retval.max_time = max_time;
+        retval.WIDTH = WIDTH;
+        return retval;
+      };
+
+      self.allSections = function allSections(events) {
+        return R.uniq(R.map(R.prop("section_name"), events))
+      }
+
+      self.calc_sections = function calc_sections(events, time_axis, selected_sections, allSections, allSectionDisplayNames, section_graph, section_info, focus_section, focus_iteration) {
+        var section_events = R.sortWith([R.ascend(R.prop('time'))], R.filter(R.compose(R.contains(R.__, ["SECTION_START", "SECTION_END"]), R.prop("event_type")), events));
+        var retval = {}
+        var section_markers = [];
+        var iteration_markers = [];
+        var section_navigators = [];
+        var is_first = true;
+        var cur_x;
+        var type_map = {
+          SECTION_START: "S",
+          SECTION_END: "E"
+        };
+        var section_start_events = R.sortWith([R.ascend(R.prop('time'))], R.filter(R.compose(R.contains(R.__, ["SECTION_START"]), R.prop("event_type")), section_events));
+        var section_end_events = R.sortWith([R.ascend(R.prop('time'))], R.filter(R.compose(R.contains(R.__, ["SECTION_END"]), R.prop("event_type")), section_events));
+        var section_loop_step_end_events = R.sortWith([R.ascend(R.prop('time'))], R.filter(R.compose(R.contains(R.__, ["LOOP_STEP_END"]), R.prop("event_type")), events));
+        var stack_height_set = new Set()
+        selected_sections.forEach(function (section) {
+          stack_height_set.add(section_info[section].preorder);
+        });
+        var max_stack_height = 30 * (Math.max(...R.map(R.prop("preorder"), R.values(qccs_current_section_info))) + 4)
+        var stack_height_array = R.sort(R.subtract, Array.from(stack_height_set))
+        selected_sections = R.sort(function (s1, s2) { return section_info[s1].preorder - section_info[s2].preorder }, selected_sections)
+        var navigator_map = {}
+        selected_sections.forEach(function (section) {
+          var filtered_section_start_events = R.filter(R.compose(R.contains(R.__, [section]), R.prop("section_name")), section_start_events);
+          var filtered_section_end_events = R.filter(R.compose(R.contains(R.__, [section]), R.prop("section_name")), section_end_events);
+          var filtered_loop_step_end_events = R.filter(R.compose(R.contains(R.__, [section]), R.prop("section_name")), section_loop_step_end_events);
+          console.log("LOOP_STEP_ENDS: " + JSON.stringify(filtered_loop_step_end_events));
+
+          var event_zip = R.zip(filtered_section_start_events, filtered_section_end_events);
+          var stacker = R.indexOf(section_info[section].preorder, stack_height_array);
+          var section_display_name = section_info[section].section_display_name;
+          var style_nr = (allSectionDisplayNames.indexOf(section_display_name)) % 19 + 1;
+
+          var navigator = {};
+          navigator.stacker = stacker;
+          navigator.section = section;
+          navigator.depth = section_info[section].depth;
+          navigator.x1 = time_axis.x0 + navigator.depth * 22;
+          navigator.x2 = navigator.x1 + 20;
+          navigator.width = 20;
+          if (section == focus_section) {
+            navigator.class_ = "section-navigator-selected";
+            navigator.selected = true;
+          } else {
+            navigator.class_ = "section-navigator"
+          }
+          if (section_info[section].is_leaf) {
+            navigator.height = 20;
+          } else {
+            navigator.height = (stack_height_array.length - stacker) * 30;
+          }
+          navigator.y1 = stacker * 30;
+          navigator.stacker = stacker
+          navigator.style_nr = style_nr;
+          if (!section_info[section].is_leaf) {
+            section_navigators.push(navigator)
+          }
+
+          if (navigator.depth in navigator_map && !section_info[section].is_leaf) {
+            navigator_map[navigator.depth].height = (stacker - navigator_map[navigator.depth].stacker) * 30 - 5;
+          }
+          if (!section_info[section].is_leaf) {
+            navigator_map[navigator.depth] = navigator
+          }
+
+          filtered_loop_step_end_events.forEach(function (loop_step_end_event) {
+            var t1 = loop_step_end_event.time;
+            var marker = {};
+            if ((t1 >= time_axis.min_time) && (t1 <= time_axis.max_time)) {
+              marker.x1 = time_axis.time_transformer(t1);
+              marker.x2 = time_axis.time_transformer(t1);
+              marker.y1 = stacker * 30;
+              marker.y1 = stacker * 30;
+              marker.y2 = marker.y1 + 20;
+              marker.y_text = (marker.y1 + marker.y2) / 2 + 4;
+              marker.x_text = marker.x1 - 5;
+              marker.text = loop_step_end_event.iteration
+              iteration_markers.push(marker);
+            }
+          });
+
+
+          event_zip.forEach(function (pair) {
+            var t1 = pair[0].time;
+            var t2 = pair[1].time;
+            var x1 = time_axis.time_transformer(t1);
+            var x2 = time_axis.time_transformer(t2);
+            var marker = {};
+            if (section == focus_section && (((focus_iteration == undefined) && (pair[0].loop_iteration == undefined)) || focus_iteration == pair[0].loop_iteration)) {
+              marker.class_ = "section-navigator-selected"
+              marker.selected = true;
+            } else {
+              marker.class_ = "section-navigator"
+            }
+
+            if (section == focus_section) {
+              marker.section_selected_style = "section-marker-selected"
+            }
+
+
+            if (t1 >= time_axis.min_time) {
+              marker.x1 = x1;
+              marker.left_closed = true;
+            } else {
+              marker.x1 = time_axis.time_transformer(time_axis.min_time);
+              marker.left_closed = false;
+            }
+
+            if (t2 <= time_axis.max_time) {
+              marker.x2 = x2;
+              marker.right_closed = true;
+            } else {
+              marker.x2 = time_axis.time_transformer(time_axis.max_time);
+              marker.right_closed = false;
+            }
+
+            marker.style_nr = style_nr;
+            marker.x_text = (marker.x1 + marker.x2) / 2;
+            marker.height = 15;
+            var y1 = stacker * 30;
+            var y2 = y1 + 20;
+            marker.y1 = y1;
+            marker.y2 = y2;
+            marker.y_text = (y1 + y2) / 2 + 4;
+            marker.width = marker.x2 - marker.x1;
+            marker.height = marker.y2 - marker.y1;
+            marker.line_bottom_y = HEIGHT - 40;
+            marker.line_top_y = 0;
+            marker.text_anchor = "middle";
+            marker.loop_iteration = pair[0].loop_iteration;
+            var t1_visible = false;
+
+            if (t1 <= time_axis.max_time && t1 >= time_axis.min_time) {
+              t1_visible = true;
+            }
+
+            var t2_visible = false;
+
+            if (t2 <= time_axis.max_time && t2 >= time_axis.min_time) {
+              t2_visible = true;
+            }
+
+            var section_covers_whole_range = false;
+
+            if (t1 < time_axis.min_time && t2 > time_axis.max_time) {
+              section_covers_whole_range = true;
+            }
+
+            marker.t1_visible = t1_visible;
+            marker.t2_visible = t2_visible;
+
+            if (x2 - x1 > 6 * section.length) {
+              marker.text = section_info[section].section_display_name;
+            }
+            marker.section = section
+
+            if (t1_visible || t2_visible || section_covers_whole_range) {
+              section_markers.push(marker);
+            }
+          });
+        });
+        retval.section_markers = section_markers;
+        retval.section_navigators = section_navigators;
+        retval.max_stack_height = max_stack_height;
+        retval.iteration_markers = iteration_markers;
+        return retval;
+      };
+
+      self.calc_pulses = function calc_pulses(events, time_axis, signal_transformer, signals) {
+        var play_start_events = R.sortWith([R.ascend(R.prop('time'))], R.filter(R.compose(R.contains(R.__, ["PLAY_START", "ACQUIRE_START"]), R.prop("event_type")), events));
+        var play_end_events = R.sortWith([R.ascend(R.prop('time'))], R.filter(R.compose(R.contains(R.__, ["PLAY_END", "ACQUIRE_END"]), R.prop("event_type")), events));
+        var pulse_markers = [];
+        var event_zip = [];
+        signals.forEach(function (signal) {
+          var signal_play_start_events = R.filter(R.compose(R.contains(R.__, [signal]), R.prop("signal")), play_start_events);
+          var signal_play_end_events = R.filter(R.compose(R.contains(R.__, [signal]), R.prop("signal")), play_end_events);
+          var event_zip = R.zip(signal_play_start_events, signal_play_end_events);
+          event_zip.push(event_zip);
+          event_zip.forEach(function (pair) {
+            var t1 = pair[0].time;
+            var t2 = pair[1].time;
+            var x1 = time_axis.time_transformer(t1);
+            var x2 = time_axis.time_transformer(t2);
+            var pulse_marker = {
+              signal: pair[0].signal
+            };
+
+            if (t1 >= time_axis.min_time) {
+              pulse_marker.x1 = x1;
+              pulse_marker.left_closed = true;
+            } else {
+              pulse_marker.x1 = time_axis.time_transformer(time_axis.min_time);
+              pulse_marker.left_closed = false;
+            }
+
+            if (t2 <= time_axis.max_time) {
+              pulse_marker.x2 = x2;
+              pulse_marker.right_closed = true;
+            } else {
+              pulse_marker.x2 = time_axis.time_transformer(time_axis.max_time);
+              pulse_marker.right_closed = false;
+            }
+
+            var t1_visible = false;
+
+            if (t1 <= time_axis.max_time && t1 >= time_axis.min_time) {
+              t1_visible = true;
+            }
+
+            var t2_visible = false;
+
+            if (t2 <= time_axis.max_time && t2 >= time_axis.min_time) {
+              t2_visible = true;
+            }
+
+            var pulse_covers_whole_range = false;
+
+            if (t1 < time_axis.min_time && t2 > time_axis.max_time) {
+              pulse_covers_whole_range = true;
+            }
+
+            pulse_marker.t1_visible = t1_visible;
+            pulse_marker.t2_visible = t2_visible;
+            if (pair[0].play_wave_id) {
+              if (x2 - x1 > 6 * pair[0].play_wave_id.length) {
+                pulse_marker.text = pair[0].play_wave_id;
+              }
+              pulse_marker.play_wave_id = pair[0].play_wave_id;
+            }
+
+
+            pulse_marker.y1 = signal_transformer(pair[0].signal);
+            pulse_marker.y2 = pulse_marker.y1 - 20;
+            pulse_marker.ytext = pulse_marker.y1 - 6;
+            pulse_marker.xtext = (pulse_marker.x1 + pulse_marker.x2) / 2;
+            pulse_marker.t1 = self.engineering_text(t1, 2);
+            pulse_marker.t2 = self.engineering_text(t2, 2);
+
+
+            if (t1_visible || t2_visible || pulse_covers_whole_range) {
+              pulse_markers.push(pulse_marker);
+            }
+          });
+        });
+        return pulse_markers;
+      };
+
+      self.calc_signal_section_markers = function calc_signal_section_markers(section_markers, section_signals_with_children, signal_transformer, signals) {
+        var signal_section_markers = []
+        section_markers = R.sort(function (sm1, sm2) { return sm2.stacker - sm1.stacker }, section_markers);
+        section_markers.forEach(function (section_marker) {
+          var section = section_marker.section
+          var section_signals = section_signals_with_children[section];
+          section_signals.forEach(function (signal) {
+            signal_section_marker = {};
+            signal_section_marker.height = 5;
+
+            signal_section_marker.style_nr = section_marker.style_nr;
+            signal_section_marker.x1 = section_marker.x1;
+            signal_section_marker.x2 = section_marker.x2;
+            signal_section_marker.width = signal_section_marker.x2 - signal_section_marker.x1;
+            signal_section_marker.y1 = signal_transformer(signal);
+            signal_section_marker.signal = signal;
+            signal_section_marker.section = section;
+
+            if (section_marker.selected) {
+              signal_section_marker.class_ = "signal-section-marker-selected"
+            } else {
+              signal_section_marker.class_ = "signal-section-marker"
+            }
+            signal_section_markers.push(signal_section_marker)
+          });
+
+        });
+        return signal_section_markers;
+      }
+
+      self.calcPulseSheet = function calcPulseSheet(events, time_axis, samplingRates, selected_sections, allSections, allSectionDisplayNames, section_graph, section_signals_with_children, section_info, focus_section, focus_iteration) {
+        var offset = 0;
+        var retval = {};
+        signals = self.get_signals(events);
+
+        section_navigator = self.calc_sections(events, time_axis, selected_sections, allSections, allSectionDisplayNames, section_graph, section_info, focus_section, focus_iteration);
+        // offset =   -HEIGHT  + section_navigator.max_stack_height  + signals.length * SIGNAL_HEIGHT ;
+        offset = -HEIGHT + signals.length * SIGNAL_HEIGHT + section_navigator.max_stack_height;
+        retval.signal_lines = self.drawSignals(events, time_axis, offset);
+        retval.section_markers = section_navigator.section_markers;
+        retval.section_navigators = section_navigator.section_navigators;
+        retval.iteration_markers = section_navigator.iteration_markers;
+
+        var signals = self.get_signals(events);
+        var signal_transformer = self.signal_transformer_function(HEIGHT, offset, signals, 0.1);
+
+        retval.pulse_markers = self.calc_pulses(events, time_axis, signal_transformer, signals);
+        retval.signal_section_markers = self.calc_signal_section_markers(retval.section_markers, section_signals_with_children, signal_transformer, signals);
+        var tick_desc = self.calcSampleTicks(events, time_axis, samplingRates, offset);
+        retval.ticks = tick_desc.ticks
+        retval.tick_headers = tick_desc.tick_headers
+        retval.pulse_sheet_height = signals.length * SIGNAL_HEIGHT + section_navigator.max_stack_height + 100
+        return retval;
+      };
+
+      self.calcFilteredEvents = function calcFilteredEvents(events, selectedSignals, includeShadow, selectedSections) {
+        function pred(event) {
+          var signal_match = false;
+          var section_match = false;
+
+          if (!includeShadow && event.shadow) {
+            return false;
+          }
+
+          if (event.signal == undefined) {
+            signal_match = true;
+          }
+
+          var idx = selectedSignals.indexOf(event.signal);
+
+          if (idx > -1) {
+            signal_match = true;
+          }
+
+          var idx2 = selectedSections.indexOf(event.section_name);
+
+          if (idx2 > -1) {
+            section_match = true;
+          }
+          section_match = true;
+          return signal_match && section_match;
+        }
+
+        return R.filter(pred)(events).slice();
+      };
+
+      self.calcSampleTicks = function calcSampleTicks(events, time_axis, samplingRates, offset) {
+        var hd_freq = 2.4e9;
+        var qa_freq = 1.8e9;
+        var retval = {}
+        var ticks = [];
+        var ybase = HEIGHT + 25 + offset;
+        retval.tick_headers = [];
+        var offset = 0
+        var header_x = time_axis.time_transformer(time_axis.min_time);
+        samplingRates.forEach(function (rate_info) {
+          ticks.push.apply(ticks, self.calcSampleTicksWithRate(events, ybase - offset, time_axis, rate_info[1], true, rate_info[0]));
+          retval.tick_headers.push({ y: ybase - offset + 8, x: header_x - 8, text: rate_info[0].join() + " @ " + Math.round(rate_info[1]/1e8)/10 + " Gs/s" })
+          offset += 40
+        });
+
+        retval.ticks = ticks;
+
+        return retval;
+      };
+
+      self.calcSampleTicksWithRate = function calcSampleTicksWithRate(events, ybase, time_axis, sampling_frequency, add_time_text, device_types) {
+        var time_transformer = time_axis.time_transformer;
+        var max_ticks = 80;
+        var initial_freq = sampling_frequency * 4;
+        var freq_divider = 1;
+        var freq = initial_freq;
+        var guard = 20;
+
+        var class_ = R.map(x => "tick_" + x, device_types).join(" ")
+
+        do {
+          freq = initial_freq / freq_divider;
+          var num_ticks = 0;
+          var start_sample = Math.round(time_axis.min_time * freq);
+          var end_sample = Math.round(time_axis.max_time * freq);
+
+          for (var s = start_sample; s < end_sample; s++) {
+            var t = s / freq;
+
+            if (!time_axis.is_strictly_compressed(t)) {
+              num_ticks += 1;
+            }
+
+            if (num_ticks > max_ticks) {
+              break;
+            }
+          }
+
+          if (num_ticks > max_ticks) {
+            freq_divider = freq_divider * 2;
+          }
+
+          guard -= 1;
+        } while (num_ticks > max_ticks && guard > 0);
+
+        var start_sample = Math.round(time_axis.min_time * freq);
+        var end_sample = Math.round(time_axis.max_time * freq);
+        var ticks = [];
+
+        for (s = start_sample; s < end_sample; s++) {
+          var t = s * freq_divider / initial_freq;
+
+          var x = time_transformer(t);
+          var tick = {};
+          tick.class_ = class_;
+          tick.y2 = ybase - 8;
+
+          if (s % 4 == 0) {
+            tick.hd_samples = Math.round(s / freq * sampling_frequency);
+            tick.y2 = ybase - 15;
+            tick.has_sample_number = true;
+
+            if (add_time_text) {
+              tick.has_text = true;
+              tick.time_text = self.engineering_text(t, 1);
+            }
+          }
+
+          tick.x = x;
+          tick.y1 = ybase;
+          tick.text_y = ybase + 8;
+          tick.time_text_y = ybase + 16;
+
+          if (!time_axis.is_strictly_compressed(t) && t >= time_axis.min_time && t <= time_axis.max_time && (s * freq_divider) % 4 == 0) {
+            ticks.push(tick);
+          }
+        }
+
+        var guard = 20;
+
+        do {
+          var num_ticks = 0;
+          var start_sample = Math.round(time_axis.min_time * freq);
+          var end_sample = Math.round(time_axis.max_time * freq);
+
+          for (var s = start_sample; s < end_sample; s++) {
+            var t = s / freq;
+
+            if (time_axis.is_strictly_compressed(t)) {
+              num_ticks += 1;
+            }
+
+            if (num_ticks > max_ticks) {
+              break;
+            }
+          }
+
+          if (num_ticks > max_ticks) {
+            freq = freq / 2;
+          }
+
+          guard -= 1;
+        } while (num_ticks > max_ticks && guard > 0);
+
+        start_sample = Math.round(time_axis.min_time * freq);
+        end_sample = Math.round(time_axis.max_time * freq);
+
+        for (s = start_sample; s < end_sample; s++) {
+          var t = s / freq;
+          var x = time_transformer(t);
+          var tick = {};
+          tick.class_ = class_
+          tick.y2 = ybase - 8;
+
+          if (s % 8 == 0) {
+            tick.hd_samples = Math.round(s / freq * sampling_frequency);
+            tick.has_sample_number = true;
+            tick.y2 = ybase - 15;
+
+            if (add_time_text) {
+              tick.has_text = true;
+              tick.time_text = self.engineering_text(t, 1);
+            }
+          }
+
+          tick.x = x;
+          tick.y1 = ybase;
+          tick.text_y = ybase + 8;
+          tick.time_text_y = ybase + 16;
+          tick.is_compressed = true;
+
+          if (time_axis.is_strictly_compressed(t)) {
+            ticks.push(tick);
+          }
+        }
+
+        return ticks;
+      };
+
+      return self;
+    }
+
+    var myApp = angular.module('qccs', []);
+    myApp.controller('QccsController', QccsController);
+
+
+    myApp.directive('ngMouseWheelUp', function () {
+      return function (scope, element, attrs) {
+        element.bind("DOMMouseScroll mousewheel onmousewheel", function (event) {
+
+          // cross-browser wheel delta
+          var event = window.event || event; // old IE support
+          var delta = Math.max(-1, Math.min(1, (event.wheelDelta || -event.detail)));
+
+          if (delta > 0) {
+            scope.$apply(function () {
+              scope.$eval(attrs.ngMouseWheelUp);
+            });
+
+            // for IE
+            event.returnValue = false;
+            // for Chrome and Firefox
+            if (event.preventDefault) {
+              event.preventDefault();
+            }
+
+          }
+        });
+      };
+    });
+
+
+    myApp.directive('ngMouseWheelDown', function () {
+      return function (scope, element, attrs) {
+        element.bind("DOMMouseScroll mousewheel onmousewheel", function (event) {
+
+          // cross-browser wheel delta
+          var event = window.event || event; // old IE support
+          var delta = Math.max(-1, Math.min(1, (event.wheelDelta || -event.detail)));
+
+          if (delta < 0) {
+            scope.$apply(function () {
+              scope.$eval(attrs.ngMouseWheelDown);
+            });
+
+            // for IE
+            event.returnValue = false;
+            // for Chrome and Firefox
+            if (event.preventDefault) {
+              event.preventDefault();
+            }
+
+          }
+        });
+      };
+    });
+
+
+    myApp.directive('sglclick', ['$parse', function ($parse) {
+      return {
+        restrict: 'A',
+        link: function (scope, element, attr) {
+          var fn = $parse(attr['sglclick']);
+          var delay = 200, clicks = 0, timer = null;
+          element.on('click', function (event) {
+            clicks++;  //count clicks
+            if (clicks === 1) {
+              timer = setTimeout(function () {
+                scope.$apply(function () {
+                  fn(scope, { $event: event });
+                });
+                clicks = 0;             //after action performed, reset counter
+              }, delay);
+            } else {
+              clearTimeout(timer);    //prevent single-click action
+              clicks = 0;             //after action performed, reset counter
+            }
+          });
+        }
+      };
+    }])
+
+    function QccsController($scope, $http, $interval, $window) {
+      console.log("controller started")
+
+
+
+      angular.element($window).bind('resize', function () {
+
+        $scope.pulse_sheet_width = $window.innerWidth
+        $scope.calcAll()
+      });
+
+
+      $scope.pulse_sheet_title = qccs_pulse_sheet_title;
+
+      $scope.round = Math.round
+      $scope.pulse_sheet_width = WIDTH
+      $scope.pulse_sheet_height = HEIGHT + 80
+      $scope.selectedSignals = []
+      $scope.includeShadow = true
+      $scope.compressTime = false
+      $scope.zoom = 100
+      $scope.start_time = 0
+      $scope.start_relative = 0
+      $scope.enable_polling = false
+      $scope.PulseSheet = PulseSheet(HEIGHT)
+      $scope.$watch('includeShadow', function (newValue, oldValue, scope) {
+        $scope.calcAll()
+      });
+      $scope.$watch('compressTime', function (newValue, oldValue, scope) {
+        $scope.calcAll()
+      });
+      $scope.$watch('zoom', function (newValue, oldValue, scope) {
+        calc()
+      });
+      $scope.$watch('start_relative', function (newValue, oldValue, scope) {
+        calc()
+      });
+      $scope.$watch('start_time', function (newValue, oldValue, scope) {
+        calc()
+      });
+
+      $scope.increaseZoom = function increaseZoom() {
+        $scope.zoom = Math.round(Math.min(($scope.zoom) * 1.1, 30000))
+      }
+      $scope.decreaseZoom = function decreaseZoom() {
+        $scope.zoom = Math.round(Math.max($scope.zoom / 1.1, 100))
+      }
+
+      function calc_min_max(events) {
+        times = R.map(R.prop("time"), events)
+
+        $scope.max_time = R.apply(Math.max, times)
+        $scope.min_time = R.apply(Math.min, times)
+
+      }
+
+      $scope.selectPulseMarker = function selectPulseMarker(pulse_marker) {
+        $scope.selectedPulseMarker = pulse_marker
+      }
+
+      $scope.onLoad = function onLoad() {
+        $scope.pulse_sheet_width = $window.innerWidth
+        if ($scope.result) {
+          events = $scope.result.events.slice()
+          $scope.title = $scope.result.title
+          $scope.signals = $scope.PulseSheet.get_signals(events)
+          $scope.selectedSignals = $scope.signals.slice();
+          $scope.sections = $scope.PulseSheet.get_sections(events)
+          $scope.selectedSections = $scope.sections.slice()
+          $scope.collapsedSections = []
+          $scope.samplingRates = $scope.result.sampling_rates
+          $scope.calcAll()
+        }
+      }
+
+      $scope.calcAll = function calcAll() {
+        if ($scope.result) {
+          $scope.filteredEvents = $scope.PulseSheet.calcFilteredEvents($scope.result.events, $scope.selectedSignals, $scope.includeShadow, $scope.selectedSections)
+          calc_min_max($scope.filteredEvents)
+          calc()
+        }
+      }
+
+      function calc_min_max_window(zoom, start_relative, min_time, max_time) {
+        retval = {}
+        real_zoom = 0.01 * zoom
+        if (real_zoom < 1.0) {
+          real_zoom = 1.0
+        }
+        if (real_zoom > 1e6) {
+          real_zoom = 1e6
+        }
+
+        start_relative_float = 0.01 * start_relative
+
+        window_width = (max_time - min_time) / real_zoom
+
+        center = start_relative_float * (max_time - min_time - window_width) + 0.5 * window_width
+
+        if (center < min_time + window_width / 2) {
+          center = min_time + window_width / 2
+        }
+        if (center > max_time - window_width / 2) {
+          center = max_time - window_width / 2
+        }
+
+        retval.min_time = center - 0.5 * window_width
+        retval.max_time = center + 0.5 * window_width
+        return retval;
+
+      }
+
+      function calc_start_relative_from_center(zoom, center, min_time, max_time) {
+        real_zoom = 0.01 * zoom
+        if (real_zoom < 1.0) {
+          real_zoom = 1.0
+        }
+        if (real_zoom > 1e6) {
+          real_zoom = 1e6
+        }
+
+        window_width = (max_time - min_time) / real_zoom
+        if (center < min_time + window_width / 2) {
+          center = min_time + window_width / 2
+        }
+        if (center > max_time - window_width / 2) {
+          center = max_time - window_width / 2
+        }
+
+        return 100 * (center - (0.5 * $scope.max_time / real_zoom - 0.5 * $scope.min_time / real_zoom)) / ($scope.max_time - $scope.min_time - $scope.max_time / real_zoom - $scope.min_time / real_zoom)
+      }
+
+
+      function calc() {
+        if ($scope.filteredEvents) {
+
+          min_max_time = calc_min_max_window($scope.zoom, $scope.start_relative, $scope.min_time, $scope.max_time)
+          min_time = min_max_time.min_time
+          max_time = min_max_time.max_time
+
+          console.log("Max time: " + max_time)
+          $scope.time_axis = $scope.PulseSheet.time_axis($scope.pulse_sheet_width, min_time, max_time, $scope.filteredEvents, 0.14, $scope.compressTime)
+          var events = $scope.result.events
+          var section_graph = $scope.result.section_graph
+          var section_info = $scope.result.section_info
+
+          var section_signals_with_children = $scope.result.section_signals_with_children
+
+          $scope.section_info = section_info
+          $scope.allSections = $scope.PulseSheet.allSections(events);
+          $scope.allSectionDisplayNames = R.map(R.prop("section_display_name"), R.values(section_info))
+
+
+          $scope.filteredEvents = $scope.PulseSheet.calcFilteredEvents(events, $scope.selectedSignals, $scope.includeShadow, $scope.selectedSections)
+          var focusSection
+          var focus_iteration
+          if ($scope.selectedSection) {
+            focusSection = $scope.selectedSection.section;
+            focus_iteration = $scope.selectedSection.loop_iteration;
+          }
+          var pulse_sheet = $scope.PulseSheet.calcPulseSheet($scope.filteredEvents, $scope.time_axis, $scope.samplingRates, $scope.selectedSections, $scope.allSections, $scope.allSectionDisplayNames, section_graph, section_signals_with_children, section_info, focusSection, focus_iteration)
+          $scope.section_markers = pulse_sheet.section_markers
+          $scope.iteration_markers = pulse_sheet.iteration_markers
+          $scope.section_navigators = pulse_sheet.section_navigators
+          $scope.signal_lines = pulse_sheet.signal_lines
+          $scope.pulse_markers = pulse_sheet.pulse_markers
+          $scope.signal_section_markers = pulse_sheet.signal_section_markers
+          $scope.ticks = pulse_sheet.ticks
+          $scope.tick_headers = pulse_sheet.tick_headers
+
+          $scope.pulse_sheet_height = pulse_sheet.pulse_sheet_height
+        }
+        $scope.samplingRateHeaders = []
+        $scope.samplingRates.forEach(function (rate_info) {
+          $scope.samplingRateHeaders.push({title:"@ " + Math.round(rate_info[1]/1e8)/10 + " Gs/s", rate:rate_info[1]});
+        });
+      }
+
+      $scope.resetZoom = function () {
+        $scope.zoom = 100;
+        $scope.start_relative = 50;
+        $scope.calcAll();
+      }
+
+      $scope.selectSection = function (section, loop_iteration) {
+
+        $scope.selectedSection = { section: section, loop_iteration: loop_iteration }
+        $scope.calcAll()
+
+      }
+
+      $scope.selectAndFocusSection = function (section, loop_iteration) {
+        $scope.selectedSection = { section: section, loop_iteration: loop_iteration };
+        $scope.focusOnSelectedSection();
+      }
+
+      $scope.focusOnSelectedSection = function () {
+        if ($scope.selectedSection) {
+          var section = $scope.selectedSection.section
+          var loop_iteration = $scope.selectedSection.loop_iteration
+          var section_events = R.sortWith([R.ascend(R.prop('time'))], R.filter(R.compose(R.contains(R.__, ["SECTION_START", "SECTION_END"]), R.prop("event_type")), events));
+
+          var section_start_events = R.sortWith([R.ascend(R.prop('time'))], R.filter(R.compose(R.contains(R.__, ["SECTION_START"]), R.prop("event_type")), section_events));
+          var section_end_events = R.sortWith([R.ascend(R.prop('time'))], R.filter(R.compose(R.contains(R.__, ["SECTION_END"]), R.prop("event_type")), section_events));
+          var filtered_section_start_events = R.filter(R.compose(R.contains(R.__, [section]), R.prop("section_name")), section_start_events);
+          var filtered_section_end_events = R.filter(R.compose(R.contains(R.__, [section]), R.prop("section_name")), section_end_events);
+          var event_zip = R.zip(filtered_section_start_events, filtered_section_end_events);
+          var t1
+          var t2
+          event_zip.forEach(function (pair) {
+
+            if (section == $scope.selectedSection.section && (((loop_iteration == undefined) && (pair[0].loop_iteration == undefined)) || loop_iteration == pair[0].loop_iteration)) {
+              t1 = pair[0].time;
+              t2 = pair[1].time;
+            }
+          });
+          if (undefined !== t1 && undefined != t2) {
+            $scope.zoom = Math.round(0.95 * 100 * ($scope.max_time - $scope.min_time) / (t2 - t1))
+            $scope.start_relative = calc_start_relative_from_center($scope.zoom, (t1 + t2) / 2, $scope.min_time, $scope.max_time)
+          }
+          $scope.calcAll();
+        }
+      }
+
+      $scope.toggleSignalSelection = function (signal) {
+        var idx = $scope.selectedSignals.indexOf(signal);
+
+        // Is currently selected
+        if (idx > -1) {
+          $scope.selectedSignals.splice(idx, 1);
+        }
+
+        // Is newly selected
+        else {
+          $scope.selectedSignals.push(signal);
+        }
+        $scope.calcAll()
+
+      }
+
+      $scope.toggleSectionSelection = function (section) {
+        var idx = $scope.selectedSections.indexOf(section);
+
+        // Is currently selected
+        if (idx > -1) {
+          $scope.selectedSections.splice(idx, 1);
+        }
+
+        // Is newly selected
+        else {
+          $scope.selectedSections.push(section);
+        }
+        $scope.calcAll()
+      }
+
+
+      $scope.toggleSectionCollapse = function (section) {
+        var idx = $scope.collapsedSections.indexOf(section);
+        // Is currently collapsed
+        if (idx > -1) {
+          $scope.collapsedSections.splice(idx, 1);
+          $scope.showSubsections(section);
+        }
+
+        // Is newly collapsed
+        else {
+          $scope.collapsedSections.push(section);
+          $scope.hideSubsections(section);
+        }
+
+      }
+
+      $scope.hideSubsections = function (section) {
+        subsections = $scope.result.subsection_map[section]
+        subsections.forEach(function (subsection) {
+          var idx = $scope.selectedSections.indexOf(subsection);
+
+          // Is currently selected
+          if (idx > -1) {
+            $scope.selectedSections.splice(idx, 1);
+          }
+        });
+
+        $scope.calcAll()
+
+      }
+
+      $scope.showSubsections = function (section) {
+        subsections = $scope.result.subsection_map[section]
+        subsections.forEach(function (subsection) {
+          var idx = $scope.selectedSections.indexOf(subsection);
+          if (idx < 0) {
+            $scope.selectedSections.push(subsection);
+          }
+        });
+        $scope.calcAll();
+      }
+
+
+      $scope.calc = calc
+
+
+
+      $scope.loadResult = function loadResult(result_id) {
+        $scope.result = { "events": qccs_current_events, "section_graph": qccs_current_section_graph, "section_info": qccs_current_section_info, "subsection_map": qccs_current_subsection_map, "section_signals_with_children": qccs_current_section_signals_with_children, "sampling_rates": qccs_current_sampling_rates }
+        $scope.onLoad()
+      }
+      $scope.loadResult()
+
+
+
+
+    }
+
+
+  </script>
+</body>
+
+</html>
