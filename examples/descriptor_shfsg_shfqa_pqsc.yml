@@ -1,0 +1,60 @@
+instrument_list:
+  HDAWG:
+  - address: DEV8XXX
+    uid: device_hdawg
+  SHFSG:
+  - address: DEV12XXX
+    uid: device_shfsg
+  SHFQA:
+   - address: DEV12XXX
+     uid: device_shfqa
+  PQSC:
+   - address: DEV10XXX
+     uid: device_pqsc
+
+connections:
+  device_hdawg:
+    - rf_signal: q0/flux_line
+      ports: SIGOUTS/0  
+    - rf_signal: q1/flux_line
+      ports: SIGOUTS/1  
+    - rf_signal: q2/flux_line
+      ports: SIGOUTS/2  
+    - rf_signal: q3/flux_line
+      ports: SIGOUTS/3  
+
+  device_shfsg:
+    - iq_signal: q0/drive_line
+      ports: SGCHANNELS/0/OUTPUT
+    - iq_signal: q1/drive_line
+      ports: SGCHANNELS/1/OUTPUT
+    - iq_signal: q2/drive_line
+      ports: SGCHANNELS/2/OUTPUT
+    - iq_signal: q3/drive_line
+      ports: SGCHANNELS/3/OUTPUT
+
+  device_shfqa:    
+    - iq_signal: q0/measure_line
+      ports: [QACHANNELS/0/OUTPUT]
+    - acquire_signal: q0/acquire_line
+      ports: [QACHANNELS/0/INPUT]
+    - iq_signal: q1/measure_line
+      ports: [QACHANNELS/1/OUTPUT]
+    - acquire_signal: q1/acquire_line
+      ports: [QACHANNELS/1/INPUT]
+    - iq_signal: q2/measure_line
+      ports: [QACHANNELS/2/OUTPUT]
+    - acquire_signal: q2/acquire_line
+      ports: [QACHANNELS/2/INPUT]
+    - iq_signal: q3/measure_line
+      ports: [QACHANNELS/3/OUTPUT]
+    - acquire_signal: q3/acquire_line
+      ports: [QACHANNELS/3/INPUT]
+
+  device_pqsc:
+    - to: device_hdawg
+      port: ZSYNCS/0
+    - to: device_shfsg
+      port: ZSYNCS/1
+    - to: device_shfqa
+      port: ZSYNCS/2

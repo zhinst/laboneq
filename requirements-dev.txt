@@ -1,0 +1,47 @@
+# These are the requirements for developers of LabOne Q.
+# Packages required to just run the software will be installed in the respective
+# component setup.py modules.
+
+# For documentation
+sphinx
+sphinxcontrib-apidoc
+sphinxcontrib-napoleon
+sphinx_tabs
+sphinx_autodoc_typehints
+sphinx_rtd_theme
+pydata-sphinx-theme
+
+# For tests
+pytest
+pytest-assume
+pytest-cov
+pytest_mock
+pytest-httpserver
+jsonschema
+requests
+nbconvert
+wrapt_timeout_decorator
+RsInstrument
+pyvisa-py
+
+# For analysis
+pyyaml
+fs
+fs.sshfs
+tabulate
+python-gitlab
+python-dateutil
+gcovr
+markdown
+pymdown-extensions
+
+# Formatting (must match version in CI)
+black==19.10b0
+
+# packaging/deployment
+wheel
+wheel-inspect
+twine
+
+# CI
+click==8.0.4

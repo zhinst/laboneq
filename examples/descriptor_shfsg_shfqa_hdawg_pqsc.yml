@@ -1,0 +1,25 @@
+instrument_list:
+  SHFQA:
+  - address: DEV12XXX   
+    uid: device_shfqa
+  SHFSG:
+  - address: DEV12XXX
+    uid: device_shfsg
+  PQSC:  
+  - address: DEV10XXX
+    uid: device_pqsc
+connections:
+  device_shfqa:    
+    - iq_signal: q0/measure_line
+      ports: [QACHANNELS/0/OUTPUT]
+    - acquire_signal: q0/acquire_line
+      ports: [QACHANNELS/0/INPUT]
+  device_shfsg:
+    - iq_signal: q0/drive_line
+      ports: SGCHANNELS/0/OUTPUT
+  device_pqsc:
+    - internal_clock_signal
+    - to: device_shfqa
+      port: ZSYNCS/0
+    - to: device_shfsg
+      port: ZSYNCS/1

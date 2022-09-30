@@ -1,0 +1,877 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "title": "QCCS Interface Schema",
+  "description": "QCCS Interface Schema for the QCCS Compiler",
+  "definitions": {
+    "reference-def": {
+      "type": "object",
+      "properties": {
+        "$ref": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "reference-list-def": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/reference-def"
+      }
+    },
+    "metadata-def": {
+      "properties": {
+        "version": {
+          "type": "string",
+          "enum": [
+            "2.0.0",
+            "2.1.0",
+            "2.2.0",
+            "2.3.0",
+            "2.4.0",
+            "2.5.0"
+          ],
+          "description": "File format version. This version must match with the relevant schema version."
+        },
+        "line_endings": {
+          "type": "string"
+        },
+        "unit": {
+          "properties": {
+            "time": {
+              "type": "string",
+              "enum": [
+                "s"
+              ],
+              "description": "Unit of time values. [const]"
+            },
+            "frequency": {
+              "type": "string",
+              "enum": [
+                "Hz"
+              ],
+              "description": "Unit of frequency values. [const]"
+            },
+            "phase": {
+              "type": "string",
+              "enum": [
+                "rad"
+              ],
+              "description": "Unit of phase values. [const]"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "time",
+            "frequency",
+            "phase"
+          ]
+        },
+        "epsilon": {
+          "properties": {
+            "time": {
+              "type": "number",
+              "description": "Rounding epsilon when comparing time delta."
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "time"
+          ]
+        },
+        "rules": {
+          "properties": {
+            "overlap": {
+              "type": "boolean",
+              "default": false
+            },
+            "overflow": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "description": {
+          "$ref": "#/definitions/description-def"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "epsilon"
+      ]
+    },
+    "pulses-def": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/definitions/pulse-functional-def"
+          },
+          {
+            "$ref": "#/definitions/pulse-sampled-real-def"
+          },
+          {
+            "$ref": "#/definitions/pulse-sampled-complex-def"
+          }
+        ]
+      }
+    },
+    "signals-def": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/signal-def"
+      }
+    },
+    "signal-def": {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/id-def"
+        },
+        "signal_type": {
+          "description": "Channel type used for waveform generation. For base band analog signals use 'single', if the signal is up-/down mixed based on a IQ channel pair use 'iq'. The integration type will feed the weight kernels for measuring inputs.",
+          "type": "string",
+          "enum": [
+            "single",
+            "iq",
+            "integration"
+          ]
+        },
+        "modulation": {
+          "description": "If modulation is enabled the oscillators will be used to generate a modulated wave form.",
+          "type": "boolean"
+        },
+        "oscillators_list": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/reference-def"
+          }
+        },
+        "signal_amplitude": {
+          "description": "Amplitude of the hardware channels associated with the signal",
+          "$ref": "#/definitions/number-or-param-ref-def",
+          "default": 1.0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "signal_type"
+      ]
+    },
+    "signal-channels-connections-def": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/signal-channels-connection-def"
+      }
+    },
+    "signal-channels-connection-def": {
+      "type": "object",
+      "properties": {
+        "signal": {
+          "$ref": "#/definitions/reference-def"
+        },
+        "device": {
+          "$ref": "#/definitions/reference-def"
+        },
+        "connection": {
+          "$ref": "#/definitions/channels-def"
+        },
+        "mixer_calibration": {
+          "description": "Mixer calibration of the IQ signal.",
+          "properties": {
+            "voltage_offsets": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2
+            },
+            "correction_matrix": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2
+              },
+              "maxItems": 2,
+              "minItems": 2
+            }
+          }
+        },
+        "range": {
+          "type": "number"
+        },
+        "lo_frequency": {
+          "type": "number"
+        },
+        "port_delay": {
+          "type": "number"
+        },
+        "delay_signal": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "signal",
+        "device",
+        "connection"
+      ]
+    },
+    "channels-def": {
+      "type": "object",
+      "propertes": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "in",
+            "out"
+          ]
+        },
+        "channels": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2
+        }
+      }
+    },
+    "trigger-def": {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/id-def"
+        },
+        "source": {}
+      },
+      "additionalProperties": false
+    },
+    "oscillators-def": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/oscillator-def"
+      }
+    },
+    "devices-def": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/device-def"
+      }
+    },
+    "server-def": {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/id-def"
+        },
+        "host": {
+          "type": "string",
+          "default": "127.0.0.1"
+        },
+        "port": {
+          "type": "integer",
+          "default": 8004,
+          "minLength": 1,
+          "maxLength": 5
+        },
+        "api_level": {
+          "type": "integer",
+          "default": 6,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "servers-def": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/server-def"
+      }
+    },
+    "port-map-def": {
+      "properties": {
+        "device": {
+          "$ref": "#/definitions/reference-def"
+        },
+        "port": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "device",
+        "port"
+      ]
+    },
+    "pqsc-def": {
+      "properties": {
+        "device": {
+          "$ref": "#/definitions/reference-def"
+        },
+        "ports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/port-map-def"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "connectivity-def": {
+      "properties": {
+        "leader": {
+          "$ref": "#/definitions/reference-def"
+        },
+        "reference_clock": {
+          "type": "number",
+          "enum": [
+            10e6,
+            100e6
+          ]
+        },
+        "triggers": {
+          "patternProperties": {
+            "^[A-Za-z_][A-Za-z0-9_-]*$": {
+              "$ref": "#/definitions/trigger-def"
+            }
+          },
+          "additionalProperties": false
+        },
+        "pqscs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/pqsc-def"
+          }
+        },
+        "dios": {
+          "type": "array",
+          "items": {
+            "properties": {
+              "leader": {
+                "$ref": "#/definitions/reference-def"
+              },
+              "follower": {
+                "$ref": "#/definitions/reference-def"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "section-list-def": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/id-def"
+      }
+    },
+    "pulse-functional-def": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/id-def"
+        },
+        "play_mode": {
+          "type": "string",
+          "value": "FUNCTIONAL"
+        },
+        "function": {
+          "type": "string"
+        },
+        "length": {
+          "$ref": "#/definitions/length-def"
+        },
+        "amplitude": {
+          "$ref": "#/definitions/number-or-param-ref-def"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "function",
+        "length"
+      ]
+    },
+    "complex-number-def": {
+      "oneOf": [
+        {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "items": {
+            "type": "number"
+          }
+        }
+      ]
+    },
+    "pulse-sampled-real-def": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/id-def"
+        },
+        "play_mode": {
+          "type": "string",
+          "value": "SAMPLED_REAL"
+        },
+        "samples": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "play_mode",
+        "samples"
+      ]
+    },
+    "pulse-sampled-complex-def": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/id-def"
+        },
+        "play_mode": {
+          "type": "string",
+          "value": "SAMPLED_COMPLEX"
+        },
+        "samples": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/complex-number-def"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "samples"
+      ]
+    },
+    "oscillator-def": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/id-def"
+        },
+        "frequency": {
+          "$ref": "#/definitions/number-or-param-ref-def"
+        },
+        "hardware": {
+          "$ref": "#/definitions/auto-bool-def"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "frequency"
+      ]
+    },
+    "device-def": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/id-def"
+        },
+        "device_type": {
+          "type": "string",
+          "enum": [
+            "hdawg",
+            "uhfqa",
+            "pqsc"
+          ]
+        },
+        "driver": {
+          "type": "string"
+        },
+        "serial": {
+          "type": "string"
+        },
+        "interface": {
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": [
+                "1gbe",
+                "1GbE"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reference_clock_source": {
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": [
+                "internal",
+                "external"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "oscillators_list": {
+          "$ref": "#/definitions/reference-list-def"
+        },
+        "server": {
+          "$ref": "#/definitions/reference-def"
+        },
+        "parameters": {
+          "$ref": "#/definitions/reference-list-def"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ]
+    },
+    "repeat-def": {
+      "type": "object",
+      "title": "Repeat loop which exectues the sections count times.",
+      "properties": {
+        "count": {
+          "type": "number"
+        },
+        "execution_type": {
+          "title": "Select between hardware loop (currently loop unrolling) and controller loop repeating the whole experiment for each loop index.",
+          "type": "string",
+          "enum": [
+            "hardware",
+            "controller"
+          ]
+        },
+        "averaging_type": {
+          "type": "string",
+          "enum": [
+            "none",
+            "hardware"
+          ]
+        },
+        "parameters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/loopparameter-def"
+          },
+          "additionalProperties": false
+        },
+        "sections_list": {
+          "$ref": "#/definitions/reference-list-def"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "count",
+        "sections_list"
+      ]
+    },
+    "signal-pulses-mapping-def": {
+      "type": "object",
+      "properties": {
+        "signal": {
+          "$ref": "#/definitions/reference-def"
+        },
+        "pulses_list": {
+          "$ref": "#/definitions/pulse-or-offsetpulse-list-def"
+        }
+      },
+      "additionalProperties": false
+    },
+    "pulse-or-offsetpulse-list-def": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/pulse-or-offsetpulse-def"
+      }
+    },
+    "pulse-or-offsetpulse-def": {
+      "type": "object",
+      "properties": {
+        "pulse": {
+          "$ref": "#/definitions/reference-def"
+        },
+        "offset": {
+          "$ref": "#/definitions/number-or-param-ref-def"
+        },
+        "amplitude": {
+          "$ref": "#/definitions/number-or-param-ref-def"
+        },
+        "phase": {
+          "$ref": "#/definitions/number-or-param-ref-def"
+        },
+        "increment_oscillator_phase": {
+          "$ref": "#/definitions/number-or-param-ref-def"
+        },
+        "set_oscillator_phase": {
+          "$ref": "#/definitions/number-or-param-ref-def"
+        },
+        "length": {
+          "$ref": "#/definitions/number-or-param-ref-def"
+        }
+      },
+      "additionalProperties": false
+    },
+    "sections-def": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/section-def"
+      }
+    },
+    "section-def": {
+      "title": "A section defines a region of synchronously and sample-exact exectued waveforms. Timings inside the sections are relative to the section barrier.",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/id-def"
+        },
+        "align": {
+          "type": "string",
+          "enum": [
+            "left",
+            "right"
+          ]
+        },
+        "description": {
+          "$ref": "#/definitions/description-def"
+        },
+        "play_after": {
+          "$ref": "#/definitions/play-after-def"
+        },
+        "length": {
+          "$ref": "#/definitions/length-def"
+        },
+        "repeat": {
+          "$ref": "#/definitions/repeat-def"
+        },
+        "signals_list": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/signal-pulses-mapping-def"
+          }
+        },
+        "trigger": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "integration_trigger",
+              "spectroscopy"
+            ]
+          }
+        },
+        "repetition_mode": {
+          "type": "string",
+          "enum": [
+            "constant",
+            "fastest",
+            "auto"
+          ]
+        },
+        "averaging_mode": {
+          "type": "string",
+          "enum": [
+            "cyclic",
+            "sequential"
+          ]
+        },
+        "repetition_time": {
+          "type": "number"
+        },
+        "offset": {
+          "oneOf": [
+            {
+              "$ref": "#/definitions/reference-def"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "sections_list": {
+          "$ref": "#/definitions/reference-list-def"
+        },
+        "reset_oscillator_phase": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ]
+    },
+    "experiment-def": {
+      "properties": {
+        "sections_list": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/reference-def"
+          }
+        },
+        "signals_list": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/reference-def"
+          }
+        }
+      },
+      "required": [
+        "sections_list"
+      ],
+      "additionalProperties": false
+    },
+    "loopparameter-def": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "start": {
+          "type": "number"
+        },
+        "step": {
+          "type": "number"
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        }
+      },
+      "dependencies": {
+        "start": {
+          "required": [
+            "step"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "id-def": {
+      "description": "The unique identifier for an object",
+      "type": "string"
+    },
+    "description-def": {
+      "description": "User description for the specific element.",
+      "type": "string"
+    },
+    "play-after-def": {
+      "description": "Play after the section with the given ID.",
+      "type": "string"
+    },
+    "length-def": {
+      "title": "Section length in seconds, 'auto', or defined by a parameter 'param-...'.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "auto"
+          ]
+        },
+        {
+          "type": "number",
+          "minimum": 0,
+          "exclusiveMinimum": true
+        },
+        {
+          "$ref": "#/definitions/reference-def"
+        }
+      ]
+    },
+    "signal-list-def": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/id-def"
+      }
+    },
+    "time-def": {
+      "type": "number"
+    },
+    "number-or-param-ref-def": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/reference-def"
+        },
+        {
+          "type": "number"
+        }
+      ]
+    },
+    "parameter-def": {
+      "type": "string",
+      "pattern": "^param-[A-Za-z0-9_]+"
+    },
+    "auto-bool-def": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "auto"
+          ]
+        },
+        {
+          "type": "boolean"
+        }
+      ]
+    }
+  },
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/definitions/metadata-def"
+    },
+    "servers": {
+      "$ref": "#/definitions/servers-def"
+    },
+    "devices": {
+      "$ref": "#/definitions/devices-def"
+    },
+    "connectivity": {
+      "$ref": "#/definitions/connectivity-def"
+    },
+    "oscillators": {
+      "$ref": "#/definitions/oscillators-def"
+    },
+    "signals": {
+      "$ref": "#/definitions/signals-def"
+    },
+    "signal_connections": {
+      "$ref": "#/definitions/signal-channels-connections-def"
+    },
+    "pulses": {
+      "$ref": "#/definitions/pulses-def"
+    },
+    "sections": {
+      "$ref": "#/definitions/sections-def"
+    },
+    "experiment": {
+      "$ref": "#/definitions/experiment-def"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "metadata",
+    "servers",
+    "devices",
+    "signals",
+    "signal_connections",
+    "pulses",
+    "sections",
+    "experiment"
+  ]
+}
