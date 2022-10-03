@@ -1972,28 +1972,29 @@ class Compiler:
                 "Using desktop setup configuration with leader %s", leader,
             )
 
-            has_signal_on_awg_0_of_leader = False
-            for signal_id in self._experiment_dao.signals():
-                signal_info = self._experiment_dao.signal_info(signal_id)
-                if signal_info["device_id"] == leader and (
-                    0 in signal_info["channels"] or 1 in signal_info["channels"]
-                ):
-                    has_signal_on_awg_0_of_leader = True
-                    break
+            if has_hdawg or has_shfsg and not has_shfqa:
+                has_signal_on_awg_0_of_leader = False
+                for signal_id in self._experiment_dao.signals():
+                    signal_info = self._experiment_dao.signal_info(signal_id)
+                    if signal_info["device_id"] == leader and (
+                        0 in signal_info["channels"] or 1 in signal_info["channels"]
+                    ):
+                        has_signal_on_awg_0_of_leader = True
+                        break
 
-            if not has_signal_on_awg_0_of_leader:
-                signal_id = "__small_system_trigger__"
-                device_id = leader
-                signal_type = "iq"
-                channels = [0, 1]
-                self._experiment_dao.add_signal(
-                    device_id, channels, "out", signal_id, signal_type, False
-                )
-                _logger.debug(
-                    "No pulses played on channels 1 or 2 of %s, adding dummy signal %s to ensure triggering of the setup",
-                    leader,
-                    signal_id,
-                )
+                if not has_signal_on_awg_0_of_leader:
+                    signal_id = "__small_system_trigger__"
+                    device_id = leader
+                    signal_type = "iq"
+                    channels = [0, 1]
+                    self._experiment_dao.add_signal(
+                        device_id, channels, "out", signal_id, signal_type, False
+                    )
+                    _logger.debug(
+                        "No pulses played on channels 1 or 2 of %s, adding dummy signal %s to ensure triggering of the setup",
+                        leader,
+                        signal_id,
+                    )
 
             has_qa = type_counter["shfqa"] > 0 or type_counter["uhfqa"] > 0
             is_hdawg_solo = type_counter["hdawg"] == 1 and not has_shf and not has_qa

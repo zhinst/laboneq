@@ -250,6 +250,9 @@ class DeviceSHFSG(DeviceZI):
                 raise LabOneQControllerException(
                     f"{self.dev_repr}: Local oscillator frequency mismatch between outputs {prev_io.channel} and {io.channel} sharing synthesizer {synth_idx}: {prev_io.lo_frequency} != {io.lo_frequency}"
                 )
+            if self._get_option("is_qc"):
+                # Different numbering on SHFQC - index 0 are QA synths
+                synth_idx += 1
             return synth_idx
 
         ios = initialization.outputs or []

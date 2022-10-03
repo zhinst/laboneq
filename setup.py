@@ -4,6 +4,7 @@
 import inspect
 import os
 import sys
+from pathlib import Path
 
 import setuptools
 
@@ -43,16 +44,18 @@ if not hasattr(setuptools, "find_namespace_packages") or not inspect.ismethod(
     sys.exit(1)
 
 
-version_path = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "laboneq/VERSION.txt",)
-)
-with open(version_path, "r") as fd:
-    version = fd.read().rstrip()
+this_directory = Path(__file__).parent
+version_path = this_directory / "laboneq/VERSION.txt"
+version = version_path.read_text().rstrip()
+
+long_description = (this_directory / "README.md").read_text()
 
 setuptools.setup(
     name="laboneq",
     version=version,
     description="Zurich Instrument tools for quantum information science",
+    long_description=long_description,
+    long_description_content_type="text/markdown",
     url="https://github.com/zhinst/laboneq",
     author="Zurich Instruments Development Team",
     author_email="info@zhinst.com",
@@ -72,7 +75,9 @@ setuptools.setup(
         "Topic :: Scientific/Engineering",
     ],
     keywords="zhinst sdk quantum",
-    packages=setuptools.find_namespace_packages(exclude=["test*"]),
+    packages=setuptools.find_namespace_packages(
+        exclude=["ci*", "docs*", "examples*", "resources*", "test*"]
+    ),
     install_requires=requirements,
     include_package_data=True,
     python_requires=">=3.7",
