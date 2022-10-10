@@ -15,7 +15,7 @@ requirements = [
     "marshmallow_union",
     "matplotlib",
     "networkx",
-    "retworkx",
+    "retworkx==0.11.0",
     "numpy",
     "python-box",
     "pyyaml",
