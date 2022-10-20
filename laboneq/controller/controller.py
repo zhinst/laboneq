@@ -9,12 +9,13 @@ import re
 import traceback
 import numpy as np
 
-from typing import Generator, List, Dict, Any, Callable, Tuple, Union, TYPE_CHECKING
+from typing import Iterator, List, Dict, Any, Callable, Tuple, Union, TYPE_CHECKING
 from numpy import typing as npt
 
 import zhinst.utils
 
 from pkg_resources import get_distribution
+from laboneq.controller.devices.zi_node_monitor import AllConditionsWaiter
 from laboneq.controller.protected_session import ProtectedSession
 
 from laboneq.core.types.enums.averaging_mode import AveragingMode
@@ -25,6 +26,7 @@ from laboneq.core.utilities.replace_pulse import ReplacementType, calc_wave_repl
 from laboneq.executor.executor import ExecutorBase, LoopingMode
 
 from .devices.device_base import DeviceBase, DeviceQualifier
+from .devices.device_zi import DeviceZI
 from .devices.device_factory import DeviceFactory
 from .recipe_1_4_0 import *
 from .recipe_processor import RecipeData, RtExecutionInfo, pre_process_compiled
@@ -76,6 +78,8 @@ class Controller:
         self._run_parameters = run_parameters or ControllerRunParameters()
         self._device_setup: DeviceSetup = device_setup
         self._connected = False
+        # Waves which are uploaded to the devices via pulse replacements
+        self._current_waves = []
         self._user_functions: Dict[str, Callable] = user_functions
         self._nodes_from_user_functions: List[DaqNodeAction] = []
         self._recipe_data: RecipeData = None
@@ -87,13 +91,11 @@ class Controller:
         self._logger = logging.getLogger(__name__)
         self._logger.debug("Controller created")
         self._logger.debug("Controller debug logging is on")
-        self._current_waves = []
-        "Waves which are uploaded to the devices via pulse replacements"
 
         version = get_distribution("laboneq").version
         self._logger.info("VERSION: laboneq %s", version)
 
-    DevIterType = Generator[Tuple[str, DeviceBase], None, None]
+    DevIterType = Iterator[Tuple[str, DeviceBase]]
 
     @property
     def leaders(self) -> DevIterType:
@@ -194,6 +196,9 @@ class Controller:
             reset_nodes.extend(device.collect_reset_nodes())
         self._batch_set(reset_nodes)
         self._sync_all_daqs()
+        for daq in self._daqs.values():
+            daq.node_monitor.stop()
+            daq.node_monitor.start()
 
     def _wait_for_conditions_to_start(self):
         for initialization in self._recipe_data.initializations:
@@ -297,6 +302,10 @@ class Controller:
         self._sync_all_daqs()
         self._wait_for_conditions_to_start()
 
+    def _deinitialize_devices(self):
+        for daq in self._daqs.values():
+            daq.node_monitor.stop()
+
     def _split_daq_actions(
         self, daq_actions: List[DaqNodeAction]
     ) -> Dict[DaqWrapper, List[DaqNodeAction]]:
@@ -307,15 +316,6 @@ class Controller:
 
             res[daq_action.daq].append(daq_action)
         return res
-
-    def _wait_all_conditions(self, wait_conditions):
-        split_actions: Dict[DaqWrapper, List[DaqNodeAction]] = self._split_daq_actions(
-            wait_conditions
-        )
-        for daq, actions in split_actions.items():
-            daq.wait_all_conditions(
-                actions, self._recipe_data.recipe.experiment.total_execution_time
-            )
 
     def _batch_set(self, daq_actions: List[DaqNodeAction]):
         split_actions: Dict[DaqWrapper, List[DaqNodeAction]] = self._split_daq_actions(
@@ -351,8 +351,26 @@ class Controller:
 
         self._batch_set(nodes_to_execute)
 
+        conditions_waiter = AllConditionsWaiter()
         for _, device in self.followers:
-            device.wait_for_execution_ready()
+            if isinstance(device, DeviceZI):
+                dev_zi: DeviceZI = device
+                conditions_waiter.add(
+                    target=dev_zi.daq.node_monitor,
+                    conditions=dev_zi.conditions_for_execution_ready(),
+                )
+        if not conditions_waiter.wait_all(timeout=2):
+            self._logger.warning(
+                "Conditions to start RT on followers still not fulfilled after 2 seconds, nonetheless trying to continue..."
+            )
+
+        # Standalone workaround: The device is triggering itself,
+        # thus split the execution into AWG trigger arming and triggering
+        nodes_to_execute = []
+        for _, device in self.followers:
+            nodes_to_execute.extend(device.collect_start_execution_nodes())
+
+        self._batch_set(nodes_to_execute)
 
     def _execute_one_step_leaders(self):
         self._logger.debug("Settings nodes to start on leaders")
@@ -362,55 +380,39 @@ class Controller:
             nodes_to_execute.extend(device.collect_execution_nodes())
         self._batch_set(nodes_to_execute)
 
-    def _wait_execution_to_stop(
-        self, acquisition_units: List[Tuple[str, int, AcquisitionType]]
-    ):
-        self._logger.debug("Waiting for execution stop")
+    def _wait_execution_to_stop(self, acquisition_type: AcquisitionType):
+        min_wait_time = self._recipe_data.recipe.experiment.total_execution_time
+        if min_wait_time is None:
+            self._logger.warning(
+                "No estimation available for the execution time, assuming 10 sec."
+            )
+            min_wait_time = 10.0
+        elif min_wait_time > 5:  # Only inform about RT executions taking longer than 5s
+            self._logger.info("Estimated RT execution time: %.2f s.", min_wait_time)
+        guarded_wait_time = round(
+            min_wait_time * 1.1 + 1
+        )  # +10% and fixed 1sec guard time
 
-        wait_conditions_to_end = []
-        for uid, device in itertools.chain(self.followers, self.leaders):
-            wait_conditions_to_end.extend(
-                device.collect_conditions_to_close_loop(
-                    [
-                        (awg, acq_type)
-                        for (dev_uid, awg, acq_type) in acquisition_units
-                        if dev_uid == uid
-                    ]
+        conditions_waiter = AllConditionsWaiter()
+        for _, device in self.followers:
+            if isinstance(device, DeviceZI):
+                dev_zi: DeviceZI = device
+                conditions_waiter.add(
+                    target=dev_zi.daq.node_monitor,
+                    conditions=dev_zi.conditions_for_execution_done(acquisition_type),
                 )
+        if not conditions_waiter.wait_all(timeout=guarded_wait_time):
+            self._logger.warning(
+                "Stop conditions still not fulfilled after %f s, estimated execution time was %.2f s. Continuing to the next step.",
+                guarded_wait_time,
+                min_wait_time,
             )
 
-        self._wait_all_conditions(wait_conditions_to_end)
-
-    def _prepare_end_conditions(
-        self, acquisition_units: List[Tuple[str, int, AcquisitionType]]
-    ):
-        self._logger.debug("Preparing end conditions")
-
-        wait_conditions_to_end = []
-        for uid, device in itertools.chain(self.followers, self.leaders):
-            wait_conditions_to_end.extend(
-                device.collect_conditions_to_close_loop(
-                    [
-                        (awg, acq_type)
-                        for (dev_uid, awg, acq_type) in acquisition_units
-                        if dev_uid == uid
-                    ]
-                )
-            )
-
-        self._prepare_wait_conditions(wait_conditions_to_end)
-
-    def _prepare_wait_conditions(self, wait_conditions):
-        split_actions: Dict[DaqWrapper, List[DaqNodeAction]] = self._split_daq_actions(
-            wait_conditions
-        )
-        for daq in split_actions:
-            daq.prepare_conditions(split_actions[daq])
-
-    def _execute_one_step(
-        self, acquisition_units: List[Tuple[str, int, AcquisitionType]]
-    ):
+    def _execute_one_step(self, acquisition_type: AcquisitionType):
         self._logger.debug("Step executing")
+
+        for daq in self._daqs.values():
+            daq.node_monitor.flush()
 
         # Can't batch everything together, because PQSC needs to be executed after HDs
         # otherwise it can finish before AWGs are started, and the trigger is lost
@@ -419,7 +421,7 @@ class Controller:
 
         self._logger.debug("Execution started")
 
-        self._wait_execution_to_stop(acquisition_units)
+        self._wait_execution_to_stop(acquisition_type)
 
         self._logger.debug("Execution stopped")
 
@@ -462,15 +464,21 @@ class Controller:
 
         self._check_connected()
         self._prepare_result_shapes()
-        self._initialize_devices()
-        self._current_waves = []
-        self._logger.info("Starting near-time execution...")
-        # Ensure no side effects from the previous execution in the same session
-        self._nodes_from_user_functions = []
-        Controller.NearTimeExecutor(controller=self).run(self._recipe_data.execution)
-        for device in self._devices.values():
-            device.check_errors()
-        self._logger.info("Finished near-time execution.")
+        try:
+            self._initialize_devices()
+
+            # Ensure no side effects from the previous execution in the same session
+            self._current_waves = []
+            self._nodes_from_user_functions = []
+            self._logger.info("Starting near-time execution...")
+            Controller.NearTimeExecutor(controller=self).run(
+                self._recipe_data.execution
+            )
+            self._logger.info("Finished near-time execution.")
+            for device in self._devices.values():
+                device.check_errors()
+        finally:
+            self._deinitialize_devices()
 
         if self._run_parameters.shut_down is True:
             self.shut_down()
@@ -575,6 +583,7 @@ class Controller:
             )
             existing = self._daqs.get(server_uid)
             if existing is not None and existing.server_qualifier == server_qualifier:
+                existing.node_monitor.reset()
                 updated_daqs[server_uid] = existing
                 continue
 
@@ -584,7 +593,9 @@ class Controller:
             if server_qualifier.dry_run:
                 daq = DaqWrapperDryRun(server_uid, server_qualifier)
                 for instr in device_setup.instruments:
-                    daq.map_device_type(instr.address, instr.calc_driver())
+                    daq.map_device_type(
+                        instr.address, instr.calc_driver(), instr.calc_options()
+                    )
             else:
                 daq = DaqWrapper(server_uid, server_qualifier)
             updated_daqs[server_uid] = daq
@@ -615,14 +626,13 @@ class Controller:
 
     def _prepare_rt_execution(
         self, rt_section_uid: str
-    ) -> Tuple[List[DaqNodeAction], List[Tuple[str, int, AcquisitionType]]]:
+    ) -> Tuple[List[DaqNodeAction], AcquisitionType]:
         if rt_section_uid is None:
             return [], []  # Old recipe-based execution - skip RT preparation
         rt_execution_info = self._recipe_data.rt_execution_infos[rt_section_uid]
         self._nodes_from_user_functions.sort(key=lambda v: v.path)
         nodes_to_prepare_rt = [*self._nodes_from_user_functions]
         self._nodes_from_user_functions.clear()
-        acquisition_units = []
         for awg_key, awg_config in rt_execution_info.per_awg_configs.items():
             device = self._devices[awg_key.device_uid]
             if rt_execution_info.averaging_mode == AveragingMode.SINGLE_SHOT:
@@ -642,14 +652,7 @@ class Controller:
                     rt_execution_info.acquisition_type,
                 )
             )
-            acquisition_units.append(
-                (
-                    awg_key.device_uid,
-                    awg_key.awg_index,
-                    rt_execution_info.acquisition_type,
-                )
-            )
-        return nodes_to_prepare_rt, acquisition_units
+        return nodes_to_prepare_rt
 
     class NearTimeExecutor(ExecutorBase):
         def __init__(self, controller: Controller):
@@ -700,19 +703,21 @@ class Controller:
                 self.nt_loop_indices.pop()
 
         def rt_handler(
-            self, count: int, uid: str, averaging_mode, acquisition_type, enter: bool
+            self,
+            count: int,
+            uid: str,
+            averaging_mode: AveragingMode,
+            acquisition_type: AcquisitionType,
+            enter: bool,
         ):
             if enter:
-                step_nodes, acquisition_units = self.controller._prepare_rt_execution(
-                    rt_section_uid=uid
-                )
+                step_nodes = self.controller._prepare_rt_execution(rt_section_uid=uid)
                 self.nodes_to_prepare_step.extend(step_nodes)
                 self.controller._batch_set(self.nodes_to_prepare_step)
                 self.nodes_to_prepare_step.clear()
                 for _ in range(3):  # Up to 3 retries
                     try:
-                        self.controller._prepare_end_conditions(acquisition_units)
-                        self.controller._execute_one_step(acquisition_units)
+                        self.controller._execute_one_step(acquisition_type)
                         self.controller._read_one_step_results(
                             nt_loop_indices=self.nt_loop_indices, rt_section_uid=uid
                         )
@@ -825,7 +830,7 @@ class Controller:
                             continue  # unused entries in sparse result vector map to None handle
                         result = self._results.acquired_results[handle]
                         build_partial_result(
-                            result, nt_loop_indices, raw_result, mapping, handle,
+                            result, nt_loop_indices, raw_result, mapping, handle
                         )
 
     def _report_step_error(

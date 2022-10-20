@@ -58,11 +58,7 @@ class DriverOption(fields.Field):
 
 class Device(QCCSSchema):
     class Meta:
-        fields = (
-            "device_uid",
-            "driver",
-            "options",
-        )
+        fields = ("device_uid", "driver", "options")
         ordered = True
         unknown = EXCLUDE
 
@@ -290,12 +286,7 @@ class SectionOperation(QCCSSchema):
 
 class Execution(QCCSSchema):
     class Meta:
-        fields = (
-            "type",
-            "count",
-            "parameters",
-            "children",
-        )
+        fields = ("type", "count", "parameters", "children")
         ordered = True
 
     @dataclass
@@ -313,11 +304,7 @@ class Execution(QCCSSchema):
 
 class Measurement(QCCSSchema):
     class Meta:
-        fields = (
-            "length",
-            "delay",
-            "channel",
-        )
+        fields = ("length", "delay", "channel")
 
     @dataclass
     class Data:
@@ -452,14 +439,7 @@ class OscillatorParam(QCCSSchema):
 
 class IntegratorAllocation(QCCSSchema):
     class Meta:
-        fields = (
-            "signal_id",
-            "device_id",
-            "awg",
-            "channels",
-            "weights",
-            "threshold",
-        )
+        fields = ("signal_id", "device_id", "awg", "channels", "weights", "threshold")
         ordered = True
 
     @dataclass

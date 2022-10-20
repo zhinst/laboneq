@@ -3,9 +3,10 @@
 
 from __future__ import annotations
 
+import json
 import time
 from enum import IntEnum
-from typing import List, TYPE_CHECKING, Optional
+from typing import Any, Dict, List, Optional
 
 from laboneq.controller.communication import (
     DaqNodeAction,
@@ -13,13 +14,14 @@ from laboneq.controller.communication import (
     DaqNodeGetAction,
     CachingStrategy,
 )
+from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.recipe_1_4_0 import Initialization
 from laboneq.controller.recipe_enums import ReferenceClockSource
 from laboneq.controller.recipe_enums import SignalType, DIOConfigType
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.controller.versioning import LabOneVersion
-from laboneq.controller.devices.device_zi import DeviceZI
+from laboneq.core.types.enums.acquisition_type import AcquisitionType
 
 DIG_TRIGGER_1_LEVEL = 0.225
 
@@ -69,8 +71,8 @@ class DeviceHDAWG(DeviceZI):
         return self._channels // 2
 
     def _osc_group_by_channel(self, channel: int) -> int:
-        # For QCCS SW, the AWG oscillator control is always on, in which case
-        # every pair of output channels share the same set of oscillators
+        # For LabOne Q SW, the AWG oscillator control is always on, in which
+        # case every pair of output channels share the same set of oscillators
         return channel // 2
 
     def _get_next_osc_index(
@@ -83,6 +85,12 @@ class DeviceHDAWG(DeviceZI):
             return None
         osc_index_base = osc_group * max_per_group
         return osc_index_base + previously_allocated
+
+    def _nodes_to_monitor_impl(self) -> List[str]:
+        nodes = []
+        for awg in range(self._get_num_AWGs()):
+            nodes.append(f"/{self.serial}/awgs/{awg}/enable")
+        return nodes
 
     def collect_awg_after_upload_nodes(self, initialization: Initialization.Data):
         nodes_to_configure_phase = []
@@ -108,6 +116,20 @@ class DeviceHDAWG(DeviceZI):
             )
 
         return nodes_to_configure_phase
+
+    def conditions_for_execution_ready(self) -> Dict[str, Any]:
+        conditions: Dict[str, Any] = {}
+        for awg_index in self._allocated_awgs:
+            conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = 1
+        return conditions
+
+    def conditions_for_execution_done(
+        self, acquisition_type: AcquisitionType
+    ) -> Dict[str, Any]:
+        conditions: Dict[str, Any] = {}
+        for awg_index in self._allocated_awgs:
+            conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = 0
+        return conditions
 
     def collect_output_initialization_nodes(
         self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
@@ -281,7 +303,17 @@ class DeviceHDAWG(DeviceZI):
 
         return device_specific_initialization_nodes
 
-    def collect_trigger_configuration_nodes(self, initialization):
+    def add_command_table_header(self, body: dict) -> Dict:
+        return {
+            "$schema": "https://docs.zhinst.com/hdawg/commandtable/v1_0/schema",
+            "header": {"version": "1.0.0"},
+            "table": body,
+        }
+
+    def command_table_path(self, awg_index: int) -> str:
+        return f"/{self.serial}/awgs/{awg_index}/commandtable/"
+
+    def collect_trigger_configuration_nodes(self, initialization: Initialization.Data):
         self._logger.debug(
             "%s: Configuring trigger configuration nodes.", self.dev_repr
         )

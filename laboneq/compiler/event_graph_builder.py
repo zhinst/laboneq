@@ -266,12 +266,12 @@ class EventGraphBuilder:
 
     @staticmethod
     def add_right_aligned_collector_for_section(
-        event_graph: EventGraph, section_graph, section_name
+        event_graph: EventGraph, section_graph: SectionGraph, section_name
     ):
-        assert section_graph.section_info(section_name).get("align") == "right"
+        assert section_graph.section_info(section_name).align == "right"
 
         cur_section_span = event_graph.find_section_start_end(section_name)
-        length = section_graph.section_info(section_name).get("length")
+        length = section_graph.section_info(section_name).length
         return EventGraphBuilder.find_or_add_right_aligned_collector(
             event_graph, section_name, cur_section_span, length
         )
@@ -285,11 +285,11 @@ class EventGraphBuilder:
         root_sections: List[ChainElement] = []
 
         for i, section_name in enumerate(section_graph.topologically_sorted_sections()):
-            section_node = section_graph.section_info(section_name)
-            length = section_node.get("length")
+            section_info = section_graph.section_info(section_name)
+            length = section_info.length
 
             section_span = ChainElement(
-                section_node["section_id"],
+                section_info.section_id,
                 start_type=EventType.SECTION_START,
                 end_type=EventType.SECTION_END,
                 length=length,
@@ -315,7 +315,7 @@ class EventGraphBuilder:
         )
 
         for section_name in [s.attributes["section_name"] for s in root_sections]:
-            if section_graph.section_info(section_name).get("align") == "right":
+            if section_graph.section_info(section_name).align == "right":
                 EventGraphBuilder.add_right_aligned_collector_for_section(
                     event_graph, section_graph, section_name
                 )
@@ -326,7 +326,7 @@ class EventGraphBuilder:
         for parent_section, spans in parent_sections.items():
             parent_span = event_graph.find_section_start_end(parent_section)
             parent_right_aligned = (
-                section_graph.section_info(parent_section).get("align") == "right"
+                section_graph.section_info(parent_section).align == "right"
             )
             section_name_to_span_index = {
                 span.attributes["section_name"]: i for i, span in enumerate(spans)
@@ -362,8 +362,10 @@ class EventGraphBuilder:
 
             if parent_right_aligned:
 
-                right_aligned_collector_id = EventGraphBuilder.add_right_aligned_collector_for_section(
-                    event_graph, section_graph, parent_section
+                right_aligned_collector_id = (
+                    EventGraphBuilder.add_right_aligned_collector_for_section(
+                        event_graph, section_graph, parent_section
+                    )
                 )
 
                 assert (
@@ -477,21 +479,19 @@ class EventGraphBuilder:
 
             section_span = event_graph.find_section_start_end(section_name)
 
-            if section_graph.section_info(section_name).get("trigger") is not None:
-                if "spectroscopy" in section_graph.section_info(section_name).get(
-                    "trigger"
-                ):
+            if section_graph.section_info(section_name).trigger is not None:
+                if "spectroscopy" in section_graph.section_info(section_name).trigger:
                     spectroscopy_end_id = event_graph.add_node(
                         section_name=section_name, event_type=EventType.SPECTROSCOPY_END
                     )
                     event_graph.after_or_at(section_span.end, spectroscopy_end_id)
 
-            if section_graph.section_info(section_name).get("align") == "right":
+            if section_graph.section_info(section_name).align == "right":
                 EventGraphBuilder.find_or_add_right_aligned_collector(
                     event_graph,
                     section_name,
                     section_span,
-                    section_graph.section_info(section_name)["length"],
+                    section_graph.section_info(section_name).length,
                 )
 
     @staticmethod
@@ -501,8 +501,7 @@ class EventGraphBuilder:
         for section_name in reversed(
             list(section_graph.topologically_sorted_sections())
         ):
-            section_node = section_graph.section_info(section_name)
-            if section_node["align"] == "right":
+            if section_graph.section_info(section_name).align == "right":
                 subsection_start_nodes = event_graph.find_section_events_by_type(
                     section_name, event_type=EventType.SUBSECTION_START
                 )

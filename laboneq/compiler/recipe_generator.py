@@ -3,6 +3,9 @@
 
 from laboneq.compiler.experiment_dao import ExperimentDAO
 from .device_type import DeviceType
+import logging
+
+_logger = logging.getLogger(__name__)
 
 
 class RecipeGenerator:
@@ -80,6 +83,7 @@ class RecipeGenerator:
             }
             for section_id, section_integration_time in integration_times.items()
             for signal_id, integration_info in section_integration_time.items()
+            if not integration_info.is_play
         ]
 
     def add_devices_from_experiment(self, experiment_dao: ExperimentDAO):
@@ -100,7 +104,7 @@ class RecipeGenerator:
         return None
 
     def add_connectivity_from_experiment(
-        self, experiment_dao, leader_properties, clock_settings,
+        self, experiment_dao, leader_properties, clock_settings
     ):
         if leader_properties.global_leader is not None:
             initialization = self._find_initalization(leader_properties.global_leader)
@@ -155,7 +159,7 @@ class RecipeGenerator:
             for port in experiment_dao.pqsc_ports(pqsc_device_id):
                 follower_device_id = port["device"]
                 out_ports.append(
-                    {"port": port["port"], "device_uid": follower_device_id,}
+                    {"port": port["port"], "device_uid": follower_device_id}
                 )
                 follower_device_init = self._find_initalization(follower_device_id)
                 follower_device_init["config"]["dio_mode"] = "zsync_dio"
@@ -225,9 +229,7 @@ class RecipeGenerator:
         awg = {"awg": awg_number, "seqc": seqc, "signal_type": signal_type}
         initialization["awgs"].append(awg)
 
-    def from_experiment(
-        self, experiment_dao, leader_properties, clock_settings,
-    ):
+    def from_experiment(self, experiment_dao, leader_properties, clock_settings):
         self.add_devices_from_experiment(experiment_dao)
         self.add_connectivity_from_experiment(
             experiment_dao, leader_properties, clock_settings

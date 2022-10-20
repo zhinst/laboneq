@@ -90,8 +90,7 @@ class ExperimentSignal:
             self.mapped_logical_signal_path = to.path if to is not None else None
 
     def disconnect(self):
-        """Disconnect the experiment signal from the logical signal.
-        """
+        """Disconnect the experiment signal from the logical signal."""
         self.mapped_logical_signal_path = None
 
     @property

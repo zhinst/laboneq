@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from operator import itemgetter
+from typing import Dict
 import networkx as nx
 from networkx.readwrite import json_graph
 import logging
 import copy
+
+from laboneq.compiler.experiment_dao import ExperimentDAO, SectionInfo
 
 from .fastlogging import NullLogger
 
@@ -20,23 +23,18 @@ else:
 class SectionGraph:
     def __init__(
         self,
-        section_instance_tree,
+        section_instance_tree: nx.DiGraph,
         section_graph,
         section_graph_parents,
-        section_infos=None,
+        section_infos: Dict[str, SectionInfo],
     ):
 
         self._section_graph = section_graph
         self._section_instance_tree = section_instance_tree
         self._section_graph_parents = section_graph_parents
-        if section_infos is None:
-            self._section_infos = {
-                k: v["section"] for k, v in section_instance_tree.nodes(data=True)
-            }
-        else:
-            self._section_infos = section_infos
+        self._section_infos = section_infos
 
-    def section_info(self, section_id):
+    def section_info(self, section_id) -> SectionInfo:
         return self._section_infos[section_id]
 
     def json_node_link_data(self):
@@ -201,17 +199,17 @@ class SectionGraph:
         for section_id in list(nx.topological_sort(self._section_graph_parents)):
             section_info = self.section_info(section_id)
             _dlogger.debug("Section: %s", section_info)
-            if section_info["has_repeat"] and section_info["count"] < 1:
+            if section_info.has_repeat and section_info.count < 1:
                 raise Exception(
-                    f"Repeat count must be at least 1, but section {section_id} has count={section_info['count']}"
+                    f"Repeat count must be at least 1, but section {section_id} has count={section_info.count}"
                 )
 
-            if section_info["execution_type"] != "controller":
+            if section_info.execution_type != "controller":
                 # first non-controller section
                 if len(root_sections) == 0:
                     _dlogger.debug(
                         "section %s is the first real-time section",
-                        section_info["section_id"],
+                        section_info.section_id,
                     )
                     root_sections = [section_id]
 
@@ -234,7 +232,7 @@ class SectionGraph:
         for section_id in root_sections:
             section_info = self.section_info(section_id)
             (root_real_time_sections, root_near_time_sections)[
-                section_info["execution_type"] == "controller"
+                section_info.execution_type == "controller"
             ].append(section_id)
         if not (len(root_real_time_sections) == 0 or len(root_near_time_sections) == 0):
             raise Exception(
@@ -243,13 +241,13 @@ class SectionGraph:
         return root_sections
 
     @staticmethod
-    def from_dao(experiment_dao):
-        section_infos = {}
+    def from_dao(experiment_dao: ExperimentDAO):
+        section_infos: Dict[str, SectionInfo] = {}
         section_graph_instances = nx.DiGraph()
         for section_id in experiment_dao.sections():
             section_info_0 = experiment_dao.section_info(section_id)
             section_infos[section_id] = section_info_0
-            section_graph_instances.add_nodes_from([section_id], section=section_info_0)
+            section_graph_instances.add_nodes_from([section_id])
         for section_id in experiment_dao.sections():
             previous_instance_signals = {}
             direct_section_children = experiment_dao.direct_section_children(section_id)
@@ -263,9 +261,7 @@ class SectionGraph:
                 )
 
                 ref_section_info = experiment_dao.section_info(section_ref_id)
-                section_graph_instances.add_nodes_from(
-                    [link_node_id], section=ref_section_info
-                )
+                section_graph_instances.add_nodes_from([link_node_id])
                 section_graph_instances.add_edges_from(
                     [(section_ref_id, link_node_id)], type="referenced_through"
                 )
@@ -284,33 +280,32 @@ class SectionGraph:
                         )
                 previous_instance_signals[link_node_id] = current_signals
 
-                if ref_section_info is not None and "play_after" in ref_section_info:
-                    play_after = ref_section_info["play_after"]
-                    if play_after is not None and play_after != "" and play_after != []:
-                        if isinstance(play_after, str):
-                            play_after = [play_after]
-                        for pa in play_after:
-                            for j, sibling_section_ref_id in enumerate(
-                                direct_section_children
-                            ):
-                                if j == i:  # That's us
-                                    raise ValueError(
-                                        f"Could not find section {pa} mentioned "
-                                        + f"in play_after of {section_ref_id}."
-                                    )
-                                if sibling_section_ref_id == pa:
-                                    play_after_link_node_id = (
-                                        sibling_section_ref_id
-                                        + "_"
-                                        + section_id
-                                        + "_"
-                                        + str(j)
-                                    )
-                                    section_graph_instances.add_edges_from(
-                                        [(play_after_link_node_id, link_node_id)],
-                                        type="previous",
-                                    )
-                                    break
+                play_after = ref_section_info.play_after
+                if play_after is not None and play_after != "" and play_after != []:
+                    if isinstance(play_after, str):
+                        play_after = [play_after]
+                    for pa in play_after:
+                        for j, sibling_section_ref_id in enumerate(
+                            direct_section_children
+                        ):
+                            if j == i:  # That's us
+                                raise ValueError(
+                                    f"Could not find section {pa} mentioned "
+                                    + f"in play_after of {section_ref_id}."
+                                )
+                            if sibling_section_ref_id == pa:
+                                play_after_link_node_id = (
+                                    sibling_section_ref_id
+                                    + "_"
+                                    + section_id
+                                    + "_"
+                                    + str(j)
+                                )
+                                section_graph_instances.add_edges_from(
+                                    [(play_after_link_node_id, link_node_id)],
+                                    type="previous",
+                                )
+                                break
 
         parent_edges = [
             (y[0], y[1])
@@ -355,8 +350,8 @@ class SectionGraph:
 
         for k, v in path_dict.items():
             section_info = copy.deepcopy(section_infos[k[0]])
-            section_info["section_display_name"] = section_info["section_id"]
-            section_info["section_id"] = v
+            section_info.section_display_name = section_info.section_id
+            section_info.section_id = v
             section_infos[v] = section_info
             if len(k) > 1:
                 section_link_id = k[1]
@@ -440,13 +435,11 @@ class SectionGraph:
 
         section_graph = nx.subgraph(
             section_instance_tree,
-            map(
-                itemgetter(0),
-                filter(
-                    lambda x: section_infos[x[0]]["execution_type"] != "controller",
-                    section_instance_tree.nodes(data=True),
-                ),
-            ),
+            [
+                n
+                for n in section_instance_tree.nodes()
+                if section_infos[n].execution_type != "controller"
+            ],
         )
 
         return SectionGraph(

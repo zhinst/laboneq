@@ -85,7 +85,7 @@ class DeviceSetup:
                 continue
 
             self._set_calibration(
-                calibration.calibration_items[path], target, path_elements, path,
+                calibration.calibration_items[path], target, path_elements, path
             )
 
     def _get_instrument_calibration(self, rel_path_stack, orig_path):

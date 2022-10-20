@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from typing import Generator, List, Dict, Any
+from typing import Iterator, List, Dict, Any
 import numpy.typing as npt
 from enum import Enum, auto
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
@@ -149,7 +149,7 @@ class ForLoop(Statement):
         self._body = body
         self._loop_type = loop_type
 
-    def _loop_iterator(self, scope: ExecutionScope) -> Generator[int, None, None]:
+    def _loop_iterator(self, scope: ExecutionScope) -> Iterator[int]:
         if scope.root.looping_mode == LoopingMode.EXECUTE:
             if self._loop_type == LoopType.HARDWARE:
                 yield 0

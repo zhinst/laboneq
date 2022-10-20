@@ -14,7 +14,9 @@ class CompilerSettings:
 
     HDAWG_LEAD_PQSC: float = 80e-9
     HDAWG_LEAD_PQSC_2GHz: float = 80e-9
-    HDAWG_LEAD_DESKTOP_SETUP: float = 20e-9  # PW 2022-09-21, dev2806, FPGA 68366, dev8047, FPGA 68666 & 68603
+    HDAWG_LEAD_DESKTOP_SETUP: float = (
+        20e-9  # PW 2022-09-21, dev2806, FPGA 68366, dev8047, FPGA 68666 & 68603
+    )
     HDAWG_LEAD_DESKTOP_SETUP_2GHz: float = 24e-9
     UHFQA_LEAD_PQSC: float = 80e-9
     SHFQA_LEAD_PQSC: float = 80e-9
@@ -36,3 +38,8 @@ class CompilerSettings:
     SHFQA_MIN_PLAYZERO_HINT: int = 1024
     SHFSG_MIN_PLAYWAVE_HINT: int = 1024
     SHFSG_MIN_PLAYZERO_HINT: int = 1024
+
+    HDAWG_FORCE_COMMAND_TABLE: bool = False
+    SHFSG_FORCE_COMMAND_TABLE: bool = False
+
+    EMIT_TIMING_COMMENTS: bool = False

@@ -36,7 +36,7 @@ TOKEN_SHA = "339b6ddce1bca6b78305474c13183baedaa4951e6460c5ddb59ea525d901c1fe"
 
 
 def install_token(token: str):
-    """ Install the LabOne Q access token as a Python package.
+    """Install the LabOne Q access token as a Python package.
 
     Note: the `LABONEQ_TOKEN` environment variable can be used
           alternatively and takes precedence in checks.

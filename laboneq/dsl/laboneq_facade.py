@@ -54,7 +54,7 @@ class LabOneQFacade:
     def compile(
         session: Session, logger, do_simulation=False, compiler_settings: Dict = None
     ) -> CompiledExperiment:
-        logger.debug("Calling QCCS Compiler...")
+        logger.debug("Calling LabOne Q Compiler...")
         if compiler_settings is not None:
             compiler_settings = {
                 k: v
@@ -70,6 +70,9 @@ class LabOneQFacade:
                     "SHFQA_MIN_PLAYZERO_HINT",
                     "SHFSG_MIN_PLAYWAVE_HINT",
                     "SHFSG_MIN_PLAYZERO_HINT",
+                    "EMIT_TIMING_COMMENTS",
+                    "HDAWG_FORCE_COMMAND_TABLE",
+                    "SHFSG_FORCE_COMMAND_TABLE",
                 )
             }
         compiler = Compiler(compiler_settings)
@@ -111,7 +114,7 @@ class LabOneQFacade:
 
             output_signals = DeviceOutputSignals()
             simulated_outputs = analyze_compiler_output_memory(
-                compiled_experiment, max_simulation_time,
+                compiled_experiment, max_simulation_time
             )
 
             for simulated_result in simulated_outputs.values():

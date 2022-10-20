@@ -1,6 +1,8 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+from dataclasses import dataclass
 import json
 import logging
 import os
@@ -9,7 +11,7 @@ from pathlib import Path
 from collections import OrderedDict
 from types import SimpleNamespace
 
-from typing import List, Dict, Tuple, Optional, Set, Any
+from typing import Callable, List, Dict, Optional, Tuple, Any
 
 from jsonschema import ValidationError
 from jsonschema.validators import validator_for
@@ -21,36 +23,76 @@ from laboneq.core.types.enums import AveragingMode, IODirection, AcquisitionType
 _logger = logging.getLogger(__name__)
 
 import typing
+from numpy.typing import ArrayLike
 
 if typing.TYPE_CHECKING:
     from laboneq.dsl.experiment import ExperimentSignal
     from laboneq.dsl.device.io_units import LogicalSignal
 
 
-def find_value_or_parameter_dict(pulse_ref, name, types):
-    value = None
+def find_value_or_parameter_dict(
+    pulse_ref: Dict[str, Any], name: str, types: Tuple[type, ...]
+):
     param = None
-    try:
-        value = pulse_ref[name]
-        if value is not None and not isinstance(value, types):
-            param = value["$ref"]
-            value = None
-    except KeyError:
-        pass
+    value = pulse_ref.get(name)
+    if value is not None and not isinstance(value, types):
+        param = value.get("$ref")
+        value = None
     return value, param
 
 
-def find_value_or_parameter_attr(operation, name, types):
-    value = None
+def find_value_or_parameter_attr(entity: Any, attr: str, value_types: Tuple[type, ...]):
     param = None
-    try:
-        value = getattr(operation, name)
-        if value is not None and not isinstance(value, types):
-            param = value.uid
-            value = None
-    except AttributeError:
-        pass
+    value = getattr(entity, attr, None)
+    if value is not None and not isinstance(value, value_types):
+        param = getattr(value, "uid", None)
+        value = None
     return value, param
+
+
+@dataclass
+class PulseDef:
+    id: str
+    function: str
+    length: float
+    amplitude: float
+    amplitude_param: str
+    play_mode: str
+    samples: ArrayLike
+    user_function: Any = None
+
+    @property
+    def effective_amplitude(self) -> float:
+        return 1.0 if self.amplitude is None else self.amplitude
+
+    @staticmethod
+    def effective_length(pulse_def: PulseDef, sampling_rate: float) -> float:
+        if pulse_def is None:
+            return None
+        length = pulse_def.length
+        if length is None and pulse_def.samples is not None:
+            length = len(pulse_def.samples) / sampling_rate
+        return length
+
+
+@dataclass
+class SectionInfo:
+    section_id: str
+    has_repeat: bool
+    execution_type: Optional[str]
+    trigger: Optional[List[str]]
+    averaging_type: Optional[str]
+    count: int
+    align: Optional[str]
+    offset: Optional[float]
+    offset_param: Optional[str]
+    length: Optional[float]
+    averaging_mode: Optional[str]
+    repetition_mode: Optional[str]
+    repetition_time: Optional[float]
+    play_after: Optional[str]
+    reset_oscillator_phase: bool
+    section_display_name: Optional[str] = None
 
 
 class ExperimentDAO:
@@ -58,6 +100,7 @@ class ExperimentDAO:
     _validator = None
 
     def __init__(self, experiment, core_device_setup=None, core_experiment=None):
+        self._root_section_ids: List[str] = []
         self._data = {}
         self._acquisition_type: AcquisitionType = None
         if core_device_setup is not None and core_experiment is not None:
@@ -258,7 +301,7 @@ class ExperimentDAO:
                 }
             )
 
-        self._data["pulse"] = {}
+        self.pulses.clear()
         for pulse in experiment["pulses"]:
             samples = pulse.get("samples", None)
 
@@ -266,15 +309,15 @@ class ExperimentDAO:
                 pulse, "amplitude", (int, float, complex)
             )
 
-            self._data["pulse"][pulse["id"]] = {
-                "id": pulse["id"],
-                "function": pulse.get("function"),
-                "length": pulse.get("length"),
-                "amplitude": amplitude,
-                "amplitude_param": amplitude_param,
-                "play_mode": pulse.get("play_mode"),
-                "samples": samples,
-            }
+            self.pulses[pulse["id"]] = PulseDef(
+                id=pulse["id"],
+                function=pulse.get("function"),
+                length=pulse.get("length"),
+                amplitude=amplitude,
+                amplitude_param=amplitude_param,
+                play_mode=pulse.get("play_mode"),
+                samples=samples,
+            )
 
         self._data["section_parameter"] = []
         self._data["section_tree"] = []
@@ -285,31 +328,26 @@ class ExperimentDAO:
 
         section_signal_id = 0
 
+        self._root_section_ids = [
+            s["$ref"] for s in experiment["experiment"]["sections_list"]
+        ]
         for section in sorted(experiment["sections"], key=lambda x: x["id"]):
-            has_repeat = 0
+            has_repeat = False
             execution_type = None
             align = None
             offset = None
             offset_param = None
             length = None
-            count = 1
-            experiment_seq = None
-            for index, experiment_section in enumerate(
-                experiment["experiment"]["sections_list"]
-            ):
-                if experiment_section["$ref"] == section["id"]:
-                    experiment_seq = index
-                    break
-
+            count: int = 1
             averaging_type = None
 
             if "repeat" in section:
-                has_repeat = 1
+                has_repeat = True
                 execution_type = section["repeat"]["execution_type"]
                 if "averaging_type" in section["repeat"]:
                     averaging_type = section["repeat"]["averaging_type"]
 
-                count = section["repeat"]["count"]
+                count = int(section["repeat"]["count"])
                 if "parameters" in section["repeat"]:
                     for parameter in section["repeat"]["parameters"]:
                         values = None
@@ -376,11 +414,8 @@ class ExperimentDAO:
             if "repetition_mode" in section:
                 repetition_mode = section["repetition_mode"]
 
-            play_after = section.get("play_after")
-
-            self._data["section"][section["id"]] = dict(
+            self._data["section"][section["id"]] = SectionInfo(
                 section_id=section["id"],
-                experiment_seq=experiment_seq,
                 has_repeat=has_repeat,
                 execution_type=execution_type,
                 count=count,
@@ -393,7 +428,7 @@ class ExperimentDAO:
                 averaging_mode=averaging_mode,
                 repetition_mode=repetition_mode,
                 repetition_time=repetition_time,
-                play_after=play_after,
+                play_after=section.get("play_after"),
                 reset_oscillator_phase=reset_oscillator_phase,
             )
 
@@ -471,6 +506,7 @@ class ExperimentDAO:
                                 increment_oscillator_phase_param=pulse_increment_oscillator_phase_param,
                                 set_oscillator_phase=pulse_set_oscillator_phase,
                                 set_oscillator_phase_param=pulse_set_oscillator_phase_param,
+                                pulse_parameters=None,
                             )
                             self._data["section_signal_pulse"].append(new_ssp)
                             seq_nr += 1
@@ -601,37 +637,11 @@ class ExperimentDAO:
     def sections(self) -> List[str]:
         return list(self._data["section"].keys())
 
-    def section_info(self, section_id):
-        retval = {
-            k: self._data["section"][section_id][k]
-            for k in [
-                "section_id",
-                "has_repeat",
-                "execution_type",
-                "trigger",
-                "averaging_type",
-                "count",
-                "align",
-                "offset",
-                "offset_param",
-                "length",
-                "averaging_mode",
-                "repetition_mode",
-                "repetition_time",
-                "play_after",
-                "reset_oscillator_phase",
-            ]
-        }
-        if retval["count"] is not None:
-            retval["count"] = int(retval["count"])
-        return retval
+    def section_info(self, section_id) -> SectionInfo:
+        return self._data["section"][section_id]
 
     def root_sections(self):
-        return [
-            s["section_id"]
-            for s in self._data["section"].values()
-            if s["experiment_seq"] is not None
-        ]
+        return self._root_section_ids
 
     def direct_section_children(self, section_id):
         return [
@@ -706,32 +716,9 @@ class ExperimentDAO:
             retval = retval.union(self.section_signals(child))
         return retval
 
-    @classmethod
-    def _pulse_info_fields(cls):
-        return [
-            "id",
-            "function",
-            "length",
-            "amplitude",
-            "amplitude_param",
-            "play_mode",
-            "samples",
-        ]
-
-    def pulses(self):
-        return [
-            {k: p.get(k) for k in self._pulse_info_fields()}
-            for p in self._data["pulse"].values()
-        ]
-
-    def pulses_dict(self):
-        return {pulse["id"]: pulse for pulse in self.pulses()}
-
-    def pulse(self, pulse_id):
-        pulse = self._data["pulse"].get(pulse_id)
-        if pulse is None:
-            return None
-        return {k: pulse.get(k) for k in self._pulse_info_fields()}
+    @property
+    def pulses(self) -> Dict[str, PulseDef]:
+        return self._data.setdefault("pulse", {})
 
     @classmethod
     def _oscillator_info_fields(cls):
@@ -826,13 +813,14 @@ class ExperimentDAO:
         for sp in retval:
             pulse_id = sp.get("pulse_id")
             if pulse_id is not None:
-                pulse_def = self.pulse(pulse_id)
+                pulse_def = self.pulses.get(pulse_id)
                 if pulse_def is not None:
                     if sp["length"] is None and sp["length_param"] is None:
-                        sp["length"] = pulse_def.get("length")
-                        if pulse_def.get("length_param") is not None:
-                            sp["length_param"] = pulse_def["length_param"]
-                            sp["length"] = None
+                        sp["length"] = pulse_def.length
+                        # TODO(2K): pulse_def has no length_param!
+                        # if pulse_def.length_param is not None:
+                        #     sp["length_param"] = pulse_def.length_param
+                        #     sp["length"] = None
 
         return retval
 
@@ -874,6 +862,7 @@ class ExperimentDAO:
                     "increment_oscillator_phase_param",
                     "set_oscillator_phase",
                     "set_oscillator_phase_param",
+                    "pulse_parameters",
                 ]
             }
             for ssp in sorted(
@@ -1084,18 +1073,13 @@ class ExperimentDAO:
 
         pulses_list = []
 
-        for pulse in experiment_dao.pulses():
-            pulse_entry = {"id": pulse["id"]}
-            fields = [
-                "function",
-                "length",
-                "samples",
-                "amplitude",
-                "play_mode",
-            ]
+        for pulse in experiment_dao.pulses.values():
+            pulse_entry = {"id": pulse.id}
+            fields = ["function", "length", "samples", "amplitude", "play_mode"]
             for field in fields:
-                if pulse.get(field) is not None:
-                    pulse_entry[field] = pulse[field]
+                val = getattr(pulse, field, None)
+                if val is not None:
+                    pulse_entry[field] = val
 
             if pulse_entry.get("amplitude_param"):
                 pulse_entry["amplitude"] = {"$ref": pulse_entry["amplitude_param"]}
@@ -1108,18 +1092,18 @@ class ExperimentDAO:
         sections_list = []
         for section_id in experiment_dao.sections():
             section_info = experiment_dao.section_info(section_id)
-            out_section = {"id": section_info["section_id"]}
+            out_section = {"id": section_info.section_id}
 
             direct_children = experiment_dao.direct_section_children(section_id)
-            if section_info["has_repeat"]:
+            if section_info.has_repeat:
                 out_section["repeat"] = {
-                    "execution_type": section_info["execution_type"],
-                    "count": section_info["count"],
+                    "execution_type": section_info.execution_type,
+                    "count": section_info.count,
                 }
-                if section_info["averaging_type"] is not None:
-                    out_section["repeat"]["averaging_type"] = section_info[
+                if section_info.averaging_type is not None:
+                    out_section["repeat"][
                         "averaging_type"
-                    ]
+                    ] = section_info.averaging_type
 
                 section_parameters = experiment_dao.section_parameters(section_id)
                 if len(section_parameters) > 0:
@@ -1134,7 +1118,7 @@ class ExperimentDAO:
                         out_section["repeat"]["parameters"].append(param_object)
 
             if len(direct_children) > 0:
-                if section_info["has_repeat"]:
+                if section_info.has_repeat:
                     out_section["repeat"]["sections_list"] = [
                         {"$ref": child} for child in direct_children
                     ]
@@ -1152,12 +1136,12 @@ class ExperimentDAO:
                 "play_after",
             ]
             for key in keys:
-                if section_info.get(key) is not None:
-                    out_section[key] = section_info[key]
-            if section_info.get("reset_oscillator_phase", False):
-                out_section["reset_oscillator_phase"] = section_info[
+                if getattr(section_info, key, None) is not None:
+                    out_section[key] = getattr(section_info, key)
+            if section_info.reset_oscillator_phase:
+                out_section[
                     "reset_oscillator_phase"
-                ]
+                ] = section_info.reset_oscillator_phase
 
             signals_list = []
             for signal_id in experiment_dao._section_signals_list(section_id):
@@ -1219,7 +1203,7 @@ class ExperimentDAO:
         self._data["signal_oscillator"] = []
         self._data["section_signal_pulse"] = []
         self._data["section_parameter"] = []
-        self._data["pulse"] = {}
+        self.pulses.clear()
 
         for server in device_setup.servers.values():
             if hasattr(server, "leader_uid"):
@@ -1638,6 +1622,8 @@ class ExperimentDAO:
         else:
             exchanger_map = lambda section: section
 
+        self._root_section_ids = [exchanger_map(s).uid for s in experiment.sections]
+
         section_signal_id = {"current": 0}
         section_uid_map = {}
         acquisition_type_map = {}
@@ -1649,7 +1635,6 @@ class ExperimentDAO:
         pulse_uids = set()
         for section in section_uid_map.values():
             self.insert_section(
-                experiment,
                 section,
                 section_signal_id,
                 pulse_uids,
@@ -1726,26 +1711,18 @@ class ExperimentDAO:
 
     def insert_section(
         self,
-        experiment,
         section,
         section_signal_id,
         pulse_uids,
         acquisition_type,
-        exchanger_map,
+        exchanger_map: Callable[[Any], Any],
     ):
-        has_repeat = 0
+        has_repeat = False
         count = 1
-        experiment_seq = None
-        for index, experiment_section in enumerate(
-            exchanger_map(s) for s in experiment.sections
-        ):
-            if experiment_section.uid == section.uid:
-                experiment_seq = index
-                break
 
         averaging_type = None
         if hasattr(section, "count"):
-            has_repeat = 1
+            has_repeat = True
             count = section.count
             if hasattr(section, "averaging_mode"):
                 if section.averaging_mode.value in ["cyclic", "sequential"]:
@@ -1757,7 +1734,7 @@ class ExperimentDAO:
                 if parameter.values is not None:
                     values_list = list(parameter.values)
                 axis_name = getattr(parameter, "axis_name", None)
-                has_repeat = 1
+                has_repeat = True
                 self._data["section_parameter"].append(
                     {
                         "section_id": section.uid,
@@ -1805,7 +1782,7 @@ class ExperimentDAO:
         if hasattr(section, "repetition_time"):
             repetition_time = section.repetition_time
 
-        reset_oscillator_phase = None
+        reset_oscillator_phase = False
         if hasattr(section, "reset_oscillator_phase"):
             reset_oscillator_phase = section.reset_oscillator_phase
 
@@ -1815,14 +1792,8 @@ class ExperimentDAO:
                 # an acquire event - add trigger
                 trigger = [acquisition_type.value]
 
-        play_after = None
-        if hasattr(section, "play_after"):
-            play_after = section.play_after
-        play_after = play_after
-
-        self._data["section"][section.uid] = dict(
+        self._data["section"][section.uid] = SectionInfo(
             section_id=section.uid,
-            experiment_seq=experiment_seq,
             has_repeat=has_repeat,
             execution_type=execution_type,
             count=count,
@@ -1835,7 +1806,7 @@ class ExperimentDAO:
             averaging_mode=averaging_mode,
             repetition_mode=repetition_mode,
             repetition_time=repetition_time,
-            play_after=play_after,
+            play_after=getattr(section, "play_after", None),
             reset_oscillator_phase=reset_oscillator_phase,
         )
 
@@ -1867,7 +1838,7 @@ class ExperimentDAO:
                 pulse_offset = None
                 pulse_offset_param = None
 
-                if hasattr(operation, "time"):
+                if hasattr(operation, "time"):  # Delay operation
 
                     pulse_offset = operation.time
                     if not isinstance(operation.time, float) and not isinstance(
@@ -1894,11 +1865,12 @@ class ExperimentDAO:
                             increment_oscillator_phase_param=None,
                             set_oscillator_phase=None,
                             set_oscillator_phase_param=None,
+                            pulse_parameters=None,
                         )
                     )
                     seq_nr += 1
 
-                else:
+                else:  # All operations, except Delay
                     pulse = None
                     operation_length = None
                     operation_length_param = None
@@ -1928,12 +1900,20 @@ class ExperimentDAO:
                     if pulse is not None:
 
                         function = None
+                        user_function = None
                         length = None
+
+                        combined_pulse_parameters = {}
+                        pulse_parameters = getattr(pulse, "pulse_parameters", None)
+                        if pulse_parameters is not None:
+                            combined_pulse_parameters.update(pulse_parameters)
 
                         if pulse.uid not in pulse_uids:
                             samples = None
                             if hasattr(pulse, "function"):
                                 function = pulse.function.value
+                            if hasattr(pulse, "user_function"):
+                                user_function = pulse.user_function
                             if hasattr(pulse, "length"):
                                 length = pulse.length
 
@@ -1944,15 +1924,16 @@ class ExperimentDAO:
                                 pulse, "amplitude", (float, int, complex)
                             )
 
-                            self._data["pulse"][pulse.uid] = {
-                                "id": pulse.uid,
-                                "function": function,
-                                "length": length,
-                                "amplitude": amplitude,
-                                "amplitude_param": amplitude_param,
-                                "play_mode": None,
-                                "samples": samples,
-                            }
+                            self.pulses[pulse.uid] = PulseDef(
+                                id=pulse.uid,
+                                function=function,
+                                length=length,
+                                amplitude=amplitude,
+                                amplitude_param=amplitude_param,
+                                play_mode=None,
+                                samples=samples,
+                                user_function=user_function,
+                            )
 
                             pulse_uids.add(pulse.uid)
 
@@ -1985,6 +1966,20 @@ class ExperimentDAO:
                                 "acquisition_type": acquisition_type.name,
                             }
 
+                        operation_pulse_parameters = getattr(
+                            operation, "pulse_parameters", None
+                        )
+                        if operation_pulse_parameters is not None:
+                            combined_pulse_parameters.update(operation_pulse_parameters)
+
+                        # Replace sweep params with their uid
+                        for param in combined_pulse_parameters:
+                            val = combined_pulse_parameters[param]
+                            if not isinstance(val, (float, int, complex)):
+                                combined_pulse_parameters[param] = getattr(
+                                    val, "uid", None
+                                )
+
                         self._data["section_signal_pulse"].append(
                             dict(
                                 section_signal_id=section_signal["section_signal_id"],
@@ -2005,6 +2000,7 @@ class ExperimentDAO:
                                 increment_oscillator_phase_param=pulse_increment_oscillator_phase_param,
                                 set_oscillator_phase=pulse_set_oscillator_phase,
                                 set_oscillator_phase_param=pulse_set_oscillator_phase_param,
+                                pulse_parameters=combined_pulse_parameters,
                             )
                         )
 
@@ -2020,7 +2016,7 @@ class ExperimentDAO:
             for signal_id in self.section_signals(section_id):
                 for section_pulse in self.section_pulses(section_id, signal_id):
                     pulse_id = section_pulse.get("pulse_id")
-                    if pulse_id is not None and self.pulse(pulse_id) is None:
+                    if pulse_id is not None and pulse_id not in self.pulses:
                         raise RuntimeError(
                             f"Pulse {pulse_id} referenced in section {section_id} by a pulse on signal {signal_id} is not known."
                         )

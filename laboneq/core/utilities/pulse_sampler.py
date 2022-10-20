@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 import logging
-from typing import Optional, Union
+from typing import Any, Dict, Optional, Union, TYPE_CHECKING
 import numpy as np
+
+if TYPE_CHECKING:
+    from laboneq.dsl.experiment.pulse import UserFunction
 
 _logger = logging.getLogger(__name__)
 
@@ -26,11 +29,13 @@ def sample_pulse(
     length: float,
     amplitude: Union[float, complex],
     pulse_function: Optional[str],
+    user_function: Optional[UserFunction] = None,
     modulation_frequency: Optional[float] = None,
     modulation_phase: Optional[float] = None,
     iq_phase: float = 0,
     samples: Optional[np.ndarray] = None,
     complex_modulation: bool = True,
+    pulse_parameters: Optional[Dict[str, Any]] = None,
 ):
     """Create a waveform from a pulse definition.
 
@@ -49,6 +54,7 @@ def sample_pulse(
         amplitude: Magnitude of the amplitude to multiply with the given pulse
         iq_phase: Phase of the amplitude to multiply with the given pulse
         pulse_function: In case of a functional pulse, the function to sample
+        user_function: User provided function to generate samples
         modulation_frequency: The oscillator frequency (for software modulation if
           not None)
         modulation_phase: The oscillator phase (for software modulation if not
@@ -56,6 +62,7 @@ def sample_pulse(
         samples: Pulse shape for a sampled pulse
         complex_modulation: Whether to allow applying iq_phase to the complex
           samples (False to emulate UHFQA behavior)
+        pulse_parameters: resolved parameters passed to the user pulse function
 
     Returns:
         A dict with one ("samples_i", real case) or two ("samples_i" and
@@ -68,9 +75,9 @@ def sample_pulse(
     if pulse_function == "":
         pulse_function = None
 
-    if samples is not None and pulse_function is not None:
+    if samples is not None and pulse_function is not None and user_function is not None:
         raise ValueError(
-            "Only one of samples or pulse_function may be given at the same time."
+            "Only one of samples, pulse_function or user_function may be given at the same time."
         )
 
     num_samples = length_to_samples(length, sampling_rate)
@@ -78,6 +85,20 @@ def sample_pulse(
     if pulse_function is not None:
         samples = pulse_function_library[pulse_function](
             length=length, num_samples=num_samples, sampling_rate=sampling_rate
+        )
+    if user_function is not None:
+        samples = user_function(
+            np.linspace(-1, 1, num_samples),
+            pulse_parameters={
+                "length": length,
+                "amplitude": amplitude,
+                "sampling_rate": sampling_rate,
+                **dict(
+                    sorted(
+                        ({} if pulse_parameters is None else pulse_parameters).items()
+                    )
+                ),
+            },
         )
     samples = np.array(samples[:num_samples])
     shape = samples.shape
@@ -90,7 +111,7 @@ def sample_pulse(
         if (complex_modulation or pulse_function) and iq_phase:
             amplitude *= np.exp(1j * iq_phase)
     else:
-        assert all(samples.imag == 0.0) or pulse_function == "ZI_internal_pulse_1"
+        assert all(samples.imag == 0.0)
         amplitude = amplitude.real
         samples = samples.real
 
@@ -98,7 +119,7 @@ def sample_pulse(
 
     if modulation_frequency is not None:
         _logger.debug(
-            "Doing modulation with modulation_frequency %f and phase %f",
+            "Doing modulation with modulation_frequency %s and phase %s",
             modulation_frequency,
             modulation_phase,
         )
@@ -131,17 +152,9 @@ def gaussian(length, num_samples, sampling_rate):
     return gauss(ts, sigma, shift)
 
 
-def ZI_internal_pulse_1(length, num_samples, sampling_rate):
-    sigma = calc_sigma(length, sampling_rate)
-    shift = float(length * sampling_rate) / 2
-    ts = np.arange(num_samples)
-    return 1.0j * gauss(ts, sigma, shift)
-
-
 pulse_function_library = dict()
 pulse_function_library["const"] = const
 pulse_function_library["gaussian"] = gaussian
-pulse_function_library["ZI_internal_pulse_1"] = ZI_internal_pulse_1
 
 
 def gauss(t, sigma, shift):

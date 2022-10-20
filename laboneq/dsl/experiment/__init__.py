@@ -7,7 +7,12 @@ from .experiment_signal import ExperimentSignal
 from .operation import Operation
 from .delay import Delay
 from .play_pulse import PlayPulse
-from .pulse import PulseFunctional, PulseSampledReal, PulseSampledComplex
+from .pulse import (
+    PulseFunctional,
+    PulseSampledReal,
+    PulseSampledComplex,
+    UserPulseFunctional,
+)
 from .reserve import Reserve
 from .section import Section, AcquireLoopNt, AcquireLoopRt, Sweep
 from .set import Set

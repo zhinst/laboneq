@@ -14,12 +14,12 @@ class DeviceSetupHelper:
     def upload_wiring(api_url, wiring_text):
         """Upload wiring information to the LabOne Q monitoring server.
 
-            Args:
-                api_url (str): URL of the monitoring server. http://localhost:9005/slugname/wiring
-                wiring_text (str): Json-like string contains wiring information.
+        Args:
+            api_url (str): URL of the monitoring server. http://localhost:9005/slugname/wiring
+            wiring_text (str): Json-like string contains wiring information.
 
-            Returns:
-                status code: 200 if succeeded.
+        Returns:
+            status code: 200 if succeeded.
         """
 
         with requests.Session() as session:
@@ -32,12 +32,12 @@ class DeviceSetupHelper:
     def upload_wiring_from_descriptor(api_url, descriptor):
         """Upload wiring information to the LabOne Q monitoring server using yaml descriptor.
 
-            Args:
-                api_url (str): URL of the monitoring server. http://localhost:9005/slugname/wiring
-                descriptor (str): yaml-like text contains wiring information.
+        Args:
+            api_url (str): URL of the monitoring server. http://localhost:9005/slugname/wiring
+            descriptor (str): yaml-like text contains wiring information.
 
-            Returns:
-                status code: 200 if succeeded.
+        Returns:
+            status code: 200 if succeeded.
         """
         res = yaml.safe_load(descriptor)
         return DeviceSetupHelper.upload_wiring(api_url, json.dumps(res, indent=4))
@@ -46,11 +46,11 @@ class DeviceSetupHelper:
     def delete_wiring(api_url):
         """Delete wiring information to the LabOne Q monitoring server.
 
-            Args:
-                api_url (str): URL of the monitoring server. http://localhost:9005/slugname/wiring
+        Args:
+            api_url (str): URL of the monitoring server. http://localhost:9005/slugname/wiring
 
-            Returns:
-                status code: 200 if succeeded.
+        Returns:
+            status code: 200 if succeeded.
         """
         with requests.Session() as session:
             response = session.delete(api_url, timeout=5)
@@ -62,11 +62,11 @@ class DeviceSetupHelper:
     def download_wiring(api_url):
         """Download wiring information from the LabOne Q monitoring server.
 
-            Args:
-                api_url (str): URL of the monitoring server. http://localhost:9005/slugname/wiring
+        Args:
+            api_url (str): URL of the monitoring server. http://localhost:9005/slugname/wiring
 
-            Returns:
-                the GET content if succeeded.
+        Returns:
+            the GET content if succeeded.
         """
 
         with requests.Session() as session:

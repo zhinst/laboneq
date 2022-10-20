@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
 
 from .pulse import Pulse
 from .operation import Operation
@@ -22,3 +23,6 @@ class Acquire(Operation):
 
     #: Integration length (only valid in spectroscopy mode).
     length: float = field(default=None)
+
+    #: Optional (re)binding of user pulse parameters
+    pulse_parameters: Optional[Dict[str, Any]] = field(default=None)

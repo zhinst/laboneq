@@ -1,21 +1,21 @@
 # Copyright 2019 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List
+from typing import Any, Dict, List
 from laboneq.controller.recipe_1_4_0 import Initialization
 
 from laboneq.controller.recipe_processor import DeviceRecipeData
 from laboneq.controller.recipe_enums import ReferenceClockSource
-from .device_zi import DeviceZI
+from laboneq.controller.devices.device_zi import DeviceZI
 
-from ..communication import (
+from laboneq.controller.communication import (
     DaqNodeAction,
     DaqNodeSetAction,
-    DaqNodeWaitAction,
     CachingStrategy,
 )
 
 from laboneq.controller.util import LabOneQControllerException
+from laboneq.core.types.enums.acquisition_type import AcquisitionType
 
 REFERENCE_CLOCK_SOURCE_INTERNAL = 0
 REFERENCE_CLOCK_SOURCE_EXTERNAL = 1
@@ -26,6 +26,9 @@ class DevicePQSC(DeviceZI):
         super().__init__(*args, **kwargs)
         self.dev_type = "PQSC"
         self.dev_opts = []
+
+    def _nodes_to_monitor_impl(self) -> List[str]:
+        return [f"/{self.serial}/execution/enable"]
 
     def collect_output_initialization_nodes(
         self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
@@ -49,17 +52,12 @@ class DevicePQSC(DeviceZI):
             ),
         ]
 
-    def collect_conditions_to_close_loop(self, acquisition_units):
-        return [
-            DaqNodeWaitAction(
-                self._daq,
-                f"/{self.serial}/execution/enable",
-                0,
-                caching_strategy=CachingStrategy.NO_CACHE,
-            )
-        ]
+    def conditions_for_execution_done(
+        self, acquisition_type: AcquisitionType
+    ) -> Dict[str, Any]:
+        return {f"/{self.serial}/execution/enable": 0}
 
-    def collect_trigger_configuration_nodes(self, initialization):
+    def collect_trigger_configuration_nodes(self, initialization: Initialization.Data):
         # Ensure ZSync links are established
         # TODO(2K): This is rather a hotfix, waiting to be done in parallel for all devices with subscription / poll
         # TODO(2K): Verify also the downlink device serial (.../connection/serial) matches

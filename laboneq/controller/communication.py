@@ -5,13 +5,13 @@ from dataclasses import dataclass
 import logging
 from enum import Enum
 from abc import ABC, abstractmethod
-import time
 from functools import lru_cache
-from typing import List
+from typing import Any, Dict, List
 
 import zhinst.core as zi
 
 from laboneq.controller.devices.zi_emulator import ziDAQServerEmulator
+from laboneq.controller.devices.zi_node_monitor import NodeMonitor
 from zhinst.toolkit import Session as TKSession
 from .util import LabOneQControllerException
 from .versioning import LabOneVersion
@@ -65,29 +65,6 @@ class DaqNodeGetAction(DaqNodeAction):
 
     def __str__(self):
         return self.to_string()
-
-
-class DaqNodeWaitAction(DaqNodeAction):
-    def __init__(
-        self, daq, path, expected_value, caching_strategy=CachingStrategy.NO_CACHE
-    ):
-        super().__init__(daq, path, caching_strategy)
-
-        if expected_value is None:
-            raise QCCSControllerException(
-                "DaqNodeSetAction requires valid value to set"
-            )
-
-        self.expected_value = expected_value
-
-    def to_string(self):
-        return f"{self.path} == {self.expected_value}"
-
-    def __str__(self):
-        return self.to_string()
-
-    def is_fulfilled(self, value):
-        return value == self.expected_value
 
 
 class ZiApiWrapperBase(ABC):
@@ -194,11 +171,6 @@ class ZiApiWrapperBase(ABC):
 
         return self._api_wrapper("set", api_input)
 
-    def _subscribe_to_wait_conditions(self, wait_conditions):
-        for wait_condition in wait_conditions:
-            # subscribe to any changes during polling
-            self._api_wrapper("subscribe", wait_condition.path)
-
     def _api_reply_to_val_history_dict(self, daq_reply):
         """Converts a DAQ reply with flat=True to a path-value_history dict
         e.g.: { path: { "value" : [ val1, val2 ] }} to { path: [ val1, val2 ] }
@@ -230,6 +202,7 @@ class DaqWrapper(ZiApiWrapperBase):
         self._is_valid = False
         self._dataserver_version = LabOneVersion.LATEST
         self._vector_counter = 0
+        self.node_monitor = None
 
         if not server_qualifier.dry_run:
             from laboneq._token import token_check
@@ -244,6 +217,7 @@ class DaqWrapper(ZiApiWrapperBase):
                 self.server_qualifier.port,
                 self.server_qualifier.api_level,
             )
+            self.node_monitor = NodeMonitor(self._zi_api_object)
         except RuntimeError as exp:
             raise LabOneQControllerException(str(exp))
 
@@ -252,7 +226,7 @@ class DaqWrapper(ZiApiWrapperBase):
         try:
             self._dataserver_version = LabOneVersion(version_str)
         except ValueError:
-            err_msg = f"Version {version_str} is not supported by QCCS."
+            err_msg = f"Version {version_str} is not supported by LabOne Q."
             if server_qualifier.ignore_lab_one_version_error:
                 self._logger.warning("Ignoring that %s", err_msg)
                 self._dataserver_version = LabOneVersion.LATEST
@@ -362,96 +336,6 @@ class DaqWrapper(ZiApiWrapperBase):
         self._log_get("get", path)
         return self._api_wrapper("get", path, flat=True)
 
-    def prepare_conditions(self, wait_conditions):
-        self._logger.debug("Preparing wait for: ")
-        for wait_condition in wait_conditions:
-            if not isinstance(wait_condition, DaqNodeWaitAction):
-                raise QCCSControllerException(
-                    "List elements must be DaqNodeWaitAction objects"
-                )
-
-            self._logger.debug("  %s", wait_condition.to_string())
-        self._logger.debug("Subscribing...")
-        self._subscribe_to_wait_conditions(wait_conditions)
-        self._logger.debug("Subscribing done")
-
-    def wait_all_conditions(self, wait_conditions, min_wait_time: float):
-        """Receives a list of waiting conditions and returns when all of them are fulfilled
-
-        E.g. wait for a node path /device/path/node to become 1 and /device/path/node2 to become 0
-
-        Parameters:
-            waiting_conditions: a list of DaqNodeWaitAction objects
-
-        Returns:
-            when all conditions are fulfilled
-        """
-        if not isinstance(wait_conditions, list):
-            raise QCCSControllerException("List expected")
-
-        if min_wait_time is None:
-            self._logger.warning(
-                "No estimation available for the execution time, assuming 10 sec."
-            )
-            min_wait_time = 10.0
-        elif min_wait_time > 5:  # Only inform about RT executions taking longer than 5s
-            self._logger.info("Estimated RT execution time: %.2f s.", min_wait_time)
-        guarded_wait_time = round(
-            min_wait_time * 1.1 + 1
-        )  # +10% and fixed 1sec guard time
-
-        self._logger.debug("Waiting on: ")
-        for wait_condition in wait_conditions:
-            if not isinstance(wait_condition, DaqNodeWaitAction):
-                raise QCCSControllerException(
-                    "List elements must be DaqNodeWaitAction objects"
-                )
-
-            self._logger.debug("  %s", wait_condition.to_string())
-
-        conditions_still_open = {
-            wait_condition.path: wait_condition for wait_condition in wait_conditions
-        }
-
-        poll_start = time.time()
-        while True:
-            daq_reply = self._api_wrapper("poll", 0.001, 10, flat=True)
-            current_values = self._api_reply_to_val_history_dict(daq_reply)
-
-            for path in current_values:
-                value_history = current_values[path]
-
-                for value in value_history:
-
-                    if not path in conditions_still_open:
-                        continue
-
-                    wait_condition = conditions_still_open[path]
-
-                    if not wait_condition.is_fulfilled(value):
-                        continue
-
-                    conditions_still_open.pop(path)
-                    self._logger.debug(
-                        "Condition fulfilled: %s", wait_condition.to_string()
-                    )
-
-            if not bool(conditions_still_open):
-                break
-
-            polling_for = time.time() - poll_start
-            if polling_for > guarded_wait_time:
-                self._logger.warning(
-                    "Conditions below still not fulfilled after %f s, estimated execution time was %.2f s. Continuing to the next step.",
-                    guarded_wait_time,
-                    min_wait_time,
-                )
-                for condition in conditions_still_open.values():
-                    self._logger.warning("  - %s", condition.to_string())
-                break
-
-        self._logger.debug("Stopped waiting, conditions fulfilled")
-
     def _filter_cached_actions(self, daq_actions):
         cached_values = {}
         actions_to_perform = []
@@ -510,9 +394,16 @@ class DaqWrapperDryRun(DaqWrapper):
         assert server_qualifier.dry_run == True
         super().__init__(name, server_qualifier)
 
-    def map_device_type(self, serial: str, type: str):
+    def map_device_type(self, serial: str, type: str, opts: Dict[str, Any]):
         assert isinstance(self._zi_api_object, ziDAQServerEmulator)
-        self._zi_api_object.map_device_type(serial, type)
+
+        def calc_dev_type(type: str, opts: Dict[str, Any]) -> str:
+            if opts.get("is_qc", False):
+                return "SHFQC"
+            else:
+                return type
+
+        self._zi_api_object.map_device_type(serial, calc_dev_type(type, opts))
 
 
 class AwgModuleWrapper(ZiApiWrapperBase):

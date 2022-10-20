@@ -11,7 +11,7 @@ import time
 import json
 import math
 
-from typing import List, Optional, Tuple, Any, Set, TYPE_CHECKING
+from typing import List, Optional, Tuple, Any, Set, TYPE_CHECKING, Dict
 from laboneq.controller.recipe_1_4_0 import Initialization, OscillatorParam
 from laboneq.controller.recipe_processor import RecipeData, RtExecutionInfo
 
@@ -21,7 +21,6 @@ from laboneq.controller.communication import (
     DaqNodeAction,
     DaqNodeSetAction,
     DaqNodeGetAction,
-    DaqNodeWaitAction,
     DaqWrapper,
     CachingStrategy,
 )
@@ -62,6 +61,7 @@ class DeviceZI(DeviceBase):
         self._connected = False
         self._allocated_oscs: List[AllocatedOscillator] = []
         self._allocated_awgs: Set[int] = set()
+        self._nodes_to_monitor = None
 
         if self._daq is None:
             raise LabOneQControllerException("ZI devices need daq")
@@ -97,6 +97,16 @@ class DeviceZI(DeviceBase):
     @property
     def daq(self):
         return self._daq
+
+    def add_command_table_header(self, body: Dict) -> Dict:
+        # Stub, implement in sub-class
+        self._logger.debug("Command table unavailable on device %s", self.dev_repr)
+        return {}
+
+    def command_table_path(self, awg_index: int) -> str:
+        # Stub, implement in sub-class
+        self._logger.debug("No command table available for device %s", self.dev_repr)
+        return ""
 
     def _process_dev_opts(self):
         pass
@@ -155,11 +165,21 @@ class DeviceZI(DeviceBase):
             awg_module.execute()
             self._logger.debug("%s: Creating AWG Module #%d", self.dev_repr, i)
 
+        self._daq.node_monitor.add_nodes(self.nodes_to_monitor())
+
         self._connected = True
 
     def free_allocations(self):
         self._allocated_oscs.clear()
         self._allocated_awgs.clear()
+
+    def _nodes_to_monitor_impl(self):
+        return []
+
+    def nodes_to_monitor(self) -> List[str]:
+        if self._nodes_to_monitor is None:
+            self._nodes_to_monitor = self._nodes_to_monitor_impl()
+        return self._nodes_to_monitor
 
     def _osc_group_by_channel(self, channel: int) -> int:
         return channel
@@ -494,20 +514,36 @@ class DeviceZI(DeviceBase):
             idx += 1
         return bin_waves
 
+    def _prepare_command_table(
+        self, compiled: CompiledExperiment, seqc_filename: str
+    ) -> Optional[Dict]:
+        command_table_body = next(
+            (ct["ct"] for ct in compiled.command_tables if ct["seqc"] == seqc_filename),
+            None,
+        )
+
+        if command_table_body is None:
+            return None
+
+        return self.add_command_table_header(command_table_body)
+
     def _prepare_seqc(
         self, seqc_filename: str, compiled: CompiledExperiment
-    ) -> Tuple[str, str, List[Any]]:
-        # 'compiled' expected to have the following members:
-        #  - 'src'   -> List[Dict[str, str]]
-        #                 'filename' -> '<seqc_filename>'
-        #                 'text'     -> '<seqc_content>'
-        #  - 'waves' -> List[Dict[str, str]]
-        #                 'filename' -> '<wave_filename_csv>'
-        #                 'text'     -> '<wave_content_csv>'
-        #
-        # returns:
-        #  - 1) str: seqc text to pass to the awg compiler
-        #  - 2) list[array]: waves to upload to the instrument (ordered by index)
+    ) -> Tuple[str, List[Any], Dict[Any]]:
+        """
+        `compiled` expected to have the following members:
+         - `src`   -> List[Dict[str, str]]
+                        `filename` -> `<seqc_filename>`
+                        `text`     -> `<seqc_content>`
+         - `waves` -> List[Dict[str, str]]
+                        `filename` -> `<wave_filename_csv>`
+                        `text`     -> `<wave_content_csv>`
+
+        Returns a tuple of
+         1. str: seqc text to pass to the awg compiler
+         2. list[array]: waves to upload to the instrument (ordered by index)
+         3. dict: command table
+        """
         seqc = next((s for s in compiled.src if s["filename"] == seqc_filename), None)
         if seqc is None:
             raise LabOneQControllerException(
@@ -515,7 +551,9 @@ class DeviceZI(DeviceBase):
             )
 
         bin_waves = self._prepare_waves(compiled, seqc_filename)
-        return seqc["text"], bin_waves
+        command_table = self._prepare_command_table(compiled, seqc_filename)
+
+        return seqc["text"], bin_waves, command_table
 
     def prepare_upload_binary_wave(
         self,
@@ -550,6 +588,37 @@ class DeviceZI(DeviceBase):
             ]
         )
 
+    def upload_command_table(self, awg_index, command_table: Dict):
+        command_table_path = self.command_table_path(awg_index)
+        self._daq.batch_set(
+            [
+                DaqNodeSetAction(
+                    self._daq,
+                    command_table_path + "data",
+                    json.dumps(command_table),
+                )
+            ]
+        )
+
+        status_path = command_table_path + "status"
+
+        status = int(
+            self._daq.batch_get(
+                [
+                    DaqNodeGetAction(
+                        self._daq,
+                        status_path,
+                    )
+                ]
+            )[status_path]
+        )
+
+        if status & 0b1000:
+            raise ValueError("Failed to parse command table JSON")
+        if not self.dry_run:
+            if not (status & 0b0001):
+                raise ValueError("Failed to upload command table")
+
     def upload_awg_program(
         self, initialization: Initialization.Data, recipe_data: RecipeData
     ):
@@ -567,7 +636,9 @@ class DeviceZI(DeviceBase):
                     awg_index,
                 )
 
-                data, waves = self._prepare_seqc(awg_obj.seqc, recipe_data.compiled)
+                data, waves, command_table = self._prepare_seqc(
+                    awg_obj.seqc, recipe_data.compiled
+                )
 
                 try:
                     self._logger.debug(
@@ -584,7 +655,7 @@ class DeviceZI(DeviceBase):
                                 data,
                                 filename=awg_obj.seqc,
                                 caching_strategy=CachingStrategy.NO_CACHE,  # if only external waves changed
-                            ),
+                            )
                         ]
                     )
                 except LabOneQControllerException as exp:
@@ -597,6 +668,8 @@ class DeviceZI(DeviceBase):
                 self._check_awg_compiler_status(awg_index)
                 self._wait_for_elf_upload(awg_index)
                 self._upload_all_binary_waves(awg_index, waves, acquisition_type)
+                if command_table is not None:
+                    self.upload_command_table(awg_index, command_table)
 
     def _get_num_AWGs(self):
         return 0
@@ -619,12 +692,6 @@ class DeviceZI(DeviceBase):
     def collect_awg_after_upload_nodes(self, initialization: Initialization.Data):
         return []
 
-    def collect_conditions_to_close_loop(self, acquisition_units):
-        return [
-            DaqNodeWaitAction(self._daq, f"/{self.serial}/awgs/{awg_index}/enable", 0)
-            for awg_index in self._allocated_awgs
-        ]
-
     def collect_execution_nodes(self):
         nodes_to_execute = []
         self._logger.debug("%s: Executing AWGS...", self.dev_repr)
@@ -642,6 +709,9 @@ class DeviceZI(DeviceBase):
                 )
 
         return nodes_to_execute
+
+    def collect_start_execution_nodes(self):
+        return []
 
     def shut_down(self):
         for awg_module in self._awg_modules:

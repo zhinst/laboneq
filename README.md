@@ -41,4 +41,4 @@ The API Documentation is published here:
 
 ## Architecture
 
-![Overview of the QCCS Software Stack](https://github.com/zhinst/laboneq/raw/main/docs/images/flowchart_QCCS.png)
+![Overview of the LabOne Q Software Stack](https://github.com/zhinst/laboneq/raw/main/docs/images/flowchart_QCCS.png)

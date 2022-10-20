@@ -14,8 +14,7 @@ from dataclasses import dataclass
 
 @dataclass(init=True, repr=True, order=True)
 class HDAWG(ZIStandardInstrument):
-    """Class representing a ZI HDAWG instrument.
-    """
+    """Class representing a ZI HDAWG instrument."""
 
     @property
     def ports(self):

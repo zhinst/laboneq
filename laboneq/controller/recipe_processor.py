@@ -3,16 +3,7 @@
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import (
-    Any,
-    Dict,
-    Generator,
-    List,
-    Union,
-    Tuple,
-    Set,
-    TYPE_CHECKING,
-)
+from typing import Any, Dict, Iterator, List, Union, Tuple, Set, TYPE_CHECKING
 import numpy as np
 from numpy import typing as npt
 from laboneq.executor.execution_from_experiment import ExecutionFactoryFromExperiment
@@ -21,20 +12,9 @@ from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 
-from .recipe_1_4_0 import (
-    Experiment,
-    Initialization,
-    OscillatorParam,
-    Recipe,
-    IO,
-)
+from .recipe_1_4_0 import Experiment, Initialization, OscillatorParam, Recipe, IO
 from .recipe_enums import SignalType
-from laboneq.executor.executor import (
-    LoopingMode,
-    ExecutorBase,
-    Sequence,
-    Statement,
-)
+from laboneq.executor.executor import LoopingMode, ExecutorBase, Sequence, Statement
 
 if TYPE_CHECKING:
     from laboneq.core.types import CompiledExperiment
@@ -108,7 +88,7 @@ class RecipeData:
     param_to_device_map: Dict[str, List[str]]
 
     @property
-    def initializations(self) -> Generator[Initialization.Data, None, None]:
+    def initializations(self) -> Iterator[Initialization.Data]:
         for initialization in self.recipe.experiment.initializations:
             yield initialization
 
@@ -395,7 +375,7 @@ def pre_process_compiled(compiled_experiment: CompiledExperiment) -> RecipeData:
     device_settings: Dict[str, DeviceRecipeData] = {}
     for initialization in recipe.experiment.initializations:
         device_settings[initialization.device_uid] = DeviceRecipeData(
-            iq_settings=_pre_process_iq_settings_hdawg(initialization),
+            iq_settings=_pre_process_iq_settings_hdawg(initialization)
         )
 
     execution = ExecutionFactoryFromExperiment().make(compiled_experiment.experiment)

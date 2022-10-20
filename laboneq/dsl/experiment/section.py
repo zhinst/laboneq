@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from typing import List, Union, Tuple, TYPE_CHECKING, Optional
+from typing import Any, Dict, List, Union, Tuple, TYPE_CHECKING, Optional
 
 from laboneq.dsl.enums import (
     AveragingMode,
@@ -116,6 +116,7 @@ class Section:
         increment_oscillator_phase=None,
         set_oscillator_phase=None,
         length=None,
+        pulse_parameters: Optional[Dict[str, Any]] = None,
     ):
         """Play a pulse on a signal.
 
@@ -124,6 +125,7 @@ class Section:
             pulse: Pulse that should be played on the signal.
             amplitude: Amplitude of the pulse that should be played.
             phase: Phase of the pulse that should be played.
+            pulse_parameters: Dictionary with user pulse function parameters (re)binding.
         """
         self._add_operation(
             PlayPulse(
@@ -134,6 +136,7 @@ class Section:
                 increment_oscillator_phase=increment_oscillator_phase,
                 set_oscillator_phase=set_oscillator_phase,
                 length=length,
+                pulse_parameters=pulse_parameters,
             )
         )
 
@@ -149,7 +152,12 @@ class Section:
         self._add_operation(Reserve(signal))
 
     def acquire(
-        self, signal: str, handle: str, kernel: Pulse = None, length: float = None,
+        self,
+        signal: str,
+        handle: str,
+        kernel: Pulse = None,
+        length: float = None,
+        pulse_parameters: Optional[Dict[str, Any]] = None,
     ):
         """Acquisition of results of a signal.
 
@@ -158,9 +166,16 @@ class Section:
             handle: Unique identifier of the handle that will be used to access the acquired result.
             kernel: Pulse base used for the acquisition.
             length: Integration length (only valid in spectroscopy mode).
+            pulse_parameters: Dictionary with user pulse function parameters (re)binding.
         """
         self._add_operation(
-            Acquire(signal=signal, handle=handle, kernel=kernel, length=length)
+            Acquire(
+                signal=signal,
+                handle=handle,
+                kernel=kernel,
+                length=length,
+                pulse_parameters=pulse_parameters,
+            )
         )
 
     def delay(self, signal: str, time: Union[float, Parameter]):

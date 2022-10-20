@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Union, TYPE_CHECKING
+from typing import Any, Dict, Optional, Union, TYPE_CHECKING
 
 from .operation import Operation
 from .pulse import Pulse
@@ -32,3 +32,6 @@ class PlayPulse(Operation):
 
     #: Modify the length of the pulse to the given value
     length: Union[float, Parameter] = field(default=None)
+
+    #: Optional (re)binding of user pulse parameters
+    pulse_parameters: Optional[Dict[str, Any]] = field(default=None)

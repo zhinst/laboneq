@@ -2,17 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
+import json
+
 import numpy
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from numpy import typing as npt
 
 from laboneq.controller.recipe_enums import DIOConfigType
 from laboneq.controller.util import LabOneQControllerException
-from laboneq.controller.communication import (
-    DaqNodeSetAction,
-    DaqNodeWaitAction,
-    CachingStrategy,
-)
+from laboneq.controller.communication import DaqNodeSetAction, CachingStrategy
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.controller.recipe_1_4_0 import Initialization, IO
 from laboneq.controller.recipe_enums import ReferenceClockSource
@@ -41,12 +40,13 @@ class DeviceSHFSG(DeviceZI):
         elif self.dev_type == "SHFSG4":
             self._channels = 4
             self._output_to_synth_map = [0, 1, 2, 3]
-        elif self._get_option("is_qc") and self.dev_type == "SHFQC":
+        elif self.dev_type == "SHFQC":
             self._channels = 6
-            self._output_to_synth_map = [0, 0, 1, 1, 2, 2]
+            # Different numbering on SHFQC - index 0 are QA synths
+            self._output_to_synth_map = [1, 1, 2, 2, 3, 3]
         else:
             self._logger.warning(
-                "%s: Unknown device type '%s', assuming 4 channels device.",
+                "%s: Unknown device type '%s', assuming SHFSG4 device.",
                 self.dev_repr,
                 self.dev_type,
             )
@@ -88,17 +88,15 @@ class DeviceSHFSG(DeviceZI):
     def _make_osc_path(self, channel: int, index: int) -> str:
         return f"/{self.serial}/sgchannels/{channel}/oscs/{index}/freq"
 
-    def collect_conditions_to_close_loop(self, acquisition_units):
-        return [
-            DaqNodeWaitAction(
-                self._daq, f"/{self.serial}/sgchannels/{awg_index}/awg/enable", 0
-            )
-            for awg_index in self._allocated_awgs
-        ]
+    def _nodes_to_monitor_impl(self) -> List[str]:
+        nodes = []
+        for awg in range(self._get_num_AWGs()):
+            nodes.append(f"/{self.serial}/sgchannels/{awg}/awg/enable")
+        return nodes
 
     def collect_execution_nodes(self):
         self._logger.debug("Starting execution...")
-        execution_nodes = [
+        return [
             DaqNodeSetAction(
                 self._daq,
                 f"/{self.serial}/sgchannels/{awg_index}/awg/enable",
@@ -107,28 +105,33 @@ class DeviceSHFSG(DeviceZI):
             )
             for awg_index in self._allocated_awgs
         ]
+
+    def collect_start_execution_nodes(self):
         if self._emit_trigger:
-            execution_nodes.append(
+            return [
                 DaqNodeSetAction(
                     self._daq,
                     f"/{self.serial}/system/internaltrigger/enable",
                     1,
                     caching_strategy=CachingStrategy.NO_CACHE,
                 )
-            )
+            ]
+        return []
 
-        return execution_nodes
-
-    def wait_for_execution_ready(self):
-        # TODO(2K): hotfix, change to subscription and parallel waiting for all awgs of all followers
+    def conditions_for_execution_ready(self) -> Dict[str, Any]:
+        conditions: Dict[str, Any] = {}
         if self._wait_for_AWGs:
             for awg_index in self._allocated_awgs:
-                # Wait for awg being enabled. Shall we rather wait for it to disable
-                # again/go to zero? It seems that sometimes the value of one was not
-                # picked up reliably
-                self._wait_for_node(
-                    f"/{self.serial}/sgchannels/{awg_index}/awg/enable", 1, timeout=5
-                )
+                conditions[f"/{self.serial}/sgchannels/{awg_index}/awg/enable"] = 1
+        return conditions
+
+    def conditions_for_execution_done(
+        self, acquisition_type: AcquisitionType
+    ) -> Dict[str, Any]:
+        conditions: Dict[str, Any] = {}
+        for awg_index in self._allocated_awgs:
+            conditions[f"/{self.serial}/sgchannels/{awg_index}/awg/enable"] = 0
+        return conditions
 
     def collect_output_initialization_nodes(
         self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
@@ -250,9 +253,6 @@ class DeviceSHFSG(DeviceZI):
                 raise LabOneQControllerException(
                     f"{self.dev_repr}: Local oscillator frequency mismatch between outputs {prev_io.channel} and {io.channel} sharing synthesizer {synth_idx}: {prev_io.lo_frequency} != {io.lo_frequency}"
                 )
-            if self._get_option("is_qc"):
-                # Different numbering on SHFQC - index 0 are QA synths
-                synth_idx += 1
             return synth_idx
 
         ios = initialization.outputs or []
@@ -347,6 +347,16 @@ class DeviceSHFSG(DeviceZI):
             )
 
         return nodes_to_configure_triggers
+
+    def add_command_table_header(self, body: dict) -> Dict:
+        return {
+            "$schema": "https://docs.zhinst.com/shfsg/commandtable/v1_1/schema",
+            "header": {"version": "1.1.0"},
+            "table": body,
+        }
+
+    def command_table_path(self, awg_index: int) -> str:
+        return f"/{self.serial}/sgchannels/{awg_index}/awg/commandtable/"
 
     def configure_as_leader(self, initialization):
         raise LabOneQControllerException("SHFSG cannot be configured as leader")

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, Optional, TypeVar
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -109,3 +110,34 @@ class PulseSampledComplex(Pulse):
         if self is other:
             return True
         return self.uid == other.uid and _compare_nested(self.samples, other.samples)
+
+
+UserFunction = TypeVar(
+    "UserFunction", bound=Callable[[ArrayLike, Dict[str, Any]], ArrayLike]
+)
+
+
+@dataclass(init=True, repr=True, order=True)
+class UserPulseFunctional(Pulse):
+    """Pulse based on a user function."""
+
+    # TODO(2K): __eq__ will not work well for this
+    user_function: UserFunction
+
+    #: Unique identifier of the pulse.
+    uid: str = field(default_factory=pulse_id_generator)
+
+    #: Amplitude of the pulse.
+    amplitude: float = field(default=None)
+
+    #: Length of the pulse in seconds.
+    length: float = field(default=None)
+
+    #: Optional (re)binding of user pulse parameters
+    pulse_parameters: Optional[Dict[str, Any]] = field(default=None)
+
+    def __post_init__(self):
+        if not isinstance(self.uid, str):
+            raise LabOneQException(
+                f"{UserPulseFunctional.__name__} must have a string uid"
+            )

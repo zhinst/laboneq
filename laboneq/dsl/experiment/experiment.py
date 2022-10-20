@@ -106,7 +106,7 @@ class Experiment:
         return uid in self.signals.keys()
 
     def map_signal(
-        self, experiment_signal_uid: str, logical_signal: Union[LogicalSignal, str],
+        self, experiment_signal_uid: str, logical_signal: Union[LogicalSignal, str]
     ):
         """Connect an experiment signal to a logical signal.
 
@@ -190,7 +190,7 @@ class Experiment:
         )
 
     def set_calibration(self, calibration: Calibration):
-        for (signal_uid, calib_item,) in calibration.calibration_items.items():
+        for (signal_uid, calib_item) in calibration.calibration_items.items():
             if calib_item is not None:
                 if signal_uid not in self.signals.keys():
                     self._signal_not_found_error(
@@ -207,7 +207,7 @@ class Experiment:
                 sig.calibration if sig.is_calibrated() else None
             )
 
-        calibration = Calibration(calibration_items=experiment_signals_calibration,)
+        calibration = Calibration(calibration_items=experiment_signals_calibration)
         return calibration
 
     def reset_calibration(self, calibration=None):
@@ -251,6 +251,7 @@ class Experiment:
         increment_oscillator_phase=None,
         set_oscillator_phase=None,
         length=None,
+        pulse_parameters: Optional[Dict[str, Any]] = None,
     ):
         """Play a pulse.
 
@@ -268,6 +269,8 @@ class Experiment:
             shall be played with. Defaults to `None`, meaning that the pulse is
             played as is.
         :type increment_oscillator_phase: `float`, optional
+        :param pulse_parameters: Dictionary with user pulse function parameters (re)binding.
+        :type pulse_parameters: `dict`, optional
         """
         current_section = self._peek_section()
         current_section.play(
@@ -278,6 +281,7 @@ class Experiment:
             increment_oscillator_phase=increment_oscillator_phase,
             set_oscillator_phase=set_oscillator_phase,
             length=length,
+            pulse_parameters=pulse_parameters,
         )
 
     def delay(self, signal: str, time: Union[float, Parameter]):
@@ -307,7 +311,12 @@ class Experiment:
         current_section.reserve(signal=signal)
 
     def acquire(
-        self, signal: str, handle: str, kernel: Pulse = None, length: float = None
+        self,
+        signal: str,
+        handle: str,
+        kernel: Pulse = None,
+        length: float = None,
+        pulse_parameters: Optional[Dict[str, Any]] = None,
     ):
         """Acquire a signal and make it available in :class:`Result`.
 
@@ -317,16 +326,21 @@ class Experiment:
                 acquired data in the :class:`Result` object.
             kernel: Pulse for filtering the acquired signal.
             length: Integration length for spectroscopy mode.
+            pulse_parameters: Dictionary with user pulse function parameters (re)binding.
         """
         current_section = self._peek_rt_section()
         current_section.acquire(
-            signal=signal, handle=handle, kernel=kernel, length=length
+            signal=signal,
+            handle=handle,
+            kernel=kernel,
+            length=length,
+            pulse_parameters=pulse_parameters,
         )
 
     def call(self, func_name, **kwargs):
         """Add a callback function in the execution of the experiment.
 
-        The callback is called by the QCCS software as part of executing the
+        The callback is called by the LabOne Q software as part of executing the
         experiment and in sequence with the other experiment operations.
 
         Args:
@@ -422,9 +436,7 @@ class Experiment:
         def __exit__(self, exc_type, exc_val, exc_tb):
             self.exp._pop_and_add_section()
 
-    def acquire_loop_nt(
-        self, count, averaging_mode=AveragingMode.CYCLIC, uid=None,
-    ):
+    def acquire_loop_nt(self, count, averaging_mode=AveragingMode.CYCLIC, uid=None):
         """Define an acquire section with averaging in near time.
 
         Sections need to open a scope in the following way::
@@ -442,16 +454,14 @@ class Experiment:
                 Defaults to :class:`AveragingMode.CYCLIC`.
         """
         return Experiment._AcquireLoopNtSectionContext(
-            self, uid=uid, count=count, averaging_mode=averaging_mode,
+            self, uid=uid, count=count, averaging_mode=averaging_mode
         )
 
     class _AcquireLoopNtSectionContext:
-        def __init__(
-            self, experiment, count, averaging_mode, uid=None,
-        ):
+        def __init__(self, experiment, count, averaging_mode, uid=None):
             self.exp = experiment
             self.acquire_loop = AcquireLoopNt(
-                uid=uid, count=count, averaging_mode=averaging_mode,
+                uid=uid, count=count, averaging_mode=averaging_mode
             )
 
         def __enter__(self):
@@ -543,17 +553,13 @@ class Experiment:
         def __exit__(self, exc_type, exc_val, exc_tb):
             self.exp._pop_and_add_section()
 
-    def for_(
-        self, timing, parameters=None, count=0, uid=None,
-    ):
+    def for_(self, timing, parameters=None, count=0, uid=None):
         return Experiment._ForSectionContext(
-            self, timing=timing, parameters=parameters, count=count, uid=uid,
+            self, timing=timing, parameters=parameters, count=count, uid=uid
         )
 
     class _ForSectionContext:
-        def __init__(
-            self, experiment, timing, uid, parameters=None, count=0,
-        ):
+        def __init__(self, experiment, timing, uid, parameters=None, count=0):
             if parameters is None:
                 parameters = []
             self.exp = experiment

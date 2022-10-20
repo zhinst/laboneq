@@ -4,7 +4,7 @@
 from __future__ import annotations
 import time
 import numpy as np
-from typing import Optional, List
+from typing import Any, Dict, Optional, List
 from numpy import typing as npt
 
 from laboneq.controller.recipe_enums import DIOConfigType
@@ -13,7 +13,6 @@ from laboneq.controller.communication import (
     DaqNodeAction,
     DaqNodeSetAction,
     DaqNodeGetAction,
-    DaqNodeWaitAction,
     CachingStrategy,
 )
 from laboneq.controller.recipe_processor import (
@@ -66,11 +65,11 @@ class DeviceSHFQA(DeviceZI):
             self._channels = 4
         elif self.dev_type == "SHFQA2":
             self._channels = 2
-        elif self._get_option("is_qc") and self.dev_type == "SHFQC":
+        elif self.dev_type == "SHFQC":
             self._channels = 1
         else:
             self._logger.warning(
-                "%s: Unknown device type '%s', assuming 4 channels device.",
+                "%s: Unknown device type '%s', assuming SHFQA4 device.",
                 self.dev_repr,
                 self.dev_type,
             )
@@ -115,6 +114,18 @@ class DeviceSHFQA(DeviceZI):
 
     def _make_osc_path(self, channel: int, index: int) -> str:
         return f"/{self.serial}/qachannels/{channel}/oscs/{index}/freq"
+
+    def _nodes_to_monitor_impl(self) -> List[str]:
+        nodes = []
+        for awg in range(self._get_num_AWGs()):
+            nodes.extend(
+                [
+                    f"/{self.serial}/qachannels/{awg}/generator/enable",
+                    f"/{self.serial}/qachannels/{awg}/spectroscopy/result/enable",
+                    f"/{self.serial}/qachannels/{awg}/readout/result/enable",
+                ]
+            )
+        return nodes
 
     def configure_acquisition(
         self,
@@ -213,7 +224,7 @@ class DeviceSHFQA(DeviceZI):
                             self._daq,
                             f"/{self.serial}/qachannels/{channel}/readout/discriminators/{integrator_idx}/threshold",
                             integrator.threshold,
-                        ),
+                        )
                     )
         nodes_to_initialize_readout.append(
             DaqNodeSetAction(
@@ -324,35 +335,9 @@ class DeviceSHFQA(DeviceZI):
         )
         return nodes_to_initialize_scope
 
-    def collect_conditions_to_close_loop(self, acquisition_units):
-        close_loop_nodes = [
-            DaqNodeWaitAction(
-                self._daq, f"/{self.serial}/qachannels/{awg_index}/generator/enable", 0
-            )
-            for awg_index in self._allocated_awgs
-        ]
-        for (awg, acquisition_type) in acquisition_units:
-            if acquisition_type == AcquisitionType.SPECTROSCOPY:
-                close_loop_nodes.append(
-                    DaqNodeWaitAction(
-                        self._daq,
-                        f"/{self.serial}/qachannels/{awg}/spectroscopy/result/enable",
-                        0,
-                    )
-                )
-            elif acquisition_type == AcquisitionType.INTEGRATION:
-                close_loop_nodes.append(
-                    DaqNodeWaitAction(
-                        self._daq,
-                        f"/{self.serial}/qachannels/{awg}/readout/result/enable",
-                        0,
-                    )
-                )
-        return close_loop_nodes
-
     def collect_execution_nodes(self):
         self._logger.debug("Starting execution...")
-        execution_nodes = [
+        return [
             DaqNodeSetAction(
                 self._daq,
                 f"/{self.serial}/qachannels/{awg_index}/generator/enable",
@@ -361,8 +346,10 @@ class DeviceSHFQA(DeviceZI):
             )
             for awg_index in self._allocated_awgs
         ]
+
+    def collect_start_execution_nodes(self):
         if self._emit_trigger:
-            execution_nodes.append(
+            return [
                 DaqNodeSetAction(
                     self._daq,
                     f"/{self.serial}/system/internaltrigger/enable"
@@ -371,22 +358,39 @@ class DeviceSHFQA(DeviceZI):
                     1,
                     caching_strategy=CachingStrategy.NO_CACHE,
                 )
-            )
+            ]
+        return []
 
-        return execution_nodes
-
-    def wait_for_execution_ready(self):
-        # TODO(2K): hotfix, change to subscription and parallel waiting for all awgs of all followers
+    def conditions_for_execution_ready(self) -> Dict[str, Any]:
         # TODO(janl): Not sure whether we need this condition this on the SHFQA (including SHFQC) as well
         # The state of the generator enable wasn't always pickup up reliably, so we
         # only check in cases where we rely on external triggering mechanisms.
+        conditions: Dict[str, Any] = {}
         if self._wait_for_AWGs:
             for awg_index in self._allocated_awgs:
-                self._wait_for_node(
-                    f"/{self.serial}/qachannels/{awg_index}/generator/enable",
-                    1,
-                    timeout=2,
-                )
+                conditions[
+                    f"/{self.serial}/qachannels/{awg_index}/generator/enable"
+                ] = 1
+        return conditions
+
+    def conditions_for_execution_done(
+        self, acquisition_type: AcquisitionType
+    ) -> Dict[str, Any]:
+        conditions: Dict[str, Any] = {}
+        for awg_index in self._allocated_awgs:
+            conditions[f"/{self.serial}/qachannels/{awg_index}/generator/enable"] = 0
+            if acquisition_type == AcquisitionType.SPECTROSCOPY:
+                conditions[
+                    f"/{self.serial}/qachannels/{awg_index}/spectroscopy/result/enable"
+                ] = 0
+            elif acquisition_type in [
+                AcquisitionType.INTEGRATION,
+                AcquisitionType.DISCRIMINATION,
+            ]:
+                conditions[
+                    f"/{self.serial}/qachannels/{awg_index}/readout/result/enable"
+                ] = 0
+        return conditions
 
     def collect_output_initialization_nodes(
         self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
@@ -730,7 +734,7 @@ class DeviceSHFQA(DeviceZI):
         for input in inputs:
             nodes_to_initialize_measurement.append(
                 DaqNodeSetAction(
-                    self._daq, f"/{self.serial}/qachannels/{input.channel}/input/on", 1,
+                    self._daq, f"/{self.serial}/qachannels/{input.channel}/input/on", 1
                 )
             )
             if input.range is not None:
@@ -763,7 +767,7 @@ class DeviceSHFQA(DeviceZI):
 
         return nodes_to_initialize_measurement
 
-    def collect_trigger_configuration_nodes(self, initialization):
+    def collect_trigger_configuration_nodes(self, initialization: Initialization.Data):
         self._logger.debug("Configuring triggers...")
         self._wait_for_AWGs = True
         self._emit_trigger = False
@@ -785,7 +789,7 @@ class DeviceSHFQA(DeviceZI):
                     if clock_source
                     and clock_source.value == ReferenceClockSource.INTERNAL.value
                     else REFERENCE_CLOCK_SOURCE_EXTERNAL,
-                ),
+                )
             ]
             if self._get_option("is_qc"):
                 ntc += [

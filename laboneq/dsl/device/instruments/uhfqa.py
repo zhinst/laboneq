@@ -25,7 +25,7 @@ class UHFQA(ZIStandardInstrument):
                 signal_type=IOSignalType.DIO,
                 physical_port_ids=["0"],
                 connector_labels=["DIO"],
-            ),
+            )
         ]
         for i in range(10):
             inputs.append(

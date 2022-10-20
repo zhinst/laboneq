@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from typing import Optional, List
+from typing import Any, Dict, Optional, List
 import numpy as np
 from laboneq.controller.recipe_enums import DIOConfigType
 from laboneq.controller.recipe_processor import (
@@ -22,10 +22,7 @@ from laboneq.controller.communication import (
     CachingStrategy,
 )
 
-from laboneq.controller.recipe_1_4_0 import (
-    Initialization,
-    IntegratorAllocation,
-)
+from laboneq.controller.recipe_1_4_0 import Initialization, IntegratorAllocation
 from laboneq.controller.recipe_enums import ReferenceClockSource
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
@@ -58,6 +55,12 @@ class DeviceUHFQA(DeviceZI):
         if previously_allocated >= 1:
             return None
         return previously_allocated
+
+    def _nodes_to_monitor_impl(self) -> List[str]:
+        nodes = []
+        for awg in range(self._get_num_AWGs()):
+            nodes.append(f"/{self.serial}/awgs/{awg}/enable")
+        return nodes
 
     def configure_acquisition(
         self,
@@ -177,6 +180,20 @@ class DeviceUHFQA(DeviceZI):
 
         return nodes_to_initialize_input_monitor
 
+    def conditions_for_execution_ready(self) -> Dict[str, Any]:
+        conditions: Dict[str, Any] = {}
+        for awg_index in self._allocated_awgs:
+            conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = 1
+        return conditions
+
+    def conditions_for_execution_done(
+        self, acquisition_type: AcquisitionType
+    ) -> Dict[str, Any]:
+        conditions: Dict[str, Any] = {}
+        for awg_index in self._allocated_awgs:
+            conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = 0
+        return conditions
+
     def collect_output_initialization_nodes(
         self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
     ) -> List[DaqNodeAction]:
@@ -203,7 +220,7 @@ class DeviceUHFQA(DeviceZI):
             if output.enable:
                 nodes_to_initialize_output.append(
                     DaqNodeSetAction(
-                        self._daq, f"/{self.serial}/sigouts/{output.channel}/imp50", 1,
+                        self._daq, f"/{self.serial}/sigouts/{output.channel}/imp50", 1
                     )
                 )
             nodes_to_initialize_output.append(
@@ -438,7 +455,7 @@ class DeviceUHFQA(DeviceZI):
 
         return nodes_to_initialize_measurement
 
-    def collect_trigger_configuration_nodes(self, initialization):
+    def collect_trigger_configuration_nodes(self, initialization: Initialization.Data):
         self._logger.debug("Configuring triggers...")
         self._logger.debug("Configuring strobe index: 16.")
         self._logger.debug("Configuring strobe slope: 0.")

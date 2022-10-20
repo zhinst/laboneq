@@ -3,7 +3,7 @@
 ## Definitions of the basic Clifford gates and functionality to calculate the recovery gate for an arbitrary sequence of Clifford gates
 
 
-# convenience import of all QCCS functionality
+# convenience import of all LabOne Q functionality
 from laboneq.simple import *
 
 # additional imports for Clifford gate calculation
@@ -15,14 +15,14 @@ import random
 
 def pulse_envelope(amplitude, pulse_length, phase, sigma, sample_rate):
     """Samples a Gaussian pulse
-    
+
     Args:
         amplitude: scaling of the pulse, between 0 and 1
         pulse_length: length of the pulse in seconds
         phase: phase of the pulse in degree.
         sigma: ratio between standard deviation and pulse length
         sample_rate: sampling rate of the instrument playing the pulse
-    
+
     Returns:
         A numpy array of lists of real and complex samples.
     """
@@ -31,11 +31,11 @@ def pulse_envelope(amplitude, pulse_length, phase, sigma, sample_rate):
     x = np.linspace(-1, 1, length)
     # output is complex, where phase later determines the gate rotation axis
     y = amplitude * np.exp(-x**2 / sigma**2 + 1j * np.deg2rad(phase))
-    
+
     return np.transpose(np.array([y.real, y.imag]))
 
 
-# basic gate pulse set as complex 2D arrays 
+# basic gate pulse set as complex 2D arrays
 def basic_gate_set(pi_amp, pi_2_amp, gate_time, sigma, sample_rate):
     """Creates and returns the basic gate pulse set.
 
@@ -126,7 +126,7 @@ def pauli(axis):
         res = np.array([[0,-1j], [1j,0]])
     if axis =='z':
         res = np.array([[1,0], [0,-1]])
-        
+
     return res
 
 def rot_matrix(angle=np.pi, axis='x'):
@@ -142,8 +142,8 @@ def rot_matrix(angle=np.pi, axis='x'):
     return matrix_exponential(-1j * angle / 2 * pauli(axis))
 
 def mult_gates(gate_list, use_linalg=False):
-    """Multiply a variable number of gates / matrices 
-    
+    """Multiply a variable number of gates / matrices
+
     Recursive definition fastest for simple 2x2 matrices
 
     Args:
@@ -160,7 +160,7 @@ def mult_gates(gate_list, use_linalg=False):
             res = np.matmul(gate_list[0], mult_gates(gate_list[1:], use_linalg=False))
     elif len(gate_list) == 1:
         res = gate_list[0]
-    
+
     return res
 
 # generate matrix representation of all elementary gates used to generate the Clifford gates
@@ -192,7 +192,7 @@ def glob_phase(phase, dim=2):
 
 def match_up_to_phase(target, gate_list, dim=2):
     """Finds the element of the gates list that best matches the target gate
-    
+
     Matching is done up to a global phase of integer multiples of pi
 
     Args:
@@ -206,7 +206,7 @@ def match_up_to_phase(target, gate_list, dim=2):
     gates_2 = [[mult_gates([gate1, gate2]) for gate2 in glob_phases] for gate1 in gate_list]
     # index of gate_list that is closest to target up to global phase (using frobenius norm)
     match_index = np.argmin([np.amin([np.linalg.norm(target - gate) for gate in gates]) for gates in gates_2])
-    
+
     return match_index
 
 #### function to calculate the last gate in the sequence - recovery gate which leads back to initial state (up to global phase)
@@ -215,7 +215,7 @@ def calculate_inverse_clifford(seq_list, clifford_list=clifford_gates):
 
     Args:
         seq_list: a list containing the indices of the clifford sequence to be inverted
-        clifford_list: a list containing the set of clifford gates 
+        clifford_list: a list containing the set of clifford gates
 
     Returns:
         recovery: index of the recovery gate
@@ -226,7 +226,7 @@ def calculate_inverse_clifford(seq_list, clifford_list=clifford_gates):
     rec_gate = np.linalg.inv(seq_gate)
     # index of recovery gate (up to global phase)
     recovery = int(match_up_to_phase(rec_gate, clifford_list))
-    
+
     return recovery
 
 
@@ -239,7 +239,7 @@ def generate_play_rb_pulses(exp, signal, seq_length, cliffords, pulse_set):
     samples pulses and plays them
 
     Args:
-        exp: QCCS SW experiment
+        exp: LabOne Q SW experiment
         signal: Experiment signal line where pulses are played
         seq_length: Length of the RB sequence, excluding recovery gate
         cliffords: List of basic Clifford gates

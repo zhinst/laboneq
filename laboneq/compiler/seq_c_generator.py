@@ -129,22 +129,23 @@ class SeqCGenerator:
         statement["value"] = value
         self.add_statement(statement)
 
-    def add_play_wave_statement(
+    def add_assign_wave_index_statement(
         self, device_type: DeviceType, signal_type, wave_id, wave_index, channel
     ):
-        if isinstance(device_type, str):
-            device_type = DeviceType(device_type)
-        if wave_index is not None:
-            self.add_statement(
-                {
-                    "type": "assignWaveIndex",
-                    "device_type": device_type,
-                    "signal_type": signal_type,
-                    "wave_id": wave_id,
-                    "wave_index": wave_index,
-                    "channel": channel,
-                }
-            )
+        self.add_statement(
+            {
+                "type": "assignWaveIndex",
+                "device_type": device_type,
+                "signal_type": signal_type,
+                "wave_id": wave_id,
+                "wave_index": wave_index,
+                "channel": channel,
+            }
+        )
+
+    def add_play_wave_statement(
+        self, device_type: DeviceType, signal_type, wave_id, channel
+    ):
         self.add_statement(
             {
                 "type": "playWave",
@@ -152,6 +153,17 @@ class SeqCGenerator:
                 "signal_type": signal_type,
                 "wave_id": wave_id,
                 "channel": channel,
+            }
+        )
+
+    def add_command_table_execution(
+        self,
+        ct_index,
+    ):
+        self.add_statement(
+            {
+                "type": "executeTableEntry",
+                "table_index": ct_index,
             }
         )
 
@@ -174,7 +186,7 @@ class SeqCGenerator:
             raise LabOneQException(
                 f"Attempting to emit playZero({num_samples}), which is below the "
                 f"minimum waveform length {device_type.min_play_wave} of device "
-                f"'{device_type.value}'"
+                f"'{device_type.value}' (sample multiple is {device_type.sample_multiple})"
             )
         statement = {
             "type": "playZero",
@@ -252,6 +264,8 @@ class SeqCGenerator:
         elif statement["type"] == "playWave":
             wave_channels = self._build_wave_channel_assignment(statement)
             self._seq_c_text += f"playWave({wave_channels});\n"
+        elif statement["type"] == "executeTableEntry":
+            self._seq_c_text += f"executeTableEntry({statement['table_index']});\n"
         elif statement["type"] == "comment":
             self._seq_c_text += "/* " + statement["text"] + " */\n"
         elif statement["type"] == "playZero":
@@ -321,7 +335,7 @@ class SeqCGenerator:
         dual_channel = statement["signal_type"] in ["iq", "double", "multi"]
         sig_string = statement["wave_id"]
         channel = statement.get("channel")
-        if dual_channel and statement["device_type"].supports_mixer_calibration:
+        if dual_channel and statement["device_type"].supports_digital_iq_modulation:
             return f"1,2,w{sig_string}_i,1,2,w{sig_string}_q"
         elif dual_channel:
             return f"w{sig_string}_i,w{sig_string}_q"

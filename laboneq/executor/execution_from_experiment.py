@@ -77,14 +77,7 @@ class ExecutionFactoryFromExperiment(ExecutionFactory):
         return SetSoftwareParam(parameter.uid, parameter.values, parameter.axis_name)
 
     def _statement_from_operation(self, operation, parent_uid: str):
-        from laboneq.dsl.experiment import (
-            Call,
-            Set,
-            PlayPulse,
-            Delay,
-            Reserve,
-            Acquire,
-        )
+        from laboneq.dsl.experiment import Call, Set, PlayPulse, Delay, Reserve, Acquire
 
         if isinstance(operation, Call):
             return ExecUserCall(operation.func_name, operation.args)

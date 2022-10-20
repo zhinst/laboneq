@@ -7,4 +7,3 @@ from enum import Enum
 class PulseType(Enum):
     GAUSSIAN = "gaussian"
     CONST = "const"
-    INTERNAL = "ZI_internal_pulse_1"

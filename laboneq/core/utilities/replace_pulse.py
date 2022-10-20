@@ -41,7 +41,7 @@ def _replace_pulse_in_wave(
     current_wave = None
     if current_waves is not None:
         current_wave = next(
-            (w for w in current_waves if w["filename"] == wave_name), None,
+            (w for w in current_waves if w["filename"] == wave_name), None
         )
     if current_wave is None:
         specified_wave = next(
@@ -56,6 +56,7 @@ def _replace_pulse_in_wave(
     input_samples = None
     amplitude = 1.0
     function = None
+    user_function = None
     length = None
     if isinstance(pulse_or_array, list):
         pulse_or_array = np.array(pulse_or_array)
@@ -66,6 +67,7 @@ def _replace_pulse_in_wave(
         input_samples = getattr(pulse_or_array, "samples", None)
         amplitude = getattr(pulse_or_array, "amplitude", 1.0)
         function = getattr(pulse_or_array, "function", None)
+        user_function = getattr(pulse_or_array, "user_function", None)
         if function is not None:
             function = function.value
     length = length or (0 if input_samples is None else len(input_samples))
@@ -87,11 +89,13 @@ def _replace_pulse_in_wave(
             length=pwm.length_samples / pwm.sampling_rate,
             amplitude=amplitude * instance.amplitude,
             pulse_function=function,
+            user_function=user_function,
             modulation_frequency=instance.modulation_frequency,
             modulation_phase=instance.modulation_phase,
             iq_phase=instance.iq_phase,
             samples=input_samples,
             complex_modulation=pwm.complex_modulation,
+            pulse_parameters=instance.pulse_parameters,
         )
 
         if "samples_q" in samples and instance.needs_conjugate:
@@ -146,8 +150,8 @@ def calc_wave_replacements(
         pulse_uid = pulse_uid.uid
     pm = compiled_experiment.pulse_map.get(pulse_uid)
     if pm is None:
-        _logger.warning("No mapping found for pulse %s - ignoring", pulse_uid)
-        return
+        _logger.warning("No mapping found for pulse '%s' - ignoring", pulse_uid)
+        return []
 
     replacements: List[WaveReplacement] = []
     for sig_string, pwm in pm.waveforms.items():
@@ -195,9 +199,7 @@ def calc_wave_replacements(
                     current_waves=current_waves,
                 )
             replacements.append(
-                WaveReplacement(
-                    awgs["filename"], sig_string, replacement_type, samples,
-                )
+                WaveReplacement(awgs["filename"], sig_string, replacement_type, samples)
             )
 
     return replacements

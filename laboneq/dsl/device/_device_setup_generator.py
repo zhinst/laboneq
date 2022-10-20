@@ -5,7 +5,7 @@ import abc
 import copy
 import itertools
 import logging
-from typing import List, Tuple, Dict, Optional
+from typing import Iterator, List, Tuple, Dict, Optional
 
 import laboneq.core.path as qct_path
 from laboneq.core.exceptions import LabOneQException
@@ -64,7 +64,7 @@ class _ProcessorBase(abc.ABC):
         server_uid: str,
         logical_signals_candidates: List[Dict],
         physical_signals: Dict[str, PhysicalChannel],
-    ):
+    ) -> Iterator[Instrument]:
         ...
 
     @staticmethod
@@ -89,7 +89,7 @@ class _HDAWGProcessor(_ProcessorBase):
         server_uid,
         logical_signals_candidates,
         physical_signals,
-    ) -> List[Instrument]:
+    ) -> Iterator[Instrument]:
         for uid, address, interface in _iterate_over_descriptors_of_type(
             instruments, T_HDAWG_DEVICE
         ):
@@ -112,7 +112,7 @@ class _HDAWGProcessor(_ProcessorBase):
         server_uid,
         logical_signals_candidates,
         physical_signals,
-    ):
+    ) -> Instrument:
         device_connections = []
         external_clock_signal = None
         if uid in connections:
@@ -209,7 +209,7 @@ class _UHFQAProcessor(_ProcessorBase):
         server_uid,
         logical_signals_candidates,
         physical_signals,
-    ):
+    ) -> Iterator[Instrument]:
         for uid, address, interface in _iterate_over_descriptors_of_type(
             instruments, T_UHFQA_DEVICE
         ):
@@ -232,7 +232,7 @@ class _UHFQAProcessor(_ProcessorBase):
         server_uid,
         logical_signals_candidates,
         physical_signals,
-    ):
+    ) -> Instrument:
         device_connections = []
         external_clock_signal = None
         if uid in connections:
@@ -359,7 +359,7 @@ class _SHFQAProcessor(_ProcessorBase):
         server_uid,
         logical_signals_candidates,
         physical_signals,
-    ):
+    ) -> Iterator[Instrument]:
         for uid, address, interface in _iterate_over_descriptors_of_type(
             instruments, T_SHFQA_DEVICE
         ):
@@ -383,7 +383,7 @@ class _SHFQAProcessor(_ProcessorBase):
         logical_signals_candidates,
         physical_signals,
         is_qc: bool = False,
-    ):
+    ) -> Instrument:
         device_connections = []
         external_clock_signal = None
         if uid in connections:
@@ -513,7 +513,7 @@ class _SHFSGProcessor(_ProcessorBase):
         server_uid,
         logical_signals_candidates,
         physical_signals,
-    ):
+    ) -> Iterator[Instrument]:
         for uid, address, interface in _iterate_over_descriptors_of_type(
             instruments, T_SHFSG_DEVICE
         ):
@@ -537,7 +537,7 @@ class _SHFSGProcessor(_ProcessorBase):
         logical_signals_candidates,
         physical_signals,
         is_qc: bool = False,
-    ):
+    ) -> Instrument:
         device_connections = []
         used_ports = set()
         external_clock_signal = None
@@ -646,7 +646,7 @@ class _SHFQCProcessor(_ProcessorBase):
         server_uid,
         logical_signals_candidates,
         physical_signals,
-    ):
+    ) -> Iterator[Instrument]:
         for uid, address, interface in _iterate_over_descriptors_of_type(
             instruments, T_SHFQC_DEVICE
         ):
@@ -852,7 +852,7 @@ def _create_physical_channel(
     ).lower()
 
     path = qct_path.Separator.join(
-        [qct_path.PhysicalChannelGroups_Path_Abs, device_id, signal_name,]
+        [qct_path.PhysicalChannelGroups_Path_Abs, device_id, signal_name]
     )
 
     if device_id not in physical_signals:
@@ -924,14 +924,14 @@ class _DeviceSetupGenerator:
     ):
         # Define server
         zi_server = DataServer(
-            uid="zi_server", host=server_host, port=server_port, api_level=6,
+            uid="zi_server", host=server_host, port=server_port, api_level=6
         )
 
         pqsc_dicts = instrument_list.get(T_PQSC_DEVICE, [])
         if len(pqsc_dicts) > 0:
             zi_server.leader_uid = pqsc_dicts[0][T_UID]
 
-        processors = [
+        processors: List[_ProcessorBase] = [
             _HDAWGProcessor,
             _UHFQAProcessor,
             _SHFQAProcessor,

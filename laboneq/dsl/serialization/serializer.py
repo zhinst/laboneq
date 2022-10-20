@@ -65,10 +65,7 @@ class Serializer:
             entity_classes, entity_mapper = Serializer._entity_config()
 
             json_struct = serialize_to_dict_with_ref(
-                serializable_object,
-                entity_classes,
-                entity_mapper,
-                emit_enum_types=True,
+                serializable_object, entity_classes, entity_mapper, emit_enum_types=True
             )
             json_dump = json.dumps(json_struct, sort_keys=True)
         return json_dump
@@ -77,14 +74,12 @@ class Serializer:
     def to_dict(serializable_object) -> str:
         entity_classes, entity_mapper = Serializer._entity_config()
         json_dump = serialize_to_dict_with_ref(
-            serializable_object, entity_classes, entity_mapper, emit_enum_types=True,
+            serializable_object, entity_classes, entity_mapper, emit_enum_types=True
         )
         return json_dump
 
     @staticmethod
-    def to_json_file(
-        serializable_object, filename: str,
-    ):
+    def to_json_file(serializable_object, filename: str):
         json_string = Serializer.to_json(serializable_object)
         try:
             with open(filename, mode="w") as file:
@@ -116,9 +111,7 @@ class Serializer:
         return classes_by_short_name
 
     @staticmethod
-    def from_json(
-        serialized_string: str, type_hint,
-    ):
+    def from_json(serialized_string: str, type_hint):
         if type_hint is dict:
             obj = json.loads(serialized_string)
         else:
@@ -135,9 +128,7 @@ class Serializer:
         return obj
 
     @staticmethod
-    def load(
-        data, type_hint,
-    ):
+    def load(data, type_hint):
         if type_hint is dict:
             obj = copy.deepcopy(data)
         else:

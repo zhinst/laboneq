@@ -27,6 +27,8 @@ class PulseInstance:
     modulation_phase: float = None
     channel: int = None  # The AWG channel for rf_signals
     needs_conjugate: bool = False  # SHF devices need that for now
+    # Resolved user pulse function parameters
+    pulse_parameters: Dict[str, Any] = field(default_factory=dict)
 
     # uid of pulses that this instance overlaps with
     overlaps: List[str] = None
@@ -45,8 +47,7 @@ class PulseWaveformMap:
 
 @dataclass
 class PulseMapEntry:
-    """Data structure to store the :py:class:`PulseWaveformMap` of each AWG waveform.
-    """
+    """Data structure to store the :py:class:`PulseWaveformMap` of each AWG waveform."""
 
     # key: waveform signature string
     #: A mapping of signals to :py:class:`PulseWaveformMap`
@@ -55,8 +56,7 @@ class PulseMapEntry:
 
 @dataclass(init=True, repr=True, order=True)
 class CompiledExperiment:
-    """Data structure to store the output of the compiler.
-    """
+    """Data structure to store the output of the compiler."""
 
     #: The source experiment.
     experiment: Experiment = field(default=None)
@@ -73,6 +73,9 @@ class CompiledExperiment:
     #: Data structure for storing the indices or filenames by which the waveforms are
     #: referred to during and after upload.
     wave_indices: List[Dict[str, Any]] = field(default=None)
+
+    #: Datastructure for storing the command table data
+    command_tables: List[Dict[str, Any]] = field(default_factory=list)
 
     #: List of events as scheduled by the compiler.
     schedule: Dict[str, Any] = field(default=None)

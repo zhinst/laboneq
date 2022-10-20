@@ -13,10 +13,11 @@ from collections import Counter, namedtuple
 import numpy as np
 from fractions import Fraction
 from typing import Any, Iterator, List, Dict, Set, Tuple, Union, Optional
-from operator import itemgetter
+from operator import attrgetter, itemgetter
 from sortedcollections import ValueSortedDict, SortedDict
 from pathlib import Path
 from engineering_notation import EngNumber
+from laboneq.core.exceptions.laboneq_exception import LabOneQException
 
 from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
@@ -30,14 +31,13 @@ from .code_generator import (
 )
 from .compiler_settings import CompilerSettings
 from .recipe_generator import RecipeGenerator
-from .experiment_dao import ExperimentDAO
+from .experiment_dao import ExperimentDAO, PulseDef, SectionInfo
 from .event_graph import EventGraph, EventRelation, EventType
 from .fastlogging import NullLogger
 from .device_type import DeviceType
 from .event_graph_builder import EventGraphBuilder, ChainElement
 from .section_graph import SectionGraph
-from .measurement_calculator import MeasurementCalculator
-from laboneq.core.exceptions import LabOneQException
+
 
 _logger = logging.getLogger(__name__)
 _dlogger = None
@@ -57,7 +57,6 @@ class _PlayWave:
     offset: Any = None
     amplitude: Any = None
     is_integration: bool = False
-    signal_offset: Any = None
     parameterized_with: list = field(default_factory=list)
     acquire_handle: str = None
     acquisition_type: list = field(default_factory=list)
@@ -65,6 +64,7 @@ class _PlayWave:
     increment_oscillator_phase: float = None
     set_oscillator_phase: float = None
     is_delay: bool = False
+    pulse_parameters: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -123,7 +123,7 @@ def _calculate_compiler_settings(local_settings: Optional[Dict] = None):
     return compiler_settings
 
 
-def _set_playwave_value_or_amplitude(section_pulse, play_wave, name, value=None):
+def _set_playwave_resolved_param(section_pulse, play_wave: _PlayWave, name, value=None):
     if value is not None:
         setattr(play_wave, name, value)
     elif section_pulse[name] is not None:
@@ -163,7 +163,7 @@ class Compiler:
         self._sampling_rate_cache = {}
         self._awgs: _AWGMapping = {}
 
-        _logger.info("Starting QCCS Compiler run...")
+        _logger.info("Starting LabOne Q Compiler run...")
         self._check_tinysamples()
 
     def _check_tinysamples(self):
@@ -194,7 +194,7 @@ class Compiler:
             )
         }
         right_aligned_collector_events = {}
-        if section_info.get("align") == "right":
+        if section_info.align == "right":
             right_aligned_collector_events = {}
             for iteration, e in loop_step_end_events.items():
                 for edge in self._event_graph.out_edges(e["id"]):
@@ -227,7 +227,7 @@ class Compiler:
             if not e.get("shadow")
         )
 
-        if section_info.get("align") == "right":
+        if section_info.align == "right":
             right_aligned_collector_of_iteration_end = None
             for edge in self._event_graph.out_edges(loop_iteration_end_event["id"]):
                 other_node = self._event_graph.node(edge[1])
@@ -319,7 +319,7 @@ class Compiler:
         )
 
     def add_iteration_control_events(
-        self, repeat_section_entry: RepeatSectionsEntry, first_only=False,
+        self, repeat_section_entry: RepeatSectionsEntry, first_only=False
     ):
         section_name = repeat_section_entry.section_name
         num_repeats = repeat_section_entry.num_repeats
@@ -339,7 +339,7 @@ class Compiler:
         _logger.debug("Adding iteration events for %s", section_name)
 
         right_aligned = False
-        if self._section_graph_object.section_info(section_name)["align"] == "right":
+        if self._section_graph_object.section_info(section_name).align == "right":
             right_aligned = True
 
         for iteration in range(repeats):
@@ -624,7 +624,7 @@ class Compiler:
             reversed(list(self._section_graph_object.topologically_sorted_sections()))
         ):
             section_info = self._section_graph_object.section_info(section_name)
-            if not section_info["has_repeat"]:
+            if not section_info.has_repeat:
                 _dlogger.debug("Section %s is not repeated", section_name)
                 continue
 
@@ -676,7 +676,7 @@ class Compiler:
             between_event_ids = filtered_between_event_ids
 
             self._event_graph.set_node_attributes(
-                iteration_event["id"], {"events_in_iteration": list(between_event_ids)},
+                iteration_event["id"], {"events_in_iteration": list(between_event_ids)}
             )
 
             between_events = [
@@ -732,9 +732,7 @@ class Compiler:
             ):
                 _logger.debug("Compressing events of section %s", section_name)
                 repeat_section = repeat_sections[section_name]
-                self.add_iteration_control_events(
-                    repeat_section, first_only=True,
-                )
+                self.add_iteration_control_events(repeat_section, first_only=True)
                 _dlogger.debug(
                     "Setting compressed to true on node %s",
                     repeat_section.loop_iteration_end_id,
@@ -762,7 +760,7 @@ class Compiler:
                 )
                 compressed = False
 
-            for (iteration, (_, step_body_id, step_end_id),) in self._loop_step_events[
+            for (iteration, (_, step_body_id, step_end_id)) in self._loop_step_events[
                 section_name
             ].items():
 
@@ -874,18 +872,14 @@ class Compiler:
                     raise Exception(
                         f"Getting mixed signals: {signal} and {play_wave.signal}"
                     )
-            if play_wave.signal_offset is not None:
-                default_attributes["signal_offset"] = play_wave.signal_offset
+
             if play_wave.offset is not None:
                 delay_element = ChainElement(
                     chain_element_id + "DELAY",
                     start_type=EventType.DELAY_START,
                     end_type=EventType.DELAY_END,
                     length=play_wave.offset,
-                    attributes={
-                        **default_attributes,
-                        **{"play_wave_id": play_wave.id},
-                    },
+                    attributes={**default_attributes, **{"play_wave_id": play_wave.id}},
                 )
                 chain.append(delay_element)
 
@@ -919,7 +913,7 @@ class Compiler:
 
             chain_element = ChainElement(
                 chain_element_id,
-                attributes={**default_attributes, **{"play_wave_id": play_wave.id,},},
+                attributes={**default_attributes, **{"play_wave_id": play_wave.id}},
                 start_attributes={},
             )
 
@@ -935,9 +929,6 @@ class Compiler:
                     chain_element.end_type = EventType.DELAY_END
 
                 chain_element.length = play_wave.length
-                chain_element.start_attributes[
-                    "signal_offset"
-                ] = play_wave.signal_offset
                 chain_element.start_attributes["parameterized_with"] = [
                     p.param_name for p in play_wave.parameterized_with
                 ]
@@ -949,6 +940,9 @@ class Compiler:
                 chain_element.start_attributes[
                     "acquisition_type"
                 ] = play_wave.acquisition_type
+                chain_element.start_attributes[
+                    "pulse_parameters"
+                ] = play_wave.pulse_parameters
                 if not (play_wave.is_delay and play_wave.length is None):
                     chain.append(chain_element)
 
@@ -1277,6 +1271,7 @@ class Compiler:
         priority_map = {
             EventType.SET_OSCILLATOR_PHASE: -5,
             EventType.PLAY_START: 0,
+            EventType.ACQUIRE_START: 0,
             EventType.PARAMETER_SET: -15,
             EventType.INCREMENT_OSCILLATOR_PHASE: -9,
         }
@@ -1313,7 +1308,7 @@ class Compiler:
                 oscillator_phase_cumulative[signal_id] = osc_phase
                 oscillator_phase_sets[signal_id] = event["time"]
 
-            if event["event_type"] == EventType.PLAY_START:
+            if event["event_type"] in [EventType.PLAY_START, EventType.ACQUIRE_START]:
                 amplitude = event["amplitude"]
                 if isinstance(amplitude, ParamRef):
                     _dlogger.debug(
@@ -1338,6 +1333,18 @@ class Compiler:
                 if isinstance(phase, ParamRef):
                     phase = parameter_values[phase.param_name]
                     self._event_graph.set_node_attributes(event["id"], {"phase": phase})
+
+                pulse_parameters = event.get("pulse_parameters", {})
+                has_updates = False
+                for k in pulse_parameters:
+                    v = pulse_parameters[k]
+                    if isinstance(v, ParamRef):
+                        pulse_parameters[k] = parameter_values[v.param_name]
+                        has_updates = True
+                if has_updates:
+                    self._event_graph.set_node_attributes(
+                        event["id"], {"pulse_parameters": pulse_parameters}
+                    )
 
                 oscillator_phase = None
                 baseband_phase = None
@@ -1366,12 +1373,10 @@ class Compiler:
                                     phase_reset_time, oscillator_phase_sets[signal_id]
                                 )
                             oscillator_phase = (
-                                (event["time"] - phase_reference_time)
-                                * 2.0
-                                * math.pi
-                                * oscillator_info["frequency"]
-                                + incremented_phase
-                            )
+                                event["time"] - phase_reference_time
+                            ) * 2.0 * math.pi * oscillator_info[
+                                "frequency"
+                            ] + incremented_phase
                 event_node = self._event_graph.node(event["id"])
                 event_node["oscillator_phase"] = oscillator_phase
                 event_node["baseband_phase"] = baseband_phase
@@ -1396,9 +1401,11 @@ class Compiler:
 
             if len(repetition_mode_auto_sections) > 0:
                 for repetition_mode_auto_section in repetition_mode_auto_sections:
-                    loop_step_start_events = self._event_graph.find_section_events_by_type(
-                        repetition_mode_auto_section,
-                        event_type=EventType.LOOP_STEP_START,
+                    loop_step_start_events = (
+                        self._event_graph.find_section_events_by_type(
+                            repetition_mode_auto_section,
+                            event_type=EventType.LOOP_STEP_START,
+                        )
                     )
                     loop_step_end_events = {
                         (e["iteration"], e.get("loop_iteration")): e
@@ -1714,15 +1721,20 @@ class Compiler:
                         and event_data.get("skeleton_of") == EventType.SECTION_END
                     )
                 ) and exactly_constraint is not None:
-                    raise Exception(
-                        f"Section end of section {event_data['section_name'] } must happen exactly {exactly_constraint['delta']} s after its start, but it contains operations which take longer."
+                    raise LabOneQException(
+                        f"Section end of section {event_data['section_name'] } must "
+                        f"happen exactly {exactly_constraint['delta']} s after its "
+                        f"start, but it contains operations which take longer."
                     )
                 if (
                     event_type in [EventType.LOOP_STEP_END]
                 ) and exactly_constraint is not None:
                     iteration = event_data.get("iteration")
-                    raise Exception(
-                        f"Sweep step end of iteration {iteration} in section {event_data['section_name'] }  must happen exactly {exactly_constraint['delta']} s after its start, but it contains operations which take longer."
+                    raise LabOneQException(
+                        f"Sweep step end of iteration {iteration} in section "
+                        f"{event_data['section_name'] }  must happen exactly "
+                        f"{exactly_constraint['delta']} s after its start, but it "
+                        f"contains operations which take longer."
                     )
 
                 raise Exception(
@@ -1754,7 +1766,7 @@ class Compiler:
 
         return event_times, sorted_events, event_times_tiny_samples
 
-    def verify_timing(self,):
+    def verify_timing(self):
         TOLERANCE = 1e-11
         sorted_events = sorted(
             [
@@ -1822,9 +1834,9 @@ class Compiler:
             return section_grid
 
         if self._section_graph_object is not None:
-            section_display_name = self._section_graph_object.section_info(section)[
-                "section_display_name"
-            ]
+            section_display_name = self._section_graph_object.section_info(
+                section
+            ).section_display_name
         else:
             section_display_name = section
 
@@ -1835,9 +1847,9 @@ class Compiler:
             )
         ]
         section_info = self._experiment_dao.section_info(section_display_name)
-        has_control_elements = section_info["has_repeat"]
+        has_control_elements = section_info.has_repeat
         has_control_elements = has_control_elements or (
-            section_info["trigger"] is not None and len(section_info["trigger"]) > 0
+            section_info.trigger is not None and len(section_info.trigger) > 0
         )
 
         _dlogger.debug("Device types for section %s are %s", section, device_types)
@@ -1942,7 +1954,6 @@ class Compiler:
             and len(used_device_serials) == 1  # SHFQC
             or used_devices == {"hdawg", "uhfqa"}
             or (used_devices == {"uhfqa"} and has_hdawg)  # No signal on leader
-            or (used_devices == {"shfsg"})
         )
         if (
             not has_pqsc
@@ -1968,9 +1979,7 @@ class Compiler:
                 elif has_shfsg:
                     leader = get_first_instr_of(device_infos, "shfsg")["id"]
 
-            _logger.debug(
-                "Using desktop setup configuration with leader %s", leader,
-            )
+            _logger.debug("Using desktop setup configuration with leader %s", leader)
 
             if has_hdawg or has_shfsg and not has_shfqa:
                 has_signal_on_awg_0_of_leader = False
@@ -2038,13 +2047,13 @@ class Compiler:
             parent = self._section_graph_object.parent(section_node)
             assert parent is not None or section_node in root_sections
             section_info = self._section_graph_object.section_info(section_node)
-            section_name = section_info["section_id"]
+            section_name = section_info.section_id
 
             spectroscopy_trigger_signals = set()
-            if section_info["trigger"] is not None:
-                if "spectroscopy" in section_info["trigger"]:
+            if section_info.trigger is not None:
+                if "spectroscopy" in section_info.trigger:
                     for device in self._experiment_dao.devices_in_section_no_descend(
-                        section_info["section_display_name"]
+                        section_info.section_display_name
                     ):
                         for signal_name in self._experiment_dao.device_signals(device):
                             if (
@@ -2074,16 +2083,15 @@ class Compiler:
                 )[0]["id"]
 
             signals = self._experiment_dao.section_signals(
-                section_info["section_display_name"]
+                section_info.section_display_name
             )
 
             signals = signals.union(spectroscopy_trigger_signals)
             for signal_id in signals:
                 _dlogger.debug(
-                    "Considering signal %s in section %s", signal_id, section_name,
+                    "Considering signal %s in section %s", signal_id, section_name
                 )
 
-                signal_offset = None
                 signal_info_main = self._experiment_dao.signal_info(signal_id)
 
                 _dlogger.debug("signal_info_main =  %s", signal_info_main)
@@ -2092,45 +2100,9 @@ class Compiler:
                 is_integration = signal_info_main["signal_type"] == "integration"
 
                 suppress_offset_indices = []
-                if is_integration:
-                    if section_info["align"] == "right":
-                        if (
-                            len(
-                                self._experiment_dao.section_pulses(
-                                    section_info["section_display_name"], signal_id
-                                )
-                            )
-                            > 0
-                            and DeviceType(signal_info_main["device_type"])
-                            == DeviceType.SHFQA
-                        ):
-                            raise RuntimeError(
-                                f"Right-aligned section {section_info['section_display_name']} found containing SHFQA integration signal {signal_id} - SHFQA only supports left-aligned sections for measurement"
-                            )
-                    else:
-                        integration_offset = 0.0
 
-                        for pulse_index, section_pulse in enumerate(
-                            self._experiment_dao.section_pulses(
-                                section_info["section_display_name"], signal_id
-                            )
-                        ):
-                            if section_pulse["offset"] is not None:
-                                integration_offset += section_pulse["offset"]
-                                suppress_offset_indices.append(pulse_index)
-                        signal_offset = integration_offset
-
-                if signal_offset is not None:
-                    play_wave = _PlayWave(
-                        id="offset_" + signal_id,
-                        signal=signal_id,
-                        offset=signal_offset,
-                        is_delay=True,
-                    )
-                    play_wave_chain.append(play_wave)
-
-                section_offset = section_info.get("offset")
-                section_offset_param = section_info.get("offset_param")
+                section_offset = section_info.offset
+                section_offset_param = section_info.offset_param
 
                 if section_offset is not None or section_offset_param is not None:
                     _dlogger.debug(
@@ -2157,7 +2129,6 @@ class Compiler:
                     play_wave = _PlayWave(
                         id="spectroscopy_" + signal_id,
                         signal=signal_id,
-                        signal_offset=signal_offset,
                         acquisition_type=["spectroscopy"],
                     )
                     play_wave.is_integration = True
@@ -2166,13 +2137,13 @@ class Compiler:
 
                 for pulse_index, section_pulse in enumerate(
                     self._experiment_dao.section_pulses(
-                        section_info["section_display_name"], signal_id
+                        section_info.section_display_name, signal_id
                     )
                 ):
                     pulse_name = section_pulse["pulse_id"]
                     pulse_def = None
                     if pulse_name is not None:
-                        pulse_def = self._experiment_dao.pulse(pulse_name)
+                        pulse_def = self._experiment_dao.pulses.get(pulse_name)
                         play_wave = _PlayWave(id=pulse_name, signal=signal_id)
                     else:
                         pulse_name = "DELAY"
@@ -2185,33 +2156,36 @@ class Compiler:
                     device_id = signal_info_main["device_id"]
 
                     sampling_rate = self._sampling_rate_for_device(device_id)
-                    length = Compiler.get_length_from_pulse_def(
-                        pulse_def, sampling_rate
-                    )
+                    length = PulseDef.effective_length(pulse_def, sampling_rate)
                     play_wave.is_integration = is_integration
-                    if is_integration and signal_offset is not None:
-                        play_wave.signal_offset = signal_offset
 
                     play_wave.parameterized_with = []
-                    _set_playwave_value_or_amplitude(section_pulse, play_wave, "offset")
+                    _set_playwave_resolved_param(section_pulse, play_wave, "offset")
                     if (
                         section_pulse["offset"] is not None
                         and pulse_index in suppress_offset_indices
                     ):
                         play_wave.offset = 0.0
-                    _set_playwave_value_or_amplitude(
-                        section_pulse, play_wave, "amplitude"
-                    )
-                    _set_playwave_value_or_amplitude(
+                    _set_playwave_resolved_param(section_pulse, play_wave, "amplitude")
+                    _set_playwave_resolved_param(
                         section_pulse, play_wave, "length", length
                     )
-                    _set_playwave_value_or_amplitude(section_pulse, play_wave, "phase")
-                    _set_playwave_value_or_amplitude(
+                    _set_playwave_resolved_param(section_pulse, play_wave, "phase")
+                    _set_playwave_resolved_param(
                         section_pulse, play_wave, "increment_oscillator_phase"
                     )
-                    _set_playwave_value_or_amplitude(
+                    _set_playwave_resolved_param(
                         section_pulse, play_wave, "set_oscillator_phase"
                     )
+                    pulse_parameters = section_pulse.get("pulse_parameters")
+                    if pulse_parameters is not None:
+                        for param, val in pulse_parameters.items():
+                            if isinstance(val, (float, int, complex)):
+                                play_wave.pulse_parameters[param] = val
+                            else:
+                                param_ref = ParamRef(val)
+                                play_wave.pulse_parameters[param] = param_ref
+                                play_wave.parameterized_with.append(param_ref)
 
                     if section_pulse["acquire_params"] is not None:
                         play_wave.acquire_handle = section_pulse["acquire_params"][
@@ -2222,11 +2196,10 @@ class Compiler:
                         )
 
                     play_wave_chain.append(play_wave)
-
                 self.add_play_wave_chain(
                     play_wave_chain,
-                    section_info["section_id"],
-                    right_aligned=(section_info["align"] == "right"),
+                    section_info.section_id,
+                    right_aligned=(section_info.align == "right"),
                     section_start_node=section_start_node,
                     is_spectroscopy_signal=is_integration and is_spectroscopy_section,
                     spectroscopy_end_id=spectroscopy_end_id,
@@ -2237,10 +2210,10 @@ class Compiler:
             reversed(list(self._section_graph_object.topologically_sorted_sections()))
         ):
             _dlogger.debug("Processing section %s", section_node)
-            section = self._section_graph_object.section_info(section_node)
+            section_info_1 = self._section_graph_object.section_info(section_node)
 
-            if section["has_repeat"]:
-                section_name = section["section_id"]
+            if section_info_1.has_repeat:
+                section_name = section_info_1.section_id
                 _dlogger.debug("Adding repeat for section %s", section_name)
                 parameters_list = [
                     {
@@ -2250,14 +2223,14 @@ class Compiler:
                         "values": param["values"],
                     }
                     for param in self._experiment_dao.section_parameters(
-                        section["section_display_name"]
+                        section_info_1.section_display_name
                     )
                 ]
-                num_repeats = section["count"]
+                num_repeats = section_info_1.count
 
-                reset_phase_hw = section["reset_oscillator_phase"]
+                reset_phase_hw = section_info_1.reset_oscillator_phase
                 reset_phase_sw = (
-                    reset_phase_hw or section["averaging_type"] == "hardware"
+                    reset_phase_hw or section_info_1.averaging_type == "hardware"
                 )
                 repeat_sections[section_name] = self.add_repeat(
                     section_name,
@@ -2279,12 +2252,12 @@ class Compiler:
 
     def _find_repetition_mode_info(self, section):
         section_info = self._section_graph_object.section_info(section)
-        if section_info.get("averaging_mode") == "sequential" and (
-            section_info.get("repetition_mode") == "constant"
-            or section_info.get("repetition_mode") == "auto"
+        if section_info.averaging_mode == "sequential" and (
+            section_info.repetition_mode == "constant"
+            or section_info.repetition_mode == "auto"
         ):
             return {
-                k: section_info.get(k)
+                k: getattr(section_info, k)
                 for k in [
                     "repetition_mode",
                     "repetition_time",
@@ -2296,15 +2269,15 @@ class Compiler:
         has_repeating_child = False
         for child in self._section_graph_object.section_children(section):
             child_section_info = self._section_graph_object.section_info(child)
-            if child_section_info.get("has_repeat"):
+            if child_section_info.has_repeat:
                 has_repeating_child = True
 
         if not has_repeating_child and (
-            section_info.get("repetition_mode") == "constant"
-            or section_info.get("repetition_mode") == "auto"
+            section_info.repetition_mode == "constant"
+            or section_info.repetition_mode == "auto"
         ):
             return {
-                k: section_info.get(k)
+                k: getattr(section_info, k)
                 for k in [
                     "repetition_mode",
                     "repetition_time",
@@ -2313,7 +2286,7 @@ class Compiler:
                 ]
             }
 
-        if not section_info.get("has_repeat"):
+        if not section_info.has_repeat:
             return None
 
         last_parent_section = None
@@ -2321,14 +2294,16 @@ class Compiler:
             parent_section = self._section_graph_object.parent(section)
             if parent_section is None or parent_section == last_parent_section:
                 return None
-            section_info = self._section_graph_object.section_info(parent_section)
+            parent_section_info = self._section_graph_object.section_info(
+                parent_section
+            )
             if (
-                section_info.get("repetition_mode") == "constant"
-                or section_info.get("repetition_mode") == "auto"
-            ) and section_info.get("averaging_mode") == "cyclic":
+                parent_section_info.repetition_mode == "constant"
+                or parent_section_info.repetition_mode == "auto"
+            ) and parent_section_info.averaging_mode == "cyclic":
 
                 return {
-                    k: section_info.get(k)
+                    k: getattr(parent_section_info, k)
                     for k in [
                         "repetition_mode",
                         "repetition_time",
@@ -2404,24 +2379,9 @@ class Compiler:
 
         return sampling_rate
 
-    def _generate_code(self, signal_delays):
+    def _generate_code(self):
+
         self._calc_awgs()
-        pulse_defs = self._experiment_dao.pulses_dict()
-
-        pulse_def_dict = {}
-        for k, v in pulse_defs.items():
-            pulse_obj = {}
-            pulse_obj["id"] = k
-            pulse_obj["function"] = v["function"]
-            pulse_obj["length"] = v["length"]
-            amplitude = 1.0
-            if "amplitude" in v and v["amplitude"] is not None:
-                amplitude = v["amplitude"]
-            pulse_obj["amplitude"] = amplitude
-            pulse_obj["samples"] = v.get("samples")
-
-            pulse_def_dict[k] = pulse_obj
-
         self._calc_shfqa_generator_allocation()
 
         code_generator = CodeGenerator(self._settings)
@@ -2436,19 +2396,18 @@ class Compiler:
             device_id = signal_info["device_id"]
 
             sampling_rate = self._sampling_rate_for_device(device_id)
-            delay = self.get_delay(
+            start_delay = self.get_delay(
                 device_type,
                 self._leader_properties.is_desktop_setup,
                 self._clock_settings["use_2GHz_for_HDAWG"],
             )
+
             if delay_signal is not None:
                 delay_signal = self._get_total_rounded_delay(
                     delay_signal, signal_id, device_type, sampling_rate
                 )
-                delay += delay_signal
-
-            if signal_id in signal_delays:
-                delay += signal_delays[signal_id]["code_generation"]
+            else:
+                delay_signal = 0
 
             trigger_mode = TriggerMode.NONE
             device_info = self._experiment_dao.device_info(device_id)
@@ -2493,7 +2452,8 @@ class Compiler:
             signal_obj = SignalObj(
                 id=signal_id,
                 sampling_rate=sampling_rate,
-                delay=delay,
+                start_delay=start_delay,
+                delay_signal=delay_signal,
                 signal_type=signal_type,
                 device_id=device_id,
                 awg=awg,
@@ -2508,10 +2468,13 @@ class Compiler:
         _logger.debug("Preparing events for code generator")
         events = self.event_timing(expand_loops=False)
         code_generator.gen_acquire_map(events, self._section_graph_object)
-        code_generator.gen_seq_c(events, pulse_def_dict)
+        integration_times, signal_delays = code_generator.gen_seq_c(
+            events, self._experiment_dao.pulses
+        )
         code_generator.gen_waves()
 
         _logger.debug("Code generation completed")
+        return integration_times, signal_delays
 
     def _calc_osc_numbering(self):
         self._osc_numbering = {}
@@ -2670,17 +2633,15 @@ class Compiler:
             if len(v["signals"]) > 1 and v["awg"].device_type != DeviceType.SHFQA:
                 awg = v["awg"]
                 awg.signal_type = AWGSignalType.MULTI
-                _dlogger.debug(f"Changing signal type to multi: {awg}")
+                _dlogger.debug("Changing signal type to multi: %s", awg)
 
         for dev_awgs in awgs.values():
             for awg in dev_awgs.values():
-                _dlogger.debug(f"Consider awg: {awg}")
                 if len(awg.signal_channels) > 1 and awg.signal_type not in [
                     AWGSignalType.IQ,
                     AWGSignalType.MULTI,
                 ]:
                     awg.signal_type = AWGSignalType.DOUBLE
-                    _dlogger.debug(f"Changing signal type to double: {awg}")
 
                 # For each awg of a HDAWG, retrieve the delay of all of its rf_signals (for
                 # playZeros and check whether they are the same:
@@ -2744,10 +2705,9 @@ class Compiler:
             signal_range = self._experiment_dao.signal_range(signal_id)
             port_delay = self._experiment_dao.port_delay(signal_id)
             if signal_id in signal_delays:
-                if port_delay is not None:
-                    port_delay += signal_delays[signal_id]["on_device"]
-                else:
-                    port_delay = signal_delays[signal_id]["on_device"]
+                port_delay = (port_delay or 0) + signal_delays[signal_id]["on_device"]
+                if abs(port_delay) < 1e-12:
+                    port_delay = None
 
             base_channel = min(signal_info["channels"])
             for channel in signal_info["channels"]:
@@ -2846,9 +2806,9 @@ class Compiler:
             graph_section_info = self._section_graph_object.section_info(
                 graph_section_name
             )
-            section_name = graph_section_info["section_display_name"]
+            section_name = graph_section_info.section_display_name
             section_info = self._experiment_dao.section_info(section_name)
-            if section_info["trigger"] is not None:
+            if section_info.trigger is not None:
                 measurement_sections.append(section_name)
 
         section_measurement_infos = []
@@ -2859,10 +2819,7 @@ class Compiler:
             )
 
             def empty_device():
-                return {
-                    "signals": set(),
-                    "monitor": None,
-                }
+                return {"signals": set(), "monitor": None}
 
             infos_by_device_awg = {}
             for signal in section_signals:
@@ -2899,14 +2856,6 @@ class Compiler:
 
         for info in section_measurement_infos:
             section_name = info["section_name"]
-            loop_params = self._loop_parameters_to_root(section_name)
-            hw_average_infos = list(
-                map(
-                    itemgetter("averaging_type"),
-                    filter(itemgetter("has_repeat"), loop_params),
-                )
-            )
-            _dlogger.debug("Found hw_average_infos  %s", hw_average_infos)
 
             for device_awg_nr, v in info["devices"].items():
 
@@ -2920,10 +2869,7 @@ class Compiler:
                     )
                     measurement = measurements[(device_id, awg_nr)]
                 else:
-                    measurement = {
-                        "length": None,
-                        "delay": 0,
-                    }
+                    measurement = {"length": None, "delay": 0}
                     if v.get("monitor") is not None:
                         measurement["monitor"] = v.get("monitor")
 
@@ -2968,31 +2914,6 @@ class Compiler:
 
         return retval
 
-    def _loop_parameters_to_root(self, section_id):
-        fields = [
-            "section_id",
-            "execution_type",
-            "averaging_type",
-            "count",
-            "trigger",
-            "has_repeat",
-        ]
-        return list(
-            reversed(
-                [
-                    dict(
-                        zip(
-                            fields,
-                            itemgetter(*fields)(
-                                self._experiment_dao.section_info(section_name)
-                            ),
-                        )
-                    )
-                    for section_name in self._path_to_root(section_id)
-                ]
-            )
-        )
-
     def _path_to_root(self, section_id):
         current_section = section_id
         path_to_root = [current_section]
@@ -3009,7 +2930,7 @@ class Compiler:
     def _generate_recipe(self, integration_times, signal_delays):
         recipe_generator = RecipeGenerator()
         recipe_generator.from_experiment(
-            self._experiment_dao, self._leader_properties, self._clock_settings,
+            self._experiment_dao, self._leader_properties, self._clock_settings
         )
 
         for output in self.calc_outputs(signal_delays):
@@ -3059,17 +2980,10 @@ class Compiler:
             self._code_generator.integration_weights(),
         )
 
-        signal_info_map = {
-            s: self._experiment_dao.signal_info(s)
-            for s in self._experiment_dao.signals()
-        }
-        for s in signal_info_map.values():
-            s["awg_number"] = self.get_awg(s["signal_id"]).awg_number
-
         recipe_generator.add_acquire_lengths(integration_times)
 
         recipe_generator.add_measurements(
-            self.calc_measurement_map(integration_times=integration_times,)
+            self.calc_measurement_map(integration_times=integration_times)
         )
 
         recipe_generator.add_simultaneous_acquires(
@@ -3089,6 +3003,7 @@ class Compiler:
             src=self._code_generator.src(),
             waves=self._code_generator.waves(),
             wave_indices=self._code_generator.wave_indices(),
+            command_tables=self._code_generator.command_tables(),
             schedule=self._prepare_schedule(),
             experiment_dict=ExperimentDAO.dump(self._experiment_dao),
             pulse_map=self._code_generator.pulse_map(),
@@ -3105,7 +3020,7 @@ class Compiler:
         ]
 
         section_graph = []
-        section_info = {}
+        section_info_out = {}
         subsection_map = {}
 
         root_section = self._section_graph_object.root_section()
@@ -3119,23 +3034,24 @@ class Compiler:
                 "sampling_rates": [],
             }
 
-        section_info = {
+        section_info_out = {
             k: {"depth": v} for k, v in self._section_graph_object.depth_map().items()
         }
 
-        if len(list(section_info.keys())) == 0:
-            section_info = {root_section: {"depth": 0}}
+        if len(list(section_info_out.keys())) == 0:
+            section_info_out = {root_section: {"depth": 0}}
 
         preorder_map = self._section_graph_object.preorder_map()
 
-        section_info = {
-            k: {**v, **{"preorder": preorder_map[k]}} for k, v in section_info.items()
+        section_info_out = {
+            k: {**v, **{"preorder": preorder_map[k]}}
+            for k, v in section_info_out.items()
         }
 
-        _dlogger.debug("Section_info: %s", section_info)
+        _dlogger.debug("Section_info: %s", section_info_out)
         subsection_map = self._section_graph_object.subsection_map()
         _dlogger.debug("subsection_map=%s", subsection_map)
-        for k, v in section_info.items():
+        for k, v in section_info_out.items():
             if len(subsection_map[k]) == 0:
                 v["is_leaf"] = True
             else:
@@ -3144,12 +3060,12 @@ class Compiler:
         section_signals_with_children = {}
 
         for section in self._section_graph_object.sections():
-            section_data = self._section_graph_object.section_info(section)
-            section_display_name = section_data["section_display_name"]
+            section_info = self._section_graph_object.section_info(section)
+            section_display_name = section_info.section_display_name
             section_signals_with_children[section] = list(
                 self._experiment_dao.section_signals_with_children(section_display_name)
             )
-            section_info[section]["section_display_name"] = section_display_name
+            section_info_out[section]["section_display_name"] = section_display_name
             section_signals_with_children[section]
 
         sampling_rate_tuples = []
@@ -3171,7 +3087,7 @@ class Compiler:
         return {
             "event_list": event_list,
             "section_graph": section_graph,
-            "section_info": section_info,
+            "section_info": section_info_out,
             "subsection_map": subsection_map,
             "section_signals_with_children": section_signals_with_children,
             "sampling_rates": sampling_rates,
@@ -3213,35 +3129,29 @@ class Compiler:
             "Recipe, source and wave files written to %s", os.path.abspath(".")
         )
 
-    def dump_src(self):
+    def dump_src(self, info=False):
         for src in self.compiler_output().src:
-            _logger.debug("*** %s", src["filename"])
+            if info:
+                _logger.info("*** %s", src["filename"])
+            else:
+                _logger.debug("*** %s", src["filename"])
             for line in src["text"].splitlines():
-                _logger.debug(line)
-        _logger.debug("END %s", src["filename"])
+                if info:
+                    _logger.info(line)
+                else:
+                    _logger.debug(line)
+        if info:
+            _logger.info("END %s", src["filename"])
+        else:
+            _logger.debug("END %s", src["filename"])
 
     def run(self, data) -> CompiledExperiment:
         _logger.debug("ES Compiler run")
+
         self._process_experiment(data)
-
         self._calc_integration_unit_allocation()
-        signal_info_map = {
-            s: self._experiment_dao.signal_info(s)
-            for s in self._experiment_dao.signals()
-        }
-        for s in signal_info_map.values():
-            s["awg_number"] = self.get_awg(s["signal_id"]).awg_number
-            s["sampling_rate"] = self._sampling_rate_for_device(s["device_id"])
 
-        (
-            integration_times,
-            signal_delays,
-            delays_per_awg,
-        ) = MeasurementCalculator.calculate_integration_times(
-            signal_info_map, self.event_timing(expand_loops=False)
-        )
-
-        self._generate_code(signal_delays)
+        integration_times, signal_delays = self._generate_code()
         self._generate_recipe(integration_times, signal_delays)
 
         retval = self.compiler_output()
@@ -3259,19 +3169,8 @@ class Compiler:
                 pass
         _logger.info("Total sample points generated: %d", total_samples)
 
-        _logger.info("Finished QCCS Compiler run.")
+        _logger.info("Finished LabOne Q Compiler run.")
         return retval
-
-    @staticmethod
-    def get_length_from_pulse_def(pulse_def, sampling_rate):
-        if pulse_def is None:
-            return None
-        length = pulse_def.get("length")
-        if length is None:
-            samples = pulse_def.get("samples")
-            if samples is not None:
-                length = len(samples) / sampling_rate
-        return length
 
     def get_delay(self, device_type, desktop_setup, hdawg_uses_2GHz):
         if not isinstance(device_type, DeviceType):

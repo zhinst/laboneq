@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Convenience header for the QCCS project.
+Convenience header for the LabOne Q project.
 """
 
 from laboneq.dsl import LinearSweepParameter, SweepParameter

@@ -28,8 +28,7 @@ requirements = [
     "requests",
     "setuptools>=40.1.0",
     "wheel",
-    "zhinst==22.8.0",
-    "zhinst-toolkit==0.4.0",
+    "zhinst==22.8.2",
 ]
 
 
@@ -48,7 +47,7 @@ this_directory = Path(__file__).parent
 version_path = this_directory / "laboneq/VERSION.txt"
 version = version_path.read_text().rstrip()
 
-long_description = (this_directory / "README.md").read_text()
+long_description = (this_directory / "README.md").read_text(encoding="utf-8")
 
 setuptools.setup(
     name="laboneq",

@@ -4,7 +4,7 @@
 # pylint: disable=wrong-import-order
 
 
-"""Main functionality of the LabOne QCCS Software."""
+"""Main functionality of the LabOne Q Software."""
 
 import pkgutil
 

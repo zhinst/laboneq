@@ -36,7 +36,7 @@ markdown
 pymdown-extensions
 
 # Formatting (must match version in CI)
-black==19.10b0
+black==22.08.0
 
 # packaging/deployment
 wheel

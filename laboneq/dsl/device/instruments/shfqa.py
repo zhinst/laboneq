@@ -18,10 +18,7 @@ class SHFQA(ZIStandardInstrument):
     _is_qc: bool = False
 
     def calc_options(self):
-        return {
-            **super().calc_options(),
-            "is_qc": self._is_qc,
-        }
+        return {**super().calc_options(), "is_qc": self._is_qc}
 
     @property
     def ports(self):

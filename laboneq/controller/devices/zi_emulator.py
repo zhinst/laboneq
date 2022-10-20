@@ -146,6 +146,16 @@ class DevEmu(ABC):
         node = self._get_node(dev_path)
         node.subscribed = True
 
+    def unsubscribe(self, dev_path: str):
+        node = self._get_node(dev_path)
+        node.subscribed = False
+
+    def getAsEvent(self, dev_path: str):
+        node = self._get_node(dev_path)
+        self._poll_queue.append(
+            PollEvent(path=self._full_path(dev_path), value=node.value)
+        )
+
     def poll(self) -> List[PollEvent]:
         output = self._poll_queue[:]
         self._poll_queue.clear()
@@ -185,7 +195,7 @@ class DevEmuHDAWG(DevEmuHW):
 
     def _awg_execute(self, awg_idx):
         self._scheduler.enter(
-            delay=0.01, priority=0, action=self._awg_stop, argument=(awg_idx,)
+            delay=0.001, priority=0, action=self._awg_stop, argument=(awg_idx,)
         )
 
     _hdawg_node_def: Dict[str, NodeInfo] = None
@@ -208,10 +218,10 @@ class DevEmuUHFQA(DevEmuHW):
         self._set_val(f"awgs/0/enable", 0)
 
     def _awg_execute(self):
-        self._scheduler.enter(delay=0.01, priority=0, action=self._awg_stop)
+        self._scheduler.enter(delay=0.001, priority=0, action=self._awg_stop)
 
     _uhfqa_node_def: Dict[str, NodeInfo] = {
-        "awgs/0/enable": NodeInfo(type=NodeType.INT, default=0, handler=_awg_execute),
+        "awgs/0/enable": NodeInfo(type=NodeType.INT, default=0, handler=_awg_execute)
     }
 
     def _node_def(self) -> Dict[str, NodeInfo]:
@@ -223,12 +233,12 @@ class DevEmuPQSC(DevEmuHW):
         self._set_val(f"execution/enable", 0)
 
     def _trig_execute(self):
-        self._scheduler.enter(delay=0.01, priority=0, action=self._trig_stop)
+        self._scheduler.enter(delay=0.001, priority=0, action=self._trig_stop)
 
     _pqsc_node_def: Dict[str, NodeInfo] = {
         "execution/enable": NodeInfo(
             type=NodeType.INT, default=0, handler=_trig_execute
-        ),
+        )
     }
 
     def _node_def(self) -> Dict[str, NodeInfo]:
@@ -243,7 +253,7 @@ class DevEmuSHFQA(DevEmuHW):
 
     def _awg_execute(self, channel: int):
         self._scheduler.enter(
-            delay=0.01, priority=0, action=self._awg_stop, argument=(channel,)
+            delay=0.001, priority=0, action=self._awg_stop, argument=(channel,)
         )
 
     _shfqa_node_def: Dict[str, NodeInfo] = None
@@ -274,7 +284,7 @@ class DevEmuSHFSG(DevEmuHW):
 
     def _awg_execute(self, channel: int):
         self._scheduler.enter(
-            delay=0.01, priority=0, action=self._awg_stop, argument=(channel,)
+            delay=0.001, priority=0, action=self._awg_stop, argument=(channel,)
         )
 
     _shfsg_node_def: Dict[str, NodeInfo] = None
@@ -290,6 +300,53 @@ class DevEmuSHFSG(DevEmuHW):
                 )
             DevEmuSHFSG._shfsg_node_def = nd
         return DevEmuSHFSG._shfsg_node_def
+
+
+class DevEmuSHFQC(DevEmuHW):
+    def _qa_awg_stop(self, channel: int):
+        self._set_val(f"qachannels/{channel}/generator/enable", 0)
+        self._set_val(f"qachannels/{channel}/readout/result/enable", 0)
+        self._set_val(f"qachannels/{channel}/spectroscopy/result/enable", 0)
+
+    def _qa_awg_execute(self, channel: int):
+        self._scheduler.enter(
+            delay=0.001, priority=0, action=self._qa_awg_stop, argument=(channel,)
+        )
+
+    def _sg_awg_stop(self, channel: int):
+        self._set_val(f"sgchannels/{channel}/awg/enable", 0)
+
+    def _sg_awg_execute(self, channel: int):
+        self._scheduler.enter(
+            delay=0.001, priority=0, action=self._sg_awg_stop, argument=(channel,)
+        )
+
+    _shfqc_node_def: Dict[str, NodeInfo] = None
+
+    def _node_def(self) -> Dict[str, NodeInfo]:
+        if DevEmuSHFQC._shfqc_node_def is None:
+            nd = {f"features/devtype": NodeInfo(type=NodeType.STR, default="SHFQC")}
+            for channel in range(1):
+                nd[f"qachannels/{channel}/generator/enable"] = NodeInfo(
+                    type=NodeType.INT,
+                    default=0,
+                    handler=partial(DevEmuSHFQC._qa_awg_execute, channel=channel),
+                )
+                # TODO(2K): emulate result logging
+                nd[f"qachannels/{channel}/readout/result/enable"] = NodeInfo(
+                    type=NodeType.INT, default=0
+                )
+                nd[f"qachannels/{channel}/spectroscopy/result/enable"] = NodeInfo(
+                    type=NodeType.INT, default=0
+                )
+            for channel in range(6):
+                nd[f"sgchannels/{channel}/awg/enable"] = NodeInfo(
+                    type=NodeType.INT,
+                    default=0,
+                    handler=partial(DevEmuSHFQC._sg_awg_execute, channel=channel),
+                )
+            DevEmuSHFQC._shfqc_node_def = nd
+        return DevEmuSHFQC._shfqc_node_def
 
 
 def _serial_to_device_type(dev_id: str):
@@ -328,6 +385,8 @@ def _device_factory(
         dev_type = DevEmuSHFQA
     elif dev_type_str == "SHFSG":
         dev_type = DevEmuSHFSG
+    elif dev_type_str == "SHFQC":
+        dev_type = DevEmuSHFQC
     else:
         dev_type = _serial_to_device_type(dev_id)
     return dev_type(dev_id, scheduler)
@@ -342,8 +401,8 @@ def _canonical_path_list(path: Union[str, List[str]]) -> List[str]:
 
 
 class ziDAQServerEmulator:
-    """ A class replacing the ziPython's 'ziDAQServer', emulating its behavior
-        to the extent required by QCCS SW without the real DataServer/HW.
+    """A class replacing the 'zhinst.core.ziDAQServer', emulating its behavior
+    to the extent required by LabOne Q SW without the real DataServer/HW.
     """
 
     def __init__(self, host: str, port: int, api_level: int):
@@ -449,9 +508,19 @@ class ziDAQServerEmulator:
         self._progress_scheduler()
         self._resolve_paths_and_perform(path, self._subscribe)
 
+    def _unsubscribe(self, device: DevEmu, dev_path: str):
+        device.unsubscribe(dev_path)
+
+    def unsubscribe(self, path: Union[str, List[str]]):
+        self._progress_scheduler()
+        self._resolve_paths_and_perform(path, self._unsubscribe)
+
+    def _getAsEvent(self, device: DevEmu, dev_path: str):
+        device.getAsEvent(dev_path)
+
     def getAsEvent(self, path: str):
         self._progress_scheduler()
-        return
+        self._resolve_paths_and_perform(path, self._getAsEvent)
 
     def sync(self):
         # TODO(2K): Do nothing, consider some behavior for testability
@@ -464,7 +533,7 @@ class ziDAQServerEmulator:
         flags: int = 0,
         flat: bool = False,
     ) -> Any:
-        self._progress_scheduler(max_wait=recording_time_s)
+        self._progress_scheduler(wait_time=recording_time_s)
         events: List[PollEvent] = []
         for dev in self._devices.values():
             events.extend(dev.poll())
@@ -480,16 +549,21 @@ class ziDAQServerEmulator:
         self._progress_scheduler()
         return AWGModuleEmulator(self)
 
-    def _progress_scheduler(self, max_wait: float = 0.0):
-        start = time.time()
+    def _progress_scheduler(self, wait_time: float = 0.0):
+        def _delay(delay: float):
+            # time.sleep is not accurate for short waits, skip for delays below 10ms
+            if delay > 0.01:
+                time.sleep(delay)
+
+        start = time.perf_counter()
         while True:
             delay_till_next_event = self._scheduler.run(blocking=False)
-            remaining = max_wait - (time.time() - start)
+            elapsed = time.perf_counter() - start
+            remaining = wait_time - elapsed
             if delay_till_next_event is None or delay_till_next_event > remaining:
-                if remaining > 0:
-                    time.sleep(remaining)
+                _delay(remaining)
                 break
-            time.sleep(delay_till_next_event)
+            _delay(delay_till_next_event)
 
 
 class AWGModuleEmulator:

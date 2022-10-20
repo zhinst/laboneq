@@ -96,7 +96,7 @@ class DeviceBase(ABC):
         return len(self._uplinks) == 0 and len(self._downlinks) > 0
 
     def is_follower(self):
-        # Treat standalone devices as followes
+        # Treat standalone devices as followers
         return (
             len(self._uplinks) > 0
             or len(self._uplinks) == 0
@@ -175,22 +175,27 @@ class DeviceBase(ABC):
         pass
 
     @abstractmethod
-    def collect_trigger_configuration_nodes(self, initialization):
+    def collect_trigger_configuration_nodes(self, initialization: Initialization.Data):
         pass
 
     @abstractmethod
     def collect_execution_nodes(self):
         pass
 
+    @abstractmethod
+    def collect_start_execution_nodes(self):
+        pass
+
     def wait_for_conditions_to_start(self):
         pass
 
-    def wait_for_execution_ready(self):
-        pass
+    def conditions_for_execution_ready(self) -> Dict[str, Any]:
+        return {}
 
-    @abstractmethod
-    def collect_conditions_to_close_loop(self, acquisition_units):
-        pass
+    def conditions_for_execution_done(
+        self, acquisition_type: AcquisitionType
+    ) -> Dict[str, Any]:
+        return {}
 
     @abstractmethod
     def configure_as_leader(self, initialization):

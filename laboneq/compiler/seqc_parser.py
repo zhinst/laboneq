@@ -267,6 +267,7 @@ class SeqCMetadata:
     sample_multiple: int
     awg_index: int
     wave_index: dict
+    command_table: list
     output_port_delay: int
 
 
@@ -284,6 +285,7 @@ class SimpleRuntime:
         sample_multiple,
         awg_index,
         wave_index,
+        command_table,
         max_time,
         output_port_delay,
     ):
@@ -329,6 +331,7 @@ class SimpleRuntime:
             "assignWaveIndex": self.assignWaveIndex,
             "playWave": self.playWave,
             "playZero": self.playZero,
+            "executeTableEntry": self.executeTableEntry,
             "startQA": self.startQA,
             "startQAResult": self.startQAResult,
             "configFreqSweep": self.configFreqSweep,
@@ -379,6 +382,7 @@ class SimpleRuntime:
         self.wave_index_lookup = {}
         self.awg_index = awg_index
         self.wave_index = wave_index
+        self.command_table = command_table
         self.max_time = max_time
         self.output_port_delay = output_port_delay
         self._oscillator_frequency = {}
@@ -396,8 +400,20 @@ class SimpleRuntime:
             )
             self.times[k] = np.arange(num_samples) / self.sample_frequency + self.delay
             port_delay = self.output_port_delay
+
             if "QAResult" in k:
                 port_delay = 0
+
+            _logger.debug(
+                "Calculating times for %s with frequency %s for channel %s, total time %f, the signal is leading by %s, port_delay=%s",
+                self.device_uid,
+                EngNumber(self.sample_frequency),
+                k,
+                num_samples / self.sample_frequency,
+                EngNumber(-self.delay),
+                EngNumber(port_delay),
+            )
+
             self.times_at_port[k] = (
                 np.arange(num_samples) / self.sample_frequency + self.delay + port_delay
             )
@@ -603,6 +619,29 @@ class SimpleRuntime:
                     _logger.debug("playing %d zeroes on channel %s", length, i)
                     self.output[i] = np.append(self.output[i], np.zeros(length))
 
+    def executeTableEntry(self, ct_index):
+        _logger.debug("executeTableEntry(%i) called", ct_index)
+
+        ct_entry = next(iter(i for i in self.command_table if i["index"] == ct_index))
+
+        wave_index = ct_entry["waveform"]["index"]
+
+        wave = self.wave_index[wave_index]
+
+        if wave["type"] != "iq":
+            raise RuntimeError(
+                "Command table execution in seqc parser only supports iq signals."
+            )
+
+        wave_names = [wave["wave_name"] + suffix + ".wave" for suffix in ("_i", "_q")]
+        for channel, filename in enumerate(wave_names):
+            wave_to_play = self.waves[filename]
+            mapped_channel = self.channel_mapping[str(channel + 1)]
+            self.last_play_start_samples = len(self.output[mapped_channel])
+            self.output[mapped_channel] = np.append(
+                self.output[mapped_channel], self.scale_factor * wave_to_play
+            )
+
     def startQA_SHFQA(
         self,
         generators_mask=None,
@@ -685,6 +724,10 @@ class SimpleRuntime:
 
                 filename = wave_index["wave_name"] + ".wave"
 
+                if filename not in self.waves:
+                    _logger.warning(
+                        f"wave {filename} unknown, known waves are {list(self.waves.keys())}"
+                    )
                 wave_to_play = self.waves[filename]
 
                 if len(wave_to_play) % self.sample_multiple != 0:
@@ -823,7 +866,7 @@ def find_device(recipe, device_uid):
     return None
 
 
-def analyze_recipe(recipe, waves, sources, wave_indices):
+def analyze_recipe(recipe, waves, sources, wave_indices, command_tables):
 
     outputs = {}
     seq_c_devices = {}
@@ -930,6 +973,7 @@ def analyze_recipe(recipe, waves, sources, wave_indices):
     seq_c_descriptors = []
     for name, source in sources.items():
         seq_c_device = seq_c_devices[name]
+        command_table = command_tables.get(name, {})
         seq_c_wave_index = seq_c_wave_indices.get(name, {})
         _logger.debug("seq_c_wave_index for %s is %s", name, seq_c_wave_index)
         channels = outputs[name]
@@ -949,6 +993,7 @@ def analyze_recipe(recipe, waves, sources, wave_indices):
                 sample_multiple=seq_c_device["sample_multiple"],
                 awg_index=seq_c_device["awg_index"],
                 wave_index=seq_c_wave_index,
+                command_table=command_table,
                 output_port_delay=seq_c_device["output_port_delay"],
             )
         else:
@@ -965,6 +1010,7 @@ def analyze_recipe(recipe, waves, sources, wave_indices):
                 sample_multiple=seq_c_device["sample_multiple"],
                 awg_index=seq_c_device["awg_index"],
                 wave_index=seq_c_wave_index,
+                command_table=command_table,
                 output_port_delay=seq_c_device["output_port_delay"],
             )
         _logger.debug("Descriptor: %s", descriptor.__dict__)
@@ -998,6 +1044,7 @@ def run_single_source(descriptor: SeqCMetadata, waves, max_time, scale_factor):
         descriptor.sample_multiple,
         descriptor.awg_index,
         descriptor.wave_index,
+        descriptor.command_table,
         max_time=max_time,
         output_port_delay=descriptor.output_port_delay,
     )
@@ -1047,7 +1094,11 @@ def convert_compiler_output_memory(data: CompiledExperiment):
     for src in data.src:
         sources[src["filename"]] = src["text"]
 
-    return analyze_recipe(recipe, waves, sources, wave_indices)
+    command_tables = {}
+    for table in data.command_tables:
+        command_tables[table["seqc"]] = table["ct"]
+
+    return analyze_recipe(recipe, waves, sources, wave_indices, command_tables)
 
 
 def analyze_compiler_output_memory(
