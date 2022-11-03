@@ -1,0 +1,119 @@
+# Copyright 2022 Zurich Instruments AG
+# SPDX-License-Identifier: Apache-2.0
+
+from __future__ import annotations
+
+from typing import List, Union, Dict, Any
+
+from laboneq.compiler.device_type import DeviceType
+from laboneq.compiler.code_generator.seq_c_generator import SeqCGenerator
+
+
+class SeqCTracker:
+    def __init__(
+        self,
+        init_generator: SeqCGenerator,
+        deferred_function_calls: List[Union[str, Dict[str, List[Any]]]],
+        sampling_rate: float,
+        delay: float,
+        device_type: DeviceType,
+        emit_timing_comments: bool,
+        logger,
+    ) -> None:
+        self.deferred_function_calls = deferred_function_calls
+        self.loop_stack_generators: List[List[SeqCGenerator]] = [
+            [init_generator, SeqCGenerator()]
+        ]
+        self.sampling_rate = sampling_rate
+        self.delay = delay
+        self.device_type = device_type
+        self.emit_timing_comments = emit_timing_comments
+        self.logger = logger
+        self.current_time = 0
+
+    def current_loop_stack_generator(self):
+        return self.loop_stack_generators[-1][-1]
+
+    def add_required_playzeros(self, sampled_event):
+        """If `current_time` precedes the scheduled start of the event, emit playZero to catch up.
+
+        Also clears deferred function calls within the context of the new playZero."""
+        start = sampled_event["start"]
+        signature = sampled_event["signature"]
+
+        if start > self.current_time:
+            play_zero_samples = start - self.current_time
+            self.logger.debug(
+                "  Emitting %d play zero samples before signature %s for event %s",
+                play_zero_samples,
+                signature,
+                sampled_event,
+            )
+
+            self.add_timing_comment(self.current_time + play_zero_samples)
+            self.current_loop_stack_generator().add_play_zero_statement(
+                play_zero_samples, self.device_type
+            )
+            self.clear_deferred_function_calls(sampled_event)
+            self.current_time += play_zero_samples
+        return self.current_time
+
+    def clear_deferred_function_calls(self, sampled_event):
+        if len(self.deferred_function_calls) > 0:
+            self.logger.debug(
+                "  Emitting deferred function calls: %s at sampled_event %s",
+                self.deferred_function_calls,
+                sampled_event or "None",
+            )
+
+            for call in self.deferred_function_calls:
+                self.current_loop_stack_generator().add_function_call_statement(
+                    call["name"], call["args"]
+                )
+            self.deferred_function_calls = []
+
+    def add_timing_comment(self, end_samples):
+        if self.emit_timing_comments:
+            start_time_ns = (
+                round((self.current_time / self.sampling_rate - self.delay) * 1e10) / 10
+            )
+            end_time_ns = (
+                round(((end_samples / self.sampling_rate) - self.delay) * 1e10) / 10
+            )
+            self.add_comment(
+                f"{self.current_time} - {end_samples} , {start_time_ns} ns - {end_time_ns} ns "
+            )
+
+    def add_comment(self, comment):
+        self.current_loop_stack_generator().add_comment(comment)
+
+    def add_function_call_statement(
+        self, name, args=None, assign_to=None, deferred=False
+    ):
+        if deferred:
+            self.deferred_function_calls.append({"name": name, "args": args})
+        else:
+            self.current_loop_stack_generator().add_function_call_statement(
+                name, args, assign_to
+            )
+
+    def add_play_zero_statement(self, num_samples, device_type):
+        self.current_loop_stack_generator().add_play_zero_statement(
+            num_samples, device_type
+        )
+
+    def add_variable_assignment(self, variable_name, value):
+        self.current_loop_stack_generator().add_variable_assignment(
+            variable_name, value
+        )
+
+    def append_loop_stack_generator(self, outer=False, always=False, generator=None):
+        if not generator:
+            generator = SeqCGenerator()
+        if outer:
+            self.loop_stack_generators.append([generator])
+        elif always or self.loop_stack_generators[-1][-1].num_statements() > 0:
+            self.loop_stack_generators[-1].append(generator)
+
+    def pop_loop_stack_generators(self):
+        return self.loop_stack_generators.pop()

@@ -7,7 +7,7 @@ from typing import List, Optional, Any
 
 from intervaltree import IntervalTree, Interval
 
-from .fastlogging import NullLogger
+from laboneq.compiler.fastlogging import NullLogger
 
 _logger = logging.getLogger(__name__)
 if _logger.getEffectiveLevel() == logging.DEBUG:
@@ -160,7 +160,7 @@ def calculate_intervals(
 
     The calculation happens in three passes: Passes 1 & 2 target the hard minimum
     waveform length, going over the segments from left-to-right and right-to-left.
-    Pass 3 targets requirements the length hints, left-to-right.
+    Pass 3 targets the length hints, left-to-right.
 
     In each pass, the algorithm keeps merging segments greedily until the total length
     exceeds the desired length, and then continues with the next segment. If it reaches

@@ -25,7 +25,7 @@ class RecipeGenerator:
     def add_oscillator_params(self, experiment_dao):
         hw_oscillators = {}
         for oscillator in experiment_dao.hardware_oscillators():
-            hw_oscillators[oscillator["id"]] = oscillator
+            hw_oscillators[oscillator.id] = oscillator
 
         oscillator_params = []
         for signal_id in experiment_dao.signals():
@@ -33,15 +33,15 @@ class RecipeGenerator:
             oscillator_info = experiment_dao.signal_oscillator(signal_id)
             if oscillator_info is None:
                 continue
-            if oscillator_info.get("hardware", False):
-                oscillator = hw_oscillators[oscillator_info["id"]]
-                for ch in signal_info["channels"]:
+            if oscillator_info.hardware:
+                oscillator = hw_oscillators[oscillator_info.id]
+                for ch in signal_info.channels:
                     oscillator_param = {
-                        "id": oscillator["id"],
-                        "device_id": oscillator["device_id"],
+                        "id": oscillator.id,
+                        "device_id": oscillator.device_id,
                         "channel": ch,
-                        "frequency": oscillator.get("frequency"),
-                        "param": oscillator.get("frequency_param"),
+                        "frequency": oscillator.frequency,
+                        "param": oscillator.frequency_param,
                     }
                     oscillator_params.append(oscillator_param)
 
@@ -91,9 +91,9 @@ class RecipeGenerator:
         initializations = []
         for device in experiment_dao.device_infos():
             devices.append(
-                {"device_uid": device["id"], "driver": device["device_type"].upper()}
+                {"device_uid": device.id, "driver": device.device_type.upper()}
             )
-            initializations.append({"device_uid": device["id"], "config": {}})
+            initializations.append({"device_uid": device.id, "config": {}})
         self._recipe["devices"] = devices
         self._recipe["experiment"]["initializations"] = initializations
 
@@ -121,7 +121,7 @@ class RecipeGenerator:
                 initialization["config"]["dio_mode"] = "hdawg"
 
         for device in experiment_dao.device_infos():
-            device_uid = device["id"]
+            device_uid = device.id
             initialization = self._find_initalization(device_uid)
             reference_clock = experiment_dao.device_reference_clock(device_uid)
             if reference_clock is not None:
@@ -132,14 +132,11 @@ class RecipeGenerator:
                     device_uid
                 ]
             except KeyError:
-                initialization["config"]["reference_clock_source"] = device[
+                initialization["config"][
                     "reference_clock_source"
-                ]
+                ] = device.reference_clock_source
 
-            if (
-                device["device_type"] == "hdawg"
-                and clock_settings["use_2GHz_for_HDAWG"]
-            ):
+            if device.device_type == "hdawg" and clock_settings["use_2GHz_for_HDAWG"]:
                 initialization["config"][
                     "sampling_rate"
                 ] = DeviceType.HDAWG.sampling_rate_2GHz
@@ -173,6 +170,7 @@ class RecipeGenerator:
         offset=0.0,
         diagonal=1.0,
         off_diagonal=0.0,
+        precompensation=None,
         modulation=False,
         oscillator=None,
         oscillator_frequency=None,
@@ -188,6 +186,8 @@ class RecipeGenerator:
             output.update(
                 {"gains": {"diagonal": diagonal, "off_diagonal": off_diagonal}}
             )
+        if precompensation is not None:
+            output["precompensation"] = precompensation
         if lo_frequency is not None:
             output["lo_frequency"] = lo_frequency
         if port_mode is not None:

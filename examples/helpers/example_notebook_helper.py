@@ -8,6 +8,8 @@ import numpy as np
 # scipy optimize for curve fitting
 import scipy.optimize as opt
 
+from laboneq.dsl import device
+
 
 
 
@@ -19,60 +21,76 @@ plt.rcParams["axes.prop_cycle"] = cycler(
 ## Definitions for result plotting
 
 # plot output signals
-def plot_output_signals(results, uhfqa=None, hdawg_drive=None, hdawg_flux=None):
-    output_signals = results.compiled_experiment.output_signals
+def plot_output_signals(results):
+    """Plot output signals of a single-qubit experiment.
+
+    Warning: Labelling the plots relies on assumptions valid for the example notebooks.
+    """
+
+    # Get a list of signals as a list, with one entry for each device involved
+    signal_list = results.compiled_experiment.output_signals.signals
+
+    # Count how many waveforms are in the experiment:
     n_rows = 0
-    if uhfqa is not None:
-        n_rows += 3
-    if hdawg_drive is not None:
-        n_rows += 2
-    if hdawg_flux is not None:
+    for signal in signal_list:
         n_rows += 1
 
+
+    # Set up the plot
     fig, ax = plt.subplots(n_rows, 1, figsize=(5, 1.5*n_rows), sharex=True)
     fig.subplots_adjust(hspace=0.4)
 
     rows = iter(range(n_rows))
 
-    if uhfqa is not None:
+    # Plot all signals of all involved devices. Some logic for correct labelling.
+    for signal in signal_list:
         row = next(rows)
-        channels_uhfqa = output_signals.signals[uhfqa]["channels"]
-        time = channels_uhfqa[0].time_axis
-        ax[row].plot(time, channels_uhfqa[0].data)
-        ax[row].set_ylabel("Amplitude")
-        ax[row].set_title("Readout pulse I")
-        row = next(rows)
-        ax[row].plot(time, channels_uhfqa[1].data)
-        ax[row].set_ylabel("Amplitude")
-        ax[row].set_title("Readout pulse Q")
-        time = channels_uhfqa[2].time_axis
-        row = next(rows)
-        ax[row].plot(time, channels_uhfqa[2].data)
-        ax[row].set_title("QA trigger")
-    
-    if hdawg_drive is not None:
-        row = next(rows)
-        channels_hdawg = output_signals.signals[hdawg_drive]["channels"]
-        time = channels_hdawg[0].time_axis
-        ax[row].plot(time, channels_hdawg[0].data)
-        ax[row].set_ylabel("Amplitude")
-        ax[row].set_title("Drive pulse I")
-        row = next(rows)
-        ax[row].plot(time, channels_hdawg[1].data)
-        ax[row].set_ylabel("Amplitude")
-        ax[row].set_title("Drive pulse Q")
 
-    if hdawg_flux is not None:
-        row = next(rows)
-        channels_hdawg = output_signals.signals[hdawg_flux]["channels"]
-        time = channels_hdawg[0].time_axis
-        ax[row].plot(time, channels_hdawg[0].data)
-        ax[row].set_ylabel("Amplitude")
-        ax[row].set_title("Flux pulse")
+        device_uid = signal["device_uid"]
+        n_channels = len(signal["channels"])
+        
+        for waveform in signal["channels"]:
+            uid = waveform.uid
+            time = waveform.time_axis
 
-    ax[-1].set_xlabel("Time (s)")
+            if not "qa" in uid.lower() and not "_freq" in uid.lower(): # ignore QA triggers and oscillator frequency
+                title = ""
+                if "hdawg" in device_uid.lower() and n_channels==1:
+                    title = "Flux Pulse"
+                elif "qa" in device_uid.lower():
+                    title = "Readout Pulse"
+                elif "qc" in device_uid.lower() and not "sg" in device_uid.lower():
+                    title = "Readout Pulse"
+                else:
+                    title = "Drive Pulse"
+                
+                legend = None
+                if "sg" in device_uid.lower():
+                    legend = "I" if "i" in uid.lower() else "Q"
+                elif "shfqa" in device_uid.lower() or "shfqc" in device_uid.lower():
+                    pass
+                else:            
+                    try:
+                        legend = "I" if int(uid)%2==1 else "Q"
+                    except:
+                        pass
+                
+                if n_rows > 1:
+                    ax[row].plot(time, waveform.data, label=legend)
+                    ax[row].set_title(title)
+                    ax[row].set_ylabel("Amplitude")
+                    ax[row].legend()
+                else:
+                    ax.plot(time, waveform.data, label=legend)
+                    ax.set_title(title)
+                    ax.set_ylabel("Amplitude")
+                    ax.legend()
+                    ax.set_xlabel("Time (s)")
+    if n_rows > 1:
+        ax[-1].set_xlabel("Time (s)")
 
 def plot_output_signals_2(results):
+    """Plot output signals for two qubit experiments"""
     output_signals = results.compiled_experiment.output_signals
     fig, ax = plt.subplots(7, 1, figsize=(5, 10), sharex=True)
     fig.subplots_adjust(hspace=0.4)

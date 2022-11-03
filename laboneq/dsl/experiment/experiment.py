@@ -262,6 +262,9 @@ class Experiment:
         :param amplitude: Amplitude the pulse shall be played with. Defaults to
             `None`, meaning that the pulse is played as is.
         :type amplitude: `float` or :class:`laboneq.dsl.Parameter`, optional
+        :param length: Length for which the pulse shall be played. Defaults to
+            `None`, meaning that the pulse is played for its whole length.
+        :type length: `float` or :class:`laboneq.dsl.Parameter`, optional
         :param phase: The desired phase the pulse shall be played with. Defaults to
             `None`, meaning that the pulse is played as is.
         :type phase: `float`, optional

@@ -18,6 +18,12 @@ from jsonschema.validators import validator_for
 import copy
 
 from laboneq.core.exceptions import LabOneQException
+from laboneq.core.types.enums import (
+    AveragingMode,
+    IODirection,
+    AcquisitionType,
+    HighPassCompensationClearing,
+)
 from laboneq.core.types.enums import AveragingMode, IODirection, AcquisitionType
 
 _logger = logging.getLogger(__name__)
@@ -59,7 +65,6 @@ class PulseDef:
     amplitude_param: str
     play_mode: str
     samples: ArrayLike
-    user_function: Any = None
 
     @property
     def effective_amplitude(self) -> float:
@@ -93,6 +98,71 @@ class SectionInfo:
     play_after: Optional[str]
     reset_oscillator_phase: bool
     section_display_name: Optional[str] = None
+
+
+@dataclass
+class DeviceInfo:
+    id: str
+    device_type: str
+    serial: str
+    server: str
+    interface: str
+    reference_clock_source: str
+
+
+@dataclass
+class SignalInfo:
+    signal_id: str
+    signal_type: str
+    device_id: str
+    device_serial: str
+    device_type: str
+    connection_type: str
+    channels: str
+    delay_signal: float
+    modulation: str
+    offset: float
+
+
+@dataclass
+class SectionSignalPulse:
+    seq_nr: int
+    pulse_id: str
+    length: float
+    length_param: str
+    amplitude: float
+    amplitude_param: str
+    play_mode: str
+    signal_id: str
+    offset: float
+    offset_param: str
+    acquire_params: str
+    phase: float
+    phase_param: str
+    increment_oscillator_phase: float
+    increment_oscillator_phase_param: str
+    set_oscillator_phase: float
+    set_oscillator_phase_param: str
+    pulse_parameters: Optional[Any]
+
+
+@dataclass
+class ParamRef:
+    param_name: str
+
+
+@dataclass
+class OscillatorInfo:
+    id: str
+    frequency: float
+    frequency_param: str
+    hardware: bool
+
+
+@dataclass
+class AcquireInfo:
+    handle: str
+    acquisition_type: str
 
 
 class ExperimentDAO:
@@ -131,6 +201,7 @@ class ExperimentDAO:
             "signal_type": signal_type,
             "modulation": modulation,
             "seq_nr": seq_nr,
+            "offset": None,
         }
 
         self._data["signal_connection"].append(
@@ -140,6 +211,7 @@ class ExperimentDAO:
                 "connection_type": connection_type,
                 "channels": channels,
                 "mixer_calibration": None,
+                "precompensation": None,
                 "lo_frequency": None,
                 "range": None,
                 "port_delay": None,
@@ -266,6 +338,7 @@ class ExperimentDAO:
                 "signal_type": signal["signal_type"],
                 "modulation": True if signal.get("modulation") else False,
                 "seq_nr": seq_nr,
+                "offset": None,
             }
             if "oscillators_list" in signal:
                 for oscillator_ref in signal["oscillators_list"]:
@@ -276,10 +349,14 @@ class ExperimentDAO:
 
         self._data["signal_connection"] = []
         for connection in experiment["signal_connections"]:
-            if "mixer_calibration" in connection:
+            try:
                 mixer_calibration = copy.deepcopy(connection["mixer_calibration"])
-            else:
+            except KeyError:
                 mixer_calibration = None
+            try:
+                precompensation = copy.deepcopy(connection["precompensation"])
+            except KeyError:
+                precompensation = None
             range = connection.get("range")
             lo_frequency = connection.get("lo_frequency")
             port_delay = connection.get("port_delay")
@@ -292,6 +369,7 @@ class ExperimentDAO:
                     "connection_type": connection["connection"]["type"],
                     "channels": connection["connection"]["channels"],
                     "mixer_calibration": mixer_calibration,
+                    "precompensation": precompensation,
                     "lo_frequency": lo_frequency,
                     "range": range,
                     "port_delay": port_delay,
@@ -300,8 +378,7 @@ class ExperimentDAO:
                     "threshold": None,
                 }
             )
-
-        self.pulses.clear()
+        self._data["pulse"] = {}
         for pulse in experiment["pulses"]:
             samples = pulse.get("samples", None)
 
@@ -309,7 +386,7 @@ class ExperimentDAO:
                 pulse, "amplitude", (int, float, complex)
             )
 
-            self.pulses[pulse["id"]] = PulseDef(
+            self._data["pulse"][pulse["id"]] = PulseDef(
                 id=pulse["id"],
                 function=pulse.get("function"),
                 length=pulse.get("length"),
@@ -543,12 +620,12 @@ class ExperimentDAO:
     def device_info(self, device_id):
         device_info = self._data["device"].get(device_id)
         if device_info is not None:
-            return {k: device_info[k] for k in self._device_info_keys()}
+            return DeviceInfo(**{k: device_info[k] for k in self._device_info_keys()})
         return None
 
     def device_infos(self):
         return [
-            {k: device_info[k] for k in self._device_info_keys()}
+            DeviceInfo(**{k: device_info[k] for k in self._device_info_keys()})
             for device_info in self._data["device"].values()
         ]
 
@@ -610,6 +687,7 @@ class ExperimentDAO:
             "channels",
             "delay_signal",
             "modulation",
+            "offset",
         ]
 
     def signal_info(self, signal_id):
@@ -630,15 +708,21 @@ class ExperimentDAO:
 
             signal_info_copy["device_type"] = device_info["device_type"]
             signal_info_copy["device_serial"] = device_info["serial"]
-            return {k: signal_info_copy[k] for k in self._signal_info_keys()}
+            return SignalInfo(
+                **{k: signal_info_copy[k] for k in self._signal_info_keys()}
+            )
         else:
             raise Exception(f"Signal_id {signal_id} not found")
 
     def sections(self) -> List[str]:
         return list(self._data["section"].keys())
 
-    def section_info(self, section_id) -> SectionInfo:
-        return self._data["section"][section_id]
+    def section_info(self, section_id):
+        retval = copy.copy(self._data["section"][section_id])
+
+        if retval.count is not None:
+            retval.count = int(retval.count)
+        return retval
 
     def root_sections(self):
         return self._root_section_ids
@@ -716,9 +800,12 @@ class ExperimentDAO:
             retval = retval.union(self.section_signals(child))
         return retval
 
-    @property
-    def pulses(self) -> Dict[str, PulseDef]:
-        return self._data.setdefault("pulse", {})
+    def pulses(self):
+        return list(self._data["pulse"].keys())
+
+    def pulse(self, pulse_id):
+        pulse = self._data["pulse"].get(pulse_id)
+        return copy.copy(pulse)
 
     @classmethod
     def _oscillator_info_fields(cls):
@@ -728,7 +815,9 @@ class ExperimentDAO:
         oscillator = self._data["oscillator"].get(oscillator_id)
         if oscillator is None:
             return None
-        return {k: oscillator[k] for k in self._oscillator_info_fields()}
+        return OscillatorInfo(
+            **{k: oscillator[k] for k in self._oscillator_info_fields()}
+        )
 
     def hardware_oscillators(self):
         oscillator_infos = []
@@ -738,13 +827,13 @@ class ExperimentDAO:
             )
             if oscillator is not None:
                 if oscillator["hardware"]:
-                    oscillator_info = {
-                        k: oscillator[k] for k in self._oscillator_info_fields()
-                    }
-                    oscillator_info["device_id"] = device_oscillator["device_id"]
+                    oscillator_info = OscillatorInfo(
+                        **{k: oscillator[k] for k in self._oscillator_info_fields()}
+                    )
+                    oscillator_info.device_id = device_oscillator["device_id"]
                     oscillator_infos.append(oscillator_info)
 
-        return list(sorted(oscillator_infos, key=lambda x: (x["device_id"], x["id"])))
+        return list(sorted(oscillator_infos, key=lambda x: (x.device_id, x.id)))
 
     def device_oscillators(self, device_id):
         return [
@@ -764,7 +853,7 @@ class ExperimentDAO:
             and so["oscillator_id"] in self._data["oscillator"]
         ]
         retval = [
-            {k: oscillator[k] for k in self._oscillator_info_fields()}
+            OscillatorInfo(**{k: oscillator[k] for k in self._oscillator_info_fields()})
             for oscillator in [
                 self._data["oscillator"][so["oscillator_id"]]
                 for so in signal_oscillators
@@ -782,6 +871,11 @@ class ExperimentDAO:
         return next(
             sc for sc in self._data["signal_connection"] if sc["signal_id"] == signal_id
         )["mixer_calibration"]
+
+    def precompensation(self, signal_id):
+        return next(
+            sc for sc in self._data["signal_connection"] if sc["signal_id"] == signal_id
+        )["precompensation"]
 
     def lo_frequency(self, signal_id):
         return next(
@@ -811,12 +905,12 @@ class ExperimentDAO:
     def section_pulses(self, section_id, signal_id):
         retval = self._section_pulses_raw(section_id, signal_id)
         for sp in retval:
-            pulse_id = sp.get("pulse_id")
+            pulse_id = sp.pulse_id
             if pulse_id is not None:
-                pulse_def = self.pulses.get(pulse_id)
+                pulse_def = self._data["pulse"].get(pulse_id)
                 if pulse_def is not None:
-                    if sp["length"] is None and sp["length_param"] is None:
-                        sp["length"] = pulse_def.length
+                    if sp.length is None and sp.length_param is None:
+                        sp.length = pulse_def.length
                         # TODO(2K): pulse_def has no length_param!
                         # if pulse_def.length_param is not None:
                         #     sp["length_param"] = pulse_def.length_param
@@ -841,30 +935,31 @@ class ExperimentDAO:
         ]
 
         retval = [
-            {
-                k: ssp.get(k)
-                for k in [
-                    "section_id",
-                    "seq_nr",
-                    "pulse_id",
-                    "length",
-                    "length_param",
-                    "amplitude",
-                    "amplitude_param",
-                    "play_mode",
-                    "signal_id",
-                    "offset",
-                    "offset_param",
-                    "acquire_params",
-                    "phase",
-                    "phase_param",
-                    "increment_oscillator_phase",
-                    "increment_oscillator_phase_param",
-                    "set_oscillator_phase",
-                    "set_oscillator_phase_param",
-                    "pulse_parameters",
-                ]
-            }
+            SectionSignalPulse(
+                **{
+                    k: ssp.get(k)
+                    for k in [
+                        "seq_nr",
+                        "pulse_id",
+                        "length",
+                        "length_param",
+                        "amplitude",
+                        "amplitude_param",
+                        "play_mode",
+                        "signal_id",
+                        "offset",
+                        "offset_param",
+                        "acquire_params",
+                        "phase",
+                        "phase_param",
+                        "increment_oscillator_phase",
+                        "increment_oscillator_phase_param",
+                        "set_oscillator_phase",
+                        "set_oscillator_phase_param",
+                        "pulse_parameters",
+                    ]
+                }
+            )
             for ssp in sorted(
                 section_signal_pulses,
                 key=lambda x: (x["section_id"], x["signal_id"], x["seq_nr"]),
@@ -925,9 +1020,9 @@ class ExperimentDAO:
 
             device_entry = {}
             for key in ["id", "serial", "interface", "reference_clock_source"]:
-                if device_info[key] is not None:
-                    device_entry[key] = device_info[key]
-            device_entry["driver"] = device_info["device_type"].lower()
+                if getattr(device_info, key) is not None:
+                    device_entry[key] = getattr(device_info, key)
+            device_entry["driver"] = device_info.device_type.lower()
 
             oscillator_ids = experiment_dao.device_oscillators(device)
 
@@ -935,8 +1030,8 @@ class ExperimentDAO:
                 device_entry["oscillators_list"] = [
                     {"$ref": oscillator_id} for oscillator_id in oscillator_ids
                 ]
-            if device_info["server"] is not None:
-                device_entry["server"] = {"$ref": device_info["server"]}
+            if device_info.server is not None:
+                device_entry["server"] = {"$ref": device_info.server}
             device_entries[device_entry["id"]] = device_entry
             reference_clock = experiment_dao.device_reference_clock(device)
 
@@ -982,13 +1077,13 @@ class ExperimentDAO:
         ]
         out_oscillators = []
         for oscillator_info in oscillator_infos:
-            frequency = oscillator_info["frequency"]
-            if oscillator_info.get("frequency_param") is not None:
-                frequency = {"$ref": oscillator_info.get("frequency_param")}
+            frequency = oscillator_info.frequency
+            if oscillator_info.frequency_param is not None:
+                frequency = {"$ref": oscillator_info.frequency_param}
             out_oscillator_entry = {
-                "id": oscillator_info["id"],
+                "id": oscillator_info.id,
                 "frequency": frequency,
-                "hardware": oscillator_info["hardware"],
+                "hardware": oscillator_info.hardware,
             }
             out_oscillators.append(out_oscillator_entry)
         if len(out_oscillators) > 0:
@@ -1003,67 +1098,67 @@ class ExperimentDAO:
         signal_connections = []
         for signal_info in signal_infos:
             signal_entry = {
-                "id": signal_info["signal_id"],
-                "signal_type": signal_info["signal_type"],
+                "id": signal_info.signal_id,
+                "signal_type": signal_info.signal_type,
             }
-            if signal_info["modulation"]:
-                signal_entry["modulation"] = signal_info["modulation"]
-            if signal_info.get("offset") is not None:
-                signal_entry["offset"] = signal_info.get("offset")
-            signal_oscillator = experiment_dao.signal_oscillator(
-                signal_info["signal_id"]
-            )
+            if signal_info.modulation:
+                signal_entry["modulation"] = signal_info.modulation
+            if signal_info.offset is not None:
+                signal_entry["offset"] = signal_info.offset
+            signal_oscillator = experiment_dao.signal_oscillator(signal_info.signal_id)
             if signal_oscillator is not None:
-                signal_entry["oscillators_list"] = [{"$ref": signal_oscillator["id"]}]
+                signal_entry["oscillators_list"] = [{"$ref": signal_oscillator.id}]
             retval["signals"].append(signal_entry)
 
-            device_id = experiment_dao.device_from_signal(signal_info["signal_id"])
+            device_id = experiment_dao.device_from_signal(signal_info.signal_id)
             signal_connection = {
-                "signal": {"$ref": signal_info["signal_id"]},
+                "signal": {"$ref": signal_info.signal_id},
                 "device": {"$ref": device_id},
                 "connection": {
-                    "type": signal_info["connection_type"],
-                    "channels": signal_info["channels"],
+                    "type": signal_info.connection_type,
+                    "channels": signal_info.channels,
                 },
             }
 
-            mixer_calibration = experiment_dao.mixer_calibration(
-                signal_info["signal_id"]
-            )
+            mixer_calibration = experiment_dao.mixer_calibration(signal_info.signal_id)
             if mixer_calibration is not None:
                 mixer_calibration_object = {}
-                if mixer_calibration.get("voltage_offsets") is not None:
-                    mixer_calibration_object["voltage_offsets"] = mixer_calibration[
-                        "voltage_offsets"
-                    ]
-                if mixer_calibration.get("correction_matrix") is not None:
-                    mixer_calibration_object["correction_matrix"] = mixer_calibration[
-                        "correction_matrix"
-                    ]
+                for key in ["voltage_offsets", "correction_matrix"]:
+                    if mixer_calibration.get(key) is not None:
+                        mixer_calibration_object[key] = mixer_calibration[key]
                 if len(mixer_calibration_object.keys()) > 0:
                     signal_connection["mixer_calibration"] = mixer_calibration_object
 
-            lo_frequency = experiment_dao.lo_frequency(signal_info["signal_id"])
+            precompensation = experiment_dao.precompensation(signal_info.signal_id)
+            if precompensation is not None:
+                precompensation_object = {}
+                for key in ["exponential", "high_pass", "bounce", "FIR"]:
+                    if precompensation.get(key) is not None:
+                        precompensation_object[key] = precompensation[key]
+                if precompensation_object:
+                    signal_connection["precompensation"] = precompensation_object
+
+            lo_frequency = experiment_dao.lo_frequency(signal_info.signal_id)
             if lo_frequency is not None:
                 signal_connection["lo_frequency"] = lo_frequency
 
-            port_mode = experiment_dao.port_mode(signal_info["signal_id"])
+            port_mode = experiment_dao.port_mode(signal_info.signal_id)
             if port_mode is not None:
                 signal_connection["port_mode"] = port_mode
 
-            signal_range = experiment_dao.signal_range(signal_info["signal_id"])
+            signal_range = experiment_dao.signal_range(signal_info.signal_id)
             if signal_range is not None:
                 signal_connection["range"] = signal_range
 
-            port_delay = experiment_dao.port_delay(signal_info["signal_id"])
+            port_delay = experiment_dao.port_delay(signal_info.signal_id)
             if port_delay is not None:
                 signal_connection["port_delay"] = port_delay
 
-            threshold = experiment_dao.threshold(signal_info["signal_id"])
+            threshold = experiment_dao.threshold(signal_info.signal_id)
             if threshold is not None:
                 signal_connection["threshold"] = threshold
 
-            delay_signal = signal_info["delay_signal"]
+            delay_signal = signal_info.delay_signal
             if delay_signal is not None:
                 signal_connection["delay_signal"] = delay_signal
 
@@ -1073,7 +1168,8 @@ class ExperimentDAO:
 
         pulses_list = []
 
-        for pulse in experiment_dao.pulses.values():
+        for pulse_id in experiment_dao.pulses():
+            pulse = experiment_dao.pulse(pulse_id)
             pulse_entry = {"id": pulse.id}
             fields = ["function", "length", "samples", "amplitude", "play_mode"]
             for field in fields:
@@ -1151,9 +1247,9 @@ class ExperimentDAO:
                     section_id, signal_id
                 ):
                     section_signal_pulse_object = {}
-                    if section_pulse["pulse_id"] is not None:
+                    if section_pulse.pulse_id is not None:
                         section_signal_pulse_object["pulse"] = {
-                            "$ref": section_pulse["pulse_id"]
+                            "$ref": section_pulse.pulse_id
                         }
                     for key in [
                         "amplitude",
@@ -1163,11 +1259,13 @@ class ExperimentDAO:
                         "set_oscillator_phase",
                         "length",
                     ]:
-                        if section_pulse.get(key) is not None:
-                            section_signal_pulse_object[key] = section_pulse[key]
-                        if section_pulse.get(key + "_param") is not None:
+                        if getattr(section_pulse, key) is not None:
+                            section_signal_pulse_object[key] = getattr(
+                                section_pulse, key
+                            )
+                        if getattr(section_pulse, key + "_param") is not None:
                             section_signal_pulse_object[key] = {
-                                "$ref": section_pulse[key + "_param"]
+                                "$ref": getattr(section_pulse, key + "_param")
                             }
 
                     section_signal_pulses.append(section_signal_pulse_object)
@@ -1203,7 +1301,7 @@ class ExperimentDAO:
         self._data["signal_oscillator"] = []
         self._data["section_signal_pulse"] = []
         self._data["section_parameter"] = []
-        self.pulses.clear()
+        self._data["pulse"] = {}
 
         for server in device_setup.servers.values():
             if hasattr(server, "leader_uid"):
@@ -1290,6 +1388,7 @@ class ExperimentDAO:
         ls_map = {}
         modulated_paths = {}
         ls_mixer_calibrations = {}
+        ls_precompensations = {}
         ls_lo_frequencies = {}
         ls_ranges = {}
         ls_port_delays = {}
@@ -1326,7 +1425,7 @@ class ExperimentDAO:
         # PhysicalChannel.
         for pc, exp_signals in experiment_signals_by_physical_channel.items():
             for field in PHYSICAL_CHANNEL_CALIBRATION_FIELDS:
-                if field == "mixer_calibration":
+                if field in ["mixer_calibration", "precompensation"]:
                     continue
                 values = set()
                 for exp_signal in exp_signals:
@@ -1422,22 +1521,61 @@ class ExperimentDAO:
                                 )
                         else:
                             if (
-                                known_oscillator["frequency"],
-                                known_oscillator["frequency_param"],
-                                known_oscillator["hardware"],
+                                known_oscillator.frequency,
+                                known_oscillator.frequency_param,
+                                known_oscillator.hardware,
                             ) != (frequency, frequency_param, is_hardware):
                                 raise Exception(
                                     f"Duplicate oscillator uid {oscillator_uid} found in {ls.path}"
                                 )
-                if (
-                    hasattr(calibration, "mixer_calibration")
-                    and hasattr(calibration.mixer_calibration, "voltage_offsets")
-                    and hasattr(calibration.mixer_calibration, "correction_matrix")
-                ):
+                try:
                     ls_mixer_calibrations[ls.path] = {
                         "voltage_offsets": calibration.mixer_calibration.voltage_offsets,
                         "correction_matrix": calibration.mixer_calibration.correction_matrix,
                     }
+                except (AttributeError, KeyError):
+                    pass
+                try:
+                    precomp = calibration.precompensation
+                    if precomp is None or not precomp.is_nonzero():
+                        raise AttributeError
+                except AttributeError:
+                    pass
+                else:
+                    precomp_dict = {}
+
+                    if precomp.exponential is not None and any(
+                        e.is_nonzero() for e in precomp.exponential
+                    ):
+                        precomp_exp = [
+                            {"timeconstant": e.timeconstant, "amplitude": e.amplitude}
+                            for e in precomp.exponential
+                            if e.amplitude != 0.0
+                        ]
+                        if precomp_exp:
+                            precomp_dict["exponential"] = precomp_exp
+                    if precomp.high_pass is not None and precomp.high_pass.is_nonzero():
+                        clearing = {
+                            HighPassCompensationClearing.LEVEL: "level",
+                            HighPassCompensationClearing.RISE: "rise",
+                            HighPassCompensationClearing.FALL: "fall",
+                            HighPassCompensationClearing.BOTH: "both",
+                        }[precomp.high_pass.clearing]
+                        precomp_dict["high_pass"] = {
+                            "timeconstant": precomp.high_pass.timeconstant,
+                            "clearing": clearing,
+                        }
+                    if precomp.bounce is not None and precomp.bounce.is_nonzero():
+                        precomp_dict["bounce"] = {
+                            "delay": precomp.bounce.delay,
+                            "amplitude": precomp.bounce.amplitude,
+                        }
+                    if precomp.FIR is not None and precomp.FIR.is_nonzero():
+                        precomp_dict["FIR"] = {
+                            "coefficients": copy.deepcopy(precomp.FIR.coefficients),
+                        }
+                    if precomp_dict:
+                        ls_precompensations[ls.path] = precomp_dict
 
                 ls_local_oscillator = getattr(calibration, "local_oscillator")
                 if ls_local_oscillator is not None:
@@ -1481,6 +1619,7 @@ class ExperimentDAO:
                 "signal_type": signal_type,
                 "modulation": signal.mapped_logical_signal_path in modulated_paths,
                 "seq_nr": seq_nr,
+                "offset": None,
             }
 
             if signal.mapped_logical_signal_path in modulated_paths:
@@ -1544,6 +1683,7 @@ class ExperimentDAO:
                     "connection_type": dest_path_devices[lsuid]["type"],
                     "channels": channels,
                     "mixer_calibration": ls_mixer_calibrations.get(lsuid),
+                    "precompensation": ls_precompensations.get(lsuid),
                     "lo_frequency": ls_lo_frequencies.get(lsuid),
                     "range": ls_ranges.get(lsuid),
                     "port_delay": ls_port_delays.get(lsuid),
@@ -1900,7 +2040,6 @@ class ExperimentDAO:
                     if pulse is not None:
 
                         function = None
-                        user_function = None
                         length = None
 
                         combined_pulse_parameters = {}
@@ -1911,9 +2050,7 @@ class ExperimentDAO:
                         if pulse.uid not in pulse_uids:
                             samples = None
                             if hasattr(pulse, "function"):
-                                function = pulse.function.value
-                            if hasattr(pulse, "user_function"):
-                                user_function = pulse.user_function
+                                function = pulse.function
                             if hasattr(pulse, "length"):
                                 length = pulse.length
 
@@ -1924,7 +2061,7 @@ class ExperimentDAO:
                                 pulse, "amplitude", (float, int, complex)
                             )
 
-                            self.pulses[pulse.uid] = PulseDef(
+                            self._data["pulse"][pulse.uid] = PulseDef(
                                 id=pulse.uid,
                                 function=function,
                                 length=length,
@@ -1932,7 +2069,6 @@ class ExperimentDAO:
                                 amplitude_param=amplitude_param,
                                 play_mode=None,
                                 samples=samples,
-                                user_function=user_function,
                             )
 
                             pulse_uids.add(pulse.uid)
@@ -1961,10 +2097,12 @@ class ExperimentDAO:
 
                         acquire_params = None
                         if hasattr(operation, "handle"):
-                            acquire_params = {
-                                "handle": operation.handle,
-                                "acquisition_type": acquisition_type.name,
-                            }
+                            acquire_params = AcquireInfo(
+                                **{
+                                    "handle": operation.handle,
+                                    "acquisition_type": acquisition_type.name,
+                                }
+                            )
 
                         operation_pulse_parameters = getattr(
                             operation, "pulse_parameters", None
@@ -2015,14 +2153,14 @@ class ExperimentDAO:
         for section_id in self.sections():
             for signal_id in self.section_signals(section_id):
                 for section_pulse in self.section_pulses(section_id, signal_id):
-                    pulse_id = section_pulse.get("pulse_id")
-                    if pulse_id is not None and pulse_id not in self.pulses:
+                    pulse_id = section_pulse.pulse_id
+                    if pulse_id is not None and pulse_id not in self._data["pulse"]:
                         raise RuntimeError(
                             f"Pulse {pulse_id} referenced in section {section_id} by a pulse on signal {signal_id} is not known."
                         )
 
                     for k in ["length_param", "amplitude_param", "offset_param"]:
-                        param_name = section_pulse.get(k)
+                        param_name = getattr(section_pulse, k)
                         if param_name is not None:
                             if param_name not in all_parameters:
                                 raise RuntimeError(

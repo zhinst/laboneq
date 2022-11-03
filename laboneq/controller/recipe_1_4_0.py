@@ -119,6 +119,7 @@ class IO(QCCSSchema):
             "offset",
             "gains",
             "range",
+            "precompensation",
             "lo_frequency",
             "port_mode",
             "port_delay",
@@ -136,6 +137,7 @@ class IO(QCCSSchema):
         offset: Optional[float] = None
         gains: Optional[Gains] = None
         range: Optional[float] = None
+        precompensation: Optional[Dict[str, Dict]] = None
         lo_frequency: Optional[float] = None
         port_mode: Optional[str] = None
         port_delay: Optional[float] = None
@@ -149,6 +151,7 @@ class IO(QCCSSchema):
     offset = fields.Float(required=False)
     gains = fields.Nested(Gains, required=False)
     range = fields.Float(required=False)
+    precompensation = fields.Dict(required=False)
     lo_frequency = fields.Float(required=False)
     port_mode = fields.Str(required=False)
     port_delay = fields.Float(required=False)

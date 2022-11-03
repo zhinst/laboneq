@@ -22,6 +22,7 @@ PHYSICAL_CHANNEL_CALIBRATION_FIELDS = (
     "port_mode",
     "range",
     "mixer_calibration",
+    "precompensation",
 )
 
 

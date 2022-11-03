@@ -1,0 +1,33 @@
+# Copyright 2022 Zurich Instruments AG
+# SPDX-License-Identifier: Apache-2.0
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Optional, List, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from laboneq.compiler.device_type import DeviceType
+    from laboneq.compiler.awg_info import AWGInfo
+
+from laboneq.compiler.trigger_mode import TriggerMode
+
+
+@dataclass(init=True, repr=True, order=True)
+class SignalObj:
+    id: str
+    sampling_rate: float
+    start_delay: float
+    delay_signal: float
+    signal_type: str
+    device_id: str
+    device_type: DeviceType
+    oscillator_frequency: float = None  # for software modulation only
+    trigger_mode: TriggerMode = TriggerMode.NONE
+    reference_clock_source: Optional[str] = None
+    pulses: List = field(default_factory=list)
+    channels: List = field(default_factory=list)
+    awg: AWGInfo = None
+    total_delay: float = None
+    on_device_delay: float = 0
+    hw_oscillator: Optional[str] = None

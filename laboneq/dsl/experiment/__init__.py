@@ -8,10 +8,9 @@ from .operation import Operation
 from .delay import Delay
 from .play_pulse import PlayPulse
 from .pulse import (
-    PulseFunctional,
     PulseSampledReal,
     PulseSampledComplex,
-    UserPulseFunctional,
+    PulseFunctional,
 )
 from .reserve import Reserve
 from .section import Section, AcquireLoopNt, AcquireLoopRt, Sweep

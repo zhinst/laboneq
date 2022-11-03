@@ -11,6 +11,7 @@ from laboneq.core.serialization.simple_serialization import (
     deserialize_from_dict_with_ref,
 )
 from laboneq.dsl.calibration.mixer_calibration import MixerCalibration
+from laboneq.dsl.calibration.precompensation import Precompensation
 from laboneq.dsl.calibration.oscillator import Oscillator
 from laboneq.dsl.device import Instrument
 from laboneq.dsl.device import LogicalSignalGroup
@@ -34,6 +35,7 @@ class Serializer:
                 Pulse,
                 Oscillator,
                 MixerCalibration,
+                Precompensation,
                 Instrument,
                 LogicalSignalGroup,
                 PhysicalChannelGroup,
@@ -47,6 +49,7 @@ class Serializer:
             "Parameter": "parameters",
             "Oscillator": "oscillators",
             "MixerCalibration": "mixer_calibrations",
+            "Precompensation": "precompensations",
             "Instrument": "instruments",
             "LogicalSignalGroup": "logical_signal_groups",
             "PhysicalChannelGroup": "physical_channel_groups",

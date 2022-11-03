@@ -56,7 +56,6 @@ def _replace_pulse_in_wave(
     input_samples = None
     amplitude = 1.0
     function = None
-    user_function = None
     length = None
     if isinstance(pulse_or_array, list):
         pulse_or_array = np.array(pulse_or_array)
@@ -67,9 +66,7 @@ def _replace_pulse_in_wave(
         input_samples = getattr(pulse_or_array, "samples", None)
         amplitude = getattr(pulse_or_array, "amplitude", 1.0)
         function = getattr(pulse_or_array, "function", None)
-        user_function = getattr(pulse_or_array, "user_function", None)
-        if function is not None:
-            function = function.value
+
     length = length or (0 if input_samples is None else len(input_samples))
     assert length > 0 and abs(length - pwm.length_samples) < 2  # (rounding)
 
@@ -89,7 +86,6 @@ def _replace_pulse_in_wave(
             length=pwm.length_samples / pwm.sampling_rate,
             amplitude=amplitude * instance.amplitude,
             pulse_function=function,
-            user_function=user_function,
             modulation_frequency=instance.modulation_frequency,
             modulation_phase=instance.modulation_phase,
             iq_phase=instance.iq_phase,

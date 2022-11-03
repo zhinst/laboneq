@@ -28,7 +28,9 @@ requirements = [
     "requests",
     "setuptools>=40.1.0",
     "wheel",
-    "zhinst==22.8.2",
+    "zhinst-core==22.8.36541",
+    "zhinst-toolkit~=0.4.3",
+    "zhinst-utils~=0.1.2",
 ]
 
 
@@ -71,6 +73,7 @@ setuptools.setup(
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
         "Topic :: Scientific/Engineering",
     ],
     keywords="zhinst sdk quantum",

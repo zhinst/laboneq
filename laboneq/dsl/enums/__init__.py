@@ -7,12 +7,12 @@ from laboneq.core.types.enums import IOSignalType
 from laboneq.core.types.enums import ModulationType
 from laboneq.core.types.enums import DSLVersion
 from laboneq.core.types.enums import ExecutionType
-from laboneq.core.types.enums import PulseType
 from laboneq.core.types.enums import AcquisitionType
 from laboneq.core.types.enums import SectionAlignment
 from laboneq.core.types.enums import AveragingMode
 from laboneq.core.types.enums import RepetitionMode
 from laboneq.core.types.enums import PortMode
+from laboneq.core.types.enums import HighPassCompensationClearing
 
 
 def enum_repr(self):
@@ -27,7 +27,6 @@ for e in [
     IODirection,
     DSLVersion,
     ExecutionType,
-    PulseType,
     AcquisitionType,
     SectionAlignment,
     AveragingMode,

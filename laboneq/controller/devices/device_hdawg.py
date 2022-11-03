@@ -6,7 +6,8 @@ from __future__ import annotations
 import json
 import time
 from enum import IntEnum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Tuple, TYPE_CHECKING, Optional
+import numpy as np
 
 from laboneq.controller.communication import (
     DaqNodeAction,
@@ -21,6 +22,7 @@ from laboneq.controller.recipe_enums import SignalType, DIOConfigType
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.controller.versioning import LabOneVersion
+from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 
 DIG_TRIGGER_1_LEVEL = 0.225
@@ -136,7 +138,7 @@ class DeviceHDAWG(DeviceZI):
     ) -> List[DaqNodeAction]:
         self._logger.debug("%s: Initializing device...", self.dev_repr)
 
-        nodes_to_initialize_output: List[DaqNodeAction] = []
+        nodes: List[Tuple[str, Any]] = []
 
         # If we do not turn all channels off, we get the following error message from
         # the server/device: 'An error happened on device dev8330 during the execution
@@ -144,21 +146,12 @@ class DeviceHDAWG(DeviceZI):
         # channel 0 (numbered from 0)'
         #
         for channel in range(self._channels):
-            nodes_to_initialize_output.append(
-                DaqNodeSetAction(self._daq, f"/{self.serial}/sigouts/{channel}/on", 0)
-            )
+            nodes.append((f"sigouts/{channel}/on", 0))
 
         sampling_rate = initialization.config.sampling_rate
         if sampling_rate is None or sampling_rate == 0:
             sampling_rate = DEFAULT_SAMPLE_FREQUENCY_HZ
-
-        nodes_to_initialize_output.append(
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/system/clocks/sampleclock/freq",
-                sampling_rate,
-            )
-        )
+        nodes.append(("system/clocks/sampleclock/freq", sampling_rate))
 
         outputs = initialization.outputs or []
         for output in outputs:
@@ -166,24 +159,9 @@ class DeviceHDAWG(DeviceZI):
             awg_idx = output.channel // 2
             self._allocated_awgs.add(awg_idx)
 
-            nodes_to_initialize_output.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/sigouts/{output.channel}/on",
-                    1 if output.enable else 0,
-                )
-            )
-            nodes_to_initialize_output.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/sigouts/{output.channel}/offset",
-                    output.offset,
-                )
-            )
-
-            nodes_to_initialize_output.append(
-                DaqNodeSetAction(self._daq, f"/{self.serial}/awgs/{awg_idx}/single", 1)
-            )
+            nodes.append((f"sigouts/{output.channel}/on", 1 if output.enable else 0))
+            nodes.append((f"sigouts/{output.channel}/offset", output.offset))
+            nodes.append((f"awgs/{awg_idx}/single", 1))
 
             measurement_delay_rounded = (
                 self._get_total_rounded_delay_samples(
@@ -196,13 +174,7 @@ class DeviceHDAWG(DeviceZI):
                 / sampling_rate
             )
 
-            nodes_to_initialize_output.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/sigouts/{output.channel}/delay",
-                    measurement_delay_rounded,
-                )
-            )
+            nodes.append((f"sigouts/{output.channel}/delay", measurement_delay_rounded))
 
             awg_ch = output.channel % 2
             iq_idx = output.channel // 2
@@ -218,29 +190,20 @@ class DeviceHDAWG(DeviceZI):
                     if output.modulation
                     else ModulationMode.OFF
                 )
-                nodes_to_initialize_output.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/awgs/{awg_idx}/outputs/{awg_ch}/modulation/mode",
+                nodes += [
+                    (
+                        f"awgs/{awg_idx}/outputs/{awg_ch}/modulation/mode",
                         modulation_mode,
-                    )
-                )
-
-                nodes_to_initialize_output.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/awgs/{awg_idx}/outputs/{awg_ch}/gains/{diagonal_channel_index}",
+                    ),
+                    (
+                        f"awgs/{awg_idx}/outputs/{awg_ch}/gains/{diagonal_channel_index}",
                         output.gains.diagonal,
-                    )
-                )
-
-                nodes_to_initialize_output.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/awgs/{awg_idx}/outputs/{awg_ch}/gains/{off_diagonal_channel_index}",
+                    ),
+                    (
+                        f"awgs/{awg_idx}/outputs/{awg_ch}/gains/{off_diagonal_channel_index}",
                         output.gains.off_diagonal,
-                    )
-                )
+                    ),
+                ]
             else:
                 # I/Q output
                 modulation_mode = (
@@ -248,41 +211,89 @@ class DeviceHDAWG(DeviceZI):
                     if output.modulation
                     else ModulationMode.OFF
                 )
-                nodes_to_initialize_output.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/awgs/{awg_idx}/outputs/{awg_ch}/modulation/mode",
+                nodes += [
+                    (
+                        f"awgs/{awg_idx}/outputs/{awg_ch}/modulation/mode",
                         modulation_mode,
-                    )
-                )
-
-                nodes_to_initialize_output.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/awgs/{awg_idx}/outputs/{awg_ch}/gains/0",
+                    ),
+                    (
+                        f"awgs/{awg_idx}/outputs/{awg_ch}/gains/0",
                         iq_gains_mx[0][awg_ch],
-                    )
-                )
-
-                nodes_to_initialize_output.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/awgs/{awg_idx}/outputs/{awg_ch}/gains/1",
+                    ),
+                    (
+                        f"awgs/{awg_idx}/outputs/{awg_ch}/gains/1",
                         iq_gains_mx[1][awg_ch],
-                    )
-                )
+                    ),
+                ]
+
+            precomp_p = f"sigouts/{output.channel}/precompensation/"
+            try:
+                precomp = output.precompensation
+                if not precomp:
+                    raise AttributeError
+                nodes.append((precomp_p + "enable", 1))
+                # Exponentials
+                for e in range(8):
+                    exp_p = precomp_p + f"exponentials/{e}/"
+                    try:
+                        exp = precomp["exponential"][e]
+                        nodes += [
+                            (exp_p + "enable", 1),
+                            (exp_p + "timeconstant", exp["timeconstant"]),
+                            (exp_p + "amplitude", exp["amplitude"]),
+                        ]
+                    except (KeyError, IndexError, TypeError):
+                        nodes.append((exp_p + "enable", 0))
+                # Bounce
+                bounce_p = precomp_p + "bounces/0/"
+                try:
+                    bounce = precomp["bounce"]
+                    delay = bounce["delay"]
+                    amp = bounce["amplitude"]
+                    nodes += [
+                        (bounce_p + "enable", 1),
+                        (bounce_p + "delay", delay),
+                        (bounce_p + "amplitude", amp),
+                    ]
+                except (KeyError, TypeError):
+                    nodes.append((bounce_p + "enable", 0))
+                # Highpass
+                hp_p = precomp_p + "highpass/0/"
+                try:
+                    hp = precomp["high_pass"]
+                    timeconstant = hp["timeconstant"]
+                    clearing = {"level": 0, "rise": 1, "fall": 2, "both": 3}[
+                        hp["clearing"]
+                    ]
+                    nodes += [
+                        (hp_p + "enable", 1),
+                        (hp_p + "timeconstant", timeconstant),
+                        (hp_p + "clearing/slope", clearing),
+                    ]
+                except (KeyError, TypeError):
+                    nodes.append((hp_p + "enable", 0))
+                # FIR
+                fir_p = precomp_p + "fir/"
+                try:
+                    fir = np.array(precomp["FIR"]["coefficients"])
+                    if len(fir) > 40:
+                        raise LabOneQException(
+                            "FIR coefficents must be a list of at most 40 doubles"
+                        )
+                    fir = np.concatenate((fir, np.zeros((40 - len(fir)))))
+                    nodes += [(fir_p + "enable", 1), (fir_p + "coefficients", fir)]
+                except (KeyError, IndexError, TypeError):
+                    nodes.append((fir_p + "enable", 0))
+            except (KeyError, TypeError, AttributeError):
+                nodes.append((precomp_p + "enable", 0))
 
         osc_selects = {
             ch: osc.index for osc in self._allocated_oscs for ch in osc.channels
         }
         for ch, osc_idx in osc_selects.items():
-            nodes_to_initialize_output.append(
-                DaqNodeSetAction(
-                    self._daq, f"/{self.serial}/sines/{ch}/oscselect", osc_idx
-                )
-            )
+            nodes.append((f"sines/{ch}/oscselect", osc_idx))
 
-        return nodes_to_initialize_output
+        return [DaqNodeSetAction(self._daq, f"/{self.serial}/{k}", v) for k, v in nodes]
 
     def wait_for_conditions_to_start(self):
         self._wait_for_node(

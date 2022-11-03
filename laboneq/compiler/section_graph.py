@@ -272,6 +272,7 @@ class SectionGraph:
                     section_ref_id
                 )
 
+                # Sections with shared signals are played after each other:
                 for previous_node_id, signals in previous_instance_signals.items():
                     common_signals = signals.intersection(current_signals)
                     if len(common_signals) > 0:
@@ -280,8 +281,9 @@ class SectionGraph:
                         )
                 previous_instance_signals[link_node_id] = current_signals
 
+                # Sections follow a previous section specified via play_after:
                 play_after = ref_section_info.play_after
-                if play_after is not None and play_after != "" and play_after != []:
+                if play_after:
                     if isinstance(play_after, str):
                         play_after = [play_after]
                     for pa in play_after:

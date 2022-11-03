@@ -78,6 +78,17 @@ class LogicalSignal(Calibratable):
             self.calibration = SignalCalibration(mixer_calibration=value)
 
     @property
+    def precompensation(self):
+        return self.calibration.precompensation if self.is_calibrated() else None
+
+    @precompensation.setter
+    def precompensation(self, value):
+        if self.is_calibrated():
+            self.calibration.precompensation = value
+        else:
+            self.calibration = SignalCalibration(precompensation=value)
+
+    @property
     def oscillator(self):
         return self.calibration.oscillator if self.is_calibrated() else None
 
@@ -201,7 +212,7 @@ class LogicalSignal(Calibratable):
 
     @calibration.setter
     def calibration(self, new_calib: Optional[SignalCalibration]):
-        if new_calib == self._calibration:
+        if new_calib is self._calibration:
             return
 
         # Ignore the physical channel properties that are None in the new object
@@ -229,23 +240,12 @@ class LogicalSignal(Calibratable):
 
         pc = self.physical_channel
 
-        if (
-            key in PHYSICAL_CHANNEL_CALIBRATION_FIELDS
-            and key != "mixer_calibration"
-            and value is not None
-        ):
+        if key in PHYSICAL_CHANNEL_CALIBRATION_FIELDS and value is not None:
             with self._suspend_callback():
                 if pc.calibration is None:
                     pc.calibration = SignalCalibration(**{key: value})
                 else:
                     setattr(pc.calibration, key, value)
-
-        elif key == "mixer_calibration" and value is not None:
-            with self._suspend_callback():
-                if pc.calibration is None:
-                    pc.calibration = SignalCalibration(mixer_calibration=value)
-                else:
-                    pc.calibration.mixer_calibration = value
 
     def _on_physical_channel_calibration_changed(
         self, _: PhysicalChannel, key: str, value

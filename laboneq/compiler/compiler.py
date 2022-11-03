@@ -8,12 +8,13 @@ import json
 import csv
 import copy
 import os
-from collections import Counter, namedtuple
+from collections import Counter
+from box import Box
 
 import numpy as np
 from fractions import Fraction
-from typing import Any, Iterator, List, Dict, Set, Tuple, Union, Optional
-from operator import attrgetter, itemgetter
+from typing import Any, Iterator, List, Dict, Set, Tuple, Union, Optional, Any
+from operator import itemgetter
 from sortedcollections import ValueSortedDict, SortedDict
 from pathlib import Path
 from engineering_notation import EngNumber
@@ -23,30 +24,30 @@ from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 
 from .code_generator import (
-    AWGSignalType,
     CodeGenerator,
-    AWGInfo,
     SignalObj,
-    TriggerMode,
 )
+from .awg_info import AWGInfo
+from .awg_signal_type import AWGSignalType
+from .trigger_mode import TriggerMode
 from .compiler_settings import CompilerSettings
 from .recipe_generator import RecipeGenerator
-from .experiment_dao import ExperimentDAO, PulseDef, SectionInfo
+from .experiment_dao import ExperimentDAO, ParamRef, PulseDef
 from .event_graph import EventGraph, EventRelation, EventType
 from .fastlogging import NullLogger
 from .device_type import DeviceType
 from .event_graph_builder import EventGraphBuilder, ChainElement
 from .section_graph import SectionGraph
+from .precompensation_helpers import (
+    compute_precompensation_delays_on_grid,
+    precompensation_is_nonzero,
+    compute_precompensations_and_delays,
+)
 
 
 _logger = logging.getLogger(__name__)
 _dlogger = None
 _dlog = False
-
-
-@dataclass
-class ParamRef:
-    param_name: str
 
 
 @dataclass
@@ -72,6 +73,33 @@ class LeaderProperties:
     global_leader: str = None
     is_desktop_setup: bool = False
     internal_followers: List[str] = field(default_factory=list)
+
+
+@dataclass
+class _PreambleInserter:
+    event_graph: EventGraph
+    before_loops_id: int
+    loop_step_start_id: int
+    previous_loop_step_end_id: Optional[int]
+
+    def insert(
+        self,
+        node_ids: Union[int, List[int]],
+        add_before_first_loop_start: bool,
+    ):
+        if not isinstance(node_ids, list):
+            node_ids = [node_ids]
+        for n in node_ids:
+            if self.previous_loop_step_end_id is None:
+                # First loop step: Schedule before/after start of outer looping section
+                if add_before_first_loop_start:
+                    self.event_graph.after_or_at(self.before_loops_id, n)
+                else:
+                    self.event_graph.after_or_at(n, self.before_loops_id)
+            else:
+                # After first loop: Schedule after beginning of new loop step
+                self.event_graph.after_or_at(n, self.previous_loop_step_end_id)
+            self.event_graph.after_or_at(self.loop_step_start_id, n)
 
 
 _AWGMapping = Dict[str, Dict[int, AWGInfo]]
@@ -126,10 +154,10 @@ def _calculate_compiler_settings(local_settings: Optional[Dict] = None):
 def _set_playwave_resolved_param(section_pulse, play_wave: _PlayWave, name, value=None):
     if value is not None:
         setattr(play_wave, name, value)
-    elif section_pulse[name] is not None:
-        setattr(play_wave, name, section_pulse[name])
-    if section_pulse[name + "_param"] is not None:
-        param_ref = ParamRef(section_pulse[name + "_param"])
+    elif getattr(section_pulse, name) is not None:
+        setattr(play_wave, name, getattr(section_pulse, name))
+    if getattr(section_pulse, name + "_param") is not None:
+        param_ref = ParamRef(getattr(section_pulse, name + "_param"))
         setattr(play_wave, name, param_ref)
         play_wave.parameterized_with.append(param_ref)
 
@@ -162,6 +190,9 @@ class Compiler:
         self._section_graph_object = None
         self._sampling_rate_cache = {}
         self._awgs: _AWGMapping = {}
+        self._precompensations: Dict[
+            str, Dict[str, Union[Dict[str, Any], float]]
+        ] = None
 
         _logger.info("Starting LabOne Q Compiler run...")
         self._check_tinysamples()
@@ -266,6 +297,7 @@ class Compiler:
         section_span: Any
         reset_phase_sw: bool
         reset_phase_hw: bool
+        reset_precompensation_filters: bool
 
     def add_repeat(
         self,
@@ -274,6 +306,7 @@ class Compiler:
         parameter_list=None,
         reset_phase_sw=False,
         reset_phase_hw=False,
+        reset_precompensation_filters=False,
     ) -> RepeatSectionsEntry:
         if parameter_list is None:
             parameter_list = []
@@ -316,6 +349,7 @@ class Compiler:
             section_span,
             reset_phase_sw,
             reset_phase_hw,
+            reset_precompensation_filters,
         )
 
     def add_iteration_control_events(
@@ -330,7 +364,10 @@ class Compiler:
         section_span = repeat_section_entry.section_span
         reset_phase_sw = repeat_section_entry.reset_phase_sw
         reset_phase_hw = repeat_section_entry.reset_phase_hw
-        previous_iteration_end_id = None
+        reset_precompensation_filters = (
+            repeat_section_entry.reset_precompensation_filters
+        )
+        previous_loop_step_end_id = None
 
         repeats = num_repeats
         if first_only and num_repeats > 1:
@@ -350,13 +387,20 @@ class Compiler:
                 section_name,
             )
 
-            # Every step of the loop is delimited by 3 events: LOOP_STEP_START,
-            # LOOP_STEP_BODY_START and LOOP_STEP_END.
-            # LOOP_STEP_BODY_START marks the end of the loop preamble, and the start
-            # of the actual body of the loop. The preamble is used for setting
+            # Every step of the loop is delimited by 3 events: LOOP_STEP_START (LSS),
+            # LOOP_STEP_BODY_START (LSBS) and LOOP_STEP_END (LSE).
+            # LOOP_STEP_BODY_START marks the end of the loop preamble (P), and the start
+            # of the actual body (B) of the loop. The preamble is used for setting
             # parameters like the oscillator frequency. Setting these may consume time,
             # so by having a dedicated time slot, we avoid them bleeding into
             # neighbouring sections.
+            # The loop is enclosed between section_span.begin (SSB) and section_span.end
+            # (SSE) and ended by LOOP_END (LE), and SUBSECTION_END (SSNE).
+            # LOOP_ITERATION_END (LIE) marks the end of the first loop iteration
+            # The body ends by loop_iteration_end_id; between this and the actual
+            # LOOP_STEP_END, the preamble for the next step can be run
+            #
+            # SSB | LSS -P- LSBS -B- LSE LIE |: LSS -P- LSBS -B- LSE :| SSNE LE SSE
 
             loop_step_start_id = self._event_graph.add_node(
                 section_name=section_name,
@@ -385,6 +429,13 @@ class Compiler:
                 loop_step_start_id,
                 loop_step_body_start_id,
                 loop_step_end_id,
+            )
+
+            preamble_inserter = _PreambleInserter(
+                self._event_graph,
+                previous_loop_step_end_id=previous_loop_step_end_id,
+                before_loops_id=section_span.start,
+                loop_step_start_id=loop_step_start_id,
             )
 
             if iteration == 0:
@@ -453,12 +504,33 @@ class Compiler:
             self._event_graph.after_or_at(loop_step_body_start_id, loop_step_start_id)
             self._event_graph.after_or_at(loop_step_end_id, loop_step_body_start_id)
 
-            if previous_iteration_end_id is not None:
+            if previous_loop_step_end_id is not None:
                 self._event_graph.after_or_at(
-                    loop_step_start_id, previous_iteration_end_id
+                    loop_step_start_id, previous_loop_step_end_id
                 )
             else:
                 self._event_graph.after_or_at(loop_step_start_id, section_span.start)
+
+            if reset_precompensation_filters:
+                signals = self._experiment_dao.section_signals_with_children(
+                    section_name
+                )
+                new_nodes = []
+                for signal_id in signals:
+                    precompensation = self._experiment_dao.precompensation(signal_id)
+                    if not precompensation:
+                        continue
+                    device_id = self._experiment_dao.device_from_signal(signal_id)
+                    device_info = self._experiment_dao.device_info(device_id)
+                    reset_precompensation_filters_id = self._event_graph.add_node(
+                        section_name=section_name,
+                        event_type=EventType.RESET_PRECOMPENSATION_FILTERS,
+                        iteration=iteration,
+                        device_id=device_info.id,
+                        signal_id=signal_id,
+                    )
+                    new_nodes.append(reset_precompensation_filters_id)
+                preamble_inserter.insert(new_nodes, add_before_first_loop_start=True)
 
             if reset_phase_sw:
                 reset_phase_sw_id = self._event_graph.add_node(
@@ -466,13 +538,9 @@ class Compiler:
                     event_type=EventType.RESET_SW_OSCILLATOR_PHASE,
                     iteration=iteration,
                 )
-                if previous_iteration_end_id is not None:
-                    self._event_graph.after_or_at(
-                        reset_phase_sw_id, previous_iteration_end_id
-                    )
-                else:
-                    self._event_graph.after_or_at(section_span.start, reset_phase_sw_id)
-                self._event_graph.after_or_at(loop_step_start_id, reset_phase_sw_id)
+                preamble_inserter.insert(
+                    reset_phase_sw_id, add_before_first_loop_start=True
+                )
 
             if reset_phase_hw:
                 devices = {
@@ -484,7 +552,7 @@ class Compiler:
                 for device in devices:
                     device_info = self._experiment_dao.device_info(device)
                     try:
-                        device_type = DeviceType(device_info["device_type"])
+                        device_type = DeviceType(device_info.device_type)
                     except ValueError:
                         # Not every device has a corresponding DeviceType (e.g. PQSC)
                         continue
@@ -495,17 +563,11 @@ class Compiler:
                         event_type=EventType.RESET_HW_OSCILLATOR_PHASE,
                         iteration=iteration,
                         duration=device_type.reset_osc_duration,
-                        device_id=device_info["id"],
+                        device_id=device_info.id,
                     )
-                    if previous_iteration_end_id is not None:
-                        self._event_graph.after_or_at(
-                            reset_phase_hw_id, previous_iteration_end_id
-                        )
-                    else:
-                        self._event_graph.after_or_at(
-                            reset_phase_hw_id, section_span.start
-                        )
-                    self._event_graph.after_or_at(loop_step_start_id, reset_phase_hw_id)
+                    preamble_inserter.insert(
+                        reset_phase_hw_id, add_before_first_loop_start=False
+                    )
                     self._event_graph.after_at_least(
                         loop_step_body_start_id,
                         reset_phase_hw_id,
@@ -516,9 +578,9 @@ class Compiler:
             # TODO(PW): for performance, consider moving out of loop over iterations
             oscillator_param_lookup = dict()
             for oscillator in self._experiment_dao.hardware_oscillators():
-                oscillator_id = oscillator.get("id")
-                device_id = oscillator.get("device_id")
-                frequency_param = oscillator.get("frequency_param")
+                oscillator_id = oscillator.id
+                device_id = oscillator.device_id
+                frequency_param = oscillator.frequency_param
                 if frequency_param is None:
                     continue
 
@@ -535,7 +597,7 @@ class Compiler:
                         raise LabOneQException(
                             "Hardware frequency sweep may drive only a single oscillator"
                         )
-                    if oscillator["id"] == oscillator_id:
+                    if oscillator.id == oscillator_id:
                         oscillator_param_lookup[frequency_param] = {
                             "id": oscillator_id,
                             "device_id": device_id,
@@ -556,14 +618,7 @@ class Compiler:
                     iteration=iteration,
                     value=current_param_value,
                 )
-
-                if previous_iteration_end_id is not None:
-                    self._event_graph.after_or_at(
-                        param_set_id, previous_iteration_end_id
-                    )
-                else:
-                    self._event_graph.after_or_at(section_span.start, param_set_id)
-                self._event_graph.after_or_at(loop_step_start_id, param_set_id)
+                preamble_inserter.insert(param_set_id, add_before_first_loop_start=True)
 
                 param_oscillator = oscillator_param_lookup.get(param["id"])
                 if param_oscillator is not None:
@@ -577,15 +632,9 @@ class Compiler:
                         signal=param_oscillator["signal_id"],
                     )
 
-                    if previous_iteration_end_id is not None:
-                        self._event_graph.after_or_at(
-                            osc_freq_start_id, previous_iteration_end_id
-                        )
-                    else:
-                        self._event_graph.after_or_at(
-                            section_span.start, osc_freq_start_id
-                        )
-                    self._event_graph.after_or_at(loop_step_start_id, osc_freq_start_id)
+                    preamble_inserter.insert(
+                        osc_freq_start_id, add_before_first_loop_start=True
+                    )
                     device_id = param_oscillator["device_id"]
                     osc_freq_end_id = self._event_graph.add_node(
                         section_name=section_name,
@@ -597,7 +646,7 @@ class Compiler:
                         signal=param_oscillator["signal_id"],
                     )
                     device_type = DeviceType(
-                        self._experiment_dao.device_info(device_id)["device_type"]
+                        self._experiment_dao.device_info(device_id).device_type
                     )
                     oscillator_set_latency = max(
                         device_type.oscillator_set_latency,
@@ -610,11 +659,11 @@ class Compiler:
                         loop_step_body_start_id, osc_freq_end_id
                     )
 
-            previous_iteration_end_id = loop_step_end_id
+            previous_loop_step_end_id = loop_step_end_id
 
-        if previous_iteration_end_id is not None:
-            self._event_graph.after_or_at(section_span.end, previous_iteration_end_id)
-            self._event_graph.after_or_at(loop_end_id, previous_iteration_end_id)
+        if previous_loop_step_end_id is not None:
+            self._event_graph.after_or_at(section_span.end, previous_loop_step_end_id)
+            self._event_graph.after_or_at(loop_end_id, previous_loop_step_end_id)
 
     def generate_loop_events(
         self, repeat_sections: Dict[str, "Compiler.RepeatSectionsEntry"]
@@ -1187,7 +1236,7 @@ class Compiler:
             section_devices = set()
             for signal in self._experiment_dao.section_signals_with_children(section):
                 section_devices.add(
-                    DeviceType(self._experiment_dao.signal_info(signal)["device_type"])
+                    DeviceType(self._experiment_dao.signal_info(signal).device_type)
                 )
             for device in section_devices:
                 sampling_rate = device.sampling_rate
@@ -1352,7 +1401,7 @@ class Compiler:
                 signal_info = self._experiment_dao.signal_info(signal_id)
                 oscillator_info = self._experiment_dao.signal_oscillator(signal_id)
                 if oscillator_info is not None:
-                    if signal_info["modulation"] and signal_info["device_type"] in [
+                    if signal_info.modulation and signal_info.device_type in [
                         "hdawg",
                         "shfsg",
                     ]:
@@ -1360,10 +1409,10 @@ class Compiler:
                         if signal_id in oscillator_phase_cumulative:
                             incremented_phase = oscillator_phase_cumulative[signal_id]
 
-                        if oscillator_info["hardware"]:
+                        if oscillator_info.hardware:
                             if len(oscillator_phase_sets) > 0:
                                 raise Exception(
-                                    f"There are set_oscillator_phase entries for signal '{signal_id}', but oscillator '{oscillator_info['id']}' is a hardware oscillator. Setting absolute phase is not supported for hardware oscillators."
+                                    f"There are set_oscillator_phase entries for signal '{signal_id}', but oscillator '{oscillator_info.id}' is a hardware oscillator. Setting absolute phase is not supported for hardware oscillators."
                                 )
                             baseband_phase = incremented_phase
                         else:
@@ -1373,10 +1422,12 @@ class Compiler:
                                     phase_reset_time, oscillator_phase_sets[signal_id]
                                 )
                             oscillator_phase = (
-                                event["time"] - phase_reference_time
-                            ) * 2.0 * math.pi * oscillator_info[
-                                "frequency"
-                            ] + incremented_phase
+                                (event["time"] - phase_reference_time)
+                                * 2.0
+                                * math.pi
+                                * oscillator_info.frequency
+                                + incremented_phase
+                            )
                 event_node = self._event_graph.node(event["id"])
                 event_node["oscillator_phase"] = oscillator_phase
                 event_node["baseband_phase"] = baseband_phase
@@ -1915,12 +1966,10 @@ class Compiler:
 
     def _analyze_setup(self):
         def get_first_instr_of(device_infos, type):
-            return next(
-                (instr for instr in device_infos if instr["device_type"] == type)
-            )
+            return next((instr for instr in device_infos if instr.device_type == type))
 
         device_infos = self._experiment_dao.device_infos()
-        device_type_list = [i["device_type"] for i in device_infos]
+        device_type_list = [i.device_type for i in device_infos]
         type_counter = Counter(device_type_list)
         has_pqsc = type_counter["pqsc"] > 0
         has_hdawg = type_counter["hdawg"] > 0
@@ -1934,8 +1983,8 @@ class Compiler:
             self._experiment_dao.signal_info(signal_id)
             for signal_id in self._experiment_dao.signals()
         ]
-        used_devices = set(info["device_type"] for info in signal_infos)
-        used_device_serials = set(info["device_serial"] for info in signal_infos)
+        used_devices = set(info.device_type for info in signal_infos)
+        used_device_serials = set(info.device_serial for info in signal_infos)
         if (
             "hdawg" in used_devices
             and "uhfqa" in used_devices
@@ -1969,15 +2018,15 @@ class Compiler:
         if self._leader_properties.is_desktop_setup:
             if leader is None:
                 if has_hdawg:
-                    leader = get_first_instr_of(device_infos, "hdawg")["id"]
+                    leader = get_first_instr_of(device_infos, "hdawg").id
                 elif has_shfqa:
-                    leader = get_first_instr_of(device_infos, "shfqa")["id"]
+                    leader = get_first_instr_of(device_infos, "shfqa").id
                     if has_shfsg:  # SHFQC
                         self._leader_properties.internal_followers = [
-                            get_first_instr_of(device_infos, "shfsg")["id"]
+                            get_first_instr_of(device_infos, "shfsg").id
                         ]
                 elif has_shfsg:
-                    leader = get_first_instr_of(device_infos, "shfsg")["id"]
+                    leader = get_first_instr_of(device_infos, "shfsg").id
 
             _logger.debug("Using desktop setup configuration with leader %s", leader)
 
@@ -1985,8 +2034,8 @@ class Compiler:
                 has_signal_on_awg_0_of_leader = False
                 for signal_id in self._experiment_dao.signals():
                     signal_info = self._experiment_dao.signal_info(signal_id)
-                    if signal_info["device_id"] == leader and (
-                        0 in signal_info["channels"] or 1 in signal_info["channels"]
+                    if signal_info.device_id == leader and (
+                        0 in signal_info.channels or 1 in signal_info.channels
                     ):
                         has_signal_on_awg_0_of_leader = True
                         break
@@ -2009,17 +2058,17 @@ class Compiler:
             is_hdawg_solo = type_counter["hdawg"] == 1 and not has_shf and not has_qa
             if is_hdawg_solo:
                 first_hdawg = get_first_instr_of(device_infos, "hdawg")
-                if first_hdawg["reference_clock_source"] is None:
-                    self._clock_settings[first_hdawg["id"]] = "internal"
+                if first_hdawg.reference_clock_source is None:
+                    self._clock_settings[first_hdawg.id] = "internal"
             else:
                 if not has_hdawg and has_shfsg:  # SHFSG or SHFQC solo
                     first_shfsg = get_first_instr_of(device_infos, "shfsg")
-                    if first_shfsg["reference_clock_source"] is None:
-                        self._clock_settings[first_shfsg["id"]] = "internal"
+                    if first_shfsg.reference_clock_source is None:
+                        self._clock_settings[first_shfsg.id] = "internal"
                 if not has_hdawg and has_shfqa:  # SHFQA or SHFQC solo
                     first_shfqa = get_first_instr_of(device_infos, "shfqa")
-                    if first_shfqa["reference_clock_source"] is None:
-                        self._clock_settings[first_shfqa["id"]] = "internal"
+                    if first_shfqa.reference_clock_source is None:
+                        self._clock_settings[first_shfqa.id] = "internal"
 
         self._clock_settings["use_2GHz_for_HDAWG"] = has_shf
         self._leader_properties.global_leader = leader
@@ -2057,9 +2106,9 @@ class Compiler:
                     ):
                         for signal_name in self._experiment_dao.device_signals(device):
                             if (
-                                self._experiment_dao.signal_info(signal_name)[
-                                    "signal_type"
-                                ]
+                                self._experiment_dao.signal_info(
+                                    signal_name
+                                ).signal_type
                                 == "integration"
                             ):
                                 spectroscopy_trigger_signals.add(signal_name)
@@ -2097,7 +2146,7 @@ class Compiler:
                 _dlogger.debug("signal_info_main =  %s", signal_info_main)
                 play_wave_chain: List[_PlayWave] = []
 
-                is_integration = signal_info_main["signal_type"] == "integration"
+                is_integration = signal_info_main.signal_type == "integration"
 
                 suppress_offset_indices = []
 
@@ -2140,10 +2189,10 @@ class Compiler:
                         section_info.section_display_name, signal_id
                     )
                 ):
-                    pulse_name = section_pulse["pulse_id"]
+                    pulse_name = section_pulse.pulse_id
                     pulse_def = None
                     if pulse_name is not None:
-                        pulse_def = self._experiment_dao.pulses.get(pulse_name)
+                        pulse_def = self._experiment_dao.pulse(pulse_name)
                         play_wave = _PlayWave(id=pulse_name, signal=signal_id)
                     else:
                         pulse_name = "DELAY"
@@ -2151,9 +2200,9 @@ class Compiler:
                             id=pulse_name, signal=signal_id, is_delay=True
                         )
 
-                    assert signal_id == signal_info_main["signal_id"]
+                    assert signal_id == signal_info_main.signal_id
 
-                    device_id = signal_info_main["device_id"]
+                    device_id = signal_info_main.device_id
 
                     sampling_rate = self._sampling_rate_for_device(device_id)
                     length = PulseDef.effective_length(pulse_def, sampling_rate)
@@ -2162,7 +2211,7 @@ class Compiler:
                     play_wave.parameterized_with = []
                     _set_playwave_resolved_param(section_pulse, play_wave, "offset")
                     if (
-                        section_pulse["offset"] is not None
+                        section_pulse.offset is not None
                         and pulse_index in suppress_offset_indices
                     ):
                         play_wave.offset = 0.0
@@ -2177,7 +2226,7 @@ class Compiler:
                     _set_playwave_resolved_param(
                         section_pulse, play_wave, "set_oscillator_phase"
                     )
-                    pulse_parameters = section_pulse.get("pulse_parameters")
+                    pulse_parameters = section_pulse.pulse_parameters
                     if pulse_parameters is not None:
                         for param, val in pulse_parameters.items():
                             if isinstance(val, (float, int, complex)):
@@ -2187,12 +2236,10 @@ class Compiler:
                                 play_wave.pulse_parameters[param] = param_ref
                                 play_wave.parameterized_with.append(param_ref)
 
-                    if section_pulse["acquire_params"] is not None:
-                        play_wave.acquire_handle = section_pulse["acquire_params"][
-                            "handle"
-                        ]
+                    if section_pulse.acquire_params is not None:
+                        play_wave.acquire_handle = section_pulse.acquire_params.handle
                         play_wave.acquisition_type.append(
-                            section_pulse["acquire_params"]["acquisition_type"]
+                            section_pulse.acquire_params.acquisition_type
                         )
 
                     play_wave_chain.append(play_wave)
@@ -2228,6 +2275,13 @@ class Compiler:
                 ]
                 num_repeats = section_info_1.count
 
+                reset_precompensation_filter = any(
+                    self._experiment_dao.precompensation(signal_id)
+                    for signal_id in self._experiment_dao.section_signals_with_children(
+                        section_name
+                    )
+                )
+
                 reset_phase_hw = section_info_1.reset_oscillator_phase
                 reset_phase_sw = (
                     reset_phase_hw or section_info_1.averaging_type == "hardware"
@@ -2238,6 +2292,7 @@ class Compiler:
                     parameters_list,
                     reset_phase_sw,
                     reset_phase_hw,
+                    reset_precompensation_filter,
                 )
 
         EventGraphBuilder.complete_section_structure(
@@ -2256,15 +2311,17 @@ class Compiler:
             section_info.repetition_mode == "constant"
             or section_info.repetition_mode == "auto"
         ):
-            return {
-                k: getattr(section_info, k)
-                for k in [
-                    "repetition_mode",
-                    "repetition_time",
-                    "averaging_mode",
-                    "section_id",
-                ]
-            }
+            return Box(
+                {
+                    k: getattr(section_info, k)
+                    for k in [
+                        "repetition_mode",
+                        "repetition_time",
+                        "averaging_mode",
+                        "section_id",
+                    ]
+                }
+            )
 
         has_repeating_child = False
         for child in self._section_graph_object.section_children(section):
@@ -2321,7 +2378,7 @@ class Compiler:
         # Todo (PW): Drop once system tests have been migrated from legacy behaviour.
         for device_info in self._experiment_dao.device_infos():
             try:
-                device_type = DeviceType(device_info["device_type"])
+                device_type = DeviceType(device_info.device_type)
             except ValueError:
                 # Not every device has a corresponding DeviceType (e.g. PQSC)
                 continue
@@ -2330,7 +2387,7 @@ class Compiler:
             retval.append(
                 self._event_graph.add_node(
                     event_type=EventType.INITIAL_RESET_HW_OSCILLATOR_PHASE,
-                    device_id=device_info["id"],
+                    device_id=device_info.id,
                     duration=device_type.reset_osc_duration,
                 )
             )
@@ -2364,7 +2421,7 @@ class Compiler:
         if device_id not in self._sampling_rate_cache:
 
             device_type = DeviceType(
-                self._experiment_dao.device_info(device_id)["device_type"]
+                self._experiment_dao.device_info(device_id).device_type
             )
             if (
                 device_type == DeviceType.HDAWG
@@ -2380,9 +2437,16 @@ class Compiler:
         return sampling_rate
 
     def _generate_code(self):
-
         self._calc_awgs()
         self._calc_shfqa_generator_allocation()
+        self._precompensations = compute_precompensations_and_delays(
+            self._experiment_dao
+        )
+        compute_precompensation_delays_on_grid(
+            self._precompensations,
+            self._experiment_dao,
+            self._clock_settings["use_2GHz_for_HDAWG"],
+        )
 
         code_generator = CodeGenerator(self._settings)
         self._code_generator = code_generator
@@ -2390,17 +2454,18 @@ class Compiler:
         for signal_id in self._experiment_dao.signals():
 
             signal_info = self._experiment_dao.signal_info(signal_id)
-            delay_signal = signal_info["delay_signal"]
+            delay_signal = signal_info.delay_signal
 
-            device_type = DeviceType(signal_info["device_type"])
-            device_id = signal_info["device_id"]
+            device_type = DeviceType(signal_info.device_type)
+            device_id = signal_info.device_id
 
             sampling_rate = self._sampling_rate_for_device(device_id)
-            start_delay = self.get_delay(
+            start_delay = self.get_lead_delay(
                 device_type,
                 self._leader_properties.is_desktop_setup,
                 self._clock_settings["use_2GHz_for_HDAWG"],
             )
+            start_delay += self._precompensations[signal_id]["computed_delay_signal"]
 
             if delay_signal is not None:
                 delay_signal = self._get_total_rounded_delay(
@@ -2414,7 +2479,7 @@ class Compiler:
             try:
                 reference_clock_source = self._clock_settings[device_id]
             except KeyError:
-                reference_clock_source = device_info["reference_clock_source"]
+                reference_clock_source = device_info.reference_clock_source
             if self._leader_properties.is_desktop_setup:
                 trigger_mode = {
                     DeviceType.HDAWG: TriggerMode.DIO_TRIGGER,
@@ -2424,7 +2489,7 @@ class Compiler:
                 }.get(device_type, TriggerMode.NONE)
 
             awg = self.get_awg(signal_id)
-            signal_type = signal_info["signal_type"]
+            signal_type = signal_info.signal_type
 
             _dlogger.debug(
                 "Adding signal %s with signal type %s", signal_id, signal_type
@@ -2435,11 +2500,11 @@ class Compiler:
             oscillator_info = self._experiment_dao.signal_oscillator(signal_id)
             if (
                 oscillator_info is not None
-                and not oscillator_info["hardware"]
-                and signal_info["modulation"]
+                and not oscillator_info.hardware
+                and signal_info.modulation
             ):
-                oscillator_frequency = oscillator_info["frequency"]
-            channels = copy.deepcopy(signal_info["channels"])
+                oscillator_frequency = oscillator_info.frequency
+            channels = copy.deepcopy(signal_info.channels)
             if signal_id in self._integration_unit_allocation:
                 channels = copy.deepcopy(
                     self._integration_unit_allocation[signal_id]["channels"]
@@ -2448,6 +2513,11 @@ class Compiler:
                 channels = copy.deepcopy(
                     self._shfqa_generator_allocation[signal_id]["channels"]
                 )
+            hw_oscillator = (
+                oscillator_info.id
+                if oscillator_info is not None and oscillator_info.hardware
+                else None
+            )
 
             signal_obj = SignalObj(
                 id=signal_id,
@@ -2462,6 +2532,7 @@ class Compiler:
                 trigger_mode=trigger_mode,
                 reference_clock_source=reference_clock_source,
                 channels=channels,
+                hw_oscillator=hw_oscillator,
             )
             code_generator.add_signal(signal_obj)
 
@@ -2469,7 +2540,8 @@ class Compiler:
         events = self.event_timing(expand_loops=False)
         code_generator.gen_acquire_map(events, self._section_graph_object)
         integration_times, signal_delays = code_generator.gen_seq_c(
-            events, self._experiment_dao.pulses
+            events,
+            {k: self._experiment_dao.pulse(k) for k in self._experiment_dao.pulses()},
         )
         code_generator.gen_waves()
 
@@ -2481,22 +2553,22 @@ class Compiler:
 
         for signal_id in self._experiment_dao.signals():
             signal_info = self._experiment_dao.signal_info(signal_id)
-            device_type = DeviceType(signal_info["device_type"])
+            device_type = DeviceType(signal_info.device_type)
 
-            if signal_info["signal_type"] == "integration":
+            if signal_info.signal_type == "integration":
                 continue
 
             hw_osc_names = set()
             oscillator_info = self._experiment_dao.signal_oscillator(signal_id)
-            if oscillator_info is not None and oscillator_info["hardware"]:
-                hw_osc_names.add(oscillator_info["id"])
+            if oscillator_info is not None and oscillator_info.hardware:
+                hw_osc_names.add(oscillator_info.id)
 
-            base_channel = min(signal_info["channels"])
+            base_channel = min(signal_info.channels)
             min_osc_number = base_channel * 2
             count = 0
             for osc_name in hw_osc_names:
                 if device_type == DeviceType.SHFQA:
-                    self._osc_numbering[osc_name] = min(signal_info["channels"])
+                    self._osc_numbering[osc_name] = min(signal_info.channels)
                 else:
                     self._osc_numbering[osc_name] = min_osc_number + count
                     count += 1
@@ -2506,16 +2578,14 @@ class Compiler:
         for signal_id in self._experiment_dao.signals():
             signal_info = self._experiment_dao.signal_info(signal_id)
             _dlogger.debug("_integration_unit_allocation considering %s", signal_info)
-            if signal_info["signal_type"] == "integration":
+            if signal_info.signal_type == "integration":
                 _dlogger.debug(
                     "_integration_unit_allocation: found integration signal %s",
                     signal_info,
                 )
-                device_id = signal_info["device_id"]
-                device_type = DeviceType(signal_info["device_type"])
-                awg_nr = Compiler.calc_awg_number(
-                    signal_info["channels"][0], device_type
-                )
+                device_id = signal_info.device_id
+                device_type = DeviceType(signal_info.device_type)
+                awg_nr = Compiler.calc_awg_number(signal_info.channels[0], device_type)
 
                 num_acquire_signals = len(
                     list(
@@ -2551,16 +2621,14 @@ class Compiler:
         self._shfqa_generator_allocation = {}
         for signal_id in self._experiment_dao.signals():
             signal_info = self._experiment_dao.signal_info(signal_id)
-            device_type = DeviceType(signal_info["device_type"])
+            device_type = DeviceType(signal_info.device_type)
 
-            if signal_info["signal_type"] == "iq" and device_type == DeviceType.SHFQA:
+            if signal_info.signal_type == "iq" and device_type == DeviceType.SHFQA:
                 _dlogger.debug(
                     "_shfqa_generator_allocation: found SHFQA iq signal %s", signal_info
                 )
-                device_id = signal_info["device_id"]
-                awg_nr = Compiler.calc_awg_number(
-                    signal_info["channels"][0], device_type
-                )
+                device_id = signal_info.device_id
+                awg_nr = Compiler.calc_awg_number(signal_info.channels[0], device_type)
                 num_generator_signals = len(
                     list(
                         filter(
@@ -2595,14 +2663,14 @@ class Compiler:
         ] = {}
         for signal_id in self._experiment_dao.signals():
             signal_info = self._experiment_dao.signal_info(signal_id)
-            device_id = signal_info["device_id"]
-            device_type = DeviceType(signal_info["device_type"])
-            for channel in sorted(signal_info["channels"]):
+            device_id = signal_info.device_id
+            device_type = DeviceType(signal_info.device_type)
+            for channel in sorted(signal_info.channels):
                 awg_number = Compiler.calc_awg_number(channel, device_type)
                 device_awgs = awgs.setdefault(device_id, SortedDict())
                 awg = device_awgs.get(awg_number)
                 if awg is None:
-                    signal_type = signal_info["signal_type"]
+                    signal_type = signal_info.signal_type
                     # Treat "integration" signal type same as "iq" at AWG level
                     if signal_type == "integration":
                         signal_type = "iq"
@@ -2617,7 +2685,7 @@ class Compiler:
 
                 awg.signal_channels.append((signal_id, channel))
 
-                if signal_info["signal_type"] == "iq":
+                if signal_info.signal_type == "iq":
                     signal_channel_awg_key = (device_id, awg.awg_number, channel)
                     if signal_channel_awg_key in signals_by_channel_and_awg:
                         signals_by_channel_and_awg[signal_channel_awg_key][
@@ -2649,7 +2717,7 @@ class Compiler:
                     continue
                 signal_ids = set(sc[0] for sc in awg.signal_channels)
                 signal_delays = {
-                    self._experiment_dao.signal_info(signal_id)["delay_signal"] or 0.0
+                    self._experiment_dao.signal_info(signal_id).delay_signal or 0.0
                     for signal_id in signal_ids
                 }
                 if len(signal_delays) > 1:
@@ -2668,13 +2736,10 @@ class Compiler:
         awg_number = None
         signal_info = self._experiment_dao.signal_info(signal_id)
 
-        device_id = signal_info["device_id"]
-        device_type = DeviceType(signal_info["device_type"])
-        awg_number = Compiler.calc_awg_number(signal_info["channels"][0], device_type)
-        if (
-            signal_info["signal_type"] == "integration"
-            and device_type != DeviceType.SHFQA
-        ):
+        device_id = signal_info.device_id
+        device_type = DeviceType(signal_info.device_type)
+        awg_number = Compiler.calc_awg_number(signal_info.channels[0], device_type)
+        if signal_info.signal_type == "integration" and device_type != DeviceType.SHFQA:
             awg_number = 0
         return self._awgs[device_id][awg_number]
 
@@ -2685,41 +2750,46 @@ class Compiler:
 
         for signal_id in self._experiment_dao.signals():
             signal_info = self._experiment_dao.signal_info(signal_id)
-            if signal_info["signal_type"] == "integration":
+            if signal_info.signal_type == "integration":
                 continue
             oscillator_frequency = None
             oscillator_number = None
 
             oscillator_info = self._experiment_dao.signal_oscillator(signal_id)
             oscillator_is_hardware = (
-                oscillator_info is not None and oscillator_info["hardware"]
+                oscillator_info is not None and oscillator_info.hardware
             )
             if oscillator_is_hardware:
-                osc_name = oscillator_info["id"]
-                oscillator_frequency = oscillator_info["frequency"]
+                osc_name = oscillator_info.id
+                oscillator_frequency = oscillator_info.frequency
                 oscillator_number = self.osc_number(osc_name)
 
             mixer_calibration = self._experiment_dao.mixer_calibration(signal_id)
             lo_frequency = self._experiment_dao.lo_frequency(signal_id)
             port_mode = self._experiment_dao.port_mode(signal_id)
             signal_range = self._experiment_dao.signal_range(signal_id)
+            device_type = DeviceType(signal_info.device_type)
             port_delay = self._experiment_dao.port_delay(signal_id)
             if signal_id in signal_delays:
                 port_delay = (port_delay or 0) + signal_delays[signal_id]["on_device"]
                 if abs(port_delay) < 1e-12:
                     port_delay = None
+            precompensation = self._precompensations[signal_id]
+            pc_port_delay = precompensation["computed_port_delay"]
+            if pc_port_delay:
+                port_delay = (port_delay or 0) + pc_port_delay
 
-            base_channel = min(signal_info["channels"])
-            for channel in signal_info["channels"]:
+            base_channel = min(signal_info.channels)
+            for channel in signal_info.channels:
                 output = {
-                    "device_id": signal_info["device_id"],
+                    "device_id": signal_info.device_id,
                     "channel": channel,
                     "lo_frequency": lo_frequency,
                     "port_mode": port_mode,
                     "range": signal_range,
                     "port_delay": port_delay,
                 }
-                signal_is_modulated = signal_info["modulation"]
+                signal_is_modulated = signal_info.modulation
                 output_modulation_logic = {
                     (True, True): True,
                     (False, False): False,
@@ -2737,7 +2807,7 @@ class Compiler:
 
                 # default mixer calib
                 if (
-                    DeviceType(signal_info["device_type"]) == DeviceType.HDAWG
+                    device_type == DeviceType.HDAWG
                 ):  # for hdawgs, we add default values to the recipe
                     output["offset"] = 0.0
                     output["diagonal"] = 1.0
@@ -2747,7 +2817,7 @@ class Compiler:
                     output["diagonal"] = None
                     output["off_diagonal"] = None
 
-                if signal_info["signal_type"] == "iq" and mixer_calibration is not None:
+                if signal_info.signal_type == "iq" and mixer_calibration is not None:
                     if mixer_calibration["voltage_offsets"] is not None:
                         output["offset"] = mixer_calibration["voltage_offsets"][
                             channel - base_channel
@@ -2760,9 +2830,18 @@ class Compiler:
                             flipper[channel - base_channel]
                         ][channel - base_channel]
 
+                if precompensation_is_nonzero(precompensation):
+                    device_type = DeviceType(signal_info.device_type)
+                    if not device_type.supports_precompensation:
+                        raise RuntimeError(
+                            f"Device {signal_info.device_id} does not"
+                            + " support precompensation"
+                        )
+                    output["precompensation"] = precompensation
+
                 output["oscillator_frequency"] = oscillator_frequency
                 output["oscillator"] = oscillator_number
-                channel_key = (signal_info["device_id"], channel)
+                channel_key = (signal_info.device_id, channel)
                 # TODO(2K): check for conflicts if 'channel_key' already present in 'all_channels'
                 all_channels[channel_key] = output
         retval = sorted(
@@ -2775,21 +2854,21 @@ class Compiler:
         all_channels = {}
         for signal_id in self._experiment_dao.signals():
             signal_info = self._experiment_dao.signal_info(signal_id)
-            if signal_info["signal_type"] != "integration":
+            if signal_info.signal_type != "integration":
                 continue
 
             lo_frequency = self._experiment_dao.lo_frequency(signal_id)
             signal_range = self._experiment_dao.signal_range(signal_id)
             port_delay = self._experiment_dao.port_delay(signal_id)
-            for channel in signal_info["channels"]:
+            for channel in signal_info.channels:
                 input = {
-                    "device_id": signal_info["device_id"],
+                    "device_id": signal_info.device_id,
                     "channel": channel,
                     "lo_frequency": lo_frequency,
                     "range": signal_range,
                     "port_delay": port_delay,
                 }
-                channel_key = (signal_info["device_id"], channel)
+                channel_key = (signal_info.device_id, channel)
                 # TODO(2K): check for conflicts if 'channel_key' already present in 'all_channels'
                 all_channels[channel_key] = input
         retval = sorted(
@@ -2824,13 +2903,13 @@ class Compiler:
             infos_by_device_awg = {}
             for signal in section_signals:
                 signal_info_for_section = self._experiment_dao.signal_info(signal)
-                device_type = DeviceType(signal_info_for_section["device_type"])
+                device_type = DeviceType(signal_info_for_section.device_type)
                 awg_nr = Compiler.calc_awg_number(
-                    signal_info_for_section["channels"][0], device_type
+                    signal_info_for_section.channels[0], device_type
                 )
 
-                if signal_info_for_section["signal_type"] == "integration":
-                    device_id = signal_info_for_section["device_id"]
+                if signal_info_for_section.signal_type == "integration":
+                    device_id = signal_info_for_section.device_id
                     device_awg_key = (device_id, awg_nr)
                     if device_awg_key not in infos_by_device_awg:
                         infos_by_device_awg[device_awg_key] = {
@@ -2846,7 +2925,7 @@ class Compiler:
 
                     _dlogger.debug(
                         "Added measurement device %s",
-                        signal_info_for_section["device_id"],
+                        signal_info_for_section.device_id,
                     )
 
             section_measurement_infos.extend(infos_by_device_awg.values())
@@ -2941,6 +3020,7 @@ class Compiler:
                 output["offset"],
                 output["diagonal"],
                 output["off_diagonal"],
+                precompensation=output.get("precompensation"),
                 modulation=output["modulation"],
                 oscillator=output["oscillator"],
                 oscillator_frequency=output["oscillator_frequency"],
@@ -3071,8 +3151,8 @@ class Compiler:
         sampling_rate_tuples = []
         for signal_id in self._experiment_dao.signals():
             signal_info = self._experiment_dao.signal_info(signal_id)
-            device_id = signal_info["device_id"]
-            device_type = signal_info["device_type"]
+            device_id = signal_info.device_id
+            device_type = signal_info.device_type
             sampling_rate_tuples.append(
                 (device_type, int(self._sampling_rate_for_device(device_id)))
             )
@@ -3148,6 +3228,7 @@ class Compiler:
     def run(self, data) -> CompiledExperiment:
         _logger.debug("ES Compiler run")
 
+        # todo (Pol): Split off the scheduler into separate class & file
         self._process_experiment(data)
         self._calc_integration_unit_allocation()
 
@@ -3172,7 +3253,7 @@ class Compiler:
         _logger.info("Finished LabOne Q Compiler run.")
         return retval
 
-    def get_delay(self, device_type, desktop_setup, hdawg_uses_2GHz):
+    def get_lead_delay(self, device_type, desktop_setup, hdawg_uses_2GHz):
         if not isinstance(device_type, DeviceType):
             raise Exception(f"Device type {device_type} is not of type DeviceType")
         if device_type == DeviceType.HDAWG:

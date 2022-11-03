@@ -14,7 +14,6 @@ from io import BytesIO
 from typing import Optional
 
 import networkx as nx
-import numpy
 import numpy as np
 from numpy.typing import ArrayLike
 from sortedcontainers import SortedDict
@@ -68,45 +67,6 @@ class NumpyArrayRepr:
                 self.real_data = array_data.tolist()
             else:
                 self.complex_data = np.frompyfunc(str, 1, 1)(array_data).tolist()
-
-
-# TODO(2K): Replace this simplified approach with the portable and secure one
-class CallableRepr:
-    # __new__ does the actual deserialization job, receiving dict elements as arguments
-    def __new__(cls, name: str, numpy_name: Optional[str], body: str):
-        namespace = {numpy_name: numpy} if numpy_name is not None else {}
-        exec(body, namespace)
-        return namespace[name]
-
-    # __init__ signature is used to access dict elements on deserialization
-    def __init__(self, name: str, numpy_name: Optional[str], body: str):
-        pass
-
-
-def serialize_callable(to_serialize):
-    # Some validations, but not necessarily exhaustive and portable,
-    # in particular missing imports for type hints will not be detected,
-    # but will fail on deserialization.
-    cv = inspect.getclosurevars(to_serialize)
-    numpy_name: Optional[str] = None
-    if len(cv.globals) >= 1:
-        name, value = next(iter(cv.globals.items()))
-        if value is numpy:
-            numpy_name = name
-        if value is not numpy or len(cv.globals) > 1:
-            raise RuntimeError(
-                f"User function {to_serialize.__name__} must not use any globals except 'numpy', but is using {[k for k in cv.globals]}"
-            )
-    if len(cv.nonlocals) > 0:
-        raise RuntimeError(
-            f"User function {to_serialize.__name__} must not use any non-locals, but is using {[k for k in cv.nonlocals]}"
-        )
-    return {
-        "__type": CallableRepr.__name__,
-        "name": to_serialize.__name__,
-        "numpy_name": numpy_name,
-        "body": inspect.getsource(to_serialize),
-    }
 
 
 def full_classname(klass):
@@ -233,10 +193,6 @@ def serialize_to_dict_with_entities(
     cls = to_serialize.__class__
     if to_serialize is None:
         return None
-
-    if callable(to_serialize):
-        return serialize_callable(to_serialize)
-
     if _issubclass(cls, str) or _issubclass(cls, float) or _issubclass(cls, int):
         return to_serialize
 
@@ -561,7 +517,6 @@ def deserialize_from_dict_with_ref_recursor(data, class_mapping, entity_collecto
 
 def deserialize_from_dict_with_ref(data, class_mapping, entity_classses, entity_map):
     class_mapping[NumpyArrayRepr.__name__] = NumpyArrayRepr
-    class_mapping[CallableRepr.__name__] = CallableRepr
     entity_map = {}
     reference_graph = []
     calculate_reference_graph(

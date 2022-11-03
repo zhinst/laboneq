@@ -3,11 +3,8 @@
 
 from __future__ import annotations
 import logging
-from typing import Any, Dict, Optional, Union, TYPE_CHECKING
+from typing import Any, Dict, Optional, Union
 import numpy as np
-
-if TYPE_CHECKING:
-    from laboneq.dsl.experiment.pulse import UserFunction
 
 _logger = logging.getLogger(__name__)
 
@@ -29,7 +26,6 @@ def sample_pulse(
     length: float,
     amplitude: Union[float, complex],
     pulse_function: Optional[str],
-    user_function: Optional[UserFunction] = None,
     modulation_frequency: Optional[float] = None,
     modulation_phase: Optional[float] = None,
     iq_phase: float = 0,
@@ -47,14 +43,13 @@ def sample_pulse(
     modulation_phase are not None.
 
     Args:
-        signal_type: "iq" if the pulse represents quadrature (IQ) moduluation; used
+        signal_type: "iq" if the pulse represents quadrature (IQ) modulation; used
           together with samples.
         sampling_rate: Sampling rate of the device the pulse is played on.
         length: Pulse length in seconds
         amplitude: Magnitude of the amplitude to multiply with the given pulse
         iq_phase: Phase of the amplitude to multiply with the given pulse
         pulse_function: In case of a functional pulse, the function to sample
-        user_function: User provided function to generate samples
         modulation_frequency: The oscillator frequency (for software modulation if
           not None)
         modulation_phase: The oscillator phase (for software modulation if not
@@ -75,30 +70,20 @@ def sample_pulse(
     if pulse_function == "":
         pulse_function = None
 
-    if samples is not None and pulse_function is not None and user_function is not None:
+    if samples is not None and pulse_function is not None:
         raise ValueError(
-            "Only one of samples, pulse_function or user_function may be given at the same time."
+            "Only one of samples or pulse_function may be given at the same time."
         )
 
     num_samples = length_to_samples(length, sampling_rate)
 
     if pulse_function is not None:
         samples = pulse_function_library[pulse_function](
-            length=length, num_samples=num_samples, sampling_rate=sampling_rate
-        )
-    if user_function is not None:
-        samples = user_function(
-            np.linspace(-1, 1, num_samples),
-            pulse_parameters={
-                "length": length,
-                "amplitude": amplitude,
-                "sampling_rate": sampling_rate,
-                **dict(
-                    sorted(
-                        ({} if pulse_parameters is None else pulse_parameters).items()
-                    )
-                ),
-            },
+            np.linspace(-1, 1, num_samples, endpoint=False),
+            length=length,
+            amplitude=amplitude,
+            sampling_rate=sampling_rate,
+            **(pulse_parameters or {}),
         )
     samples = np.array(samples[:num_samples])
     shape = samples.shape
@@ -141,26 +126,4 @@ def sample_pulse(
     return {"samples_i": samples.real, "samples_q": samples.imag}
 
 
-def const(length, num_samples, sampling_rate):
-    return np.ones(num_samples)
-
-
-def gaussian(length, num_samples, sampling_rate):
-    sigma = calc_sigma(length, sampling_rate)
-    shift = float(length * sampling_rate) / 2
-    ts = np.arange(num_samples)
-    return gauss(ts, sigma, shift)
-
-
 pulse_function_library = dict()
-pulse_function_library["const"] = const
-pulse_function_library["gaussian"] = gaussian
-
-
-def gauss(t, sigma, shift):
-    shift_t = t - shift
-    return np.exp(-shift_t * shift_t / (2 * sigma * sigma))
-
-
-def calc_sigma(length, sampling_rate):
-    return length * sampling_rate / 6

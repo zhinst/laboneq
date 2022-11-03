@@ -7,7 +7,16 @@ Convenience header for the LabOne Q project.
 
 from laboneq.dsl import LinearSweepParameter, SweepParameter
 from laboneq.dsl.calibration import Calibration, Calibratable
-from laboneq.dsl.calibration import SignalCalibration, Oscillator, MixerCalibration
+from laboneq.dsl.calibration import (
+    SignalCalibration,
+    Oscillator,
+    MixerCalibration,
+    Precompensation,
+    ExponentialCompensation,
+    HighPassCompensation,
+    BounceCompensation,
+    FIRCompensation,
+)
 from laboneq.dsl.device import DeviceSetup
 from laboneq.dsl.enums import (
     AcquisitionType,
@@ -18,6 +27,7 @@ from laboneq.dsl.enums import (
     SectionAlignment,
     PortMode,
     CarrierType,
+    HighPassCompensationClearing,
 )
 from laboneq.dsl.experiment import (
     Experiment,

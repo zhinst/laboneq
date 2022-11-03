@@ -14,7 +14,7 @@ from numpy import typing as npt
 
 import zhinst.utils
 
-from pkg_resources import get_distribution
+from laboneq import __version__
 from laboneq.controller.devices.zi_node_monitor import AllConditionsWaiter
 from laboneq.controller.protected_session import ProtectedSession
 
@@ -92,8 +92,7 @@ class Controller:
         self._logger.debug("Controller created")
         self._logger.debug("Controller debug logging is on")
 
-        version = get_distribution("laboneq").version
-        self._logger.info("VERSION: laboneq %s", version)
+        self._logger.info(f"VERSION: laboneq {__version__}")
 
     DevIterType = Iterator[Tuple[str, DeviceBase]]
 
@@ -715,7 +714,11 @@ class Controller:
                 self.nodes_to_prepare_step.extend(step_nodes)
                 self.controller._batch_set(self.nodes_to_prepare_step)
                 self.nodes_to_prepare_step.clear()
-                for _ in range(3):  # Up to 3 retries
+                for retry in range(3):  # Up to 3 retries
+                    if retry > 0:
+                        self.controller._logger.info(
+                            f"Step retry %s of 3...", retry + 1
+                        )
                     try:
                         self.controller._execute_one_step(acquisition_type)
                         self.controller._read_one_step_results(

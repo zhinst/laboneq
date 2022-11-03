@@ -6,7 +6,7 @@ from typing import Optional
 from laboneq.core.exceptions import LabOneQException
 
 from dataclasses import dataclass
-from laboneq.dsl.calibration import SignalCalibration, MixerCalibration
+from laboneq.dsl.calibration import SignalCalibration, MixerCalibration, Precompensation
 
 experiment_signal_id = 0
 
@@ -36,6 +36,7 @@ class ExperimentSignal:
         port_delay: float = None,
         delay_signal: float = None,
         mixer_calibration=None,
+        precompensation=None,
         local_oscillator=None,
         range: float = None,
         port_mode=None,
@@ -53,6 +54,7 @@ class ExperimentSignal:
             or port_delay is not None
             or delay_signal is not None
             or mixer_calibration is not None
+            or precompensation is not None
             or local_oscillator is not None
             or range is not None
             or port_mode is not None
@@ -64,6 +66,7 @@ class ExperimentSignal:
                 port_delay=port_delay,
                 delay_signal=delay_signal,
                 mixer_calibration=mixer_calibration,
+                precompensation=precompensation,
                 local_oscillator=local_oscillator,
                 range=range,
                 port_mode=port_mode,
@@ -103,6 +106,17 @@ class ExperimentSignal:
             self.calibration.mixer_calibration = value
         else:
             self.calibration = SignalCalibration(mixer_calibration=value)
+
+    @property
+    def precompensation(self):
+        return self.calibration.precompensation if self.is_calibrated() else None
+
+    @precompensation.setter
+    def precompensation(self, value):
+        if self.is_calibrated():
+            self.calibration.precompensation = value
+        else:
+            self.calibration = SignalCalibration(precompensation=value)
 
     @property
     def oscillator(self):

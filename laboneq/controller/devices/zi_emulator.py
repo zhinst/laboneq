@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from functools import partial
 import re
@@ -41,17 +41,19 @@ class NodeStr(NodeBase):
 
 @dataclass
 class NodeVectorFloat(NodeBase):
-    value: npt.ArrayLike = np.array([], dtype=np.float64)
+    value: npt.ArrayLike = field(default_factory=lambda: np.array([], dtype=np.float64))
 
 
 @dataclass
 class NodeVectorInt(NodeBase):
-    value: npt.ArrayLike = np.array([], dtype=np.int64)
+    value: npt.ArrayLike = field(default_factory=lambda: np.array([], dtype=np.int64))
 
 
 @dataclass
 class NodeVectorComplex(NodeBase):
-    value: npt.ArrayLike = np.array([], dtype=np.complex128)
+    value: npt.ArrayLike = field(
+        default_factory=lambda: np.array([], dtype=np.complex128)
+    )
 
 
 class NodeType(Enum):

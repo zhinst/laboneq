@@ -106,7 +106,7 @@ class LabOneQFacade:
     def simulate_outputs(
         compiled_experiment: CompiledExperiment, max_simulation_time: float, logger
     ):
-        from laboneq.compiler import analyze_compiler_output_memory
+        from laboneq.simulator import analyze_compiler_output_memory
         from laboneq.core.types.device_output_signals import DeviceOutputSignals
         from laboneq.dsl.result import Waveform
 

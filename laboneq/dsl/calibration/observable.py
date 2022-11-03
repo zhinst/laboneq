@@ -38,7 +38,6 @@ Unsubscribe:
     >>> b.a = 0
 """
 
-import dataclasses
 import weakref
 from typing import Callable, Any, List
 
@@ -51,7 +50,9 @@ class Signal:
         self._observable = weakref.ref(observable)
 
     def connect(self, callback: CallbackType):
-        if callback not in self._callbacks:
+        # Need to check for identity, cannot use `callback in self._callbacks`, which
+        # checks for equality.
+        if not any(callback is element for element in self._callbacks):
             self._callbacks.append(callback)
 
     def disconnect(self, callback):
@@ -97,3 +98,16 @@ class Observable:
 
         super().__setattr__(key, value)
         self._signal_changed.fire(key, value)
+
+
+class RecursiveObservable(Observable):
+    def __setattr__(self, key, value):
+        if isinstance(value, Observable):
+            try:
+                value.has_changed().connect(
+                    lambda obs, k, v: self.has_changed().fire(k, v)
+                )
+            except TypeError:
+                #  `_signal_changed` has not been set yet.
+                pass
+        super().__setattr__(key, value)

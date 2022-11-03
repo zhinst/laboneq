@@ -38,27 +38,6 @@ class Pulse:
 
 
 @dataclass(init=True, repr=True, order=True)
-class PulseFunctional(Pulse):
-    """Pulse based on a function."""
-
-    #: Unique identifier of the pulse.
-    uid: str = field(default_factory=pulse_id_generator)
-
-    #: Amplitude of the pulse.
-    amplitude: float = field(default=None)
-
-    #: Type of the function, one of gaussian, const, internal.
-    function: str = field(default=None)
-
-    #: Length of the pulse in seconds.
-    length: float = field(default=None)
-
-    def __post_init__(self):
-        if not isinstance(self.uid, str):
-            raise LabOneQException("PulseSampledReal must have a string uid")
-
-
-@dataclass(init=True, repr=True, order=True)
 class PulseSampledReal(Pulse):
     """Pulse based on a list of real-valued samples."""
 
@@ -112,17 +91,12 @@ class PulseSampledComplex(Pulse):
         return self.uid == other.uid and _compare_nested(self.samples, other.samples)
 
 
-UserFunction = TypeVar(
-    "UserFunction", bound=Callable[[ArrayLike, Dict[str, Any]], ArrayLike]
-)
-
-
 @dataclass(init=True, repr=True, order=True)
-class UserPulseFunctional(Pulse):
-    """Pulse based on a user function."""
+class PulseFunctional(Pulse):
+    """Pulse based on a function."""
 
-    # TODO(2K): __eq__ will not work well for this
-    user_function: UserFunction
+    #: Key for the function used for sampling the pulse.
+    function: str
 
     #: Unique identifier of the pulse.
     uid: str = field(default_factory=pulse_id_generator)
@@ -138,6 +112,4 @@ class UserPulseFunctional(Pulse):
 
     def __post_init__(self):
         if not isinstance(self.uid, str):
-            raise LabOneQException(
-                f"{UserPulseFunctional.__name__} must have a string uid"
-            )
+            raise LabOneQException(f"{PulseFunctional.__name__} must have a string uid")

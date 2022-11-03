@@ -525,6 +525,13 @@ class DeviceZI(DeviceBase):
         if command_table_body is None:
             return None
 
+        oscillator_map = {osc.id: osc.index for osc in self._allocated_oscs}
+        for entry in command_table_body:
+            if "oscillatorSelect" not in entry:
+                continue
+            oscillator_uid = entry["oscillatorSelect"]["value"]["$ref"]
+            entry["oscillatorSelect"]["value"] = oscillator_map[oscillator_uid]
+
         return self.add_command_table_header(command_table_body)
 
     def _prepare_seqc(
@@ -596,6 +603,7 @@ class DeviceZI(DeviceBase):
                     self._daq,
                     command_table_path + "data",
                     json.dumps(command_table),
+                    caching_strategy=CachingStrategy.NO_CACHE,
                 )
             ]
         )

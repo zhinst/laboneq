@@ -337,6 +337,41 @@ class Session:
         self.run()
 
     @_SessionDeco.entrypoint
+    def submit(
+        self,
+        experiment: Optional[Union[Experiment, CompiledExperiment]] = None,
+        queue: Callable[[str, CompiledExperiment, DeviceSetup], Any] = None,
+    ) -> Results:
+        """Asynchronously submit experiment to the given queue.
+
+        If no experiment is specified, the last compiled experiment is run.
+        If an experiment is specified, the provided experiment is assigned to the
+        internal experiment of the session.
+
+        Args:
+            experiment: Optional. Experiment instance that should be
+                run. The experiment will be compiled if it has not been yet. If no
+                experiment is specified the previously assigned and compiled experiment
+                is used.
+            queue: The name of connector to a queueing system which should do the actual
+                run on a setup. `queue` must be callable with the signature
+                ``(name: str, experiment: CompiledExperiment, device_setup: DeviceSetup)``
+                which returns an object with which users can query results.
+
+        Returns:
+            An object with which users can query results. Details depend on the
+            implementation of the queue.
+        """
+
+        if experiment:
+            if isinstance(experiment, CompiledExperiment):
+                self._compiled_experiment = experiment
+            else:
+                self.compile(experiment)
+
+        return queue(experiment.uid, self.compiled_experiment, self.device_setup)
+
+    @_SessionDeco.entrypoint
     def replace_pulse(
         self, pulse_uid: str | Pulse, pulse_or_array: npt.ArrayLike | Pulse
     ):

@@ -5,10 +5,10 @@ import logging
 from itertools import groupby
 from dataclasses import dataclass, field
 
-from .fastlogging import NullLogger
+from laboneq.compiler.fastlogging import NullLogger
 
 
-from .device_type import DeviceType
+from laboneq.compiler.device_type import DeviceType
 from engineering_notation import EngNumber
 from typing import Any, Dict
 
@@ -85,7 +85,6 @@ class MeasurementCalculator:
 
         def calc_awg_key(signal_id):
             acquire_signal_info = signal_info_map.get(signal_id)
-
             return (acquire_signal_info["device_id"], acquire_signal_info["awg_number"])
 
         def group_by_awg_key(event):
@@ -187,7 +186,8 @@ class MeasurementCalculator:
                 signal_info = signal_info_map[signal]
                 device_type = DeviceType(signal_info["device_type"])
                 sampling_rate = device_type.sampling_rate
-                signal_integration_info.awg = signal_info_map[signal]["awg_number"]
+                signal_integration_info.awg = signal_info["awg_number"]
+
                 signal_integration_info.device_id = signal_info["device_id"]
 
                 signal_integration_info.length = (
