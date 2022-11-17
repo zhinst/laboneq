@@ -16,7 +16,7 @@ from laboneq.dsl.enums import (
 )
 from laboneq.dsl.experiment.pulse import Pulse
 from .experiment_signal import ExperimentSignal
-from .section import Sweep, AcquireLoopNt, AcquireLoopRt, Section
+from .section import Sweep, AcquireLoopNt, AcquireLoopRt, Section, Match, Case
 from laboneq.core.types.enums import DSLVersion
 
 from dataclasses import dataclass, field
@@ -265,7 +265,7 @@ class Experiment:
         :param length: Length for which the pulse shall be played. Defaults to
             `None`, meaning that the pulse is played for its whole length.
         :type length: `float` or :class:`laboneq.dsl.Parameter`, optional
-        :param phase: The desired phase the pulse shall be played with. Defaults to
+        :param phase: The desired phase in radians the pulse shall be played with. Defaults to
             `None`, meaning that the pulse is played as is.
         :type phase: `float`, optional
         :param increment_oscillator_phase: The desired phase increment the pulse
@@ -605,6 +605,7 @@ class Experiment:
         alignment=None,
         uid=None,
         play_after: Optional[str] = None,
+        trigger: Optional[Dict[str, Dict[str, int]]] = None,
     ):
         """Define an section for scoping operations.
 
@@ -621,19 +622,46 @@ class Experiment:
             offset: (deprecated) Offset in seconds the execution of the section
                 is delayed. Defaults to `None` which is equivalent to 0.0 secs
                 of delay. The parameter can either be given as a float or as a
-                sweep parameter (:class:`laboneq.dsl.Parameter`).
+                sweep parameter (:class:`~.Parameter`).
             length: The minimal duration of the section in seconds. The
                 scheduled section might be slightly longer, as its length is
                 rounded to the next multiple of the section timing grid.
                 Defaults to `None` which means that the section length is
                 derived automatically from the contained operations.
                 The parameter can either be given as a float or as a sweep
-                parameter (:class:`laboneq.dsl.Parameter`).
+                parameter (:class:`~.Parameter`).
             alignment: Alignment of the operations in the section. Defaults to
                 :class:`SectionAlignment.LEFT`.
-            play_after Play this section after the end of the section with the
-                given ID. Defaults to None (:class:`laboneq.dsl.Parameter`).
+            play_after: Play this section after the end of the section with the
+                given ID. Defaults to None.
+            trigger: Play a pulse a trigger pulse for the duration of this section.
+                See below for details.
 
+        The individual trigger (a.k.a marker) ports on the device are addressed via the
+        experiment signal that is mapped to the corresponding analog port.
+        For playing trigger pulses, pass a dictionary via the `trigger` argument. The
+        keys of the dictionary must be an ID of an :class:`~.ExperimentSignal`. Each
+        value is another ``dict`` of the form: ::
+
+            {"state": value}
+
+        ``value`` is a bit field that enables the individual trigger signals (on the
+        devices that feature more than a single one).
+
+        ..  code-block:: python
+
+            {"state": 1}  # raise trigger signal 1
+            {"state": 0b10}  # raise trigger signal 2 (on supported devices)
+            {"state": 0b11}  # raise both trigger signals
+
+        As a more complete example, to fire a trigger pulse on the first port associated
+        with signal ``"drive_line"``, call ::
+
+            with exp.section(..., trigger={"drive_line": {"state": 0b01}}):
+                ...
+
+        When trigger signals on the same signal are issued in nested sections, the values
+        are ORed.
         """
         return Experiment._SectionSectionContext(
             self,
@@ -642,6 +670,7 @@ class Experiment:
             alignment=alignment,
             offset=offset,
             play_after=play_after,
+            trigger=trigger,
         )
 
     class _SectionSectionContext:
@@ -653,6 +682,7 @@ class Experiment:
             length=None,
             alignment=None,
             play_after=None,
+            trigger=None,
         ):
             self.exp = experiment
             args = {}
@@ -666,6 +696,8 @@ class Experiment:
                 args["alignment"] = alignment
             if play_after is not None:
                 args["play_after"] = play_after
+            if trigger is not None:
+                args["trigger"] = trigger
 
             self.section = Section(**args)
 
@@ -726,6 +758,130 @@ class Experiment:
         for section in sections:
             visitor(section)
             self.accept_section_visitor(visitor, section.sections)
+
+    def match_local(
+        self, handle: str, uid: str = None, play_after: Optional[str] = None
+    ):
+        """Define a section which switches between different child sections based
+        on a QA measurement on an SHFQC.
+
+        Match needs to open a scope in the following way::
+
+            with exp.match_local(...):
+                # here come the different branches to be selected
+
+        :note: Only subsections of type ``Case`` are allowed.
+
+        Args:
+            uid: The unique ID for this section.
+            handle: A unique identifier string that allows to retrieve the
+                acquired data.
+            play_after Play this section after the end of the section with the
+                given ID. Defaults to None.
+
+        """
+        return Experiment._MatchSectionContext(
+            self, uid=uid, handle=handle, play_after=play_after, local=True
+        )
+
+    def match_global(
+        self, handle: str, uid: str = None, play_after: Optional[str] = None
+    ):
+        """Define a section which switches between different child sections based
+        on a QA measurement via the PQSC.
+
+        Match needs to open a scope in the following way::
+
+            with exp.match_global(...):
+                # here come the different branches to be selected
+
+        :note: Only subsections of type ``Case`` are allowed.
+
+        Args:
+            uid: The unique ID for this section.
+            handle: A unique identifier string that allows to retrieve the
+                acquired data.
+            play_after Play this section after the end of the section with the
+                given ID. Defaults to None.
+
+        """
+        return Experiment._MatchSectionContext(
+            self, uid=uid, handle=handle, play_after=play_after, local=False
+        )
+
+    class _MatchSectionContext:
+        def __init__(
+            self,
+            experiment,
+            uid,
+            handle,
+            local,
+            play_after=None,
+        ):
+            self.exp = experiment
+            args = {"handle": handle}
+            if uid is not None:
+                args["uid"] = uid
+            if play_after is not None:
+                args["play_after"] = play_after
+            args["local"] = local
+
+            self.section = Match(**args)
+
+        def __enter__(self):
+            self.exp._push_section(self.section)
+            return self.section
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            self.exp._pop_and_add_section()
+
+    def case(self, state: int, uid: str = None):
+        """Define a section which plays after matching with the given value to the
+        result of a QA measurement.
+
+        Case needs to open a scope in the following way::
+
+            with exp.case(...):
+                # here come the operations that shall be executed in the section
+
+        :note: No subsections are allowed, only ``play`` and ``delay``.
+
+        Args:
+            uid: The unique ID for this section.
+            handle: A unique identifier string that allows to retrieve the
+                acquired data.
+            play_after Play this section after the end of the section with the
+                given ID. Defaults to None.
+
+        """
+        if not isinstance(self._peek_section(), Match):
+            raise LabOneQException("Case section must be inside a Match section")
+        return Experiment._CaseSectionContext(
+            self,
+            uid=uid,
+            state=state,
+        )
+
+    class _CaseSectionContext:
+        def __init__(
+            self,
+            experiment,
+            uid,
+            state,
+        ):
+            self.exp = experiment
+            args = {"state": state}
+            if uid is not None:
+                args["uid"] = uid
+
+            self.section = Case(**args)
+
+        def __enter__(self):
+            self.exp._push_section(self.section)
+            return self.section
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            self.exp._pop_and_add_section()
 
     @staticmethod
     def load(filename):

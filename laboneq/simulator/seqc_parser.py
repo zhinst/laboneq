@@ -261,6 +261,8 @@ class Operation(Enum):
     PLAY_WAVE = auto()
     START_QA = auto()
     SET_OSC_FREQ = auto()
+    SET_TRIGGER = auto()
+    WAIT_WAVE = auto()
 
 
 @dataclass
@@ -343,6 +345,8 @@ class SimpleRuntime:
             "configFreqSweep": self.configFreqSweep,
             "setSweepStep": self.setSweepStep,
             "setOscFreq": self.setOscFreq,
+            "setTrigger": self.setTrigger,
+            "waitWave": self.waitWave,
         }
         self.variables = {}
         self.seqc_simulation = SeqCSimulation()
@@ -364,7 +368,6 @@ class SimpleRuntime:
         self.command_table = descriptor.command_table
         self.max_time: Optional[float] = max_time
         self.output_port_delay: float = descriptor.output_port_delay
-        self._oscillator_frequency = {}
         self._oscillator_sweep_config = {}
 
     def _last_played_sample(self) -> int:
@@ -379,7 +382,11 @@ class SimpleRuntime:
         ev = self.seqc_simulation.events
         if len(ev) == 0:
             return 0, 0
-        if ev[-1].operation in [Operation.PLAY_WAVE, Operation.PLAY_ZERO]:
+        if ev[-1].operation in [
+            Operation.PLAY_WAVE,
+            Operation.PLAY_ZERO,
+            Operation.WAIT_WAVE,
+        ]:
             return ev[-1].start_samples, -1
         return ev[-1].start_samples + ev[-1].length_samples, len(ev)
 
@@ -529,9 +536,9 @@ class SimpleRuntime:
 
         wave = self.wave_index[wave_index]
 
-        if wave["type"] != "iq":
+        if wave["type"] not in ("iq", "multi"):
             raise RuntimeError(
-                "Command table execution in seqc parser only supports iq signals."
+                f"Command table execution in seqc parser only supports iq signals. Device type: {self.device_type}, signal type: {wave['type']}"
             )
 
         wave_names = [wave["wave_name"] + suffix + ".wave" for suffix in ("_i", "_q")]
@@ -645,7 +652,6 @@ class SimpleRuntime:
         self.setOscFreq(oscillator, freq)
 
     def setOscFreq(self, oscillator: int, frequency: float):
-        self._oscillator_frequency[oscillator] = frequency
         start_samples, insert_at = self._last_play_start_samples()
         self.seqc_simulation.events.insert(
             insert_at,
@@ -655,6 +661,29 @@ class SimpleRuntime:
                 operation=Operation.SET_OSC_FREQ,
                 args=[oscillator, frequency],
             ),
+        )
+
+    def setTrigger(self, value: int):
+        start_samples, insert_at = self._last_play_start_samples()
+        self.seqc_simulation.events.insert(
+            insert_at,
+            SeqCEvent(
+                start_samples=start_samples,
+                length_samples=0,
+                operation=Operation.SET_TRIGGER,
+                args=[value],
+            ),
+        )
+
+    def waitWave(self):
+        time_samples = self._last_played_sample()
+        self.seqc_simulation.events.append(
+            SeqCEvent(
+                start_samples=time_samples,
+                length_samples=0,
+                operation=Operation.WAIT_WAVE,
+                args=[],
+            )
         )
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import List, Union, Dict, Any
 
-from laboneq.compiler.device_type import DeviceType
+from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.code_generator.seq_c_generator import SeqCGenerator
 
 
@@ -56,9 +56,11 @@ class SeqCTracker:
             )
             self.clear_deferred_function_calls(sampled_event)
             self.current_time += play_zero_samples
+
         return self.current_time
 
     def clear_deferred_function_calls(self, sampled_event):
+        """Emit the deferred function calls *now*."""
         if len(self.deferred_function_calls) > 0:
             self.logger.debug(
                 "  Emitting deferred function calls: %s at sampled_event %s",
@@ -71,6 +73,24 @@ class SeqCTracker:
                     call["name"], call["args"]
                 )
             self.deferred_function_calls = []
+
+    def force_deferred_function_calls(self):
+        """There may be deferred function calls issued *at the end of the sequence*.
+        There will be no playWave or playZero that could flush them, so this function
+        will force a flush.
+
+        This function should not be needed anywhere but at the end of the sequence.
+        (In the future, maybe at the end of a loop iteration?)
+        """
+        if self.deferred_function_calls:
+            # Flush any remaining deferred calls (ie those that should execute at the
+            # end of the sequence)
+            if self.device_type == DeviceType.SHFQA:
+                # SHFQA does not support waitWave()
+                self.add_play_zero_statement(32, signal_obj.device_type)
+            else:
+                self.add_function_call_statement("waitWave", [])
+            self.clear_deferred_function_calls(None)
 
     def add_timing_comment(self, end_samples):
         if self.emit_timing_comments:

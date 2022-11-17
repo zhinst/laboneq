@@ -80,6 +80,7 @@ def _replace_pulse_in_wave(
     for instance in pwm.instances:
         if not is_complex and (instance.channel == 0) != (component == Component.REAL):
             continue
+        phase = (instance.modulation_phase or 0.0) + (instance.iq_phase or 0.0)
         samples = sample_pulse(
             signal_type=pwm.signal_type,
             sampling_rate=pwm.sampling_rate,
@@ -87,10 +88,9 @@ def _replace_pulse_in_wave(
             amplitude=amplitude * instance.amplitude,
             pulse_function=function,
             modulation_frequency=instance.modulation_frequency,
-            modulation_phase=instance.modulation_phase,
-            iq_phase=instance.iq_phase,
+            phase=phase,
             samples=input_samples,
-            complex_modulation=pwm.complex_modulation,
+            mixer_type=pwm.mixer_type,
             pulse_parameters=instance.pulse_parameters,
         )
 

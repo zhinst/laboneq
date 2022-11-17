@@ -6,11 +6,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional, List, TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from laboneq.compiler.device_type import DeviceType
-    from laboneq.compiler.awg_info import AWGInfo
+from laboneq.core.types.enums.mixer_type import MixerType
 
-from laboneq.compiler.trigger_mode import TriggerMode
+if TYPE_CHECKING:
+    from laboneq.compiler.common.device_type import DeviceType
+    from laboneq.compiler.common.awg_info import AWGInfo
+
+from laboneq.compiler.common.trigger_mode import TriggerMode
 
 
 @dataclass(init=True, repr=True, order=True)
@@ -30,4 +32,5 @@ class SignalObj:
     awg: AWGInfo = None
     total_delay: float = None
     on_device_delay: float = 0
+    mixer_type: Optional[MixerType] = None
     hw_oscillator: Optional[str] = None

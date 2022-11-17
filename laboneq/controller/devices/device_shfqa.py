@@ -78,6 +78,14 @@ class DeviceSHFQA(DeviceZI):
     def _get_sequencer_type(self) -> str:
         return "qa"
 
+    def _get_sequencer_path_patterns(self) -> dict:
+        return {
+            "elf": "/{serial}/qachannels/{index}/generator/elf/data",
+            "progress": "/{serial}/qachannels/{index}/generator/elf/progress",
+            "enable": "/{serial}/qachannels/{index}/generator/enable",
+            "ready": "/{serial}/qachannels/{index}/generator/ready",
+        }
+
     def _get_num_AWGs(self):
         return self._channels
 
@@ -121,6 +129,7 @@ class DeviceSHFQA(DeviceZI):
             nodes.extend(
                 [
                     f"/{self.serial}/qachannels/{awg}/generator/enable",
+                    f"/{self.serial}/qachannels/{awg}/generator/ready",
                     f"/{self.serial}/qachannels/{awg}/spectroscopy/result/enable",
                     f"/{self.serial}/qachannels/{awg}/readout/result/enable",
                 ]
@@ -482,7 +491,7 @@ class DeviceSHFQA(DeviceZI):
             caching_strategy=CachingStrategy.NO_CACHE,
         )
 
-    def _upload_all_binary_waves(
+    def prepare_upload_all_binary_waves(
         self, awg_index, waves, acquisition_type: AcquisitionType
     ):
         waves_upload: List[DaqNodeSetAction] = []
@@ -539,7 +548,7 @@ class DeviceSHFQA(DeviceZI):
                 1 if has_spectroscopy_envelope else 0,
             )
         )
-        self._daq.batch_set(waves_upload)
+        return waves_upload
 
     def _configure_readout_mode_nodes(
         self,
@@ -806,6 +815,13 @@ class DeviceSHFQA(DeviceZI):
                 f"Unsupported DIO mode: {dio_mode} for device type SHFQA."
             )
 
+        for awg_index in (
+            self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
+        ):
+            marker_path = f"/{self.serial}/qachannels/{awg_index}/markers"
+            nodes_to_configure_triggers.append(
+                DaqNodeSetAction(self._daq, f"{marker_path}/source", 0),
+            )
         return nodes_to_configure_triggers
 
     def configure_as_leader(self, initialization):

@@ -7,9 +7,9 @@ from dataclasses import dataclass, field
 from typing import List, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from laboneq.compiler import DeviceType
-    from laboneq.compiler.awg_signal_type import AWGSignalType
-    from laboneq.compiler.code_generator import SignalObj
+    from laboneq.compiler.common import DeviceType
+    from laboneq.compiler.common.awg_signal_type import AWGSignalType
+    from laboneq.compiler.common.signal_obj import SignalObj
 
 
 @dataclass

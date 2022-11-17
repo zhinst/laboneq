@@ -54,7 +54,9 @@ class WaveScroller:
             cur_time_samples += ev.length_samples
             ev_idx += 1
 
-        snippet = np.zeros(cur_time_samples - snippet_start_samples)
+        snippet = np.zeros(
+            cur_time_samples - snippet_start_samples, dtype=np.complex128
+        )
         for ev in op_events:
             processor(ev, snippet, snippet_start_samples)
 
@@ -172,7 +174,7 @@ class WaveScroller:
             if oscillator == ch:
                 frequency: float = ev.args[1]
                 wave_start_samples = ev.start_samples - snippet_start_samples
-                if wave_start_samples < len(snippet) and state.last_freq is not None:
+                if wave_start_samples <= len(snippet) and state.last_freq is not None:
                     snippet[
                         state.last_freq_set_samples : wave_start_samples
                     ] = state.last_freq
@@ -189,6 +191,41 @@ class WaveScroller:
         )
         if state.last_freq_set_samples < len(snippet):
             snippet[state.last_freq_set_samples :] = state.last_freq
+        return time_ax, snippet
+
+    def get_trigger_snippet(
+        self,
+        start_secs: float,
+        length_secs: float,
+        prog: str,
+        ch: int,
+    ) -> Tuple[npt.ArrayLike, npt.ArrayLike]:
+        sim = self.simulations[prog]
+        time_delay_secs = self._calc_delay(sim, is_output=False)
+        state = SimpleNamespace(last_trig_set_samples=0, last_trig=0)
+
+        def process_setTrigger_event(
+            ev: SeqCEvent, snippet: npt.ArrayLike, snippet_start_samples: int
+        ):
+            value: int = int(ev.args[0])
+            wave_start_samples = ev.start_samples - snippet_start_samples
+            if wave_start_samples <= len(snippet) and state.last_trig is not None:
+                snippet[
+                    state.last_trig_set_samples : wave_start_samples
+                ] = state.last_trig
+            state.last_trig_set_samples = wave_start_samples
+            state.last_trig = value
+
+        time_ax, snippet = self._get_snippet(
+            sim,
+            start_secs,
+            length_secs,
+            time_delay_secs,
+            [Operation.SET_TRIGGER],
+            process_setTrigger_event,
+        )
+        if state.last_trig_set_samples < len(snippet):
+            snippet[state.last_trig_set_samples :] = state.last_trig
         return time_ax, snippet
 
     def get_non_zero(self, prog: str):

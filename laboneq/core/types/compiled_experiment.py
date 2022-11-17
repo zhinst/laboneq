@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Union, Optional, TYPE_CHECKING
 import numpy as np
 
+from laboneq.core.types.enums.mixer_type import MixerType
 from laboneq.core.utilities.replace_pulse import replace_pulse
 
 from laboneq.core.exceptions import LabOneQException
@@ -41,7 +42,7 @@ class PulseWaveformMap:
     sampling_rate: float
     length_samples: int
     signal_type: str
-    complex_modulation: bool  # UHFQA does not allow complex wave forms
+    mixer_type: MixerType  # UHFQA's HW modulation is not an IQ mixer
     instances: List[PulseInstance] = field(default_factory=list)
 
 

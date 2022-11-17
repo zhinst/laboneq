@@ -61,11 +61,19 @@ def _pass_left_to_right(
     cut_interval: Interval,
     play_wave_size_hint: int,
     play_zero_size_hint: int,
+    play_wave_maximum_size: int = 0,
 ) -> List[MutableInterval]:
     first_playback = chunk[0].begin
+    if play_wave_maximum_size:
+        assert play_wave_maximum_size > play_wave_size_hint
+
+    if play_wave_maximum_size == 0:
+        play_wave_maximum_size = float("inf")
     if 0 < first_playback - cut_interval.begin < play_zero_size_hint:
         # First playZero is too short. Extend first playWave to the left.
-        chunk[0].begin = cut_interval.begin
+        extended_length = chunk[0].end - cut_interval.begin
+        if extended_length <= play_wave_maximum_size:
+            chunk[0].begin = cut_interval.begin
 
     new_intervals = []
 
@@ -79,12 +87,18 @@ def _pass_left_to_right(
 
         gap_length = next_iv.begin - iv.end
         if 0 < gap_length < play_zero_size_hint:
-            iv.end = next_iv.begin
+            extended_length = next_iv.begin - iv.begin
+            if extended_length <= play_wave_maximum_size:
+                iv.end = next_iv.begin
 
         if iv.overlaps(next_iv):
-            next_iv.begin = iv.begin
-            next_iv.data = [*iv.data, *next_iv.data]
-            continue
+            merged_length = next_iv.end - iv.begin
+            if merged_length > play_wave_maximum_size:
+                iv.end = next_iv.begin
+            else:
+                next_iv.begin = iv.begin
+                next_iv.data = [*iv.data, *next_iv.data]
+                continue
         new_intervals.append(iv)
 
     return new_intervals
@@ -130,6 +144,7 @@ def calculate_intervals(
     min_play_wave: int,
     play_wave_size_hint: int,
     play_zero_size_hint: int,
+    play_wave_max_hint: int,
     cut_points: List[int],
     granularity: int = 16,
 ):
@@ -139,11 +154,13 @@ def calculate_intervals(
 
     Args:
         interval_tree: The interval tree containing pulse playback as intervals
-        min_play_wave: the hard limit on how long a playWave or playZero must be.
+        min_play_wave: the hard lower limit on how long a playWave or playZero can be
         play_wave_size_hint: minimum length long we would like (but not require!)
             playWave() to be
         play_zero_size_hint: minimum length long we would like (but not require!)
             playZero() to be
+        play_wave_max_hint: hint maximum length on how long a playWave or playZero can be
+            (pass 0 to ignore)
         cut_points: Timestamps of events that (probably) emit code. A merged waveform
             must not span across a cut point.
         granularity: The waveform granularity of the hardware, i.e. waveform lengths
@@ -154,11 +171,11 @@ def calculate_intervals(
         below. Data of each interval is a list of the data of the original intervals
         that were merged together.
 
-    Respecting `min_play_wave` is hard requirement: if it cannot be enforced, the
-    algorithm fails loudly. By comparison `play_wave_size_hint` and
+    Respecting `min_play_wave` and `max_play_wave` is hard requirement: if they cannot
+    be enforced, the algorithm fails loudly. By comparison `play_wave_size_hint` and
     `play_zero_size_hint` are merely hints.
 
-    The calculation happens in three passes: Passes 1 & 2 target the hard minimum
+    The calculation happens in three passes: Passes 1 & 2 target the hard min & max
     waveform length, going over the segments from left-to-right and right-to-left.
     Pass 3 targets the length hints, left-to-right.
 
@@ -170,6 +187,10 @@ def calculate_intervals(
     If two consecutive cut points are spaced by less than `min_play_wave`, no solution
     may exist, and we fail.
 
+    In the third pass we also enforce the _maximum_ length. (In the first 2 passes, this
+    is unnecessary; if we can't make one waveform long enough without making another too
+    long, all is lost.)
+
     Note that at this time, we do not support pulses overlapping cut points.
     """
     if interval_tree.is_empty():
@@ -177,6 +198,7 @@ def calculate_intervals(
 
     assert all(cut_point % granularity == 0 for cut_point in cut_points)
     assert min_play_wave % granularity == 0
+    assert play_wave_max_hint % granularity == 0
     assert play_wave_size_hint % granularity == 0
     assert are_cut_points_valid(interval_tree, cut_points)
     assert all(
@@ -220,7 +242,11 @@ def calculate_intervals(
         chunk = _pass_left_to_right(chunk, cut_interval, min_play_wave, min_play_wave)
         chunk = _pass_right_to_left(chunk, cut_interval, min_play_wave, min_play_wave)
         chunk = _pass_left_to_right(
-            chunk, cut_interval, play_wave_size_hint, play_zero_size_hint
+            chunk,
+            cut_interval,
+            play_wave_size_hint,
+            play_zero_size_hint,
+            play_wave_max_hint,
         )
 
         for interval in chunk:

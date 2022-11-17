@@ -8,16 +8,11 @@ from networkx.readwrite import json_graph
 import logging
 import copy
 
-from laboneq.compiler.experiment_dao import ExperimentDAO, SectionInfo
+from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO, SectionInfo
 
-from .fastlogging import NullLogger
+from laboneq.compiler.fastlogging import NullLogger
 
 _logger = logging.getLogger(__name__)
-if _logger.getEffectiveLevel() == logging.DEBUG:
-    _dlogger = _logger
-else:
-    _logger.info("Debug logging disabled for %s", __name__)
-    _dlogger = NullLogger()
 
 
 class SectionGraph:
@@ -108,14 +103,14 @@ class SectionGraph:
         for node in newgraph.nodes:
             for edge in self._section_instance_tree.in_edges(node, data=True):
                 if edge[2]["type"] == "parent":
-                    _dlogger.debug("Found parent relation %s for %s", edge, node)
+                    _logger.debug("Found parent relation %s for %s", edge, node)
                     for sequential_edge in newgraph.out_edges(edge[0]):
                         if sequential_edge[1] != node:
-                            _dlogger.debug("sequential_edge=%s", sequential_edge)
+                            _logger.debug("sequential_edge=%s", sequential_edge)
                             if not self._section_graph_parents.has_edge(
                                 sequential_edge[0], sequential_edge[1]
                             ):
-                                _dlogger.debug(
+                                _logger.debug(
                                     "descendants of %s : %s",
                                     sequential_edge[0],
                                     nx.descendants(
@@ -126,7 +121,7 @@ class SectionGraph:
                                     self._section_graph_parents, sequential_edge[0]
                                 ):
                                     if sequential_edge[1] != descendant:
-                                        _dlogger.debug(
+                                        _logger.debug(
                                             "adding edge %s",
                                             (descendant, sequential_edge[1]),
                                         )
@@ -138,13 +133,13 @@ class SectionGraph:
         preorder_map = {}
         depth_map = self.depth_map()
         for first, second in list(zip(toposorted, toposorted[1:] + [None])):
-            _dlogger.debug(
+            _logger.debug(
                 "first=%s second=%s current_level=%d", first, second, current_level
             )
             preorder_map[first] = current_level
             if second is not None:
                 in_edges = self._section_instance_tree.in_edges(second, data=True)
-                _dlogger.debug("%s in_edges=%s", second, in_edges)
+                _logger.debug("%s in_edges=%s", second, in_edges)
 
             is_independent = True
             if second is not None:
@@ -180,25 +175,25 @@ class SectionGraph:
 
     def log_graph(self):
 
-        _dlogger.debug("++++Section Graph")
+        _logger.debug("++++Section Graph")
 
         for node in self._section_graph.nodes:
             for edge in self._section_graph.out_edges(nbunch=[node], data=True):
-                _dlogger.debug(edge)
+                _logger.debug(edge)
 
         for node in list(
             reversed(list(nx.topological_sort(self._section_instance_tree)))
         ):
             section_children = self.section_children(node)
-            _dlogger.debug("Children of %s: %s", node, section_children)
-        _dlogger.debug("++++ END ++++Section Graph")
+            _logger.debug("Children of %s: %s", node, section_children)
+        _logger.debug("++++ END ++++Section Graph")
 
     def root_sections(self):
 
         root_sections = []
         for section_id in list(nx.topological_sort(self._section_graph_parents)):
             section_info = self.section_info(section_id)
-            _dlogger.debug("Section: %s", section_info)
+            _logger.debug("Section: %s", section_info)
             if section_info.has_repeat and section_info.count < 1:
                 raise Exception(
                     f"Repeat count must be at least 1, but section {section_id} has count={section_info.count}"
@@ -207,7 +202,7 @@ class SectionGraph:
             if section_info.execution_type != "controller":
                 # first non-controller section
                 if len(root_sections) == 0:
-                    _dlogger.debug(
+                    _logger.debug(
                         "section %s is the first real-time section",
                         section_info.section_id,
                     )
@@ -253,7 +248,7 @@ class SectionGraph:
             direct_section_children = experiment_dao.direct_section_children(section_id)
             for i, section_ref_id in enumerate(direct_section_children):
                 link_node_id = section_ref_id + "_" + section_id + "_" + str(i)
-                _dlogger.debug(
+                _logger.debug(
                     "  Child section of %s : %s link_node_id=%s",
                     section_id,
                     section_ref_id,
@@ -346,7 +341,7 @@ class SectionGraph:
         if root_node is not None:
             path_dict[(root_node,)] = root_node
         for k, v in path_dict.items():
-            _dlogger.debug("path_dict %s : %s", k, v)
+            _logger.debug("path_dict %s : %s", k, v)
 
         section_instance_tree = nx.DiGraph()
 
@@ -391,7 +386,7 @@ class SectionGraph:
             except StopIteration:
                 pass
 
-            _dlogger.debug("node_id=%s siblings=%s", node_id, siblings)
+            _logger.debug("node_id=%s siblings=%s", node_id, siblings)
             section_link_id = section_instance_tree.nodes(data=True)[node_id][
                 "section"
             ]["section_link_id"]
@@ -400,7 +395,7 @@ class SectionGraph:
                 if edge[2]["type"] == "previous":
                     linked_sibling = siblings[edge[1]]
 
-                    _dlogger.debug(
+                    _logger.debug(
                         "node_id=%s section_link_id=%s edge=%s linked_sibling=%s",
                         node_id,
                         section_link_id,
@@ -427,13 +422,13 @@ class SectionGraph:
         else:
             section_graph_parents = copy.deepcopy(section_instance_tree)
 
-        _dlogger.debug("***** Section graph parents:")
+        _logger.debug("***** Section graph parents:")
         for node in section_graph_parents.nodes(data=True):
-            _dlogger.debug("  %s", node)
+            _logger.debug("  %s", node)
             for edge in section_graph_parents.out_edges(node[0], data=True):
-                _dlogger.debug("      %s", edge)
+                _logger.debug("      %s", edge)
 
-        _dlogger.debug("END ***** Section graph parents")
+        _logger.debug("END ***** Section graph parents")
 
         section_graph = nx.subgraph(
             section_instance_tree,

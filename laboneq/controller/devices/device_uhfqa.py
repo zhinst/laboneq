@@ -60,6 +60,7 @@ class DeviceUHFQA(DeviceZI):
         nodes = []
         for awg in range(self._get_num_AWGs()):
             nodes.append(f"/{self.serial}/awgs/{awg}/enable")
+            nodes.append(f"/{self.serial}/awgs/{awg}/ready")
         return nodes
 
     def configure_acquisition(
@@ -282,7 +283,6 @@ class DeviceUHFQA(DeviceZI):
         nodes_to_set_for_standard_mode.append(
             DaqNodeSetAction(self._daq, f"/{self.serial}/qas/0/integration/mode", 0)
         )
-
         for (
             integrator_allocation
         ) in recipe_data.recipe.experiment.integrator_allocations:
@@ -320,7 +320,7 @@ class DeviceUHFQA(DeviceZI):
                     [
                         DaqNodeSetAction(
                             self._daq,
-                            f"/{self.serial}/qas/0/integration/sources/{integrator}",
+                            f"/{self.serial}/qas/0/integration/sources/{integration_unit_index}",
                             inputs_mapping[integrator],
                         ),
                         DaqNodeSetAction(
@@ -472,58 +472,52 @@ class DeviceUHFQA(DeviceZI):
         for awg_index in (
             self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
         ):
-            nodes_to_configure_triggers.append(
-                DaqNodeSetAction(
-                    self._daq, f"/{self.serial}/awgs/{awg_index}/dio/strobe/index", 16
-                )
-            )
-            nodes_to_configure_triggers.append(
-                DaqNodeSetAction(
-                    self._daq, f"/{self.serial}/awgs/{awg_index}/dio/strobe/slope", 0
-                )
-            )
-            nodes_to_configure_triggers.append(
-                DaqNodeSetAction(
-                    self._daq, f"/{self.serial}/awgs/{awg_index}/dio/valid/polarity", 2
-                )
-            )
-            nodes_to_configure_triggers.append(
-                DaqNodeSetAction(
-                    self._daq, f"/{self.serial}/awgs/{awg_index}/dio/valid/index", 16
-                )
+            awg_path = f"/{self.serial}/awgs/{awg_index}"
+            nodes_to_configure_triggers.extend(
+                [
+                    DaqNodeSetAction(self._daq, f"{awg_path}/dio/strobe/index", 16),
+                    DaqNodeSetAction(self._daq, f"{awg_path}/dio/strobe/slope", 0),
+                    DaqNodeSetAction(self._daq, f"{awg_path}/dio/valid/polarity", 2),
+                    DaqNodeSetAction(self._daq, f"{awg_path}/dio/valid/index", 16),
+                ]
             )
 
         dio_mode = initialization.config.dio_mode
 
         if dio_mode == DIOConfigType.HDAWG or dio_mode is None:
-            nodes_to_configure_triggers.append(
-                DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/mode", 2)
-            )
-            nodes_to_configure_triggers.append(
-                DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/drive", 0x3)
-            )
-            nodes_to_configure_triggers.append(
-                DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/extclk", 0x2)
+            nodes_to_configure_triggers.extend(
+                [
+                    DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/mode", 2),
+                    DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/drive", 0x3),
+                    DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/extclk", 0x2),
+                ]
             )
         elif dio_mode == DIOConfigType.DIO_FOLLOWER_OF_HDAWG_LEADER:
-            nodes_to_configure_triggers.append(
-                DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/mode", 0)
-            )
-            nodes_to_configure_triggers.append(
-                DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/drive", 0)
-            )
-            nodes_to_configure_triggers.append(
-                DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/extclk", 0x2)
-            )
-            nodes_to_configure_triggers.append(
-                DaqNodeSetAction(
-                    self._daq, f"/{self.serial}/awgs/0/auxtriggers/0/channel", 0
-                )
+            nodes_to_configure_triggers.extend(
+                [
+                    DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/mode", 0),
+                    DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/drive", 0),
+                    DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/extclk", 0x2),
+                    DaqNodeSetAction(
+                        self._daq, f"/{self.serial}/awgs/0/auxtriggers/0/channel", 0
+                    ),
+                ]
             )
             nodes_to_configure_triggers.append(
                 DaqNodeSetAction(
                     self._daq, f"/{self.serial}/awgs/0/auxtriggers/0/slope", 1
                 )
+            )
+        for trigger_index in (0, 1):
+            trigger_path = f"/{self.serial}/triggers/out/{trigger_index}"
+            nodes_to_configure_triggers.extend(
+                [
+                    DaqNodeSetAction(self._daq, f"{trigger_path}/delay", 0.0),
+                    DaqNodeSetAction(self._daq, f"{trigger_path}/drive", 1),
+                    DaqNodeSetAction(
+                        self._daq, f"{trigger_path}/source", 32 + trigger_index
+                    ),
+                ]
             )
 
         return nodes_to_configure_triggers

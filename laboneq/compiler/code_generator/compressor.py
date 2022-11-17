@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 from typing import List
 
-from .seq_c_generator import SeqCGenerator
+from laboneq.compiler.code_generator.seq_c_generator import SeqCGenerator
 
 _logger = logging.getLogger(__name__)
 

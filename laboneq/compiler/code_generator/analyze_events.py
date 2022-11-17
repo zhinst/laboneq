@@ -12,8 +12,8 @@ from engineering_notation import EngNumber
 from intervaltree import IntervalTree
 from sortedcontainers import SortedDict
 
-from laboneq.compiler.awg_info import AWGInfo
-from laboneq.compiler.awg_signal_type import AWGSignalType
+from laboneq.compiler.common.awg_info import AWGInfo
+from laboneq.compiler.common.awg_signal_type import AWGSignalType
 from laboneq.compiler.code_generator.dict_list import add_to_dict_list, merge_dict_list
 from laboneq.compiler.code_generator.interval_calculator import (
     MinimumWaveformLengthViolation,
@@ -25,13 +25,13 @@ from laboneq.compiler.code_generator.signatures import (
     PulseSignature,
 )
 from laboneq.compiler.code_generator.utils import normalize_phase
-from laboneq.compiler.device_type import DeviceType
-from laboneq.compiler.event_graph import EventType
+from laboneq.compiler.common.device_type import DeviceType
+from laboneq.compiler.common.event_type import EventType
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.pulse_sampler import length_to_samples, interval_to_samples
 
 if TYPE_CHECKING:
-    from laboneq.compiler.code_generator import SignalObj
+    from laboneq.compiler.common.signal_obj import SignalObj
 
 _logger = logging.getLogger(__name__)
 
@@ -478,13 +478,16 @@ def analyze_play_wave_times(
     sampling_rate,
     delay: float,
     other_events: Dict,
-    iq_phase: float,
     waveform_size_hints: Tuple[int, int],
     phase_resolution_range: float,
     sub_channel: Optional[int] = None,
 ):
     sample_multiple = device_type.sample_multiple
     min_play_wave = device_type.min_play_wave
+    if device_type == DeviceType.SHFQA:
+        playwave_max_hint = 4096  # in integration mode, 4096 samples is the limit
+    else:
+        playwave_max_hint = 0  # 0 means no limit
     play_wave_size_hint, play_zero_size_hint = waveform_size_hints
     signal_id = "_".join(signal_ids)
     for k, v in other_events.items():
@@ -674,6 +677,7 @@ def analyze_play_wave_times(
             min_play_wave,
             play_wave_size_hint,
             play_zero_size_hint,
+            playwave_max_hint,
             cut_points,
             granularity=sample_multiple,
         )
@@ -740,7 +744,6 @@ def analyze_play_wave_times(
                     phase=int_phase,
                     oscillator_phase=data.oscillator_phase,
                     baseband_phase=data.baseband_phase,
-                    iq_phase=iq_phase,
                     channel=data.channel if len(signal_ids) > 1 else None,
                     sub_channel=data.sub_channel,
                     pulse_parameters=None
@@ -775,6 +778,75 @@ def analyze_play_wave_times(
     _logger.debug("Interval events: %s", interval_events)
 
     return interval_events
+
+
+def analyze_trigger_events(events: List[Dict], signal: SignalObj):
+    delay = signal.total_delay
+    sampling_rate = signal.sampling_rate
+    device_type = signal.awg.device_type
+    trigger_events = [
+        event
+        for event in events
+        if event["event_type"] in (EventType.SECTION_START, EventType.SECTION_END)
+        and event.get("trigger_output", {}).get(signal.id)
+    ]
+    chain_map = {}
+    for event in trigger_events:
+        chain_map.setdefault(event["chain_element_id"], []).append(event)
+    trigger_intervals = IntervalTree()
+
+    def start_end_event_pairs():
+        for chain in chain_map.values():
+            i = iter(chain)
+            # turn iterator over A, B, C, D, ... into (A, B), (C, D), ...
+            try:
+                while True:
+                    yield next(i), next(i)
+            except StopIteration:
+                continue
+
+    for start, end in start_end_event_pairs():
+        trigger_intervals.addi(
+            length_to_samples(start["time"] + delay, sampling_rate),
+            length_to_samples(end["time"] + delay, sampling_rate),
+            start["trigger_output"][signal.id]["state"],
+        )
+
+    trigger_intervals.addi(
+        trigger_intervals.begin(), trigger_intervals.end() + 1, data=0
+    )
+    trigger_intervals.split_overlaps()
+    # In case of nested or overlapping triggers: OR the values
+    trigger_intervals.merge_overlaps(
+        data_reducer=lambda state1, state2: state1 | state2
+    )
+
+    retval = SortedDict()
+
+    if len(trigger_intervals) == 1 and next(iter(trigger_intervals)).data == 0:
+        # Triggers are not used at all
+        return retval
+
+    if device_type in (DeviceType.SHFQA, DeviceType.SHFSG):
+        for interval in trigger_intervals:
+            if interval.data > 1:
+                raise LabOneQException(
+                    f"On device {device_type.value}, only a single trigger channel is "
+                    f"available."
+                )
+
+    for interval in trigger_intervals:
+        add_to_dict_list(
+            retval,
+            interval.begin,
+            {
+                "start": interval.begin,
+                "signature": "trigger_output",
+                "state": interval.data,
+            },
+        )
+
+    return retval
 
 
 PHASE_FIXED_SCALE = 1000000000

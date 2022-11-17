@@ -9,15 +9,9 @@ import re
 from enum import Enum
 
 from laboneq.core.exceptions import LabOneQException
-from ..device_type import DeviceType
-from ..fastlogging import NullLogger
+from laboneq.compiler.common.device_type import DeviceType
 
 _logger = logging.getLogger(__name__)
-if _logger.getEffectiveLevel() == logging.DEBUG:
-    _dlogger = _logger
-else:
-    _logger.info("Debug logging disabled for %s", __name__)
-    _dlogger = NullLogger()
 
 
 MAX_PLAY_ZERO_UHFQA = 131056

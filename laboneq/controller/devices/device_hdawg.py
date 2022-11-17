@@ -92,6 +92,7 @@ class DeviceHDAWG(DeviceZI):
         nodes = []
         for awg in range(self._get_num_AWGs()):
             nodes.append(f"/{self.serial}/awgs/{awg}/enable")
+            nodes.append(f"/{self.serial}/awgs/{awg}/ready")
         return nodes
 
     def collect_awg_after_upload_nodes(self, initialization: Initialization.Data):
@@ -151,6 +152,7 @@ class DeviceHDAWG(DeviceZI):
         sampling_rate = initialization.config.sampling_rate
         if sampling_rate is None or sampling_rate == 0:
             sampling_rate = DEFAULT_SAMPLE_FREQUENCY_HZ
+        self._sampling_rate = sampling_rate
         nodes.append(("system/clocks/sampleclock/freq", sampling_rate))
 
         outputs = initialization.outputs or []
@@ -361,36 +363,19 @@ class DeviceHDAWG(DeviceZI):
             for awg_index in (
                 self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
             ):
-                nodes_to_configure_triggers.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/awgs/{awg_index}/dio/strobe/slope",
-                        0,
-                    )
-                )
-                nodes_to_configure_triggers.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/awgs/{awg_index}/dio/valid/polarity",
-                        2,
-                    )
-                )
-                nodes_to_configure_triggers.append(
-                    DaqNodeSetAction(
-                        self._daq, f"/{self.serial}/awgs/{awg_index}/dio/valid/index", 0
-                    )
-                )
-                nodes_to_configure_triggers.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/awgs/{awg_index}/dio/mask/value",
-                        0x3FF,
-                    )
-                )
-                nodes_to_configure_triggers.append(
-                    DaqNodeSetAction(
-                        self._daq, f"/{self.serial}/awgs/{awg_index}/dio/mask/shift", 1
-                    )
+                awg_path = f"/{self.serial}/awgs/{awg_index}"
+                nodes_to_configure_triggers.extend(
+                    [
+                        DaqNodeSetAction(self._daq, f"{awg_path}/dio/strobe/slope", 0),
+                        DaqNodeSetAction(
+                            self._daq, f"{awg_path}/dio/valid/polarity", 2
+                        ),
+                        DaqNodeSetAction(self._daq, f"{awg_path}/dio/valid/index", 0),
+                        DaqNodeSetAction(
+                            self._daq, f"{awg_path}/dio/mask/value", 0x3FF
+                        ),
+                        DaqNodeSetAction(self._daq, f"{awg_path}/dio/mask/shift", 1),
+                    ]
                 )
         elif dio_mode == DIOConfigType.HDAWG_LEADER:
 
@@ -431,20 +416,18 @@ class DeviceHDAWG(DeviceZI):
                     else REFERENCE_CLOCK_SOURCE_EXTERNAL,
                 )
             )
-            nodes_to_configure_triggers.append(
-                DaqNodeSetAction(self._daq, f"/{self.serial}/triggers/out/0/source", 4)
-            )
 
-            nodes_to_configure_triggers.append(
-                DaqNodeSetAction(self._daq, f"/{self.serial}/triggers/out/1/source", 4)
-            )
-
-            nodes_to_configure_triggers.append(
-                DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/mode", 1)
-            )
-
-            nodes_to_configure_triggers.append(
-                DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/drive", 15)
+            nodes_to_configure_triggers.extend(
+                [
+                    DaqNodeSetAction(
+                        self._daq, f"/{self.serial}/triggers/out/0/source", 0
+                    ),
+                    DaqNodeSetAction(
+                        self._daq, f"/{self.serial}/triggers/out/1/source", 1
+                    ),
+                    DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/mode", 1),
+                    DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/drive", 15),
+                ]
             )
 
             # Loop over at least AWG instance to cover the case that the instrument is only used as a communication proxy.

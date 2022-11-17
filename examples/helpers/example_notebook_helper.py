@@ -53,7 +53,7 @@ def plot_output_signals(results):
             uid = waveform.uid
             time = waveform.time_axis
 
-            if not "qa" in uid.lower() and not "_freq" in uid.lower(): # ignore QA triggers and oscillator frequency
+            if not "qa" in uid.lower() and not "_freq" in uid.lower() and not "trigger" in uid.lower(): # ignore QA triggers and oscillator frequency
                 title = ""
                 if "hdawg" in device_uid.lower() and n_channels==1:
                     title = "Flux Pulse"

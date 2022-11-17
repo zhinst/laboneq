@@ -15,7 +15,7 @@ requirements = [
     "marshmallow_union",
     "matplotlib",
     "networkx",
-    "retworkx==0.11.0",
+    "rustworkx",
     "numpy",
     "python-box",
     "pyyaml",
@@ -29,8 +29,8 @@ requirements = [
     "setuptools>=40.1.0",
     "wheel",
     "zhinst-core==22.8.36541",
-    "zhinst-toolkit~=0.4.3",
-    "zhinst-utils~=0.1.2",
+    "zhinst-toolkit~=0.5.0",
+    "zhinst-utils~=0.1.3",
 ]
 
 

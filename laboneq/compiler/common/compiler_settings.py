@@ -3,7 +3,7 @@
 
 from dataclasses import dataclass
 
-from laboneq.compiler.device_type import DeviceType
+from laboneq.compiler.common.device_type import DeviceType
 
 
 @dataclass(frozen=True)

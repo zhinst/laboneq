@@ -6,10 +6,10 @@ import copy
 from math import ceil
 from typing import Dict, Any, TYPE_CHECKING, NewType
 from numpy import gcd
-from .device_type import DeviceType
+from laboneq.compiler.common.device_type import DeviceType
 
 if TYPE_CHECKING:
-    from .experiment_dao import ExperimentDAO
+    from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 
 PrecompensationType = NewType("PrecompensationType", Dict[str, Dict[str, Any]])
 
@@ -174,5 +174,5 @@ def compute_precompensation_delays_on_grid(
         delay_signal = (compensation // multiple) / sampling_rate * multiple
         port_delay = (compensation % multiple) / sampling_rate
         assert port_delay == 0 or signal_infos[signal_id].device_type != "uhfqa"
-        pc["computed_delay_signal"] = delay_signal
-        pc["computed_port_delay"] = port_delay
+        pc["computed_delay_signal"] = delay_signal if abs(delay_signal) > 1e-12 else 0
+        pc["computed_port_delay"] = port_delay if abs(port_delay) > 1e-12 else 0

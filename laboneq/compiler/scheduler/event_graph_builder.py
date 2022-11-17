@@ -7,10 +7,10 @@ from dataclasses import dataclass
 import copy
 import logging
 from typing import List
-from .section_graph import SectionGraph
+from laboneq.compiler.experiment_access.section_graph import SectionGraph
 
-from .event_graph import EventGraph, EventType, EventRelation
-
+from laboneq.compiler.scheduler.event_graph import EventGraph, EventRelation
+from laboneq.compiler.common.event_type import EventType
 
 _logger = logging.getLogger(__name__)
 
@@ -288,12 +288,16 @@ class EventGraphBuilder:
             section_info = section_graph.section_info(section_name)
             length = section_info.length
 
+            attributes = {"section_name": section_name}
+            if section_info.trigger_output:
+                attributes["trigger_output"] = section_info.trigger_output
+
             section_span = ChainElement(
                 section_info.section_id,
                 start_type=EventType.SECTION_START,
                 end_type=EventType.SECTION_END,
                 length=length,
-                attributes={"section_name": section_name},
+                attributes=attributes,
             )
 
             for parent_section_name in section_graph.parent_sections(section_name):
@@ -479,8 +483,11 @@ class EventGraphBuilder:
 
             section_span = event_graph.find_section_start_end(section_name)
 
-            if section_graph.section_info(section_name).trigger is not None:
-                if "spectroscopy" in section_graph.section_info(section_name).trigger:
+            if section_graph.section_info(section_name).acquisition_types is not None:
+                if (
+                    "spectroscopy"
+                    in section_graph.section_info(section_name).acquisition_types
+                ):
                     spectroscopy_end_id = event_graph.add_node(
                         section_name=section_name, event_type=EventType.SPECTROSCOPY_END
                     )

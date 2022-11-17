@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from typing import Any, Dict, List, Union, Tuple, TYPE_CHECKING, Optional
+from typing import Any, Dict, List, Union, Tuple, TYPE_CHECKING, Optional, Any
 
+from laboneq.core.validators import validating_allowed_values
 from laboneq.dsl.enums import (
     AveragingMode,
     RepetitionMode,
@@ -65,6 +66,9 @@ class Section:
     children: List[Union[Section, Operation]] = field(
         default_factory=list, compare=False
     )
+
+    #: Optional trigger pulses to play during this section. See :meth:`~.Experiment.section`.
+    trigger: Dict[str, Dict] = field(default_factory=dict)
 
     def __post_init__(self):
         if self.uid is None:
@@ -242,3 +246,54 @@ class Sweep(Section):
     parameters: List[Parameter] = field(default_factory=list)
     #: When True, reset all oscillators at the start of every step.
     reset_oscillator_phase: bool = field(default=False)
+
+
+@validating_allowed_values(
+    {
+        "alignment": [SectionAlignment.LEFT],
+        "execution_type": [ExecutionType.REAL_TIME],
+    }
+)
+@dataclass(init=True, repr=True, order=True)
+class Match(Section):
+    """Execute one of the child branches depending on feedback result."""
+
+    #: Handle from which to obtain results
+    handle: str = ""
+
+    #: Whether to go via the PQSC (False) or SHFQC (True)
+    local: bool = False
+
+    def add(self, case: Case):
+        """Add a branch to which to switch.
+
+        Args:
+            case: Branch that is added.
+        """
+        if not isinstance(case, Case):
+            raise LabOneQException(
+                f"Trying to add section to section {self.uid} which is not of type 'Case'."
+            )
+        if any(c.state == case.state for c in self.sections):
+            raise LabOneQException(
+                f"A branch with matches {case.state} already exists."
+            )
+        super().add(case)
+
+
+@validating_allowed_values(
+    {
+        "alignment": [SectionAlignment.LEFT],
+        "execution_type": [ExecutionType.REAL_TIME],
+    }
+)
+@dataclass(init=True, repr=True, order=True)
+class Case(Section):
+    """Branch in a match/case statement"""
+
+    state: int = 0
+
+    def add(self, obj):
+        raise LabOneQException(
+            f"Trying to add object to section {self.uid}. Only ``play`` and ``delay`` are allowed."
+        )

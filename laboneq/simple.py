@@ -37,6 +37,8 @@ from laboneq.dsl.experiment import (
     AcquireLoopNt,
     AcquireLoopRt,
     Sweep,
+    Match,
+    Case,
 )
 from laboneq.dsl.result import Results
 from laboneq.core.types.compiled_experiment import CompiledExperiment

@@ -6,6 +6,9 @@ import logging
 from typing import Any, Dict, Optional, Union
 import numpy as np
 
+from laboneq.core.exceptions import LabOneQException
+from laboneq.core.types.enums.mixer_type import MixerType
+
 _logger = logging.getLogger(__name__)
 
 
@@ -27,10 +30,9 @@ def sample_pulse(
     amplitude: Union[float, complex],
     pulse_function: Optional[str],
     modulation_frequency: Optional[float] = None,
-    modulation_phase: Optional[float] = None,
-    iq_phase: float = 0,
+    phase: Optional[float] = None,
     samples: Optional[np.ndarray] = None,
-    complex_modulation: bool = True,
+    mixer_type: Optional[MixerType] = MixerType.IQ,
     pulse_parameters: Optional[Dict[str, Any]] = None,
 ):
     """Create a waveform from a pulse definition.
@@ -42,22 +44,23 @@ def sample_pulse(
     same time. Software modulation is performed when modulation_frequency and
     modulation_phase are not None.
 
+    Depending on the following mixer stage, the output of the AWG should either be real
+    and imaginary components of a complex signal (IQ modulation, default), or
+    UHFQA-style envelope modulation, where both AWG channels should output the signal's
+    envelope. Specify the type via the `mixer_type` argument.
+
     Args:
         signal_type: "iq" if the pulse represents quadrature (IQ) modulation; used
           together with samples.
         sampling_rate: Sampling rate of the device the pulse is played on.
         length: Pulse length in seconds
         amplitude: Magnitude of the amplitude to multiply with the given pulse
-        iq_phase: Phase of the amplitude to multiply with the given pulse
         pulse_function: In case of a functional pulse, the function to sample
         modulation_frequency: The oscillator frequency (for software modulation if
           not None)
-        modulation_phase: The oscillator phase (for software modulation if not
-          None)
+        phase: The phase shift to apply to the signal
         samples: Pulse shape for a sampled pulse
-        complex_modulation: Whether to allow applying iq_phase to the complex
-          samples (False to emulate UHFQA behavior)
-        pulse_parameters: resolved parameters passed to the user pulse function
+        mixer_type: Type of the mixer after the AWG. Only effective for IQ signals.
 
     Returns:
         A dict with one ("samples_i", real case) or two ("samples_i" and
@@ -93,8 +96,6 @@ def sample_pulse(
 
     if signal_type == "iq":
         samples = samples.astype(complex)
-        if (complex_modulation or pulse_function) and iq_phase:
-            amplitude *= np.exp(1j * iq_phase)
     else:
         assert all(samples.imag == 0.0)
         amplitude = amplitude.real
@@ -102,26 +103,36 @@ def sample_pulse(
 
     samples *= amplitude
 
-    if modulation_frequency is not None:
-        _logger.debug(
-            "Doing modulation with modulation_frequency %s and phase %s",
-            modulation_frequency,
-            modulation_phase,
-        )
+    phase = phase or 0.0
+    modulation_frequency = modulation_frequency or 0.0
 
-        phase = (
-            2.0 * np.pi * modulation_frequency * np.arange(num_samples) / sampling_rate
-        ) + (modulation_phase or 0.0)
+    _logger.debug(
+        "Doing modulation with modulation_frequency %f and phase %f",
+        modulation_frequency,
+        phase,
+    )
 
-        if signal_type == "iq":
-            if complex_modulation:
-                samples = np.exp(-1.0j * phase) * samples
-            else:
-                samples = (
-                    np.cos(phase) * samples.real - 1j * np.sin(phase) * samples.imag
-                )
-        else:
-            samples = np.cos(phase) * samples
+    t = np.arange(num_samples) / sampling_rate
+    if modulation_frequency:
+        carrier_phase = 2.0 * np.pi * modulation_frequency * t
+    else:
+        carrier_phase = 0
+    carrier_phase += phase
+
+    if signal_type == "iq":
+        samples = np.exp(-1.0j * carrier_phase) * samples
+    else:
+        if not np.allclose(samples.imag, 0.0):
+            raise LabOneQException("Complex samples not permitted for RF signals")
+        samples = np.cos(carrier_phase) * samples
+
+    if mixer_type == MixerType.UHFQA_ENVELOPE and signal_type == "iq":
+        if not np.allclose(samples.imag, 0.0):
+            raise LabOneQException(
+                "HW modulation on UHFQA requires a real baseband (phase "
+                "modulation is not permitted)."
+            )
+        samples = samples.real * (1.0 + 1.0j)
 
     return {"samples_i": samples.real, "samples_q": samples.imag}
 

@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-import json
-
 import numpy
 from typing import Any, Dict, List, Optional
 from numpy import typing as npt
@@ -55,6 +53,14 @@ class DeviceSHFSG(DeviceZI):
     def _get_sequencer_type(self) -> str:
         return "sg"
 
+    def _get_sequencer_path_patterns(self) -> dict:
+        return {
+            "elf": "/{serial}/sgchannels/{index}/awg/elf/data",
+            "progress": "/{serial}/sgchannels/{index}/awg/elf/progress",
+            "enable": "/{serial}/sgchannels/{index}/awg/enable",
+            "ready": "/{serial}/sgchannels/{index}/awg/ready",
+        }
+
     def _get_num_AWGs(self):
         return self._channels
 
@@ -92,6 +98,7 @@ class DeviceSHFSG(DeviceZI):
         nodes = []
         for awg in range(self._get_num_AWGs()):
             nodes.append(f"/{self.serial}/sgchannels/{awg}/awg/enable")
+            nodes.append(f"/{self.serial}/sgchannels/{awg}/awg/ready")
         return nodes
 
     def collect_execution_nodes(self):
@@ -313,16 +320,14 @@ class DeviceSHFSG(DeviceZI):
                 # otherwise, the QA will initialize the nodes
                 self._emit_trigger = True
                 clock_source = initialization.config.reference_clock_source
-                ntc.append(
+                ntc += [
                     (
                         "system/clocks/referenceclock/in/source",
                         REFERENCE_CLOCK_SOURCE_INTERNAL
                         if clock_source
                         and clock_source.value == ReferenceClockSource.INTERNAL.value
                         else REFERENCE_CLOCK_SOURCE_EXTERNAL,
-                    )
-                )
-                ntc += [
+                    ),
                     ("system/internaltrigger/enable", 0),
                     ("system/internaltrigger/repetitions", 1),
                 ]
@@ -330,12 +335,18 @@ class DeviceSHFSG(DeviceZI):
                 self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
             ):
                 ntc += [
-                    (f"sgchannels/{awg_index}/awg/auxtriggers/0/slope", 1),  # Rise
-                    (
-                        f"sgchannels/{awg_index}/awg/auxtriggers/0/channel",
-                        8,
-                    ),  # Internal trigger
+                    # Rise
+                    (f"sgchannels/{awg_index}/awg/auxtriggers/0/slope", 1),
+                    # Internal trigger
+                    (f"sgchannels/{awg_index}/awg/auxtriggers/0/channel", 8),
                 ]
+                if self._get_option("qc_with_qa"):
+                    ntc += [
+                        # Internal feedback
+                        (f"sgchannels/{awg_index}/awg/intfeedback/direct/shift", 0),
+                        (f"sgchannels/{awg_index}/awg/intfeedback/direct/mask", 0b1),
+                        (f"sgchannels/{awg_index}/awg/intfeedback/direct/offset", 0),
+                    ]
 
             nodes_to_configure_triggers = [
                 DaqNodeSetAction(self._daq, f"/{self.serial}/{node}", v)
@@ -346,6 +357,13 @@ class DeviceSHFSG(DeviceZI):
                 f"Unsupported DIO mode: {dio_mode} for device type SHFSG."
             )
 
+        for awg_index in (
+            self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
+        ):
+            marker_path = f"/{self.serial}/sgchannels/{awg_index}/marker"
+            nodes_to_configure_triggers.append(
+                DaqNodeSetAction(self._daq, f"{marker_path}/source", 0),
+            )
         return nodes_to_configure_triggers
 
     def add_command_table_header(self, body: dict) -> Dict:

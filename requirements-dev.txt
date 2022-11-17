@@ -37,6 +37,8 @@ pymdown-extensions
 
 # Formatting (must match version in CI)
 black==22.08.0
+pre-commit
+isort>=5.10.1
 
 # packaging/deployment
 wheel

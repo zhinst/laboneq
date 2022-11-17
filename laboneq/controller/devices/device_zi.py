@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
+from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
 from math import floor
@@ -30,7 +32,11 @@ if TYPE_CHECKING:
     from laboneq.core.types import CompiledExperiment
 
 from laboneq.controller.devices.device_base import DeviceBase, DeviceQualifier
+
+import zhinst.core
 import zhinst.utils
+from zhinst.core.errors import CoreError as LabOneCoreError
+
 import numpy as np
 from numpy import typing as npt
 
@@ -62,6 +68,11 @@ class DeviceZI(DeviceBase):
         self._allocated_oscs: List[AllocatedOscillator] = []
         self._allocated_awgs: Set[int] = set()
         self._nodes_to_monitor = None
+        self._sampling_rate = None
+
+        self._is_using_standalone_compiler = device_qualifier.options.get(
+            "standalone_awg", False
+        )
 
         if self._daq is None:
             raise LabOneQControllerException("ZI devices need daq")
@@ -84,7 +95,7 @@ class DeviceZI(DeviceBase):
 
     @property  # Overrides one from DeviceBase
     def has_awg(self) -> bool:
-        return len(self._awg_modules) > 0
+        return self._get_num_AWGs() > 0
 
     @property
     def serial(self):
@@ -113,6 +124,22 @@ class DeviceZI(DeviceBase):
 
     def _get_sequencer_type(self) -> str:
         return "auto-detect"
+
+    def _get_sequencer_path_patterns(self) -> dict:
+        return {
+            "elf": "/{serial}/awgs/{index}/elf/data",
+            "progress": "/{serial}/awgs/{index}/elf/progress",
+            "enable": "/{serial}/awgs/{index}/enable",
+            "ready": "/{serial}/awgs/{index}/ready",
+        }
+
+    def get_sequencer_paths(self, index: int) -> dict:
+        props = {
+            "serial": self.serial,
+            "index": index,
+        }
+        patterns = self._get_sequencer_path_patterns()
+        return {k: v.format(**props) for k, v in patterns.items()}
 
     def connect(self):
         if self._connected:
@@ -146,24 +173,25 @@ class DeviceZI(DeviceBase):
             self.dev_opts = dev_opts.split("\n")
         self._process_dev_opts()
 
-        for i in range(self._get_num_AWGs()):
-            awg_module = self._daq.create_awg_module(
-                f"{self.serial}:awg_module{str(i)}"
-            )
-            self._awg_modules.append(awg_module)
-            awg_config = [
-                DaqNodeSetAction(awg_module, "/index", i),
-                DaqNodeSetAction(awg_module, "/device", self.serial),
-            ]
-            if self._get_option("is_qc"):
-                awg_config.append(
-                    DaqNodeSetAction(
-                        awg_module, "/sequencertype", self._get_sequencer_type()
-                    )
+        if not self._is_using_standalone_compiler:
+            for i in range(self._get_num_AWGs()):
+                awg_module = self._daq.create_awg_module(
+                    f"{self.serial}:awg_module{str(i)}"
                 )
-            awg_module.batch_set(awg_config)
-            awg_module.execute()
-            self._logger.debug("%s: Creating AWG Module #%d", self.dev_repr, i)
+                self._awg_modules.append(awg_module)
+                awg_config = [
+                    DaqNodeSetAction(awg_module, "/index", i),
+                    DaqNodeSetAction(awg_module, "/device", self.serial),
+                ]
+                if self._get_option("is_qc"):
+                    awg_config.append(
+                        DaqNodeSetAction(
+                            awg_module, "/sequencertype", self._get_sequencer_type()
+                        )
+                    )
+                awg_module.batch_set(awg_config)
+                awg_module.execute()
+                self._logger.debug("%s: Creating AWG Module #%d", self.dev_repr, i)
 
         self._daq.node_monitor.add_nodes(self.nodes_to_monitor())
 
@@ -526,6 +554,7 @@ class DeviceZI(DeviceBase):
             return None
 
         oscillator_map = {osc.id: osc.index for osc in self._allocated_oscs}
+        command_table_body = deepcopy(command_table_body)
         for entry in command_table_body:
             if "oscillatorSelect" not in entry:
                 continue
@@ -534,7 +563,7 @@ class DeviceZI(DeviceBase):
 
         return self.add_command_table_header(command_table_body)
 
-    def _prepare_seqc(
+    def prepare_seqc(
         self, seqc_filename: str, compiled: CompiledExperiment
     ) -> Tuple[str, List[Any], Dict[Any]]:
         """
@@ -562,6 +591,16 @@ class DeviceZI(DeviceBase):
 
         return seqc["text"], bin_waves, command_table
 
+    def prepare_upload_elf(self, elf: bytes, awg_index: int, filename: str):
+        sequencer_paths = self.get_sequencer_paths(awg_index)
+        return DaqNodeSetAction(
+            self._daq,
+            sequencer_paths["elf"],
+            elf,
+            filename=filename,
+            caching_strategy=CachingStrategy.NO_CACHE,
+        )
+
     def prepare_upload_binary_wave(
         self,
         filename: str,
@@ -578,34 +617,42 @@ class DeviceZI(DeviceBase):
             caching_strategy=CachingStrategy.NO_CACHE,
         )
 
-    def _upload_all_binary_waves(
+    def prepare_upload_all_binary_waves(
         self, awg_index, waves, acquisition_type: AcquisitionType
     ):
         # Default implementation for "old" devices, override for newer devices
-        self._daq.batch_set(
-            [
-                self.prepare_upload_binary_wave(
-                    filename=w[0],
-                    waveform=w[1],
-                    awg_index=awg_index,
-                    wave_index=i,
-                    acquisition_type=acquisition_type,
-                )
-                for i, w in enumerate(waves)
-            ]
+        return [
+            self.prepare_upload_binary_wave(
+                filename=w[0],
+                waveform=w[1],
+                awg_index=awg_index,
+                wave_index=i,
+                acquisition_type=acquisition_type,
+            )
+            for i, w in enumerate(waves)
+        ]
+
+    def _upload_all_binary_waves(
+        self, awg_index, waves, acquisition_type: AcquisitionType
+    ):
+        waves_upload = self.prepare_upload_all_binary_waves(
+            awg_index, waves, acquisition_type
+        )
+        self._daq.batch_set(waves_upload)
+
+    def prepare_upload_command_table(self, awg_index, command_table: Dict):
+        command_table_path = self.command_table_path(awg_index)
+        return DaqNodeSetAction(
+            self._daq,
+            command_table_path + "data",
+            json.dumps(command_table),
+            caching_strategy=CachingStrategy.NO_CACHE,
         )
 
     def upload_command_table(self, awg_index, command_table: Dict):
         command_table_path = self.command_table_path(awg_index)
         self._daq.batch_set(
-            [
-                DaqNodeSetAction(
-                    self._daq,
-                    command_table_path + "data",
-                    json.dumps(command_table),
-                    caching_strategy=CachingStrategy.NO_CACHE,
-                )
-            ]
+            [self.prepare_upload_command_table(awg_index, command_table)]
         )
 
         status_path = command_table_path + "status"
@@ -627,57 +674,107 @@ class DeviceZI(DeviceBase):
             if not (status & 0b0001):
                 raise ValueError("Failed to upload command table")
 
+    def _compile_and_upload_seqc(
+        self, code: str, awg_index: int, filename_hint: str = None
+    ):
+        try:
+            self._logger.debug(
+                "%s: Running AWG compiler on AWG #%d...",
+                self.dev_repr,
+                awg_index,
+            )
+            awg_module = self._awg_modules[awg_index]
+            awg_module.batch_set(
+                [
+                    DaqNodeSetAction(
+                        awg_module,
+                        "/compiler/sourcestring",
+                        code,
+                        filename=filename_hint,
+                        caching_strategy=CachingStrategy.NO_CACHE,  # if only external waves changed
+                    )
+                ]
+            )
+        except LabOneQControllerException as exp:
+            raise LabOneQControllerException(
+                f"Exception raised while uploading program from file {filename_hint} to AWG #{awg_index}\n"
+                f"details:\n{str(exp)}\n{code}\n"
+            )
+
+        # TODO(2K): handle timeout, emit:
+        # f"{str(exp)}\nAWG compiler timed out while trying to compile:\n{data}\n"
+        self._check_awg_compiler_status(awg_index)
+        self._wait_for_elf_upload(awg_index)
+
+    def compile_seqc(self, code: str, awg_index: int, filename_hint: str = None):
+        self._logger.debug(
+            "%s: Compiling sequence for AWG #%d...",
+            self.dev_repr,
+            awg_index,
+        )
+        sequencer = self._get_sequencer_type()
+        sequencer = "auto" if sequencer == "auto-detect" else sequencer
+
+        try:
+            elf, extra = zhinst.core.compile_seqc(
+                code,
+                self.dev_type,
+                options=self.dev_opts,
+                index=awg_index,
+                sequencer=sequencer,
+                filename=filename_hint,
+                samplerate=self._sampling_rate,
+            )
+        except LabOneCoreError as exc:
+            raise LabOneQControllerException(
+                f"{self.dev_repr}: AWG compilation failed.\n{str(exc)}"
+            )
+
+        compiler_warnings = extra["messages"]
+        if compiler_warnings:
+            raise LabOneQControllerException(
+                f"{self.dev_repr}: AWG compilation succeeded, but there are warnings:\n{compiler_warnings}"
+            )
+
+        self._logger.debug(
+            "%s: Compilation successful on AWG #%d with no warnings.",
+            self.dev_repr,
+            awg_index,
+        )
+
+        return elf
+
     def upload_awg_program(
         self, initialization: Initialization.Data, recipe_data: RecipeData
     ):
-        if initialization.awgs is not None:
-            acquisition_type = RtExecutionInfo.get_acquisition_type(
-                recipe_data.rt_execution_infos
+        assert not self._is_using_standalone_compiler
+
+        if initialization.awgs is None:
+            return
+
+        acquisition_type = RtExecutionInfo.get_acquisition_type(
+            recipe_data.rt_execution_infos
+        )
+
+        for awg_obj in initialization.awgs:
+            awg_index = awg_obj.awg
+
+            self._logger.debug(
+                "%s: Starting to compile and upload AWG program '%s' to AWG #%d",
+                self.dev_repr,
+                awg_obj.seqc,
+                awg_index,
             )
-            for awg_obj in initialization.awgs:
-                awg_index = awg_obj.awg
 
-                self._logger.debug(
-                    "%s: Starting to compile and upload AWG program '%s' to AWG #%d",
-                    self.dev_repr,
-                    awg_obj.seqc,
-                    awg_index,
-                )
+            data, waves, command_table = self.prepare_seqc(
+                awg_obj.seqc, recipe_data.compiled
+            )
 
-                data, waves, command_table = self._prepare_seqc(
-                    awg_obj.seqc, recipe_data.compiled
-                )
+            self._compile_and_upload_seqc(data, awg_index, filename_hint=awg_obj.seqc)
 
-                try:
-                    self._logger.debug(
-                        "%s: Running AWG compiler on AWG #%d...",
-                        self.dev_repr,
-                        awg_index,
-                    )
-                    awg_module = self._awg_modules[awg_index]
-                    awg_module.batch_set(
-                        [
-                            DaqNodeSetAction(
-                                awg_module,
-                                "/compiler/sourcestring",
-                                data,
-                                filename=awg_obj.seqc,
-                                caching_strategy=CachingStrategy.NO_CACHE,  # if only external waves changed
-                            )
-                        ]
-                    )
-                except LabOneQControllerException as exp:
-                    raise LabOneQControllerException(
-                        f"Exception raised while uploading program from file {awg_obj.seqc} to AWG #{awg_index}\n"
-                        f"details:\n{str(exp)}\n{data}\n"
-                    )
-                # TODO(2K): handle timeout, emit:
-                # f"{str(exp)}\nAWG compiler timed out while trying to compile:\n{data}\n"
-                self._check_awg_compiler_status(awg_index)
-                self._wait_for_elf_upload(awg_index)
-                self._upload_all_binary_waves(awg_index, waves, acquisition_type)
-                if command_table is not None:
-                    self.upload_command_table(awg_index, command_table)
+            self._upload_all_binary_waves(awg_index, waves, acquisition_type)
+            if command_table is not None:
+                self.upload_command_table(awg_index, command_table)
 
     def _get_num_AWGs(self):
         return 0

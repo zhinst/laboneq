@@ -43,6 +43,8 @@ def _get_channel_mapping(
             ("osc0_freq", 0, WaveScroller.get_freq_snippet, True),
         ]
 
+    channel_mapping.append(("trigger", 0, WaveScroller.get_trigger_snippet, False))
+
     return channel_mapping
 
 
@@ -107,18 +109,22 @@ def find_signal_start_times_for_result(
 
 
 def find_signal_start_times(runtime: SimpleRuntime, threshold=1e-6, holdoff=50e-9):
+    """Find the start of pulses
+
+    Algorithm: Rectify, boxcar-filter with given width. Return points where the signal
+    crosses the threshold.
+    """
     retval = {}
     for output_key, wave in runtime.output.items():
-        found = {"samples": [], "time": [], "time_at_port": []}
-        last_found = None
-        for i, val in enumerate(wave):
-            current_time_at_port = runtime.times_at_port[output_key][i]
-            current_time = runtime.times[output_key][i]
-            if np.abs(val) > threshold:
-                if last_found is None or current_time - last_found > holdoff:
-                    found["samples"].append(i)
-                    found["time"].append(current_time)
-                    found["time_at_port"].append(current_time_at_port)
-                last_found = current_time
+        sample_period = runtime.times[output_key][1] - runtime.times[output_key][0]
+        window_width = int(holdoff / sample_period)
+        wave = np.convolve(np.abs(wave), np.ones(window_width))[: -window_width + 1]
+        shifted = np.concatenate([[0], wave[:-1]])
+        events = np.logical_and(wave > threshold, shifted < threshold)
+        found = {
+            "samples": np.arange(len(wave))[events],
+            "time": runtime.times[output_key][events],
+            "time_at_port": runtime.times_at_port[output_key][events],
+        }
         retval[output_key] = found
     return retval

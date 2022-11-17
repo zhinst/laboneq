@@ -13,6 +13,6 @@ from .pulse import (
     PulseFunctional,
 )
 from .reserve import Reserve
-from .section import Section, AcquireLoopNt, AcquireLoopRt, Sweep
+from .section import Section, AcquireLoopNt, AcquireLoopRt, Sweep, Match, Case
 from .set import Set
 from .call import Call

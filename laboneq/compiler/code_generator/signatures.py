@@ -23,8 +23,7 @@ class PulseSignature:
     amplitude: Optional[float]
     phase: Optional[int]
     oscillator_phase: Optional[float]
-    baseband_phase: Optional[float]
-    iq_phase: float
+    baseband_phase: Optional[float]  # todo: rename to `persistent_phase`
     channel: Optional[int]
     sub_channel: Optional[int]
     pulse_parameters: FrozenSet[Tuple[str, Any]]

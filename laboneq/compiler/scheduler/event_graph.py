@@ -8,16 +8,12 @@ import itertools
 import logging
 import copy
 
-import retworkx
+import rustworkx
 
-from .fastlogging import NullLogger
+from laboneq.compiler.common.event_type import EventType
+from laboneq.compiler.fastlogging import NullLogger
 
 _logger = logging.getLogger(__name__)
-if _logger.getEffectiveLevel() == logging.DEBUG:
-    _dlogger = _logger
-else:
-    _logger.info("Debug logging disabled for %s", __name__)
-    _dlogger = NullLogger()
 
 
 class EventRelation(Enum):
@@ -34,42 +30,10 @@ class EventRelation(Enum):
     USES_LATE_REFERENCE = "USES_LATE_REFERENCE"
 
 
-class EventType:
-    SECTION_START = "SECTION_START"
-    SECTION_END = "SECTION_END"
-    PLAY_START = "PLAY_START"
-    PLAY_END = "PLAY_END"
-    ACQUIRE_START = "ACQUIRE_START"
-    ACQUIRE_END = "ACQUIRE_END"
-    LOOP_STEP_START = "LOOP_STEP_START"
-    LOOP_STEP_BODY_START = "LOOP_STEP_BODY_START"
-    LOOP_STEP_END = "LOOP_STEP_END"
-    LOOP_ITERATION_END = "LOOP_ITERATION_END"
-    LOOP_END = "LOOP_END"
-    PARAMETER_SET = "PARAMETER_SET"
-    DELAY_START = "DELAY_START"
-    DELAY_END = "DELAY_END"
-    RESET_PRECOMPENSATION_FILTERS = "RESET_PRECOMPENSATION_FILTERS"
-    INITIAL_RESET_HW_OSCILLATOR_PHASE = "INITIAL_RESET_HW_OSCILLATOR_PHASE"
-    RESET_HW_OSCILLATOR_PHASE = "RESET_HW_OSCILLATOR_PHASE"
-    RESET_SW_OSCILLATOR_PHASE = "RESET_SW_OSCILLATOR_PHASE"
-    SKELETON = "SKELETON"
-    RIGHT_ALIGNED_COLLECTOR = "RIGHT_ALIGNED_COLLECTOR"
-    INCREMENT_OSCILLATOR_PHASE = "INCREMENT_OSCILLATOR_PHASE"
-    SET_OSCILLATOR_PHASE = "SET_OSCILLATOR_PHASE"
-    SET_OSCILLATOR_FREQUENCY_START = "SET_OSCILLATOR_FREQUENCY_START"
-    SET_OSCILLATOR_FREQUENCY_END = "SET_OSCILLATOR_FREQUENCY_END"
-    SPECTROSCOPY_END = "SPECTROSCOPY_END"
-    SUBSECTION_START = "SUBSECTION_START"
-    SUBSECTION_END = "SUBSECTION_END"
-    SECTION_SKELETON = "SECTION_SKELETON"
-    RELATIVE_TIMING = "RELATIVE_TIMING"
-
-
 class EventGraph:
     def __init__(self, event_graph=None, node_data=None):
         if event_graph is None:
-            self._event_graph = retworkx.PyDiGraph(check_cycle=False, multigraph=False)
+            self._event_graph = rustworkx.PyDiGraph(check_cycle=False, multigraph=False)
         else:
             self._event_graph = event_graph
         self._section_events = {}
@@ -144,7 +108,7 @@ class EventGraph:
 
         self._node_data[node_id] = attributes
 
-        _dlogger.debug("Added node %s to nx graph", node_id)
+        _logger.debug("Added node %s to nx graph", node_id)
 
         new_node = attributes
 
@@ -220,7 +184,7 @@ class EventGraph:
         return self._node_data[id]
 
     def descendants(self, id):
-        return retworkx.descendants(self._event_graph, id)
+        return rustworkx.descendants(self._event_graph, id)
 
     def log_graph_lines(self):
         log_lines = []
@@ -244,7 +208,7 @@ class EventGraph:
 
     def log_graph(self):
         for line in self.log_graph_lines():
-            _dlogger.debug(line)
+            _logger.debug(line)
 
     def out_edges(self, event_id):
         return self._event_graph.out_edges(event_id)
@@ -268,10 +232,12 @@ class EventGraph:
             self._event_graph.num_edges(),
         )
         try:
-            sorted_events = list(reversed(retworkx.topological_sort(self._event_graph)))
-        except retworkx.DAGHasCycle as ex:
+            sorted_events = rustworkx.topological_sort(self._event_graph)[::-1]
+        except rustworkx.DAGHasCycle as ex:
             _logger.error("Event graph has cycles:")
-            first_cycle = [e[0] for e in retworkx.digraph_find_cycle(self._event_graph)]
+            first_cycle = [
+                e[0] for e in rustworkx.digraph_find_cycle(self._event_graph)
+            ]
             _logger.debug("First cycle: %d", first_cycle)
             for node in first_cycle:
                 graph_node = self.node(node)
@@ -332,7 +298,7 @@ class EventGraph:
         # is much more robust, the documentation says: "
         #     source: The node from which the traversal begins.
         #     If None, then a source is chosen arbitrarily and repeatedly until all edges from each node in the graph are searched"
-        first_cycle_edges = list(retworkx.digraph_find_cycle(self._event_graph, root))
+        first_cycle_edges = list(rustworkx.digraph_find_cycle(self._event_graph, root))
         _logger.debug(
             "first_cycle_edges=%s, edges = %s",
             first_cycle_edges,

@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from laboneq.compiler.fastlogging import NullLogger
 
 
-from laboneq.compiler.device_type import DeviceType
+from laboneq.compiler.common.device_type import DeviceType
 from engineering_notation import EngNumber
 from typing import Any, Dict
 

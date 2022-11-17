@@ -3,13 +3,27 @@
 
 from __future__ import annotations
 from copy import deepcopy
+from collections import defaultdict
 import itertools
 import logging
+import os
 import re
 import traceback
 import numpy as np
 
-from typing import Iterator, List, Dict, Any, Callable, Tuple, Union, TYPE_CHECKING
+import concurrent.futures
+
+from typing import (
+    Iterator,
+    List,
+    Dict,
+    Any,
+    Callable,
+    Optional,
+    Tuple,
+    Union,
+    TYPE_CHECKING,
+)
 from numpy import typing as npt
 
 import zhinst.utils
@@ -27,6 +41,7 @@ from laboneq.executor.executor import ExecutorBase, LoopingMode
 
 from .devices.device_base import DeviceBase, DeviceQualifier
 from .devices.device_zi import DeviceZI
+from .devices.device_uhfqa import DeviceUHFQA
 from .devices.device_factory import DeviceFactory
 from .recipe_1_4_0 import *
 from .recipe_processor import RecipeData, RtExecutionInfo, pre_process_compiled
@@ -94,6 +109,11 @@ class Controller:
 
         self._logger.info(f"VERSION: laboneq {__version__}")
 
+        # TODO: Remove this option and support of AWG module.
+        self._is_using_standalone_compiler = os.environ.get(
+            "LABONEQ_STANDALONE_AWG", "1"
+        ).lower() in ("1", "true")
+
     DevIterType = Iterator[Tuple[str, DeviceBase]]
 
     @property
@@ -117,7 +137,10 @@ class Controller:
         def make_device_qualifier(dry_run: bool, instrument, daq) -> DeviceQualifier:
 
             driver = instrument.calc_driver()
-            options = instrument.calc_options()
+            options = {
+                **instrument.calc_options(),
+                "standalone_awg": self._is_using_standalone_compiler,
+            }
 
             return DeviceQualifier(
                 dry_run=dry_run, driver=driver, server=daq, options=options
@@ -229,7 +252,138 @@ class Controller:
             )
         self._batch_set(nodes_to_initialize)
 
+    def _upload_awg_programs_standalone(self):
+        @dataclass
+        class UploadItem:
+            awg_index: int
+            seqc_code: str
+            seqc_filename: str
+            waves: List[Any]
+            command_table: Dict[Any]
+            elf: Optional[bytes]
+
+        # Mise en place:
+        awg_data = defaultdict(list)
+        recipe_data = self._recipe_data
+        acquisition_type = RtExecutionInfo.get_acquisition_type(
+            recipe_data.rt_execution_infos
+        )
+        other_initializations = []
+        for initialization in recipe_data.initializations:
+            device = self._find_device(initialization.device_uid)
+
+            if not isinstance(device, DeviceZI):
+                other_initializations.append(initialization)
+                continue
+
+            if initialization.awgs is None:
+                continue
+
+            for awg_obj in initialization.awgs:
+                awg_index = awg_obj.awg
+                seqc_code, waves, command_table = device.prepare_seqc(
+                    awg_obj.seqc, recipe_data.compiled
+                )
+                awg_data[device].append(
+                    UploadItem(
+                        awg_index, seqc_code, awg_obj.seqc, waves, command_table, None
+                    )
+                )
+
+        # Compile in parallel:
+        def worker(device: DeviceZI, item: UploadItem):
+            item.elf = device.compile_seqc(
+                item.seqc_code, item.awg_index, item.seqc_filename
+            )
+
+        self._logger.debug("Started compilation of AWG programs...")
+        max_workers = os.environ.get("LABONEQ_AWG_COMPILER_MAX_WORKERS")
+        max_workers = int(max_workers) if max_workers is not None else None
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [
+                executor.submit(worker, device, item)
+                for device, items in awg_data.items()
+                for item in items
+            ]
+            concurrent.futures.wait(futures)
+            exceptions = [
+                future.exception()
+                for future in futures
+                if future.exception() is not None
+            ]
+            if len(exceptions) > 0:
+                raise LabOneQControllerException(
+                    "Compilation failed. See log output for details."
+                )
+        self._logger.debug("Finished compilation.")
+
+        # Upload AWG programs, waveforms, and command tables:
+        elf_node_settings = defaultdict(list)
+        elf_upload_conditions = defaultdict(dict)
+        wf_node_settings = defaultdict(list)
+        for device, items in awg_data.items():
+            for item in items:
+                elf_filename = item.seqc_filename.rsplit(".seqc", 1)[0] + ".elf"
+                set_action = device.prepare_upload_elf(
+                    item.elf, item.awg_index, elf_filename
+                )
+                node_settings = elf_node_settings[device.daq]
+                node_settings.append(set_action)
+
+                if isinstance(device, DeviceUHFQA):
+                    # UHFQA does not yet support upload of ELF and waveforms in
+                    # a single transaction.
+                    ready_node = device.get_sequencer_paths(item.awg_index)["ready"]
+                    elf_upload_conditions[device.daq][ready_node] = 1
+                    node_settings = wf_node_settings[device.daq]
+
+                node_settings += device.prepare_upload_all_binary_waves(
+                    item.awg_index, item.waves, acquisition_type
+                )
+
+                if item.command_table is not None:
+                    set_action = device.prepare_upload_command_table(
+                        item.awg_index, item.command_table
+                    )
+                    node_settings.append(set_action)
+
+        if len(elf_upload_conditions) > 0:
+            for daq in elf_upload_conditions.keys():
+                daq.node_monitor.flush()
+
+        self._logger.debug("Started upload of AWG programs...")
+        for daq, nodes in elf_node_settings.items():
+            daq.batch_set(nodes)
+
+        if len(elf_upload_conditions) > 0:
+            self._logger.debug("Waiting for devices...")
+            if not self._run_parameters.dry_run:
+                conditions_waiter = AllConditionsWaiter()
+                for daq, conditions in elf_upload_conditions.items():
+                    conditions_waiter.add(
+                        target=daq.node_monitor,
+                        conditions=conditions,
+                    )
+                timeout_s = 10
+                if not conditions_waiter.wait_all(timeout=timeout_s):
+                    raise LabOneQControllerException(
+                        f"AWGs not in ready state within timeout ({timeout_s} s)."
+                    )
+
+            self._logger.debug("Started upload of waveforms...")
+            for daq, nodes in wf_node_settings.items():
+                daq.batch_set(nodes)
+        self._logger.debug("Finished upload.")
+
+        # For completeness, deal with initializations of non-ZI devices:
+        for initialization in other_initializations:
+            device = self._find_device(initialization.device_uid)
+            device.upload_awg_program(initialization, self._recipe_data)
+
     def _upload_awg_programs(self):
+        if self._is_using_standalone_compiler:
+            return self._upload_awg_programs_standalone()
+
         for initialization in self._recipe_data.initializations:
             device = self._find_device(initialization.device_uid)
             device.upload_awg_program(initialization, self._recipe_data)

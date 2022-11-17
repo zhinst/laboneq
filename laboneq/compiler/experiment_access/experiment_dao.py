@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import logging
 import os
@@ -18,12 +18,7 @@ from jsonschema.validators import validator_for
 import copy
 
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types.enums import (
-    AveragingMode,
-    IODirection,
-    AcquisitionType,
-    HighPassCompensationClearing,
-)
+from laboneq.core.types.enums import HighPassCompensationClearing
 from laboneq.core.types.enums import AveragingMode, IODirection, AcquisitionType
 
 _logger = logging.getLogger(__name__)
@@ -85,7 +80,7 @@ class SectionInfo:
     section_id: str
     has_repeat: bool
     execution_type: Optional[str]
-    trigger: Optional[List[str]]
+    acquisition_types: Optional[List[str]]
     averaging_type: Optional[str]
     count: int
     align: Optional[str]
@@ -97,7 +92,11 @@ class SectionInfo:
     repetition_time: Optional[float]
     play_after: Optional[str]
     reset_oscillator_phase: bool
+    handle: Optional[str]
+    state: Optional[int]
+    local: Optional[bool]
     section_display_name: Optional[str] = None
+    trigger_output: Dict[str, Dict] = field(default_factory=dict)
 
 
 @dataclass
@@ -458,9 +457,11 @@ class ExperimentDAO:
                         }
                     )
 
-            trigger = section.get("trigger")
-            if self._acquisition_type is None and trigger is not None:
-                self._acquisition_type = AcquisitionType(trigger[0])
+            acquisition_types = section.get("acquisition_types")
+            # backwards-compatibility: "acquisition_types" field was previously named "trigger"
+            acquisition_types = acquisition_types or section.get("trigger")
+            if self._acquisition_type is None and acquisition_types is not None:
+                self._acquisition_type = AcquisitionType(acquisition_types[0])
 
             if "align" in section:
                 align = section["align"]
@@ -475,6 +476,18 @@ class ExperimentDAO:
             reset_oscillator_phase = False
             if "reset_oscillator_phase" in section:
                 reset_oscillator_phase = section["reset_oscillator_phase"]
+
+            handle = None
+            if "handle" in section:
+                handle = section["handle"]
+
+            state = None
+            if "state" in section:
+                state = section["state"]
+
+            local = None
+            if "local" in section:
+                local = section["local"]
 
             if "length" in section:
                 length = section["length"]
@@ -491,12 +504,16 @@ class ExperimentDAO:
             if "repetition_mode" in section:
                 repetition_mode = section["repetition_mode"]
 
+            trigger_output = {}
+            if "trigger_output" in section:
+                trigger_output = section["trigger_output"]
+
             self._data["section"][section["id"]] = SectionInfo(
                 section_id=section["id"],
                 has_repeat=has_repeat,
                 execution_type=execution_type,
                 count=count,
-                trigger=trigger,
+                acquisition_types=acquisition_types,
                 averaging_type=averaging_type,
                 align=align,
                 offset=offset,
@@ -507,6 +524,10 @@ class ExperimentDAO:
                 repetition_time=repetition_time,
                 play_after=section.get("play_after"),
                 reset_oscillator_phase=reset_oscillator_phase,
+                trigger_output=trigger_output,
+                handle=handle,
+                state=state,
+                local=local,
             )
 
             if "signals_list" in section:
@@ -717,7 +738,7 @@ class ExperimentDAO:
     def sections(self) -> List[str]:
         return list(self._data["section"].keys())
 
-    def section_info(self, section_id):
+    def section_info(self, section_id) -> SectionInfo:
         retval = copy.copy(self._data["section"][section_id])
 
         if retval.count is not None:
@@ -977,7 +998,9 @@ class ExperimentDAO:
     @staticmethod
     def experiment_json_schema():
         with open(
-            os.path.join(Path(__file__).parent.absolute(), "qccs-schema_2_5_0.json")
+            os.path.join(
+                Path(__file__).parent.parent.absolute(), "qccs-schema_2_5_0.json"
+            )
         ) as schema_file:
             return json.load(schema_file)
 
@@ -1225,11 +1248,14 @@ class ExperimentDAO:
             keys = [
                 "align",
                 "length",
-                "trigger",
+                "acquisition_types",
                 "repetition_mode",
                 "repetition_time",
                 "averaging_mode",
                 "play_after",
+                "handle",
+                "state",
+                "local",
             ]
             for key in keys:
                 if getattr(section_info, key, None) is not None:
@@ -1238,6 +1264,8 @@ class ExperimentDAO:
                 out_section[
                     "reset_oscillator_phase"
                 ] = section_info.reset_oscillator_phase
+            if section_info.trigger_output:
+                out_section["trigger_output"] = section_info.trigger_output
 
             signals_list = []
             for signal_id in experiment_dao._section_signals_list(section_id):
@@ -1891,7 +1919,7 @@ class ExperimentDAO:
                     count = len(parameter.values)
 
         execution_type = None
-        if hasattr(section, "execution_type") and section.execution_type is not None:
+        if section.execution_type is not None:
             execution_type = section.execution_type.value
 
         align = "left"
@@ -1907,7 +1935,7 @@ class ExperimentDAO:
                 offset = None
 
         length = None
-        if hasattr(section, "length") and section.length is not None:
+        if section.length is not None:
             length = section.length
 
         averaging_mode = None
@@ -1926,18 +1954,32 @@ class ExperimentDAO:
         if hasattr(section, "reset_oscillator_phase"):
             reset_oscillator_phase = section.reset_oscillator_phase
 
-        trigger = None
+        handle = None
+        if hasattr(section, "handle"):
+            handle = section.handle
+
+        state = None
+        if hasattr(section, "state"):
+            state = section.state
+
+        local = None
+        if hasattr(section, "local"):
+            local = section.local
+
+        trigger = section.trigger
+
+        acquisition_types = None
         for operation in exchanger_map(section).operations:
             if hasattr(operation, "handle"):
-                # an acquire event - add trigger
-                trigger = [acquisition_type.value]
+                # an acquire event - add acquisition_types
+                acquisition_types = [acquisition_type.value]
 
         self._data["section"][section.uid] = SectionInfo(
             section_id=section.uid,
             has_repeat=has_repeat,
             execution_type=execution_type,
             count=count,
-            trigger=trigger,
+            acquisition_types=acquisition_types,
             averaging_type=averaging_type,
             align=align,
             offset=offset,
@@ -1948,6 +1990,10 @@ class ExperimentDAO:
             repetition_time=repetition_time,
             play_after=getattr(section, "play_after", None),
             reset_oscillator_phase=reset_oscillator_phase,
+            trigger_output=trigger,
+            handle=handle,
+            state=state,
+            local=local,
         )
 
         section_signals = {}

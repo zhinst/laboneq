@@ -660,7 +660,7 @@
             "$ref": "#/definitions/signal-pulses-mapping-def"
           }
         },
-        "trigger": {
+        "acquisition_types": {
           "type": "array",
           "items": {
             "type": "string",
@@ -704,6 +704,14 @@
         "reset_oscillator_phase": {
           "type": "boolean",
           "default": false
+        },
+        "match": {
+          "type": "number",
+          "default": 0
+        },
+        "handle": {
+          "type": "string",
+          "default": ""
         }
       },
       "additionalProperties": false,
