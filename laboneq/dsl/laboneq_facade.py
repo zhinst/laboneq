@@ -2,37 +2,30 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Dict
-from numpy import typing as npt
 
 import atexit
+from typing import TYPE_CHECKING, Dict
 
-# TODO(ErC,2K): This import is deprecated and needs to go away for DSLv3
+from laboneq import controller as ctrl
 from laboneq.compiler import Compiler
-from laboneq.controller import initialize_logging
-from laboneq.controller.controller import (
-    Controller,
-    ControllerRunParameters,
-    _stop_controller,
-)
-from laboneq.controller.toolkit_adapter import ToolkitDevices
 from laboneq.core.types import CompiledExperiment
+from numpy import typing as npt
 
 if TYPE_CHECKING:
-    from laboneq.dsl.session import Session
     from laboneq.dsl.experiment.pulse import Pulse
+    from laboneq.dsl.session import Session
 
 
 class LabOneQFacade:
     @staticmethod
     def connect(session: Session):
-        run_parameters = ControllerRunParameters()
+        run_parameters = ctrl.ControllerRunParameters()
         run_parameters.dry_run = session._connection_state.emulated
         run_parameters.ignore_lab_one_version_error = (
             session._ignore_lab_one_version_error
         )
 
-        controller = Controller(
+        controller = ctrl.Controller(
             run_parameters=run_parameters,
             device_setup=session._device_setup,
             user_functions=session._user_functions,
@@ -40,15 +33,15 @@ class LabOneQFacade:
         controller.connect()
         session._controller = controller
         if not session._connection_state.emulated:
-            session._toolkit_devices = ToolkitDevices(controller.devices)
+            session._toolkit_devices = ctrl.ToolkitDevices(controller._devices._devices)
 
     @staticmethod
     def disconnect(session: Session):
-        controller: Controller = session._controller
+        controller: ctrl.Controller = session._controller
         controller.shut_down()
         controller.disconnect()
         session._controller = None
-        session._toolkit_devices = ToolkitDevices()
+        session._toolkit_devices = ctrl.ToolkitDevices()
 
     @staticmethod
     def compile(
@@ -79,6 +72,7 @@ class LabOneQFacade:
         compiled_experiment = compiler.run(
             {"setup": session.device_setup, "experiment": session.experiment}
         )
+        compiled_experiment.device_setup = session.device_setup
         compiled_experiment.experiment = session.experiment
         if do_simulation:
             compiled_experiment.output_signals = LabOneQFacade.simulate_outputs(
@@ -88,10 +82,10 @@ class LabOneQFacade:
 
     @staticmethod
     def run(session: Session):
-        controller: Controller = session._controller
+        controller: ctrl.Controller = session._controller
 
         if controller._run_parameters.shut_down is True:
-            atexit.register(_stop_controller, controller)
+            atexit.register(ctrl._stop_controller, controller)
 
         controller.execute_compiled(session.compiled_experiment, session)
 
@@ -99,7 +93,7 @@ class LabOneQFacade:
     def replace_pulse(
         session: Session, pulse_uid: str | Pulse, pulse_or_array: npt.ArrayLike | Pulse
     ):
-        controller: Controller = session._controller
+        controller: ctrl.Controller = session._controller
         controller.replace_pulse(pulse_uid, pulse_or_array)
 
     @staticmethod
@@ -153,4 +147,6 @@ class LabOneQFacade:
         if not "pytest" in sys.modules:
             # Only initialize logging outside pytest
             # pytest initializes the logging itself
-            initialize_logging(log_level=log_level, performance_log=performance_log)
+            ctrl.initialize_logging(
+                log_level=log_level, performance_log=performance_log
+            )

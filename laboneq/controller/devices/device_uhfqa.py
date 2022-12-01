@@ -4,6 +4,7 @@
 from __future__ import annotations
 from typing import Any, Dict, Optional, List
 import numpy as np
+from laboneq.controller.devices.zi_node_monitor import Command, NodeControlBase
 from laboneq.controller.recipe_enums import DIOConfigType
 from laboneq.controller.recipe_processor import (
     AwgConfig,
@@ -13,7 +14,6 @@ from laboneq.controller.recipe_processor import (
     RtExecutionInfo,
     get_wave,
 )
-from laboneq.controller.versioning import LabOneVersion
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.controller.communication import (
     DaqNodeAction,
@@ -22,7 +22,7 @@ from laboneq.controller.communication import (
     CachingStrategy,
 )
 
-from laboneq.controller.recipe_1_4_0 import Initialization, IntegratorAllocation
+from laboneq.controller.recipe_1_4_0 import Initialization, IntegratorAllocation, IO
 from laboneq.controller.recipe_enums import ReferenceClockSource
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
@@ -33,8 +33,7 @@ DELAY_NODE_GRANULARITY_SAMPLES = 4
 DELAY_NODE_MAX_SAMPLES = 1020
 
 REFERENCE_CLOCK_SOURCE_INTERNAL = 0
-REFERENCE_CLOCK_SOURCE_EXTERNAL_OLD = 1
-REFERENCE_CLOCK_SOURCE_EXTERNAL = 2
+REFERENCE_CLOCK_SOURCE_EXTERNAL = 1
 
 
 class DeviceUHFQA(DeviceZI):
@@ -57,11 +56,56 @@ class DeviceUHFQA(DeviceZI):
         return previously_allocated
 
     def _nodes_to_monitor_impl(self) -> List[str]:
-        nodes = []
+        nodes = [f"/{self.serial}/system/extclk"]
         for awg in range(self._get_num_AWGs()):
             nodes.append(f"/{self.serial}/awgs/{awg}/enable")
             nodes.append(f"/{self.serial}/awgs/{awg}/ready")
         return nodes
+
+    def _error_as_leader(self):
+        raise LabOneQControllerException(
+            f"{self.dev_repr}: UHFQA cannot be configured as leader, ensure correct DIO connection in the device setup"
+        )
+
+    def _error_ambiguous_upstream(self):
+        raise LabOneQControllerException(
+            f"{self.dev_repr}: Can't determine unambiguously upstream device for UHFQA, ensure correct DIO connection in the device setup"
+        )
+
+    def update_clock_source(self, force_internal: Optional[bool]):
+        if self.is_standalone():
+            # TODO(2K): Special handling for scope devices,
+            # consider separating it from the main device setup
+            self._use_internal_clock = True
+            return
+        if len(self._uplinks) == 0:
+            self._error_as_leader()
+        if len(self._uplinks) > 1:
+            self._error_ambiguous_upstream()
+        upstream = next(iter(self._uplinks.values()))()
+        if upstream is None:
+            self._error_ambiguous_upstream()
+        is_desktop = upstream.is_leader() and (
+            upstream.device_qualifier.driver.upper() == "HDAWG"
+        )
+        # For non-desktop, always use external clock,
+        # for desktop - internal is the default (force_internal is None),
+        # but allow override to external.
+        self._use_internal_clock = is_desktop and (force_internal != False)
+
+    def clock_source_control_nodes(self) -> List[NodeControlBase]:
+        if self.is_standalone():
+            # TODO(2K): Special handling for scope devices,
+            # consider separating it from the main device setup
+            return []
+        source = (
+            REFERENCE_CLOCK_SOURCE_INTERNAL
+            if self._use_internal_clock
+            else REFERENCE_CLOCK_SOURCE_EXTERNAL
+        )
+        return [
+            Command(f"/{self.serial}/system/extclk", source),
+        ]
 
     def configure_acquisition(
         self,
@@ -195,6 +239,33 @@ class DeviceUHFQA(DeviceZI):
             conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = 0
         return conditions
 
+    def _validate_range(self, io: IO.Data, is_out: bool):
+        if io.range is None:
+            return
+
+        input_ranges = np.concatenate(
+            [np.arange(0.01, 0.1, 0.01), np.arange(0, 1.6, 0.1)]
+        )
+        output_ranges = np.array([0.15, 1.5], dtype=np.float64)
+        range_list = output_ranges if is_out else input_ranges
+        label = "Output" if is_out else "Input"
+
+        if io.range_unit not in (None, "volt"):
+            raise LabOneQControllerException(
+                f"{label} range of device {self.dev_repr} is specified in "
+                f"units of {io.range_unit}. Units must be 'volt'."
+            )
+
+        if not any(np.isclose([io.range] * len(range_list), range_list)):
+            self._logger.warning(
+                "%s: %s channel %d range %.1f is not on the list of allowed ranges: %s. Nearest allowed range will be used.",
+                self.dev_repr,
+                label,
+                io.channel,
+                io.range,
+                range_list,
+            )
+
     def collect_output_initialization_nodes(
         self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
     ) -> List[DaqNodeAction]:
@@ -261,6 +332,16 @@ class DeviceUHFQA(DeviceZI):
                     )
                 self._logger.debug(
                     "%s's output port delay should be set to None, not 0", self.dev_repr
+                )
+
+            if output.range is not None:
+                self._validate_range(output, is_out=True)
+                nodes_to_initialize_output.append(
+                    DaqNodeSetAction(
+                        self._daq,
+                        f"/{self.serial}/sigouts/{output.channel}/range",
+                        output.range,
+                    )
                 )
 
         return nodes_to_initialize_output
@@ -453,6 +534,18 @@ class DeviceUHFQA(DeviceZI):
                 )
             )
 
+        for input in inputs or []:
+            if input.range is None:
+                continue
+            self._validate_range(input, is_out=False)
+            nodes_to_initialize_measurement.append(
+                DaqNodeSetAction(
+                    self._daq,
+                    f"/{self.serial}/sigins/{input.channel}/range",
+                    input.range,
+                )
+            )
+
         return nodes_to_initialize_measurement
 
     def collect_trigger_configuration_nodes(self, initialization: Initialization.Data):
@@ -523,67 +616,10 @@ class DeviceUHFQA(DeviceZI):
         return nodes_to_configure_triggers
 
     def configure_as_leader(self, initialization):
-        raise LabOneQControllerException(
-            f"{self.dev_repr}: UHFQA cannot be configured as leader, ensure correct DIO connection in the device setup"
-        )
+        self._error_as_leader()
 
     def collect_follower_configuration_nodes(self, initialization):
-        def _set_reference_clock(self, external: bool):
-            extclk_path = f"/{self.serial}/system/extclk"
-            if external:
-                if self._daq.dataserver_version <= LabOneVersion.V_20_06:
-                    get_result = self._daq.batch_get(
-                        [DaqNodeGetAction(self._daq, extclk_path)]
-                    )
-                    extclk = get_result[extclk_path]
-                    if extclk != 1:
-                        return DaqNodeSetAction(
-                            self._daq, extclk_path, REFERENCE_CLOCK_SOURCE_EXTERNAL_OLD
-                        )
-                    else:
-                        return None
-                else:
-                    return DaqNodeSetAction(
-                        self._daq, extclk_path, REFERENCE_CLOCK_SOURCE_EXTERNAL
-                    )
-            else:
-                return DaqNodeSetAction(
-                    self._daq, extclk_path, REFERENCE_CLOCK_SOURCE_INTERNAL
-                )
-
-        dio_mode = initialization.config.dio_mode
-
-        nodes_to_configure_as_follower = []
-
-        self._logger.debug("%s: Configuring as a follower...", self.dev_repr)
-
-        if dio_mode == DIOConfigType.HDAWG:
-            self._logger.debug(
-                "%s: Configuring reference clock to use HDAWG's clock as a reference...",
-                self.dev_repr,
-            )
-            ntc = _set_reference_clock(self, True)
-            if ntc is not None:
-                nodes_to_configure_as_follower.append(ntc)
-        elif dio_mode == DIOConfigType.DIO_FOLLOWER_OF_HDAWG_LEADER:
-            self._logger.debug(
-                "%s: Configuring clock to be internal, to provide external clock to hdawg",
-                self.dev_repr,
-            )
-            clock_source = initialization.config.reference_clock_source
-            ntc = _set_reference_clock(
-                self,
-                clock_source
-                and clock_source.value == ReferenceClockSource.EXTERNAL.value,
-            )
-            if ntc is not None:
-                nodes_to_configure_as_follower.append(ntc)
-        else:
-            raise LabOneQControllerException(
-                f"Unsupported DIO mode: {dio_mode} for device type UHFQA."
-            )
-
-        return nodes_to_configure_as_follower
+        return []
 
     def _get_integrator_measurement_data(
         self, result_index, num_results, averages_divider: int

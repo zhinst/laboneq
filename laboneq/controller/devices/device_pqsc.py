@@ -1,11 +1,16 @@
 # Copyright 2019 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
+from laboneq.controller.devices.zi_node_monitor import (
+    Command,
+    Condition,
+    NodeControlBase,
+    Response,
+)
 from laboneq.controller.recipe_1_4_0 import Initialization
 
 from laboneq.controller.recipe_processor import DeviceRecipeData
-from laboneq.controller.recipe_enums import ReferenceClockSource
 from laboneq.controller.devices.device_zi import DeviceZI
 
 from laboneq.controller.communication import (
@@ -17,6 +22,7 @@ from laboneq.controller.communication import (
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 
+
 REFERENCE_CLOCK_SOURCE_INTERNAL = 0
 REFERENCE_CLOCK_SOURCE_EXTERNAL = 1
 
@@ -26,9 +32,33 @@ class DevicePQSC(DeviceZI):
         super().__init__(*args, **kwargs)
         self.dev_type = "PQSC"
         self.dev_opts = []
+        self._use_internal_clock = False
 
     def _nodes_to_monitor_impl(self) -> List[str]:
-        return [f"/{self.serial}/execution/enable"]
+        nodes = [node.path for node in self.clock_source_control_nodes()]
+        nodes.append(f"/{self.serial}/execution/enable")
+        return nodes
+
+    def update_clock_source(self, force_internal: Optional[bool]):
+        self._use_internal_clock = force_internal == True
+
+    def clock_source_control_nodes(self) -> List[NodeControlBase]:
+        source = (
+            REFERENCE_CLOCK_SOURCE_INTERNAL
+            if self._use_internal_clock
+            else REFERENCE_CLOCK_SOURCE_EXTERNAL
+        )
+        expected_freq = None if self._use_internal_clock else 10e6
+        return [
+            Condition(
+                f"/{self.serial}/system/clocks/referenceclock/in/freq", expected_freq
+            ),
+            Command(f"/{self.serial}/system/clocks/referenceclock/in/source", source),
+            Response(
+                f"/{self.serial}/system/clocks/referenceclock/in/sourceactual", source
+            ),
+            Response(f"/{self.serial}/system/clocks/referenceclock/in/status", 0),
+        ]
 
     def collect_output_initialization_nodes(
         self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
@@ -117,16 +147,6 @@ class DevicePQSC(DeviceZI):
                 )
             ]
         )
-
-        clock_source = initialization.config.reference_clock_source
-        if clock_source and clock_source.value == ReferenceClockSource.INTERNAL.value:
-            self._switch_reference_clock(
-                source=REFERENCE_CLOCK_SOURCE_INTERNAL, expected_freqs=None
-            )
-        else:
-            self._switch_reference_clock(
-                source=REFERENCE_CLOCK_SOURCE_EXTERNAL, expected_freqs=10e6
-            )
 
         self._daq.batch_set(
             [

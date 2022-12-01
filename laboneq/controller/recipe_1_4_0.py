@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass, field
-from typing import Any, AnyStr, Dict, Optional, List
-from numpy import typing as npt
+from typing import Any, AnyStr, Dict, Optional, List, Union
 
 from marshmallow import Schema, fields, post_load, EXCLUDE
 
@@ -119,6 +118,7 @@ class IO(QCCSSchema):
             "offset",
             "gains",
             "range",
+            "range_unit",
             "precompensation",
             "lo_frequency",
             "port_mode",
@@ -137,6 +137,7 @@ class IO(QCCSSchema):
         offset: Optional[float] = None
         gains: Optional[Gains] = None
         range: Optional[float] = None
+        range_unit: Optional[str] = None
         precompensation: Optional[Dict[str, Dict]] = None
         lo_frequency: Optional[float] = None
         port_mode: Optional[str] = None
@@ -151,6 +152,7 @@ class IO(QCCSSchema):
     offset = fields.Float(required=False)
     gains = fields.Nested(Gains, required=False)
     range = fields.Float(required=False)
+    range_unit = fields.Str(required=False)
     precompensation = fields.Dict(required=False)
     lo_frequency = fields.Float(required=False)
     port_mode = fields.Str(required=False)
@@ -168,7 +170,13 @@ class SignalTypeField(fields.Field):
 
 class AWG(QCCSSchema):
     class Meta:
-        fields = ("awg", "seqc", "signal_type")
+        fields = (
+            "awg",
+            "seqc",
+            "signal_type",
+            "qa_signal_id",
+            "command_table_match_offset",
+        )
         ordered = False
 
     @dataclass
@@ -176,10 +184,14 @@ class AWG(QCCSSchema):
         awg: int
         seqc: str
         signal_type: SignalType = SignalType.SINGLE
+        qa_signal_id: Optional[str] = None
+        command_table_match_offset: Optional[int] = None
 
     awg = fields.Integer()
     seqc = fields.Str()
     signal_type = SignalTypeField()
+    qa_signal_id = fields.Str(required=False, allow_none=True)
+    command_table_match_offset = fields.Integer(required=False, allow_none=True)
 
 
 class Port(QCCSSchema):

@@ -1,9 +1,9 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-import typing
+from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Dict, List, Any
+from typing import Dict, List, Any, TYPE_CHECKING
 
 from laboneq.core import path as qct_path
 from laboneq.core.exceptions import LabOneQException
@@ -11,9 +11,9 @@ from laboneq.dsl.device.physical_channel_group import PhysicalChannelGroup
 from laboneq.dsl.device import LogicalSignalGroup
 from laboneq.dsl.serialization import Serializer
 from ._device_setup_generator import _DeviceSetupGenerator
-from ..calibration import CalibrationItem, Calibratable, Calibration
+from laboneq.dsl.calibration import CalibrationItem, Calibratable, Calibration
 
-if typing.TYPE_CHECKING:
+if TYPE_CHECKING:
     from laboneq.dsl.device.servers import DataServer
     from .instrument import Instrument
 
@@ -26,10 +26,10 @@ class DeviceSetup:
     uid: str = field(default=None)
 
     #: Servers of the device setup.
-    servers: Dict[str, "DataServer"] = field(default_factory=dict)
+    servers: Dict[str, DataServer] = field(default_factory=dict)
 
     #: Instruments of the device setup.
-    instruments: List["Instrument"] = field(default_factory=list)
+    instruments: List[Instrument] = field(default_factory=list)
 
     #: Physical channels of this device setup, by name of the device.
     physical_channel_groups: Dict[str, PhysicalChannelGroup] = field(
@@ -39,7 +39,7 @@ class DeviceSetup:
     #: Logical signal groups of this device setup, by name of the group.
     logical_signal_groups: Dict[str, LogicalSignalGroup] = field(default_factory=dict)
 
-    def instrument_by_uid(self, uid: str) -> "Instrument":
+    def instrument_by_uid(self, uid: str) -> Instrument:
         return next(i for i in self.instruments if i.uid == uid)
 
     def _set_calibration(

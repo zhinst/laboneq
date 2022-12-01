@@ -165,6 +165,8 @@ class EventGraphBuilder:
     ):
         if len(chain) == 0:
             return
+        # Form a chain [(-1, 0), (0, 1), ..., (n-1, n)] (or without the last entry if
+        # not link_last); -1 is boundary_start_node_id, n is boundary_end_node_id
         follows_graph = list(zip(range(-1, len(chain)), range(0, len(chain) + 1)))
         if not link_last:
             follows_graph = follows_graph[:-1]
@@ -284,6 +286,8 @@ class EventGraphBuilder:
         parent_sections: Dict[str, List[ChainElement]] = {}
         root_sections: List[ChainElement] = []
 
+        # Create a chain of spans for all subsections of a parent section and
+        # find root sections (without parent)
         for i, section_name in enumerate(section_graph.topologically_sorted_sections()):
             section_info = section_graph.section_info(section_name)
             length = section_info.length
@@ -291,7 +295,12 @@ class EventGraphBuilder:
             attributes = {"section_name": section_name}
             if section_info.trigger_output:
                 attributes["trigger_output"] = section_info.trigger_output
-
+            if section_info.handle:
+                attributes["handle"] = section_info.handle
+            if section_info.state is not None:
+                attributes["state"] = section_info.state
+            if section_info.local is not None:
+                attributes["local"] = section_info.local
             section_span = ChainElement(
                 section_info.section_id,
                 start_type=EventType.SECTION_START,
@@ -318,6 +327,8 @@ class EventGraphBuilder:
             use_exactly_relation=True,
         )
 
+        # Add support for right-aligned root sections and let root sections follow after
+        # init events
         for section_name in [s.attributes["section_name"] for s in root_sections]:
             if section_graph.section_info(section_name).align == "right":
                 EventGraphBuilder.add_right_aligned_collector_for_section(

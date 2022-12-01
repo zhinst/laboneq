@@ -28,9 +28,6 @@ class ExponentialCompensation(Observable):
     timeconstant: float = 1e-6
     amplitude: float = 0.0
 
-    def is_nonzero(self):
-        return self.amplitude != 0.0
-
 
 @dataclass
 class HighPassCompensation(Observable):
@@ -39,21 +36,12 @@ class HighPassCompensation(Observable):
     timeconstant: float = 1e-6
     clearing: HighPassCompensationClearing = HighPassCompensationClearing.LEVEL
 
-    def is_nonzero(self):
-        # timeconstant would have to be infinity for a neutral filter
-        return True
-
 
 @dataclass
 class FIRCompensation(Observable):
     """Data object containing FIR filter compensation parameters"""
 
     coefficients: npt.ArrayLike = field(default_factory=lambda: np.zeros(40))
-
-    def is_nonzero(self):
-        return self.coefficients is not None and any(
-            c != 0.0 for c in self.coefficients
-        )
 
 
 @dataclass
@@ -62,9 +50,6 @@ class BounceCompensation(Observable):
 
     delay: float = 0.0
     amplitude: float = 0.0
-
-    def is_nonzero(self):
-        return self.amplitude != 0.0
 
 
 @dataclass(init=True, repr=True, order=True)
@@ -87,13 +72,4 @@ class Precompensation(RecursiveObservable):
     FIR: Optional[FIRCompensation] = field(default=None)
 
     def is_nonzero(self):
-        return (
-            self.exponential is not None
-            and any([e.is_nonzero() for e in self.exponential])
-            or self.high_pass is not None
-            and self.high_pass.is_nonzero()
-            or self.bounce is not None
-            and self.bounce.is_nonzero()
-            or self.FIR is not None
-            and self.FIR.is_nonzero()
-        )
+        return self.exponential or self.high_pass or self.bounce or self.FIR

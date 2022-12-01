@@ -22,6 +22,15 @@ def interval_to_samples(start, end, sampling_rate):
     return start_samples, end_samples
 
 
+def interval_to_samples_with_errors(start, end, sampling_rate):
+    start_samples = length_to_samples(start, sampling_rate)
+    end_samples = start_samples + length_to_samples(end - start, sampling_rate)
+    start_rounding_error = start - start_samples / sampling_rate
+    end_rounding_error = end - end_samples / sampling_rate
+
+    return (start_samples, end_samples), (start_rounding_error, end_rounding_error)
+
+
 def sample_pulse(
     *,
     signal_type: str,

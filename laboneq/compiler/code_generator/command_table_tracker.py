@@ -18,12 +18,32 @@ class CommandTableTracker:
             return
         return table_entry["index"]
 
-    def create_entry(self, signature: PlaybackSignature, wave_index: int) -> int:
+    def __getitem__(self, index: int):
+        return next(
+            (
+                (sig, ct_entry)
+                for sig, ct_entry in self._command_table.items()
+                if ct_entry["index"] == index
+            ),
+            None,
+        )
+
+    def __len__(self):
+        return len(self._command_table)
+
+    def create_entry(
+        self, signature: PlaybackSignature, wave_index: Optional[int]
+    ) -> int:
         assert signature not in self._command_table
         index = len(self._command_table)
-        self._command_table[signature] = self._create_command_table_entry(
-            index, wave_index, signature.hw_oscillator
-        )
+        if wave_index is None:
+            self._command_table[signature] = self._create_playzero_command_table_entry(
+                index, signature.waveform.length
+            )
+        else:
+            self._command_table[signature] = self._create_command_table_entry(
+                index, wave_index, signature.hw_oscillator
+            )
         return index
 
     @staticmethod
@@ -36,6 +56,14 @@ class CommandTableTracker:
         }
         if oscillator is not None:
             d["oscillatorSelect"] = {"value": {"$ref": oscillator}}
+        return d
+
+    @staticmethod
+    def _create_playzero_command_table_entry(ct_index: int, length: int):
+        d = {
+            "index": ct_index,
+            "waveform": {"playZero": True, "length": length},
+        }
         return d
 
     def command_table(self) -> List[Dict]:

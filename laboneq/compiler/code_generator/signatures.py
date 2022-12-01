@@ -23,6 +23,7 @@ class PulseSignature:
     amplitude: Optional[float]
     phase: Optional[int]
     oscillator_phase: Optional[float]
+    oscillator_frequency: Optional[float]
     baseband_phase: Optional[float]  # todo: rename to `persistent_phase`
     channel: Optional[int]
     sub_channel: Optional[int]
@@ -44,7 +45,7 @@ class WaveformSignature:
         retval = "p_" + str(self.length).zfill(4)
         for pulse_entry in self.pulses:
             retval += "_"
-            retval += pulse_entry.pulse
+            retval += pulse_entry.pulse or ""
             for key, separator, scale, fill in (
                 ("start", "_", 1, 2),
                 ("amplitude", "_a", 1e9, 10),
@@ -95,3 +96,4 @@ class PlaybackSignature:
 
     waveform: WaveformSignature
     hw_oscillator: Optional[str]
+    state: Optional[int] = None

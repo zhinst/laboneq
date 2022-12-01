@@ -9,6 +9,8 @@ import math
 from dataclasses import dataclass, field
 from fractions import Fraction
 from operator import itemgetter
+from itertools import groupby
+
 from typing import List, Any, Dict, Union, Optional, Iterator, Tuple
 from box import Box
 
@@ -118,6 +120,8 @@ class Scheduler:
             self._event_graph, self._section_graph_object, start_events
         )
 
+        match_case_signals = {}
+        empty_match_case_sections = {}
         for section_node in self._section_graph_object.topologically_sorted_sections():
 
             parent = self._section_graph_object.parent(section_node)
@@ -161,6 +165,15 @@ class Scheduler:
             signals = self._experiment_dao.section_signals(
                 section_info.section_display_name
             )
+
+            if section_info.state is not None:
+                if signals:
+                    match_case_signals.setdefault(parent, set()).update(signals)
+                else:
+                    empty_match_case_sections[section_name] = (
+                        parent,
+                        section_start_node,
+                    )
 
             signals = signals.union(spectroscopy_trigger_signals)
             for signal_id in signals:
@@ -279,6 +292,24 @@ class Scheduler:
                     section_start_node=section_start_node,
                     is_spectroscopy_signal=is_integration and is_spectroscopy_section,
                     spectroscopy_end_id=spectroscopy_end_id,
+                )
+
+        for empty_section, parent in empty_match_case_sections.items():
+            for signal in match_case_signals[parent[0]]:
+                # This is an empty branch of a feedback, but we still want to create
+                # events such that we can play zeros during the duration of that event
+                # via the command table - it needs an entry even when nothing is played.
+                play_zeros = _PlayWave(
+                    id="EMPTY_MATCH_CASE_DELAY",
+                    is_delay=True,
+                    signal=signal,
+                    length=1e-9,
+                )
+                self.add_play_wave_chain(
+                    [play_zeros],
+                    parent_section_name=empty_section,
+                    right_aligned=False,
+                    section_start_node=parent[1],
                 )
 
         repeat_sections: Dict[str, Scheduler.RepeatSectionsEntry] = {}
@@ -670,6 +701,22 @@ class Scheduler:
             reset_precompensation_filters,
         )
 
+    def _nodes_which_reference_parameters(self):
+
+        zero_getter = itemgetter(0)
+        param_referencing_nodes = [
+            (e[2].get("delta").param_name, e[0])
+            for e in self._event_graph.edge_list()
+            if isinstance(e[2].get("delta"), ParamRef)
+        ]
+        nodes_of_param_dict = {
+            k: [node[1] for node in g]
+            for k, g in groupby(
+                sorted(param_referencing_nodes, key=zero_getter), zero_getter
+            )
+        }
+        return nodes_of_param_dict
+
     def add_iteration_control_events(
         self, repeat_section_entry: RepeatSectionsEntry, first_only=False
     ):
@@ -691,6 +738,7 @@ class Scheduler:
         if first_only and num_repeats > 1:
             repeats = 1
 
+        nodes_which_reference_params = self._nodes_which_reference_parameters()
         _logger.debug("Adding iteration events for %s", section_name)
 
         right_aligned = False
@@ -757,6 +805,12 @@ class Scheduler:
             )
 
             if iteration == 0:
+                # make sure the loop step end at least depends on the same nodes
+                # as the loop iteration end
+                for edge in self._event_graph.out_edges(loop_iteration_end_id):
+                    if edge[2]["relation"] == EventRelation.AFTER_OR_AT:
+                        self._event_graph.after_or_at(loop_step_end_id, edge[1])
+
                 self._event_graph.after_or_at(loop_iteration_end_id, loop_step_end_id)
 
                 subsection_events = [
@@ -936,7 +990,17 @@ class Scheduler:
                     iteration=iteration,
                     value=current_param_value,
                 )
+
                 preamble_inserter.insert(param_set_id, add_before_first_loop_start=True)
+                if iteration == 0:
+
+                    param_referencing_nodes = nodes_which_reference_params.get(
+                        param["id"], []
+                    )
+                    # Make sure that nodes which reference the parameter through parameterized edges
+                    # are scheduled after the parameter setting node
+                    for n in param_referencing_nodes:
+                        self._event_graph.after_or_at(n, param_set_id)
 
                 param_oscillator = oscillator_param_lookup.get(param["id"])
                 if param_oscillator is not None:
@@ -1283,8 +1347,14 @@ class Scheduler:
                 start_attributes={},
             )
 
-            if play_wave.length is not None or play_wave.is_integration:
-
+            is_match_case_empty_section = (
+                play_wave.is_delay and play_wave.id == "EMPTY_MATCH_CASE_DELAY"
+            )
+            if (
+                play_wave.length is not None
+                or play_wave.is_integration
+                or is_match_case_empty_section
+            ):
                 chain_element.start_type = EventType.PLAY_START
                 chain_element.end_type = EventType.PLAY_END
                 if play_wave.is_integration:
@@ -1309,7 +1379,10 @@ class Scheduler:
                 chain_element.start_attributes[
                     "pulse_parameters"
                 ] = play_wave.pulse_parameters
-                if not (play_wave.is_delay and play_wave.length is None):
+                if (
+                    not (play_wave.is_delay and play_wave.length is None)
+                    or is_match_case_empty_section
+                ):
                     chain.append(chain_element)
 
         if right_aligned:
@@ -1734,7 +1807,7 @@ class Scheduler:
 
         _logger.debug("Event times calculated")
 
-    def _calculate_timing_for_graph(self, event_graph):
+    def _calculate_timing_for_graph(self, event_graph: EventGraph):
         event_times = {}
         parameter_change_times = SortedDict()
 
@@ -2012,6 +2085,59 @@ class Scheduler:
 
     def verify_timing(self):
         TOLERANCE = 1e-11
+        # find nodes which are the reference for another node
+        # through a parameterized edge indicating an "after" relation
+        # this results in the earlier node of the relation being in the list, they are the
+        # second item (b) in the edge (a,b), "a AFTER b"
+        # we need the earlier nodes here so that a new parameter setting
+        # has not yet overridden the current parameter value
+        raw_param_referencing_nodes = [
+            (e[1], e[2].get("delta").param_name)
+            for e in self._event_graph.edge_list()
+            if isinstance(e[2].get("delta"), ParamRef)
+            and e[2].get("relation")
+            in {EventRelation.AFTER_AT_LEAST, EventRelation.AFTER_EXACTLY}
+        ]
+        # add the nodes which are the reference for another node
+        # through a parameterized edge indicating a "before" relation
+        # this also results in the earlier node ending up in the list, they are the
+        # first item (a) in the edge (a,b), "a BEFORE b"
+        raw_param_referencing_nodes.extend(
+            [
+                (e[0], e[2].get("delta").param_name)
+                for e in self._event_graph.edge_list()
+                if isinstance(e[2].get("delta"), ParamRef)
+                and e[2].get("relation") in {EventRelation.BEFORE_AT_LEAST}
+            ]
+        )
+
+        zerogetter = itemgetter(0)
+        # a dict with a node id as a key, mapping to a list of parameters
+        # that are referenced through a parameterized edge by the key node
+        parameter_referencing_nodes = {
+            k: set([node[1] for node in g])
+            for k, g in groupby(
+                sorted(raw_param_referencing_nodes, key=zerogetter), zerogetter
+            )
+        }
+
+        def add_issue(
+            relation, event_time, other_time, delta, event, other_event, edge_data
+        ):
+            issues.append(
+                {
+                    "relation": relation,
+                    "event_time": event_time,
+                    "other_time": other_time,
+                    "delta": delta,
+                    "event": event,
+                    "other_event": other_event,
+                    "edge_data": edge_data,
+                }
+            )
+
+        parameter_values = {}
+        parameter_values_at_node = {}
         sorted_events = sorted(
             [
                 self._event_graph.node(event_id)
@@ -2020,48 +2146,164 @@ class Scheduler:
             # PARAMETER_SET must be visited early in case of tie
             key=lambda node: (node["time"], node["event_type"] != "PARAMETER_SET"),
         )
-        parameter_values = {}
+        issues = []
+
         for event in sorted_events:
             if event["event_type"] == EventType.PARAMETER_SET:
                 parameter_values[event["parameter"]["id"]] = event["value"]
 
+            if event["id"] in parameter_referencing_nodes:
+                parameter_values_at_node[event["id"]] = {
+                    k: parameter_values[k]
+                    for k in parameter_referencing_nodes[event["id"]]
+                }
+
             for _, other_node_id, edge_data in self._event_graph.out_edges(event["id"]):
+
                 other_event = self._event_graph.node(other_node_id)
                 relation = edge_data["relation"]
+
                 if "delta" in edge_data:
                     if isinstance(edge_data["delta"], ParamRef):
-                        delta = parameter_values[edge_data["delta"].param_name]
+                        param_name = edge_data["delta"].param_name
+                        # get the value of the parameter as it was at the node at the other end of the edge
+                        # because if a parameter change happens at the same time as the end of the interval
+                        # the new value would be used - which is wrong because that value applies only to the
+                        # next interval
+                        param_values_at_other_node = parameter_values_at_node.get(
+                            other_node_id
+                        )
+                        if param_values_at_other_node is not None:
+                            delta = param_values_at_other_node[param_name]
+                        else:
+                            delta = parameter_values[param_name]
+
                     else:
                         delta = edge_data["delta"]
                 else:
                     delta = None
 
+                if (
+                    "SKELETON" in event["event_type"]
+                    or "SKELETON" in other_event["event_type"]
+                ):
+                    # SKELETON events have a difficult parameter-dependent timing -> ignore
+                    continue
+
                 if relation == EventRelation.AFTER_OR_AT:
-                    assert event["time"] >= other_event["time"]
+                    if not event["time"] >= other_event["time"]:
+                        add_issue(
+                            relation,
+                            event["time"],
+                            other_event["time"],
+                            delta,
+                            event,
+                            other_event,
+                            edge_data,
+                        )
+
                 elif relation == EventRelation.AFTER_AT_LEAST:
-                    assert event["time"] >= other_event["time"] + delta - TOLERANCE
+                    if not event["time"] >= other_event["time"] + delta - TOLERANCE:
+                        add_issue(
+                            relation,
+                            event["time"],
+                            other_event["time"],
+                            delta,
+                            event,
+                            other_event,
+                            edge_data,
+                        )
                 elif relation == EventRelation.AFTER:
-                    assert event["time"] > other_event["time"]
+                    if not event["time"] > other_event["time"]:
+                        add_issue(
+                            relation,
+                            event["time"],
+                            other_event["time"],
+                            delta,
+                            event,
+                            other_event,
+                            edge_data,
+                        )
+
                 elif relation in (
                     EventRelation.USES_EARLY_REFERENCE,
                     EventRelation.USES_LATE_REFERENCE,
                 ):
                     pass
-                elif relation == EventRelation.AFTER_EXACTLY:
-                    assert event["time"] - other_event["time"] - delta >= -TOLERANCE
+                elif relation == EventRelation.AFTER_EXACTLY and delta is not None:
+                    if not event["time"] - other_event["time"] - delta >= -TOLERANCE:
+                        add_issue(
+                            relation,
+                            event["time"],
+                            other_event["time"],
+                            delta,
+                            event,
+                            other_event,
+                            edge_data,
+                        )
+
                 elif relation == EventRelation.AFTER_LOOP:
                     pass
                     # assert event["time"] == other_event["time"]
                 elif relation == EventRelation.BEFORE:
-                    assert event["time"] < other_event["time"]
+                    if not event["time"] < other_event["time"]:
+                        add_issue(
+                            relation,
+                            event["time"],
+                            other_event["time"],
+                            delta,
+                            event,
+                            other_event,
+                            edge_data,
+                        )
+
                 elif relation == EventRelation.BEFORE_OR_AT:
-                    assert event["time"] <= other_event["time"]
+                    if not event["time"] <= other_event["time"]:
+                        add_issue(
+                            relation,
+                            event["time"],
+                            other_event["time"],
+                            delta,
+                            event,
+                            other_event,
+                            edge_data,
+                        )
+
                 elif relation == EventRelation.BEFORE_AT_LEAST:
-                    assert event["time"] + delta <= other_event["time"] + TOLERANCE
+                    if not event["time"] + delta <= other_event["time"] + TOLERANCE:
+                        add_issue(
+                            relation,
+                            event["time"],
+                            other_event["time"],
+                            delta,
+                            event,
+                            other_event,
+                            edge_data,
+                        )
+
                 elif relation == EventRelation.RELATIVE_BEFORE:
-                    assert event["time"] <= other_event["time"]
+                    if not event["time"] <= other_event["time"]:
+                        add_issue(
+                            relation,
+                            event["time"],
+                            other_event["time"],
+                            delta,
+                            event,
+                            other_event,
+                            edge_data,
+                        )
                 else:
                     raise ValueError("invalid relation")
+
+        for issue in issues:
+            issue_text = ", ".join(f"{key}: {value}" for key, value in issue.items())
+            _logger.warning(
+                f"Issue: Not fulfilled timing relation {issue['event']['id']}  ->  {issue['other_event']['id']} : {issue_text}"
+            )
+        if len(issues) > 0 and not self._settings.IGNORE_GRAPH_VERIFY_RESULTS:
+            raise LabOneQException(
+                f"Scheduler issues: Constraints not satisfied: {issue_text}"
+            )
 
     def section_grid(self, section):
 
@@ -2095,6 +2337,8 @@ class Scheduler:
             section_info.has_repeat
             or section_info.acquisition_types is not None
             and len(section_info.acquisition_types) > 0
+            or section_info.handle is not None
+            or section_info.state is not None
         )
         for signal, trigger in section_info.trigger_output.items():
             if trigger["state"]:

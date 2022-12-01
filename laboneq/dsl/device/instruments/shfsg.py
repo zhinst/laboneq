@@ -16,14 +16,14 @@ from dataclasses import dataclass, field
 class SHFSG(ZIStandardInstrument):
     """Class representing a ZI SHFSG instrument."""
 
-    _is_qc: bool = False
-    _qc_with_qa: bool = False
+    is_qc: bool = False
+    qc_with_qa: bool = False
 
     def calc_options(self):
         return {
             **super().calc_options(),
-            "is_qc": self._is_qc,
-            "qc_with_qa": self._qc_with_qa,
+            "is_qc": self.is_qc,
+            "qc_with_qa": self.qc_with_qa,
         }
 
     @property

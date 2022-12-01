@@ -92,7 +92,7 @@ def parse_seq_c(runtime: SimpleRuntime):
         return
 
     parser = CParser()
-    ast = parser.parse(runtime.source, runtime.name)
+    ast = parser.parse(runtime.source, runtime.descriptor.name)
     # ast_stream = StringIO()
     # ast.show(buf=ast_stream)
     # print(ast_stream.getvalue())
@@ -229,7 +229,7 @@ def parse_item(item: Node, runtime: SimpleRuntime):
                 raise RuntimeError("Endless guard triggered")
     if (
         runtime.max_time is not None
-        and runtime._last_play_start_samples()[0] / runtime.sampling_rate
+        and runtime._last_play_start_samples()[0] / runtime.descriptor.sampling_rate
         > runtime.max_time
     ):
         # Stop, once a time-span event encountered, that is entirely outside the simulation region.
@@ -240,20 +240,20 @@ def parse_item(item: Node, runtime: SimpleRuntime):
 
 
 @dataclass
-class SeqCMetadata:
+class SeqCDescriptor:
     name: str
-    source: str
-    channels: List[int]
     device_uid: str
     device_type: str
+    awg_index: int
     measurement_delay_samples: int
     startup_delay: float
-    sampling_rate: float
     sample_multiple: int
-    awg_index: int
-    wave_index: dict
-    command_table: list
+    sampling_rate: float
     output_port_delay: float
+    source: str = None
+    channels: List[int] = None
+    wave_index: Dict[Any, Any] = None
+    command_table: List[Any] = None
 
 
 class Operation(Enum):
@@ -293,7 +293,7 @@ class SeqCSimulation:
 class SimpleRuntime:
     def __init__(
         self,
-        descriptor: SeqCMetadata,
+        descriptor: SeqCDescriptor,
         waves,
         max_time: Optional[float],
     ):
@@ -352,22 +352,12 @@ class SimpleRuntime:
         self.seqc_simulation = SeqCSimulation()
         self.times = {}
         self.times_at_port = {}
-        self.device_uid = descriptor.device_uid
-        self.device_type = descriptor.device_type
+        self.descriptor = descriptor
         self.waves = waves
-        self.name = descriptor.name
         self.source = preprocess_source(descriptor.source)
-        self.sampling_rate = descriptor.sampling_rate
-        self.startup_delay = descriptor.startup_delay
-        self.measurement_delay_samples = descriptor.measurement_delay_samples
-        self.sample_multiple = descriptor.sample_multiple
         self.wave_lookup: Dict[Any, WaveRefInfo] = {}
         self.wave_data: List[Any] = []
-        self.awg_index = descriptor.awg_index
-        self.wave_index = descriptor.wave_index
-        self.command_table = descriptor.command_table
         self.max_time: Optional[float] = max_time
-        self.output_port_delay: float = descriptor.output_port_delay
         self._oscillator_sweep_config = {}
 
     def _last_played_sample(self) -> int:
@@ -391,11 +381,11 @@ class SimpleRuntime:
         return ev[-1].start_samples + ev[-1].length_samples, len(ev)
 
     def program_finished(self):
-        self.seqc_simulation.device_type = self.device_type
+        self.seqc_simulation.device_type = self.descriptor.device_type
         self.seqc_simulation.waves = self.wave_data
-        self.seqc_simulation.sampling_rate = self.sampling_rate
-        self.seqc_simulation.startup_delay = self.startup_delay
-        self.seqc_simulation.output_port_delay = self.output_port_delay
+        self.seqc_simulation.sampling_rate = self.descriptor.sampling_rate
+        self.seqc_simulation.startup_delay = self.descriptor.startup_delay
+        self.seqc_simulation.output_port_delay = self.descriptor.output_port_delay
 
     def declare(self, name):
         self.variables[name] = {"name": name}
@@ -454,9 +444,9 @@ class SimpleRuntime:
                     f"Unexpected waveform '{wave_name}' shape: {np.ndim(wave_to_play)}"
                 )
 
-            if wave_len % self.sample_multiple != 0:
+            if wave_len % self.descriptor.sample_multiple != 0:
                 raise Exception(
-                    f"Wave {wave_name} has {wave_len} samples, which is not divisible by {self.sample_multiple}"
+                    f"Wave {wave_name} has {wave_len} samples, which is not divisible by {self.descriptor.sample_multiple}"
                 )
             if known_wave.length_samples is None:
                 known_wave.length_samples = wave_len
@@ -523,30 +513,33 @@ class SimpleRuntime:
                 )
             )
 
-    def executeTableEntry(self, ct_index):
+    def executeTableEntry(self, ct_index, latency=None):
         wave_key = self._args2key(["ct", ct_index])
         known_wave = self.wave_lookup.get(wave_key)
         if known_wave is None:
             known_wave = WaveRefInfo()
             self.wave_lookup[wave_key] = known_wave
 
-        ct_entry = next(iter(i for i in self.command_table if i["index"] == ct_index))
+        ct_entry = next(
+            iter(i for i in self.descriptor.command_table if i["index"] == ct_index)
+        )
 
         wave_index = ct_entry["waveform"]["index"]
 
-        wave = self.wave_index[wave_index]
+        wave = self.descriptor.wave_index[wave_index]
 
         if wave["type"] not in ("iq", "multi"):
             raise RuntimeError(
-                f"Command table execution in seqc parser only supports iq signals. Device type: {self.device_type}, signal type: {wave['type']}"
+                f"Command table execution in seqc parser only supports iq signals. Device type: {self.descriptor.device_type}, signal type: {wave['type']}"
             )
 
         wave_names = [wave["wave_name"] + suffix + ".wave" for suffix in ("_i", "_q")]
 
+        # todo(JL): add latency
         self._append_wave_event(wave_names, known_wave)
 
     def startQA(self, *args):
-        if self.device_type == "SHFQA":
+        if self.descriptor.device_type == "SHFQA":
             self.startQA_SHFQA(*args)
         else:
             self.startQA_UHFQA(*args)
@@ -572,7 +565,7 @@ class SimpleRuntime:
                 if known_wave is None:
                     known_wave = WaveRefInfo()
                     self.wave_lookup[wave_key] = known_wave
-                wave = self.wave_index[gen_index]
+                wave = self.descriptor.wave_index[gen_index]
                 wave_names = [wave["wave_name"] + ".wave"]
                 self._update_wave_refs(wave_names, known_wave)
                 wave_data_idx = known_wave.wave_data_idx
@@ -587,7 +580,7 @@ class SimpleRuntime:
                 args=[
                     generators_mask,
                     integrators_mask,
-                    self.measurement_delay_samples,
+                    self.descriptor.measurement_delay_samples,
                     input_monitor,
                     wave_data_idx,
                 ],
@@ -613,7 +606,7 @@ class SimpleRuntime:
                 args=[
                     None,
                     weighted_integrator_mask,
-                    self.measurement_delay_samples,
+                    self.descriptor.measurement_delay_samples,
                     monitor,
                     None,
                 ],
@@ -628,7 +621,13 @@ class SimpleRuntime:
                 start_samples=start_samples,
                 length_samples=0,
                 operation=Operation.START_QA,
-                args=[None, 0xFFFF, self.measurement_delay_samples, None, None],
+                args=[
+                    None,
+                    0xFFFF,
+                    self.descriptor.measurement_delay_samples,
+                    None,
+                    None,
+                ],
             ),
         )
 
@@ -694,9 +693,11 @@ def find_device(recipe, device_uid):
     return None
 
 
-def analyze_recipe(recipe, sources, wave_indices, command_tables) -> List[SeqCMetadata]:
+def analyze_recipe(
+    recipe, sources, wave_indices, command_tables
+) -> List[SeqCDescriptor]:
     outputs: Dict[str, List[int]] = {}
-    seq_c_devices = {}
+    seqc_descriptors_from_recipe: Dict[str, SeqCDescriptor] = {}
     for init in recipe["experiment"]["initializations"]:
         delay = 0
         if "measurements" in init and len(init["measurements"]) > 0:
@@ -736,23 +737,23 @@ def analyze_recipe(recipe, sources, wave_indices, command_tables) -> List[SeqCMe
             for awg in init["awgs"]:
                 seqc = awg["seqc"]
                 awg_nr = awg["awg"]
-                seq_c_devices[seqc] = {
-                    "device_uid": device_uid,
-                    "device_type": device_type,
-                    "awg_index": awg_index,
-                    "signal_type": awg["signal_type"],
-                    "measurement_delay_samples": delay,
-                    "startup_delay": startup_delay,
-                    "sample_multiple": sample_multiple,
-                    "sampling_rate": sampling_rate,
-                }
                 if device_type == "SHFSG" or device_type == "SHFQA":
                     output_channels = [awg_nr]
                 else:
                     output_channels = [2 * awg_nr, 2 * awg_nr + 1]
 
-                seq_c_devices[seqc]["output_port_delay"] = output_channel_delays.get(
-                    output_channels[0], 0.0
+                seqc_descriptors_from_recipe[seqc] = SeqCDescriptor(
+                    name=seqc,
+                    device_uid=device_uid,
+                    device_type=device_type,
+                    awg_index=awg_index,
+                    measurement_delay_samples=delay,
+                    startup_delay=startup_delay,
+                    sample_multiple=sample_multiple,
+                    sampling_rate=sampling_rate,
+                    output_port_delay=output_channel_delays.get(
+                        output_channels[0], 0.0
+                    ),
                 )
 
                 precompensation_info = output_channel_precompensation.get(
@@ -763,7 +764,9 @@ def analyze_recipe(recipe, sources, wave_indices, command_tables) -> List[SeqCMe
                         precompensation_delay_samples(precompensation_info)
                         / sampling_rate
                     )
-                    seq_c_devices[seqc]["output_port_delay"] += precompensation_delay
+                    seqc_descriptors_from_recipe[
+                        seqc
+                    ].output_port_delay += precompensation_delay
 
                 channels: List[int] = [
                     output["channel"] + 1
@@ -789,34 +792,22 @@ def analyze_recipe(recipe, sources, wave_indices, command_tables) -> List[SeqCMe
                     "wave_name": wave_name,
                 }
 
-    seq_c_descriptors = []
+    seqc_descriptors = []
     for src in sources:
         name = src["filename"]
-        seq_c_device = seq_c_devices[name]
         command_table = next(
             (table["ct"] for table in command_tables if table["seqc"] == name), {}
         )
-        seq_c_descriptors.append(
-            SeqCMetadata(
-                name=name,
-                source=src["text"],
-                channels=outputs[name],
-                device_uid=seq_c_device["device_uid"],
-                device_type=seq_c_device["device_type"],
-                measurement_delay_samples=seq_c_device["measurement_delay_samples"],
-                startup_delay=seq_c_device["startup_delay"],
-                sampling_rate=seq_c_device["sampling_rate"],
-                sample_multiple=seq_c_device["sample_multiple"],
-                awg_index=seq_c_device["awg_index"],
-                wave_index=seq_c_wave_indices.get(name, {}),
-                command_table=command_table,
-                output_port_delay=seq_c_device["output_port_delay"],
-            )
-        )
-    return seq_c_descriptors
+        seqc_descriptor = seqc_descriptors_from_recipe[name]
+        seqc_descriptor.source = src["text"]
+        seqc_descriptor.channels = outputs[name]
+        seqc_descriptor.wave_index = seq_c_wave_indices.get(name, {})
+        seqc_descriptor.command_table = command_table
+        seqc_descriptors.append(seqc_descriptor)
+    return seqc_descriptors
 
 
-def run_single_source(descriptor: SeqCMetadata, waves, max_time) -> SeqCSimulation:
+def run_single_source(descriptor: SeqCDescriptor, waves, max_time) -> SeqCSimulation:
     runtime = SimpleRuntime(
         descriptor=descriptor,
         waves=waves,
@@ -851,7 +842,7 @@ def preprocess_source(text):
 
 def _analyze_compiled(
     compiled: CompiledExperiment,
-) -> Tuple[List[SeqCMetadata], Dict[str, npt.ArrayLike]]:
+) -> Tuple[List[SeqCDescriptor], Dict[str, npt.ArrayLike]]:
     if isinstance(compiled, dict):
         compiled = SimpleNamespace(
             recipe=compiled["recipe"],

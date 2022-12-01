@@ -484,7 +484,7 @@ class _SHFQAProcessor(_ProcessorBase):
                 interface=interface,
                 connections=device_connections,
                 reference_clock_source=external_clock_signal,
-                _is_qc=is_qc,
+                is_qc=is_qc,
             )
         )
 
@@ -616,8 +616,8 @@ class _SHFSGProcessor(_ProcessorBase):
                 interface=interface,
                 connections=device_connections,
                 reference_clock_source=external_clock_signal,
-                _is_qc=is_qc,
-                _qc_with_qa=qc_with_qa,
+                is_qc=is_qc,
+                qc_with_qa=qc_with_qa,
             )
         )
 

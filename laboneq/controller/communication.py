@@ -15,7 +15,7 @@ from laboneq.controller.devices.zi_node_monitor import NodeMonitor
 from zhinst.toolkit import Session as TKSession
 from .util import LabOneQControllerException
 from .versioning import LabOneVersion
-from .cache import Cache, CacheTreeNode
+from .cache import Cache
 
 
 class CachingStrategy(Enum):
@@ -76,14 +76,6 @@ class ZiApiWrapperBase(ABC):
 
     @abstractmethod
     def _api_wrapper(self, method_name, *args, **kwargs):
-        pass
-
-    @abstractmethod
-    def extract_cache_tree(self):
-        pass
-
-    @abstractmethod
-    def inject_cache_tree(self, cache_tree_node):
         pass
 
     @property
@@ -292,20 +284,6 @@ class DaqWrapper(ZiApiWrapperBase):
     def is_valid(self):
         return self._is_valid
 
-    def extract_cache_tree(self):
-        self._logger.debug("Extracting cache")
-        cache_tree = CacheTreeNode(self._node_cache_root)
-        for awg_module in self._awg_module_wrappers:
-            cache_tree.add_child(awg_module.name, awg_module.extract_cache_tree())
-        return cache_tree
-
-    def inject_cache_tree(self, cache_tree_node):
-        self._logger.debug("Injecting cache")
-        self._node_cache_root = cache_tree_node.cache
-        for awg_module in self._awg_module_wrappers:
-            if awg_module.name in cache_tree_node.children:
-                awg_module.inject_cache_tree(cache_tree_node.children[awg_module.name])
-
     @property
     def dataserver_version(self):
         return self._dataserver_version
@@ -323,10 +301,6 @@ class DaqWrapper(ZiApiWrapperBase):
 
         self._logger.debug("disconnectDevice %s", serial)
         self._api_wrapper("disconnectDevice", serial)
-
-    def sync(self):
-        self._logger.debug("sync")
-        return self._api_wrapper("sync")
 
     def get_raw(self, path):
         # @TODO(andreyk): remove this method and refactor call site
@@ -405,6 +379,10 @@ class DaqWrapperDryRun(DaqWrapper):
 
         self._zi_api_object.map_device_type(serial, calc_dev_type(type, opts))
 
+    def set_emulation_option(self, serial: str, option: str, value: Any):
+        assert isinstance(self._zi_api_object, ziDAQServerEmulator)
+        self._zi_api_object.set_option(serial, option, value)
+
 
 class AwgModuleWrapper(ZiApiWrapperBase):
     def __init__(self, name, zi_awg_module):
@@ -424,14 +402,6 @@ class AwgModuleWrapper(ZiApiWrapperBase):
     def elf_status(self):
         return self._zi_api_object.getInt("elf/status")
 
-    def extract_cache_tree(self):
-        self._logger.debug("Extracting cache")
-        return CacheTreeNode(self._node_cache_root)
-
-    def inject_cache_tree(self, cache_tree_node):
-        self._logger.debug("Injecting cache")
-        self._node_cache_root = cache_tree_node.cache
-
     def _api_reply_to_val_history_dict(self, daq_reply):
         """Converts AWG module reply with flat=True to path-value_history dict
         e.g. { path: [ val1, val2 ] } to { path: [ val1, val2 ] }
@@ -440,3 +410,12 @@ class AwgModuleWrapper(ZiApiWrapperBase):
         for path in daq_reply:
             res[path] = daq_reply[path]
         return res
+
+
+def batch_set(all_actions: List[DaqNodeAction]):
+    split_actions: Dict[DaqWrapper, List[DaqNodeAction]] = {}
+    for daq_action in all_actions:
+        daq_actions = split_actions.setdefault(daq_action.daq, [])
+        daq_actions.append(daq_action)
+    for daq, daq_actions in split_actions.items():
+        daq.batch_set(daq_actions)

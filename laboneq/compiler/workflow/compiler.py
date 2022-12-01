@@ -33,6 +33,7 @@ from laboneq.compiler.workflow.precompensation_helpers import (
     compute_precompensation_delays_on_grid,
     precompensation_is_nonzero,
     compute_precompensations_and_delays,
+    verify_precompensation_parameters,
 )
 from laboneq.compiler.workflow.recipe_generator import RecipeGenerator
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
@@ -338,21 +339,22 @@ class Compiler:
             else:
                 delay_signal = 0
 
-            trigger_mode = TriggerMode.NONE
+            awg = self.get_awg(signal_id)
+            awg.trigger_mode = TriggerMode.NONE
             device_info = self._experiment_dao.device_info(device_id)
             try:
-                reference_clock_source = self._clock_settings[device_id]
+                awg.reference_clock_source = self._clock_settings[device_id]
             except KeyError:
-                reference_clock_source = device_info.reference_clock_source
+                awg.reference_clock_source = device_info.reference_clock_source
             if self._leader_properties.is_desktop_setup:
-                trigger_mode = {
+                awg.trigger_mode = {
                     DeviceType.HDAWG: TriggerMode.DIO_TRIGGER,
                     DeviceType.SHFSG: TriggerMode.INTERNAL_TRIGGER_WAIT,
                     DeviceType.SHFQA: TriggerMode.INTERNAL_TRIGGER_WAIT,
                     DeviceType.UHFQA: TriggerMode.DIO_WAIT,
                 }.get(device_type, TriggerMode.NONE)
+            awg.sampling_rate = sampling_rate
 
-            awg = self.get_awg(signal_id)
             signal_type = signal_info.signal_type
 
             _logger.debug(
@@ -403,8 +405,6 @@ class Compiler:
                 awg=awg,
                 device_type=device_type,
                 oscillator_frequency=oscillator_frequency,
-                trigger_mode=trigger_mode,
-                reference_clock_source=reference_clock_source,
                 channels=channels,
                 mixer_type=mixer_type,
                 hw_oscillator=hw_oscillator,
@@ -418,6 +418,8 @@ class Compiler:
             events,
             {k: self._experiment_dao.pulse(k) for k in self._experiment_dao.pulses()},
         )
+        self._command_table_match_offsets = code_generator.command_table_match_offsets()
+        self._feedback_connections = code_generator.feedback_connections()
         code_generator.gen_waves()
 
         _logger.debug("Code generation completed")
@@ -555,6 +557,7 @@ class Compiler:
                         awg_number=awg_number,
                         seqc="seq_" + device_id + "_" + str(awg_number) + ".seqc",
                         device_type=device_type,
+                        sampling_rate=None,
                     )
                     device_awgs[awg_number] = awg
 
@@ -642,7 +645,9 @@ class Compiler:
             mixer_calibration = self._experiment_dao.mixer_calibration(signal_id)
             lo_frequency = self._experiment_dao.lo_frequency(signal_id)
             port_mode = self._experiment_dao.port_mode(signal_id)
-            signal_range = self._experiment_dao.signal_range(signal_id)
+            signal_range, signal_range_unit = self._experiment_dao.signal_range(
+                signal_id
+            )
             device_type = DeviceType(signal_info.device_type)
             port_delay = self._experiment_dao.port_delay(signal_id)
             if signal_id in signal_delays:
@@ -662,6 +667,7 @@ class Compiler:
                     "lo_frequency": lo_frequency,
                     "port_mode": port_mode,
                     "range": signal_range,
+                    "range_unit": signal_range_unit,
                     "port_delay": port_delay,
                 }
                 signal_is_modulated = signal_info.modulation
@@ -712,6 +718,15 @@ class Compiler:
                             f"Device {signal_info.device_id} does not"
                             + " support precompensation"
                         )
+                    warnings = verify_precompensation_parameters(
+                        precompensation,
+                        self._sampling_rate_tracker.sampling_rate_for_device(
+                            signal_info.device_id
+                        ),
+                        signal_id,
+                    )
+                    if warnings:
+                        _logger.warn(warnings)
                     output["precompensation"] = precompensation
 
                 output["oscillator_frequency"] = oscillator_frequency
@@ -733,7 +748,9 @@ class Compiler:
                 continue
 
             lo_frequency = self._experiment_dao.lo_frequency(signal_id)
-            signal_range = self._experiment_dao.signal_range(signal_id)
+            signal_range, signal_range_unit = self._experiment_dao.signal_range(
+                signal_id
+            )
             port_delay = self._experiment_dao.port_delay(signal_id)
             for channel in signal_info.channels:
                 input = {
@@ -741,6 +758,7 @@ class Compiler:
                     "channel": channel,
                     "lo_frequency": lo_frequency,
                     "range": signal_range,
+                    "range_unit": signal_range_unit,
                     "port_delay": port_delay,
                 }
                 channel_key = (signal_info.device_id, channel)
@@ -887,6 +905,7 @@ class Compiler:
                 lo_frequency=output["lo_frequency"],
                 port_mode=output["port_mode"],
                 output_range=output["range"],
+                output_range_unit=output["range_unit"],
                 port_delay=output["port_delay"],
             )
 
@@ -897,6 +916,7 @@ class Compiler:
                 input["channel"],
                 lo_frequency=input["lo_frequency"],
                 input_range=input["range"],
+                input_range_unit=input["range_unit"],
                 port_delay=input["port_delay"],
             )
 
@@ -907,8 +927,26 @@ class Compiler:
                     signal_type = AWGSignalType.SINGLE
                 if signal_type == AWGSignalType.MULTI:
                     signal_type = AWGSignalType.IQ
+                # Find the acquire signal from which we read the feedback from and which
+                # is used via a match/state construct for the drive signals of this awg
+                awg_signals = {c for c, _ in awg.signal_channels}
+                qa_signal_ids = {
+                    h.acquire
+                    for h in self._feedback_connections.values()
+                    if h.drive.intersection(awg_signals)
+                }
+                if len(qa_signal_ids) > 1:
+                    raise Exception(
+                        f"The drive signal(s) ({set(awg_signals)}) can only react to "
+                        f"one acquire signal for feedback, got {qa_signal_ids}."
+                    )
                 recipe_generator.add_awg(
-                    device_id, awg.awg_number, signal_type.value, awg.seqc
+                    device_id,
+                    awg.awg_number,
+                    signal_type.value,
+                    awg.seqc,
+                    next(iter(qa_signal_ids), None),
+                    self._command_table_match_offsets.get((device_id, awg.awg_number)),
                 )
 
         if self._code_generator is None:
@@ -1006,7 +1044,6 @@ class Compiler:
                 self._experiment_dao.section_signals_with_children(section_display_name)
             )
             section_info_out[section]["section_display_name"] = section_display_name
-            section_signals_with_children[section]
 
         sampling_rate_tuples = []
         for signal_id in self._experiment_dao.signals():

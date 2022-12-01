@@ -276,7 +276,7 @@ class Match(Section):
             )
         if any(c.state == case.state for c in self.sections):
             raise LabOneQException(
-                f"A branch with matches {case.state} already exists."
+                f"A branch which matches {case.state} already exists."
             )
         super().add(case)
 

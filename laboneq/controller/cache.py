@@ -45,15 +45,3 @@ class Cache:
 
     def invalidate(self):
         self._cache = {}
-
-
-class CacheTreeNode:
-    def __init__(self, cache):
-        self.cache = cache
-        self.children = {}
-
-    def add_child(self, name, cache_tree_node):
-        if name in self.children:
-            raise LabOneQControllerException(f"Already have a child named {name}")
-
-        self.children[name] = cache_tree_node

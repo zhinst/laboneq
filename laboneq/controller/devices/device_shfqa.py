@@ -60,6 +60,12 @@ class DeviceSHFQA(DeviceZI):
         self._wait_for_AWGs = True
         self._emit_trigger = False
 
+    @property
+    def dev_repr(self) -> str:
+        if self._get_option("is_qc"):
+            return f"SHFQC/QA:{self._get_option('serial')}"
+        return f"SHFQA:{self._get_option('serial')}"
+
     def _process_dev_opts(self):
         if self.dev_type == "SHFQA4":
             self._channels = 4
@@ -100,6 +106,12 @@ class DeviceSHFQA(DeviceZI):
         )
         range_list = output_ranges if is_out else input_ranges
         label = "Output" if is_out else "Input"
+
+        if io.range_unit not in (None, "dBm"):
+            raise LabOneQControllerException(
+                f"{label} range of device {self.dev_repr} is specified in "
+                f"units of {io.range_unit}. Units must be 'dBm'."
+            )
         if not any(np.isclose([io.range] * len(range_list), range_list)):
             self._logger.warning(
                 "%s: %s channel %d range %.1f is not on the list of allowed ranges: %s. Nearest allowed range will be used.",
@@ -747,15 +759,14 @@ class DeviceSHFQA(DeviceZI):
                 )
             )
             if input.range is not None:
-                if input.range is not None:
-                    self._validate_range(input, is_out=False)
-                    nodes_to_initialize_measurement.append(
-                        DaqNodeSetAction(
-                            self._daq,
-                            f"/{self.serial}/qachannels/{input.channel}/input/range",
-                            input.range,
-                        )
+                self._validate_range(input, is_out=False)
+                nodes_to_initialize_measurement.append(
+                    DaqNodeSetAction(
+                        self._daq,
+                        f"/{self.serial}/qachannels/{input.channel}/input/range",
+                        input.range,
                     )
+                )
 
         for measurement in initialization.measurements:
             channel = 0

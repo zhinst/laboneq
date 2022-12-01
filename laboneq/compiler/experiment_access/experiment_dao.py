@@ -213,6 +213,7 @@ class ExperimentDAO:
                 "precompensation": None,
                 "lo_frequency": None,
                 "range": None,
+                "range_unit": None,
                 "port_delay": None,
                 "delay_signal": None,
                 "port_mode": None,
@@ -357,6 +358,7 @@ class ExperimentDAO:
             except KeyError:
                 precompensation = None
             range = connection.get("range")
+            range_unit = connection.get("range_unit")
             lo_frequency = connection.get("lo_frequency")
             port_delay = connection.get("port_delay")
             delay_signal = connection.get("delay_signal")
@@ -371,6 +373,7 @@ class ExperimentDAO:
                     "precompensation": precompensation,
                     "lo_frequency": lo_frequency,
                     "range": range,
+                    "range_unit": range_unit,
                     "port_delay": port_delay,
                     "delay_signal": delay_signal,
                     "port_mode": None,
@@ -904,9 +907,10 @@ class ExperimentDAO:
         )["lo_frequency"]
 
     def signal_range(self, signal_id):
-        return next(
+        sc = next(
             sc for sc in self._data["signal_connection"] if sc["signal_id"] == signal_id
-        )["range"]
+        )
+        return sc["range"], sc["range_unit"]
 
     def port_delay(self, signal_id):
         return next(
@@ -1169,9 +1173,13 @@ class ExperimentDAO:
             if port_mode is not None:
                 signal_connection["port_mode"] = port_mode
 
-            signal_range = experiment_dao.signal_range(signal_info.signal_id)
+            signal_range, signal_range_unit = experiment_dao.signal_range(
+                signal_info.signal_id
+            )
             if signal_range is not None:
                 signal_connection["range"] = signal_range
+            if signal_range_unit is not None:
+                signal_connection["range_unit"] = signal_range_unit
 
             port_delay = experiment_dao.port_delay(signal_info.signal_id)
             if port_delay is not None:
@@ -1419,6 +1427,7 @@ class ExperimentDAO:
         ls_precompensations = {}
         ls_lo_frequencies = {}
         ls_ranges = {}
+        ls_range_units = {}
         ls_port_delays = {}
         ls_delays_signal = {}
         ls_port_modes = {}
@@ -1565,24 +1574,20 @@ class ExperimentDAO:
                     pass
                 try:
                     precomp = calibration.precompensation
-                    if precomp is None or not precomp.is_nonzero():
+                    if precomp is None:
                         raise AttributeError
                 except AttributeError:
                     pass
                 else:
                     precomp_dict = {}
 
-                    if precomp.exponential is not None and any(
-                        e.is_nonzero() for e in precomp.exponential
-                    ):
+                    if precomp.exponential:
                         precomp_exp = [
                             {"timeconstant": e.timeconstant, "amplitude": e.amplitude}
                             for e in precomp.exponential
-                            if e.amplitude != 0.0
                         ]
-                        if precomp_exp:
-                            precomp_dict["exponential"] = precomp_exp
-                    if precomp.high_pass is not None and precomp.high_pass.is_nonzero():
+                        precomp_dict["exponential"] = precomp_exp
+                    if precomp.high_pass is not None:
                         clearing = {
                             HighPassCompensationClearing.LEVEL: "level",
                             HighPassCompensationClearing.RISE: "rise",
@@ -1593,12 +1598,12 @@ class ExperimentDAO:
                             "timeconstant": precomp.high_pass.timeconstant,
                             "clearing": clearing,
                         }
-                    if precomp.bounce is not None and precomp.bounce.is_nonzero():
+                    if precomp.bounce is not None:
                         precomp_dict["bounce"] = {
                             "delay": precomp.bounce.delay,
                             "amplitude": precomp.bounce.amplitude,
                         }
-                    if precomp.FIR is not None and precomp.FIR.is_nonzero():
+                    if precomp.FIR is not None:
                         precomp_dict["FIR"] = {
                             "coefficients": copy.deepcopy(precomp.FIR.coefficients),
                         }
@@ -1610,7 +1615,14 @@ class ExperimentDAO:
                     ls_lo_frequencies[ls.path] = getattr(
                         ls_local_oscillator, "frequency"
                     )
-                ls_ranges[ls.path] = getattr(calibration, "range")
+                signal_range = getattr(calibration, "range")
+                if signal_range is not None:
+                    if hasattr(signal_range, "unit"):
+                        ls_ranges[ls.path] = signal_range.value
+                        ls_range_units[ls.path] = str(signal_range.unit)
+                    else:
+                        ls_ranges[ls.path] = signal_range
+                        ls_range_units[ls.path] = None
 
                 if (
                     hasattr(calibration, "port_mode")
@@ -1714,6 +1726,7 @@ class ExperimentDAO:
                     "precompensation": ls_precompensations.get(lsuid),
                     "lo_frequency": ls_lo_frequencies.get(lsuid),
                     "range": ls_ranges.get(lsuid),
+                    "range_unit": ls_range_units.get(lsuid),
                     "port_delay": ls_port_delays.get(lsuid),
                     "delay_signal": ls_delays_signal.get(lsuid),
                     "port_mode": ls_port_modes.get(lsuid),

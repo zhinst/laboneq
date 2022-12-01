@@ -6,8 +6,10 @@ Convenience header for the LabOne Q project.
 """
 
 from laboneq.dsl import LinearSweepParameter, SweepParameter
-from laboneq.dsl.calibration import Calibration, Calibratable
 from laboneq.dsl.calibration import (
+    Calibration,
+    Calibratable,
+    units,
     SignalCalibration,
     Oscillator,
     MixerCalibration,
@@ -51,3 +53,5 @@ from laboneq.controller import laboneq_logging
 from laboneq.pulse_sheet_viewer.pulse_sheet_viewer import show_pulse_sheet
 
 from laboneq._token import install_token
+
+from laboneq.simulator.output_simulator import OutputSimulator

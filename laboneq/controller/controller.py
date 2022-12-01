@@ -7,14 +7,13 @@ from collections import defaultdict
 import itertools
 import logging
 import os
-import re
 import traceback
+
 import numpy as np
 
 import concurrent.futures
 
 from typing import (
-    Iterator,
     List,
     Dict,
     Any,
@@ -29,42 +28,41 @@ from numpy import typing as npt
 import zhinst.utils
 
 from laboneq import __version__
-from laboneq.controller.devices.zi_node_monitor import AllConditionsWaiter
-from laboneq.controller.protected_session import ProtectedSession
-
-from laboneq.core.types.enums.averaging_mode import AveragingMode
-from laboneq.core.types.enums.acquisition_type import AcquisitionType
-from laboneq.core.types.enums.io_signal_type import IOSignalType
-from laboneq.core.utilities.replace_pulse import ReplacementType, calc_wave_replacements
-
-from laboneq.executor.executor import ExecutorBase, LoopingMode
-
-from .devices.device_base import DeviceBase, DeviceQualifier
-from .devices.device_zi import DeviceZI
-from .devices.device_uhfqa import DeviceUHFQA
-from .devices.device_factory import DeviceFactory
-from .recipe_1_4_0 import *
-from .recipe_processor import RecipeData, RtExecutionInfo, pre_process_compiled
-from .util import LabOneQControllerException
-from .results import make_empty_results, make_acquired_result, build_partial_result
-from .communication import (
-    DaqNodeGetAction,
-    DaqNodeAction,
-    DaqNodeSetAction,
+from laboneq.controller.communication import (
     CachingStrategy,
+    DaqNodeAction,
+    DaqNodeGetAction,
+    DaqNodeSetAction,
     DaqWrapper,
-    DaqWrapperDryRun,
-    ServerQualifier,
+    batch_set,
 )
-
-from .cache import CacheTreeNode
+from laboneq.controller.devices.device_collection import DeviceCollection
+from laboneq.controller.devices.device_zi import DeviceZI
+from laboneq.controller.devices.device_uhfqa import DeviceUHFQA
+from laboneq.controller.devices.zi_node_monitor import ResponseWaiter
+from laboneq.controller.protected_session import ProtectedSession
+from laboneq.controller.recipe_1_4_0 import *
+from laboneq.controller.recipe_processor import (
+    RecipeData,
+    RtExecutionInfo,
+    pre_process_compiled,
+)
+from laboneq.controller.results import (
+    build_partial_result,
+    make_acquired_result,
+    make_empty_results,
+)
+from laboneq.controller.util import LabOneQControllerException
+from laboneq.core.types.enums.acquisition_type import AcquisitionType
+from laboneq.core.types.enums.averaging_mode import AveragingMode
+from laboneq.core.utilities.replace_pulse import ReplacementType, calc_wave_replacements
+from laboneq.executor.executor import ExecutorBase, LoopingMode
 
 if TYPE_CHECKING:
     from laboneq.core.types import CompiledExperiment
     from laboneq.dsl import Session
-    from laboneq.dsl.experiment.pulse import Pulse
     from laboneq.dsl.device.device_setup import DeviceSetup
-    from laboneq.dsl.device.instrument import Instrument
+    from laboneq.dsl.experiment.pulse import Pulse
     from laboneq.dsl.result.results import Results
 
 
@@ -91,7 +89,11 @@ class Controller:
         user_functions: Dict[str, Callable] = None,
     ):
         self._run_parameters = run_parameters or ControllerRunParameters()
-        self._device_setup: DeviceSetup = device_setup
+        self._devices = DeviceCollection(
+            device_setup,
+            self._run_parameters.dry_run,
+            self._run_parameters.ignore_lab_one_version_error,
+        )
         self._connected = False
         # Waves which are uploaded to the devices via pulse replacements
         self._current_waves = []
@@ -100,9 +102,7 @@ class Controller:
         self._recipe_data: RecipeData = None
         self._session = None
         self._results: Results = None
-        self.cache_to_inject = None
-        self._daqs: Dict[str, DaqWrapper] = {}
-        self._devices: Dict[str, DeviceBase] = {}
+
         self._logger = logging.getLogger(__name__)
         self._logger.debug("Controller created")
         self._logger.debug("Controller debug logging is on")
@@ -114,123 +114,26 @@ class Controller:
             "LABONEQ_STANDALONE_AWG", "1"
         ).lower() in ("1", "true")
 
-    DevIterType = Iterator[Tuple[str, DeviceBase]]
-
-    @property
-    def leaders(self) -> DevIterType:
-        for uid, device in self._devices.items():
-            if device.is_leader():
-                yield uid, device
-
-    @property
-    def followers(self) -> DevIterType:
-        for uid, device in self._devices.items():
-            if device.is_follower():
-                yield uid, device
-
-    @property
-    def devices(self) -> Dict[str, DeviceBase]:
-        """Controller devices"""
-        return self._devices
-
-    def _prepare_devices(self, instruments: List[Instrument]):
-        def make_device_qualifier(dry_run: bool, instrument, daq) -> DeviceQualifier:
-
-            driver = instrument.calc_driver()
-            options = {
-                **instrument.calc_options(),
-                "standalone_awg": self._is_using_standalone_compiler,
-            }
-
-            return DeviceQualifier(
-                dry_run=dry_run, driver=driver, server=daq, options=options
-            )
-
-        updated_devices: Dict[str, DeviceBase] = {}
-        for instrument in instruments:
-            if hasattr(instrument, "server_uid"):
-                daq = self._daqs.get(instrument.server_uid)
-            else:
-                daq = None
-            device_qualifier = make_device_qualifier(
-                self._run_parameters.dry_run, instrument, daq
-            )
-            device = self._devices.get(instrument.uid)
-            if device is None or device.device_qualifier != device_qualifier:
-                device = DeviceFactory.create(device_qualifier)
-            device.remove_all_links()
-            updated_devices[instrument.uid] = device
-        self._devices = updated_devices
-
-        # Update device links
-        for instrument in instruments:
-            from_dev = self._devices[instrument.uid]
-            for connection in instrument.connections:
-                if connection.signal_type in [IOSignalType.DIO, IOSignalType.ZSYNC]:
-                    from_port = connection.local_port
-                    to_dev = self._devices.get(connection.remote_path)
-                    if to_dev is None:
-                        raise LabOneQControllerException(
-                            f"Could not find destination device '{connection.remote_path}' for the port '{connection.local_port}' connection of the device '{instrument.uid}'"
-                        )
-                    to_port = f"{connection.signal_type.name}/{connection.remote_port}"
-                    from_dev.add_downlink(from_port, to_dev)
-                    to_dev.add_uplink(to_port, from_dev)
-
-    def _connect_devices(self):
-        for device in self._devices.values():
-            device.connect()
-
-    def _find_device(self, device_uid):
-        device = self._devices.get(device_uid)
-        if device is None:
-            raise LabOneQControllerException(
-                f"Could not find device object for the device uid '{device_uid}'"
-            )
-        return device
-
-    def _find_device_by_path(self, path: str):
-        m = re.match(r"^/?(DEV\d+)/.+", path.upper())
-        if m is None:
-            raise LabOneQControllerException(
-                f"Path '{path}' is not referring to any device"
-            )
-        serial = m.group(1)
-        dev: DeviceBase
-        for dev in self._devices.values():
-            if dev._get_option("serial").upper() == serial:
-                return dev
-        raise LabOneQControllerException(f"Could not find device for the path '{path}'")
-
-    def _sync_all_daqs(self):
-        for daq in self._daqs.values():
-            daq.sync()
-
     def _allocate_resources(self):
-        for device in self._devices.values():
-            device.free_allocations()
+        self._devices.free_allocations()
         for osc_param in self._recipe_data.recipe.experiment.oscillator_params:
-            self._devices[osc_param.device_id].allocate_osc(osc_param)
+            self._devices.find_by_uid(osc_param.device_id).allocate_osc(osc_param)
 
     def _reset_to_idle_state(self):
         reset_nodes = []
-        for device in self._devices.values():
+        for _, device in self._devices.all:
             reset_nodes.extend(device.collect_reset_nodes())
-        self._batch_set(reset_nodes)
-        self._sync_all_daqs()
-        for daq in self._daqs.values():
-            daq.node_monitor.stop()
-            daq.node_monitor.start()
+        batch_set(reset_nodes)
 
     def _wait_for_conditions_to_start(self):
         for initialization in self._recipe_data.initializations:
-            device = self._find_device(initialization.device_uid)
+            device = self._devices.find_by_uid(initialization.device_uid)
             device.wait_for_conditions_to_start()
 
     def _initialize_device_outputs(self):
         nodes_to_initialize: List[DaqNodeAction] = []
         for initialization in self._recipe_data.initializations:
-            device = self._find_device(initialization.device_uid)
+            device = self._devices.find_by_uid(initialization.device_uid)
             nodes_to_initialize.extend(
                 device.collect_output_initialization_nodes(
                     self._recipe_data.device_settings[initialization.device_uid],
@@ -239,18 +142,18 @@ class Controller:
             )
             nodes_to_initialize.extend(device.collect_osc_initialization_nodes())
 
-        self._batch_set(nodes_to_initialize)
+        batch_set(nodes_to_initialize)
 
     def _set_nodes_before_awg_program_upload(self):
         nodes_to_initialize = []
         for initialization in self._recipe_data.initializations:
-            device = self._find_device(initialization.device_uid)
+            device = self._devices.find_by_uid(initialization.device_uid)
             nodes_to_initialize.extend(
                 device.collect_awg_before_upload_nodes(
                     initialization, self._recipe_data
                 )
             )
-        self._batch_set(nodes_to_initialize)
+        batch_set(nodes_to_initialize)
 
     def _upload_awg_programs_standalone(self):
         @dataclass
@@ -263,18 +166,13 @@ class Controller:
             elf: Optional[bytes]
 
         # Mise en place:
-        awg_data = defaultdict(list)
+        awg_data: Dict[DeviceZI, List[UploadItem]] = defaultdict(list)
         recipe_data = self._recipe_data
         acquisition_type = RtExecutionInfo.get_acquisition_type(
             recipe_data.rt_execution_infos
         )
-        other_initializations = []
         for initialization in recipe_data.initializations:
-            device = self._find_device(initialization.device_uid)
-
-            if not isinstance(device, DeviceZI):
-                other_initializations.append(initialization)
-                continue
+            device = self._devices.find_by_uid(initialization.device_uid)
 
             if initialization.awgs is None:
                 continue
@@ -318,9 +216,9 @@ class Controller:
         self._logger.debug("Finished compilation.")
 
         # Upload AWG programs, waveforms, and command tables:
-        elf_node_settings = defaultdict(list)
-        elf_upload_conditions = defaultdict(dict)
-        wf_node_settings = defaultdict(list)
+        elf_node_settings: Dict[DaqWrapper, List[DaqNodeSetAction]] = defaultdict(list)
+        elf_upload_conditions: Dict[DaqWrapper, Dict[str, Any]] = defaultdict(dict)
+        wf_node_settings: Dict[DaqWrapper, List[DaqNodeSetAction]] = defaultdict(list)
         for device, items in awg_data.items():
             for item in items:
                 elf_filename = item.seqc_filename.rsplit(".seqc", 1)[0] + ".elf"
@@ -357,46 +255,40 @@ class Controller:
 
         if len(elf_upload_conditions) > 0:
             self._logger.debug("Waiting for devices...")
-            if not self._run_parameters.dry_run:
-                conditions_waiter = AllConditionsWaiter()
-                for daq, conditions in elf_upload_conditions.items():
-                    conditions_waiter.add(
-                        target=daq.node_monitor,
-                        conditions=conditions,
-                    )
-                timeout_s = 10
-                if not conditions_waiter.wait_all(timeout=timeout_s):
-                    raise LabOneQControllerException(
-                        f"AWGs not in ready state within timeout ({timeout_s} s)."
-                    )
+            response_waiter = ResponseWaiter()
+            for daq, conditions in elf_upload_conditions.items():
+                response_waiter.add(
+                    target=daq.node_monitor,
+                    conditions=conditions,
+                )
+            timeout_s = 10
+            if not response_waiter.wait_all(timeout=timeout_s):
+                raise LabOneQControllerException(
+                    f"AWGs not in ready state within timeout ({timeout_s} s)."
+                )
 
             self._logger.debug("Started upload of waveforms...")
             for daq, nodes in wf_node_settings.items():
                 daq.batch_set(nodes)
         self._logger.debug("Finished upload.")
 
-        # For completeness, deal with initializations of non-ZI devices:
-        for initialization in other_initializations:
-            device = self._find_device(initialization.device_uid)
-            device.upload_awg_program(initialization, self._recipe_data)
-
     def _upload_awg_programs(self):
         if self._is_using_standalone_compiler:
             return self._upload_awg_programs_standalone()
 
         for initialization in self._recipe_data.initializations:
-            device = self._find_device(initialization.device_uid)
+            device = self._devices.find_by_uid(initialization.device_uid)
             device.upload_awg_program(initialization, self._recipe_data)
 
     def _set_nodes_after_awg_program_upload(self):
         nodes_to_initialize = []
         for initialization in self._recipe_data.initializations:
-            device = self._find_device(initialization.device_uid)
+            device = self._devices.find_by_uid(initialization.device_uid)
             nodes_to_initialize.extend(
                 device.collect_awg_after_upload_nodes(initialization)
             )
 
-        self._batch_set(nodes_to_initialize)
+        batch_set(nodes_to_initialize)
 
     def _initialize_awgs(self):
         self._set_nodes_before_awg_program_upload()
@@ -405,9 +297,10 @@ class Controller:
 
     def _configure_leaders(self):
         self._logger.debug(
-            "Using %s as leaders.", [d.dev_repr for _, d in self.leaders]
+            "Using %s as leaders.",
+            [d.dev_repr for _, d in self._devices.leaders],
         )
-        for uid, device in self.leaders:
+        for uid, device in self._devices.leaders:
             init = self._recipe_data.get_initialization_by_device_uid(uid)
             if init is None:
                 continue
@@ -415,11 +308,12 @@ class Controller:
 
     def _configure_followers(self):
         self._logger.debug(
-            "Using %s as followers.", [d.dev_repr for _, d in self.followers]
+            "Using %s as followers.",
+            [d.dev_repr for _, d in self._devices.followers],
         )
         nodes_to_configure_followers = []
 
-        for uid, device in self.followers:
+        for uid, device in self._devices.followers:
             init = self._recipe_data.get_initialization_by_device_uid(uid)
             if init is None:
                 continue
@@ -427,14 +321,14 @@ class Controller:
                 device.collect_follower_configuration_nodes(init)
             )
 
-        self._batch_set(nodes_to_configure_followers)
-
-        self._sync_all_daqs()
+        batch_set(nodes_to_configure_followers)
 
     def _configure_triggers(self):
         nodes_to_configure_triggers = []
 
-        for uid, device in itertools.chain(self.leaders, self.followers):
+        for uid, device in itertools.chain(
+            self._devices.leaders, self._devices.followers
+        ):
             init = self._recipe_data.get_initialization_by_device_uid(uid)
             if init is None:
                 continue
@@ -442,7 +336,7 @@ class Controller:
                 device.collect_trigger_configuration_nodes(init)
             )
 
-        self._batch_set(nodes_to_configure_triggers)
+        batch_set(nodes_to_configure_triggers)
 
     def _initialize_devices(self):
         self._reset_to_idle_state()
@@ -452,34 +346,11 @@ class Controller:
         self._configure_leaders()
         self._configure_followers()
         self._configure_triggers()
-        self._sync_all_daqs()
         self._wait_for_conditions_to_start()
 
-    def _deinitialize_devices(self):
-        for daq in self._daqs.values():
-            daq.node_monitor.stop()
-
-    def _split_daq_actions(
-        self, daq_actions: List[DaqNodeAction]
-    ) -> Dict[DaqWrapper, List[DaqNodeAction]]:
-        res: Dict[DaqWrapper, List[DaqNodeAction]] = {}
-        for daq_action in daq_actions:
-            if not daq_action.daq in res:
-                res[daq_action.daq] = []
-
-            res[daq_action.daq].append(daq_action)
-        return res
-
-    def _batch_set(self, daq_actions: List[DaqNodeAction]):
-        split_actions: Dict[DaqWrapper, List[DaqNodeAction]] = self._split_daq_actions(
-            daq_actions
-        )
-        for daq in split_actions:
-            daq.batch_set(split_actions[daq])
-
     def set(self, path: str, value: Any):
-        self._check_connected()
-        dev = self._find_device_by_path(path)
+        self.connect()
+        dev = self._devices.find_by_path(path)
         daq: DaqWrapper = dev._daq
         daq.batch_set(
             [
@@ -490,8 +361,8 @@ class Controller:
         )
 
     def get(self, path: str) -> Any:
-        self._check_connected()
-        dev = self._find_device_by_path(path)
+        self.connect()
+        dev = self._devices.find_by_path(path)
         daq: DaqWrapper = dev._daq
         return daq.get(DaqNodeGetAction(daq, path))
 
@@ -499,20 +370,18 @@ class Controller:
         self._logger.debug("Settings nodes to start on followers")
 
         nodes_to_execute = []
-        for _, device in self.followers:
+        for _, device in self._devices.followers:
             nodes_to_execute.extend(device.collect_execution_nodes())
 
-        self._batch_set(nodes_to_execute)
+        batch_set(nodes_to_execute)
 
-        conditions_waiter = AllConditionsWaiter()
-        for _, device in self.followers:
-            if isinstance(device, DeviceZI):
-                dev_zi: DeviceZI = device
-                conditions_waiter.add(
-                    target=dev_zi.daq.node_monitor,
-                    conditions=dev_zi.conditions_for_execution_ready(),
-                )
-        if not conditions_waiter.wait_all(timeout=2):
+        response_waiter = ResponseWaiter()
+        for _, device in self._devices.followers:
+            response_waiter.add(
+                target=device.daq.node_monitor,
+                conditions=device.conditions_for_execution_ready(),
+            )
+        if not response_waiter.wait_all(timeout=2):
             self._logger.warning(
                 "Conditions to start RT on followers still not fulfilled after 2 seconds, nonetheless trying to continue..."
             )
@@ -520,18 +389,18 @@ class Controller:
         # Standalone workaround: The device is triggering itself,
         # thus split the execution into AWG trigger arming and triggering
         nodes_to_execute = []
-        for _, device in self.followers:
+        for _, device in self._devices.followers:
             nodes_to_execute.extend(device.collect_start_execution_nodes())
 
-        self._batch_set(nodes_to_execute)
+        batch_set(nodes_to_execute)
 
     def _execute_one_step_leaders(self):
         self._logger.debug("Settings nodes to start on leaders")
         nodes_to_execute = []
 
-        for _, device in self.leaders:
+        for _, device in self._devices.leaders:
             nodes_to_execute.extend(device.collect_execution_nodes())
-        self._batch_set(nodes_to_execute)
+        batch_set(nodes_to_execute)
 
     def _wait_execution_to_stop(self, acquisition_type: AcquisitionType):
         min_wait_time = self._recipe_data.recipe.experiment.total_execution_time
@@ -546,15 +415,13 @@ class Controller:
             min_wait_time * 1.1 + 1
         )  # +10% and fixed 1sec guard time
 
-        conditions_waiter = AllConditionsWaiter()
-        for _, device in self.followers:
-            if isinstance(device, DeviceZI):
-                dev_zi: DeviceZI = device
-                conditions_waiter.add(
-                    target=dev_zi.daq.node_monitor,
-                    conditions=dev_zi.conditions_for_execution_done(acquisition_type),
-                )
-        if not conditions_waiter.wait_all(timeout=guarded_wait_time):
+        response_waiter = ResponseWaiter()
+        for _, device in self._devices.followers:
+            response_waiter.add(
+                target=device.daq.node_monitor,
+                conditions=device.conditions_for_execution_done(acquisition_type),
+            )
+        if not response_waiter.wait_all(timeout=guarded_wait_time):
             self._logger.warning(
                 "Stop conditions still not fulfilled after %f s, estimated execution time was %.2f s. Continuing to the next step.",
                 guarded_wait_time,
@@ -564,8 +431,7 @@ class Controller:
     def _execute_one_step(self, acquisition_type: AcquisitionType):
         self._logger.debug("Step executing")
 
-        for daq in self._daqs.values():
-            daq.node_monitor.flush()
+        self._devices.flush_monitor()
 
         # Can't batch everything together, because PQSC needs to be executed after HDs
         # otherwise it can finish before AWGs are started, and the trigger is lost
@@ -579,29 +445,19 @@ class Controller:
         self._logger.debug("Execution stopped")
 
     def connect(self):
-        self._create_daqs(self._device_setup)
-        self._prepare_devices(self._device_setup.instruments)
-        self._connect_devices()
-        self._connected = True
-
-    def _check_connected(self):
         if not self._connected:
-            self.connect()
+            self._devices.connect(self._is_using_standalone_compiler)
+            self._connected = True
 
     def shut_down(self):
         self._logger.info("Shutting down all devices...")
-        for device in self._devices.values():
-            device.shut_down()
+        self._devices.shut_down()
         self._logger.info("Successfully Shut down all devices.")
 
     def disconnect(self):
-        self._logger.info("Disconnecting from all devices...")
-        for device in self._devices.values():
-            device.disconnect()
-        self._devices = {}
-        self._logger.info("Successfully disconnected from all devices.")
-        self._daqs = {}
-        self._logger.info("Disconnected from all servers.")
+        self._logger.info("Disconnecting from all devices and servers...")
+        self._devices.disconnect()
+        self._logger.info("Successfully disconnected from all devices and servers.")
         self._connected = False
 
     def execute_compiled(
@@ -615,9 +471,10 @@ class Controller:
         else:
             self._results = session._last_results
 
-        self._check_connected()
+        self.connect()
         self._prepare_result_shapes()
         try:
+            self._devices.start_monitor()
             self._initialize_devices()
 
             # Ensure no side effects from the previous execution in the same session
@@ -628,10 +485,10 @@ class Controller:
                 self._recipe_data.execution
             )
             self._logger.info("Finished near-time execution.")
-            for device in self._devices.values():
+            for _, device in self._devices.all:
                 device.check_errors()
         finally:
-            self._deinitialize_devices()
+            self._devices.stop_monitor()
 
         if self._run_parameters.shut_down is True:
             self.shut_down()
@@ -677,7 +534,7 @@ class Controller:
             target_wave = awg_wave_map.get(repl.sig_string)
             seqc_name = repl.awg_id[: -len("_waveindices.csv")] + ".seqc"
             awg = self._find_awg(seqc_name)
-            device = self._find_device(awg[0])
+            device = self._devices.find_by_uid(awg[0])
 
             if repl.replacement_type == ReplacementType.I_Q:
                 bin_wave = zhinst.utils.convert_awg_waveform(
@@ -703,80 +560,6 @@ class Controller:
                     )
                 )
 
-    def _create_daqs(self, device_setup: DeviceSetup):
-        servers = device_setup.servers
-
-        self._logger.debug("Creating/updating data servers connections")
-
-        def make_server_qualifier(
-            dry_run: bool, server=None, ignore_lab_one_version_error=False
-        ):
-            from laboneq.dsl.device.servers import DataServer
-
-            if isinstance(server, DataServer):
-                return ServerQualifier(
-                    dry_run=dry_run,
-                    host=server.host,
-                    port=int(server.port),
-                    api_level=int(server.api_level),
-                    ignore_lab_one_version_error=ignore_lab_one_version_error,
-                )
-            else:
-                self._logger.warning(
-                    "Server provider '%s' is not supported by the controller.",
-                    type(server).__name__,
-                )
-
-        updated_daqs: Dict[str, DaqWrapper] = {}
-        for server_uid, server in servers.items():
-            server_qualifier = make_server_qualifier(
-                self._run_parameters.dry_run,
-                server=server,
-                ignore_lab_one_version_error=self._run_parameters.ignore_lab_one_version_error,
-            )
-            existing = self._daqs.get(server_uid)
-            if existing is not None and existing.server_qualifier == server_qualifier:
-                existing.node_monitor.reset()
-                updated_daqs[server_uid] = existing
-                continue
-
-            self._logger.info(
-                "Connecting to data server at %s:%s", server.host, server.port
-            )
-            if server_qualifier.dry_run:
-                daq = DaqWrapperDryRun(server_uid, server_qualifier)
-                for instr in device_setup.instruments:
-                    daq.map_device_type(
-                        instr.address, instr.calc_driver(), instr.calc_options()
-                    )
-            else:
-                daq = DaqWrapper(server_uid, server_qualifier)
-            updated_daqs[server_uid] = daq
-        self._daqs = updated_daqs
-
-    def _inject_cache_internal(self):
-        if self.cache_to_inject is None:
-            return
-        for server_uid in self.cache_to_inject.children:
-            if not server_uid in self._daqs:
-                self._logger.error(self.cache_to_inject.children.keys())
-                continue
-            self._daqs[server_uid].inject_cache_tree(
-                self.cache_to_inject.children[server_uid]
-            )
-
-    def inject_cache_tree(self, cache_tree_node):
-        self.cache_to_inject = cache_tree_node
-        self._inject_cache_internal()
-
-    def extract_cache_tree(self):
-        cache_tree_root = CacheTreeNode(None)
-        for server_uid in self._daqs:
-            cache_tree_root.add_child(
-                server_uid, self._daqs[server_uid].extract_cache_tree()
-            )
-        return cache_tree_root
-
     def _prepare_rt_execution(
         self, rt_section_uid: str
     ) -> Tuple[List[DaqNodeAction], AcquisitionType]:
@@ -787,7 +570,7 @@ class Controller:
         nodes_to_prepare_rt = [*self._nodes_from_user_functions]
         self._nodes_from_user_functions.clear()
         for awg_key, awg_config in rt_execution_info.per_awg_configs.items():
-            device = self._devices[awg_key.device_uid]
+            device = self._devices.find_by_uid(awg_key.device_uid)
             if rt_execution_info.averaging_mode == AveragingMode.SINGLE_SHOT:
                 effective_averages = 1
                 effective_averaging_mode = AveragingMode.CYCLIC
@@ -815,7 +598,7 @@ class Controller:
             self.nt_loop_indices: List[int] = []
 
         def set_handler(self, path: str, val):
-            dev = self.controller._find_device_by_path(path)
+            dev = self.controller._devices.find_by_path(path)
             self.nodes_to_prepare_step.append(
                 DaqNodeSetAction(
                     dev._daq, path, val, caching_strategy=CachingStrategy.NO_CACHE
@@ -844,7 +627,7 @@ class Controller:
         ):
             device_ids = self.controller._recipe_data.param_to_device_map.get(name, [])
             for device_id in device_ids:
-                device = self.controller._find_device(device_id)
+                device = self.controller._devices.find_by_uid(device_id)
                 self.nodes_to_prepare_step.extend(
                     device.collect_prepare_sweep_step_nodes_for_param(name, val)
                 )
@@ -866,7 +649,7 @@ class Controller:
             if enter:
                 step_nodes = self.controller._prepare_rt_execution(rt_section_uid=uid)
                 self.nodes_to_prepare_step.extend(step_nodes)
-                self.controller._batch_set(self.nodes_to_prepare_step)
+                batch_set(self.nodes_to_prepare_step)
                 self.nodes_to_prepare_step.clear()
                 for retry in range(3):  # Up to 3 retries
                     if retry > 0:
@@ -940,7 +723,7 @@ class Controller:
             return  # Old recipe-based execution - skip partial result processing
         rt_execution_info = self._recipe_data.rt_execution_infos[rt_section_uid]
         for awg_key, awg_config in rt_execution_info.per_awg_configs.items():
-            device = self._devices[awg_key.device_uid]
+            device = self._devices.find_by_uid(awg_key.device_uid)
             if rt_execution_info.acquisition_type == AcquisitionType.RAW:
                 raw_result = device.get_input_monitor_data(
                     awg_key.awg_index, awg_config.acquire_length

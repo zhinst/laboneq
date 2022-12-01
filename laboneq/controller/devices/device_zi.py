@@ -2,36 +2,53 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-
 from copy import deepcopy
-from dataclasses import dataclass
-from enum import Enum
-from math import floor
+
+import json
+import logging
+import math
 import os
 import os.path
 import time
-import json
-import math
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from enum import Enum
+from math import floor
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
+from weakref import ReferenceType, ref
 
 from typing import List, Optional, Tuple, Any, Set, TYPE_CHECKING, Dict
+from laboneq.controller.devices.zi_node_monitor import NodeControlBase
 from laboneq.controller.recipe_1_4_0 import Initialization, OscillatorParam
 from laboneq.controller.recipe_processor import RecipeData, RtExecutionInfo
 
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.controller.communication import (
     AwgModuleWrapper,
-    DaqNodeAction,
-    DaqNodeSetAction,
-    DaqNodeGetAction,
-    DaqWrapper,
     CachingStrategy,
+    DaqNodeAction,
+    DaqNodeGetAction,
+    DaqNodeSetAction,
+    DaqWrapper,
 )
+from laboneq.controller.recipe_1_4_0 import (
+    Initialization,
+    IntegratorAllocation,
+    OscillatorParam,
+)
+from laboneq.controller.recipe_processor import (
+    AwgConfig,
+    AwgKey,
+    DeviceRecipeData,
+    RecipeData,
+    RtExecutionInfo,
+)
+from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
+from laboneq.core.types.enums.averaging_mode import AveragingMode
 
 if TYPE_CHECKING:
     from laboneq.core.types import CompiledExperiment
-
-from laboneq.controller.devices.device_base import DeviceBase, DeviceQualifier
 
 import zhinst.core
 import zhinst.utils
@@ -57,9 +74,20 @@ class AllocatedOscillator:
     param: str
 
 
-class DeviceZI(DeviceBase):
+@dataclass
+class DeviceQualifier:
+    dry_run: bool = True
+    driver: str = None
+    server: DaqWrapper = None
+    options: Dict[str, str] = None
+
+
+class DeviceZI(ABC):
     def __init__(self, device_qualifier: DeviceQualifier):
-        super().__init__(device_qualifier)
+        self._device_qualifier: DeviceQualifier = device_qualifier
+        self._logger = logging.getLogger(__name__)
+        self._downlinks: Dict[str, ReferenceType[DeviceZI]] = {}
+        self._uplinks: Dict[str, ReferenceType[DeviceZI]] = {}
 
         self._daq: DaqWrapper = device_qualifier.server
         self.dev_type = None
@@ -89,11 +117,19 @@ class DeviceZI(DeviceBase):
                 "ZI device must be provided with interface via options"
             )
 
-    @property  # Overrides one from DeviceBase
-    def dev_repr(self) -> str:
-        return f"{self._device_qualifier.driver}:{self._get_option('serial')}"
+    @property
+    def device_qualifier(self):
+        return self._device_qualifier
 
-    @property  # Overrides one from DeviceBase
+    @property
+    def dry_run(self):
+        return self._device_qualifier.dry_run
+
+    @property
+    def dev_repr(self) -> str:
+        return f"{self._device_qualifier.driver.upper()}:{self._get_option('serial')}"
+
+    @property
     def has_awg(self) -> bool:
         return self._get_num_AWGs() > 0
 
@@ -119,13 +155,28 @@ class DeviceZI(DeviceBase):
         self._logger.debug("No command table available for device %s", self.dev_repr)
         return ""
 
+    def _get_option(self, key):
+        return self._device_qualifier.options.get(key)
+
+    def _warn_for_unsupported_param(self, param_assert, param_name, channel):
+        if not param_assert:
+            channel_clause = (
+                "" if channel is None else f" specified for the channel {channel}"
+            )
+            self._logger.warning(
+                "%s: parameter '%s'%s is not supported on this device type.",
+                self.dev_repr,
+                param_name,
+                channel_clause,
+            )
+
     def _process_dev_opts(self):
         pass
 
     def _get_sequencer_type(self) -> str:
         return "auto-detect"
 
-    def _get_sequencer_path_patterns(self) -> dict:
+    def _get_sequencer_path_patterns(self) -> Dict[str, str]:
         return {
             "elf": "/{serial}/awgs/{index}/elf/data",
             "progress": "/{serial}/awgs/{index}/elf/progress",
@@ -133,13 +184,52 @@ class DeviceZI(DeviceBase):
             "ready": "/{serial}/awgs/{index}/ready",
         }
 
-    def get_sequencer_paths(self, index: int) -> dict:
+    def get_sequencer_paths(self, index: int) -> Dict[str, str]:
         props = {
             "serial": self.serial,
             "index": index,
         }
         patterns = self._get_sequencer_path_patterns()
         return {k: v.format(**props) for k, v in patterns.items()}
+
+    def add_downlink(self, port: str, linked_device: DeviceZI):
+        self._downlinks[port] = ref(linked_device)
+
+    def add_uplink(self, port: str, linked_device: DeviceZI):
+        self._uplinks[port] = ref(linked_device)
+
+    def remove_all_links(self):
+        self._downlinks.clear()
+        self._uplinks.clear()
+
+    def is_leader(self):
+        # Check also downlinks, to exclude standalone devices
+        return len(self._uplinks) == 0 and len(self._downlinks) > 0
+
+    def is_follower(self):
+        # Treat standalone devices as followers
+        return len(self._uplinks) > 0 or self.is_standalone()
+
+    def is_standalone(self):
+        return len(self._uplinks) == 0 and len(self._downlinks) == 0
+
+    @abstractmethod
+    def collect_output_initialization_nodes(
+        self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
+    ) -> List[DaqNodeAction]:
+        pass
+
+    @abstractmethod
+    def collect_trigger_configuration_nodes(self, initialization: Initialization.Data):
+        pass
+
+    @abstractmethod
+    def configure_as_leader(self, initialization):
+        pass
+
+    @abstractmethod
+    def collect_follower_configuration_nodes(self, initialization):
+        pass
 
     def connect(self):
         if self._connected:
@@ -204,6 +294,12 @@ class DeviceZI(DeviceBase):
     def _nodes_to_monitor_impl(self):
         return []
 
+    def update_clock_source(self, force_internal: Optional[bool]):
+        pass
+
+    def clock_source_control_nodes(self) -> List[NodeControlBase]:
+        return []
+
     def nodes_to_monitor(self) -> List[str]:
         if self._nodes_to_monitor is None:
             self._nodes_to_monitor = self._nodes_to_monitor_impl()
@@ -247,6 +343,46 @@ class DeviceZI(DeviceBase):
                     f"{self.dev_repr}: ambiguous frequency in recipe for oscillator '{osc_param.id}': {same_id_osc.frequency} != {osc_param.frequency}"
                 )
             same_id_osc.channels.add(osc_param.channel)
+
+    def configure_acquisition(
+        self,
+        awg_key: AwgKey,
+        awg_config: AwgConfig,
+        integrator_allocations: List[IntegratorAllocation.Data],
+        averages: int,
+        averaging_mode: AveragingMode,
+        acquisition_type: AcquisitionType,
+    ) -> List[DaqNodeAction]:
+        return []
+
+    def get_measurement_data(
+        self,
+        channel: int,
+        acquisition_type: AcquisitionType,
+        result_indices: List[int],
+        num_results: int,
+        hw_averages: int,
+    ):
+        return None  # default -> no results available from the device
+
+    def get_input_monitor_data(self, channel: int, num_results: int):
+        return None  # default -> no results available from the device
+
+    def wait_for_conditions_to_start(self):
+        pass
+
+    def conditions_for_execution_ready(self) -> Dict[str, Any]:
+        return {}
+
+    def conditions_for_execution_done(
+        self, acquisition_type: AcquisitionType
+    ) -> Dict[str, Any]:
+        return {}
+
+    def check_results_acquired_status(
+        self, channel, acquisition_type: AcquisitionType, result_length, hw_averages
+    ):
+        pass
 
     def _wait_for_node(
         self, path: str, expected: Any, timeout: float, guard_time: float = 0
@@ -793,6 +929,11 @@ class DeviceZI(DeviceBase):
                 )
             )
         return nodes_to_initialize_oscs
+
+    def collect_awg_before_upload_nodes(
+        self, initialization: Initialization.Data, recipe_data: RecipeData
+    ):
+        return []
 
     def collect_awg_after_upload_nodes(self, initialization: Initialization.Data):
         return []

@@ -14,6 +14,7 @@ from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.device_output_signals import DeviceOutputSignals
 
 if TYPE_CHECKING:
+    from laboneq.dsl.device.device_setup import DeviceSetup
     from laboneq.dsl.experiment.pulse import Pulse
     from laboneq.dsl.experiment import Experiment
     from numpy.typing import ArrayLike
@@ -58,6 +59,9 @@ class PulseMapEntry:
 @dataclass(init=True, repr=True, order=True)
 class CompiledExperiment:
     """Data structure to store the output of the compiler."""
+
+    #: The source device setup.
+    device_setup: DeviceSetup = field(default=None)
 
     #: The source experiment.
     experiment: Experiment = field(default=None)

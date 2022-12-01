@@ -4,6 +4,7 @@
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.common.device_type import DeviceType
 import logging
+from typing import Optional
 
 _logger = logging.getLogger(__name__)
 
@@ -177,6 +178,7 @@ class RecipeGenerator:
         lo_frequency=None,
         port_mode=None,
         output_range=None,
+        output_range_unit=None,
         port_delay=None,
     ):
         output = {"channel": channel, "enable": True}
@@ -194,6 +196,8 @@ class RecipeGenerator:
             output["port_mode"] = port_mode
         if output_range is not None:
             output["range"] = output_range
+        if output_range_unit is not None:
+            output["range_unit"] = output_range_unit
         if oscillator is not None:
             output["oscillator"] = oscillator
         output["modulation"] = modulation
@@ -207,13 +211,21 @@ class RecipeGenerator:
         outputs.append(output)
 
     def add_input(
-        self, device_id, channel, lo_frequency=None, input_range=None, port_delay=None
+        self,
+        device_id,
+        channel,
+        lo_frequency=None,
+        input_range=None,
+        input_range_unit=None,
+        port_delay=None,
     ):
         input = {"channel": channel, "enable": True}
         if lo_frequency is not None:
             input["lo_frequency"] = lo_frequency
         if input_range is not None:
             input["range"] = input_range
+        if input_range_unit is not None:
+            input["range_unit"] = input_range_unit
         if port_delay is not None:
             input["port_delay"] = port_delay
 
@@ -221,12 +233,26 @@ class RecipeGenerator:
         inputs: list = initialization.setdefault("inputs", [])
         inputs.append(input)
 
-    def add_awg(self, device_id, awg_number, signal_type: str, seqc):
+    def add_awg(
+        self,
+        device_id: str,
+        awg_number: int,
+        signal_type: str,
+        seqc: str,
+        qa_signal_id: Optional[str],
+        command_table_match_offset: Optional[int],
+    ):
         initialization = self._find_initalization(device_id)
 
         if "awgs" not in initialization:
             initialization["awgs"] = []
-        awg = {"awg": awg_number, "seqc": seqc, "signal_type": signal_type}
+        awg = {
+            "awg": awg_number,
+            "seqc": seqc,
+            "signal_type": signal_type,
+            "qa_signal_id": qa_signal_id,
+            "command_table_match_offset": command_table_match_offset,
+        }
         initialization["awgs"].append(awg)
 
     def from_experiment(self, experiment_dao, leader_properties, clock_settings):

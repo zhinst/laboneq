@@ -43,3 +43,4 @@ class CompilerSettings:
     SHFSG_FORCE_COMMAND_TABLE: bool = False
 
     EMIT_TIMING_COMMENTS: bool = False
+    IGNORE_GRAPH_VERIFY_RESULTS: bool = False

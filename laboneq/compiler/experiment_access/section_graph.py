@@ -267,18 +267,21 @@ class SectionGraph:
                     section_ref_id
                 )
 
-                # Sections with shared signals are played after each other:
-                for previous_node_id, signals in previous_instance_signals.items():
-                    common_signals = signals.intersection(current_signals)
-                    if len(common_signals) > 0:
-                        section_graph_instances.add_edges_from(
-                            [(previous_node_id, link_node_id)], type="previous"
-                        )
+                # Sections with shared signals are played after each other, except for
+                # the branches of a Match section, when they are played in parallel:
+                if not section_infos[section_id].handle:
+                    for previous_node_id, signals in previous_instance_signals.items():
+                        common_signals = signals.intersection(current_signals)
+                        if len(common_signals) > 0:
+                            section_graph_instances.add_edges_from(
+                                [(previous_node_id, link_node_id)], type="previous"
+                            )
                 previous_instance_signals[link_node_id] = current_signals
 
-                # Sections follow a previous section specified via play_after:
+                # Sections follow a previous section specified via play_after, except
+                # for the branches of a match section, where we don't allow that:
                 play_after = ref_section_info.play_after
-                if play_after:
+                if play_after and not section_infos[section_id].handle:
                     if isinstance(play_after, str):
                         play_after = [play_after]
                     for pa in play_after:

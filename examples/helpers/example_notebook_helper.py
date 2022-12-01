@@ -11,8 +11,6 @@ import scipy.optimize as opt
 from laboneq.dsl import device
 
 
-
-
 # configuring matplotlib
 plt.rcParams["axes.prop_cycle"] = cycler(
     "color", ["172983", "007EC4", "EE7F00"]
@@ -55,7 +53,7 @@ def plot_output_signals(results):
 
             if not "qa" in uid.lower() and not "_freq" in uid.lower() and not "trigger" in uid.lower(): # ignore QA triggers and oscillator frequency
                 title = ""
-                if "hdawg" in device_uid.lower() and n_channels==1:
+                if "hdawg" in device_uid.lower() and n_channels==2:
                     title = "Flux Pulse"
                 elif "qa" in device_uid.lower():
                     title = "Readout Pulse"
@@ -162,9 +160,9 @@ def plot_result_3d(results, handle):
     plt.figure() # Create new dummy figure to ensure no side effects of the current 3D figure
 
 def plot2d_abs(results, handle):
-    data = results.get_data("ac_0")
-    axis = results.get_axis("ac_0")[0]
-    xlabel = results.get_axis_name("ac_0")[0]
+    data = results.get_data(handle)
+    axis = results.get_axis(handle)[0]
+    xlabel = results.get_axis_name(handle)[0]
     plt.plot(axis,np.abs(data))
     plt.xlabel(xlabel)
     plt.ylabel("level")

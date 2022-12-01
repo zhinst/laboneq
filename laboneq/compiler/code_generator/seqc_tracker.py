@@ -122,9 +122,28 @@ class SeqCTracker:
             num_samples, device_type
         )
 
+    def add_play_wave_statement(
+        self, device_type: DeviceType, signal_type, wave_id, channel
+    ):
+        self.current_loop_stack_generator().add_play_wave_statement(
+            device_type, signal_type, wave_id, channel
+        )
+
+    def add_command_table_execution(self, ct_index, latency=None, comment=""):
+        self.current_loop_stack_generator().add_command_table_execution(
+            ct_index=ct_index, latency=latency, comment=comment
+        )
+
     def add_variable_assignment(self, variable_name, value):
         self.current_loop_stack_generator().add_variable_assignment(
             variable_name, value
+        )
+
+    def add_assign_wave_index_statement(
+        self, device_type: DeviceType, signal_type, wave_id, wave_index, channel
+    ):
+        self.current_loop_stack_generator().add_assign_wave_index_statement(
+            device_type, signal_type, wave_id, wave_index, channel
         )
 
     def append_loop_stack_generator(self, outer=False, always=False, generator=None):

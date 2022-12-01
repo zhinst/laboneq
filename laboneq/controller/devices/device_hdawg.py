@@ -3,25 +3,25 @@
 
 from __future__ import annotations
 
-import json
-import time
 from enum import IntEnum
-from typing import Any, Dict, List, Tuple, TYPE_CHECKING, Optional
+from typing import Any, Dict, List, Tuple, Optional
 import numpy as np
 
 from laboneq.controller.communication import (
     DaqNodeAction,
     DaqNodeSetAction,
-    DaqNodeGetAction,
-    CachingStrategy,
 )
 from laboneq.controller.devices.device_zi import DeviceZI
+from laboneq.controller.devices.zi_node_monitor import (
+    Command,
+    Condition,
+    NodeControlBase,
+    Response,
+)
 from laboneq.controller.recipe_1_4_0 import Initialization
-from laboneq.controller.recipe_enums import ReferenceClockSource
 from laboneq.controller.recipe_enums import SignalType, DIOConfigType
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.controller.util import LabOneQControllerException
-from laboneq.controller.versioning import LabOneVersion
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 
@@ -31,9 +31,11 @@ DELAY_NODE_GRANULARITY_SAMPLES = 1
 DELAY_NODE_MAX_SAMPLES = 62
 DEFAULT_SAMPLE_FREQUENCY_HZ = 2.4e9
 
-REFERENCE_CLOCK_SOURCE_INTERNAL = 0
-REFERENCE_CLOCK_SOURCE_EXTERNAL = 1
-REFERENCE_CLOCK_SOURCE_ZSYNC = 2
+
+class ReferenceClockSourceHDAWG(IntEnum):
+    INTERNAL = 0
+    EXTERNAL = 1
+    ZSYNC = 2
 
 
 class ModulationMode(IntEnum):
@@ -53,6 +55,7 @@ class DeviceHDAWG(DeviceZI):
         self.dev_opts = ["MF", "ME", "SKW"]
         self._channels = 8
         self._multi_freq = True
+        self._reference_clock_source = ReferenceClockSourceHDAWG.INTERNAL
 
     def _process_dev_opts(self):
         if self.dev_type == "HDAWG8":
@@ -89,11 +92,40 @@ class DeviceHDAWG(DeviceZI):
         return osc_index_base + previously_allocated
 
     def _nodes_to_monitor_impl(self) -> List[str]:
-        nodes = []
+        nodes = [node.path for node in self.clock_source_control_nodes()]
         for awg in range(self._get_num_AWGs()):
             nodes.append(f"/{self.serial}/awgs/{awg}/enable")
             nodes.append(f"/{self.serial}/awgs/{awg}/ready")
         return nodes
+
+    def update_clock_source(self, force_internal: Optional[bool]):
+        if force_internal or force_internal is None and self.is_standalone():
+            # Internal specified explicitly or
+            # the source is not specified, but HDAWG is a standalone device
+            self._reference_clock_source = ReferenceClockSourceHDAWG.INTERNAL
+        elif self.is_leader() or self.is_standalone():
+            # If HDAWG is a leader or standalone (and not explicitly forced to internal),
+            # external is the default (or explicit)
+            self._reference_clock_source = ReferenceClockSourceHDAWG.EXTERNAL
+        else:
+            # If HDAWG is a follower (and not explicitly forced to internal),
+            # ZSync is the default (explicit external is also treated as ZSync in this case)
+            self._reference_clock_source = ReferenceClockSourceHDAWG.ZSYNC
+
+    def clock_source_control_nodes(self) -> List[NodeControlBase]:
+        expected_freq = {
+            ReferenceClockSourceHDAWG.INTERNAL: None,
+            ReferenceClockSourceHDAWG.EXTERNAL: 10e6,
+            ReferenceClockSourceHDAWG.ZSYNC: 100e6,
+        }[self._reference_clock_source]
+        source = self._reference_clock_source.value
+        return [
+            Condition(
+                f"/{self.serial}/system/clocks/referenceclock/freq", expected_freq
+            ),
+            Command(f"/{self.serial}/system/clocks/referenceclock/source", source),
+            Response(f"/{self.serial}/system/clocks/referenceclock/status", 0),
+        ]
 
     def collect_awg_after_upload_nodes(self, initialization: Initialization.Data):
         nodes_to_configure_phase = []
@@ -162,6 +194,25 @@ class DeviceHDAWG(DeviceZI):
             self._allocated_awgs.add(awg_idx)
 
             nodes.append((f"sigouts/{output.channel}/on", 1 if output.enable else 0))
+
+            if output.range is not None:
+                if output.range_unit not in (None, "volt"):
+                    raise LabOneQControllerException(
+                        f"The output range of device {self.dev_repr} is specified in "
+                        f"units of {output.range_unit}. Units must be 'volt'."
+                    )
+                if output.range not in (0.2, 0.4, 0.6, 0.8, 1.0, 2.0, 3.0, 4.0, 5.0):
+                    self._logger.warning(
+                        f"The specified output range {output.range} for device "
+                        f"{self.dev_repr} is not in the list of supported values. It "
+                        f"will be rounded to the next higher allowed value."
+                    )
+                nodes.append(
+                    (
+                        f"sigouts/{output.channel}/range",
+                        output.range,
+                    )
+                )
             nodes.append((f"sigouts/{output.channel}/offset", output.offset))
             nodes.append((f"awgs/{awg_idx}/single", 1))
 
@@ -340,19 +391,9 @@ class DeviceHDAWG(DeviceZI):
             self._logger.debug(
                 "%s: Configuring external clock to ZSync.", self.dev_repr
             )
-            if self._daq.dataserver_version <= LabOneVersion.V_20_06:
-                nodes_to_configure_triggers.append(
-                    DaqNodeSetAction(self._daq, f"/{self.serial}/raw/dios/0/mode", 0x01)
-                )
-                nodes_to_configure_triggers.append(
-                    DaqNodeSetAction(
-                        self._daq, f"/{self.serial}/raw/dios/0/extclk", 0x1
-                    )
-                )
-            else:
-                nodes_to_configure_triggers.append(
-                    DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/mode", 3)
-                )
+            nodes_to_configure_triggers.append(
+                DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/mode", 3)
+            )
 
             nodes_to_configure_triggers.append(
                 DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/drive", 0xC)
@@ -404,18 +445,6 @@ class DeviceHDAWG(DeviceZI):
                         0,
                     )
                 )
-
-            clock_source = initialization.config.reference_clock_source
-            nodes_to_configure_triggers.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/system/clocks/referenceclock/source",
-                    REFERENCE_CLOCK_SOURCE_INTERNAL
-                    if clock_source
-                    and clock_source.value == ReferenceClockSource.INTERNAL.value
-                    else REFERENCE_CLOCK_SOURCE_EXTERNAL,
-                )
-            )
 
             nodes_to_configure_triggers.extend(
                 [
@@ -471,116 +500,10 @@ class DeviceHDAWG(DeviceZI):
         return nodes_to_configure_triggers
 
     def configure_as_leader(self, initialization):
-        count = 1
-        while True:
-
-            source_path = f"/{self.serial}/system/clocks/referenceclock/source"
-            status_path = f"/{self.serial}/system/clocks/referenceclock/status"
-
-            daq_reply = self._daq.batch_get(
-                [
-                    DaqNodeGetAction(
-                        self._daq,
-                        source_path,
-                        caching_strategy=CachingStrategy.NO_CACHE,
-                    ),
-                    DaqNodeGetAction(
-                        self._daq,
-                        status_path,
-                        caching_strategy=CachingStrategy.NO_CACHE,
-                    ),
-                ]
-            )
-
-            refclock_source = daq_reply[source_path]
-            refclock_status = daq_reply[status_path]
-
-            if refclock_source == 1 and refclock_status == 0:
-
-                refclock_freq_path = f"/{self.serial}/system/clocks/referenceclock/freq"
-
-                daq_reply = self._daq.batch_get(
-                    [
-                        DaqNodeGetAction(
-                            self._daq,
-                            refclock_freq_path,
-                            caching_strategy=CachingStrategy.NO_CACHE,
-                        )
-                    ]
-                )
-
-                refclock_freq = daq_reply[refclock_freq_path]
-
-                if refclock_freq == 10e6:
-                    self._logger.debug(
-                        "HDAWG:%s: successfully locked to external clock on the %d time.",
-                        self.serial,
-                        count,
-                    )
-                    break
-                else:
-                    raise LabOneQControllerException(
-                        f"HDAWG:{self.serial}: unable to lock to external clock.\n "
-                    )
-
-            if self.dry_run:
-                break
-
-            if refclock_status == 2 and count < 20:
-                self._logger.debug(
-                    "HDAWG:%s: Trying to lock to external clock for the %d time...",
-                    self.serial,
-                    count,
-                )
-            elif count >= 20:
-                raise LabOneQControllerException(
-                    f"HDAWG:{self.serial}: unable to lock to external clock.\n "
-                )
-            else:
-                if refclock_status == 1:
-                    self._logger.debug("/Unable to lock to external clock...retrying")
-                clock_source = initialization.config.reference_clock_source
-                self._daq.batch_set(
-                    [
-                        DaqNodeSetAction(
-                            self._daq,
-                            f"/{self.serial}/system/clocks/referenceclock/source",
-                            REFERENCE_CLOCK_SOURCE_INTERNAL
-                            if clock_source
-                            and clock_source.value
-                            == ReferenceClockSource.INTERNAL.value
-                            else REFERENCE_CLOCK_SOURCE_EXTERNAL,
-                            caching_strategy=CachingStrategy.NO_CACHE,
-                        )
-                    ]
-                )
-            count += 1
-
-            time.sleep(0.1)
+        pass
 
     def collect_follower_configuration_nodes(self, initialization):
-        dio_mode = initialization.config.dio_mode
-        self._logger.debug("%s: Configuring as a follower...", self.dev_repr)
-
-        nodes_to_configure_as_follower = []
-        if dio_mode == DIOConfigType.ZSYNC_DIO:
-            self._logger.debug(
-                "%s: Configuring reference clock to use ZSYNC as a reference...",
-                self.dev_repr,
-            )
-            nodes_to_configure_as_follower.append(
-                DaqNodeSetAction(
-                    self._daq, f"/{self.serial}/system/clocks/referenceclock/source", 2
-                )
-            )
-        elif dio_mode == DIOConfigType.HDAWG_LEADER:
-            pass
-        else:
-            raise LabOneQControllerException(
-                f"{self.dev_repr}: Unsupported DIO mode {dio_mode} for device type: HDAWG."
-            )
-
-        return nodes_to_configure_as_follower
+        return []
 
     def initialize_sweep_setting(self, setting):
         raise LabOneQControllerException("HDAWG doesn't support sweeping")

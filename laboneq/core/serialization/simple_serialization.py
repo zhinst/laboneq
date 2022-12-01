@@ -3,67 +3,66 @@
 
 from __future__ import annotations
 
-import base64
-import dataclasses
 import functools
 import importlib
 import inspect
 import logging
-from collections.abc import Iterable
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from enum import Enum
 from io import BytesIO
-from typing import Optional
+from typing import Dict
 
-import networkx as nx
 import numpy as np
-from numpy.typing import ArrayLike
+from numpy.lib.format import read_array, write_array
+import pybase64 as base64
 from sortedcontainers import SortedDict
 
 ID_KEY = "__id"
 
 
-@dataclasses.dataclass(init=False)
 class NumpyArrayRepr:
-    array_data: Optional[ArrayLike] = dataclasses.field(default=None)
-    real_data: Optional[ArrayLike] = dataclasses.field(default=None)
-    complex_data: Optional[ArrayLike] = dataclasses.field(default=None)
-    binary_npz: Optional[str] = dataclasses.field(default=None)
-
     def __new__(
-        cls, array_data=None, real_data=None, complex_data=None, binary_npz=None
+        cls,
+        array_data=None,
+        real_data=None,
+        complex_data=None,
+        binary_npz=None,
+        binary_npy=None,
     ):
         # deserialize
         if binary_npz is not None:
+            # For backwards compatibility only, we no longer emit npz blobs
             input_buffer = BytesIO(base64.b64decode(binary_npz.encode("ascii")))
             loaded_npz = np.load(input_buffer)
             return loaded_npz[loaded_npz.files[0]]
-
+        if binary_npy is not None:
+            input_buffer = base64.b64decode(binary_npy.encode("ascii"))
+            return read_array(BytesIO(input_buffer))
         if real_data is not None:
             return np.array(real_data)
-
         if complex_data is not None:
             return np.array(complex_data).astype(complex)
 
-        # serialize
+        # serialize array_data
         return super().__new__(cls)
 
     def __init__(
-        self, array_data=None, real_data=None, complex_data=None, binary_npz=None
+        self,
+        array_data=None,
+        # Must specify all arguments, as keys are filtered based on function signature
+        real_data=None,
+        complex_data=None,
+        binary_npz=None,
+        binary_npy=None,
     ):
         assert array_data is not None
-        assert real_data is None and complex_data is None and binary_npz is None
-        self.array_data = None
-        self.real_data = None
-        self.complex_data = None
-        self.binary_npz = None
-
-        if max(np.shape(array_data)) > 400:
+        assert real_data is complex_data is binary_npz is binary_npy is None
+        if array_data.size > 100:
             output_buffer = BytesIO()
-            np.savez_compressed(output_buffer, array_data)
-            self.binary_npz = base64.b64encode(output_buffer.getbuffer()).decode(
-                "ascii"
-            )
+            write_array(output_buffer, array_data, version=(3, 0), allow_pickle=False)
+            output_buffer.seek(0)
+
+            self.binary_npy = base64.b64encode(output_buffer.read()).decode("ascii")
         else:
             if np.isrealobj(array_data):
                 self.real_data = array_data.tolist()
@@ -102,7 +101,7 @@ def module_classes(modules_list):
 def serialize_to_dict(to_serialize, emit_enum_types=False):
 
     if to_serialize is None:
-        return None
+        return
     if (
         isinstance(to_serialize, str)
         or isinstance(to_serialize, float)
@@ -195,7 +194,7 @@ def serialize_to_dict_with_entities(
     cls = to_serialize.__class__
     if to_serialize is None:
         return None
-    if _issubclass(cls, str) or _issubclass(cls, float) or _issubclass(cls, int):
+    if _issubclass(cls, (bool, int, float, str)):
         return to_serialize
 
     if _issubclass(cls, Enum):
@@ -253,7 +252,9 @@ def serialize_to_dict_with_entities(
     sub_dict = {}
     dir_list = _dir(to_serialize.__class__)
     is_object = False
-    if hasattr(to_serialize, "__dict__"):
+    if _issubclass(cls, Mapping):
+        mapping = to_serialize
+    elif hasattr(to_serialize, "__dict__"):
         is_object = True
         item_is_entity, item_entity_class = is_entity_class(
             to_serialize.__class__, entity_classes
@@ -265,20 +266,20 @@ def serialize_to_dict_with_entities(
         mapping = to_serialize.__dict__
         sub_dict["__type"] = short_typename(to_serialize)
 
-    elif _issubclass(cls, Mapping):
-        mapping = to_serialize
-
     for k, v in mapping.items():
-        outkey = k
-        outvalue = v
+        item_class = v.__class__
 
-        item_is_entity, item_entity_class = is_entity_class(v.__class__, entity_classes)
-        if k[0] == "_" and is_object:
+        outkey, outvalue = k, v
+        if is_object and k[0] == "_":
             if k[1:] in dir_list:
                 outkey = k[1:]
                 outvalue = getattr(to_serialize, outkey)
             else:
                 continue
+        if item_class in (bool, int, float, str) or v is None:
+            sub_dict[outkey] = outvalue
+            continue
+        item_is_entity, item_entity_class = is_entity_class(item_class, entity_classes)
         if item_is_entity:
             entity_typename_full = full_classname(item_entity_class)
             entity_typename_short = entity_typename_full.split(".")[-1]
@@ -302,74 +303,68 @@ def serialize_to_dict_with_entities(
                     )
 
             sub_dict[outkey] = create_ref(v, entity_typename_short)
-        else:
-            out_cls = outvalue.__class__
+        elif _issubclass(item_class, np.ndarray):
+            sub_dict[outkey] = serialize_to_dict_with_entities(
+                NumpyArrayRepr(array_data=outvalue),
+                entity_classes,
+                entities_collector,
+                emit_enum_types,
+            )
 
-            if _issubclass(out_cls, np.ndarray):
-                sub_dict[outkey] = serialize_to_dict_with_entities(
-                    NumpyArrayRepr(array_data=outvalue),
-                    entity_classes,
-                    entities_collector,
-                    emit_enum_types,
+        elif _issubclass(item_class, Mapping):
+            sub_dict[outkey] = serialize_to_dict_with_entities(
+                v, entity_classes, entities_collector, emit_enum_types
+            )
+        elif _issubclass(item_class, Iterable) and not _issubclass(item_class, str):
+            sub_dict[outkey] = []
+            for item in outvalue:
+                item_is_entity, item_entity_class = is_entity_class(
+                    item.__class__, entity_classes
                 )
-
-            elif _issubclass(out_cls, Mapping):
-                sub_dict[outkey] = serialize_to_dict_with_entities(
-                    v, entity_classes, entities_collector, emit_enum_types
-                )
-            elif _issubclass(out_cls, Iterable) and not _issubclass(out_cls, str):
-                sub_dict[outkey] = []
-                index = 0
-                for item in outvalue:
-                    item_is_entity, item_entity_class = is_entity_class(
-                        item.__class__, entity_classes
-                    )
-                    if item_is_entity:
-                        if item.uid is None:
-                            raise RuntimeError(
-                                f"Entities must have valid uid, but {v} has uid of None"
-                            )
-                        entity_typename_full = full_classname(item_entity_class)
-                        entity_typename_short = entity_typename_full.split(".")[-1]
-
-                        if entity_typename_short not in entities_collector:
-                            entities_collector[entity_typename_short] = {}
-                        if item.uid not in entities_collector[entity_typename_short]:
-                            entities_collector[entity_typename_short][
-                                item.uid
-                            ] = serialize_to_dict_with_entities(
-                                item,
-                                entity_classes,
-                                entities_collector,
-                                emit_enum_types,
-                            )
-                            entities_collector[entity_typename_short][item.uid][
-                                ID_KEY
-                            ] = id(item)
-
-                        else:
-                            if entities_collector[entity_typename_short][item.uid][
-                                ID_KEY
-                            ] != id(item):
-                                raise RuntimeError(
-                                    f"uid not unique: item {item} has same uid as previously encountered item {entities_collector[entity_typename_short][item.uid]}"
-                                )
-                        sub_dict[outkey].append(create_ref(item, entity_typename_short))
-                    else:
-                        sub_dict[outkey].append(
-                            serialize_to_dict_with_entities(
-                                item,
-                                entity_classes,
-                                entities_collector,
-                                emit_enum_types,
-                            )
+                if item_is_entity:
+                    if item.uid is None:
+                        raise RuntimeError(
+                            f"Entities must have valid uid, but {v} has uid of None"
                         )
+                    entity_typename_full = full_classname(item_entity_class)
+                    entity_typename_short = entity_typename_full.split(".")[-1]
 
-                    index += 1
-            else:
-                sub_dict[outkey] = serialize_to_dict_with_entities(
-                    outvalue, entity_classes, entities_collector, emit_enum_types
-                )
+                    if entity_typename_short not in entities_collector:
+                        entities_collector[entity_typename_short] = {}
+                    if item.uid not in entities_collector[entity_typename_short]:
+                        entities_collector[entity_typename_short][
+                            item.uid
+                        ] = serialize_to_dict_with_entities(
+                            item,
+                            entity_classes,
+                            entities_collector,
+                            emit_enum_types,
+                        )
+                        entities_collector[entity_typename_short][item.uid][
+                            ID_KEY
+                        ] = id(item)
+
+                    else:
+                        if entities_collector[entity_typename_short][item.uid][
+                            ID_KEY
+                        ] != id(item):
+                            raise RuntimeError(
+                                f"uid not unique: item {item} has same uid as previously encountered item {entities_collector[entity_typename_short][item.uid]}"
+                            )
+                    sub_dict[outkey].append(create_ref(item, entity_typename_short))
+                else:
+                    sub_dict[outkey].append(
+                        serialize_to_dict_with_entities(
+                            item,
+                            entity_classes,
+                            entities_collector,
+                            emit_enum_types,
+                        )
+                    )
+        else:
+            sub_dict[outkey] = serialize_to_dict_with_entities(
+                outvalue, entity_classes, entities_collector, emit_enum_types
+            )
     if is_object:
         sub_dict = {k: v for k, v in sub_dict.items() if v is not None}
     return sub_dict
@@ -424,130 +419,84 @@ def _dir(cls):
     return dir(cls)
 
 
-def calculate_reference_graph(
-    data, class_mapping, entity_classes, reference_graph, entity_map, current_entity
+def deserialize_from_dict_with_ref_recursor(
+    data, class_mapping, entity_pool_raw: Dict, entity_pool_deserialized: Dict
 ):
     cls = data.__class__
-    if _issubclass(cls, Mapping):
+    if cls is dict:
         if ("$ref" in data) and ("__entity_type" in data):
-            if current_entity is not None:
-                entity_key = (current_entity, (data["$ref"], data["__entity_type"]))
-            else:
-                entity_key = (("__ROOT__", ""), (data["$ref"], data["__entity_type"]))
-            reference_graph.append(entity_key)
-            return None
-        else:
-            type_name = data.get("__type")
-            new_entity = current_entity
-
-            if type_name is not None:
-                type_name_short = type_name.split(".")[-1]
-                mapped_class = class_mapping.get(type_name_short)
-                if mapped_class is None:
-                    raise Exception(
-                        f"Class {type_name_short} / {type_name} not found, known classes are {list(class_mapping.keys())}"
-                    )
-                current_class_is_entity_class, entity_class = is_entity_class(
-                    mapped_class, entity_classes
-                )
-                if current_class_is_entity_class:
-                    entity_class_name_short = full_classname(entity_class).split(".")[
-                        -1
-                    ]
-                    new_entity = (data["uid"], entity_class_name_short)
-                    entity_map[new_entity] = data
-
-            for k, v in data.items():
-                if k != "__type":
-                    calculate_reference_graph(
-                        v,
-                        class_mapping,
-                        entity_classes,
-                        reference_graph,
-                        entity_map,
-                        new_entity,
-                    )
-
-    elif _issubclass(cls, Iterable) and not _issubclass(cls, str):
-        for item in data:
-            calculate_reference_graph(
-                item,
-                class_mapping,
-                entity_classes,
-                reference_graph,
-                entity_map,
-                current_entity,
+            key = data["$ref"], data["__entity_type"]
+            return entity_pool_deserialized.setdefault(
+                key,
+                deserialize_from_dict_with_ref_recursor(
+                    entity_pool_raw[key],
+                    class_mapping,
+                    entity_pool_raw,
+                    entity_pool_deserialized,
+                ),
             )
-
-
-def deserialize_from_dict_with_ref_recursor(data, class_mapping, entity_collector):
-    cls = data.__class__
-    if _issubclass(cls, Mapping):
-        if ("$ref" in data) and ("__entity_type" in data):
-            return entity_collector[data["__entity_type"]][data["$ref"]]
-        else:
-            out_mapping = {}
-            for k, v in data.items():
-                if k != "__type":
-                    child = deserialize_from_dict_with_ref_recursor(
-                        v, class_mapping, entity_collector
-                    )
-                    out_mapping[k] = child
-            type_name = data.get("__type")
-            if type_name is not None:
-                type_name_short = type_name.split(".")[-1]
-                mapped_class = class_mapping.get(type_name_short)
-                if mapped_class is None:
-                    raise Exception(
-                        f"Class {type_name_short} / {type_name} not found, known classes are {list(class_mapping.keys())}"
-                    )
-                constructed_object = construct_object(out_mapping, mapped_class)
-                return constructed_object
-            else:
-                return out_mapping
-    elif _issubclass(cls, Iterable) and not _issubclass(cls, str):
-        out_list = [
+        out_mapping = {
+            k: deserialize_from_dict_with_ref_recursor(
+                v, class_mapping, entity_pool_raw, entity_pool_deserialized
+            )
+            if v.__class__ not in (bool, int, float, str)
+            else v
+            # for performance: do not recurse on simple primitives
+            for k, v in data.items()
+            if k != "__type"
+        }
+        type_name = data.get("__type")
+        if type_name is None:
+            return out_mapping
+        type_name_short = type_name.split(".")[-1]
+        mapped_class = class_mapping.get(type_name_short)
+        if mapped_class is None:
+            raise Exception(
+                f"Class {type_name_short} / {type_name} not found, known classes are {list(class_mapping.keys())}"
+            )
+        constructed_object = construct_object(out_mapping, mapped_class)
+        return constructed_object
+    if cls is list:
+        return [
             deserialize_from_dict_with_ref_recursor(
-                item, class_mapping, entity_collector
+                item, class_mapping, entity_pool_raw, entity_pool_deserialized
             )
+            if item.__class__ not in (bool, int, float, str)
+            else item
+            # for performance: do not recurse on simple primitives
             for item in data
         ]
-        return out_list
-    else:
-        return data
+    return data
 
 
-def deserialize_from_dict_with_ref(data, class_mapping, entity_classses, entity_map):
+def deserialize_from_dict_with_ref(data, class_mapping, entity_classes, entity_map):
     class_mapping[NumpyArrayRepr.__name__] = NumpyArrayRepr
-    entity_map = {}
-    reference_graph = []
-    calculate_reference_graph(
-        data, class_mapping, entity_classses, reference_graph, entity_map, None
+    entity_pool = {}
+
+    for _, entity_list in data.get("entities", {}).items():
+        for entity in entity_list:
+            type_name = entity["__type"]
+            type_name_short = type_name.split(".")[-1]
+            mapped_class = class_mapping.get(type_name_short)
+            current_class_is_entity_class, entity_class = is_entity_class(
+                mapped_class, entity_classes
+            )
+            if not current_class_is_entity_class:
+                continue
+            entity_class_name_short = full_classname(entity_class).split(".")[-1]
+            entity_key = entity["uid"], entity_class_name_short
+            if entity_key in entity_pool:
+                raise RuntimeError(
+                    f"Non-unique UID {entity['uid']} for type {entity['__type']}"
+                )
+            entity_pool[entity_key] = entity
+
+    root_key = next(k for k, v in data.items() if k != "entities")
+    entity_pool[("__ROOT__", "")] = data[root_key]
+    entity_pool_deserialized = {}
+    return deserialize_from_dict_with_ref_recursor(
+        data[root_key], class_mapping, entity_pool, entity_pool_deserialized
     )
-    entity_map[("__ROOT__", "")] = next(v for k, v in data.items() if k != "entities")
-    reference_graph_nx = nx.DiGraph()
-    reference_graph_nx.add_edges_from(reference_graph)
-
-    g_entity_collector = {}
-    g_root_object = None
-    for entity_key in list(reversed(list(nx.topological_sort(reference_graph_nx)))):
-        if entity_key[0] != "__ROOT__":
-            if entity_key[1] not in g_entity_collector:
-                g_entity_collector[entity_key[1]] = {}
-            cur_object = deserialize_from_dict_with_ref_recursor(
-                entity_map[entity_key], class_mapping, g_entity_collector
-            )
-            g_entity_collector[entity_key[1]][entity_key[0]] = cur_object
-        else:
-            g_root_object = deserialize_from_dict_with_ref_recursor(
-                entity_map[entity_key], class_mapping, g_entity_collector
-            )
-    if g_root_object is None:
-        g_root_object = deserialize_from_dict_with_ref_recursor(
-            entity_map[("__ROOT__", "")], class_mapping, g_entity_collector
-        )
-
-    return g_root_object
 
 
 def deserialize_from_dict(data, class_mapping):

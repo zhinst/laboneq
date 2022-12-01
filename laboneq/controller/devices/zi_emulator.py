@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import partial
+import functools
 import re
 import sched
 
@@ -21,7 +22,7 @@ class NodeBase:
     "A class modeling a single node. Specialized for specific node types."
     read_only: bool = False
     subscribed: bool = False
-    handler: Callable = None
+    handler: Callable[[NodeBase], None] = None
 
 
 @dataclass
@@ -71,7 +72,7 @@ class NodeInfo:
     type: NodeType = NodeType.FLOAT
     default: Any = 0.0
     read_only: bool = False
-    handler: Callable = None
+    handler: Callable[[NodeBase], None] = None
 
 
 def _node_factory(node_info: NodeInfo) -> NodeBase:
@@ -94,11 +95,13 @@ class PollEvent:
 class DevEmu(ABC):
     "Base class emulating a device, specialized per device type."
 
-    def __init__(self, scheduler: sched.scheduler):
+    def __init__(self, scheduler: sched.scheduler, dev_opts: Dict[str, Any]):
         self._scheduler = scheduler
+        self._dev_opts = dev_opts
         self._node_tree: Dict[str, NodeBase] = {}
         self._poll_queue: List[PollEvent] = []
         self._total_subscribed: int = 0
+        self._cached_node_def = functools.lru_cache(maxsize=None)(self._node_def)
 
     @abstractmethod
     def serial(self) -> str:
@@ -112,7 +115,7 @@ class DevEmu(ABC):
         return f"/{self.serial().lower()}/{dev_path}"
 
     def _make_node(self, dev_path: str):
-        node_def = self._node_def()
+        node_def = self._cached_node_def()
         new_node_def = node_def.get(dev_path)
         if new_node_def is None:
             new_node_def = NodeInfo(type=NodeType.INT, default=0, read_only=False)
@@ -142,7 +145,7 @@ class DevEmu(ABC):
     def set(self, dev_path: str, value: Any):
         node = self._set_val(dev_path, value)
         if node.handler is not None:
-            node.handler(self)
+            node.handler(self, node)
 
     def subscribe(self, dev_path: str):
         node = self._get_node(dev_path)
@@ -165,21 +168,25 @@ class DevEmu(ABC):
 
 
 class DevEmuZI(DevEmu):
-    _zi_node_def: Dict[str, NodeInfo] = {
-        "about/version": NodeInfo(type=NodeType.STR, default="22.02", read_only=True),
-        "about/revision": NodeInfo(type=NodeType.STR, default="99999", read_only=True),
-    }
-
     def serial(self) -> str:
         return "ZI"
 
     def _node_def(self) -> Dict[str, NodeInfo]:
-        return DevEmuZI._zi_node_def
+        return {
+            "about/version": NodeInfo(
+                type=NodeType.STR, default="22.08", read_only=True
+            ),
+            "about/revision": NodeInfo(
+                type=NodeType.STR, default="99999", read_only=True
+            ),
+        }
 
 
 class DevEmuHW(DevEmu):
-    def __init__(self, serial: str, scheduler: sched.scheduler):
-        super().__init__(scheduler)
+    def __init__(
+        self, serial: str, scheduler: sched.scheduler, dev_opts: Dict[str, Any]
+    ):
+        super().__init__(scheduler, dev_opts)
         self._serial = serial
 
     def serial(self) -> str:
@@ -195,56 +202,115 @@ class DevEmuHDAWG(DevEmuHW):
     def _awg_stop(self, awg_idx):
         self._set_val(f"awgs/{awg_idx}/enable", 0)
 
-    def _awg_execute(self, awg_idx):
+    def _awg_execute(self, node: NodeBase, awg_idx):
         self._scheduler.enter(
             delay=0.001, priority=0, action=self._awg_stop, argument=(awg_idx,)
         )
 
-    _hdawg_node_def: Dict[str, NodeInfo] = None
+    def _ref_clock_switched(self, source):
+        self._set_val("system/clocks/referenceclock/status", 0)
+        # 0 -> internal (freq 100e6)
+        # 1 -> external (freq 10e6)
+        # 2 -> zsync (freq 100e6)
+        target_freq = 10e6 if source == 1 else 100e6
+        current_freq = self.get("system/clocks/referenceclock/freq")
+        if current_freq != target_freq:
+            self._set_val("system/clocks/referenceclock/freq", target_freq)
+
+    def _ref_clock(self, node: NodeInt):
+        self._scheduler.enter(
+            delay=0.001,
+            priority=0,
+            action=self._ref_clock_switched,
+            argument=(node.value,),
+        )
 
     def _node_def(self) -> Dict[str, NodeInfo]:
-        if DevEmuHDAWG._hdawg_node_def is None:
-            nd = {}
-            for awg_idx in range(4):
-                nd[f"awgs/{awg_idx}/enable"] = NodeInfo(
-                    type=NodeType.INT,
-                    default=0,
-                    handler=partial(DevEmuHDAWG._awg_execute, awg_idx=awg_idx),
-                )
-            DevEmuHDAWG._hdawg_node_def = nd
-        return DevEmuHDAWG._hdawg_node_def
+        nd = {
+            "system/clocks/referenceclock/source": NodeInfo(
+                type=NodeType.INT, default=0, handler=DevEmuHDAWG._ref_clock
+            ),
+            "system/clocks/referenceclock/status": NodeInfo(
+                type=NodeType.INT, default=0
+            ),
+            "system/clocks/referenceclock/freq": NodeInfo(
+                type=NodeType.FLOAT, default=100e6
+            ),
+        }
+        for awg_idx in range(4):
+            nd[f"awgs/{awg_idx}/enable"] = NodeInfo(
+                type=NodeType.INT,
+                default=0,
+                handler=partial(DevEmuHDAWG._awg_execute, awg_idx=awg_idx),
+            )
+        return nd
 
 
 class DevEmuUHFQA(DevEmuHW):
     def _awg_stop(self):
         self._set_val(f"awgs/0/enable", 0)
 
-    def _awg_execute(self):
+    def _awg_execute(self, node: NodeBase):
         self._scheduler.enter(delay=0.001, priority=0, action=self._awg_stop)
 
-    _uhfqa_node_def: Dict[str, NodeInfo] = {
-        "awgs/0/enable": NodeInfo(type=NodeType.INT, default=0, handler=_awg_execute)
-    }
+    def _awg_ready(self):
+        self._set_val(f"awgs/0/ready", 1)
+
+    def _elf_upload(self, node: NodeBase):
+        self._set_val(f"awgs/0/ready", 0)
+        self._scheduler.enter(delay=0.001, priority=0, action=self._awg_ready)
 
     def _node_def(self) -> Dict[str, NodeInfo]:
-        return DevEmuUHFQA._uhfqa_node_def
+        return {
+            "awgs/0/enable": NodeInfo(
+                type=NodeType.INT, default=0, handler=DevEmuUHFQA._awg_execute
+            ),
+            "awgs/0/elf/data": NodeInfo(
+                type=NodeType.VECTOR_INT, default=[], handler=DevEmuUHFQA._elf_upload
+            ),
+            "awgs/0/ready": NodeInfo(type=NodeType.INT, default=0),
+        }
 
 
 class DevEmuPQSC(DevEmuHW):
     def _trig_stop(self):
         self._set_val(f"execution/enable", 0)
 
-    def _trig_execute(self):
+    def _trig_execute(self, node: NodeBase):
         self._scheduler.enter(delay=0.001, priority=0, action=self._trig_stop)
 
-    _pqsc_node_def: Dict[str, NodeInfo] = {
-        "execution/enable": NodeInfo(
-            type=NodeType.INT, default=0, handler=_trig_execute
+    def _ref_clock_switched(self, requested_source: int):
+        self._set_val("system/clocks/referenceclock/in/sourceactual", requested_source)
+        self._set_val("system/clocks/referenceclock/in/status", 0)
+        self._set_val("system/clocks/referenceclock/in/freq", 10e6)
+
+    def _ref_clock(self, node: NodeBase):
+        node_int: NodeInt = node
+        self._scheduler.enter(
+            delay=0.001,
+            priority=0,
+            action=self._ref_clock_switched,
+            argument=(node_int.value,),
         )
-    }
 
     def _node_def(self) -> Dict[str, NodeInfo]:
-        return DevEmuPQSC._pqsc_node_def
+        return {
+            "execution/enable": NodeInfo(
+                type=NodeType.INT, default=0, handler=DevEmuPQSC._trig_execute
+            ),
+            "system/clocks/referenceclock/in/source": NodeInfo(
+                type=NodeType.INT, default=0, handler=DevEmuPQSC._ref_clock
+            ),
+            "system/clocks/referenceclock/in/sourceactual": NodeInfo(
+                type=NodeType.INT, default=0
+            ),
+            "system/clocks/referenceclock/in/status": NodeInfo(
+                type=NodeType.INT, default=0
+            ),
+            "system/clocks/referenceclock/in/freq": NodeInfo(
+                type=NodeType.FLOAT, default=100e6
+            ),
+        }
 
 
 class DevEmuSHFQA(DevEmuHW):
@@ -253,55 +319,56 @@ class DevEmuSHFQA(DevEmuHW):
         self._set_val(f"qachannels/{channel}/readout/result/enable", 0)
         self._set_val(f"qachannels/{channel}/spectroscopy/result/enable", 0)
 
-    def _awg_execute(self, channel: int):
+    def _awg_execute(self, node: NodeBase, channel: int):
         self._scheduler.enter(
             delay=0.001, priority=0, action=self._awg_stop, argument=(channel,)
         )
 
-    _shfqa_node_def: Dict[str, NodeInfo] = None
-
     def _node_def(self) -> Dict[str, NodeInfo]:
-        if DevEmuSHFQA._shfqa_node_def is None:
-            nd = {}
-            for channel in range(4):
-                nd[f"qachannels/{channel}/generator/enable"] = NodeInfo(
-                    type=NodeType.INT,
-                    default=0,
-                    handler=partial(DevEmuSHFQA._awg_execute, channel=channel),
-                )
-                # TODO(2K): emulate result logging
-                nd[f"qachannels/{channel}/readout/result/enable"] = NodeInfo(
-                    type=NodeType.INT, default=0
-                )
-                nd[f"qachannels/{channel}/spectroscopy/result/enable"] = NodeInfo(
-                    type=NodeType.INT, default=0
-                )
-            DevEmuSHFQA._shfqa_node_def = nd
-        return DevEmuSHFQA._shfqa_node_def
+        nd = {}
+        for channel in range(4):
+            nd[f"qachannels/{channel}/generator/enable"] = NodeInfo(
+                type=NodeType.INT,
+                default=0,
+                handler=partial(DevEmuSHFQA._awg_execute, channel=channel),
+            )
+            # TODO(2K): emulate result logging
+            nd[f"qachannels/{channel}/readout/result/enable"] = NodeInfo(
+                type=NodeType.INT, default=0
+            )
+            nd[f"qachannels/{channel}/spectroscopy/result/enable"] = NodeInfo(
+                type=NodeType.INT, default=0
+            )
+        return nd
 
 
 class DevEmuSHFSG(DevEmuHW):
     def _awg_stop(self, channel: int):
         self._set_val(f"sgchannels/{channel}/awg/enable", 0)
 
-    def _awg_execute(self, channel: int):
+    def _awg_execute(self, node: NodeBase, channel: int):
         self._scheduler.enter(
             delay=0.001, priority=0, action=self._awg_stop, argument=(channel,)
         )
 
-    _shfsg_node_def: Dict[str, NodeInfo] = None
-
     def _node_def(self) -> Dict[str, NodeInfo]:
-        if DevEmuSHFSG._shfsg_node_def is None:
-            nd = {}
-            for channel in range(8):
-                nd[f"sgchannels/{channel}/awg/enable"] = NodeInfo(
-                    type=NodeType.INT,
-                    default=0,
-                    handler=partial(DevEmuSHFSG._awg_execute, channel=channel),
-                )
-            DevEmuSHFSG._shfsg_node_def = nd
-        return DevEmuSHFSG._shfsg_node_def
+        nd = {
+            "features/devtype": NodeInfo(
+                type=NodeType.STR,
+                default=self._dev_opts.get("features/devtype", "SHFSG8"),
+            ),
+            "features/options": NodeInfo(
+                type=NodeType.STR,
+                default=self._dev_opts.get("features/options", ""),
+            ),
+        }
+        for channel in range(8):
+            nd[f"sgchannels/{channel}/awg/enable"] = NodeInfo(
+                type=NodeType.INT,
+                default=0,
+                handler=partial(DevEmuSHFSG._awg_execute, channel=channel),
+            )
+        return nd
 
 
 class DevEmuSHFQC(DevEmuHW):
@@ -310,7 +377,7 @@ class DevEmuSHFQC(DevEmuHW):
         self._set_val(f"qachannels/{channel}/readout/result/enable", 0)
         self._set_val(f"qachannels/{channel}/spectroscopy/result/enable", 0)
 
-    def _qa_awg_execute(self, channel: int):
+    def _qa_awg_execute(self, node: NodeBase, channel: int):
         self._scheduler.enter(
             delay=0.001, priority=0, action=self._qa_awg_stop, argument=(channel,)
         )
@@ -318,37 +385,42 @@ class DevEmuSHFQC(DevEmuHW):
     def _sg_awg_stop(self, channel: int):
         self._set_val(f"sgchannels/{channel}/awg/enable", 0)
 
-    def _sg_awg_execute(self, channel: int):
+    def _sg_awg_execute(self, node: NodeBase, channel: int):
         self._scheduler.enter(
             delay=0.001, priority=0, action=self._sg_awg_stop, argument=(channel,)
         )
 
-    _shfqc_node_def: Dict[str, NodeInfo] = None
-
     def _node_def(self) -> Dict[str, NodeInfo]:
-        if DevEmuSHFQC._shfqc_node_def is None:
-            nd = {f"features/devtype": NodeInfo(type=NodeType.STR, default="SHFQC")}
-            for channel in range(1):
-                nd[f"qachannels/{channel}/generator/enable"] = NodeInfo(
-                    type=NodeType.INT,
-                    default=0,
-                    handler=partial(DevEmuSHFQC._qa_awg_execute, channel=channel),
-                )
-                # TODO(2K): emulate result logging
-                nd[f"qachannels/{channel}/readout/result/enable"] = NodeInfo(
-                    type=NodeType.INT, default=0
-                )
-                nd[f"qachannels/{channel}/spectroscopy/result/enable"] = NodeInfo(
-                    type=NodeType.INT, default=0
-                )
-            for channel in range(6):
-                nd[f"sgchannels/{channel}/awg/enable"] = NodeInfo(
-                    type=NodeType.INT,
-                    default=0,
-                    handler=partial(DevEmuSHFQC._sg_awg_execute, channel=channel),
-                )
-            DevEmuSHFQC._shfqc_node_def = nd
-        return DevEmuSHFQC._shfqc_node_def
+        nd = {
+            "features/devtype": NodeInfo(
+                type=NodeType.STR,
+                default=self._dev_opts.get("features/devtype", "SHFQC"),
+            ),
+            "features/options": NodeInfo(
+                type=NodeType.STR,
+                default=self._dev_opts.get("features/options", "QC6CH"),
+            ),
+        }
+        for channel in range(1):
+            nd[f"qachannels/{channel}/generator/enable"] = NodeInfo(
+                type=NodeType.INT,
+                default=0,
+                handler=partial(DevEmuSHFQC._qa_awg_execute, channel=channel),
+            )
+            # TODO(2K): emulate result logging
+            nd[f"qachannels/{channel}/readout/result/enable"] = NodeInfo(
+                type=NodeType.INT, default=0
+            )
+            nd[f"qachannels/{channel}/spectroscopy/result/enable"] = NodeInfo(
+                type=NodeType.INT, default=0
+            )
+        for channel in range(6):
+            nd[f"sgchannels/{channel}/awg/enable"] = NodeInfo(
+                type=NodeType.INT,
+                default=0,
+                handler=partial(DevEmuSHFQC._sg_awg_execute, channel=channel),
+            )
+        return nd
 
 
 def _serial_to_device_type(dev_id: str):
@@ -371,29 +443,6 @@ def _serial_to_device_type(dev_id: str):
         return DevEmuDummy
 
 
-def _device_factory(
-    dev_id: str, scheduler: sched.scheduler, device_type_map: Dict[str, str] = None
-) -> DevEmu:
-    if device_type_map is None:
-        device_type_map = {}
-    dev_type_str = device_type_map.get(dev_id.upper())
-    if dev_type_str == "HDAWG":
-        dev_type = DevEmuHDAWG
-    elif dev_type_str == "UHFQA":
-        dev_type = DevEmuUHFQA
-    elif dev_type_str == "PQSC":
-        dev_type = DevEmuPQSC
-    elif dev_type_str == "SHFQA":
-        dev_type = DevEmuSHFQA
-    elif dev_type_str == "SHFSG":
-        dev_type = DevEmuSHFSG
-    elif dev_type_str == "SHFQC":
-        dev_type = DevEmuSHFQC
-    else:
-        dev_type = _serial_to_device_type(dev_id)
-    return dev_type(dev_id, scheduler)
-
-
 def _canonical_path_list(path: Union[str, List[str]]) -> List[str]:
     if isinstance(path, list):
         paths = path
@@ -414,16 +463,41 @@ class ziDAQServerEmulator:
         super().__init__()
         self._scheduler = sched.scheduler()
         self._device_type_map: Dict[str, str] = {}
-        self._devices: Dict[str, DevEmu] = {"ZI": DevEmuZI(self._scheduler)}
+        # TODO(2K): Defer "ZI" device initialization to allow passing options
+        self._devices: Dict[str, DevEmu] = {"ZI": DevEmuZI(self._scheduler, {})}
+        self._options: Dict[str, Dict[str, Any]] = {}
 
     def map_device_type(self, serial: str, type: str):
         self._device_type_map[serial.upper()] = type.upper()
+
+    def set_option(self, serial: str, option: str, value: Any):
+        dev_opts = self._options.setdefault(serial.upper(), {})
+        dev_opts[option] = value
+
+    def _device_factory(self, dev_id: str) -> DevEmu:
+        dev_type_str = self._device_type_map.get(dev_id.upper())
+        if dev_type_str == "HDAWG":
+            dev_type = DevEmuHDAWG
+        elif dev_type_str == "UHFQA":
+            dev_type = DevEmuUHFQA
+        elif dev_type_str == "PQSC":
+            dev_type = DevEmuPQSC
+        elif dev_type_str == "SHFQA":
+            dev_type = DevEmuSHFQA
+        elif dev_type_str == "SHFSG":
+            dev_type = DevEmuSHFSG
+        elif dev_type_str == "SHFQC":
+            dev_type = DevEmuSHFQC
+        else:
+            dev_type = _serial_to_device_type(dev_id)
+        dev_opts = self._options.setdefault(dev_id.upper(), {})
+        return dev_type(dev_id, self._scheduler, dev_opts)
 
     def _device_lookup(self, dev_id: str, create: bool = True) -> DevEmu:
         dev_id = dev_id.upper()
         device = self._devices.get(dev_id)
         if device is None and create:
-            device = _device_factory(dev_id, self._scheduler, self._device_type_map)
+            device = self._device_factory(dev_id)
             self._devices[dev_id] = device
         return device
 

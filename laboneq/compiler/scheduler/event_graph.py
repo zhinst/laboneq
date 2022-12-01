@@ -3,7 +3,7 @@
 
 from enum import Enum
 from types import SimpleNamespace
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import itertools
 import logging
 import copy
@@ -129,7 +129,10 @@ class EventGraph:
         section_events[event_type].append(node)
 
     def find_section_events_by_type(
-        self, section_name, event_type=None, properties=None
+        self,
+        section_name: str,
+        event_type: Optional[str] = None,
+        properties: Dict[str, Any] = None,
     ):
         if event_type is None:
             events = list(
@@ -292,13 +295,24 @@ class EventGraph:
                 }
             )
 
-        root = next(n for n in self._event_graph.node_indices())
-        # Note: If root is not given, tha algorithm below will pick one random node, and then sometimes find a cycle, sometimes not
-        # Whether the root we pick here is a good one is currently unclear. The networkx implementation of find_cycle
-        # is much more robust, the documentation says: "
-        #     source: The node from which the traversal begins.
-        #     If None, then a source is chosen arbitrarily and repeatedly until all edges from each node in the graph are searched"
-        first_cycle_edges = list(rustworkx.digraph_find_cycle(self._event_graph, root))
+        first_cycle_edges = []
+        try:
+            rustworkx.topological_sort(self._event_graph)[::-1]
+        except rustworkx.DAGHasCycle as ex:
+
+            # Note: If root is not given, tha algorithm below will pick one random node, and then sometimes find a cycle, sometimes not
+            # Whether the root we pick here is a good one is currently unclear. The networkx implementation of find_cycle
+            # is much more robust, the documentation says: "
+            #     source: The node from which the traversal begins.
+            #     If None, then a source is chosen arbitrarily and repeatedly until all edges from each node in the graph are searched"
+            # we implement it now in an inefficient but effective way; this is for development-time visualization only, so it should not matter
+            for root in self._event_graph.node_indices():
+                first_cycle_edges = list(
+                    rustworkx.digraph_find_cycle(self._event_graph, root)
+                )
+                if len(first_cycle_edges) > 0:
+                    break
+
         _logger.debug(
             "first_cycle_edges=%s, edges = %s",
             first_cycle_edges,

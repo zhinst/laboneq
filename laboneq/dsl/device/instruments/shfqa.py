@@ -15,10 +15,10 @@ from dataclasses import dataclass
 class SHFQA(ZIStandardInstrument):
     """Class representing a ZI SHFQA instrument."""
 
-    _is_qc: bool = False
+    is_qc: bool = False
 
     def calc_options(self):
-        return {**super().calc_options(), "is_qc": self._is_qc}
+        return {**super().calc_options(), "is_qc": self.is_qc}
 
     @property
     def ports(self):

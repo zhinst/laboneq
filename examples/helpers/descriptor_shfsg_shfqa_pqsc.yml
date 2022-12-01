@@ -1,9 +1,9 @@
 instrument_list:
   SHFQA:
-  - address: DEV12XXX   
+  - address: DEV12XX1
     uid: device_shfqa
   SHFSG:
-  - address: DEV12XXX
+  - address: DEV12XX2
     uid: device_shfsg
   PQSC:  
   - address: DEV10XXX

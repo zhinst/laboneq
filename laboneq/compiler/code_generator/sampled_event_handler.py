@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+from dataclasses import dataclass, field
 
 import logging
-from typing import List, Dict, TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Dict, Set, Optional
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.compiler.code_generator.compressor import compress_generators
@@ -46,6 +47,12 @@ def sort_events(events):
     return sampled_event_list
 
 
+@dataclass
+class FeedbackConnection:
+    acquire: Optional[str]
+    drive: Set[str] = field(default_factory=set)
+
+
 class SampledEventHandler:
     def __init__(
         self,
@@ -53,6 +60,7 @@ class SampledEventHandler:
         command_table_tracker: CommandTableTracker,
         declarations_generator: SeqCGenerator,
         wave_indices: WaveIndexTracker,
+        feedback_connections: Dict[str, FeedbackConnection],
         awg: AWGInfo,
         device_type: DeviceType,
         channels: List[int],
@@ -60,20 +68,25 @@ class SampledEventHandler:
         use_command_table: bool,
         emit_timing_comments: bool,
     ):
-        self.sampled_event_list = None
         self.seqc_tracker = seqc_tracker
         self.command_table_tracker = command_table_tracker
         self.declarations_generator = declarations_generator
-        self.declared_variables = set()
-        self.loop_stack = []
         self.wave_indices = wave_indices
+        self.feedback_connections = feedback_connections
         self.awg = awg
         self.device_type = device_type
         self.channels = channels
         self.sampled_signatures = sampled_signatures
         self.use_command_table = use_command_table
         self.emit_timing_comments = emit_timing_comments
-        self.last_playwave_event = None
+
+        self.sampled_event_list = None
+        self.declared_variables = set()
+        self.loop_stack = []
+        self.last_event = None
+        self.match_parent_event = None
+        self.command_table_match_offset = None
+        self.match_command_table_entries = {}
 
     def handle_playwave(
         self,
@@ -81,6 +94,21 @@ class SampledEventHandler:
     ):
         signature = sampled_event["playback_signature"]
         signal_id = sampled_event["signal_id"]
+        state = signature.state
+
+        match_statement_active = self.match_parent_event is not None
+        handle = (
+            self.match_parent_event["handle"]
+            if self.match_parent_event is not None
+            else None
+        )
+
+        assert (state is not None) == match_statement_active
+
+        if not self.use_command_table and state is not None:
+            raise LabOneQException(
+                f"Found match/case statement for handle {handle} on unsupported device."
+            )
 
         if signature.hw_oscillator is not None and not self.use_command_table:
             raise LabOneQException(
@@ -99,9 +127,10 @@ class SampledEventHandler:
             signature,
             sampled_event,
         )
-        self.seqc_tracker.add_required_playzeros(sampled_event)
-        self.seqc_tracker.add_timing_comment(sampled_event["end"])
-        generator = self.seqc_tracker.current_loop_stack_generator()
+        if not match_statement_active:
+            # Playzeros were already added for match event
+            self.seqc_tracker.add_required_playzeros(sampled_event)
+            self.seqc_tracker.add_timing_comment(sampled_event["end"])
 
         play_wave_channel = None
         if len(self.channels) > 0:
@@ -114,39 +143,60 @@ class SampledEventHandler:
             # Include CSV waves into the index to keep track of waves-AWG mapping
         )
         sig_string, _ = signature.waveform.signature_string()
-        wave_index = self.wave_indices.lookup_index_by_wave_id(sig_string)
-        if wave_index is None:
-            wave_index = self.wave_indices.create_index_for_wave(
-                sig_string, signal_type_for_wave_index
-            )
-            if wave_index is not None:
-                generator.add_assign_wave_index_statement(
+        if (
+            all(p.pulse is None for p in signature.waveform.pulses)
+            and self.use_command_table
+        ):
+            # all-zero pulse is played via play-zero command table entry
+            wave_index = None
+        else:
+            wave_index = self.wave_indices.lookup_index_by_wave_id(sig_string)
+            if wave_index is None:
+                wave_index = self.wave_indices.create_index_for_wave(
+                    sig_string, signal_type_for_wave_index
+                )
+                if wave_index is not None:
+                    self.seqc_tracker.add_assign_wave_index_statement(
+                        self.device_type,
+                        self.awg.signal_type.value,
+                        sig_string,
+                        wave_index,
+                        play_wave_channel,
+                    )
+
+        if not match_statement_active:
+            if self.use_command_table:
+                ct_index = self.command_table_tracker.lookup_index_by_signature(
+                    signature
+                )
+                if ct_index is None:
+                    ct_index = self.command_table_tracker.create_entry(
+                        signature, wave_index
+                    )
+                comment = sig_string
+                if signature.hw_oscillator is not None:
+                    comment += f", osc={signature.hw_oscillator}"
+                self.seqc_tracker.add_command_table_execution(ct_index, comment=comment)
+            else:
+                self.seqc_tracker.add_play_wave_statement(
                     self.device_type,
                     self.awg.signal_type.value,
                     sig_string,
-                    wave_index,
                     play_wave_channel,
                 )
-        if self.use_command_table:
-            ct_index = self.command_table_tracker.lookup_index_by_signature(signature)
-            if ct_index is None:
-                ct_index = self.command_table_tracker.create_entry(
-                    signature, wave_index
-                )
-            comment = sig_string
-            if signature.hw_oscillator is not None:
-                comment += f", osc={signature.hw_oscillator}"
-            generator.add_command_table_execution(ct_index, comment)
+            self.seqc_tracker.clear_deferred_function_calls(sampled_event)
+            self.seqc_tracker.current_time = sampled_event["end"]
         else:
-            generator.add_play_wave_statement(
-                self.device_type,
-                self.awg.signal_type.value,
-                sig_string,
-                play_wave_channel,
-            )
-        self.seqc_tracker.clear_deferred_function_calls(sampled_event)
-
-        self.seqc_tracker.current_time = sampled_event["end"]
+            assert self.use_command_table
+            if state in self.match_command_table_entries:
+                raise LabOneQException(
+                    f"Duplicate state {state} with different pulses for handle "
+                    f"{self.match_parent_event['handle']} found."
+                )
+            self.match_command_table_entries[state] = (signature, wave_index)
+            self.feedback_connections.setdefault(
+                self.match_parent_event["handle"], FeedbackConnection(None)
+            ).drive.add(signal_id)
         return True
 
     def handle_acquire(self, sampled_event):
@@ -167,21 +217,23 @@ class SampledEventHandler:
             )
         else:
             skip = False
-            if self.last_playwave_event is not None:
+            if self.last_event is not None:
                 if (
-                    self.last_playwave_event["signature"] == "acquire"
-                    and self.last_playwave_event["start"] == start
+                    self.last_event["signature"] == "acquire"
+                    and self.last_event["start"] == start
                 ):
                     skip = True
                     _logger.debug(
                         "Skipping acquire event %s because last event was also acquire: %s",
                         sampled_event,
-                        self.last_playwave_event,
+                        self.last_event,
                     )
             if not skip:
                 self.seqc_tracker.add_function_call_statement(
                     "startQA", args, deferred=False
                 )
+        for h in sampled_event["acquire_handles"]:
+            self._add_feedback_connection(h, sampled_event["signal_id"])
 
     def handle_qa_event(self, sampled_event):
         _logger.debug("  Processing QA_EVENT %s", sampled_event)
@@ -259,6 +311,10 @@ class SampledEventHandler:
         self.seqc_tracker.add_function_call_statement("startQA", args)
         if "spectroscopy" in sampled_event["acquisition_type"]:
             self.seqc_tracker.add_function_call_statement("setTrigger", [0])
+
+        for ev in sampled_event["acquire_events"]:
+            for h in ev["acquire_handles"]:
+                self._add_feedback_connection(h, ev["signal_id"])
 
     def handle_reset_precompensation_filters(self, sampled_event):
         try:
@@ -420,6 +476,50 @@ class SampledEventHandler:
             self.seqc_tracker.pop_loop_stack_generators()
             self.loop_stack.pop()
 
+    def handle_match(self, sampled_event):
+        self.match_parent_event = sampled_event
+        self.seqc_tracker.add_required_playzeros(self.match_parent_event)
+        self.seqc_tracker.add_timing_comment(self.match_parent_event["end"])
+        self._match_command_table_entries = {}
+
+    def close_event_list(self):
+        if self.match_parent_event is not None:
+            handle = self.match_parent_event["handle"]
+            sorted_ct_entries = sorted(self.match_command_table_entries.items())
+            first = sorted_ct_entries[0][0]
+            last = sorted_ct_entries[-1][0]
+            if first != 0 or last - first + 1 != len(sorted_ct_entries):
+                raise LabOneQException(
+                    f"States missing in match statement with handle {handle}. First "
+                    f"state: {first}, last state: {last}, number of states: "
+                    f"{len(sorted_ct_entries)}, expected {last+1}, starting from 0."
+                )
+
+            # Check whether we already have the same states in the command table:
+            if self.command_table_match_offset is not None:
+                for idx, (signature, wave_index) in sorted_ct_entries:
+                    current_ct_entry = self.command_table_tracker[
+                        idx + self.command_table_match_offset
+                    ]
+                    current_wf_idx = current_ct_entry[1]["waveform"].get("index")
+                    if current_ct_entry[0] != signature or wave_index != current_wf_idx:
+                        raise LabOneQException(
+                            "Multiple command table entry sets for feedback "
+                            f"(handle {handle}), do you use the same pulses and states?"
+                        )
+            else:
+                self.command_table_match_offset = len(self.command_table_tracker)
+                for idx, (signature, wave_index) in sorted_ct_entries:
+                    id2 = self.command_table_tracker.create_entry(signature, wave_index)
+                    assert self.command_table_match_offset + idx == id2
+
+            self.seqc_tracker.add_command_table_execution(
+                "QA_DATA_PROCESSED", latency=42, comment="Match handle " + handle
+            )
+            self.seqc_tracker.clear_deferred_function_calls(self.match_parent_event)
+            self.seqc_tracker.current_time = self.match_parent_event["end"]
+            self.match_parent_event = None
+
     def handle_sampled_event(self, sampled_event):
         signature = sampled_event["signature"]
         if signature == "playwave":
@@ -443,14 +543,18 @@ class SampledEventHandler:
             self.handle_push_loop(sampled_event)
         elif signature == "ITERATE":
             self.handle_iterate(sampled_event)
-        self.last_playwave_event = sampled_event
+        elif signature == "match":
+            self.handle_match(sampled_event)
+        self.last_event = sampled_event
 
     def handle_sampled_event_list(self):
         for sampled_event in self.sampled_event_list:
             _logger.debug("  Processing event %s", sampled_event)
             self.handle_sampled_event(sampled_event)
+        self.close_event_list()
 
     def handle_sampled_events(self, sampled_events):
+        # Handle events grouped by start point
         for sampled_event_list in sampled_events.values():
             _logger.debug("EventListBeforeSort: %s", sampled_event_list)
             self.sampled_event_list = sort_events(sampled_event_list)
@@ -459,3 +563,19 @@ class SampledEventHandler:
                 _logger.debug("       %s", sampled_event_for_log)
             _logger.debug("-End event list")
             self.handle_sampled_event_list()
+        self.seqc_tracker.force_deferred_function_calls()
+
+    def _add_feedback_connection(self, handle: str, acquire_signal: str):
+        if handle is None:
+            return
+        try:
+            fbc = self.feedback_connections[handle]
+            if fbc.acquire is None:
+                fbc.acquire = acquire_signal
+            elif fbc.acquire != acquire_signal:
+                raise LabOneQException(
+                    f"Acquisition handle {handle} may not be "
+                    f"reused with different signal {acquire_signal}"
+                )
+        except KeyError:
+            self.feedback_connections[handle] = FeedbackConnection(acquire_signal)

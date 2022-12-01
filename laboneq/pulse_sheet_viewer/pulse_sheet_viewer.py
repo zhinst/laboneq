@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import textwrap
 from pathlib import Path
 
 _logger = logging.getLogger(__name__)
@@ -16,63 +17,54 @@ if typing.TYPE_CHECKING:
     from laboneq.core.types import CompiledExperiment
 
 
+def _get_html_template():
+    template = Path(__file__).parent.absolute() / "pulse_sheet_viewer_template.html"
+    return template.read_text(encoding="utf-8")
+
+
 class PulseSheetViewer:
     @staticmethod
     def generate_viewer_html_text(events, title):
-        html_lines = []
-        events_lines = json.dumps(events["event_list"], indent=2).splitlines()
-        section_graph_lines = json.dumps(events["section_graph"], indent=2).splitlines()
-        section_info_lines = json.dumps(events["section_info"], indent=2).splitlines()
-        section_signals_with_children_lines = json.dumps(
+        events_json = json.dumps(events["event_list"], indent=2)
+        section_graph_json = json.dumps(events["section_graph"], indent=2)
+        section_info_json = json.dumps(events["section_info"], indent=2)
+        section_signals_with_children_json = json.dumps(
             events["section_signals_with_children"], indent=2
-        ).splitlines()
-        subsection_map_lines = json.dumps(
-            events["subsection_map"], indent=2
-        ).splitlines()
-        sampling_rates_lines = json.dumps(
-            events["sampling_rates"], indent=2
-        ).splitlines()
+        )
+        subsection_map_json = json.dumps(events["subsection_map"], indent=2)
+        sampling_rates_json = json.dumps(events["sampling_rates"], indent=2)
 
-        with open(
-            os.path.join(
-                Path(__file__).parent.absolute(), "pulse_sheet_viewer_template.html"
-            )
-        ) as html_template:
-            lines = html_template.readlines()
-            in_events = False
-            for line in lines:
-                if in_events:
-                    if "%%%END qccs_current_events" in line:
-                        in_events = False
-                else:
-                    if "%%%START qccs_current_events" in line:
-                        in_events = True
-                        html_lines.append(f' qccs_pulse_sheet_title = "{title}"')
-                        html_lines.append("  qccs_current_events = ")
-                        html_lines.extend(events_lines)
-                        html_lines.append("  qccs_current_section_graph = ")
-                        html_lines.extend(section_graph_lines)
-                        html_lines.append("  qccs_current_section_info = ")
-                        html_lines.extend(section_info_lines)
-                        html_lines.append("  qccs_current_subsection_map = ")
-                        html_lines.extend(subsection_map_lines)
-                        html_lines.append(
-                            "  qccs_current_section_signals_with_children = "
-                        )
-                        html_lines.extend(section_signals_with_children_lines)
-                        html_lines.append("  qccs_current_sampling_rates = ")
-                        html_lines.extend(sampling_rates_lines)
+        js_script = textwrap.dedent(
+            """
+            window.qccs_pulse_sheet_title = {};
+            window.qccs_current_events = {};
+            window.qccs_current_section_graph = {};
+            window.qccs_current_section_info = {};
+            window.qccs_current_subsection_map = {};
+            window.qccs_current_section_signals_with_children = {};
+            window.qccs_current_sampling_rates = {};
+            """
+        ).format(
+            repr(title),
+            events_json,
+            section_graph_json,
+            section_info_json,
+            subsection_map_json,
+            section_signals_with_children_json,
+            sampling_rates_json,
+        )
 
-                    else:
-                        html_lines.append(line)
-        return "\n".join(html_lines)
+        PLACEHOLDER = "// QCCS_DATA_PLACEHOLDER"
+
+        rendered = _get_html_template().replace(PLACEHOLDER, js_script, 1)
+        return rendered
 
     @staticmethod
     def generate_viewer_html_file(events, title, filename):
         html_text = PulseSheetViewer.generate_viewer_html_text(events, title)
 
         _logger.info("Writing html file to %s", os.path.abspath(filename))
-        with open(filename, "w") as html_file:
+        with open(filename, "w", encoding="utf-8") as html_file:
             html_file.write(html_text)
 
 
@@ -98,7 +90,7 @@ def show_pulse_sheet(name: str, compiled_experiment: CompiledExperiment):
         )
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     filename = f"{name}_{timestamp}.html"
-    viewer_url = PulseSheetViewer.generate_viewer_html_file(
+    PulseSheetViewer.generate_viewer_html_file(
         compiled_experiment.schedule, name, filename
     )
     return ipd.FileLink(filename)

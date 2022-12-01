@@ -3,10 +3,10 @@ instrument_list:
   - address: DEV8XXX
     uid: device_hdawg
   SHFSG:
-  - address: DEV12XXX
+  - address: DEV12XX1
     uid: device_shfsg
   SHFQA:
-   - address: DEV12XXX
+   - address: DEV12XX2
      uid: device_shfqa
   PQSC:
    - address: DEV10XXX

@@ -31,6 +31,12 @@ class DeviceSHFSG(DeviceZI):
         self._wait_for_AWGs = True
         self._emit_trigger = False
 
+    @property
+    def dev_repr(self) -> str:
+        if self._get_option("is_qc"):
+            return f"SHFQC/SG:{self._get_option('serial')}"
+        return f"SHFSG:{self._get_option('serial')}"
+
     def _process_dev_opts(self):
         if self.dev_type == "SHFSG8":
             self._channels = 8
@@ -39,9 +45,24 @@ class DeviceSHFSG(DeviceZI):
             self._channels = 4
             self._output_to_synth_map = [0, 1, 2, 3]
         elif self.dev_type == "SHFQC":
-            self._channels = 6
             # Different numbering on SHFQC - index 0 are QA synths
-            self._output_to_synth_map = [1, 1, 2, 2, 3, 3]
+            if "QC2CH" in self.dev_opts:
+                self._channels = 2
+                self._output_to_synth_map = [1, 1]
+            elif "QC4CH" in self.dev_opts:
+                self._channels = 4
+                self._output_to_synth_map = [1, 1, 2, 2]
+            elif "QC6CH" in self.dev_opts:
+                self._channels = 6
+                self._output_to_synth_map = [1, 1, 2, 2, 3, 3]
+            else:
+                self._logger.warning(
+                    "%s: No valid channel option found, installed options: [%s]. Assuming 2ch device.",
+                    self.dev_repr,
+                    ", ".join(self.dev_opts),
+                )
+                self._channels = 2
+                self._output_to_synth_map = [1, 1]
         else:
             self._logger.warning(
                 "%s: Unknown device type '%s', assuming SHFSG4 device.",
@@ -49,6 +70,7 @@ class DeviceSHFSG(DeviceZI):
                 self.dev_type,
             )
             self._channels = 4
+            self._output_to_synth_map = [0, 1, 2, 3]
 
     def _get_sequencer_type(self) -> str:
         return "sg"
@@ -71,6 +93,12 @@ class DeviceSHFSG(DeviceZI):
             [-30, -25, -20, -15, -10, -5, 0, 5, 10], dtype=numpy.float64
         )
         label = "Output"
+
+        if io.range_unit not in (None, "dBm"):
+            raise LabOneQControllerException(
+                f"{label} range of device {self.dev_repr} is specified in "
+                f"units of {io.range_unit}. Units must be 'dBm'."
+            )
         if not any(numpy.isclose([io.range] * len(range_list), range_list)):
             self._logger.warning(
                 "%s: %s channel %d range %.1f is not on the list of allowed ranges: %s. Nearest allowed range will be used.",
@@ -252,6 +280,10 @@ class DeviceSHFSG(DeviceZI):
         center_frequencies: Dict[int, IO.Data] = {}
 
         def get_synth_idx(io: IO.Data):
+            if io.channel >= self._channels:
+                raise LabOneQControllerException(
+                    f"{self.dev_repr}: Attempt to configure channel {io.channel + 1} on a device with {self._channels} channels. Verify your device setup."
+                )
             synth_idx = self._output_to_synth_map[io.channel]
             prev_io = center_frequencies.get(synth_idx)
             if prev_io is None:

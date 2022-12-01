@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
-import json
+from typing import Dict
+
+import orjson
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.serialization.simple_serialization import (
@@ -61,8 +63,9 @@ class Serializer:
 
     @staticmethod
     def to_json(serializable_object) -> str:
+        options = orjson.OPT_SORT_KEYS | orjson.OPT_SERIALIZE_NUMPY
         if isinstance(serializable_object, dict):
-            json_dump = json.dumps(serializable_object, sort_keys=True)
+            json_dump = orjson.dumps(serializable_object, option=options)
         else:
 
             entity_classes, entity_mapper = Serializer._entity_config()
@@ -70,16 +73,15 @@ class Serializer:
             json_struct = serialize_to_dict_with_ref(
                 serializable_object, entity_classes, entity_mapper, emit_enum_types=True
             )
-            json_dump = json.dumps(json_struct, sort_keys=True)
-        return json_dump
+            json_dump = orjson.dumps(json_struct, option=options)
+        return json_dump.decode()
 
     @staticmethod
-    def to_dict(serializable_object) -> str:
+    def to_dict(serializable_object) -> Dict:
         entity_classes, entity_mapper = Serializer._entity_config()
-        json_dump = serialize_to_dict_with_ref(
+        return serialize_to_dict_with_ref(
             serializable_object, entity_classes, entity_mapper, emit_enum_types=True
         )
-        return json_dump
 
     @staticmethod
     def to_json_file(serializable_object, filename: str):
@@ -116,10 +118,10 @@ class Serializer:
     @staticmethod
     def from_json(serialized_string: str, type_hint):
         if type_hint is dict:
-            obj = json.loads(serialized_string)
+            obj = orjson.loads(serialized_string)
         else:
             entity_classes, entity_mapper = Serializer._entity_config()
-            serialized_form = json.loads(serialized_string)
+            serialized_form = orjson.loads(serialized_string)
 
             obj = deserialize_from_dict_with_ref(
                 serialized_form,

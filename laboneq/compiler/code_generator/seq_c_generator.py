@@ -149,11 +149,12 @@ class SeqCGenerator:
             }
         )
 
-    def add_command_table_execution(self, ct_index, comment=""):
+    def add_command_table_execution(self, ct_index, latency, comment=""):
         self.add_statement(
             {
                 "type": "executeTableEntry",
                 "table_index": ct_index,
+                "latency": latency,
                 "comment": comment,
             }
         )
@@ -256,7 +257,11 @@ class SeqCGenerator:
             wave_channels = self._build_wave_channel_assignment(statement)
             self._seq_c_text += f"playWave({wave_channels});\n"
         elif statement["type"] == "executeTableEntry":
-            self._seq_c_text += f"executeTableEntry({statement['table_index']});"
+            self._seq_c_text += f"executeTableEntry({statement['table_index']}"
+            latency = statement.get("latency", None)
+            if latency is not None:
+                self._seq_c_text += f", {latency}"
+            self._seq_c_text += ");"
             if statement["comment"] != "":
                 self._seq_c_text += f"  // {statement['comment']}"
             self._seq_c_text += "\n"
@@ -271,7 +276,7 @@ class SeqCGenerator:
     def _gen_play_zero(self, num_samples, max_play_zero):
         seq_c_text = ""
         _logger.debug(
-            "\n\nGenerating play zero for  num_samples %d max_play_zero %d ",
+            "Generating play zero for num_samples %d max_play_zero %d",
             num_samples,
             max_play_zero,
         )

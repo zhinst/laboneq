@@ -1,55 +1,64 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Callable, Dict, List, Tuple
+from typing import Dict, List
 
 import numpy as np
 from laboneq.core.types.compiled_experiment import CompiledExperiment
-from laboneq.simulator.seqc_parser import SeqCMetadata, SimpleRuntime, _analyze_compiled
+from laboneq.simulator.seqc_parser import (
+    SeqCDescriptor,
+    SeqCSimulation,
+    SimpleRuntime,
+    _analyze_compiled,
+)
 from laboneq.simulator.seqc_parser import run_single_source as run_single_source_impl
 from laboneq.simulator.seqc_parser import simulate
-from laboneq.simulator.wave_scroller import WaveScroller
+from laboneq.simulator.wave_scroller import WaveScroller, SimTarget
 
 
-def _get_channel_mapping(
-    device_type: str, channels: List[int]
-) -> List[Tuple[str, int, Callable, bool]]:
+@dataclass
+class ChannelInfo:
+    name: str
+    ch: int
+    target: SimTarget
+
+
+def _get_channel_mapping(device_type: str, channels: List[int]) -> List[ChannelInfo]:
     # output key, channel, wave getter, True if output port delay applicable
-    channel_mapping: List[Tuple[str, int, Callable, bool]] = []
+    channel_mapping: List[ChannelInfo] = []
     if device_type != "SHFQA":
         for ch, i in enumerate(channels):
-            channel_mapping.append((f"{i}", ch, WaveScroller.get_play_snippet, True))
+            channel_mapping.append(ChannelInfo(f"{i}", ch, SimTarget.PLAY))
 
     if device_type == "UHFQA":
-        channel_mapping.append(
-            ("QAResult", 0xFFFF, WaveScroller.get_acquire_snippet, False)
-        )
+        channel_mapping.append(ChannelInfo("QAResult", -1, SimTarget.ACQUIRE))
 
     if device_type == "SHFQA":
         channel_mapping = [
-            ("0", 0, WaveScroller.get_play_snippet, True),
-            ("1", 1, WaveScroller.get_play_snippet, True),
-            ("QAResult", 0xFFFF, WaveScroller.get_acquire_snippet, False),
-            ("QAResult_0", 0x0001, WaveScroller.get_acquire_snippet, False),
-            ("QAResult_1", 0x0002, WaveScroller.get_acquire_snippet, False),
-            ("osc0_freq", 0, WaveScroller.get_freq_snippet, True),
+            ChannelInfo("0", 0, SimTarget.PLAY),
+            ChannelInfo("1", 1, SimTarget.PLAY),
+            ChannelInfo("QAResult", -1, SimTarget.ACQUIRE),
+            ChannelInfo("QAResult_0", 0, SimTarget.ACQUIRE),
+            ChannelInfo("QAResult_1", 1, SimTarget.ACQUIRE),
+            ChannelInfo("osc0_freq", 0, SimTarget.FREQUENCY),
         ]
 
     if device_type == "SHFSG":
         channel_mapping = [
-            (f"{channels[0]}_I", 0, WaveScroller.get_play_snippet, True),
-            (f"{channels[0]}_Q", 1, WaveScroller.get_play_snippet, True),
-            ("osc0_freq", 0, WaveScroller.get_freq_snippet, True),
+            ChannelInfo(f"{channels[0]}_I", 0, SimTarget.PLAY),
+            ChannelInfo(f"{channels[0]}_Q", 1, SimTarget.PLAY),
+            ChannelInfo("osc0_freq", 0, SimTarget.FREQUENCY),
         ]
 
-    channel_mapping.append(("trigger", 0, WaveScroller.get_trigger_snippet, False))
+    channel_mapping.append(ChannelInfo("trigger", 0, SimTarget.TRIGGER))
 
     return channel_mapping
 
 
 def _build_compatibility_output(
-    ws: WaveScroller, seqc_descriptor: SeqCMetadata
+    seqc_descriptor: SeqCDescriptor, sim: SeqCSimulation
 ) -> SimpleNamespace:
     channel_mapping = _get_channel_mapping(
         seqc_descriptor.device_type, seqc_descriptor.channels
@@ -57,17 +66,24 @@ def _build_compatibility_output(
     output = {}
     times = {}
     times_at_port = {}
-    for (ch_out, ch, getter, is_out) in channel_mapping:
-        time, wave = getter(
-            ws,
-            start_secs=-0.5,
-            length_secs=1,
-            prog=seqc_descriptor.name,
-            ch=ch,
+    for ch_info in channel_mapping:
+        ws = WaveScroller(
+            ch=[ch_info.ch],
+            sim_targets=ch_info.target,
+            sim=sim,
         )
-        output[ch_out] = wave
-        times[ch_out] = time - (seqc_descriptor.output_port_delay if is_out else 0.0)
-        times_at_port[ch_out] = time
+        ws.calc_snippet(-0.5, 1)
+        output[ch_info.name] = {
+            SimTarget.PLAY: ws.wave_snippet,
+            SimTarget.ACQUIRE: ws.acquire_snippet,
+            SimTarget.TRIGGER: ws.trigger_snippet,
+            SimTarget.FREQUENCY: ws.frequency_snippet,
+        }[ch_info.target]
+
+        times[ch_info.name] = ws.time_axis - (
+            seqc_descriptor.output_port_delay if ws.is_output() else 0.0
+        )
+        times_at_port[ch_info.name] = ws.time_axis
     return SimpleNamespace(
         device_uid=seqc_descriptor.device_uid,
         awg_index=seqc_descriptor.awg_index,
@@ -78,23 +94,23 @@ def _build_compatibility_output(
     )
 
 
-def run_single_source(descriptor: SeqCMetadata, waves, max_time, scale_factor):
+def run_single_source(descriptor: SeqCDescriptor, waves, max_time, scale_factor):
     core_simulation = run_single_source_impl(descriptor, waves, max_time)
-    ws = WaveScroller({descriptor.name: core_simulation})
-    return _build_compatibility_output(ws, descriptor)
+    return _build_compatibility_output(descriptor, core_simulation)
 
 
 def analyze_compiler_output_memory(
     compiled: CompiledExperiment, max_time=None, scale_factors=None
 ):
     seqc_descriptors, _ = _analyze_compiled(compiled)
-    simulation = simulate(compiled, max_time=max_time)
-    ws = WaveScroller(simulation)
+    simulations = simulate(compiled, max_time=max_time)
 
     simulated_waves = {}
-    for core_id in simulation.keys():
+    for core_id, core_simulation in simulations.items():
         seqc_descriptor = next(d for d in seqc_descriptors if d.name == core_id)
-        simulated_waves[core_id] = _build_compatibility_output(ws, seqc_descriptor)
+        simulated_waves[core_id] = _build_compatibility_output(
+            seqc_descriptor, core_simulation
+        )
 
     return simulated_waves
 

@@ -22,6 +22,10 @@
       stroke-width: 4px;
     }
 
+    .cycle {
+      fill: red;
+    }
+
     .link_text text {
       font-family: sans-serif;
       font-size: 14px;
@@ -317,7 +321,7 @@
             }
             angle = angle / Math.PI;
             angle = angle*angle*angle;
-            
+
             if(isNaN(angle)) {
               continue;
             } else {
@@ -333,9 +337,9 @@
             node1.vx += force_dir_1.x;
             node1.vy += force_dir_1.y;
             node2.vx += force_dir_2.x;
-            node2.vy += force_dir_2.y;            
+            node2.vy += force_dir_2.y;
             node.vx += - force_dir_1.x - force_dir_2.x ;
-            node.vx += - force_dir_2.x - force_dir_2.x ;            
+            node.vx += - force_dir_2.x - force_dir_2.x ;
 
           }
         }
@@ -350,7 +354,7 @@
       simulation.force("straightener", link_straighten_2);
 
       simulation.force("collision", d3.forceCollide().strength(0.1).radius(function (d) { return d.node_type == "node" ? nodeRadius * 3 : nodeRadius * 3; }));
-      
+
 
       function border_repulsion(alpha) {
         var strength = 1;
@@ -368,7 +372,7 @@
           if (node.x > (width - border)) {
             force_x = -(node.x - width + border);
           }
-          if (node.y < border) {            
+          if (node.y < border) {
             force_y = -(node.y - border) * strength;
           }
           if (node.y > (height - border)) {
@@ -469,7 +473,8 @@
 
         link_text
           .attr("x", function (d) { return d.x; })
-          .attr("y", function (d) { return d.y; });
+          .attr("y", function (d) { return d.y; })
+          .classed("cycle",function (d) { return d.cycle > 0; });
 
         incoming_markers.attr("points", function (d) {
           let delta = Victor(d.source.x, d.source.y);

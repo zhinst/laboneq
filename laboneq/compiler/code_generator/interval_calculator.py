@@ -3,7 +3,7 @@
 
 import dataclasses
 import logging
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Iterable
 
 from intervaltree import IntervalTree, Interval
 
@@ -147,6 +147,7 @@ def calculate_intervals(
     play_wave_max_hint: int,
     cut_points: List[int],
     granularity: int = 16,
+    force_command_table_intervals: Iterable[MutableInterval] = {},
 ):
     """
     Compute intervals (corresponding to eventual playWave statements in the code) from
@@ -163,6 +164,9 @@ def calculate_intervals(
             (pass 0 to ignore)
         cut_points: Timestamps of events that (probably) emit code. A merged waveform
             must not span across a cut point.
+        force_command_table_intervals: A collection of intervals for which all pulses
+            must be merged to one interval because they are played as a single command
+            table entry.
         granularity: The waveform granularity of the hardware, i.e. waveform lengths
             must be a multiple of this number.
 
@@ -200,6 +204,8 @@ def calculate_intervals(
     assert min_play_wave % granularity == 0
     assert play_wave_max_hint % granularity == 0
     assert play_wave_size_hint % granularity == 0
+    for interval in force_command_table_intervals:
+        assert min_play_wave <= interval.end - interval.begin
     assert are_cut_points_valid(interval_tree, cut_points)
     assert all(
         iv.end <= cut_points[-1] for iv in interval_tree
@@ -225,8 +231,12 @@ def calculate_intervals(
     ]
 
     retval = IntervalTree()
+    command_table_intervals = set(
+        (m.begin, m.end) for m in force_command_table_intervals
+    )
 
     for cut_interval in cut_intervals:
+
         # We may merge intervals inside this chunk, but they must not extend past it.
         chunk = [
             MutableInterval(i.begin, i.end, i.data)
@@ -239,8 +249,13 @@ def calculate_intervals(
             # Need playback, but can't fit a single waveform? Not happening!
             raise MinimumWaveformLengthViolation
 
-        chunk = _pass_left_to_right(chunk, cut_interval, min_play_wave, min_play_wave)
-        chunk = _pass_right_to_left(chunk, cut_interval, min_play_wave, min_play_wave)
+        mpw = (
+            (cut_interval.end - cut_interval.begin)
+            if (cut_interval.begin, cut_interval.end) in command_table_intervals
+            else min_play_wave
+        )
+        chunk = _pass_left_to_right(chunk, cut_interval, mpw, mpw)
+        chunk = _pass_right_to_left(chunk, cut_interval, mpw, mpw)
         chunk = _pass_left_to_right(
             chunk,
             cut_interval,
