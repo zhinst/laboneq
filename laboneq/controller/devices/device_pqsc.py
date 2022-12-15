@@ -10,7 +10,7 @@ from laboneq.controller.devices.zi_node_monitor import (
 )
 from laboneq.controller.recipe_1_4_0 import Initialization
 
-from laboneq.controller.recipe_processor import DeviceRecipeData
+from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.controller.devices.device_zi import DeviceZI
 
 from laboneq.controller.communication import (
@@ -87,7 +87,9 @@ class DevicePQSC(DeviceZI):
     ) -> Dict[str, Any]:
         return {f"/{self.serial}/execution/enable": 0}
 
-    def collect_trigger_configuration_nodes(self, initialization: Initialization.Data):
+    def collect_trigger_configuration_nodes(
+        self, initialization: Initialization.Data, recipe_data: RecipeData
+    ):
         # Ensure ZSync links are established
         # TODO(2K): This is rather a hotfix, waiting to be done in parallel for all devices with subscription / poll
         # TODO(2K): Verify also the downlink device serial (.../connection/serial) matches

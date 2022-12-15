@@ -17,7 +17,6 @@ requirements = [
     "marshmallow_enum",
     "marshmallow_union",
     "matplotlib",
-    "networkx",
     "numpy",
     "orjson",
     "python-box",

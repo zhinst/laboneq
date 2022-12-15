@@ -548,7 +548,9 @@ class DeviceUHFQA(DeviceZI):
 
         return nodes_to_initialize_measurement
 
-    def collect_trigger_configuration_nodes(self, initialization: Initialization.Data):
+    def collect_trigger_configuration_nodes(
+        self, initialization: Initialization.Data, recipe_data: RecipeData
+    ):
         self._logger.debug("Configuring triggers...")
         self._logger.debug("Configuring strobe index: 16.")
         self._logger.debug("Configuring strobe slope: 0.")

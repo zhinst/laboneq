@@ -333,7 +333,9 @@ class DeviceSHFSG(DeviceZI):
 
         return nodes_to_initialize_measurement
 
-    def collect_trigger_configuration_nodes(self, initialization: Initialization.Data):
+    def collect_trigger_configuration_nodes(
+        self, initialization: Initialization.Data, recipe_data: RecipeData
+    ):
         self._logger.debug("Configuring triggers...")
         self._wait_for_AWGs = True
         self._emit_trigger = False
@@ -372,13 +374,49 @@ class DeviceSHFSG(DeviceZI):
                     # Internal trigger
                     (f"sgchannels/{awg_index}/awg/auxtriggers/0/channel", 8),
                 ]
-                if self._get_option("qc_with_qa"):
-                    ntc += [
-                        # Internal feedback
-                        (f"sgchannels/{awg_index}/awg/intfeedback/direct/shift", 0),
-                        (f"sgchannels/{awg_index}/awg/intfeedback/direct/mask", 0b1),
-                        (f"sgchannels/{awg_index}/awg/intfeedback/direct/offset", 0),
-                    ]
+                if initialization.awgs is not None and self._get_option("qc_with_qa"):
+                    awg = next(
+                        (awg for awg in initialization.awgs if awg.awg == awg_index),
+                        None,
+                    )
+                    if (
+                        awg is not None
+                        and awg.qa_signal_id is not None
+                        and awg.command_table_match_offset is not None
+                    ):
+                        # Internal feedback requested in the recipe
+                        matching_integrator = next(
+                            (
+                                i
+                                for i in recipe_data.recipe.experiment.integrator_allocations
+                                if i.signal_id == awg.qa_signal_id
+                            ),
+                            None,
+                        )
+                        if (
+                            matching_integrator is None
+                            or len(matching_integrator.channels) != 1
+                        ):
+                            raise LabOneQControllerException(
+                                f"{self.dev_repr}: Internal error - can't find integrator config for mapped QA signal {awg.qa_signal_id}, that is suitable for the feedback configuration."
+                            )
+
+                        shift = matching_integrator.channels[0]
+                        offset = awg.command_table_match_offset
+                        ntc += [
+                            (
+                                f"sgchannels/{awg_index}/awg/intfeedback/direct/shift",
+                                shift,
+                            ),
+                            (
+                                f"sgchannels/{awg_index}/awg/intfeedback/direct/mask",
+                                0b1,
+                            ),
+                            (
+                                f"sgchannels/{awg_index}/awg/intfeedback/direct/offset",
+                                offset,
+                            ),
+                        ]
 
             nodes_to_configure_triggers = [
                 DaqNodeSetAction(self._daq, f"/{self.serial}/{node}", v)

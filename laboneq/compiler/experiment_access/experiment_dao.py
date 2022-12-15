@@ -209,6 +209,7 @@ class ExperimentDAO:
                 "device_id": device_id,
                 "connection_type": connection_type,
                 "channels": channels,
+                "voltage_offset": None,
                 "mixer_calibration": None,
                 "precompensation": None,
                 "lo_frequency": None,
@@ -350,6 +351,10 @@ class ExperimentDAO:
         self._data["signal_connection"] = []
         for connection in experiment["signal_connections"]:
             try:
+                voltage_offset = copy.deepcopy(connection["voltage_offset"])
+            except KeyError:
+                voltage_offset = None
+            try:
                 mixer_calibration = copy.deepcopy(connection["mixer_calibration"])
             except KeyError:
                 mixer_calibration = None
@@ -369,6 +374,7 @@ class ExperimentDAO:
                     "device_id": connection["device"]["$ref"],
                     "connection_type": connection["connection"]["type"],
                     "channels": connection["connection"]["channels"],
+                    "voltage_offset": voltage_offset,
                     "mixer_calibration": mixer_calibration,
                     "precompensation": precompensation,
                     "lo_frequency": lo_frequency,
@@ -692,6 +698,8 @@ class ExperimentDAO:
         }
 
     def device_types_in_section(self, section_id):
+        if self.is_branch(section_id):
+            return self.device_types_in_section(self.section_parent(section_id))
         retval = set()
         section_with_children = self.all_section_children(section_id)
         section_with_children.add(section_id)
@@ -751,7 +759,7 @@ class ExperimentDAO:
     def root_sections(self):
         return self._root_section_ids
 
-    def direct_section_children(self, section_id):
+    def direct_section_children(self, section_id) -> List[str]:
         return [
             t["child_section_id"]
             for t in self._data["section_tree"]
@@ -777,6 +785,9 @@ class ExperimentDAO:
             )["parent_section_id"]
         except StopIteration:
             return None
+
+    def is_branch(self, section_id):
+        return self._data["section"][section_id].state is not None
 
     def pqscs(self):
         return [p[0] for p in self._data["pqsc_port"]]
@@ -890,6 +901,11 @@ class ExperimentDAO:
             )
 
         return retval[0] if len(retval) > 0 else None
+
+    def voltage_offset(self, signal_id):
+        return next(
+            sc for sc in self._data["signal_connection"] if sc["signal_id"] == signal_id
+        )["voltage_offset"]
 
     def mixer_calibration(self, signal_id):
         return next(
@@ -1146,6 +1162,10 @@ class ExperimentDAO:
                     "channels": signal_info.channels,
                 },
             }
+
+            voltage_offset = experiment_dao.voltage_offset(signal_info.signal_id)
+            if voltage_offset is not None:
+                signal_connection["voltage_offset"] = voltage_offset
 
             mixer_calibration = experiment_dao.mixer_calibration(signal_info.signal_id)
             if mixer_calibration is not None:
@@ -1423,6 +1443,7 @@ class ExperimentDAO:
 
         ls_map = {}
         modulated_paths = {}
+        ls_voltage_offsets = {}
         ls_mixer_calibrations = {}
         ls_precompensations = {}
         ls_lo_frequencies = {}
@@ -1565,6 +1586,10 @@ class ExperimentDAO:
                                 raise Exception(
                                     f"Duplicate oscillator uid {oscillator_uid} found in {ls.path}"
                                 )
+                try:
+                    ls_voltage_offsets[ls.path] = calibration.voltage_offset
+                except AttributeError:
+                    pass
                 try:
                     ls_mixer_calibrations[ls.path] = {
                         "voltage_offsets": calibration.mixer_calibration.voltage_offsets,
@@ -1722,6 +1747,7 @@ class ExperimentDAO:
                     "device_id": dest_path_devices[lsuid]["device"],
                     "connection_type": dest_path_devices[lsuid]["type"],
                     "channels": channels,
+                    "voltage_offset": ls_voltage_offsets.get(lsuid),
                     "mixer_calibration": ls_mixer_calibrations.get(lsuid),
                     "precompensation": ls_precompensations.get(lsuid),
                     "lo_frequency": ls_lo_frequencies.get(lsuid),
@@ -1930,6 +1956,10 @@ class ExperimentDAO:
                     count = parameter.count
                 elif hasattr(parameter, "values"):
                     count = len(parameter.values)
+                if count < 1:
+                    raise Exception(
+                        f"Repeat count must be at least 1, but section {section.uid} has count={count}"
+                    )
 
         execution_type = None
         if section.execution_type is not None:

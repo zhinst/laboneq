@@ -18,11 +18,13 @@ import numpy as np
 from engineering_notation import EngNumber
 from sortedcollections import ValueSortedDict
 from sortedcontainers import SortedDict
+from collections import OrderedDict
 
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.core.exceptions import LabOneQException
 from laboneq.compiler.scheduler.event_graph import EventGraph, EventRelation, node_info
 from laboneq.compiler.common.event_type import EventType
+from laboneq.compiler.common.play_wave_type import PlayWaveType
 from laboneq.compiler.scheduler.event_graph_builder import (
     EventGraphBuilder,
     ChainElement,
@@ -43,14 +45,13 @@ class _PlayWave:
     length: float = None
     offset: Any = None
     amplitude: Any = None
-    is_integration: bool = False
     parameterized_with: list = field(default_factory=list)
     acquire_handle: str = None
     acquisition_type: list = field(default_factory=list)
     phase: float = None
     increment_oscillator_phase: float = None
     set_oscillator_phase: float = None
-    is_delay: bool = False
+    play_wave_type: PlayWaveType = PlayWaveType.PLAY
     pulse_parameters: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -188,6 +189,12 @@ class Scheduler:
 
                 is_integration = signal_info_main.signal_type == "integration"
 
+                device_id = signal_info_main.device_id
+
+                sampling_rate = self._sampling_rate_tracker.sampling_rate_for_device(
+                    device_id
+                )
+
                 suppress_offset_indices = []
 
                 section_offset = section_info.offset
@@ -219,11 +226,21 @@ class Scheduler:
                         id="spectroscopy_" + signal_id,
                         signal=signal_id,
                         acquisition_type=["spectroscopy"],
+                        play_wave_type=PlayWaveType.INTEGRATION,
                     )
-                    play_wave.is_integration = True
                     play_wave_chain.append(play_wave)
                     _logger.debug("Added play_wave=%s to play wave chain", play_wave)
 
+                if section_info.state is not None:
+                    # Add an additional anchor to time the executeTableEntry evaluation:
+                    play_wave_chain.append(
+                        _PlayWave(
+                            id="CASE_EVALUATION",
+                            signal=signal_id,
+                            play_wave_type=PlayWaveType.CASE_EVALUATION,
+                            offset=32 / sampling_rate,
+                        )
+                    )
                 for pulse_index, section_pulse in enumerate(
                     self._experiment_dao.section_pulses(
                         section_info.section_display_name, signal_id
@@ -233,22 +250,23 @@ class Scheduler:
                     pulse_def = None
                     if pulse_name is not None:
                         pulse_def = self._experiment_dao.pulse(pulse_name)
-                        play_wave = _PlayWave(id=pulse_name, signal=signal_id)
-                    else:
-                        pulse_name = "DELAY"
                         play_wave = _PlayWave(
-                            id=pulse_name, signal=signal_id, is_delay=True
+                            id=pulse_name,
+                            signal=signal_id,
+                            play_wave_type=PlayWaveType.INTEGRATION
+                            if is_integration
+                            else PlayWaveType.PLAY,
+                        )
+                    else:
+                        play_wave = _PlayWave(
+                            id="DELAY",
+                            signal=signal_id,
+                            play_wave_type=PlayWaveType.DELAY,
                         )
 
                     assert signal_id == signal_info_main.signal_id
 
-                    device_id = signal_info_main.device_id
-
-                    sampling_rate = (
-                        self._sampling_rate_tracker.sampling_rate_for_device(device_id)
-                    )
                     length = PulseDef.effective_length(pulse_def, sampling_rate)
-                    play_wave.is_integration = is_integration
 
                     play_wave.parameterized_with = []
                     _set_playwave_resolved_param(section_pulse, play_wave, "offset")
@@ -299,14 +317,25 @@ class Scheduler:
                 # This is an empty branch of a feedback, but we still want to create
                 # events such that we can play zeros during the duration of that event
                 # via the command table - it needs an entry even when nothing is played.
+
+                signal_info_main = self._experiment_dao.signal_info(signal_id)
+                sampling_rate = self._sampling_rate_tracker.sampling_rate_for_device(
+                    signal_info_main.device_id
+                )
+                timing_anchor = _PlayWave(
+                    id="CASE_EVALUATION",
+                    signal=signal_id,
+                    play_wave_type=PlayWaveType.CASE_EVALUATION,
+                    offset=32 / sampling_rate,
+                )
                 play_zeros = _PlayWave(
                     id="EMPTY_MATCH_CASE_DELAY",
-                    is_delay=True,
+                    play_wave_type=PlayWaveType.EMPTY_CASE,
                     signal=signal,
                     length=1e-9,
                 )
                 self.add_play_wave_chain(
-                    [play_zeros],
+                    [timing_anchor, play_zeros],
                     parent_section_name=empty_section,
                     right_aligned=False,
                     section_start_node=parent[1],
@@ -363,6 +392,8 @@ class Scheduler:
         )
         self.generate_loop_events(repeat_sections)
         self._add_repetition_time_edges()
+        self._sorted_events = self._event_graph.sorted_events()
+        self._add_feedback_time_edges()
         self.calculate_timing()
         self.verify_timing()
         _logger.debug("Calculating play wave parameters")
@@ -634,6 +665,78 @@ class Scheduler:
                 repetition_time = repetition_mode_info.get("repetition_time")
                 if repetition_time is not None:
                     self._add_repetition_time_edges_for(section, repetition_time)
+
+    def _add_feedback_time_edges(self):
+        @dataclass
+        class AcquiresMatches:
+            acquire_node_id: Optional[int] = None
+            match_node_ids: List[int] = field(default_factory=list)
+            local: bool = False
+
+        event_graph_modified = False
+        acquires = OrderedDict()
+        signals_to_handles = {}
+        for event_id in self._sorted_events:
+            event_data = self._event_graph.node(event_id)
+            event_type = event_data["event_type"]
+            if event_type == "ACQUIRE_START":
+                handle = event_data["acquire_handle"]
+                signal = event_data["signal"]
+                signals_to_handles[signal] = handle
+                acquires.setdefault(handle, []).append(AcquiresMatches())
+            elif event_type == "ACQUIRE_END":
+                try:
+                    handle = signals_to_handles[event_data["signal"]]
+                    last_acquire = acquires[handle][-1]
+                    assert last_acquire.acquire_node_id is None
+                    last_acquire.acquire_node_id = event_id
+                except KeyError:
+                    # Right aligned section - cannot schedule feedback. Error is handled
+                    # later
+                    pass
+            elif event_type == "SECTION_START":
+                handle = event_data.get("handle")
+                if handle is not None:
+                    try:
+                        last_acquire = acquires[handle][-1]
+                        last_acquire.match_node_ids.append(event_id)
+                        last_acquire.local = event_data["local"]
+                        if last_acquire.acquire_node_id is None:
+                            # Right aligned section - cannot schedule feedback.
+                            # Consider passing worst-case timing along for that case
+                            raise LabOneQException(
+                                "Could not compute match section timing "
+                                "- end of acquire came before start. Did you use "
+                                "right-alignment?"
+                            )
+
+                    except KeyError:
+                        raise LabOneQException(
+                            "No matching acquire found for handle %s; this "
+                            "can also happen if a match section is responding to a "
+                            "right-aligned acquire. "
+                        )
+
+        for acquires_per_handle in acquires.values():
+            for acquire in acquires_per_handle:
+                if acquire.match_node_ids:
+                    event_graph_modified = True
+                    for m in acquire.match_node_ids:
+                        # N.B.: Careful with very short delays, they are difficult to
+                        # represent with playZero/executeTableEntry; thus this delay
+                        # will be at least be 32 samples long
+                        #
+                        if acquire.local:
+                            # todo(JL): Proper timing model; but does it work for right alignment?
+                            timing = lambda _: 50e-9
+                        else:
+                            # todo(JL): Proper timing model; but does it work for right alignment?
+                            timing = lambda _: 500e-9
+                        self._event_graph.after_at_least(
+                            m, acquire.acquire_node_id, timing
+                        )
+        if event_graph_modified:
+            self._sorted_events = self._event_graph.sorted_events()
 
     @dataclass
     class RepeatSectionsEntry:
@@ -1290,7 +1393,7 @@ class Scheduler:
         signal = None
         for i, play_wave in enumerate(play_wave_list):
 
-            chain_element_id = parent_section_name + play_wave.id + str(i)
+            chain_element_id = parent_section_name + (play_wave.id or "") + str(i)
             default_attributes = {
                 "section_name": parent_section_name,
                 "signal": play_wave.signal,
@@ -1345,22 +1448,24 @@ class Scheduler:
                 chain_element_id,
                 attributes={**default_attributes, **{"play_wave_id": play_wave.id}},
                 start_attributes={},
+                end_attributes={},
             )
 
             is_match_case_empty_section = (
-                play_wave.is_delay and play_wave.id == "EMPTY_MATCH_CASE_DELAY"
+                play_wave.play_wave_type == PlayWaveType.EMPTY_CASE
             )
+            is_integration = play_wave.play_wave_type == PlayWaveType.INTEGRATION
             if (
                 play_wave.length is not None
-                or play_wave.is_integration
+                or is_integration
                 or is_match_case_empty_section
             ):
                 chain_element.start_type = EventType.PLAY_START
                 chain_element.end_type = EventType.PLAY_END
-                if play_wave.is_integration:
+                if is_integration:
                     chain_element.start_type = EventType.ACQUIRE_START
                     chain_element.end_type = EventType.ACQUIRE_END
-                if play_wave.is_delay:
+                elif play_wave.play_wave_type != PlayWaveType.PLAY:
                     chain_element.start_type = EventType.DELAY_START
                     chain_element.end_type = EventType.DELAY_END
 
@@ -1377,10 +1482,19 @@ class Scheduler:
                     "acquisition_type"
                 ] = play_wave.acquisition_type
                 chain_element.start_attributes[
+                    "play_wave_type"
+                ] = play_wave.play_wave_type.name
+                chain_element.end_attributes[
+                    "play_wave_type"
+                ] = play_wave.play_wave_type.name
+                chain_element.start_attributes[
                     "pulse_parameters"
                 ] = play_wave.pulse_parameters
                 if (
-                    not (play_wave.is_delay and play_wave.length is None)
+                    not (
+                        play_wave.play_wave_type == PlayWaveType.DELAY
+                        and play_wave.length is None
+                    )
                     or is_match_case_empty_section
                 ):
                     chain.append(chain_element)
@@ -1702,7 +1816,6 @@ class Scheduler:
     def calculate_timing(self):
         (
             event_times,
-            sorted_events,
             event_times_tiny_samples,
         ) = self._calculate_timing_for_graph(self._event_graph)
 
@@ -1788,7 +1901,6 @@ class Scheduler:
                 )
                 (
                     event_times,
-                    sorted_events,
                     event_times_tiny_samples,
                 ) = self._calculate_timing_for_graph(self._event_graph)
 
@@ -1797,7 +1909,7 @@ class Scheduler:
 
         self._event_timing = ValueSortedDict()
         sequence_nr = 0
-        for event_id in sorted_events:
+        for event_id in self._sorted_events:
             event_data = self._event_graph.node(event_id)
             event_data["sequence_nr"] = sequence_nr
             event_time = float(event_data["time"])
@@ -1825,11 +1937,9 @@ class Scheduler:
 
         TINYSAMPLE = self._settings.TINYSAMPLE
 
-        sorted_events = event_graph.sorted_events()
-
         iteration_ends = {}
 
-        for event_id in sorted_events:
+        for event_id in self._sorted_events:
             has_exactly_constraint = False
 
             event_data = event_graph.node(event_id)
@@ -1880,6 +1990,8 @@ class Scheduler:
                     delay_time = edge["delta"]
                     if isinstance(delay_time, ParamRef):
                         delay_time = parameter_value(delay_time.param_name, other_time)
+                    elif callable(delay_time):
+                        delay_time = delay_time(other_time * TINYSAMPLE)
 
                     # todo (Pol): this causes off-by-one errors!
                     delay_time_tinysamples = math.floor(delay_time / TINYSAMPLE)
@@ -1893,6 +2005,8 @@ class Scheduler:
                     delay_time = edge["delta"]
                     if isinstance(delay_time, ParamRef):
                         delay_time = parameter_value(delay_time.param_name, other_time)
+                    elif callable(delay_time):
+                        delay_time = delay_time(other_time * TINYSAMPLE)
                     # todo (Pol): is this intended behavior?
                     delay_time_tinysamples = math.floor(delay_time / TINYSAMPLE)
 
@@ -1907,6 +2021,8 @@ class Scheduler:
                     delay_time = edge["delta"]
                     if isinstance(delay_time, ParamRef):
                         delay_time = parameter_value(delay_time.param_name, other_time)
+                    elif callable(delay_time):
+                        delay_time = delay_time(other_time * TINYSAMPLE)
                     # todo (Pol): is this intended behavior?
                     delayed_event_time = other_time - math.floor(
                         delay_time / TINYSAMPLE
@@ -2081,7 +2197,7 @@ class Scheduler:
         for k in event_times.keys():
             event_times[k] = event_times[k] * TINYSAMPLE
 
-        return event_times, sorted_events, event_times_tiny_samples
+        return event_times, event_times_tiny_samples
 
     def verify_timing(self):
         TOLERANCE = 1e-11
@@ -2178,6 +2294,8 @@ class Scheduler:
                         else:
                             delta = parameter_values[param_name]
 
+                    elif callable(edge_data["delta"]):
+                        delta = edge_data["delta"](other_event["time"])
                     else:
                         delta = edge_data["delta"]
                 else:
@@ -2203,6 +2321,8 @@ class Scheduler:
                         )
 
                 elif relation == EventRelation.AFTER_AT_LEAST:
+                    if callable(delta):
+                        delta = delta(other_event["time"])
                     if not event["time"] >= other_event["time"] + delta - TOLERANCE:
                         add_issue(
                             relation,

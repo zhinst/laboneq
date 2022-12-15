@@ -1,6 +1,7 @@
 # Copyright 2020 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+import re
 from .util import LabOneQControllerException
 import logging
 import numpy as np
@@ -39,8 +40,14 @@ class Cache:
         self._log(f"{self.name}: set miss: {key} = {value}")
         return None
 
-    def force_set(self, key, value):
-        self._cache[key] = value
+    def force_set(self, key: str, value):
+        if "*" in key:
+            pattern = re.compile(key.replace("*", ".*"))
+            for k in self._cache:
+                if pattern.fullmatch(k):
+                    self._cache[k] = value
+        else:
+            self._cache[key] = value
         return value
 
     def invalidate(self):

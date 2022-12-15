@@ -153,6 +153,7 @@ class ZiApiWrapperBase(ABC):
                     continue
             else:
                 self._logger.debug("set not caching: %s", action.path)
+                self._node_cache_root.force_set(action.path, action.value)
 
             daq_actions_to_execute.append(action)
 

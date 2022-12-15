@@ -60,7 +60,7 @@ class _AWG_ID:
 
     def _decode_sgchannels(self, chs: List[str]):
         self.is_out = True
-        self.channels = [0]
+        self.channels = [0, 1]
         if self._is_qc():
             self.prog = f"seq_{self._dev_uid}_sg_{chs[0]}.seqc"
         else:

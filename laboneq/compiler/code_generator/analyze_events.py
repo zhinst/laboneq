@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import List, Any, Optional, Dict, Tuple, TYPE_CHECKING
 
 from engineering_notation import EngNumber
-from intervaltree import IntervalTree
+from intervaltree import IntervalTree, Interval
 from sortedcontainers import SortedDict
 
 from laboneq.compiler.common.awg_info import AWGInfo
@@ -29,6 +29,7 @@ from laboneq.compiler.code_generator.signatures import (
 from laboneq.compiler.code_generator.utils import normalize_phase
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.event_type import EventType
+from laboneq.compiler.common.play_wave_type import PlayWaveType
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.pulse_sampler import (
     length_to_samples,
@@ -286,7 +287,10 @@ def analyze_set_oscillator_times(
         range(len(iterations))
     )  # "iteration" values are unique, ordered, and numbered 0 .. N-1
     start_frequency = iterations[0]["value"]
-    step_frequency = iterations[1]["value"] - start_frequency
+    if len(iterations) > 1:
+        step_frequency = iterations[1]["value"] - start_frequency
+    else:
+        step_frequency = 0
 
     retval = SortedDict()
 
@@ -505,6 +509,8 @@ def analyze_play_wave_times(
     if sub_channel is not None:
         _logger.debug("Signal %s: using sub_channel = %s", signal_id, sub_channel)
 
+    cut_points = set()
+
     # For feedback, the pulses in the branches create a single waveform which spans
     # the whole duration of the section; also keep the state to be able to split
     # later
@@ -514,10 +520,17 @@ def analyze_play_wave_times(
         if ev["event_type"] == "SECTION_START":
             handle = ev.get("handle", None)
             if handle is not None:
+                begin = length_to_samples(ev["time"] + delay, sampling_rate)
+                # Add the command table interval boundaries as cut points
+                cut_points.add(begin)
+                begin += 32
+                cut_points.add(begin)
                 branching_intervals[ev["section_name"]] = MutableInterval(
-                    begin=length_to_samples(ev["time"] + delay, sampling_rate),
+                    # Add min_play_wave samples for executing executeTableEntry at the
+                    # right time; todo(JL): Use actual min_play_wave
+                    begin=begin,
                     end=None,
-                    data=handle,
+                    data=(handle, ev["local"]),
                 )
             else:
                 if "state" in ev:
@@ -525,7 +538,9 @@ def analyze_play_wave_times(
         if ev["event_type"] == "SECTION_END":
             if ev["section_name"] in branching_intervals:
                 iv = branching_intervals[ev["section_name"]]
-                iv.end = length_to_samples(ev["time"] + delay, sampling_rate)
+                end = length_to_samples(ev["time"] + delay, sampling_rate)
+                cut_points.add(end)
+                iv.end = end
                 if playwave_max_hint != 0 and iv.end - iv.begin > playwave_max_hint:
                     raise LabOneQException(
                         f"In section {ev['section_name']}, waveform length ls larger "
@@ -628,7 +643,8 @@ def analyze_play_wave_times(
                         for event in events
                         if (
                             event["event_type"] == "DELAY_START"
-                            and event.get("play_wave_id") == "EMPTY_MATCH_CASE_DELAY"
+                            and event.get("play_wave_type")
+                            == PlayWaveType.EMPTY_CASE.name
                         )
                         and event["signal"] == cur_signal_id
                         and states.get(event["section_name"], None) == state
@@ -642,9 +658,9 @@ def analyze_play_wave_times(
                         )
                         for event in events
                         if (
-                            event["event_type"] == "PLAY_END"
-                            or event["event_type"] == "DELAY_END"
-                            and event.get("play_wave_id") == "EMPTY_MATCH_CASE_DELAY"
+                            event["event_type"] == "DELAY_END"
+                            and event.get("play_wave_type")
+                            == PlayWaveType.EMPTY_CASE.name
                         )
                         and event["signal"] == cur_signal_id
                         and states.get(event["section_name"], None) == state
@@ -719,7 +735,6 @@ def analyze_play_wave_times(
 
     merge_dict_list(other_events, oscillator_switch_events)
 
-    cut_points = set()
     for event_time, other_event_list in other_events.items():
         intervals = [
             interval for interval in t.at(event_time) if interval.begin < event_time
@@ -755,11 +770,6 @@ def analyze_play_wave_times(
     for cp in cut_points:
         for iv in branching_intervals.values():
             assert not (iv.begin < cp < iv.end)
-
-    # Add the command table interval boundaries as cut points
-    for interval in branching_intervals.values():
-        cut_points.add(interval.begin)
-        cut_points.add(interval.end)
 
     cut_points = sorted(list(cut_points))
 
@@ -813,7 +823,8 @@ def analyze_play_wave_times(
             "start": interval.begin,
             "end": interval.end,
             "signature": "match",
-            "handle": interval.data,
+            "handle": interval.data[0],
+            "local": interval.data[1],
             "signal_id": signal_id,
             "section_name": section_name,
         }
@@ -846,7 +857,6 @@ def analyze_play_wave_times(
                 _logger.debug("Calculating looking at child %s", iv)
                 has_child = True
                 start = iv.begin - k.begin
-                end = iv.end - k.begin
                 float_phase = data.phase
                 if float_phase is not None:
                     float_phase = normalize_phase(float_phase)
@@ -878,9 +888,8 @@ def analyze_play_wave_times(
                 signature_pulses.append(
                     PulseSignature(
                         start=start,
-                        end=end,
                         pulse=data.pulse,
-                        pulse_samples=iv.length(),
+                        length=iv.length(),
                         amplitude=data.amplitude,
                         phase=int_phase,
                         oscillator_phase=int_oscillator_phase,
@@ -921,7 +930,7 @@ def analyze_play_wave_times(
     return interval_events
 
 
-def analyze_trigger_events(events: List[Dict], signal: SignalObj):
+def analyze_trigger_events(events: List[Dict], signal: SignalObj, loop_events):
     delay = signal.total_delay
     sampling_rate = signal.sampling_rate
     device_type = signal.awg.device_type
@@ -953,39 +962,67 @@ def analyze_trigger_events(events: List[Dict], signal: SignalObj):
             start["trigger_output"][signal.id]["state"],
         )
 
-    trigger_intervals.addi(
-        trigger_intervals.begin(), trigger_intervals.end() + 1, data=0
-    )
+    trigger_intervals.addi(0, trigger_intervals.end() + 1, data=0)
     trigger_intervals.split_overlaps()
     # In case of nested or overlapping triggers: OR the values
     trigger_intervals.merge_overlaps(
         data_reducer=lambda state1, state2: state1 | state2
     )
 
-    retval = SortedDict()
+    # We now have a set of disjoint ranges, so no point in sticking with the tree.
+    trigger_intervals_list = sorted(
+        trigger_intervals.all_intervals, key=lambda i: i.begin
+    )
 
-    if len(trigger_intervals) == 1 and next(iter(trigger_intervals)).data == 0:
-        # Triggers are not used at all
-        return retval
+    grouped = itertools.groupby(trigger_intervals_list, key=lambda i: i.data)
+    trigger_intervals_list = []
+    for val, group in grouped:
+        intervals = list(group)
+        trigger_intervals_list.append(
+            Interval(intervals[0].begin, intervals[-1].end, val)
+        )
 
     if device_type in (DeviceType.SHFQA, DeviceType.SHFSG):
-        for interval in trigger_intervals:
+        for interval in trigger_intervals_list:
             if interval.data > 1:
                 raise LabOneQException(
                     f"On device {device_type.value}, only a single trigger channel is "
                     f"available."
                 )
 
-    for interval in trigger_intervals:
-        add_to_dict_list(
-            retval,
-            interval.begin,
-            {
-                "start": interval.begin,
-                "signature": "trigger_output",
-                "state": interval.data,
-            },
-        )
+    retval = SortedDict()
+
+    if len(trigger_intervals_list) == 1 and trigger_intervals_list[0].data == 0:
+        # Triggers are not used at all
+        return retval
+
+    seq_trigger_events = {
+        interval.begin: {
+            "start": interval.begin,
+            "signature": "trigger_output",
+            "state": interval.data,
+        }
+        for interval in trigger_intervals_list[1:]
+    }
+
+    # When the trigger is raised at the end of the averaging loop (which is not
+    # unrolled), things get a bit dicey: the command to reset the trigger signal must
+    # be deferred to the next iteration. Which means that the very first iteration must
+    # already include this tigger reset, and that we must issue it again after the loop.
+    for time, event_list in loop_events.items():
+        if any(event["signature"] == "PUSH_LOOP" for event in event_list):
+            seq_trigger_events.setdefault(
+                time,
+                {
+                    "start": time,
+                    "signature": "trigger_output",
+                    "state": next(iter(trigger_intervals.at(time))).data,
+                },
+            )
+
+    for k, v in seq_trigger_events.items():
+        add_to_dict_list(retval, k, v)
+
     return retval
 
 

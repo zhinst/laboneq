@@ -16,6 +16,7 @@ class SignalCalibration(Observable):
     amplitude: Optional[float]
     delay_signal: Optional[float]
     local_oscillator: Optional[Oscillator]
+    voltage_offset: Optional[float]
     mixer_calibration: Optional[MixerCalibration]
     precompensation: Optional[Precompensation]
     oscillator: Optional[Oscillator]
@@ -29,6 +30,7 @@ class SignalCalibration(Observable):
         amplitude=None,
         delay_signal=None,
         local_oscillator=None,
+        voltage_offset=None,
         mixer_calibration=None,
         precompensation=None,
         oscillator=None,
@@ -41,6 +43,7 @@ class SignalCalibration(Observable):
         self.amplitude = amplitude
         self.delay_signal = delay_signal
         self.local_oscillator = local_oscillator
+        self.voltage_offset = voltage_offset
         self._mixer_calibration = mixer_calibration
         self._precompensation = precompensation
         self.oscillator = oscillator

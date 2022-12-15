@@ -177,6 +177,9 @@
         "connection": {
           "$ref": "#/definitions/channels-def"
         },
+        "voltage_offset": {
+          "type": "number"
+        },
         "mixer_calibration": {
           "description": "Mixer calibration of the IQ signal.",
           "properties": {

@@ -377,7 +377,9 @@ class DeviceHDAWG(DeviceZI):
     def command_table_path(self, awg_index: int) -> str:
         return f"/{self.serial}/awgs/{awg_index}/commandtable/"
 
-    def collect_trigger_configuration_nodes(self, initialization: Initialization.Data):
+    def collect_trigger_configuration_nodes(
+        self, initialization: Initialization.Data, recipe_data: RecipeData
+    ):
         self._logger.debug(
             "%s: Configuring trigger configuration nodes.", self.dev_repr
         )

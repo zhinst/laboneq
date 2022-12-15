@@ -29,8 +29,8 @@ def _get_channel_mapping(device_type: str, channels: List[int]) -> List[ChannelI
     # output key, channel, wave getter, True if output port delay applicable
     channel_mapping: List[ChannelInfo] = []
     if device_type != "SHFQA":
-        for ch, i in enumerate(channels):
-            channel_mapping.append(ChannelInfo(f"{i}", ch, SimTarget.PLAY))
+        for ch in channels:
+            channel_mapping.append(ChannelInfo(f"{ch+1}", ch, SimTarget.PLAY))
 
     if device_type == "UHFQA":
         channel_mapping.append(ChannelInfo("QAResult", -1, SimTarget.ACQUIRE))
@@ -47,8 +47,8 @@ def _get_channel_mapping(device_type: str, channels: List[int]) -> List[ChannelI
 
     if device_type == "SHFSG":
         channel_mapping = [
-            ChannelInfo(f"{channels[0]}_I", 0, SimTarget.PLAY),
-            ChannelInfo(f"{channels[0]}_Q", 1, SimTarget.PLAY),
+            ChannelInfo(f"{channels[0]+1}_I", 0, SimTarget.PLAY),
+            ChannelInfo(f"{channels[0]+1}_Q", 1, SimTarget.PLAY),
             ChannelInfo("osc0_freq", 0, SimTarget.FREQUENCY),
         ]
 

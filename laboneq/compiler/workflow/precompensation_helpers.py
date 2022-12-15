@@ -81,7 +81,7 @@ def _adapt_precompensations_of_awg(signal_ids, precompensations):
             if has_bounce and not new_pc.get("bounce"):
                 new_pc["bounce"] = {"delay": 10e-9, "amplitude": 0}
             if has_FIR and not new_pc.get("FIR"):
-                new_pc["FIR"] = {"coefficients": []}
+                new_pc["FIR"] = {"coefficients": [1.0]}
             precompensations[signal_id] = new_pc
 
 
@@ -273,7 +273,7 @@ def verify_exponential_filter_params(
     )
     if not math.isclose(
         timeconstant_clamped, timeconstant, rel_tol=0.001
-    ) or not math.isclose(amplitude_clamped, amplitude):
+    ) or not math.isclose(amplitude_clamped, amplitude, rel_tol=0.001):
         return (
             f"Exponential precompensation values of signal '{signal_id}' out of range; "
             f"they will be clamped to timeconstant={EngNumber(timeconstant_clamped, significant=4)}s, "

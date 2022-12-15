@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 import logging
 import time
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
 @dataclass
@@ -91,7 +91,7 @@ class NodeMonitor:
     def get_last(self, path: str) -> Optional[Any]:
         return self._get_node(path).get_last()
 
-    def check_last_for_conditions(self, conditions: Dict[str, Any]) -> bool:
+    def check_last_for_conditions(self, conditions: Dict[str, Any]) -> str:
         for path, expected in conditions.items():
             if path not in self._nodes:
                 self._log_missing_node(path)
@@ -100,10 +100,10 @@ class NodeMonitor:
             all_expected = expected if isinstance(expected, Iterable) else [expected]
             val = self.get_last(path)
             if val is None:
-                return False
+                return path
             if expected is not None and val not in all_expected:
-                return False
-        return True
+                return path
+        return None
 
     def poll_and_check_conditions(self, conditions: Dict[str, Any]) -> Dict[str, Any]:
         self.poll()
@@ -146,11 +146,12 @@ class ConditionsChecker(MultiDeviceHandlerBase):
     see AllRepliesWaiter for details.
     """
 
-    def check_all(self) -> bool:
+    def check_all(self) -> Tuple[str, Any]:
         for node_monitor, daq_conditions in self._conditions.items():
-            if not node_monitor.check_last_for_conditions(daq_conditions):
-                return False
-        return True
+            failed_path = node_monitor.check_last_for_conditions(daq_conditions)
+            if failed_path is not None:
+                return failed_path, daq_conditions[failed_path]
+        return None, None
 
 
 class ResponseWaiter(MultiDeviceHandlerBase):

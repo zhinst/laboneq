@@ -163,6 +163,17 @@ class ExperimentSignal:
             self.calibration.delay_signal = value
 
     @property
+    def voltage_offset(self):
+        return self.calibration.voltage_offset if self.is_calibrated() else None
+
+    @voltage_offset.setter
+    def voltage_offset(self, value):
+        if self.is_calibrated():
+            self.calibration.voltage_offset = value
+        else:
+            self.calibration = SignalCalibration(voltage_offset=value)
+
+    @property
     def voltage_offsets(self):
         return self.calibration.voltage_offsets if self.is_calibrated() else None
 

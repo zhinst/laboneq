@@ -334,6 +334,9 @@ class SimpleRuntime:
             "QA_INT_NONE": 0,
             "QA_GEN_ALL": 0b1111111111111111,
             "QA_GEN_NONE": 0,
+            "QA_DATA_PROCESSED": 0b1000000000100
+            if descriptor.device_type == "SHFSG"
+            else 0b10000000100,
         }
         self.exposedFunctions = {
             "assignWaveIndex": self.assignWaveIndex,
@@ -406,6 +409,9 @@ class SimpleRuntime:
         if known_length is not None:
             return
         for wave_name in wave_names:
+            if wave_name is None:
+                known_wave.wave_data_idx.append(None)
+                continue
             wave_to_play = self.waves[wave_name]
             if np.ndim(wave_to_play) == 1:
                 wave_len = len(wave_to_play)
@@ -490,13 +496,15 @@ class SimpleRuntime:
         wave_format = ".csv" if known_wave.assigned_index == -1 else ".wave"
 
         wave_names = []
+        # Supporting only combinations emitted by L1Q compiler, not any possible SeqC
         for arg in args:
             if isinstance(arg, str):
-                if arg == '""':
-                    continue  # handle instructions like `playWave(1, "", 2, w1);`
-                wave_names.append(arg.strip('"') + wave_format)
+                # handle also instructions like `playWave(1, "", 2, w1);`
+                wave_names.append(
+                    None if arg == '""' else (arg.strip('"') + wave_format)
+                )
 
-        if len(wave_names) == 0:
+        if not wave_names or wave_names == [None]:
             raise RuntimeError(f"Couldn't determine wave name(s) from {args}")
 
         self._append_wave_event(wave_names, known_wave)
@@ -513,12 +521,18 @@ class SimpleRuntime:
                 )
             )
 
-    def executeTableEntry(self, ct_index, latency=None):
+    def executeTableEntry(self, ct_index):
         wave_key = self._args2key(["ct", ct_index])
         known_wave = self.wave_lookup.get(wave_key)
         if known_wave is None:
             known_wave = WaveRefInfo()
             self.wave_lookup[wave_key] = known_wave
+
+        QA_DATA_PROCESSED_SG = 0b1000000000100
+        if ct_index == QA_DATA_PROCESSED_SG:
+            assert self.descriptor.device_type == "SHFSG"
+            # todo(JL): Find a better index via the command table offset; take last for now
+            ct_index = self.descriptor.command_table[-1]["index"]
 
         ct_entry = next(
             iter(i for i in self.descriptor.command_table if i["index"] == ct_index)
@@ -535,7 +549,6 @@ class SimpleRuntime:
 
         wave_names = [wave["wave_name"] + suffix + ".wave" for suffix in ("_i", "_q")]
 
-        # todo(JL): add latency
         self._append_wave_event(wave_names, known_wave)
 
     def startQA(self, *args):
@@ -769,12 +782,12 @@ def analyze_recipe(
                     ].output_port_delay += precompensation_delay
 
                 channels: List[int] = [
-                    output["channel"] + 1
+                    output["channel"]
                     for output in init["outputs"]
                     if output["channel"] in output_channels
                 ]
                 if len(channels) == 0:
-                    channels.append(1)
+                    channels.append(0)
                 outputs[seqc] = channels
 
                 awg_index += 1

@@ -21,6 +21,7 @@ PHYSICAL_CHANNEL_CALIBRATION_FIELDS = (
     "port_delay",
     "port_mode",
     "range",
+    "voltage_offset",
     "mixer_calibration",
     "precompensation",
 )

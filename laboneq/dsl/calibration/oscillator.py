@@ -23,6 +23,16 @@ def oscillator_uid_generator():
 
 @dataclass(init=True, repr=True, order=True)
 class Oscillator:
+    """
+    This oscillator class represents an oscillator on a Zurich Instruments device.
+
+    Args:
+        carrier_type (CarrierType): The carrier type, defaults to radio frequency (`CarrierType.RF`)
+        frequency (float): The frequency in units of Hz
+        modulation_type (ModulationType): The modulation type (`ModulationType.SOFTWARE` or `ModulationType.Hardware`).
+            The default `ModulationType.AUTO` currently falls back to `ModulationType.Software`.
+    """
+
     uid: str = field(default_factory=oscillator_uid_generator)
     carrier_type: CarrierType = field(default=CarrierType.RF)
     frequency: Union[float, Parameter] = field(default=None)

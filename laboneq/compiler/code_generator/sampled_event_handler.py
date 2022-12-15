@@ -127,7 +127,7 @@ class SampledEventHandler:
             signature,
             sampled_event,
         )
-        if not match_statement_active:
+        if state is None:
             # Playzeros were already added for match event
             self.seqc_tracker.add_required_playzeros(sampled_event)
             self.seqc_tracker.add_timing_comment(sampled_event["end"])
@@ -142,7 +142,7 @@ class SampledEventHandler:
             else "csv"
             # Include CSV waves into the index to keep track of waves-AWG mapping
         )
-        sig_string, _ = signature.waveform.signature_string()
+        sig_string = signature.waveform.signature_string()
         if (
             all(p.pulse is None for p in signature.waveform.pulses)
             and self.use_command_table
@@ -163,6 +163,8 @@ class SampledEventHandler:
                         wave_index,
                         play_wave_channel,
                     )
+            else:
+                wave_index = wave_index[0]
 
         if not match_statement_active:
             if self.use_command_table:
@@ -189,11 +191,21 @@ class SampledEventHandler:
         else:
             assert self.use_command_table
             if state in self.match_command_table_entries:
-                raise LabOneQException(
-                    f"Duplicate state {state} with different pulses for handle "
-                    f"{self.match_parent_event['handle']} found."
+                if self.match_command_table_entries[state] != (
+                    signature,
+                    wave_index,
+                    sampled_event["start"] - self.match_parent_event["start"],
+                ):
+                    raise LabOneQException(
+                        f"Duplicate state {state} with different pulses for handle "
+                        f"{self.match_parent_event['handle']} found."
+                    )
+            else:
+                self.match_command_table_entries[state] = (
+                    signature,
+                    wave_index,
+                    sampled_event["start"] - self.match_parent_event["start"],
                 )
-            self.match_command_table_entries[state] = (signature, wave_index)
             self.feedback_connections.setdefault(
                 self.match_parent_event["handle"], FeedbackConnection(None)
             ).drive.add(signal_id)
@@ -255,10 +267,7 @@ class SampledEventHandler:
                         if signal_obj.id == signal_id
                     )
                     generator_channels.update(current_signal_obj.channels)
-                    (
-                        sig_string,
-                        _,
-                    ) = play_signature.signature_string()
+                    sig_string = play_signature.signature_string()
 
                     self.wave_indices.add_numbered_wave(
                         sig_string,
@@ -303,9 +312,7 @@ class SampledEventHandler:
         if sampled_event["end"] > self.seqc_tracker.current_time:
             play_zero_after_qa = sampled_event["end"] - self.seqc_tracker.current_time
             self.seqc_tracker.add_timing_comment(sampled_event["end"])
-            self.seqc_tracker.add_play_zero_statement(
-                play_zero_after_qa, self.device_type
-            )
+            self.seqc_tracker.add_play_zero_statement(play_zero_after_qa)
         self.seqc_tracker.current_time = sampled_event["end"]
 
         self.seqc_tracker.add_function_call_statement("startQA", args)
@@ -436,7 +443,7 @@ class SampledEventHandler:
                     f"ITERATE  {sampled_event}, current time = {self.seqc_tracker.current_time}"
                 )
             self.seqc_tracker.add_required_playzeros(sampled_event)
-            assert not self.seqc_tracker.deferred_function_calls
+
             variable_name = string_sanitize(
                 "repeat_count_" + str(sampled_event["loop_id"])
             )
@@ -478,8 +485,6 @@ class SampledEventHandler:
 
     def handle_match(self, sampled_event):
         self.match_parent_event = sampled_event
-        self.seqc_tracker.add_required_playzeros(self.match_parent_event)
-        self.seqc_tracker.add_timing_comment(self.match_parent_event["end"])
         self._match_command_table_entries = {}
 
     def close_event_list(self):
@@ -497,7 +502,7 @@ class SampledEventHandler:
 
             # Check whether we already have the same states in the command table:
             if self.command_table_match_offset is not None:
-                for idx, (signature, wave_index) in sorted_ct_entries:
+                for idx, (signature, wave_index, _) in sorted_ct_entries:
                     current_ct_entry = self.command_table_tracker[
                         idx + self.command_table_match_offset
                     ]
@@ -509,13 +514,31 @@ class SampledEventHandler:
                         )
             else:
                 self.command_table_match_offset = len(self.command_table_tracker)
-                for idx, (signature, wave_index) in sorted_ct_entries:
+                for idx, (signature, wave_index, _) in sorted_ct_entries:
                     id2 = self.command_table_tracker.create_entry(signature, wave_index)
                     assert self.command_table_match_offset + idx == id2
 
-            self.seqc_tracker.add_command_table_execution(
-                "QA_DATA_PROCESSED", latency=42, comment="Match handle " + handle
-            )
+            ev = self.match_parent_event
+            if ev["local"]:
+                if ev["start"] - self.seqc_tracker.current_time < 32:
+                    _logger.warn(
+                        f"Match section for handle {handle} too close to "
+                        "previous play event, will be delayed by up to 32 samples."
+                    )
+                self.seqc_tracker.add_required_playzeros(
+                    {"start": ev["start"] - 32, "signature": ev["signature"]}
+                )
+                # playZero anchor - make sure that the register readout of
+                # executeTableEntry is happening at or after the requested time
+                self.seqc_tracker.add_play_zero_statement(32)
+                self.seqc_tracker.current_time += 32
+                self.seqc_tracker.add_command_table_execution(
+                    "QA_DATA_PROCESSED",
+                    comment="Match handle " + handle,
+                )
+            else:
+                assert ev["local"], "Global feedback not supported yet."
+            self.seqc_tracker.add_timing_comment(ev["end"])
             self.seqc_tracker.clear_deferred_function_calls(self.match_parent_event)
             self.seqc_tracker.current_time = self.match_parent_event["end"]
             self.match_parent_event = None

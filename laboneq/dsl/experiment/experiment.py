@@ -805,9 +805,7 @@ class Experiment:
                 given ID. Defaults to None.
 
         """
-        return Experiment._MatchSectionContext(
-            self, uid=uid, handle=handle, play_after=play_after, local=False
-        )
+        raise LabOneQException("Global feedback via the PQSC is not yet supported.")
 
     class _MatchSectionContext:
         def __init__(

@@ -346,7 +346,12 @@ class DeviceSHFQA(DeviceZI):
                         self._daq, f"/{self.serial}/scopes/0/trigger/delay", 200e-9
                     ),
                     DaqNodeSetAction(self._daq, f"/{self.serial}/scopes/0/enable", 0),
-                    DaqNodeSetAction(self._daq, f"/{self.serial}/scopes/0/single", 1),
+                    DaqNodeSetAction(
+                        self._daq,
+                        f"/{self.serial}/scopes/0/single",
+                        1,
+                        caching_strategy=CachingStrategy.NO_CACHE,
+                    ),
                 ]
             )
         nodes_to_initialize_scope.append(
@@ -787,7 +792,9 @@ class DeviceSHFQA(DeviceZI):
 
         return nodes_to_initialize_measurement
 
-    def collect_trigger_configuration_nodes(self, initialization: Initialization.Data):
+    def collect_trigger_configuration_nodes(
+        self, initialization: Initialization.Data, recipe_data: RecipeData
+    ):
         self._logger.debug("Configuring triggers...")
         self._wait_for_AWGs = True
         self._emit_trigger = False

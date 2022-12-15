@@ -147,3 +147,27 @@ def sample_pulse(
 
 
 pulse_function_library = dict()
+
+
+def verify_amplitude_no_clipping(
+    samples, pulse_id: Optional[str], mixer_type: MixerType, signal_id: Optional[str]
+):
+    max_amplitude = np.max(
+        np.abs(samples["samples_i"] + 1j * samples.get("samples_j", 0))
+    )
+    if mixer_type == MixerType.UHFQA_ENVELOPE:
+        max_amplitude /= np.sqrt(2)
+    TOLERANCE = 1e-6
+    if max_amplitude > 1 + TOLERANCE:
+        if pulse_id is not None:
+            message = (
+                f"Pulse '{pulse_id}' {f'on signal {signal_id} ' if signal_id else ''}"
+                f"exceeds the max allowed amplitude."
+            )
+        else:
+            message = (
+                f"A waveform on signal '{signal_id}' exceeds the max allowed amplitude."
+            )
+
+        message += " Signal will be clipped on the device."
+        _logger.warning(message)

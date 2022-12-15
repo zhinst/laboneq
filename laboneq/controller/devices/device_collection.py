@@ -127,7 +127,8 @@ class DeviceCollection:
                 conditions=filter_responses(dev_nodes),
             )
 
-        if conditions_checker.check_all():
+        failed_path, _ = conditions_checker.check_all()
+        if failed_path is None:
             return
 
         batch_set(set_clock_nodes)
@@ -137,9 +138,10 @@ class DeviceCollection:
                 f"Internal error: Reference clock switching for devices {[d.dev_repr for d in devices]} is not complete within {timeout}s. Not fulfilled:\n{response_waiter.remaining_str()}"
             )
 
-        if not conditions_checker.check_all():
+        failed_path, expected = conditions_checker.check_all()
+        if failed_path is not None:
             raise RuntimeError(
-                f"Internal error: Reference clock switching for devices {[d.dev_repr for d in devices]} failed."
+                f"Internal error: Reference clock switching for devices {[d.dev_repr for d in devices]} failed at {failed_path} != {expected}."
             )
 
     def init_clocks(self):

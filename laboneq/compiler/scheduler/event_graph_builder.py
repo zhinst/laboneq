@@ -309,7 +309,9 @@ class EventGraphBuilder:
                 attributes=attributes,
             )
 
-            for parent_section_name in section_graph.parent_sections(section_name):
+            parent_section_name = section_graph.parent(section_name)
+
+            if parent_section_name:
                 if parent_section_name not in parent_sections:
                     parent_sections[parent_section_name] = []
                 parent_sections[parent_section_name].append(section_span)

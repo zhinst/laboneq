@@ -10,7 +10,10 @@ import logging
 import numpy as np
 from numpy.typing import ArrayLike
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
-from laboneq.core.utilities.pulse_sampler import sample_pulse
+from laboneq.core.utilities.pulse_sampler import (
+    sample_pulse,
+    verify_amplitude_no_clipping,
+)
 
 if TYPE_CHECKING:
     from laboneq.core.types.compiled_experiment import (
@@ -57,6 +60,7 @@ def _replace_pulse_in_wave(
     amplitude = 1.0
     function = None
     length = None
+    pulse_id = "<replaced pulse>"
     if isinstance(pulse_or_array, list):
         pulse_or_array = np.array(pulse_or_array)
     if isinstance(pulse_or_array, np.ndarray):
@@ -66,6 +70,7 @@ def _replace_pulse_in_wave(
         input_samples = getattr(pulse_or_array, "samples", None)
         amplitude = getattr(pulse_or_array, "amplitude", 1.0)
         function = getattr(pulse_or_array, "function", None)
+        pulse_id = getattr(pulse_or_array, "uid", pulse_id)
 
     length = length or (0 if input_samples is None else len(input_samples))
     assert length > 0 and abs(length - pwm.length_samples) < 2  # (rounding)
@@ -93,6 +98,7 @@ def _replace_pulse_in_wave(
             mixer_type=pwm.mixer_type,
             pulse_parameters=instance.pulse_parameters,
         )
+        verify_amplitude_no_clipping(samples, pulse_id, pwm.mixer_type, None)
 
         if "samples_q" in samples and instance.needs_conjugate:
             samples["samples_q"] = -samples["samples_q"]

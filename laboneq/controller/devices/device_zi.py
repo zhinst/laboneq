@@ -220,7 +220,9 @@ class DeviceZI(ABC):
         pass
 
     @abstractmethod
-    def collect_trigger_configuration_nodes(self, initialization: Initialization.Data):
+    def collect_trigger_configuration_nodes(
+        self, initialization: Initialization.Data, recipe_data: RecipeData
+    ):
         pass
 
     @abstractmethod

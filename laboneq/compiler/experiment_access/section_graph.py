@@ -1,16 +1,14 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from operator import itemgetter
-from typing import Dict
-import networkx as nx
-from networkx.readwrite import json_graph
-import logging
 import copy
+import json
+import logging
+from typing import Dict, List, Tuple
+
+import rustworkx as rx
 
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO, SectionInfo
-
-from laboneq.compiler.fastlogging import NullLogger
 
 _logger = logging.getLogger(__name__)
 
@@ -18,117 +16,124 @@ _logger = logging.getLogger(__name__)
 class SectionGraph:
     def __init__(
         self,
-        section_instance_tree: nx.DiGraph,
-        section_graph,
-        section_graph_parents,
+        section_graph: rx.PyDiGraph,
+        section_graph_parents: rx.PyDiGraph,
+        node_ids: Dict[str, int],
         section_infos: Dict[str, SectionInfo],
+        root_sections: List[str],
     ):
 
         self._section_graph = section_graph
-        self._section_instance_tree = section_instance_tree
         self._section_graph_parents = section_graph_parents
+        self._node_ids = node_ids
         self._section_infos = section_infos
+        self._root_sections = root_sections
 
     def section_info(self, section_id) -> SectionInfo:
         return self._section_infos[section_id]
 
-    def json_node_link_data(self):
-        return json_graph.node_link_data(self._section_graph)
+    def sections(self):
+        return [node["section_id"] for node in self._section_graph.nodes()]
 
-    def topologically_sorted_sections(self):
-        return nx.topological_sort(self._section_graph)
+    def topologically_sorted_sections(self) -> List[str]:
+        return [
+            self._section_graph[node]["section_id"]
+            for node in rx.topological_sort(self._section_graph)
+        ]
 
-    def cycles(self):
-        return nx.simple_cycles(self._section_graph)
+    def has_cycles(self):
+        try:
+            rx.topological_sort(self._section_graph)
+        except rx.DAGHasCycle:
+            return True
+        return False
 
     def parent(self, section):
-        edges_list = self._section_graph.in_edges([section], data=True)
+        node_id = self._node_ids[section]
+        edges_list = self._section_graph.in_edges(node_id)
         parent = None
         for edge in edges_list:
             if edge[2]["type"] == "parent":
                 parent = edge[0]
-        return parent
-
-    def root_section(self):
-        try:
-            return next(v for v, d in self._section_instance_tree.in_degree() if d == 0)
-        except StopIteration:
+        if parent is None:
             return None
-
-    def depth_map(self):
-        root_section = self.root_section()
-        if root_section is None:
-            return {}
-        return {
-            item[0]: item[1]
-            for item in nx.shortest_path_length(
-                self._section_instance_tree, root_section
-            ).items()
-        }
-
-    def subsection_map(self):
-        return {
-            node: list(nx.descendants(self._section_graph_parents, node))
-            for node in self._section_graph_parents.nodes
-        }
-
-    def as_section_graph(self):
-        section_graph = [
-            dict({"from": edge[0], "to": edge[1]}, **edge[2])
-            for edge in self._section_instance_tree.edges(data=True)
-        ]
-        return section_graph
+        return self._section_graph[parent]["section_id"]
 
     def followers(self, section):
+        node = self._node_ids[section]
         return [
-            edge[1]
-            for edge in self._section_graph.out_edges(nbunch=section, data=True)
+            self._section_graph[edge[1]]["section_id"]
+            for edge in self._section_graph.out_edges(node)
             if edge[2]["type"] == "previous"
         ]
 
+    def section_children(self, section_name):
+        node = self._node_ids[section_name]
+        return [
+            self._section_graph_parents[node]["section_id"]
+            for node in rx.descendants(self._section_graph_parents, node)
+        ]
+
+    def depth_map(self) -> Dict[str, int]:
+        root_sections = self.root_sections()
+        if len(root_sections) == 0:
+            return {}
+        result = {}
+        for root_section in root_sections:
+            root_node = self._node_ids[root_section]
+            paths = rx.digraph_dijkstra_shortest_paths(
+                self._section_graph_parents, root_node
+            )
+            result.update(
+                {
+                    self._section_graph[destination_node]["section_id"]: len(path)
+                    for destination_node, path in paths.items()
+                }
+            )
+            result[root_section] = 0
+        return result
+
+    def subsection_map(self):
+        return {section: self.section_children(section) for section in self.sections()}
+
     def preorder_map(self):
-        newgraph = nx.DiGraph()
-        newgraph.add_nodes_from(self._section_instance_tree.nodes())
-        for node in self._section_instance_tree.nodes():
+        new_graph: rx.PyDiGraph = self._section_graph.copy()
+        new_graph.remove_edges_from(new_graph.edge_list())
+        for node in self._section_graph.node_indices():
             prio_edge = None
-            for edge in self._section_instance_tree.in_edges(node, data=True):
-                if edge[2]["type"] == "previous":
-                    prio_edge = (edge[1], edge[0])
-                else:
-                    if prio_edge is None:
-                        prio_edge = (edge[1], edge[0])
+            for u, v, data in self._section_graph.in_edges(node):
+                if data["type"] == "previous" or prio_edge is None:
+                    prio_edge = u, v
             if prio_edge is not None:
-                newgraph.add_edges_from([(prio_edge[1], prio_edge[0])])
-        new_edges = []
-        for node in newgraph.nodes:
-            for edge in self._section_instance_tree.in_edges(node, data=True):
-                if edge[2]["type"] == "parent":
-                    _logger.debug("Found parent relation %s for %s", edge, node)
-                    for sequential_edge in newgraph.out_edges(edge[0]):
-                        if sequential_edge[1] != node:
-                            _logger.debug("sequential_edge=%s", sequential_edge)
-                            if not self._section_graph_parents.has_edge(
-                                sequential_edge[0], sequential_edge[1]
-                            ):
-                                _logger.debug(
-                                    "descendants of %s : %s",
-                                    sequential_edge[0],
-                                    nx.descendants(
-                                        self._section_graph_parents, sequential_edge[0]
-                                    ),
-                                )
-                                for descendant in nx.descendants(
-                                    self._section_graph_parents, sequential_edge[0]
-                                ):
-                                    if sequential_edge[1] != descendant:
-                                        _logger.debug(
-                                            "adding edge %s",
-                                            (descendant, sequential_edge[1]),
-                                        )
-                                        new_edges.append((node, sequential_edge[1]))
-        new_edges = list(set(new_edges))
-        newgraph.add_edges_from(new_edges)
-        toposorted = list(nx.topological_sort(newgraph))
+                new_graph.add_edge(*prio_edge, None)
+        new_edges = set()
+        for node in new_graph.node_indices():
+            for parent, _, edge_data in self._section_graph.in_edges(node):
+                if edge_data["type"] != "parent":
+                    continue
+                _logger.debug("Found parent relation between %s and %s", parent, node)
+                for u, v, sequential_edge in new_graph.out_edges(parent):
+                    if v == node:
+                        continue
+                    _logger.debug("sequential_edge=%s", sequential_edge)
+                    if not self._section_graph_parents.has_edge(u, v):
+                        _logger.debug(
+                            "descendants of %s : %s",
+                            sequential_edge,
+                            rx.descendants(self._section_graph_parents, u),
+                        )
+                        for descendant in rx.descendants(
+                            self._section_graph_parents, u
+                        ):
+                            if v == descendant:
+                                continue
+                            _logger.debug(
+                                "adding edge %s",
+                                (descendant, v),
+                            )
+                            new_edges.add((node, v, None))
+        new_graph.add_edges_from(tuple(new_edges))
+        toposorted = list(rx.topological_sort(new_graph))
         current_level = 0
         preorder_map = {}
         depth_map = self.depth_map()
@@ -136,132 +141,139 @@ class SectionGraph:
             _logger.debug(
                 "first=%s second=%s current_level=%d", first, second, current_level
             )
-            preorder_map[first] = current_level
+            first_section_id = self._section_graph[first]["section_id"]
+            second_section_id = (
+                self._section_graph[second]["section_id"]
+                if second is not None
+                else None
+            )
+            preorder_map[first_section_id] = current_level
             if second is not None:
-                in_edges = self._section_instance_tree.in_edges(second, data=True)
+                in_edges = self._section_graph.in_edges(second)
                 _logger.debug("%s in_edges=%s", second, in_edges)
 
             is_independent = True
-            if second is not None:
-                if self._section_instance_tree.has_edge(first, second):
-                    if self._section_instance_tree.has_edge(first, second):
-                        if (
-                            self._section_instance_tree.edges()[(first, second)]["type"]
-                            == "previous"
-                        ):
-                            is_independent = False
             if (
                 second is not None
-                and first in depth_map
-                and second in depth_map
-                and (depth_map[first] != depth_map[second] or is_independent)
+                and self._section_graph.has_edge(first, second)
+                and self._section_graph.has_edge(first, second)
+                and self._section_graph.get_edge_data(first, second)["type"]
+                == "previous"
+            ):
+                is_independent = False
+            if (
+                second is not None
+                and first_section_id in depth_map
+                and second_section_id in depth_map
+                and (
+                    depth_map[first_section_id] != depth_map[second_section_id]
+                    or is_independent
+                )
             ):
                 current_level += 1
         return preorder_map
 
-    def parent_sections(self, section):
-        parent_edges = [
-            e
-            for e in self._section_graph.in_edges(nbunch=section, data=True)
-            if e[2]["type"] == "parent"
-        ]
-        return [parent_edge[0] for parent_edge in parent_edges]
-
-    def sections(self):
-        return list(self._section_graph.nodes())
-
-    def section_children(self, section_name):
-        return nx.algorithms.dag.descendants(self._section_graph_parents, section_name)
-
-    def log_graph(self):
-
-        _logger.debug("++++Section Graph")
-
-        for node in self._section_graph.nodes:
-            for edge in self._section_graph.out_edges(nbunch=[node], data=True):
-                _logger.debug(edge)
-
-        for node in list(
-            reversed(list(nx.topological_sort(self._section_instance_tree)))
-        ):
-            section_children = self.section_children(node)
-            _logger.debug("Children of %s: %s", node, section_children)
-        _logger.debug("++++ END ++++Section Graph")
-
     def root_sections(self):
+        return self._root_sections
 
-        root_sections = []
-        for section_id in list(nx.topological_sort(self._section_graph_parents)):
-            section_info = self.section_info(section_id)
-            _logger.debug("Section: %s", section_info)
-            if section_info.has_repeat and section_info.count < 1:
-                raise Exception(
-                    f"Repeat count must be at least 1, but section {section_id} has count={section_info.count}"
-                )
+    @staticmethod
+    def _compute_root_sections(
+        section_instance_tree: rx.PyDiGraph, section_infos, node_ids
+    ):
+        nt_parents_of_rt = set()
 
-            if section_info.execution_type != "controller":
-                # first non-controller section
-                if len(root_sections) == 0:
-                    _logger.debug(
-                        "section %s is the first real-time section",
-                        section_info.section_id,
+        section_graph_parents = section_instance_tree.copy()
+        section_graph_parents.remove_edges_from(
+            [
+                (u, v)
+                for (u, v, data) in section_instance_tree.weighted_edge_list()
+                if data["type"] != "parent"
+            ]
+        )
+
+        rt_root_sections: List[str] = []
+        for node in section_graph_parents.node_indices():
+            section_id = section_graph_parents[node]["section_id"]
+            if section_infos[section_id].execution_type == "controller":
+                continue
+
+            edges_list = section_graph_parents.in_edges(node)
+            parent = None
+            for u, v, data in edges_list:
+                if data["type"] == "parent":
+                    parent = u
+                    break
+            if parent is None:
+                nt_parents_of_rt.add(None)
+                rt_root_sections.append(section_id)
+            else:
+                parent_section_id: str = section_graph_parents[parent]["section_id"]
+                if section_infos[parent_section_id].execution_type == "controller":
+                    nt_parents_of_rt.add(parent_section_id)
+                    rt_root_sections.append(section_id)
+
+        if len(rt_root_sections) == 0:
+            return []
+
+        if len(nt_parents_of_rt) != 1:
+            raise RuntimeError(
+                f"Real-time root sections must all be located at the same level."
+            )
+
+        for nt_section in nt_parents_of_rt:
+            if nt_section is None:
+                children = rt_root_sections
+            else:
+                children = [
+                    section_graph_parents[child]["section_id"]
+                    for child in rx.descendants(
+                        section_graph_parents, node_ids[nt_section]
                     )
-                    root_sections = [section_id]
+                ]
 
-        if len(root_sections) > 0:
-            parent_edges = self._section_graph_parents.in_edges(
-                nbunch=[root_sections[0]], data=True
-            )
-            if len(parent_edges) > 0:
-                root_parent = list(parent_edges)[0][0]
-                root_sections = []
-                child_edges = self._section_graph_parents.out_edges(
-                    nbunch=[root_parent], data=True
-                )
-                for edge in child_edges:
-                    child_section_id = edge[1]
-                    root_sections.append(child_section_id)
+            for child in children:
+                if section_infos[child].execution_type == "controller":
+                    raise RuntimeError(
+                        f"Real-time root sections cannot be siblings of near-time sections."
+                    )
 
-        root_real_time_sections = []
-        root_near_time_sections = []
-        for section_id in root_sections:
-            section_info = self.section_info(section_id)
-            (root_real_time_sections, root_near_time_sections)[
-                section_info.execution_type == "controller"
-            ].append(section_id)
-        if not (len(root_real_time_sections) == 0 or len(root_near_time_sections) == 0):
-            raise Exception(
-                f"Root sections {root_sections} contains both real time child sections {root_real_time_sections} and near-time sections {root_near_time_sections}. Only one kind is allowed."
-            )
-        return root_sections
+        return rt_root_sections
 
     @staticmethod
     def from_dao(experiment_dao: ExperimentDAO):
         section_infos: Dict[str, SectionInfo] = {}
-        section_graph_instances = nx.DiGraph()
+        section_graph_instances = rx.PyDiGraph(multigraph=False)
+        node_ids: Dict[str, int] = {}  # look-up node IDs by section ID
+
+        # Note: sections directly at the root of the experiment are are not linked to
+        # be played back sequentially even if they share signals.
+        # Such an arrangement is invalid as per our DSL rules, so this is not an
+        # immediate issue.
+
         for section_id in experiment_dao.sections():
-            section_info_0 = experiment_dao.section_info(section_id)
-            section_infos[section_id] = section_info_0
-            section_graph_instances.add_nodes_from([section_id])
+            section_info = experiment_dao.section_info(section_id)
+            section_infos[section_id] = section_info
+            node_id = section_graph_instances.add_node(section_id)
+            node_ids[section_id] = node_id
+
+        link_nodes: Dict[Tuple[str, str], int] = {}
+
         for section_id in experiment_dao.sections():
             previous_instance_signals = {}
+            section_node_id = node_ids[section_id]
             direct_section_children = experiment_dao.direct_section_children(section_id)
             for i, section_ref_id in enumerate(direct_section_children):
-                link_node_id = section_ref_id + "_" + section_id + "_" + str(i)
-                _logger.debug(
-                    "  Child section of %s : %s link_node_id=%s",
-                    section_id,
-                    section_ref_id,
-                    link_node_id,
-                )
-
+                ref_section_node_id = node_ids[section_ref_id]
                 ref_section_info = experiment_dao.section_info(section_ref_id)
-                section_graph_instances.add_nodes_from([link_node_id])
-                section_graph_instances.add_edges_from(
-                    [(section_ref_id, link_node_id)], type="referenced_through"
+                link_node_id = section_graph_instances.add_node(
+                    f"{section_ref_id}_{section_id}_{i}"
                 )
-                section_graph_instances.add_edges_from(
-                    [(link_node_id, section_id)], type="referenced_by"
+                link_nodes[(section_id, section_ref_id)] = link_node_id
+                section_graph_instances.add_edge(
+                    ref_section_node_id, link_node_id, dict(type="referenced_through")
+                )
+                section_graph_instances.add_edge(
+                    link_node_id, section_node_id, dict(type="referenced_by")
                 )
                 current_signals = experiment_dao.section_signals_with_children(
                     section_ref_id
@@ -273,184 +285,202 @@ class SectionGraph:
                     for previous_node_id, signals in previous_instance_signals.items():
                         common_signals = signals.intersection(current_signals)
                         if len(common_signals) > 0:
-                            section_graph_instances.add_edges_from(
-                                [(previous_node_id, link_node_id)], type="previous"
+                            section_graph_instances.add_edge(
+                                previous_node_id, link_node_id, dict(type="previous")
                             )
                 previous_instance_signals[link_node_id] = current_signals
 
                 # Sections follow a previous section specified via play_after, except
                 # for the branches of a match section, where we don't allow that:
-                play_after = ref_section_info.play_after
-                if play_after and not section_infos[section_id].handle:
-                    if isinstance(play_after, str):
-                        play_after = [play_after]
-                    for pa in play_after:
-                        for j, sibling_section_ref_id in enumerate(
-                            direct_section_children
-                        ):
-                            if j == i:  # That's us
-                                raise ValueError(
-                                    f"Could not find section {pa} mentioned "
-                                    + f"in play_after of {section_ref_id}."
-                                )
-                            if sibling_section_ref_id == pa:
-                                play_after_link_node_id = (
-                                    sibling_section_ref_id
-                                    + "_"
-                                    + section_id
-                                    + "_"
-                                    + str(j)
-                                )
-                                section_graph_instances.add_edges_from(
-                                    [(play_after_link_node_id, link_node_id)],
-                                    type="previous",
-                                )
-                                break
+                play_after = ref_section_info.play_after or []
+                if isinstance(play_after, str):
+                    play_after = [play_after]
+                if section_infos[section_id].handle:
+                    play_after = []
+                for pa in play_after:
+                    for j, sibling_section_ref_id in enumerate(direct_section_children):
+                        if j == i:  # That's us
+                            raise ValueError(
+                                f"Could not find section {pa} mentioned in play_after "
+                                f"of {section_ref_id}."
+                            )
+                        if sibling_section_ref_id == pa:
+                            play_after_link_node_id = link_nodes[
+                                (section_id, sibling_section_ref_id)
+                            ]
+                            section_graph_instances.add_edge(
+                                play_after_link_node_id,
+                                link_node_id,
+                                dict(type="previous"),
+                            )
+                            break
 
         parent_edges = [
-            (y[0], y[1])
-            for y in filter(
-                lambda x: x[2]["type"] != "previous",
-                section_graph_instances.edges(data=True),
-            )
+            (a, b)
+            for (a, b, data) in section_graph_instances.weighted_edge_list()
+            if data["type"] != "previous"
         ]
+
         if len(parent_edges) > 0:
-            section_graph_instances_parents = nx.edge_subgraph(
+            section_graph_instances_parents = rx.PyDiGraph.edge_subgraph(
                 section_graph_instances, parent_edges
             )
         else:
             section_graph_instances_parents = copy.deepcopy(section_graph_instances)
 
-        try:
-            root_node = next(
-                v for v, d in section_graph_instances_parents.out_degree() if d == 0
-            )
-        except StopIteration:
-            root_node = None
+        root_nodes = (
+            node
+            for node in section_graph_instances_parents.node_indices()
+            if section_graph_instances_parents.out_degree(node) == 0
+        )
 
-        path_dict = {}
-        for node in experiment_dao.sections():
-            paths = list(
-                nx.all_simple_paths(
-                    section_graph_instances_parents, source=node, target=root_node
+        path_dict: Dict[Tuple[int, ...], str] = {}
+        for root_node in root_nodes:
+            path_dict[(root_node,)] = section_graph_instances[root_node]
+            for section in experiment_dao.sections():
+                node_id = node_ids[section]
+                paths = rx.all_simple_paths(
+                    section_graph_instances_parents, from_=node_id, to=root_node
                 )
+
+                if len(paths) == 1:
+                    path_dict[tuple(paths[0])] = section
+                else:
+                    for i, path in enumerate(paths):
+                        path_dict[tuple(path)] = f"{section}_{i}"
+
+        for k, section in path_dict.items():
+            _logger.debug("path_dict %s : %s", k, section)
+
+        section_instance_tree = rx.PyDiGraph(multigraph=False)
+        section_instance_tree_node_ids = {}
+
+        for k, section in path_dict.items():
+            section_info: SectionInfo = copy.deepcopy(
+                section_infos[section_graph_instances_parents[k[0]]]
             )
-
-            if len(paths) == 1:
-                path_dict[tuple(paths[0])] = node
-            else:
-                for i, path in enumerate(paths):
-                    path_dict[tuple(path)] = node + "_" + str(i)
-        if root_node is not None:
-            path_dict[(root_node,)] = root_node
-        for k, v in path_dict.items():
-            _logger.debug("path_dict %s : %s", k, v)
-
-        section_instance_tree = nx.DiGraph()
-
-        for k, v in path_dict.items():
-            section_info = copy.deepcopy(section_infos[k[0]])
             section_info.section_display_name = section_info.section_id
-            section_info.section_id = v
-            section_infos[v] = section_info
+            section_info.section_id = section
+            section_infos[section] = section_info
             if len(k) > 1:
                 section_link_id = k[1]
             else:
                 section_link_id = k[0]
 
-            section_instance_tree.add_nodes_from(
-                [v], section={"section_link_id": section_link_id}
+            node_id = section_instance_tree.add_node(
+                dict(
+                    section_id=section,
+                    section_link_id=section_link_id,
+                )
             )
-        for k, v in path_dict.items():
-            cur_node = v
+            assert node_id not in node_ids
+            section_instance_tree_node_ids[section] = node_id
+
+        for k, section in path_dict.items():
+            cur_node = section_instance_tree_node_ids[section]
             path_list = list(k)
             while len(path_list) > 2:
                 rest_key = tuple(path_list[2:])
-                rest_path_entry = path_dict[rest_key]
-                section_instance_tree.add_edge(rest_path_entry, cur_node, type="parent")
+                rest_path_entry = section_instance_tree_node_ids[path_dict[rest_key]]
 
-                section_link_id = section_instance_tree.nodes(data=True)[cur_node][
-                    "section"
-                ]["section_link_id"]
+                section_instance_tree.add_edge(
+                    rest_path_entry, cur_node, dict(type="parent")
+                )
+
                 path_list = path_list[2:]
                 cur_node = rest_path_entry
 
-        for node_id in section_instance_tree.nodes:
-
-            siblings = {}
+        for node_id in section_instance_tree.node_indices():
             try:
-                parent = next(e[0] for e in section_instance_tree.in_edges(node_id))
+                parent = next(
+                    u
+                    for u, _, data in section_instance_tree.in_edges(node_id)
+                    if data["type"] == "parent"
+                )
+            except StopIteration:
+                siblings = {}
+            else:
                 siblings = {
-                    section_instance_tree.nodes(data=True)[e[1]]["section"][
-                        "section_link_id"
-                    ]: e[1]
+                    section_instance_tree[e[1]]["section_link_id"]: e[1]
                     for e in section_instance_tree.out_edges(parent)
                 }
-            except StopIteration:
-                pass
 
-            _logger.debug("node_id=%s siblings=%s", node_id, siblings)
-            section_link_id = section_instance_tree.nodes(data=True)[node_id][
-                "section"
-            ]["section_link_id"]
+            _logger.debug("node_id=%i siblings=%i", node_id, siblings)
+            section_link_id = section_instance_tree[node_id]["section_link_id"]
 
-            for edge in section_graph_instances.out_edges(section_link_id, data=True):
-                if edge[2]["type"] == "previous":
-                    linked_sibling = siblings[edge[1]]
+            for edge in section_graph_instances.out_edges(section_link_id):
+                node_from, node_to, edge_data = edge
+                if edge_data["type"] == "previous":
+                    linked_sibling = siblings[node_to]
 
                     _logger.debug(
-                        "node_id=%s section_link_id=%s edge=%s linked_sibling=%s",
+                        "node_id=%i section_link_id=%i edge=%s linked_sibling=%i",
                         node_id,
                         section_link_id,
                         edge,
                         linked_sibling,
                     )
                     section_instance_tree.add_edge(
-                        node_id, linked_sibling, type="previous"
+                        node_id, linked_sibling, dict(type="previous")
                     )
 
-        if len(section_instance_tree.edges) > 0:
+        near_time_sections = [
+            n
+            for n in section_instance_tree.node_indices()
+            if section_infos[section_instance_tree[n]["section_id"]].execution_type
+            == "controller"
+        ]
+        # Note: we cannot use PyDiGraph.subgraph(), as it invalidates all node indices.
+        # (Node indices in the new graph are a contiguous range starting from 0.)
+        section_graph_rt = section_instance_tree.copy()
+        section_graph_rt.remove_nodes_from(near_time_sections)
 
-            section_graph_parents = nx.edge_subgraph(
-                section_instance_tree,
+        if len(section_graph_rt.edges()) > 0:
+            section_graph_parents: rx.PyDiGraph = section_graph_rt.copy()
+            section_graph_parents.remove_edges_from(
                 [
-                    (y[0], y[1])
-                    for y in filter(
-                        lambda x: x[2]["type"] == "parent",
-                        section_instance_tree.edges(data=True),
-                    )
-                ],
+                    (u, v)
+                    for (u, v, data) in section_graph_rt.weighted_edge_list()
+                    if data["type"] != "parent"
+                ]
             )
 
+            assert len(section_graph_rt.nodes()) == len(section_graph_parents.nodes())
         else:
-            section_graph_parents = copy.deepcopy(section_instance_tree)
+            section_graph_parents = copy.deepcopy(section_graph_rt)
 
-        _logger.debug("***** Section graph parents:")
-        for node in section_graph_parents.nodes(data=True):
-            _logger.debug("  %s", node)
-            for edge in section_graph_parents.out_edges(node[0], data=True):
-                _logger.debug("      %s", edge)
-
-        _logger.debug("END ***** Section graph parents")
-
-        section_graph = nx.subgraph(
-            section_instance_tree,
-            [
-                n
-                for n in section_instance_tree.nodes()
-                if section_infos[n].execution_type != "controller"
-            ],
+        root_rt_sections = SectionGraph._compute_root_sections(
+            section_instance_tree, section_infos, section_instance_tree_node_ids
         )
 
         return SectionGraph(
-            section_instance_tree,
-            section_graph,
-            section_graph_parents,
+            section_graph=section_graph_rt,
+            section_graph_parents=section_graph_parents,
+            node_ids=section_instance_tree_node_ids,
             section_infos=section_infos,
+            root_sections=root_rt_sections,
         )
 
+    def json_node_link_data(self):
+        return json.loads(rx.node_link_json(self._section_graph))
+
+    def as_primitive(self):
+        section_graph = [
+            {
+                "from": self._section_graph[edge[0]]["section_id"],
+                "to": self._section_graph[edge[1]]["section_id"],
+                **edge[2],
+            }
+            for edge in self._section_graph.weighted_edge_list()
+        ]
+
+        def sort_key(d):
+            return d["from"], d["to"]
+
+        section_graph.sort(key=sort_key)
+        return section_graph
+
     def visualization_dict(self):
-        node_dir = {}
         out_graph = {"nodes": [], "links": []}
         link_data = self.json_node_link_data()
         for node in link_data["nodes"]:
@@ -465,3 +495,52 @@ class SectionGraph:
             )
 
         return out_graph
+
+    def log_graph(self):
+        _logger.debug("++++Section Graph")
+
+        for node in self._section_graph.node_indices():
+            for parent, child, data in self._section_graph.out_edges(node):
+                _logger.debug(
+                    self._section_graph[parent]["section_id"],
+                    self._section_graph[child]["section_id"],
+                    data,
+                )
+
+        for section in reversed(self.topologically_sorted_sections()):
+            section_children = self.section_children(section)
+            _logger.debug("Children of %s: %s", section, section_children)
+        _logger.debug("++++ END ++++Section Graph")
+
+    @staticmethod
+    def from_json_node_link(d):
+        graph = rx.PyDiGraph()
+        node_ids = {}
+        section_infos = {}
+        for node in d["nodes"]:
+            section_id = node["id"]
+            section_infos[section_id] = SectionInfo(**node["section"])
+            node_ids[section_id] = graph.add_node(dict(section_id=section_id))
+
+        for edge_data in d["links"]:
+            graph.add_edge(
+                node_ids[edge_data["source"]], node_ids[edge_data["target"]], edge_data
+            )
+
+        section_graph_parent: rx.PyDiGraph = graph.copy()
+        for u, v, data in graph.weighted_edge_list():
+            if data.get("type") != "parent":
+                section_graph_parent.remove_edge(u, v)
+
+        # Note: We only use this function internal unit testing. Before this can be
+        # used in production code, we probably need to handle the RT subgraph properly.
+
+        return SectionGraph(
+            section_graph=graph,
+            section_graph_parents=section_graph_parent,
+            node_ids=node_ids,
+            section_infos=section_infos,
+            root_sections=SectionGraph._compute_root_sections(
+                graph, section_infos, node_ids
+            ),
+        )

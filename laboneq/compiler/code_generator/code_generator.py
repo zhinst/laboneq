@@ -9,6 +9,7 @@ import math
 import os
 import re
 from dataclasses import dataclass
+from itertools import groupby
 from typing import Any, Dict, List, Tuple
 from contextlib import suppress
 
@@ -27,9 +28,11 @@ from laboneq.core.types.compiled_experiment import (
     PulseMapEntry,
     PulseWaveformMap,
 )
+from laboneq.core.types.enums.mixer_type import MixerType
 from laboneq.core.utilities.pulse_sampler import (
     length_to_samples,
     sample_pulse,
+    verify_amplitude_no_clipping,
 )
 from laboneq.compiler.code_generator.analyze_events import (
     analyze_init_times,
@@ -48,7 +51,10 @@ from laboneq.compiler.common.awg_signal_type import AWGSignalType
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.common.trigger_mode import TriggerMode
 from laboneq.compiler.code_generator.dict_list import merge_dict_list
-from laboneq.compiler.code_generator.signatures import WaveformSignature
+from laboneq.compiler.code_generator.signatures import (
+    WaveformSignature,
+    PlaybackSignature,
+)
 from laboneq.compiler.code_generator.utils import normalize_phase
 from laboneq.compiler.code_generator.wave_index_tracker import WaveIndexTracker
 from laboneq.compiler.code_generator.command_table_tracker import CommandTableTracker
@@ -156,6 +162,13 @@ def calculate_integration_weights(acquire_events, signal_obj, pulse_defs, device
                         samples=samples,
                         mixer_type=signal_obj.mixer_type,
                         pulse_parameters=event.get("pulse_parameters"),
+                    )
+
+                    verify_amplitude_no_clipping(
+                        integration_weight,
+                        pulse_def.id,
+                        signal_obj.mixer_type,
+                        signal_obj.id,
                     )
 
                     integration_weight["basename"] = (
@@ -316,7 +329,7 @@ class CodeGenerator:
                         ) in self._sampled_signatures[signal_obj.id].items():
                             if not sampled_signature:
                                 continue
-                            sig_string, _ = signature_key.signature_string()
+                            sig_string = signature_key.signature_string()
                             if signal_obj.device_type.supports_binary_waves:
                                 if awg.signal_type == AWGSignalType.SINGLE:
                                     self._save_wave_bin(
@@ -359,7 +372,7 @@ class CodeGenerator:
                 for signature_key, sampled_signature in self._sampled_signatures[
                     virtual_signal_id
                 ].items():
-                    sig_string, _ = signature_key.signature_string()
+                    sig_string = signature_key.signature_string()
                     if signal_obj.device_type.supports_binary_waves:
                         self._save_wave_bin(
                             sampled_signature["samples_i"],
@@ -378,6 +391,15 @@ class CodeGenerator:
                         raise RuntimeError(
                             f"Device type {signal_obj.device_type} has invalid supported waves config."
                         )
+
+        # check that there are no duplicate filenames in the wave pool (QCSW-1079)
+        waves = sorted(
+            [(wave["filename"], wave["samples"]) for wave in self._waves],
+            key=lambda w: w[0],
+        )
+        for _, group in groupby(waves, key=lambda w: w[0]):
+            group = list(group)
+            assert all(np.all(group[0][1] == g[1]) for g in group[1:])
 
         if _logger.getEffectiveLevel() == logging.DEBUG:
             _logger.debug("Sampled signatures: %s", self._sampled_signatures)
@@ -700,7 +722,7 @@ class CodeGenerator:
                 sample_multiple=signal_obj.device_type.sample_multiple,
                 channels=signal_obj.channels,
             )
-            trigger_events = analyze_trigger_events(events, signal_obj)
+            trigger_events = analyze_trigger_events(events, signal_obj, loop_events)
             merge_dict_list(sampled_events, trigger_events)
 
             if (
@@ -779,11 +801,8 @@ class CodeGenerator:
                 for sig, sampled in self._sampled_signatures[virtual_signal_id].items():
                     if not sampled:
                         continue
-                    sig_string, long_sig = sig.signature_string()
-                    if long_sig is not None:
-                        declarations_generator.add_comment(
-                            f"{sig_string} is {long_sig}"
-                        )
+                    sig_string = sig.signature_string()
+
                     length = sig.length
                     declarations_generator.add_wave_declaration(
                         signal_obj.device_type,
@@ -831,7 +850,7 @@ class CodeGenerator:
                     signature_infos = []
                     for sig, sampled in self._sampled_signatures[signal_obj.id].items():
                         if sampled:
-                            sig_string, _ = sig.signature_string()
+                            sig_string = sig.signature_string()
                             length = sig.length
                             signature_infos.append((sig_string, length))
 
@@ -877,7 +896,7 @@ class CodeGenerator:
                 for sig, sampled in self._sampled_signatures[virtual_signal_id].items():
                     if not sampled:
                         continue
-                    sig_string, _ = sig.signature_string()
+                    sig_string = sig.signature_string()
                     length = sig.length
                     declarations_generator.add_wave_declaration(
                         signals_to_process[0].device_type,
@@ -992,14 +1011,12 @@ class CodeGenerator:
         multi_iq_signal=False,
     ):
         PHASE_RESOLUTION_RANGE = CodeGenerator.phase_resolution_range()
-        sampled_signatures: Dict[CodeGenerator.WaveformSignature, Dict] = {}
+        sampled_signatures: Dict[WaveformSignature, Dict] = {}
         signatures = set()
         for interval_event_list in interval_events.values():
             for interval_event in interval_event_list:
                 with suppress(KeyError):
-                    signature: CodeGenerator.PlaybackSignature = interval_event[
-                        "playback_signature"
-                    ]
+                    signature: PlaybackSignature = interval_event["playback_signature"]
                     _logger.debug("Signature found %s in %s", signature, interval_event)
                     if any(p.pulse for p in signature.waveform.pulses):
                         signatures.add(signature)
@@ -1013,7 +1030,7 @@ class CodeGenerator:
             length = signature.waveform.length
             _logger.debug(
                 "Sampling pulses for signature %s for signal %s, length %d device type %s",
-                signature.waveform.signature_string()[0],
+                signature.waveform.signature_string(),
                 signal_id,
                 length,
                 device_type.value,
@@ -1021,7 +1038,7 @@ class CodeGenerator:
 
             if length % device_type.sample_multiple != 0:
                 raise Exception(
-                    f"Length of signature {signature.waveform.signature_string()[0]} is not divisible by {device_type.sample_multiple}, which it needs to be for {device_type.value}"
+                    f"Length of signature {signature.waveform.signature_string()} is not divisible by {device_type.sample_multiple}, which it needs to be for {device_type.value}"
                 )
 
             signature_pulse_map: Dict[str, PulseWaveformMap] = {}
@@ -1100,7 +1117,7 @@ class CodeGenerator:
                     signal_type=sampling_signal_type,
                     sampling_rate=sampling_rate,
                     amplitude=amplitude,
-                    length=pulse_part.pulse_samples / sampling_rate,
+                    length=pulse_part.length / sampling_rate,
                     pulse_function=pulse_def.function,
                     modulation_frequency=used_oscillator_frequency,
                     phase=iq_phase,
@@ -1111,6 +1128,10 @@ class CodeGenerator:
                     else {k: v for k, v in pulse_part.pulse_parameters},
                 )
 
+                verify_amplitude_no_clipping(
+                    sampled_pulse, pulse_def.id, mixer_type, signal_id
+                )
+
                 if "samples_q" in sampled_pulse and len(
                     sampled_pulse["samples_i"]
                 ) != len(sampled_pulse["samples_q"]):
@@ -1118,12 +1139,12 @@ class CodeGenerator:
                         "Expected samples_q and samples_i to be of equal length"
                     )
                 len_i = len(sampled_pulse["samples_i"])
-                if not len_i == pulse_part.pulse_samples and samples is None:
+                if not len_i == pulse_part.length and samples is None:
                     num_samples = length_to_samples(pulse_def.length, sampling_rate)
                     _logger.warning(
                         "Pulse part %s: Expected %d samples but got %d; length = %f num samples=%d length in samples=%d",
                         repr(pulse_part),
-                        pulse_part.pulse_samples,
+                        pulse_part.length,
                         len_i,
                         pulse_def.length,
                         num_samples,
@@ -1165,7 +1186,7 @@ class CodeGenerator:
                 if pm is None:
                     pm = PulseWaveformMap(
                         sampling_rate=sampling_rate,
-                        length_samples=pulse_part.pulse_samples,
+                        length_samples=pulse_part.length,
                         signal_type=sampling_signal_type,
                         mixer_type=mixer_type,
                     )
@@ -1202,6 +1223,13 @@ class CodeGenerator:
 
             if max_amplitude > 1e-9:
                 sampled_signatures[signature.waveform] = sampled_pulse_obj
+
+            verify_amplitude_no_clipping(
+                sampled_pulse_obj,
+                None,
+                mixer_type,
+                signal_id,
+            )
 
         return sampled_signatures
 

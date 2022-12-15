@@ -43,7 +43,8 @@ class PulseWaveformMap:
     sampling_rate: float
     length_samples: int
     signal_type: str
-    mixer_type: MixerType  # UHFQA's HW modulation is not an IQ mixer
+    # UHFQA's HW modulation is not an IQ mixer. None for flux pulses etc.
+    mixer_type: Optional[MixerType] = field(default=None)
     instances: List[PulseInstance] = field(default_factory=list)
 
 

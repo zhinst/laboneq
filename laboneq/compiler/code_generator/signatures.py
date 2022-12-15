@@ -4,10 +4,14 @@
 from __future__ import annotations
 
 import hashlib
+import numpy as np
 import sys
 
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Optional, FrozenSet, Tuple, Any
+
+import numpy
+from orjson import orjson
 
 from laboneq.compiler.code_generator.seq_c_generator import string_sanitize
 
@@ -17,9 +21,8 @@ class PulseSignature:
     """Signature of a single pulse, part of a sampled waveform"""
 
     start: int
-    end: int
     pulse: str
-    pulse_samples: int
+    length: int
     amplitude: Optional[float]
     phase: Optional[int]
     oscillator_phase: Optional[float]
@@ -49,8 +52,7 @@ class WaveformSignature:
             for key, separator, scale, fill in (
                 ("start", "_", 1, 2),
                 ("amplitude", "_a", 1e9, 10),
-                ("pulse_samples", "_l", 1, 3),
-                ("oscillator_phase", "_ph", 1, 7),
+                ("length", "_l", 1, 3),
                 ("baseband_phase", "_bb", 1, 7),
                 ("channel", "_c", 1, 0),
                 ("sub_channel", "_sc", 1, 0),
@@ -61,29 +63,37 @@ class WaveformSignature:
                     sign = ""
                     if value < 0:
                         sign = "m"
-                    retval += (
+                    new_part = (
                         separator + sign + str(abs(round(scale * value))).zfill(fill)
                     )
-            # Simplified approach with hash of all parameters.
-            # Can be expanded to individual params, but it will
-            # require handling of unknown types, ranges and
-            # scales of the parameters.
-            pulse_parameters = pulse_entry.pulse_parameters
-            if pulse_parameters is not None and len(pulse_parameters) > 0:
-                pp_hash = hash(pulse_parameters)
-                if pp_hash < 0:
-                    pp_hash += 1 << sys.hash_info.width
-                retval += f"_pp{pp_hash:016X}"
+                    if len(retval + new_part) > 56:
+                        break
+                    retval += new_part
+            else:  # allow inner break to exit outer loop
+                continue
+            break
 
         retval = string_sanitize(retval)
+        hashed_signature = self.stable_hash().hexdigest()[:7]
+        retval += "_" + hashed_signature
+        return retval
 
-        long_signature = None
-        if len(retval) > 64:
-            hashed_signature = hashlib.md5(retval.encode()).hexdigest()
-            long_signature = retval
-            retval = hashed_signature
+    def stable_hash(self):
+        def default(obj):
+            if isinstance(obj, frozenset):
+                return tuple(sorted(obj))
+            if obj.__class__ in (complex, np.complex128):
+                return repr(obj)
+            raise TypeError
 
-        return retval, long_signature
+        return hashlib.sha1(
+            # leverage that orjson can serialize dataclasses
+            orjson.dumps(
+                self,
+                option=orjson.OPT_SORT_KEYS | orjson.OPT_SERIALIZE_NUMPY,
+                default=default,
+            )
+        )
 
 
 @dataclass(frozen=True)

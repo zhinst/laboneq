@@ -87,7 +87,7 @@ class SeqCTracker:
             # end of the sequence)
             if self.device_type == DeviceType.SHFQA:
                 # SHFQA does not support waitWave()
-                self.add_play_zero_statement(32, signal_obj.device_type)
+                self.add_play_zero_statement(32)
             else:
                 self.add_function_call_statement("waitWave", [])
             self.clear_deferred_function_calls(None)
@@ -117,9 +117,9 @@ class SeqCTracker:
                 name, args, assign_to
             )
 
-    def add_play_zero_statement(self, num_samples, device_type):
+    def add_play_zero_statement(self, num_samples):
         self.current_loop_stack_generator().add_play_zero_statement(
-            num_samples, device_type
+            num_samples, self.device_type
         )
 
     def add_play_wave_statement(
@@ -129,9 +129,9 @@ class SeqCTracker:
             device_type, signal_type, wave_id, channel
         )
 
-    def add_command_table_execution(self, ct_index, latency=None, comment=""):
+    def add_command_table_execution(self, ct_index, comment=""):
         self.current_loop_stack_generator().add_command_table_execution(
-            ct_index=ct_index, latency=latency, comment=comment
+            ct_index=ct_index, comment=comment
         )
 
     def add_variable_assignment(self, variable_name, value):

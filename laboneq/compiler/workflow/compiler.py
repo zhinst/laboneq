@@ -642,6 +642,7 @@ class Compiler:
                 oscillator_frequency = oscillator_info.frequency
                 oscillator_number = self.osc_number(osc_name)
 
+            voltage_offset = self._experiment_dao.voltage_offset(signal_id)
             mixer_calibration = self._experiment_dao.mixer_calibration(signal_id)
             lo_frequency = self._experiment_dao.lo_frequency(signal_id)
             port_mode = self._experiment_dao.port_mode(signal_id)
@@ -697,6 +698,9 @@ class Compiler:
                     output["offset"] = 0.0
                     output["diagonal"] = None
                     output["off_diagonal"] = None
+
+                if signal_info.signal_type == "single" and voltage_offset is not None:
+                    output["offset"] = voltage_offset
 
                 if signal_info.signal_type == "iq" and mixer_calibration is not None:
                     if mixer_calibration["voltage_offsets"] is not None:
@@ -1001,8 +1005,9 @@ class Compiler:
         section_info_out = {}
         subsection_map = {}
 
-        root_section = self._section_graph_object.root_section()
-        if root_section is None:
+        try:
+            root_section = self._section_graph_object.root_sections()[0]
+        except IndexError:
             return {
                 "event_list": [],
                 "section_graph": {},
@@ -1034,7 +1039,7 @@ class Compiler:
                 v["is_leaf"] = True
             else:
                 v["is_leaf"] = False
-        section_graph = self._section_graph_object.as_section_graph()
+        section_graph = self._section_graph_object.as_primitive()
         section_signals_with_children = {}
 
         for section in self._section_graph_object.sections():

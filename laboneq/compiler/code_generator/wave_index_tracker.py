@@ -19,7 +19,7 @@ class WaveIndexTracker:
         if signal_type == "csv":
             # For CSV store only the signature, do not allocate an index
             self._wave_indices[wave_id] = (-1, signal_type)
-            return
+            return None
 
         index = self._next_wave_index
         self._next_wave_index += 1

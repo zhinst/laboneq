@@ -116,7 +116,8 @@ class Controller:
 
     def _allocate_resources(self):
         self._devices.free_allocations()
-        for osc_param in self._recipe_data.recipe.experiment.oscillator_params:
+        osc_params = self._recipe_data.recipe.experiment.oscillator_params
+        for osc_param in sorted(osc_params, key=lambda p: p.id):
             self._devices.find_by_uid(osc_param.device_id).allocate_osc(osc_param)
 
     def _reset_to_idle_state(self):
@@ -333,7 +334,7 @@ class Controller:
             if init is None:
                 continue
             nodes_to_configure_triggers.extend(
-                device.collect_trigger_configuration_nodes(init)
+                device.collect_trigger_configuration_nodes(init, self._recipe_data)
             )
 
         batch_set(nodes_to_configure_triggers)
