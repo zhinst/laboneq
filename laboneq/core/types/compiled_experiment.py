@@ -2,22 +2,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Union, Optional, TYPE_CHECKING
-import numpy as np
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from laboneq.core.types.enums.mixer_type import MixerType
-from laboneq.core.utilities.replace_pulse import replace_pulse
+import numpy as np
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.device_output_signals import DeviceOutputSignals
+from laboneq.core.types.enums.mixer_type import MixerType
+from laboneq.core.utilities.replace_pulse import replace_pulse
 
 if TYPE_CHECKING:
-    from laboneq.dsl.device.device_setup import DeviceSetup
-    from laboneq.dsl.experiment.pulse import Pulse
-    from laboneq.dsl.experiment import Experiment
     from numpy.typing import ArrayLike
+
+    from laboneq.dsl.device.device_setup import DeviceSetup
+    from laboneq.dsl.experiment import Experiment
+    from laboneq.dsl.experiment.pulse import Pulse
 
 
 @dataclass

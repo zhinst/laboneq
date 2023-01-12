@@ -4,8 +4,8 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-from .pulse import Pulse
 from .operation import Operation
+from .pulse import Pulse
 
 
 @dataclass(init=True, repr=True, order=True)

@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass, field
-from ..instrument import Instrument
+
 from laboneq.core.types.enums import ReferenceClockSource
+
+from ..instrument import Instrument
 
 
 @dataclass(init=True, repr=True, order=True)

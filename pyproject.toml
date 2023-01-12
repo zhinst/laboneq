@@ -1,5 +1,88 @@
+[build-system]
+requires = [ "setuptools>=65.0.0", "wheel",]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "laboneq"
+dynamic = ["version", "readme"]
+description = "Zurich Instrument tools for quantum information science"
+license = {text = "Apache 2.0"}
+requires-python = ">=3.7"
+authors = [
+    { name = "Zurich Instruments Development Team", email = "info@zhinst.com" },
+]
+keywords = [
+    "quantum",
+    "sdk",
+    "zhinst",
+]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "engineering_notation",
+    "intervaltree",
+    "ipykernel",
+    "jsonschema",
+    "marshmallow",
+    "marshmallow_enum",
+    "marshmallow_union",
+    "matplotlib",
+    "numpy",
+    "orjson",
+    "pybase64",
+    "pycparser",
+    "python-box",
+    "pyyaml",
+    "requests",
+    "rustworkx",
+    "scipy",
+    "sortedcollections",
+    "zhinst-core==22.8.36541",
+    "zhinst-toolkit~=0.5.0",
+    "zhinst-utils~=0.1.3",
+]
+
+[project.urls]
+Homepage = "https://github.com/zhinst/laboneq"
+
+[tool.setuptools]
+zip-safe = false
+
+[tool.setuptools.dynamic]
+version = {file = "laboneq/VERSION.txt"}
+readme = {file = "README.md"}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["laboneq*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+laboneq = [
+    "compiler/qccs-schema_2_5_0.json", 
+    "pulse_sheet_viewer/pulse_sheet_viewer_template.html", 
+    "VERSION.txt"
+]
+
 [tool.black]
 line-length = 88
 target-version = ["py37"]
-include = '\.pyi?$'
+include = "\\.pyi?$"
 required-version = "22.8.0"
+
+[tool.isort]
+profile = "black"
+src_paths = ["laboneq", "tests"]

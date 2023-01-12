@@ -1,12 +1,12 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from enum import Enum
-from types import SimpleNamespace
-from typing import Dict, Any, Optional
+import copy
 import itertools
 import logging
-import copy
+from enum import Enum
+from types import SimpleNamespace
+from typing import Any, Dict, Optional
 
 import rustworkx
 

@@ -4,13 +4,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, List, TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Optional
 
 from laboneq.core.types.enums.mixer_type import MixerType
 
 if TYPE_CHECKING:
-    from laboneq.compiler.common.device_type import DeviceType
     from laboneq.compiler.common.awg_info import AWGInfo
+    from laboneq.compiler.common.device_type import DeviceType
 
 
 @dataclass(init=True, repr=True, order=True)

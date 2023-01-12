@@ -2,20 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from typing import List, Tuple, Union, Dict, Any, TYPE_CHECKING, Optional
+
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from laboneq.core.exceptions import LabOneQException
+
 from ..calibration import Calibration
 from ..serialization import Serializer
 from .acquired_result import AcquiredResult
 
-from dataclasses import dataclass, field
-
 if TYPE_CHECKING:
-    from laboneq.core.types import CompiledExperiment
-    from laboneq.dsl.experiment import Experiment
-    from laboneq.dsl.device.device_setup import DeviceSetup
     from numpy.typing import ArrayLike
+
+    from laboneq.core.types import CompiledExperiment
+    from laboneq.dsl.device.device_setup import DeviceSetup
+    from laboneq.dsl.experiment import Experiment
 
 
 @dataclass(init=True, repr=True, order=True)
@@ -68,7 +70,7 @@ class Results:
             handle (str): The handle assigned to an 'acquire' event in the experiment definition.
 
         Returns:
-            An object of type :class:`laboneq.dsl.result.AcquiredResult`.
+            An object of type :class:`~.dsl.result.acquired_result.AcquiredResult`.
 
         Raises:
             LabOneQException: No result is available for the provided handle.

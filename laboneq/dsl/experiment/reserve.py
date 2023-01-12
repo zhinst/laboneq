@@ -1,11 +1,10 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from .operation import Operation
-
 from dataclasses import dataclass, field
-
 from typing import Any
+
+from .operation import Operation
 
 
 @dataclass(init=True, repr=True, order=True)

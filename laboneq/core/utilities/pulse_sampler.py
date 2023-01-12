@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
 import logging
 from typing import Any, Dict, Optional, Union
+
 import numpy as np
 
 from laboneq.core.exceptions import LabOneQException

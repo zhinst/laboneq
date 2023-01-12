@@ -1,9 +1,9 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 from dataclasses import asdict, dataclass
 from enum import Enum
-import math
 
 
 @dataclass(eq=True, frozen=True)

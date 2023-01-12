@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, Tuple, Any, Optional, List
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class WaveIndexTracker:

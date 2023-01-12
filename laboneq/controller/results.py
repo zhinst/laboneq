@@ -2,14 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
 from copy import deepcopy
+from typing import TYPE_CHECKING, Any, List, Union
+
 import numpy as np
 from numpy.typing import ArrayLike
-from typing import Any, List, Union, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from laboneq.dsl.result.results import Results
     from laboneq.dsl.result.acquired_result import AcquiredResult
+    from laboneq.dsl.result.results import Results
 
 
 def make_empty_results() -> Results:

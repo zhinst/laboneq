@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Dict, List
 
 import numpy as np
+
 from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.simulator.seqc_parser import (
     SeqCDescriptor,
@@ -15,7 +16,7 @@ from laboneq.simulator.seqc_parser import (
 )
 from laboneq.simulator.seqc_parser import run_single_source as run_single_source_impl
 from laboneq.simulator.seqc_parser import simulate
-from laboneq.simulator.wave_scroller import WaveScroller, SimTarget
+from laboneq.simulator.wave_scroller import SimTarget, WaveScroller
 
 
 @dataclass

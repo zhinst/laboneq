@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Union, TYPE_CHECKING
+from typing import TYPE_CHECKING, Union
 
 from laboneq.dsl.enums import CarrierType, ModulationType
 

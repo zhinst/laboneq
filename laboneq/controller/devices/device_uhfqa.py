@@ -2,10 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from typing import Any, Dict, Optional, List
+
+from typing import Any, Dict, List, Optional
+
 import numpy as np
+
+from laboneq.controller.communication import (
+    CachingStrategy,
+    DaqNodeAction,
+    DaqNodeGetAction,
+    DaqNodeSetAction,
+)
+from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.devices.zi_node_monitor import Command, NodeControlBase
-from laboneq.controller.recipe_enums import DIOConfigType
+from laboneq.controller.recipe_1_4_0 import IO, Initialization, IntegratorAllocation
+from laboneq.controller.recipe_enums import DIOConfigType, ReferenceClockSource
 from laboneq.controller.recipe_processor import (
     AwgConfig,
     AwgKey,
@@ -15,18 +26,8 @@ from laboneq.controller.recipe_processor import (
     get_wave,
 )
 from laboneq.controller.util import LabOneQControllerException
-from laboneq.controller.communication import (
-    DaqNodeAction,
-    DaqNodeSetAction,
-    DaqNodeGetAction,
-    CachingStrategy,
-)
-
-from laboneq.controller.recipe_1_4_0 import Initialization, IntegratorAllocation, IO
-from laboneq.controller.recipe_enums import ReferenceClockSource
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
-from laboneq.controller.devices.device_zi import DeviceZI
 
 SAMPLE_FREQUENCY_HZ = 1.8e9
 DELAY_NODE_GRANULARITY_SAMPLES = 4

@@ -6,10 +6,11 @@ from __future__ import annotations
 import atexit
 from typing import TYPE_CHECKING, Dict
 
+from numpy import typing as npt
+
 from laboneq import controller as ctrl
 from laboneq.compiler import Compiler
 from laboneq.core.types import CompiledExperiment
-from numpy import typing as npt
 
 if TYPE_CHECKING:
     from laboneq.dsl.experiment.pulse import Pulse
@@ -55,6 +56,7 @@ class LabOneQFacade:
                 if k
                 in (
                     "MAX_EVENTS_TO_PUBLISH",
+                    "PHASE_RESOLUTION_BITS",
                     "HDAWG_MIN_PLAYWAVE_HINT",
                     "HDAWG_MIN_PLAYZERO_HINT",
                     "UHFQA_MIN_PLAYWAVE_HINT",
@@ -100,9 +102,9 @@ class LabOneQFacade:
     def simulate_outputs(
         compiled_experiment: CompiledExperiment, max_simulation_time: float, logger
     ):
-        from laboneq.simulator import analyze_compiler_output_memory
         from laboneq.core.types.device_output_signals import DeviceOutputSignals
         from laboneq.dsl.result import Waveform
+        from laboneq.simulator import analyze_compiler_output_memory
 
         try:
 

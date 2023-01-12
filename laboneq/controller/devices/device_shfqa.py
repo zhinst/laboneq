@@ -2,19 +2,27 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
 import time
+from typing import Any, Dict, List, Optional
+
 import numpy as np
-from typing import Any, Dict, Optional, List
 from numpy import typing as npt
 
-from laboneq.controller.recipe_enums import DIOConfigType
-from laboneq.controller.util import LabOneQControllerException
 from laboneq.controller.communication import (
-    DaqNodeAction,
-    DaqNodeSetAction,
-    DaqNodeGetAction,
     CachingStrategy,
+    DaqNodeAction,
+    DaqNodeGetAction,
+    DaqNodeSetAction,
 )
+from laboneq.controller.devices.device_zi import DeviceZI
+from laboneq.controller.recipe_1_4_0 import (
+    IO,
+    Initialization,
+    IntegratorAllocation,
+    Measurement,
+)
+from laboneq.controller.recipe_enums import DIOConfigType
 from laboneq.controller.recipe_processor import (
     AwgConfig,
     AwgKey,
@@ -23,16 +31,10 @@ from laboneq.controller.recipe_processor import (
     RtExecutionInfo,
     get_wave,
 )
-from laboneq.controller.recipe_1_4_0 import (
-    Initialization,
-    IntegratorAllocation,
-    Measurement,
-    IO,
-)
+from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
-from laboneq.controller.devices.device_zi import DeviceZI
 
 REFERENCE_CLOCK_SOURCE_INTERNAL = 0
 REFERENCE_CLOCK_SOURCE_EXTERNAL = 1
@@ -344,6 +346,9 @@ class DeviceSHFQA(DeviceZI):
                     # TODO(2K): 200ns input-to-output delay was taken from one of the example notebooks, what value to use?
                     DaqNodeSetAction(
                         self._daq, f"/{self.serial}/scopes/0/trigger/delay", 200e-9
+                    ),
+                    DaqNodeSetAction(
+                        self._daq, f"/{self.serial}/scopes/0/trigger/enable", 1
                     ),
                     DaqNodeSetAction(self._daq, f"/{self.serial}/scopes/0/enable", 0),
                     DaqNodeSetAction(

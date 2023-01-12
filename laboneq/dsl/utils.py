@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Dict, List
-from laboneq.dsl.device import DeviceSetup
-from laboneq.dsl.experiment import ExperimentSignal
-from laboneq.dsl.calibration import Oscillator
+
 from laboneq.core import path as qct_path
 from laboneq.core.types.enums import ModulationType
+from laboneq.dsl.calibration import Oscillator
+from laboneq.dsl.device import DeviceSetup
+from laboneq.dsl.experiment import ExperimentSignal
 
 
 def _canonical_line(line: str) -> str:

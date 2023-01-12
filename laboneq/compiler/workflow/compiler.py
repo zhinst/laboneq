@@ -8,36 +8,34 @@ import logging
 import math
 import os
 from collections import Counter
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import List, Dict, Set, Tuple, Union, Optional, Any
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import numpy as np
 from sortedcollections import SortedDict
 
-from laboneq.compiler.experiment_access.section_graph import SectionGraph
-from laboneq.core.types.compiled_experiment import CompiledExperiment
-from laboneq.core.types.enums.acquisition_type import AcquisitionType
-from laboneq.compiler.code_generator import (
-    CodeGenerator,
-)
-from laboneq.compiler.common.signal_obj import SignalObj
-
+from laboneq._observability.tracing import trace
+from laboneq.compiler.code_generator import CodeGenerator
 from laboneq.compiler.common.awg_info import AWGInfo
 from laboneq.compiler.common.awg_signal_type import AWGSignalType
-from laboneq.compiler.common.trigger_mode import TriggerMode
 from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.device_type import DeviceType
+from laboneq.compiler.common.signal_obj import SignalObj
+from laboneq.compiler.common.trigger_mode import TriggerMode
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
+from laboneq.compiler.experiment_access.section_graph import SectionGraph
+from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
+from laboneq.compiler.scheduler.scheduler import Scheduler
 from laboneq.compiler.workflow.precompensation_helpers import (
     compute_precompensation_delays_on_grid,
-    precompensation_is_nonzero,
     compute_precompensations_and_delays,
+    precompensation_is_nonzero,
     verify_precompensation_parameters,
 )
 from laboneq.compiler.workflow.recipe_generator import RecipeGenerator
-from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
-from laboneq.compiler.scheduler.scheduler import Scheduler
+from laboneq.core.types.compiled_experiment import CompiledExperiment
+from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.mixer_type import MixerType
 
 _logger = logging.getLogger(__name__)
@@ -1132,6 +1130,7 @@ class Compiler:
         else:
             _logger.debug("END %s", src["filename"])
 
+    @trace("compiler-run()")
     def run(self, data) -> CompiledExperiment:
         _logger.debug("ES Compiler run")
 

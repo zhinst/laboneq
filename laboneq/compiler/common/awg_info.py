@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Tuple, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Optional, Tuple
+
 from laboneq.compiler.common.trigger_mode import TriggerMode
 
 if TYPE_CHECKING:

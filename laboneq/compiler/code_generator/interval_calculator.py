@@ -3,9 +3,9 @@
 
 import dataclasses
 import logging
-from typing import List, Optional, Any, Iterable
+from typing import Any, Iterable, List, Optional
 
-from intervaltree import IntervalTree, Interval
+from intervaltree import Interval, IntervalTree
 
 from laboneq.compiler.fastlogging import NullLogger
 

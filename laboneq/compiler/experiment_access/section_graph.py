@@ -405,7 +405,7 @@ class SectionGraph:
                     for e in section_instance_tree.out_edges(parent)
                 }
 
-            _logger.debug("node_id=%i siblings=%i", node_id, siblings)
+            _logger.debug("node_id=%i siblings=%s", node_id, siblings)
             section_link_id = section_instance_tree[node_id]["section_link_id"]
 
             for edge in section_graph_instances.out_edges(section_link_id):
@@ -502,6 +502,7 @@ class SectionGraph:
         for node in self._section_graph.node_indices():
             for parent, child, data in self._section_graph.out_edges(node):
                 _logger.debug(
+                    "%s, %s, %s",
                     self._section_graph[parent]["section_id"],
                     self._section_graph[child]["section_id"],
                     data,

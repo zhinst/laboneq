@@ -2,15 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from typing import List, Union, TYPE_CHECKING
 
-from .executor import *
+from typing import TYPE_CHECKING, List, Union
 
 from laboneq.core.types.enums import ExecutionType
 
+from .executor import *
+
 if TYPE_CHECKING:
-    from laboneq.dsl.experiment import Experiment, Operation, Section, Sweep
     from laboneq.dsl import SweepParameter
+    from laboneq.dsl.experiment import Experiment, Operation, Section, Sweep
 
 
 class ExecutionFactoryFromExperiment(ExecutionFactory):
@@ -22,9 +23,9 @@ class ExecutionFactoryFromExperiment(ExecutionFactory):
         self, children: List[Union[Operation, Section]], parent_uid: str
     ):
         from laboneq.dsl.experiment import (
-            Operation,
             AcquireLoopNt,
             AcquireLoopRt,
+            Operation,
             Sweep,
         )
 
@@ -77,7 +78,7 @@ class ExecutionFactoryFromExperiment(ExecutionFactory):
         return SetSoftwareParam(parameter.uid, parameter.values, parameter.axis_name)
 
     def _statement_from_operation(self, operation, parent_uid: str):
-        from laboneq.dsl.experiment import Call, Set, PlayPulse, Delay, Reserve, Acquire
+        from laboneq.dsl.experiment import Acquire, Call, Delay, PlayPulse, Reserve, Set
 
         if isinstance(operation, Call):
             return ExecUserCall(operation.func_name, operation.args)

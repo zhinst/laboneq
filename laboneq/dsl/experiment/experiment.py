@@ -2,24 +2,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from typing import Any, Dict, List, Union, Deque, Optional, TYPE_CHECKING
+
 from collections import deque
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Deque, Dict, List, Optional, Union
 
 from laboneq.core.exceptions import LabOneQException
+from laboneq.core.types.enums import DSLVersion
 from laboneq.dsl.calibration.calibration import Calibration
 from laboneq.dsl.device.io_units.logical_signal import LogicalSignal
 from laboneq.dsl.enums import (
-    ExecutionType,
-    AveragingMode,
-    RepetitionMode,
     AcquisitionType,
+    AveragingMode,
+    ExecutionType,
+    RepetitionMode,
 )
 from laboneq.dsl.experiment.pulse import Pulse
-from .experiment_signal import ExperimentSignal
-from .section import Sweep, AcquireLoopNt, AcquireLoopRt, Section, Match, Case
-from laboneq.core.types.enums import DSLVersion
 
-from dataclasses import dataclass, field
+from .experiment_signal import ExperimentSignal
+from .section import AcquireLoopNt, AcquireLoopRt, Case, Match, Section, Sweep
 
 if TYPE_CHECKING:
     from .. import Parameter
@@ -67,10 +68,10 @@ class Experiment:
         :param connect_to:
             The `LogicalSignal` this experiment signal shall be connected to.
             Defaults to None, meaning that there is no connection defined yet.
-        :type connect_to: :class:`laboneq.dsl.devices.LogicalSignal`, optional
+        :type connect_to: :class:`~.LogicalSignal`, optional
 
         :return: The created and added signal.
-        :rtype: :class:`laboneq.dsl.experiment.ExperimentSignal`
+        :rtype: :class:`~.ExperimentSignal`
 
         .. seealso:: :func:`map_signal`
         """
@@ -111,14 +112,14 @@ class Experiment:
         """Connect an experiment signal to a logical signal.
 
         In order to relate an experiment signal to a logical signal defined in a
-        device setup (:class:`laboneq.dsl.devices.DeviceSetup`), you need to make
+        device setup (:class:`~.DeviceSetup`), you need to make
         a connection between these two types of signals.
 
         :param experiment_signal_uid: The unique id of the experiment signal to
             be connected.
         :type experiment_signal_uid: `UID = str`
         :param logical_signal: The logical signal to connect to.
-        :type logical_signal: :class:`laboneq.dsl.devices.LogicalSignal`
+        :type logical_signal: :class:`~.LogicalSignal`
 
         .. seealso:: :func:`add_signal`
         """
@@ -144,16 +145,18 @@ class Experiment:
         """Get an overview of the signal mapping.
 
         :return: A dictionary with entries for:
-            - `is_all_mapped`: `True` if all experiment signals are mapped
-            to a logical signal, `False` otherwise.
-            - `mapped_signals`: A list of experiment signal uids that have a
-            mapping to a logical signal.
-            - `not_mapped_signals`: A list of experiment signal uids that
-            have no mapping to a logical signal.
+
+            - `is_all_mapped`:
+               `True` if all experiment signals are mapped to a logical signal, `False` otherwise.
+            - `mapped_signals`:
+               A list of experiment signal uids that have a mapping to a logical signal.
+            - `not_mapped_signals`:
+               A list of experiment signal uids that have no mapping to a logical signal.
         """
         is_all_mapped = True
         mapped_signals = list()
         not_mapped_signals = list()
+
         for signal in self.signals.values():
             if signal.is_mapped():
                 mapped_signals.append(signal.uid)
@@ -252,19 +255,20 @@ class Experiment:
         set_oscillator_phase=None,
         length=None,
         pulse_parameters: Optional[Dict[str, Any]] = None,
+        precompensation_clear: Optional[bool] = None,
     ):
         """Play a pulse.
 
         :param signal: The unique id of the signal to play the pulse on.
         :type signal: `str`
         :param pulse: The pulse description of the pulse to be played.
-        :type pulse: :class:`laboneq.dsl.experiments.PulseBase`
+        :type pulse: :class:`~.experiment.pulse.Pulse`
         :param amplitude: Amplitude the pulse shall be played with. Defaults to
             `None`, meaning that the pulse is played as is.
-        :type amplitude: `float` or :class:`laboneq.dsl.Parameter`, optional
+        :type amplitude: `float` or :class:`~.dsl.parameter.Parameter`, optional
         :param length: Length for which the pulse shall be played. Defaults to
             `None`, meaning that the pulse is played for its whole length.
-        :type length: `float` or :class:`laboneq.dsl.Parameter`, optional
+        :type length: `float` or :class:`~.dsl.parameter.Parameter`, optional
         :param phase: The desired phase in radians the pulse shall be played with. Defaults to
             `None`, meaning that the pulse is played as is.
         :type phase: `float`, optional
@@ -285,19 +289,28 @@ class Experiment:
             set_oscillator_phase=set_oscillator_phase,
             length=length,
             pulse_parameters=pulse_parameters,
+            precompensation_clear=precompensation_clear,
         )
 
-    def delay(self, signal: str, time: Union[float, Parameter]):
+    def delay(
+        self,
+        signal: str,
+        time: Union[float, Parameter],
+        precompensation_clear: Optional[bool] = None,
+    ):
         """Delay execution of next operation on the given experiment signal.
 
         :param signal: The unique id of the signal to delay execution of next
             operation.
         :param time: The delay time in seconds. The parameter can either be
             given as a float or as a sweep parameter
-            (:class:`laboneq.dsl.Parameter`).
+            (:class:`~.dsl.parameter.Parameter`).
+        :param precompensation_clear: Clear the precompensation filter during this delay.
         """
         current_section = self._peek_section()
-        current_section.delay(signal=signal, time=time)
+        current_section.delay(
+            signal=signal, time=time, precompensation_clear=precompensation_clear
+        )
 
     def reserve(self, signal):
         """Reserves an experiment signal for the active section.
@@ -380,9 +393,9 @@ class Experiment:
                 of sweep parameters. If multiple sweep parameters are given, the
                 parameters are executed in parallel in this sweep loop.
             execution_type: Defines if the sweep is executed in near time or
-                real time. Defaults to :class:`ExecutionType.NEAR_TIME`.
+                real time. Defaults to :class:`.~ExecutionType.NEAR_TIME`.
             alignment: Alignment of the operations in the section. Defaults to
-                :class:`SectionAlignment.LEFT`.
+                :class:`.~SectionAlignment.LEFT`.
             reset_oscillator_phase: When True, reset all oscillators at the start of
                 each step.
 
@@ -454,7 +467,7 @@ class Experiment:
             uid: The unique ID for this section.
             count: The number of acquire iterations.
             averaging_mode: The mode of how to average the acquired data.
-                Defaults to :class:`AveragingMode.CYCLIC`.
+                Defaults to :attr:`~.AveragingMode.CYCLIC`.
         """
         return Experiment._AcquireLoopNtSectionContext(
             self, uid=uid, count=count, averaging_mode=averaging_mode
@@ -498,18 +511,18 @@ class Experiment:
             uid: The unique ID for this section.
             count: The number of acquire iterations.
             averaging_mode: The mode of how to average the acquired data.
-                Defaults to :class:`AveragingMode.CYCLIC`.
-                Further option: :class:`AveragingMode.SEQUENTIAL`.
+                Defaults to :attr:`.AveragingMode.CYCLIC`.
+                Further option: :attr:`.AveragingMode.SEQUENTIAL`.
             repetition_mode: Defines the shot repetition mode. Defaults to
-                :class:`RepetitionMode.FASTEST`. Further options are
-                :class:`RepetitionMode.CONSTANT` and :class:`RepetitionMode.AUTO`.
+                :attr:`.RepetitionMode.FASTEST`. Further options are
+                :attr:`.RepetitionMode.CONSTANT` and :attr:`.RepetitionMode.AUTO`.
             repetition_time: This is the shot repetition time in sec. This
                 argument is only required and valid if :param:repetition_mode is
                 :class:`RepetitionMode.CONSTANT`. The parameter can either be
-                given as a float or as a sweep parameter (:class:`laboneq.dsl.Parameter`).
+                given as a float or as a sweep parameter (:class:`~.dsl.parameter.Parameter`).
             acquisition_type: This is the acquisition type.
-                Defaults to :class:`AcquisitionType.INTEGRATION`. Further options are
-                :class:`AcquisitionType.SPECTROSCOPY` and :class:`AcquisitionType.RAW`.
+                Defaults to :attr:`.AcquisitionType.INTEGRATION`. Further options are
+                :attr:`.AcquisitionType.SPECTROSCOPY` and :attr:`.AcquisitionType.RAW`.
             reset_oscillator_phase: When True, the phase of every oscillator is reset at
                 the start of the each step of the acquire loop.
         """
@@ -604,7 +617,7 @@ class Experiment:
         length=None,
         alignment=None,
         uid=None,
-        play_after: Optional[str] = None,
+        play_after: Optional[Union[str, List[str]]] = None,
         trigger: Optional[Dict[str, Dict[str, int]]] = None,
     ):
         """Define an section for scoping operations.
@@ -631,9 +644,9 @@ class Experiment:
                 The parameter can either be given as a float or as a sweep
                 parameter (:class:`~.Parameter`).
             alignment: Alignment of the operations in the section. Defaults to
-                :class:`SectionAlignment.LEFT`.
-            play_after: Play this section after the end of the section with the
-                given ID. Defaults to None.
+                :class:`~.SectionAlignment.LEFT`.
+            play_after: Play this section after the end of the section(s) with the
+                given ID(s) (single string or list of strings). Defaults to None.
             trigger: Play a pulse a trigger pulse for the duration of this section.
                 See below for details.
 
@@ -760,7 +773,10 @@ class Experiment:
             self.accept_section_visitor(visitor, section.sections)
 
     def match_local(
-        self, handle: str, uid: str = None, play_after: Optional[str] = None
+        self,
+        handle: str,
+        uid: str = None,
+        play_after: Optional[Union[str, List[str]]] = None,
     ):
         """Define a section which switches between different child sections based
         on a QA measurement on an SHFQC.
@@ -776,8 +792,8 @@ class Experiment:
             uid: The unique ID for this section.
             handle: A unique identifier string that allows to retrieve the
                 acquired data.
-            play_after Play this section after the end of the section with the
-                given ID. Defaults to None.
+            play_after Play this section after the end of the section(s) with the
+                given ID(s) (single string or list of strings). Defaults to None.
 
         """
         return Experiment._MatchSectionContext(
@@ -785,7 +801,10 @@ class Experiment:
         )
 
     def match_global(
-        self, handle: str, uid: str = None, play_after: Optional[str] = None
+        self,
+        handle: str,
+        uid: str = None,
+        play_after: Optional[Union[str, List[str]]] = None,
     ):
         """Define a section which switches between different child sections based
         on a QA measurement via the PQSC.
@@ -801,8 +820,8 @@ class Experiment:
             uid: The unique ID for this section.
             handle: A unique identifier string that allows to retrieve the
                 acquired data.
-            play_after Play this section after the end of the section with the
-                given ID. Defaults to None.
+            play_after Play this section after the end of the section(s) with the
+                given ID(s) (single string or list of strings). Defaults to None.
 
         """
         raise LabOneQException("Global feedback via the PQSC is not yet supported.")
@@ -842,15 +861,11 @@ class Experiment:
             with exp.case(...):
                 # here come the operations that shall be executed in the section
 
-        :note: No subsections are allowed, only ``play`` and ``delay``.
+        :note: No subsections are allowed, only :meth:`play` and :meth:`delay`.
 
         Args:
             uid: The unique ID for this section.
-            handle: A unique identifier string that allows to retrieve the
-                acquired data.
-            play_after Play this section after the end of the section with the
-                given ID. Defaults to None.
-
+            state: The state that this section is executed for.
         """
         if not isinstance(self._peek_section(), Match):
             raise LabOneQException("Case section must be inside a Match section")

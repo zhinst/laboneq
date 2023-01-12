@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from copy import deepcopy
 
 import logging
 import re
+from copy import deepcopy
 from typing import TYPE_CHECKING, Dict, Iterator, List, Optional, Tuple
 
 from laboneq.controller.communication import (
@@ -21,8 +21,8 @@ from laboneq.controller.devices.device_zi import DeviceQualifier, DeviceZI
 from laboneq.controller.devices.zi_node_monitor import (
     ConditionsChecker,
     ResponseWaiter,
-    filter_conditions,
     filter_commands,
+    filter_conditions,
     filter_responses,
 )
 from laboneq.controller.util import LabOneQControllerException
@@ -149,12 +149,16 @@ class DeviceCollection:
         # Wait until clock status is available for all devices
         response_waiter = ResponseWaiter()
         for device in self._devices.values():
+            target_node_monitor = device.daq.node_monitor
+            clock_source_control_nodes = [
+                node.path for node in device.clock_source_control_nodes()
+            ]
+            target_node_monitor.fetch(clock_source_control_nodes)
             response_waiter.add(
-                target=device.daq.node_monitor,
-                conditions={
-                    node.path: None for node in device.clock_source_control_nodes()
-                },
+                target=target_node_monitor,
+                conditions={path: None for path in clock_source_control_nodes},
             )
+
         if not response_waiter.wait_all(timeout=2):
             raise RuntimeError(
                 f"Internal error: Didn't get all the clock status node values within 2s. Missing:\n{response_waiter.remaining_str()}"

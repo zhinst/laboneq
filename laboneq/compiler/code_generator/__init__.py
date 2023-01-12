@@ -6,16 +6,16 @@ from laboneq.compiler.code_generator.code_generator import (
     PulseDef,
     sample_pulse,
 )
-from laboneq.compiler.code_generator.wave_index_tracker import WaveIndexTracker
+from laboneq.compiler.code_generator.interval_calculator import (
+    are_cut_points_valid,
+    calculate_intervals,
+)
 from laboneq.compiler.code_generator.measurement_calculator import (
-    MeasurementCalculator,
     IntegrationTimes,
+    MeasurementCalculator,
 )
 from laboneq.compiler.code_generator.seq_c_generator import (
     SeqCGenerator,
     string_sanitize,
 )
-from laboneq.compiler.code_generator.interval_calculator import (
-    are_cut_points_valid,
-    calculate_intervals,
-)
+from laboneq.compiler.code_generator.wave_index_tracker import WaveIndexTracker

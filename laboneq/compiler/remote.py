@@ -1,9 +1,10 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-import requests
-import re
 import json
+import re
+
+import requests
 
 
 class RemoteCompiler:

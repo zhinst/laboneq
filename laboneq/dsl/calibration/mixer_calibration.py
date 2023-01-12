@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
 from dataclasses import dataclass, field
+from typing import List, Optional
 
 from laboneq.dsl.calibration.observable import Observable
 

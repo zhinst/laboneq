@@ -1,7 +1,8 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Dict, Any
+from typing import Any, Dict
+
 from laboneq.core.exceptions import LabOneQException
 
 

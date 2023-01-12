@@ -1,15 +1,13 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List
-from laboneq.core.types.enums.io_direction import IODirection
+from dataclasses import dataclass
 
+from laboneq.core.types.enums.io_direction import IODirection
 from laboneq.dsl.device import Port
-from .zi_standard_instrument import ZIStandardInstrument
 
 from ...enums import IOSignalType
-
-from dataclasses import dataclass, field
+from .zi_standard_instrument import ZIStandardInstrument
 
 
 @dataclass(init=True, repr=True, order=True)

@@ -3,10 +3,10 @@
 
 from __future__ import annotations
 
-from typing import List, Union, Dict, Any
+from typing import Any, Dict, List, Union
 
-from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.code_generator.seq_c_generator import SeqCGenerator
+from laboneq.compiler.common.device_type import DeviceType
 
 
 class SeqCTracker:

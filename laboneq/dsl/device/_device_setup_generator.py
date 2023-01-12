@@ -5,14 +5,14 @@ import abc
 import copy
 import itertools
 import logging
-from typing import Iterator, List, Tuple, Dict, Optional
+from typing import Dict, Iterator, List, Optional, Tuple
 
 import laboneq.core.path as qct_path
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import ReferenceClockSource
 from laboneq.dsl.device import Instrument
 from laboneq.dsl.device.connection import Connection
-from laboneq.dsl.device.instruments import HDAWG, UHFQA, SHFQA, SHFSG, PQSC
+from laboneq.dsl.device.instruments import HDAWG, PQSC, SHFQA, SHFSG, UHFQA
 from laboneq.dsl.device.io_units import (
     LogicalSignal,
     PhysicalChannel,
@@ -880,9 +880,10 @@ class _DeviceSetupGenerator:
         from yaml import load
 
         try:
-            from yaml import CLoader as Loader, CDumper as Dumper
+            from yaml import CDumper as Dumper
+            from yaml import CLoader as Loader
         except ImportError:
-            from yaml import Loader, Dumper
+            from yaml import Dumper, Loader
 
         setup_desc = load(yaml_text, Loader=Loader)
 

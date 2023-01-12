@@ -2,12 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
 import copy
 import math
 from math import ceil
-from typing import Dict, Any, TYPE_CHECKING, NewType
+from typing import TYPE_CHECKING, Any, Dict, NewType
+
 import numpy as np
 from engineering_notation import EngNumber
+
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.core.exceptions import LabOneQException
 

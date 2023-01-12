@@ -3,15 +3,17 @@
 
 from __future__ import annotations
 
-import json
 import functools
+import json
 import logging
 import warnings
 from copy import deepcopy
-from typing import Any, List, Dict, Callable, TYPE_CHECKING, Union, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 from numpy import typing as npt
 
+from laboneq._observability.tracing import trace
+from laboneq.controller.toolkit_adapter import ToolkitDevices
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types import CompiledExperiment
 from laboneq.dsl.calibration import Calibration
@@ -20,7 +22,6 @@ from laboneq.dsl.experiment import Experiment
 from laboneq.dsl.laboneq_facade import LabOneQFacade
 from laboneq.dsl.result import Results
 from laboneq.dsl.serialization import Serializer
-from laboneq.controller.toolkit_adapter import ToolkitDevices
 
 if TYPE_CHECKING:
     from laboneq.controller import Controller
@@ -199,6 +200,7 @@ class Session:
         self._user_functions[name] = func
 
     @_SessionDeco.entrypoint
+    @trace("session.connect()")
     def connect(self, do_emulation=False, ignore_lab_one_version_error=False):
         """Connects the session to the QCCS system.
 
@@ -232,6 +234,7 @@ class Session:
         return self._connection_state
 
     @_SessionDeco.entrypoint
+    @trace("session.compile()")
     def compile(
         self,
         experiment: Experiment,
@@ -248,7 +251,6 @@ class Session:
                 after a configurable time, see `session.max_simulation_time`.
             compiler_settings: Extra options passed to the compiler.
         """
-
         if not self._assert_connected(fail=False):
             return
 
@@ -265,6 +267,7 @@ class Session:
         return self._compiled_experiment
 
     @_SessionDeco.entrypoint
+    @trace("session.run()")
     def run(
         self,
         experiment: Optional[Union[Experiment, CompiledExperiment]] = None,
@@ -289,7 +292,6 @@ class Session:
             A `Results` object in case of success. `None` if the session is not
             connected.
         """
-
         if experiment:
             if isinstance(experiment, CompiledExperiment):
                 self._compiled_experiment = experiment

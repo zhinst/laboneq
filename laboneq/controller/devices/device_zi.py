@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from copy import deepcopy
 
 import json
 import logging
@@ -11,18 +10,13 @@ import os
 import os.path
 import time
 from abc import ABC, abstractmethod
+from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
 from math import floor
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 from weakref import ReferenceType, ref
 
-from typing import List, Optional, Tuple, Any, Set, TYPE_CHECKING, Dict
-from laboneq.controller.devices.zi_node_monitor import NodeControlBase
-from laboneq.controller.recipe_1_4_0 import Initialization, OscillatorParam
-from laboneq.controller.recipe_processor import RecipeData, RtExecutionInfo
-
-from laboneq.controller.util import LabOneQControllerException
 from laboneq.controller.communication import (
     AwgModuleWrapper,
     CachingStrategy,
@@ -31,6 +25,7 @@ from laboneq.controller.communication import (
     DaqNodeSetAction,
     DaqWrapper,
 )
+from laboneq.controller.devices.zi_node_monitor import NodeControlBase
 from laboneq.controller.recipe_1_4_0 import (
     Initialization,
     IntegratorAllocation,
@@ -50,12 +45,11 @@ from laboneq.core.types.enums.averaging_mode import AveragingMode
 if TYPE_CHECKING:
     from laboneq.core.types import CompiledExperiment
 
+import numpy as np
 import zhinst.core
 import zhinst.utils
-from zhinst.core.errors import CoreError as LabOneCoreError
-
-import numpy as np
 from numpy import typing as npt
+from zhinst.core.errors import CoreError as LabOneCoreError
 
 
 class AwgCompilerStatus(Enum):

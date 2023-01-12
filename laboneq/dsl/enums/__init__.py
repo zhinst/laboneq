@@ -1,18 +1,20 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from laboneq.core.types.enums import CarrierType
-from laboneq.core.types.enums import IODirection
-from laboneq.core.types.enums import IOSignalType
-from laboneq.core.types.enums import ModulationType
-from laboneq.core.types.enums import DSLVersion
-from laboneq.core.types.enums import ExecutionType
-from laboneq.core.types.enums import AcquisitionType
-from laboneq.core.types.enums import SectionAlignment
-from laboneq.core.types.enums import AveragingMode
-from laboneq.core.types.enums import RepetitionMode
-from laboneq.core.types.enums import PortMode
-from laboneq.core.types.enums import HighPassCompensationClearing
+from laboneq.core.types.enums import (
+    AcquisitionType,
+    AveragingMode,
+    CarrierType,
+    DSLVersion,
+    ExecutionType,
+    HighPassCompensationClearing,
+    IODirection,
+    IOSignalType,
+    ModulationType,
+    PortMode,
+    RepetitionMode,
+    SectionAlignment,
+)
 
 
 def enum_repr(self):

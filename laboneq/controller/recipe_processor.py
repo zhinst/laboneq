@@ -2,19 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterator, List, Union, Tuple, Set, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Set, Tuple, Union
+
 import numpy as np
 from numpy import typing as npt
-from laboneq.executor.execution_from_experiment import ExecutionFactoryFromExperiment
 
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
+from laboneq.executor.execution_from_experiment import ExecutionFactoryFromExperiment
+from laboneq.executor.executor import ExecutorBase, LoopingMode, Sequence, Statement
 
-from .recipe_1_4_0 import Experiment, Initialization, OscillatorParam, Recipe, IO
+from .recipe_1_4_0 import IO, Experiment, Initialization, OscillatorParam, Recipe
 from .recipe_enums import SignalType
-from laboneq.executor.executor import LoopingMode, ExecutorBase, Sequence, Statement
 
 if TYPE_CHECKING:
     from laboneq.core.types import CompiledExperiment

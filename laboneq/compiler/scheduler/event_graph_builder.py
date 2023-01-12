@@ -1,16 +1,14 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Dict, Optional
-from dataclasses import dataclass
-
 import copy
 import logging
-from typing import List
-from laboneq.compiler.experiment_access.section_graph import SectionGraph
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 
-from laboneq.compiler.scheduler.event_graph import EventGraph, EventRelation
 from laboneq.compiler.common.event_type import EventType
+from laboneq.compiler.experiment_access.section_graph import SectionGraph
+from laboneq.compiler.scheduler.event_graph import EventGraph, EventRelation
 
 _logger = logging.getLogger(__name__)
 
@@ -164,7 +162,7 @@ class EventGraphBuilder:
         link_last=True,
     ):
         if len(chain) == 0:
-            return
+            return {}
         # Form a chain [(-1, 0), (0, 1), ..., (n-1, n)] (or without the last entry if
         # not link_last); -1 is boundary_start_node_id, n is boundary_end_node_id
         follows_graph = list(zip(range(-1, len(chain)), range(0, len(chain) + 1)))

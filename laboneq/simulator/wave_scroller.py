@@ -1,12 +1,15 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 from enum import Flag
 from typing import List, Set, Tuple
 
 import numpy as np
+from numpy.typing import ArrayLike
+
 from laboneq.simulator.seqc_parser import Operation, SeqCEvent, SeqCSimulation
-from numpy import typing as npt
 
 
 class SimTarget(Flag):
@@ -40,7 +43,7 @@ class WaveScroller:
         self.last_trig_set_samples = 0
         self.last_trig = 0
         self.last_freq_set_samples = 0
-        self.last_freq = None
+        self.last_freq = np.nan
 
         self.processors = {
             Operation.PLAY_WAVE: self._process_play_wave,
@@ -66,7 +69,7 @@ class WaveScroller:
         if SimTarget.TRIGGER in self.sim_targets:
             self.trigger_snippet = np.zeros(snippet_length, dtype=np.uint8)
         if SimTarget.FREQUENCY in self.sim_targets:
-            self.frequency_snippet = np.zeros(snippet_length, dtype=np.float64)
+            self.frequency_snippet = np.full(snippet_length, np.nan, dtype=np.float64)
 
     def target_events(self) -> Set[Operation]:
         target_events: Set[Operation] = set()
@@ -141,10 +144,7 @@ class WaveScroller:
         if oscillator == 0:
             frequency: float = event.args[1]
             wave_start_samples = event.start_samples - snippet_start_samples
-            if (
-                wave_start_samples <= len(self.frequency_snippet)
-                and self.last_freq is not None
-            ):
+            if wave_start_samples <= len(self.frequency_snippet):
                 self.frequency_snippet[
                     self.last_freq_set_samples : wave_start_samples
                 ] = self.last_freq
@@ -162,19 +162,19 @@ class WaveScroller:
         if self.acquire_snippet is not None:
             self.acquire_snippet = self.acquire_snippet[offset : offset + length]
         if self.trigger_snippet is not None:
-            self.trigger_snippet = self.trigger_snippet[offset : offset + length]
             if self.last_trig_set_samples < len(self.trigger_snippet):
                 self.trigger_snippet[self.last_trig_set_samples :] = self.last_trig
+            self.trigger_snippet = self.trigger_snippet[offset : offset + length]
         if self.frequency_snippet is not None:
-            self.frequency_snippet = self.frequency_snippet[offset : offset + length]
             if self.last_freq_set_samples < len(self.frequency_snippet):
                 self.frequency_snippet[self.last_freq_set_samples :] = self.last_freq
+            self.frequency_snippet = self.frequency_snippet[offset : offset + length]
 
     def calc_snippet(
         self,
         start_secs: float,
         length_secs: float,
-    ) -> Tuple[npt.ArrayLike, npt.ArrayLike]:
+    ) -> Tuple[ArrayLike, ArrayLike]:
         time_delay_secs = self.sim.output_port_delay if self.is_output() else 0.0
         time_delay_secs += self.sim.startup_delay
         target_events = self.target_events()

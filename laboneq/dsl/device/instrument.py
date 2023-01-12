@@ -4,8 +4,10 @@
 import typing
 from dataclasses import dataclass, field
 from typing import List
+
 from laboneq.core.types.enums.io_direction import IODirection
 from laboneq.dsl.device.ports import Port
+
 from .connection import Connection
 
 

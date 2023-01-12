@@ -8,19 +8,17 @@ import orjson
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.serialization.simple_serialization import (
-    serialize_to_dict_with_ref,
-    module_classes,
     deserialize_from_dict_with_ref,
+    module_classes,
+    serialize_to_dict_with_ref,
 )
 from laboneq.dsl.calibration.mixer_calibration import MixerCalibration
-from laboneq.dsl.calibration.precompensation import Precompensation
 from laboneq.dsl.calibration.oscillator import Oscillator
-from laboneq.dsl.device import Instrument
-from laboneq.dsl.device import LogicalSignalGroup
-from laboneq.dsl.device import Server
+from laboneq.dsl.calibration.precompensation import Precompensation
+from laboneq.dsl.device import Instrument, LogicalSignalGroup, Server
 from laboneq.dsl.device.physical_channel_group import (
-    PhysicalChannelGroup,
     PhysicalChannel,
+    PhysicalChannelGroup,
 )
 from laboneq.dsl.experiment.pulse import Pulse
 from laboneq.dsl.experiment.section import Section
@@ -111,8 +109,9 @@ class Serializer:
             "laboneq.dsl.device.io_units.physical_channel",
             "laboneq.dsl.device.instruments",
             "laboneq.dsl.result.waveform",
+            "laboneq.dsl.calibration.units",
         ]
-        classes_by_fullname, classes_by_short_name = module_classes(dsl_modules)
+        _, classes_by_short_name = module_classes(dsl_modules)
         return classes_by_short_name
 
     @staticmethod

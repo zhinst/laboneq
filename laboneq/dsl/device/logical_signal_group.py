@@ -5,8 +5,9 @@ from dataclasses import dataclass, field
 from typing import Dict
 
 import laboneq.core.path as qct_path
-from .io_units import LogicalSignal
+
 from ..calibration import Calibratable
+from .io_units import LogicalSignal
 
 
 @dataclass(init=True, repr=True, order=True)

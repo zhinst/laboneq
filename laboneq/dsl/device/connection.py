@@ -1,8 +1,8 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional
 from dataclasses import dataclass, field
+from typing import Optional
 
 from laboneq.dsl.enums import IODirection, IOSignalType
 

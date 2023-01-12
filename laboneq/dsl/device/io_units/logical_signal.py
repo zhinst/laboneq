@@ -6,11 +6,11 @@ from dataclasses import dataclass
 from typing import Optional
 
 from laboneq.core.types.enums import IODirection
-from laboneq.dsl.calibration import SignalCalibration, MixerCalibration
+from laboneq.dsl.calibration import MixerCalibration, SignalCalibration
 from laboneq.dsl.calibration.calibratable import Calibratable
 from laboneq.dsl.device.io_units.physical_channel import (
-    PhysicalChannel,
     PHYSICAL_CHANNEL_CALIBRATION_FIELDS,
+    PhysicalChannel,
 )
 
 

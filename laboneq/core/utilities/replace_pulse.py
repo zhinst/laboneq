@@ -2,13 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
+import logging
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import List, Union, Optional, TYPE_CHECKING
-import logging
+from typing import TYPE_CHECKING, List, Optional, Union
+
 import numpy as np
 from numpy.typing import ArrayLike
+
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.core.utilities.pulse_sampler import (
     sample_pulse,
@@ -61,6 +64,7 @@ def _replace_pulse_in_wave(
     function = None
     length = None
     pulse_id = "<replaced pulse>"
+    pulse_parameters = {}
     if isinstance(pulse_or_array, list):
         pulse_or_array = np.array(pulse_or_array)
     if isinstance(pulse_or_array, np.ndarray):
@@ -71,6 +75,7 @@ def _replace_pulse_in_wave(
         amplitude = getattr(pulse_or_array, "amplitude", 1.0)
         function = getattr(pulse_or_array, "function", None)
         pulse_id = getattr(pulse_or_array, "uid", pulse_id)
+        pulse_parameters = getattr(pulse_or_array, "pulse_parameters", None) or {}
 
     length = length or (0 if input_samples is None else len(input_samples))
     assert length > 0 and abs(length - pwm.length_samples) < 2  # (rounding)
@@ -83,9 +88,13 @@ def _replace_pulse_in_wave(
         raise LabOneQException("Complex numbers found in non-complex pulse replacement")
 
     for instance in pwm.instances:
-        if not is_complex and (instance.channel == 0) != (component == Component.REAL):
+        if not is_complex and (
+            (instance.channel == 0) != (component == Component.REAL)
+            and instance.channel is not None
+        ):
             continue
         phase = (instance.modulation_phase or 0.0) + (instance.iq_phase or 0.0)
+        combined_pulse_parameters = {**pulse_parameters, **instance.pulse_parameters}
         samples = sample_pulse(
             signal_type=pwm.signal_type,
             sampling_rate=pwm.sampling_rate,
@@ -96,7 +105,7 @@ def _replace_pulse_in_wave(
             phase=phase,
             samples=input_samples,
             mixer_type=pwm.mixer_type,
-            pulse_parameters=instance.pulse_parameters,
+            pulse_parameters=combined_pulse_parameters,
         )
         verify_amplitude_no_clipping(samples, pulse_id, pwm.mixer_type, None)
 
@@ -163,12 +172,20 @@ def calc_wave_replacements(
             if target_wave is None:
                 continue
             wave_type = target_wave[1]
-            if wave_type not in ("iq", "double", "multi", "complex"):
-                raise LabOneQException(
-                    f"Pulse replacement for the waves of type '{wave_type}' is not yet supported"
-                )
             is_complex = wave_type == "iq" or wave_type == "complex"
-            if wave_type != "complex":
+            if wave_type == "single":
+                replacement_type = ReplacementType.I_Q
+                samples_i = _replace_pulse_in_wave(
+                    compiled_experiment,
+                    sig_string + ".wave",
+                    pulse_or_array,
+                    pwm,
+                    component=Component.REAL,
+                    is_complex=False,
+                    current_waves=current_waves,
+                )
+                samples = [samples_i]
+            elif wave_type != "complex":
                 replacement_type = ReplacementType.I_Q
                 samples_i = _replace_pulse_in_wave(
                     compiled_experiment,
@@ -226,17 +243,25 @@ def replace_pulse(
         wave_replacements = calc_wave_replacements(target, pulse_uid, pulse_or_array)
         for repl in wave_replacements:
             if repl.replacement_type == ReplacementType.I_Q:
-                wave_i = next(
-                    w
-                    for w in target.waves
-                    if w["filename"] == repl.sig_string + "_i.wave"
-                )
-                wave_q = next(
-                    w
-                    for w in target.waves
-                    if w["filename"] == repl.sig_string + "_q.wave"
-                )
-                wave_i["samples"] = repl.samples[0]
-                wave_q["samples"] = repl.samples[1]
+                if len(repl.samples) == 2:
+                    wave_i = next(
+                        w
+                        for w in target.waves
+                        if w["filename"] == repl.sig_string + "_i.wave"
+                    )
+                    wave_q = next(
+                        w
+                        for w in target.waves
+                        if w["filename"] == repl.sig_string + "_q.wave"
+                    )
+                    wave_i["samples"] = repl.samples[0]
+                    wave_q["samples"] = repl.samples[1]
+                else:
+                    wave = next(
+                        w
+                        for w in target.waves
+                        if w["filename"] == repl.sig_string + ".wave"
+                    )
+                    wave["samples"] = repl.samples[0]
     else:
         target.replace_pulse(pulse_uid, pulse_or_array)

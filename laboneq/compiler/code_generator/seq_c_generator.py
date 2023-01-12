@@ -8,8 +8,8 @@ import math
 import re
 from enum import Enum
 
-from laboneq.core.exceptions import LabOneQException
 from laboneq.compiler.common.device_type import DeviceType
+from laboneq.core.exceptions import LabOneQException
 
 _logger = logging.getLogger(__name__)
 

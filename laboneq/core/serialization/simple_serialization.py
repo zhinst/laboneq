@@ -13,8 +13,8 @@ from io import BytesIO
 from typing import Dict
 
 import numpy as np
-from numpy.lib.format import read_array, write_array
 import pybase64 as base64
+from numpy.lib.format import read_array, write_array
 from sortedcontainers import SortedDict
 
 ID_KEY = "__id"

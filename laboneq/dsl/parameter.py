@@ -3,12 +3,11 @@
 
 from __future__ import annotations
 
-import numpy as np
-
-from dataclasses import dataclass, field
 from abc import ABC
-
+from dataclasses import dataclass, field
 from numbers import Number
+
+import numpy as np
 from numpy.typing import ArrayLike
 
 parameter_id = 0

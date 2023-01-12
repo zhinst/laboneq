@@ -2,31 +2,31 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
+import re
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from functools import lru_cache
-from typing import Any, Dict, List, Optional, Tuple
 from types import SimpleNamespace
-import re
-import numpy as np
-from numpy import typing as npt
-
-from pycparser.c_parser import CParser
-from pycparser.c_ast import (
-    Decl,
-    FuncCall,
-    Constant,
-    ID,
-    DoWhile,
-    Assignment,
-    BinaryOp,
-    UnaryOp,
-    Node,
-)
 
 # Note: The simulator may be used as a testing tool, so it must be independent of the production code
 # Do not add dependencies to the code being tested here (such as compiler, DSL asf.)
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
+import numpy as np
+from numpy import typing as npt
+from pycparser.c_ast import (
+    ID,
+    Assignment,
+    BinaryOp,
+    Constant,
+    Decl,
+    DoWhile,
+    FuncCall,
+    Node,
+    UnaryOp,
+)
+from pycparser.c_parser import CParser
 
 if TYPE_CHECKING:
     from laboneq.core.types.compiled_experiment import CompiledExperiment
@@ -262,6 +262,7 @@ class Operation(Enum):
     START_QA = auto()
     SET_OSC_FREQ = auto()
     SET_TRIGGER = auto()
+    SET_PRECOMP_CLEAR = auto()
     WAIT_WAVE = auto()
 
 
@@ -349,6 +350,7 @@ class SimpleRuntime:
             "setSweepStep": self.setSweepStep,
             "setOscFreq": self.setOscFreq,
             "setTrigger": self.setTrigger,
+            "setPrecompClear": self.setPrecompClear,
             "waitWave": self.waitWave,
         }
         self.variables = {}
@@ -687,6 +689,18 @@ class SimpleRuntime:
             ),
         )
 
+    def setPrecompClear(self, value: int):
+        start_samples, insert_at = self._last_play_start_samples()
+        self.seqc_simulation.events.insert(
+            insert_at,
+            SeqCEvent(
+                start_samples=start_samples,
+                length_samples=0,
+                operation=Operation.SET_PRECOMP_CLEAR,
+                args=[value],
+            ),
+        )
+
     def waitWave(self):
         time_samples = self._last_played_sample()
         self.seqc_simulation.events.append(
@@ -728,7 +742,7 @@ def analyze_recipe(
         if sampling_rate is None or sampling_rate == 0:
             sampling_rate = get_frequency(device_type)
         startup_delay = -80e-9
-        if "config" in init:
+        if device_type == "HDAWG" and "config" in init:
             if "dio_mode" in init["config"]:
                 dio_mode = init["config"]["dio_mode"]
                 if dio_mode == "hdawg_leader":

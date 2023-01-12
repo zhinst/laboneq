@@ -4,13 +4,12 @@
 from __future__ import annotations
 
 import hashlib
-import numpy as np
 import sys
-
-from dataclasses import dataclass, asdict
-from typing import Optional, FrozenSet, Tuple, Any
+from dataclasses import asdict, dataclass
+from typing import Any, FrozenSet, Optional, Tuple
 
 import numpy
+import numpy as np
 from orjson import orjson
 
 from laboneq.compiler.code_generator.seq_c_generator import string_sanitize

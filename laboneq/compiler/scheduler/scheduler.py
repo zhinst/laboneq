@@ -6,34 +6,36 @@ from __future__ import annotations
 import copy
 import logging
 import math
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from fractions import Fraction
-from operator import itemgetter
 from itertools import groupby
-
-from typing import List, Any, Dict, Union, Optional, Iterator, Tuple
-from box import Box
+from operator import itemgetter
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 import numpy as np
+from box import Box
 from engineering_notation import EngNumber
 from sortedcollections import ValueSortedDict
 from sortedcontainers import SortedDict
-from collections import OrderedDict
 
+from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.device_type import DeviceType
-from laboneq.core.exceptions import LabOneQException
-from laboneq.compiler.scheduler.event_graph import EventGraph, EventRelation, node_info
 from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.common.play_wave_type import PlayWaveType
-from laboneq.compiler.scheduler.event_graph_builder import (
-    EventGraphBuilder,
-    ChainElement,
+from laboneq.compiler.experiment_access.experiment_dao import (
+    ExperimentDAO,
+    ParamRef,
+    PulseDef,
 )
 from laboneq.compiler.experiment_access.section_graph import SectionGraph
-from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO, PulseDef
-from laboneq.compiler.common.compiler_settings import CompilerSettings
-from laboneq.compiler.experiment_access.experiment_dao import ParamRef
+from laboneq.compiler.scheduler.event_graph import EventGraph, EventRelation, node_info
+from laboneq.compiler.scheduler.event_graph_builder import (
+    ChainElement,
+    EventGraphBuilder,
+)
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
+from laboneq.core.exceptions import LabOneQException
 
 _logger = logging.getLogger(__name__)
 
@@ -53,6 +55,7 @@ class _PlayWave:
     set_oscillator_phase: float = None
     play_wave_type: PlayWaveType = PlayWaveType.PLAY
     pulse_parameters: Dict[str, Any] = field(default_factory=dict)
+    precompensation_clear: bool = field(default=False)
 
 
 @dataclass
@@ -83,14 +86,38 @@ class _PreambleInserter:
 
 
 def _set_playwave_resolved_param(section_pulse, play_wave: _PlayWave, name, value=None):
-    if value is not None:
-        setattr(play_wave, name, value)
-    elif getattr(section_pulse, name) is not None:
+    if getattr(section_pulse, name) is not None:
         setattr(play_wave, name, getattr(section_pulse, name))
+    elif value is not None:
+        setattr(play_wave, name, value)
     if getattr(section_pulse, name + "_param") is not None:
         param_ref = ParamRef(getattr(section_pulse, name + "_param"))
         setattr(play_wave, name, param_ref)
         play_wave.parameterized_with.append(param_ref)
+
+
+def _assign_playwave_parameters(play_wave, section_pulse, length):
+    play_wave.parameterized_with = []
+    _set_playwave_resolved_param(section_pulse, play_wave, "offset")
+    _set_playwave_resolved_param(section_pulse, play_wave, "amplitude")
+    _set_playwave_resolved_param(section_pulse, play_wave, "length", length)
+    _set_playwave_resolved_param(section_pulse, play_wave, "phase")
+    _set_playwave_resolved_param(section_pulse, play_wave, "increment_oscillator_phase")
+    _set_playwave_resolved_param(section_pulse, play_wave, "set_oscillator_phase")
+    play_wave.precompensation_clear = section_pulse.precompensation_clear
+    pulse_parameters = section_pulse.pulse_parameters
+    if pulse_parameters is not None:
+        for param, val in pulse_parameters.items():
+            if isinstance(val, (float, int, complex)):
+                play_wave.pulse_parameters[param] = val
+            else:
+                param_ref = ParamRef(val)
+                play_wave.pulse_parameters[param] = param_ref
+                play_wave.parameterized_with.append(param_ref)
+
+    if section_pulse.acquire_params is not None:
+        play_wave.acquire_handle = section_pulse.acquire_params.handle
+        play_wave.acquisition_type.append(section_pulse.acquire_params.acquisition_type)
 
 
 class Scheduler:
@@ -195,8 +222,6 @@ class Scheduler:
                     device_id
                 )
 
-                suppress_offset_indices = []
-
                 section_offset = section_info.offset
                 section_offset_param = section_info.offset_param
 
@@ -267,40 +292,7 @@ class Scheduler:
                     assert signal_id == signal_info_main.signal_id
 
                     length = PulseDef.effective_length(pulse_def, sampling_rate)
-
-                    play_wave.parameterized_with = []
-                    _set_playwave_resolved_param(section_pulse, play_wave, "offset")
-                    if (
-                        section_pulse.offset is not None
-                        and pulse_index in suppress_offset_indices
-                    ):
-                        play_wave.offset = 0.0
-                    _set_playwave_resolved_param(section_pulse, play_wave, "amplitude")
-                    _set_playwave_resolved_param(
-                        section_pulse, play_wave, "length", length
-                    )
-                    _set_playwave_resolved_param(section_pulse, play_wave, "phase")
-                    _set_playwave_resolved_param(
-                        section_pulse, play_wave, "increment_oscillator_phase"
-                    )
-                    _set_playwave_resolved_param(
-                        section_pulse, play_wave, "set_oscillator_phase"
-                    )
-                    pulse_parameters = section_pulse.pulse_parameters
-                    if pulse_parameters is not None:
-                        for param, val in pulse_parameters.items():
-                            if isinstance(val, (float, int, complex)):
-                                play_wave.pulse_parameters[param] = val
-                            else:
-                                param_ref = ParamRef(val)
-                                play_wave.pulse_parameters[param] = param_ref
-                                play_wave.parameterized_with.append(param_ref)
-
-                    if section_pulse.acquire_params is not None:
-                        play_wave.acquire_handle = section_pulse.acquire_params.handle
-                        play_wave.acquisition_type.append(
-                            section_pulse.acquire_params.acquisition_type
-                        )
+                    _assign_playwave_parameters(play_wave, section_pulse, length)
 
                     play_wave_chain.append(play_wave)
                 self.add_play_wave_chain(
@@ -364,16 +356,6 @@ class Scheduler:
                 ]
                 num_repeats = section_info_1.count
 
-                reset_precompensation_filter = any(
-                    pc and "high_pass" in pc
-                    for pc in (
-                        self._experiment_dao.precompensation(signal_id)
-                        for signal_id in self._experiment_dao.section_signals_with_children(
-                            section_name
-                        )
-                    )
-                )
-
                 reset_phase_hw = section_info_1.reset_oscillator_phase
                 reset_phase_sw = (
                     reset_phase_hw or section_info_1.averaging_type == "hardware"
@@ -384,7 +366,6 @@ class Scheduler:
                     parameters_list,
                     reset_phase_sw,
                     reset_phase_hw,
-                    reset_precompensation_filter,
                 )
 
         EventGraphBuilder.complete_section_structure(
@@ -749,7 +730,6 @@ class Scheduler:
         section_span: Any
         reset_phase_sw: bool
         reset_phase_hw: bool
-        reset_precompensation_filters: bool
 
     def add_repeat(
         self,
@@ -758,7 +738,6 @@ class Scheduler:
         parameter_list=None,
         reset_phase_sw=False,
         reset_phase_hw=False,
-        reset_precompensation_filters=False,
     ) -> RepeatSectionsEntry:
         if parameter_list is None:
             parameter_list = []
@@ -801,7 +780,6 @@ class Scheduler:
             section_span,
             reset_phase_sw,
             reset_phase_hw,
-            reset_precompensation_filters,
         )
 
     def _nodes_which_reference_parameters(self):
@@ -832,9 +810,6 @@ class Scheduler:
         section_span = repeat_section_entry.section_span
         reset_phase_sw = repeat_section_entry.reset_phase_sw
         reset_phase_hw = repeat_section_entry.reset_phase_hw
-        reset_precompensation_filters = (
-            repeat_section_entry.reset_precompensation_filters
-        )
         previous_loop_step_end_id = None
 
         repeats = num_repeats
@@ -985,27 +960,6 @@ class Scheduler:
                 )
             else:
                 self._event_graph.after_or_at(loop_step_start_id, section_span.start)
-
-            if reset_precompensation_filters:
-                signals = self._experiment_dao.section_signals_with_children(
-                    section_name
-                )
-                new_nodes = []
-                for signal_id in signals:
-                    precompensation = self._experiment_dao.precompensation(signal_id)
-                    if not precompensation or "high_pass" not in precompensation:
-                        continue
-                    device_id = self._experiment_dao.device_from_signal(signal_id)
-                    device_info = self._experiment_dao.device_info(device_id)
-                    reset_precompensation_filters_id = self._event_graph.add_node(
-                        section_name=section_name,
-                        event_type=EventType.RESET_PRECOMPENSATION_FILTERS,
-                        iteration=iteration,
-                        device_id=device_info.id,
-                        signal_id=signal_id,
-                    )
-                    new_nodes.append(reset_precompensation_filters_id)
-                preamble_inserter.insert(new_nodes, add_before_first_loop_start=True)
 
             if reset_phase_sw:
                 reset_phase_sw_id = self._event_graph.add_node(
@@ -1406,6 +1360,25 @@ class Scheduler:
                         f"Getting mixed signals: {signal} and {play_wave.signal}"
                     )
 
+            if play_wave.precompensation_clear:
+                if right_aligned:
+                    # In principle, there is nothing that would stop us from
+                    # implementing this. But the logic of the event graph is already
+                    # quite complex, and PW doesn't want to strain it any more unless we
+                    # actually need to.
+                    raise LabOneQException(
+                        "Precompensation clear not supported in right aligned sections"
+                    )
+                precompensation_clear_element = ChainElement(
+                    id=chain_element_id + "RESET_PRECOMPENSATION_FILTERS_UNALIGNED",
+                    start_type=EventType.RESET_PRECOMPENSATION_FILTERS_UNALIGNED,
+                    end_type=None,
+                    attributes={
+                        **default_attributes,
+                    },
+                )
+                chain.append(precompensation_clear_element)
+
             if play_wave.offset is not None:
                 delay_element = ChainElement(
                     chain_element_id + "DELAY",
@@ -1490,11 +1463,10 @@ class Scheduler:
                 chain_element.start_attributes[
                     "pulse_parameters"
                 ] = play_wave.pulse_parameters
+
                 if (
-                    not (
-                        play_wave.play_wave_type == PlayWaveType.DELAY
-                        and play_wave.length is None
-                    )
+                    play_wave.play_wave_type != PlayWaveType.DELAY
+                    or play_wave.length is not None
                     or is_match_case_empty_section
                 ):
                     chain.append(chain_element)
@@ -1533,6 +1505,22 @@ class Scheduler:
             if pull_out_node_id is not None and len(chain) > 0:
                 last_node_id = added_nodes[len(chain) - 1]["end_node_id"]
                 self._event_graph.after_or_at(last_node_id, pull_out_node_id)
+
+            for added_node in added_nodes.values():
+                node_id = added_node["start_node_id"]
+                node_data = self._event_graph.node(node_id)
+                if (
+                    node_data["event_type"]
+                    == EventType.RESET_PRECOMPENSATION_FILTERS_UNALIGNED
+                ):
+                    aligned_node_id = self._event_graph.add_node(
+                        event_type=EventType.RESET_PRECOMPENSATION_FILTERS,
+                        section_name=node_data["section_name"],
+                        signal_id=node_data["signal"],
+                    )
+                    EventGraphBuilder.add_time_link(
+                        self._event_graph, aligned_node_id, node_id, None, False, False
+                    )
 
     def process_events(self):
         _logger.debug("**** Event Timing")
@@ -2071,6 +2059,7 @@ class Scheduler:
                 EventType.SUBSECTION_START,
                 EventType.SUBSECTION_END,
                 EventType.SECTION_SKELETON,
+                EventType.RESET_PRECOMPENSATION_FILTERS,
             ]:
                 if (
                     event_type

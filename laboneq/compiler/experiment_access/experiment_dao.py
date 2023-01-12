@@ -2,33 +2,33 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from dataclasses import dataclass, field
+
+import copy
 import json
 import logging
 import os
 import uuid
-from pathlib import Path
 from collections import OrderedDict
+from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace
-
-from typing import Callable, List, Dict, Optional, Tuple, Any
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from jsonschema import ValidationError
 from jsonschema.validators import validator_for
-import copy
 
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types.enums import HighPassCompensationClearing
-from laboneq.core.types.enums import AveragingMode, IODirection, AcquisitionType
+from laboneq.core.types.enums import AcquisitionType, AveragingMode, IODirection
 
 _logger = logging.getLogger(__name__)
 
 import typing
+
 from numpy.typing import ArrayLike
 
 if typing.TYPE_CHECKING:
-    from laboneq.dsl.experiment import ExperimentSignal
     from laboneq.dsl.device.io_units import LogicalSignal
+    from laboneq.dsl.experiment import ExperimentSignal
 
 
 def find_value_or_parameter_dict(
@@ -90,7 +90,7 @@ class SectionInfo:
     averaging_mode: Optional[str]
     repetition_mode: Optional[str]
     repetition_time: Optional[float]
-    play_after: Optional[str]
+    play_after: Optional[Union[str, List[str]]]
     reset_oscillator_phase: bool
     handle: Optional[str]
     state: Optional[int]
@@ -143,6 +143,7 @@ class SectionSignalPulse:
     set_oscillator_phase: float
     set_oscillator_phase_param: str
     pulse_parameters: Optional[Any]
+    precompensation_clear: bool
 
 
 @dataclass
@@ -590,6 +591,10 @@ class ExperimentDAO:
                                 pulse_ref, "length", (int, float)
                             )
 
+                            precompensation_clear = pulse_ref.get(
+                                "precompensation_clear", False
+                            )
+
                             pulse_id = None
                             if pulse_ref.get("pulse") is not None:
                                 pulse_id = pulse_ref["pulse"]["$ref"]
@@ -614,6 +619,7 @@ class ExperimentDAO:
                                 set_oscillator_phase=pulse_set_oscillator_phase,
                                 set_oscillator_phase_param=pulse_set_oscillator_phase_param,
                                 pulse_parameters=None,
+                                precompensation_clear=precompensation_clear,
                             )
                             self._data["section_signal_pulse"].append(new_ssp)
                             seq_nr += 1
@@ -998,6 +1004,7 @@ class ExperimentDAO:
                         "set_oscillator_phase",
                         "set_oscillator_phase_param",
                         "pulse_parameters",
+                        "precompensation_clear",
                     ]
                 }
             )
@@ -1307,6 +1314,10 @@ class ExperimentDAO:
                         section_signal_pulse_object["pulse"] = {
                             "$ref": section_pulse.pulse_id
                         }
+                    if section_pulse.precompensation_clear:
+                        section_signal_pulse_object[
+                            "precompensation_clear"
+                        ] = section_pulse.precompensation_clear
                     for key in [
                         "amplitude",
                         "offset",
@@ -1613,12 +1624,13 @@ class ExperimentDAO:
                         ]
                         precomp_dict["exponential"] = precomp_exp
                     if precomp.high_pass is not None:
-                        clearing = {
-                            HighPassCompensationClearing.LEVEL: "level",
-                            HighPassCompensationClearing.RISE: "rise",
-                            HighPassCompensationClearing.FALL: "fall",
-                            HighPassCompensationClearing.BOTH: "both",
-                        }[precomp.high_pass.clearing]
+                        # Since we currently only support clearing the integrator
+                        # inside a delay, the different modes are not relevant.
+                        # Instead, we would like to merge subsequent pulses into the
+                        # same waveform, so we restrict the choice to "rise", regardless
+                        # of what the user may have specified.
+                        clearing = "rise"
+
                         precomp_dict["high_pass"] = {
                             "timeconstant": precomp.high_pass.timeconstant,
                             "clearing": clearing,
@@ -2070,6 +2082,9 @@ class ExperimentDAO:
                 if hasattr(operation, "time"):  # Delay operation
 
                     pulse_offset = operation.time
+                    precompensation_clear = (
+                        getattr(operation, "precompensation_clear", None) or False
+                    )
                     if not isinstance(operation.time, float) and not isinstance(
                         operation.time, int
                     ):
@@ -2095,13 +2110,13 @@ class ExperimentDAO:
                             set_oscillator_phase=None,
                             set_oscillator_phase_param=None,
                             pulse_parameters=None,
+                            precompensation_clear=precompensation_clear,
                         )
                     )
                     seq_nr += 1
 
                 else:  # All operations, except Delay
                     pulse = None
-                    operation_length = None
                     operation_length_param = None
 
                     if hasattr(operation, "pulse"):
@@ -2184,6 +2199,10 @@ class ExperimentDAO:
                             operation, "set_oscillator_phase", (int, float)
                         )
 
+                        precompensation_clear = (
+                            getattr(operation, "precompensation_clear", None) or False
+                        )
+
                         acquire_params = None
                         if hasattr(operation, "handle"):
                             acquire_params = AcquireInfo(
@@ -2228,6 +2247,7 @@ class ExperimentDAO:
                                 set_oscillator_phase=pulse_set_oscillator_phase,
                                 set_oscillator_phase_param=pulse_set_oscillator_phase_param,
                                 pulse_parameters=combined_pulse_parameters,
+                                precompensation_clear=False,  # not supported
                             )
                         )
 

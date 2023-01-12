@@ -1,21 +1,22 @@
 # Copyright 2019 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
 import logging
-from enum import Enum
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from enum import Enum
 from functools import lru_cache
 from typing import Any, Dict, List
 
 import zhinst.core as zi
+from zhinst.toolkit import Session as TKSession
 
 from laboneq.controller.devices.zi_emulator import ziDAQServerEmulator
 from laboneq.controller.devices.zi_node_monitor import NodeMonitor
-from zhinst.toolkit import Session as TKSession
+
+from .cache import Cache
 from .util import LabOneQControllerException
 from .versioning import LabOneVersion
-from .cache import Cache
 
 
 class CachingStrategy(Enum):

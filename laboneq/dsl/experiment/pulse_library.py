@@ -1,15 +1,15 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Dict, Callable
+from typing import Any, Callable, Dict
 
 import numpy as np
 
 from laboneq.core.utilities.pulse_sampler import pulse_function_library
 from laboneq.dsl.experiment.pulse import (
-    PulseSampledReal,
-    PulseSampledComplex,
     PulseFunctional,
+    PulseSampledComplex,
+    PulseSampledReal,
 )
 
 

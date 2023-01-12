@@ -2,32 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from copy import deepcopy
-from collections import defaultdict
+
+import concurrent.futures
 import itertools
 import logging
 import os
 import traceback
+from collections import defaultdict
+from copy import deepcopy
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
-
-import concurrent.futures
-
-from typing import (
-    List,
-    Dict,
-    Any,
-    Callable,
-    Optional,
-    Tuple,
-    Union,
-    TYPE_CHECKING,
-)
+import zhinst.utils
 from numpy import typing as npt
 
-import zhinst.utils
-
 from laboneq import __version__
+from laboneq._observability import tracing
 from laboneq.controller.communication import (
     CachingStrategy,
     DaqNodeAction,
@@ -37,8 +27,8 @@ from laboneq.controller.communication import (
     batch_set,
 )
 from laboneq.controller.devices.device_collection import DeviceCollection
-from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.devices.device_uhfqa import DeviceUHFQA
+from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.devices.zi_node_monitor import ResponseWaiter
 from laboneq.controller.protected_session import ProtectedSession
 from laboneq.controller.recipe_1_4_0 import *
@@ -156,6 +146,7 @@ class Controller:
             )
         batch_set(nodes_to_initialize)
 
+    @tracing.trace("awg-program-handler")
     def _upload_awg_programs_standalone(self):
         @dataclass
         class UploadItem:
@@ -190,30 +181,34 @@ class Controller:
                 )
 
         # Compile in parallel:
-        def worker(device: DeviceZI, item: UploadItem):
-            item.elf = device.compile_seqc(
-                item.seqc_code, item.awg_index, item.seqc_filename
-            )
+        def worker(device: DeviceZI, item: UploadItem, span: tracing.Span):
+            with tracing.get_tracer().start_span("compile-awg-thread", span) as _:
+                item.elf = device.compile_seqc(
+                    item.seqc_code, item.awg_index, item.seqc_filename
+                )
 
         self._logger.debug("Started compilation of AWG programs...")
-        max_workers = os.environ.get("LABONEQ_AWG_COMPILER_MAX_WORKERS")
-        max_workers = int(max_workers) if max_workers is not None else None
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [
-                executor.submit(worker, device, item)
-                for device, items in awg_data.items()
-                for item in items
-            ]
-            concurrent.futures.wait(futures)
-            exceptions = [
-                future.exception()
-                for future in futures
-                if future.exception() is not None
-            ]
-            if len(exceptions) > 0:
-                raise LabOneQControllerException(
-                    "Compilation failed. See log output for details."
-                )
+        with tracing.get_tracer().start_span("compile-awg-programs") as awg_span:
+            max_workers = os.environ.get("LABONEQ_AWG_COMPILER_MAX_WORKERS")
+            max_workers = int(max_workers) if max_workers is not None else None
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=max_workers
+            ) as executor:
+                futures = [
+                    executor.submit(worker, device, item, awg_span)
+                    for device, items in awg_data.items()
+                    for item in items
+                ]
+                concurrent.futures.wait(futures)
+                exceptions = [
+                    future.exception()
+                    for future in futures
+                    if future.exception() is not None
+                ]
+                if len(exceptions) > 0:
+                    raise LabOneQControllerException(
+                        "Compilation failed. See log output for details."
+                    )
         self._logger.debug("Finished compilation.")
 
         # Upload AWG programs, waveforms, and command tables:
@@ -251,26 +246,28 @@ class Controller:
                 daq.node_monitor.flush()
 
         self._logger.debug("Started upload of AWG programs...")
-        for daq, nodes in elf_node_settings.items():
-            daq.batch_set(nodes)
-
-        if len(elf_upload_conditions) > 0:
-            self._logger.debug("Waiting for devices...")
-            response_waiter = ResponseWaiter()
-            for daq, conditions in elf_upload_conditions.items():
-                response_waiter.add(
-                    target=daq.node_monitor,
-                    conditions=conditions,
-                )
-            timeout_s = 10
-            if not response_waiter.wait_all(timeout=timeout_s):
-                raise LabOneQControllerException(
-                    f"AWGs not in ready state within timeout ({timeout_s} s)."
-                )
-
-            self._logger.debug("Started upload of waveforms...")
-            for daq, nodes in wf_node_settings.items():
+        with tracing.get_tracer().start_span("upload-awg-programs") as _:
+            for daq, nodes in elf_node_settings.items():
                 daq.batch_set(nodes)
+
+            if len(elf_upload_conditions) > 0:
+                self._logger.debug("Waiting for devices...")
+                response_waiter = ResponseWaiter()
+                for daq, conditions in elf_upload_conditions.items():
+                    response_waiter.add(
+                        target=daq.node_monitor,
+                        conditions=conditions,
+                    )
+                timeout_s = 10
+                if not response_waiter.wait_all(timeout=timeout_s):
+                    raise LabOneQControllerException(
+                        f"AWGs not in ready state within timeout ({timeout_s} s)."
+                    )
+
+                self._logger.debug("Started upload of waveforms...")
+                with tracing.get_tracer().start_span("upload-waveforms") as _:
+                    for daq, nodes in wf_node_settings.items():
+                        daq.batch_set(nodes)
         self._logger.debug("Finished upload.")
 
     def _upload_awg_programs(self):
@@ -482,9 +479,10 @@ class Controller:
             self._current_waves = []
             self._nodes_from_user_functions = []
             self._logger.info("Starting near-time execution...")
-            Controller.NearTimeExecutor(controller=self).run(
-                self._recipe_data.execution
-            )
+            with tracing.get_tracer().start_span("near-time-execution"):
+                Controller.NearTimeExecutor(controller=self).run(
+                    self._recipe_data.execution
+                )
             self._logger.info("Finished near-time execution.")
             for _, device in self._devices.all:
                 device.check_errors()
@@ -538,9 +536,8 @@ class Controller:
             device = self._devices.find_by_uid(awg[0])
 
             if repl.replacement_type == ReplacementType.I_Q:
-                bin_wave = zhinst.utils.convert_awg_waveform(
-                    repl.samples[0], repl.samples[1]
-                )
+                clipped = np.clip(repl.samples, -1.0, 1.0)
+                bin_wave = zhinst.utils.convert_awg_waveform(*clipped)
                 self._nodes_from_user_functions.append(
                     device.prepare_upload_binary_wave(
                         filename=repl.sig_string + " (repl)",
@@ -551,6 +548,8 @@ class Controller:
                     )
                 )
             elif repl.replacement_type == ReplacementType.COMPLEX:
+                np.clip(repl.samples.real, -1.0, 1.0, out=repl.samples.real)
+                np.clip(repl.samples.imag, -1.0, 1.0, out=repl.samples.imag)
                 self._nodes_from_user_functions.append(
                     device.prepare_upload_binary_wave(
                         filename=repl.sig_string + " (repl)",
@@ -595,12 +594,12 @@ class Controller:
         def __init__(self, controller: Controller):
             super().__init__(looping_mode=LoopingMode.EXECUTE)
             self.controller = controller
-            self.nodes_to_prepare_step = []
+            self.step_param_nodes = []
             self.nt_loop_indices: List[int] = []
 
         def set_handler(self, path: str, val):
             dev = self.controller._devices.find_by_path(path)
-            self.nodes_to_prepare_step.append(
+            self.step_param_nodes.append(
                 DaqNodeSetAction(
                     dev._daq, path, val, caching_strategy=CachingStrategy.NO_CACHE
                 )
@@ -629,7 +628,7 @@ class Controller:
             device_ids = self.controller._recipe_data.param_to_device_map.get(name, [])
             for device_id in device_ids:
                 device = self.controller._devices.find_by_uid(device_id)
-                self.nodes_to_prepare_step.extend(
+                self.step_param_nodes.extend(
                     device.collect_prepare_sweep_step_nodes_for_param(name, val)
                 )
 
@@ -648,15 +647,17 @@ class Controller:
             enter: bool,
         ):
             if enter:
-                step_nodes = self.controller._prepare_rt_execution(rt_section_uid=uid)
-                self.nodes_to_prepare_step.extend(step_nodes)
-                batch_set(self.nodes_to_prepare_step)
-                self.nodes_to_prepare_step.clear()
+                step_prepare_nodes = self.controller._prepare_rt_execution(
+                    rt_section_uid=uid
+                )
+                batch_set([*self.step_param_nodes, *step_prepare_nodes])
+                self.step_param_nodes.clear()
                 for retry in range(3):  # Up to 3 retries
                     if retry > 0:
                         self.controller._logger.info(
                             f"Step retry %s of 3...", retry + 1
                         )
+                        batch_set(step_prepare_nodes)
                     try:
                         self.controller._execute_one_step(acquisition_type)
                         self.controller._read_one_step_results(

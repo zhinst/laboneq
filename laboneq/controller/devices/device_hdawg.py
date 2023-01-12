@@ -4,13 +4,11 @@
 from __future__ import annotations
 
 from enum import IntEnum
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
 
-from laboneq.controller.communication import (
-    DaqNodeAction,
-    DaqNodeSetAction,
-)
+from laboneq.controller.communication import DaqNodeAction, DaqNodeSetAction
 from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.devices.zi_node_monitor import (
     Command,
@@ -19,7 +17,7 @@ from laboneq.controller.devices.zi_node_monitor import (
     Response,
 )
 from laboneq.controller.recipe_1_4_0 import Initialization
-from laboneq.controller.recipe_enums import SignalType, DIOConfigType
+from laboneq.controller.recipe_enums import DIOConfigType, SignalType
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.exceptions.laboneq_exception import LabOneQException

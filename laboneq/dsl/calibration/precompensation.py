@@ -3,10 +3,11 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
 from dataclasses import dataclass, field
+from typing import List, Optional
+
 import numpy as np
-import numpy.typing as npt
+from numpy.typing import ArrayLike
 
 from laboneq.core.types.enums import HighPassCompensationClearing
 from laboneq.dsl.calibration.observable import Observable, RecursiveObservable
@@ -34,14 +35,14 @@ class HighPassCompensation(Observable):
     """Data object containing highpass compensation parameters"""
 
     timeconstant: float = 1e-6
-    clearing: HighPassCompensationClearing = HighPassCompensationClearing.LEVEL
+    clearing: HighPassCompensationClearing = HighPassCompensationClearing.RISE
 
 
 @dataclass
 class FIRCompensation(Observable):
     """Data object containing FIR filter compensation parameters"""
 
-    coefficients: npt.ArrayLike = field(default_factory=lambda: np.zeros(40))
+    coefficients: ArrayLike = field(default_factory=lambda: np.zeros(40))
 
 
 @dataclass

@@ -1,10 +1,12 @@
 # Copyright 2020 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-import re
-from .util import LabOneQControllerException
 import logging
+import re
+
 import numpy as np
+
+from .util import LabOneQControllerException
 
 
 class Cache:

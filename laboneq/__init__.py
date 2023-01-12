@@ -7,6 +7,7 @@
 """Main functionality of the LabOne Q Software."""
 
 import pkgutil
+
 from laboneq._version import get_version
 
 __path__ = pkgutil.extend_path(__path__, __name__)

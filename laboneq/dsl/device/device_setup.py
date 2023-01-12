@@ -2,19 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import Dict, List, Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List
 
 from laboneq.core import path as qct_path
 from laboneq.core.exceptions import LabOneQException
+from laboneq.dsl.calibration import Calibratable, Calibration, CalibrationItem
+from laboneq.dsl.device.logical_signal_group import LogicalSignalGroup
 from laboneq.dsl.device.physical_channel_group import PhysicalChannelGroup
-from laboneq.dsl.device import LogicalSignalGroup
 from laboneq.dsl.serialization import Serializer
+
 from ._device_setup_generator import _DeviceSetupGenerator
-from laboneq.dsl.calibration import CalibrationItem, Calibratable, Calibration
 
 if TYPE_CHECKING:
     from laboneq.dsl.device.servers import DataServer
+
     from .instrument import Instrument
 
 

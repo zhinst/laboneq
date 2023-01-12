@@ -2,6 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Any, Dict, List, Optional, Tuple
+
+from laboneq.controller.communication import (
+    CachingStrategy,
+    DaqNodeAction,
+    DaqNodeSetAction,
+)
+from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.devices.zi_node_monitor import (
     Command,
     Condition,
@@ -9,19 +16,9 @@ from laboneq.controller.devices.zi_node_monitor import (
     Response,
 )
 from laboneq.controller.recipe_1_4_0 import Initialization
-
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
-from laboneq.controller.devices.device_zi import DeviceZI
-
-from laboneq.controller.communication import (
-    DaqNodeAction,
-    DaqNodeSetAction,
-    CachingStrategy,
-)
-
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
-
 
 REFERENCE_CLOCK_SOURCE_INTERNAL = 0
 REFERENCE_CLOCK_SOURCE_EXTERNAL = 1

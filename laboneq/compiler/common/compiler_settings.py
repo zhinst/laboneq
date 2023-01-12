@@ -23,6 +23,7 @@ class CompilerSettings:
     SHFSG_LEAD_PQSC: float = 80e-9
 
     AMPLITUDE_RESOLUTION_BITS: int = 24
+    PHASE_RESOLUTION_BITS: int = 12
     MAX_EVENTS_TO_PUBLISH: int = 1000
     EXPAND_LOOPS_FOR_SCHEDULE: bool = True
     CONSTRAINT_TOLERANCE: float = 1e-15

@@ -8,18 +8,46 @@ import logging
 import math
 import os
 import re
+from contextlib import suppress
 from dataclasses import dataclass
 from itertools import groupby
 from typing import Any, Dict, List, Tuple
-from contextlib import suppress
 
 import numpy as np
 from engineering_notation import EngNumber
 from sortedcontainers import SortedDict
 
+from laboneq.compiler.code_generator.analyze_events import (
+    analyze_acquire_times,
+    analyze_init_times,
+    analyze_loop_times,
+    analyze_phase_reset_times,
+    analyze_play_wave_times,
+    analyze_precomp_reset_times,
+    analyze_set_oscillator_times,
+    analyze_trigger_events,
+    phase_int_to_float,
+)
+from laboneq.compiler.code_generator.command_table_tracker import CommandTableTracker
+from laboneq.compiler.code_generator.compressor import compress_generators_rle
+from laboneq.compiler.code_generator.dict_list import merge_dict_list
 from laboneq.compiler.code_generator.measurement_calculator import MeasurementCalculator
 from laboneq.compiler.code_generator.sampled_event_handler import SampledEventHandler
+from laboneq.compiler.code_generator.seq_c_generator import SeqCGenerator
+from laboneq.compiler.code_generator.seqc_tracker import SeqCTracker
+from laboneq.compiler.code_generator.signatures import (
+    PlaybackSignature,
+    WaveformSignature,
+)
+from laboneq.compiler.code_generator.utils import normalize_phase
+from laboneq.compiler.code_generator.wave_index_tracker import WaveIndexTracker
+from laboneq.compiler.common.awg_info import AWGInfo
+from laboneq.compiler.common.awg_signal_type import AWGSignalType
+from laboneq.compiler.common.compiler_settings import CompilerSettings
+from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.event_type import EventType
+from laboneq.compiler.common.signal_obj import SignalObj
+from laboneq.compiler.common.trigger_mode import TriggerMode
 from laboneq.compiler.experiment_access.experiment_dao import PulseDef, SectionInfo
 from laboneq.compiler.experiment_access.section_graph import SectionGraph
 from laboneq.core.exceptions import LabOneQException
@@ -34,34 +62,6 @@ from laboneq.core.utilities.pulse_sampler import (
     sample_pulse,
     verify_amplitude_no_clipping,
 )
-from laboneq.compiler.code_generator.analyze_events import (
-    analyze_init_times,
-    analyze_play_wave_times,
-    analyze_set_oscillator_times,
-    analyze_loop_times,
-    analyze_acquire_times,
-    analyze_phase_reset_times,
-    analyze_precomp_reset_times,
-    phase_int_to_float,
-    analyze_trigger_events,
-)
-from laboneq.compiler.code_generator.compressor import compress_generators_rle
-from laboneq.compiler.common.awg_info import AWGInfo
-from laboneq.compiler.common.awg_signal_type import AWGSignalType
-from laboneq.compiler.common.signal_obj import SignalObj
-from laboneq.compiler.common.trigger_mode import TriggerMode
-from laboneq.compiler.code_generator.dict_list import merge_dict_list
-from laboneq.compiler.code_generator.signatures import (
-    WaveformSignature,
-    PlaybackSignature,
-)
-from laboneq.compiler.code_generator.utils import normalize_phase
-from laboneq.compiler.code_generator.wave_index_tracker import WaveIndexTracker
-from laboneq.compiler.code_generator.command_table_tracker import CommandTableTracker
-from laboneq.compiler.code_generator.seq_c_generator import SeqCGenerator
-from laboneq.compiler.code_generator.seqc_tracker import SeqCTracker
-from laboneq.compiler.common.compiler_settings import CompilerSettings
-from laboneq.compiler.common.device_type import DeviceType
 
 _logger = logging.getLogger(__name__)
 
@@ -191,8 +191,6 @@ class CodeGenerator:
     DELAY_OTHER_AWG = 32 / DeviceType.HDAWG.sampling_rate
     DELAY_UHFQA = 140 / DeviceType.HDAWG.sampling_rate
 
-    PHASE_RESOLUTION_BITS = 7
-
     # This is used as a workaround for the SHFQA requiring that for sampled pulses,  abs(s)  < 1.0 must hold
     # to be able to play pulses with an amplitude of 1.0, we scale complex pulses by this factor
     SHFQA_COMPLEX_SAMPLE_SCALING = 1 - 1e-10
@@ -226,6 +224,7 @@ class CodeGenerator:
         self._total_execution_time = None
 
         self.EMIT_TIMING_COMMENTS = self._settings.EMIT_TIMING_COMMENTS
+        self.PHASE_RESOLUTION_BITS = self._settings.PHASE_RESOLUTION_BITS
 
     def integration_weights(self):
         return self._integration_weights
@@ -688,7 +687,7 @@ class CodeGenerator:
         merge_dict_list(sampled_events, init_events)
 
         precomp_reset_events = analyze_precomp_reset_times(
-            events, awg.device_id, global_sampling_rate, global_delay
+            events, [s.id for s in awg.signals], global_sampling_rate, global_delay
         )
         merge_dict_list(sampled_events, precomp_reset_events)
 
@@ -939,6 +938,7 @@ class CodeGenerator:
             use_command_table=use_command_table,
             emit_timing_comments=self.EMIT_TIMING_COMMENTS,
         )
+
         handler.handle_sampled_events(sampled_events)
         self._command_table_match_offsets[
             (awg.device_id, awg.awg_number)
@@ -1010,7 +1010,7 @@ class CodeGenerator:
         mixer_type,
         multi_iq_signal=False,
     ):
-        PHASE_RESOLUTION_RANGE = CodeGenerator.phase_resolution_range()
+        PHASE_RESOLUTION_RANGE = self.phase_resolution_range()
         sampled_signatures: Dict[WaveformSignature, Dict] = {}
         signatures = set()
         for interval_event_list in interval_events.values():
@@ -1048,7 +1048,20 @@ class CodeGenerator:
 
             for pulse_part in signature.waveform.pulses:
                 _logger.debug(" Sampling pulse part %s", pulse_part)
-                pulse_def = pulse_defs[pulse_part.pulse]
+                pulse_def = pulse_defs.get(pulse_part.pulse)
+                if pulse_def is None:
+                    # Workaround HULK-1246: there is a special pulse "dummy_precomp_reset"
+                    # that is used to reset the precompensation. It is all zeros, but we
+                    # use it to force a playWave command to be generated.
+                    pulse_def = PulseDef(
+                        id="dummy_precomp_reset",
+                        length=32,
+                        amplitude=1.0,
+                        samples=np.zeros(32),
+                        play_mode="",
+                        function=None,
+                        amplitude_param=None,
+                    )
                 _logger.debug(" Pulse def: %s", pulse_def)
 
                 sampling_signal_type = signal_type
@@ -1278,9 +1291,8 @@ class CodeGenerator:
                 target_end,
             )
 
-    @staticmethod
-    def phase_resolution_range():
-        return round(math.pow(2, CodeGenerator.PHASE_RESOLUTION_BITS))
+    def phase_resolution_range(self):
+        return 1 << self.PHASE_RESOLUTION_BITS
 
     @staticmethod
     def post_process_sampled_events(awg: AWGInfo, sampled_events):

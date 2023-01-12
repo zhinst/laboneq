@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
-from typing import Union, Optional
+from typing import Optional, Union
 
 from laboneq.core.types.enums import PortMode
 from laboneq.dsl.calibration.mixer_calibration import MixerCalibration
-from laboneq.dsl.calibration.precompensation import Precompensation
 from laboneq.dsl.calibration.observable import Observable
 from laboneq.dsl.calibration.oscillator import Oscillator
+from laboneq.dsl.calibration.precompensation import Precompensation
 
 
 @dataclass(init=False, order=True)

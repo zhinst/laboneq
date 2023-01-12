@@ -1,10 +1,10 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from .. import Server
-
 from dataclasses import dataclass, field
 from typing import Union
+
+from .. import Server
 
 
 @dataclass(init=True, repr=True, order=True)

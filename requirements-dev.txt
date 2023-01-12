@@ -20,7 +20,6 @@ pytest-httpserver
 jsonschema
 requests
 nbconvert
-wrapt_timeout_decorator
 RsInstrument
 pyvisa-py
 
@@ -47,3 +46,5 @@ twine
 
 # CI
 click==8.0.4
+toml
+build

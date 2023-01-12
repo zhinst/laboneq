@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
 from dataclasses import dataclass, field
+from typing import List, Union
+
 import numpy as np
 from numpy.typing import ArrayLike
-from typing import List, Union
 
 
 def _compare_nested(a, b):

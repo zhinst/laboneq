@@ -39,7 +39,7 @@ Unsubscribe:
 """
 
 import weakref
-from typing import Callable, Any, List
+from typing import Any, Callable, List
 
 CallbackType = Callable[[Any, str, Any], None]
 

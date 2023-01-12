@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Optional, Union
 
 from laboneq.dsl.experiment.operation import Operation
 
@@ -21,3 +21,6 @@ class Delay(Operation):
 
     #:  Duration of the delay.
     time: Union[float, Parameter] = field(default=None)
+
+    #: Clear the precompensation filter of the signal.
+    precompensation_clear: Optional[bool] = field(default=None)

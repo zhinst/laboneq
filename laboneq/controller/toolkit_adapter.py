@@ -1,10 +1,11 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Dict, Optional
 from collections.abc import Mapping
+from typing import Dict, Optional
 
 from zhinst.toolkit.driver.devices import DeviceType
+
 from laboneq.controller.devices.device_zi import DeviceZI
 
 

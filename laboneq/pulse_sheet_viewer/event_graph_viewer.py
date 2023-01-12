@@ -1,11 +1,11 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from cmath import e
-import os
 import json
-from pathlib import Path
 import logging
+import os
+from cmath import e
+from pathlib import Path
 
 _logger = logging.getLogger(__name__)
 

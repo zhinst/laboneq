@@ -2,15 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
-from itertools import groupby
 from dataclasses import dataclass, field
+from itertools import groupby
+from typing import Any, Dict
 
-from laboneq.compiler.fastlogging import NullLogger
-
+from engineering_notation import EngNumber
 
 from laboneq.compiler.common.device_type import DeviceType
-from engineering_notation import EngNumber
-from typing import Any, Dict
+from laboneq.compiler.fastlogging import NullLogger
 
 _logger = logging.getLogger(__name__)
 if _logger.getEffectiveLevel() == logging.DEBUG:

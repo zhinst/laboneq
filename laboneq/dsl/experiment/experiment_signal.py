@@ -1,12 +1,11 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
 from typing import Optional
 
 from laboneq.core.exceptions import LabOneQException
-
-from dataclasses import dataclass
-from laboneq.dsl.calibration import SignalCalibration, MixerCalibration, Precompensation
+from laboneq.dsl.calibration import MixerCalibration, Precompensation, SignalCalibration
 
 experiment_signal_id = 0
 

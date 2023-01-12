@@ -2,40 +2,40 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from dataclasses import dataclass, field
 
 import logging
-from typing import TYPE_CHECKING, List, Dict, Set, Optional
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Dict, List, Optional, Set
 
-from laboneq.core.exceptions import LabOneQException
 from laboneq.compiler.code_generator.compressor import compress_generators
 from laboneq.compiler.code_generator.seq_c_generator import (
     SeqCGenerator,
     string_sanitize,
 )
 from laboneq.compiler.common.device_type import DeviceType
+from laboneq.core.exceptions import LabOneQException
 
 if TYPE_CHECKING:
-    from laboneq.compiler.common.awg_info import AWGInfo
-    from laboneq.compiler.code_generator.signatures import WaveformSignature
-    from laboneq.compiler.code_generator.seqc_tracker import SeqCTracker
-    from laboneq.compiler.code_generator.wave_index_tracker import WaveIndexTracker
     from laboneq.compiler.code_generator.command_table_tracker import (
         CommandTableTracker,
     )
+    from laboneq.compiler.code_generator.seqc_tracker import SeqCTracker
+    from laboneq.compiler.code_generator.signatures import WaveformSignature
+    from laboneq.compiler.code_generator.wave_index_tracker import WaveIndexTracker
+    from laboneq.compiler.common.awg_info import AWGInfo
 
 
 _logger = logging.getLogger(__name__)
 
 
 def sort_events(events):
-    # For events that happen at the same sample, emit the play wave first, because it is asynchronous
     later = {
         "sequencer_start": -100,
         "initial_reset_phase": -4,
         "LOOP_STEP_START": -3,
         "PUSH_LOOP": -2,
         "reset_phase": -1,
+        "reset_precompensation_filters": -1,
         "acquire": 1,
         "ITERATE": 2,
     }
@@ -324,18 +324,20 @@ class SampledEventHandler:
                 self._add_feedback_connection(h, ev["signal_id"])
 
     def handle_reset_precompensation_filters(self, sampled_event):
-        try:
-            if sampled_event["signal_id"] in (s.id for s in self.awg.signals):
-                _logger.debug(
-                    "  Processing RESET PRECOMPENSATION FILTERS event %s",
-                    sampled_event,
-                )
-                self.seqc_tracker.add_required_playzeros(sampled_event)
-                self.seqc_tracker.add_function_call_statement(
-                    name="setPrecompClear", args=[1]
-                )
-        except KeyError:
-            pass
+        if sampled_event["signal_id"] not in (s.id for s in self.awg.signals):
+            return
+
+        _logger.debug(
+            "  Processing RESET PRECOMPENSATION FILTERS event %s",
+            sampled_event,
+        )
+        self.seqc_tracker.add_required_playzeros(sampled_event)
+        self.seqc_tracker.add_function_call_statement(
+            name="setPrecompClear", args=[1], deferred=False
+        )
+        self.seqc_tracker.add_function_call_statement(
+            name="setPrecompClear", args=[0], deferred=True
+        )
 
     def handle_reset_phase(self, sampled_event):
         # If multiple phase reset events are scheduled at the same time,
@@ -410,6 +412,10 @@ class SampledEventHandler:
         self.seqc_tracker.add_required_playzeros(sampled_event)
         assert not self.seqc_tracker.deferred_function_calls
         self.seqc_tracker.append_loop_stack_generator()
+
+    def handle_loop_step_end(self, sampled_event):
+        _logger.debug("  Processing LOOP_STEP_END EVENT %s", sampled_event)
+        self.seqc_tracker.add_required_playzeros(sampled_event)
 
     def handle_push_loop(self, sampled_event):
         _logger.debug(
@@ -562,6 +568,8 @@ class SampledEventHandler:
             self.handle_trigger_output(sampled_event)
         elif signature == "LOOP_STEP_START":
             self.handle_loop_step_start(sampled_event)
+        elif signature == "LOOP_STEP_END":
+            self.handle_loop_step_end(sampled_event)
         elif signature == "PUSH_LOOP":
             self.handle_push_loop(sampled_event)
         elif signature == "ITERATE":

@@ -2,13 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Iterator, List, Dict, Any
-import numpy.typing as npt
 from enum import Enum, auto
+from typing import Any, Dict, Iterator, List
+
+import numpy.typing as npt
+
+from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
-from laboneq.core.exceptions import LabOneQException
 
 
 class LoopType(Enum):
@@ -214,9 +217,6 @@ class ExecutorBase:
         These methods are being called during execution on respective events.
         By default do nothing. Override and implement in your concrete executor
         class as needed.
-
-    run(self, root_sequence: Statement)
-        Start execution of the provided sequence.
     """
 
     def __init__(self, looping_mode: LoopingMode = LoopingMode.EXECUTE):
@@ -250,6 +250,7 @@ class ExecutorBase:
         pass
 
     def run(self, root_sequence: Statement):
+        """Start execution of the provided sequence."""
         scope = ExecutionScope(None, self)
         root_sequence.run(scope)
 

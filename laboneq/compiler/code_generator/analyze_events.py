@@ -3,18 +3,16 @@
 
 from __future__ import annotations
 
+import itertools
 import logging
 import math
-import itertools
 from dataclasses import dataclass
-from typing import List, Any, Optional, Dict, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from engineering_notation import EngNumber
-from intervaltree import IntervalTree, Interval
+from intervaltree import Interval, IntervalTree
 from sortedcontainers import SortedDict
 
-from laboneq.compiler.common.awg_info import AWGInfo
-from laboneq.compiler.common.awg_signal_type import AWGSignalType
 from laboneq.compiler.code_generator.dict_list import add_to_dict_list, merge_dict_list
 from laboneq.compiler.code_generator.interval_calculator import (
     MinimumWaveformLengthViolation,
@@ -23,18 +21,20 @@ from laboneq.compiler.code_generator.interval_calculator import (
 )
 from laboneq.compiler.code_generator.signatures import (
     PlaybackSignature,
-    WaveformSignature,
     PulseSignature,
+    WaveformSignature,
 )
 from laboneq.compiler.code_generator.utils import normalize_phase
+from laboneq.compiler.common.awg_info import AWGInfo
+from laboneq.compiler.common.awg_signal_type import AWGSignalType
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.common.play_wave_type import PlayWaveType
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.pulse_sampler import (
-    length_to_samples,
     interval_to_samples,
     interval_to_samples_with_errors,
+    length_to_samples,
 )
 
 if TYPE_CHECKING:
@@ -199,27 +199,51 @@ def analyze_init_times(
 
 def analyze_precomp_reset_times(
     events: List[Any],
-    device_id: str,
+    signals: List[str],
     sampling_rate: float,
     delay: float,
 ):
     retval = SortedDict()
     for event in events:
         if (
-            event.get("device_id", None) != device_id
-            or event["event_type"] != EventType.RESET_PRECOMPENSATION_FILTERS
+            event["event_type"] != EventType.RESET_PRECOMPENSATION_FILTERS
+            or event.get("signal_id", None) not in signals
         ):
             continue
         event_time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
-        init_event = {
-            "start": event_time_in_samples,
+
+        sampled_event = {
             "signature": "reset_precompensation_filters",
-            "end": event_time_in_samples,
-            "device_id": device_id,
+            "start": event_time_in_samples,
             "signal_id": event.get("signal_id"),
         }
+        add_to_dict_list(retval, event_time_in_samples, sampled_event)
 
-        add_to_dict_list(retval, event_time_in_samples, init_event)
+        # To force a playWave at the pre-compensation reset time, we add fake
+        # PLAY_START and PLAY_END events to the event list. The interval calculator
+        # will then pick these up and create a waveform that is all zeros at the reset.
+
+        # Todo: Remove when HULK-1246 is fixed.
+
+        common = {
+            "signal": event.get("signal_id"),
+            "section_name": event["section_name"],
+            "play_wave_id": "dummy_precomp_reset",
+            "amplitude": 1.0,  # non-zero amplitude to avoid being ignored
+        }
+
+        play_start_event = {
+            "event_type": EventType.PLAY_START,
+            "time": event["time"],
+            **common,
+        }
+        play_end_event = {
+            "event_type": EventType.PLAY_END,
+            "time": event["time"] + 32 / sampling_rate,
+            **common,
+        }
+        events.extend([play_start_event, play_end_event])
+
     return retval
 
 

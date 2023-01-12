@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Union, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from .operation import Operation
 from .pulse import Pulse
@@ -29,9 +29,9 @@ class PlayPulse(Operation):
     phase: float = field(default=None)
     #: Set the phase of the modulating oscillator at the start of playing this pulse to this angle (in rad).
     set_oscillator_phase: float = field(default=None)
-
     #: Modify the length of the pulse to the given value
     length: Union[float, Parameter] = field(default=None)
-
     #: Optional (re)binding of user pulse parameters
     pulse_parameters: Optional[Dict[str, Any]] = field(default=None)
+    #: Clear the precompensation filter of the signal while playing the pulse.
+    precompensation_clear: Optional[bool] = field(default=None)

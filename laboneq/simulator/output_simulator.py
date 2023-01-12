@@ -2,23 +2,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import List, Union
-from numpy import typing as npt
+
+from numpy.typing import ArrayLike
 
 from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.dsl.device.device_setup import DeviceSetup
 from laboneq.dsl.device.io_units.physical_channel import PhysicalChannel
 from laboneq.simulator.seqc_parser import simulate
-from laboneq.simulator.wave_scroller import WaveScroller, SimTarget
+from laboneq.simulator.wave_scroller import SimTarget, WaveScroller
 
 
 @dataclass
 class OutputData:
-    time: npt.ArrayLike
-    wave: npt.ArrayLike = None
-    trigger: npt.ArrayLike = None
-    frequency: npt.ArrayLike = None
+    time: ArrayLike
+    wave: ArrayLike = None
+    trigger: ArrayLike = None
+    frequency: ArrayLike = None
 
 
 @dataclass
@@ -51,7 +53,7 @@ class _AWG_ID:
 
     def _is_qc(self):
         dev = self._device_setup.instrument_by_uid(self._dev_uid)
-        return dev.calc_driver() == "SHFQC"
+        return dev.calc_driver() == "SHFQA" and dev.is_qc
 
     def _decode_qachannels(self, chs: List[str]):
         self.is_out = chs[1] == "output"

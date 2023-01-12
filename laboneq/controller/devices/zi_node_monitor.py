@@ -1,11 +1,13 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass, field
-from enum import Enum, auto
 import logging
 import time
+from dataclasses import dataclass, field
+from enum import Enum, auto
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+from laboneq._observability.tracing import trace
 
 
 @dataclass
@@ -61,7 +63,9 @@ class NodeMonitor:
     def start(self):
         all_paths = [p for p in self._nodes.keys()]
         self._daq.subscribe(all_paths)
-        for path in all_paths:
+
+    def fetch(self, paths: List[str]):
+        for path in paths:
             self._daq.getAsEvent(path)
 
     def stop(self):
@@ -78,7 +82,7 @@ class NodeMonitor:
                 self._get_node(path).append(val)
 
     def flush(self):
-        self.poll()
+        self._daq.sync()
         for node in self._nodes.values():
             node.flush()
 
@@ -207,6 +211,7 @@ class ResponseWaiter(MultiDeviceHandlerBase):
         super().__init__()
         self._timer = time.time
 
+    @trace("wait-for-all-nodes", disable_tracing_during=True)
     def wait_all(self, timeout: float) -> bool:
         start = self._timer()
         while True:

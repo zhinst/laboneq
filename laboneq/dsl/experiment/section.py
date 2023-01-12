@@ -2,27 +2,29 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from typing import Any, Dict, List, Union, Tuple, TYPE_CHECKING, Optional, Any
 
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+
+from laboneq import dsl
+from laboneq.core.exceptions import LabOneQException
+from laboneq.core.types.enums import SectionAlignment
 from laboneq.core.validators import validating_allowed_values
 from laboneq.dsl.enums import (
-    AveragingMode,
-    RepetitionMode,
     AcquisitionType,
+    AveragingMode,
     ExecutionType,
+    RepetitionMode,
 )
 from laboneq.dsl.experiment.pulse import Pulse
 
 from .acquire import Acquire
+from .call import Call
 from .delay import Delay
+from .operation import Operation
 from .play_pulse import PlayPulse
 from .reserve import Reserve
 from .set import Set
-from .call import Call
-from .operation import Operation
-from laboneq.core.types.enums import SectionAlignment
-from dataclasses import dataclass, field
-from laboneq.core.exceptions import LabOneQException
 
 if TYPE_CHECKING:
     from .. import Parameter
@@ -60,10 +62,10 @@ class Section:
     offset: Union[float, Parameter, None] = field(default=None)
 
     #: Play after the section with the given ID.
-    play_after: Optional[str] = field(default=None)
+    play_after: Optional[Union[str, List[str]]] = field(default=None)
 
     #: List of children. Each child may be another section or an operation.
-    children: List[Union[Section, Operation]] = field(
+    children: List[Union[Section, dsl.experiment.operation.Operation]] = field(
         default_factory=list, compare=False
     )
 
@@ -121,6 +123,7 @@ class Section:
         set_oscillator_phase=None,
         length=None,
         pulse_parameters: Optional[Dict[str, Any]] = None,
+        precompensation_clear: Optional[bool] = None,
     ):
         """Play a pulse on a signal.
 
@@ -130,6 +133,7 @@ class Section:
             amplitude: Amplitude of the pulse that should be played.
             phase: Phase of the pulse that should be played.
             pulse_parameters: Dictionary with user pulse function parameters (re)binding.
+            precompensation_clear: Clear the precompensation filter during the pulse.
         """
         self._add_operation(
             PlayPulse(
@@ -141,6 +145,7 @@ class Section:
                 set_oscillator_phase=set_oscillator_phase,
                 length=length,
                 pulse_parameters=pulse_parameters,
+                precompensation_clear=precompensation_clear,
             )
         )
 
@@ -182,14 +187,22 @@ class Section:
             )
         )
 
-    def delay(self, signal: str, time: Union[float, Parameter]):
+    def delay(
+        self,
+        signal: str,
+        time: Union[float, Parameter],
+        precompensation_clear: Optional[bool] = None,
+    ):
         """Adds a delay on the signal with a specified time.
 
         Args:
             signal: Unique identifier of the signal where the delay should be applied.
             time: Duration of the delay.
+            precompensation_clear: Clear the precompensation filter during the delay.
         """
-        self._add_operation(Delay(signal=signal, time=time))
+        self._add_operation(
+            Delay(signal=signal, time=time, precompensation_clear=precompensation_clear)
+        )
 
     def call(self, func_name, **kwargs):
         """Function call.
@@ -225,7 +238,7 @@ class AcquireLoopRt(Section):
     execution_type: ExecutionType = field(default=ExecutionType.REAL_TIME)
     #: Repetition method. One of fastest, constant and auto.
     repetition_mode: RepetitionMode = field(default=RepetitionMode.FASTEST)
-    #: The repetition time, when :py:attr:`repetition_mode` is :py:attr:`~.core.types.enum.repetition_mode.RepitionMode.CONSTANT`
+    #: The repetition time, when :py:attr:`repetition_mode` is :py:attr:`~.RepetitionMode.CONSTANT`
     repetition_time: float = field(default=None)
     #: When True, reset all oscillators at the start of every step.
     reset_oscillator_phase: bool = field(default=False)

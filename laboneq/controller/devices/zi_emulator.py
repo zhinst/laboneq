@@ -2,19 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
+import functools
+import re
+import sched
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import partial
-import functools
-import re
-import sched
-
-import time
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, overload
 
-from numpy import typing as npt
 import numpy as np
+from numpy import typing as npt
 
 
 @dataclass

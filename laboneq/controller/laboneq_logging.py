@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
-import sys
+import logging.config
 import os
 import shutil
-import logging.config
+import sys
+
 import yaml
 
 _log_dir = os.path.join("laboneq_output", "log")

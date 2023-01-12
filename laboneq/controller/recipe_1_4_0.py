@@ -2,19 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass, field
-from typing import Any, AnyStr, Dict, Optional, List, Union
+from typing import Any, AnyStr, Dict, List, Optional, Union
 
-from marshmallow import Schema, fields, post_load, EXCLUDE
+from marshmallow import EXCLUDE, Schema, fields, post_load
 
-from .util import LabOneQControllerException
 from .recipe_enums import (
-    SignalType,
-    ExecutionType,
-    RefClkType,
     DIOConfigType,
+    ExecutionType,
     OperationType,
+    RefClkType,
     ReferenceClockSource,
+    SignalType,
 )
+from .util import LabOneQControllerException
 
 
 class QCCSSchema(Schema):

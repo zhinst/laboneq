@@ -3,17 +3,17 @@
 
 from __future__ import annotations
 
-import numpy
 from typing import Any, Dict, List, Optional
+
+import numpy
 from numpy import typing as npt
 
-from laboneq.controller.recipe_enums import DIOConfigType
-from laboneq.controller.util import LabOneQControllerException
-from laboneq.controller.communication import DaqNodeSetAction, CachingStrategy
-from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
-from laboneq.controller.recipe_1_4_0 import Initialization, IO
-from laboneq.controller.recipe_enums import ReferenceClockSource
+from laboneq.controller.communication import CachingStrategy, DaqNodeSetAction
 from laboneq.controller.devices.device_zi import DeviceZI
+from laboneq.controller.recipe_1_4_0 import IO, Initialization
+from laboneq.controller.recipe_enums import DIOConfigType, ReferenceClockSource
+from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
+from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 
 REFERENCE_CLOCK_SOURCE_INTERNAL = 0

@@ -1,10 +1,11 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-import requests
 import json
-import yaml
 import logging
+
+import requests
+import yaml
 
 logger = logging.getLogger(__name__)
 

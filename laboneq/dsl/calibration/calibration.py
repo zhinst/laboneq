@@ -9,10 +9,10 @@ from laboneq.dsl.calibration.calibration_item import CalibrationItem
 
 @dataclass(init=True, repr=True, order=True)
 class Calibration:
-    """Calibration object containing a dict of :class:`CalibrationItem`.
+    """Calibration object containing a dict of :class:`~.CalibrationItem`.
 
-    The dictionary has the path i.e. UID to the :py:class:`Calibratable` object as
-    key and the actual :py:class:`CalibrationItem` object as value.
+    The dictionary has the path i.e. UID to the :py:class:`~.Calibratable` object as
+    key and the actual :py:class:`~.CalibrationItem` object as value.
     """
 
     calibration_items: Dict[str, CalibrationItem] = field(default_factory=dict)
