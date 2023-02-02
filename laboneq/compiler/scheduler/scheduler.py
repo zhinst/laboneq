@@ -53,8 +53,10 @@ class _PlayWave:
     phase: float = None
     increment_oscillator_phase: float = None
     set_oscillator_phase: float = None
+    oscillator_frequency: float = None
     play_wave_type: PlayWaveType = PlayWaveType.PLAY
-    pulse_parameters: Dict[str, Any] = field(default_factory=dict)
+    play_pulse_parameters: Dict[str, Any] = field(default_factory=dict)
+    pulse_pulse_parameters: Dict[str, Any] = field(default_factory=dict)
     precompensation_clear: bool = field(default=False)
 
 
@@ -96,7 +98,7 @@ def _set_playwave_resolved_param(section_pulse, play_wave: _PlayWave, name, valu
         play_wave.parameterized_with.append(param_ref)
 
 
-def _assign_playwave_parameters(play_wave, section_pulse, length):
+def _assign_playwave_parameters(play_wave, section_pulse, oscillator, length):
     play_wave.parameterized_with = []
     _set_playwave_resolved_param(section_pulse, play_wave, "offset")
     _set_playwave_resolved_param(section_pulse, play_wave, "amplitude")
@@ -104,15 +106,33 @@ def _assign_playwave_parameters(play_wave, section_pulse, length):
     _set_playwave_resolved_param(section_pulse, play_wave, "phase")
     _set_playwave_resolved_param(section_pulse, play_wave, "increment_oscillator_phase")
     _set_playwave_resolved_param(section_pulse, play_wave, "set_oscillator_phase")
+    if oscillator is None or oscillator.hardware:
+        pass
+    elif oscillator.frequency is not None:
+        play_wave.oscillator_frequency = oscillator.frequency
+    elif oscillator.frequency_param is not None:
+        param_ref = ParamRef(oscillator.frequency_param)
+        play_wave.oscillator_frequency = param_ref
+        play_wave.parameterized_with.append(param_ref)
+
     play_wave.precompensation_clear = section_pulse.precompensation_clear
-    pulse_parameters = section_pulse.pulse_parameters
-    if pulse_parameters is not None:
-        for param, val in pulse_parameters.items():
+    play_pulse_parameters = section_pulse.play_pulse_parameters
+    pulse_pulse_parameters = section_pulse.pulse_pulse_parameters
+    if play_pulse_parameters is not None:
+        for param, val in play_pulse_parameters.items():
             if isinstance(val, (float, int, complex)):
-                play_wave.pulse_parameters[param] = val
+                play_wave.play_pulse_parameters[param] = val
             else:
                 param_ref = ParamRef(val)
-                play_wave.pulse_parameters[param] = param_ref
+                play_wave.play_pulse_parameters[param] = param_ref
+                play_wave.parameterized_with.append(param_ref)
+    if pulse_pulse_parameters is not None:
+        for param, val in pulse_pulse_parameters.items():
+            if isinstance(val, (float, int, complex)):
+                play_wave.pulse_pulse_parameters[param] = val
+            else:
+                param_ref = ParamRef(val)
+                play_wave.pulse_pulse_parameters[param] = param_ref
                 play_wave.parameterized_with.append(param_ref)
 
     if section_pulse.acquire_params is not None:
@@ -292,7 +312,10 @@ class Scheduler:
                     assert signal_id == signal_info_main.signal_id
 
                     length = PulseDef.effective_length(pulse_def, sampling_rate)
-                    _assign_playwave_parameters(play_wave, section_pulse, length)
+                    oscillator = self._experiment_dao.signal_oscillator(signal_id)
+                    _assign_playwave_parameters(
+                        play_wave, section_pulse, oscillator, length
+                    )
 
                     play_wave_chain.append(play_wave)
                 self.add_play_wave_chain(
@@ -310,13 +333,13 @@ class Scheduler:
                 # events such that we can play zeros during the duration of that event
                 # via the command table - it needs an entry even when nothing is played.
 
-                signal_info_main = self._experiment_dao.signal_info(signal_id)
+                signal_info_main = self._experiment_dao.signal_info(signal)
                 sampling_rate = self._sampling_rate_tracker.sampling_rate_for_device(
                     signal_info_main.device_id
                 )
                 timing_anchor = _PlayWave(
                     id="CASE_EVALUATION",
-                    signal=signal_id,
+                    signal=signal,
                     play_wave_type=PlayWaveType.CASE_EVALUATION,
                     offset=32 / sampling_rate,
                 )
@@ -394,6 +417,7 @@ class Scheduler:
             EventType.ACQUIRE_START: 0,
             EventType.PARAMETER_SET: -15,
             EventType.INCREMENT_OSCILLATOR_PHASE: -9,
+            EventType.RESET_SW_OSCILLATOR_PHASE: -15,
         }
 
         for local_event_id in self._event_timing.keys():
@@ -454,16 +478,33 @@ class Scheduler:
                     phase = parameter_values[phase.param_name]
                     self._event_graph.set_node_attributes(event["id"], {"phase": phase})
 
-                pulse_parameters = event.get("pulse_parameters", {})
+                oscillator_frequency = event["oscillator_frequency"]
+                if isinstance(oscillator_frequency, ParamRef):
+                    oscillator_frequency = parameter_values[
+                        oscillator_frequency.param_name
+                    ]
+                    self._event_graph.set_node_attributes(
+                        event["id"], {"oscillator_frequency": oscillator_frequency}
+                    )
+
+                play_pulse_parameters = event.get("play_pulse_parameters", {})
+                pulse_pulse_parameters = event.get("pulse_pulse_parameters", {})
                 has_updates = False
-                for k in pulse_parameters:
-                    v = pulse_parameters[k]
+                for k, v in play_pulse_parameters.items():
                     if isinstance(v, ParamRef):
-                        pulse_parameters[k] = parameter_values[v.param_name]
+                        play_pulse_parameters[k] = parameter_values[v.param_name]
+                        has_updates = True
+                for k, v in pulse_pulse_parameters.items():
+                    if isinstance(v, ParamRef):
+                        pulse_pulse_parameters[k] = parameter_values[v.param_name]
                         has_updates = True
                 if has_updates:
                     self._event_graph.set_node_attributes(
-                        event["id"], {"pulse_parameters": pulse_parameters}
+                        event["id"],
+                        {
+                            "play_pulse_parameters": play_pulse_parameters,
+                            "pulse_pulse_parameters": pulse_pulse_parameters,
+                        },
                     )
 
                 oscillator_phase = None
@@ -476,6 +517,13 @@ class Scheduler:
                         "hdawg",
                         "shfsg",
                     ]:
+                        if oscillator_info.frequency_param is not None:
+                            frequency = parameter_values.get(
+                                oscillator_info.frequency_param
+                            )
+                        else:
+                            frequency = oscillator_info.frequency
+
                         incremented_phase = 0.0
                         if signal_id in oscillator_phase_cumulative:
                             incremented_phase = oscillator_phase_cumulative[signal_id]
@@ -493,12 +541,8 @@ class Scheduler:
                                     phase_reset_time, oscillator_phase_sets[signal_id]
                                 )
                             oscillator_phase = (
-                                (event["time"] - phase_reference_time)
-                                * 2.0
-                                * math.pi
-                                * oscillator_info.frequency
-                                + incremented_phase
-                            )
+                                event["time"] - phase_reference_time
+                            ) * 2.0 * math.pi * frequency + incremented_phase
                 event_node = self._event_graph.node(event["id"])
                 event_node["oscillator_phase"] = oscillator_phase
                 event_node["baseband_phase"] = baseband_phase
@@ -1449,6 +1493,9 @@ class Scheduler:
                 chain_element.start_attributes["phase"] = play_wave.phase
                 chain_element.start_attributes["amplitude"] = play_wave.amplitude
                 chain_element.start_attributes[
+                    "oscillator_frequency"
+                ] = play_wave.oscillator_frequency
+                chain_element.start_attributes[
                     "acquire_handle"
                 ] = play_wave.acquire_handle
                 chain_element.start_attributes[
@@ -1461,8 +1508,11 @@ class Scheduler:
                     "play_wave_type"
                 ] = play_wave.play_wave_type.name
                 chain_element.start_attributes[
-                    "pulse_parameters"
-                ] = play_wave.pulse_parameters
+                    "play_pulse_parameters"
+                ] = play_wave.play_pulse_parameters
+                chain_element.start_attributes[
+                    "pulse_pulse_parameters"
+                ] = play_wave.pulse_pulse_parameters
 
                 if (
                     play_wave.play_wave_type != PlayWaveType.DELAY
@@ -2414,6 +2464,32 @@ class Scheduler:
                 f"Scheduler issues: Constraints not satisfied: {issue_text}"
             )
 
+    def _has_control_elements(self, section_display_name):
+        section_info = self._experiment_dao.section_info(section_display_name)
+
+        if (
+            section_info.has_repeat
+            or section_info.acquisition_types is not None
+            and len(section_info.acquisition_types) > 0
+            or section_info.handle is not None
+            or section_info.state is not None
+        ):
+            return True
+        for signal, trigger in section_info.trigger_output.items():
+            if trigger["state"]:
+                return True
+
+        for signal in self._experiment_dao.section_signals(section_display_name):
+            if any(
+                pulse.precompensation_clear
+                for pulse in self._experiment_dao.section_pulses(
+                    section_display_name, signal
+                )
+            ):
+                return True
+
+        return False
+
     def section_grid(self, section):
 
         if section in self._section_grids:
@@ -2441,17 +2517,7 @@ class Scheduler:
                 section_display_name
             )
         ]
-        section_info = self._experiment_dao.section_info(section_display_name)
-        has_control_elements = (
-            section_info.has_repeat
-            or section_info.acquisition_types is not None
-            and len(section_info.acquisition_types) > 0
-            or section_info.handle is not None
-            or section_info.state is not None
-        )
-        for signal, trigger in section_info.trigger_output.items():
-            if trigger["state"]:
-                has_control_elements = True
+        has_control_elements = self._has_control_elements(section_display_name)
 
         _logger.debug("Device types for section %s are %s", section, device_types)
         self._section_grids[section] = self._calculate_section_grid(

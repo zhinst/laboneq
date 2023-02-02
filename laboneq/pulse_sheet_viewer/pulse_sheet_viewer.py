@@ -24,7 +24,7 @@ def _get_html_template():
 
 class PulseSheetViewer:
     @staticmethod
-    def generate_viewer_html_text(events, title):
+    def generate_viewer_html_text(events, title, interactive: bool = False):
         events_json = json.dumps(events["event_list"], indent=2)
         section_graph_json = json.dumps(events["section_graph"], indent=2)
         section_info_json = json.dumps(events["section_info"], indent=2)
@@ -33,6 +33,7 @@ class PulseSheetViewer:
         )
         subsection_map_json = json.dumps(events["subsection_map"], indent=2)
         sampling_rates_json = json.dumps(events["sampling_rates"], indent=2)
+        interactive_json = json.dumps(interactive, indent=2)
 
         js_script = textwrap.dedent(
             """
@@ -43,6 +44,7 @@ class PulseSheetViewer:
             window.qccs_current_subsection_map = {};
             window.qccs_current_section_signals_with_children = {};
             window.qccs_current_sampling_rates = {};
+            window.qccs_interactive = {};
             """
         ).format(
             repr(title),
@@ -52,6 +54,7 @@ class PulseSheetViewer:
             subsection_map_json,
             section_signals_with_children_json,
             sampling_rates_json,
+            interactive_json,
         )
 
         PLACEHOLDER = "// QCCS_DATA_PLACEHOLDER"

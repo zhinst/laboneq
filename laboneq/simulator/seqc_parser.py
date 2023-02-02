@@ -23,6 +23,8 @@ from pycparser.c_ast import (
     Decl,
     DoWhile,
     FuncCall,
+    FuncDef,
+    If,
     Node,
     UnaryOp,
 )
@@ -98,7 +100,11 @@ def parse_seq_c(runtime: SimpleRuntime):
     # print(ast_stream.getvalue())
 
     item: Node
-    for item in ast.ext[2].body.block_items:
+    for ext in ast.ext:
+        if isinstance(ext, FuncDef) and ext.decl.name.startswith("set_"):
+            parse_set_func(ext.decl.name[4:], ext.body.block_items[1], runtime)
+
+    for item in ast.ext[-1].body.block_items:
         try:
             parse_item(item, runtime)
         except StopSimulation:
@@ -172,6 +178,19 @@ class StopSimulation(Exception):
     pass
 
 
+def parse_set_func(param_name: str, stmt: Node, runtime: SimpleRuntime):
+    def parse_step(lower_bound: int, stmt: Node):
+        if isinstance(stmt, If):
+            upper_bound = int(stmt.cond.right.value)
+            parse_step(lower_bound, stmt.iftrue.block_items[0])
+            parse_step(upper_bound, stmt.iffalse.block_items[0])
+        else:
+            value = parse_expression(stmt.args.exprs[1], runtime)
+            runtime.setParamVal(param_name, lower_bound, value)
+
+    parse_step(0, stmt)
+
+
 def parse_item(item: Node, runtime: SimpleRuntime):
     if isinstance(item, Decl):
         runtime.declare(item.name)
@@ -182,7 +201,7 @@ def parse_item(item: Node, runtime: SimpleRuntime):
             init_value = f'"{item.name[1:]}"'
         runtime.initialize(item.name, init_value)
     elif isinstance(item, FuncCall):
-        func_name = item.name.name
+        func_name: str = item.name.name
         args = (
             tuple(parse_expression(arg, runtime) for arg in item.args)
             if item.args is not None
@@ -190,6 +209,8 @@ def parse_item(item: Node, runtime: SimpleRuntime):
         )
         if func_name in runtime.exposedFunctions:
             runtime.exposedFunctions[func_name](*args)
+        elif func_name.startswith("set_"):
+            runtime.setOscFreqByParam(func_name[4:], *args)
         else:
             pass  # Skipping unknown function
 
@@ -364,6 +385,7 @@ class SimpleRuntime:
         self.wave_data: List[Any] = []
         self.max_time: Optional[float] = max_time
         self._oscillator_sweep_config = {}
+        self._oscillator_sweep_params: Dict[str, Dict[int, float]] = {}
 
     def _last_played_sample(self) -> int:
         ev = self.seqc_simulation.events
@@ -677,6 +699,13 @@ class SimpleRuntime:
             ),
         )
 
+    def setParamVal(self, param_name: str, index: int, value: float):
+        param_vals = self._oscillator_sweep_params.setdefault(param_name, {})
+        param_vals[index] = value
+
+    def setOscFreqByParam(self, param_name: str, index: int):
+        self.setOscFreq(0, self._oscillator_sweep_params[param_name][index])
+
     def setTrigger(self, value: int):
         start_samples, insert_at = self._last_play_start_samples()
         self.seqc_simulation.events.insert(
@@ -845,6 +874,13 @@ def run_single_source(descriptor: SeqCDescriptor, waves, max_time) -> SeqCSimula
 
 
 def preprocess_source(text):
+    parts = text.split("/* === END-OF-FUNCTION-DEFS === */\n")
+    if len(parts) > 1:
+        user_functions = parts[0]
+        main = parts[1]
+    else:
+        user_functions = ""
+        main = parts[0]
     # Strip-off comments
     pattern = r"(\".*?\"|\'.*?\')|(/\*.*?\*/|//[^\r\n]*$)"
     regex = re.compile(pattern, re.MULTILINE | re.DOTALL)
@@ -855,13 +891,18 @@ def preprocess_source(text):
         else:
             return match.group(1)
 
-    source = regex.sub(_replacer, text)
+    user_functions = regex.sub(_replacer, user_functions)
+    main = regex.sub(_replacer, main)
 
     # Define SeqC built-ins and wrap program into function
     # to make the program syntactically correct for C parser.
-    if len(source) > 0:
+    if len(main) > 0:
         source = (
-            f"typedef int var;\ntypedef const char* wave;\nvoid f(void){{\n{source}\n}}"
+            f"typedef int var;\n"
+            f"typedef const char* wave;\n"
+            f"typedef const char* string;\n"
+            f"{user_functions}\n"
+            f"void f(void){{\n{main}\n}}"
         )
 
     return source

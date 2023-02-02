@@ -8,6 +8,7 @@ import logging
 import math
 import os
 import os.path
+import re
 import time
 from abc import ABC, abstractmethod
 from copy import deepcopy
@@ -50,6 +51,10 @@ import zhinst.core
 import zhinst.utils
 from numpy import typing as npt
 from zhinst.core.errors import CoreError as LabOneCoreError
+
+seqc_osc_match = re.compile(
+    r'(\s*string\s+osc_node_)(\w+)(\s*=\s*"oscs/)[0-9]+(/freq"\s*;\s*)', re.ASCII
+)
 
 
 class AwgCompilerStatus(Enum):
@@ -718,10 +723,24 @@ class DeviceZI(ABC):
                 f"SeqC program '{seqc_filename}' not found"
             )
 
+        # Substitute oscillator nodes by actual assignment
+        seqc_lines = seqc["text"].split("\n")
+        for i in range(len(seqc_lines)):
+            seqc_line = seqc_lines[i]
+            m = seqc_osc_match.match(seqc_line)
+            if m is not None:
+                param = m.group(2)
+                for osc in self._allocated_oscs:
+                    if osc.param == param:
+                        seqc_lines[
+                            i
+                        ] = f"{m.group(1)}{m.group(2)}{m.group(3)}{osc.index}{m.group(4)}"
+        seqc_text = "\n".join(seqc_lines)
+
         bin_waves = self._prepare_waves(compiled, seqc_filename)
         command_table = self._prepare_command_table(compiled, seqc_filename)
 
-        return seqc["text"], bin_waves, command_table
+        return seqc_text, bin_waves, command_table
 
     def prepare_upload_elf(self, elf: bytes, awg_index: int, filename: str):
         sequencer_paths = self.get_sequencer_paths(awg_index)

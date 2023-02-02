@@ -81,7 +81,7 @@ class Session:
 
     def __init__(
         self,
-        device_setup: DeviceSetup,
+        device_setup: DeviceSetup = None,
         log_level: int = logging.INFO,
         pass_v3_to_compiler=True,
         performance_log=False,
@@ -93,26 +93,26 @@ class Session:
         """Constructor of the session.
 
         Args:
-            device_setup (DeviceSetup): Optional device setup that should be used for this session.
-                                        The device setup can also be passed to the session after the construction
-                                        of the object.
-            log_level (int):    Optional log level of the session.
-                                If no log level is specified, the session will use the logging.INFO level.
-                                Other possible levels refer to the logging python package.
-            pass_v3_to_compiler (bool):     Optional compiler option with DSL version is used internally.
-                                            We currently only support True.
-            performance_log (bool): Optional enable performance logging.
-                                    When True, the system creates a separate logfile containing logs aimed to analyze system performance.
-                                    Defaults to False.
-            configure_logging (bool): Whether to configure logger. Can be disabled for custom logging use cases.
-                                      Defaults to True.
-        """
+            device_setup: Device setup that should be used for this session.
+                The device setup can also be passed to the session after the construction
+                of the object.
+            log_level: Log level of the session.
+                If no log level is specified, the session will use the logging.INFO level.
+                Other possible levels refer to the logging python package.
+            pass_v3_to_compiler: Compiler option with DSL version is used internally.
+                We currently only support True.
 
+                .. deprecated:: 1.7
+                    Parameter not used.
+
+            performance_log: Flag to enable performance logging.
+                When True, the system creates a separate logfile containing logs aimed to analyze system performance.
+            configure_logging: Whether to configure logger. Can be disabled for custom logging use cases.
+        """
         self._device_setup = device_setup if device_setup else DeviceSetup()
         self._controller: Controller = None
         self._connection_state: ConnectionState = ConnectionState()
         self._experiment_definition = experiment
-        self._experiment_v2 = None
         self._compiled_experiment = compiled_experiment
         # Keeps call stack of public methods (when calling each other)
         self._call_stack: List[str] = list()
@@ -125,7 +125,6 @@ class Session:
             self._logger.setLevel(log_level)
         else:
             self._logger = logging.getLogger("null")
-        self.pass_v3_to_compiler = pass_v3_to_compiler
         self._user_functions: Dict[str, Callable] = {}
         self.max_simulation_time = 10e-6
         self._toolkit_devices = ToolkitDevices()
@@ -156,12 +155,11 @@ class Session:
             and self._experiment_definition == other._experiment_definition
             and self._compiled_experiment == other._compiled_experiment
             and self._last_results == other._last_results
-            and self.pass_v3_to_compiler == other.pass_v3_to_compiler
             and self._user_functions == other._user_functions
             and self.max_simulation_time == other.max_simulation_time
         )
 
-    def _assert_connected(self, fail=True, message=None):
+    def _assert_connected(self, fail=True, message=None) -> bool:
         """Verifies that the session is connected to the devices.
 
         Args:
@@ -201,14 +199,16 @@ class Session:
 
     @_SessionDeco.entrypoint
     @trace("session.connect()")
-    def connect(self, do_emulation=False, ignore_lab_one_version_error=False):
+    def connect(
+        self, do_emulation=False, ignore_lab_one_version_error=False
+    ) -> ConnectionState:
         """Connects the session to the QCCS system.
 
         Args:
-            do_emulation (bool): Optional, specifies if the session should connect to a emulator
-                                 (in the case of 'true') or the real system (in the case of 'false').
+            do_emulation (bool): Specifies if the session should connect to a emulator
+                                 (in the case of 'True') or the real system (in the case of 'False').
 
-            ignore_lab_one_version_error (bool): Optional, Is ignored in the current implementation.
+            ignore_lab_one_version_error (bool): Ignore LabOne and LabOne Q version mismatch error.
         """
         self._ignore_lab_one_version_error = ignore_lab_one_version_error
         if (
@@ -222,15 +222,15 @@ class Session:
         return self._connection_state
 
     @_SessionDeco.entrypoint
-    def disconnect(self):
+    def disconnect(self) -> ConnectionState:
         """Disconnects the session from the devices."""
         self._connection_state.connected = False
         LabOneQFacade.disconnect(self)
         return self._connection_state
 
     @property
-    def connection_state(self):
-        """State of the connection (connected or not)"""
+    def connection_state(self) -> ConnectionState:
+        """State of the connection."""
         return self._connection_state
 
     @_SessionDeco.entrypoint
@@ -244,11 +244,13 @@ class Session:
         """Compiles the specified experiment and stores it in the compiled_experiment property.
 
         Args:
-            experiment (Experiment): Experiment instance that should be compiled.
-
+            experiment: Experiment instance that should be compiled.
             do_simulation: Run the generated seqC code in the simulator, populating the
                 `output_signals` field in the return value. The simulation is truncated
                 after a configurable time, see `session.max_simulation_time`.
+
+                .. deprecated:: 1.7
+                  Use the :class:`~.OutputSimulator` instead.
             compiler_settings: Extra options passed to the compiler.
         """
         if not self._assert_connected(fail=False):
@@ -262,8 +264,11 @@ class Session:
         return self._compiled_experiment
 
     @property
-    def compiled_experiment(self) -> CompiledExperiment:
-        """Access to the compiled experiment. The compiled experiment can be assigned to a different session if the device setup is matching."""
+    def compiled_experiment(self) -> Optional[CompiledExperiment]:
+        """Access to the compiled experiment.
+
+        The compiled experiment can be assigned to a different session if the device setup is matching.
+        """
         return self._compiled_experiment
 
     @_SessionDeco.entrypoint
@@ -272,7 +277,7 @@ class Session:
         self,
         experiment: Optional[Union[Experiment, CompiledExperiment]] = None,
         do_simulation=False,
-    ) -> Results:
+    ) -> Optional[Results]:
         """Executes the compiled experiment.
 
         If no experiment is specified, the last compiled experiment is run.
@@ -287,6 +292,9 @@ class Session:
             do_simulation: Run the generated seqC code in the simulator, populating the
                 `output_signals` field in the return value. The simulation is truncated
                 after a configurable time, see `session.max_simulation_time`.
+
+                .. deprecated:: 1.7
+                  Use the :class:`~.OutputSimulator` instead.
 
         Returns:
             A `Results` object in case of success. `None` if the session is not
@@ -328,6 +336,11 @@ class Session:
             do_simulation: Simulate the output waveforms after compiling.
                 Available as `self.results.output_signals`. The simulation is truncated
                 after a configurable time, see `session.max_simulation_time`.
+
+        .. deprecated:: 1.7
+
+          `run_all()` will be removed in the next version.
+
         """
 
         warnings.warn(
@@ -472,11 +485,6 @@ class Session:
 
     @staticmethod
     def _session_fields():
-        from laboneq.core.types import CompiledExperiment
-        from laboneq.dsl.device import DeviceSetup
-        from laboneq.dsl.experiment import Experiment
-        from laboneq.dsl.result import Results
-
         return {
             "compiled_experiment": CompiledExperiment,
             "device_setup": DeviceSetup,
@@ -667,6 +675,13 @@ class Session:
 
     @_SessionDeco.entrypoint
     def set(self, path: str, value: Any):
+        """
+        .. deprecated:: 1.7
+        """
+        warnings.warn(
+            "Session.set() has been deprecated. Use the toolkit API instead.",
+            FutureWarning,
+        )
         self._assert_connected(
             message="Session not connected. set() requires an established connection, call connect() first."
         )
@@ -674,6 +689,13 @@ class Session:
 
     @_SessionDeco.entrypoint
     def get(self, path: str) -> Any:
+        """
+        .. deprecated:: 1.7
+        """
+        warnings.warn(
+            "Session.get() has been deprecated. Use the toolkit API instead.",
+            FutureWarning,
+        )
         self._assert_connected(
             message="Session not connected. get() requires an established connection, call connect() first."
         )

@@ -33,6 +33,7 @@ classifiers = [
 ]
 dependencies = [
     "engineering_notation",
+    "flask",
     "intervaltree",
     "ipykernel",
     "jsonschema",
@@ -63,7 +64,7 @@ zip-safe = false
 
 [tool.setuptools.dynamic]
 version = {file = "laboneq/VERSION.txt"}
-readme = {file = "README.md"}
+readme = {file = "README.md", content-type = "text/markdown"}
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -81,7 +82,6 @@ laboneq = [
 line-length = 88
 target-version = ["py37"]
 include = "\\.pyi?$"
-required-version = "22.8.0"
 
 [tool.isort]
 profile = "black"

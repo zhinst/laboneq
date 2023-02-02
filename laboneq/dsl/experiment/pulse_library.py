@@ -40,8 +40,9 @@ def register_pulse_functional(sampler: Callable, name: str = None):
 
 
     Args
-        sampler (Callable): the function used for sampling the pulse
-        name (str): the name used internally for referring to this pulse type
+        - sampler (Callable): the function used for sampling the pulse
+
+        - name (str): the name used internally for referring to this pulse type
 
     Returns
         A factory function for new :py:class:`~.Pulse` objects. The return value has the

@@ -16,11 +16,13 @@ _TRACING_ENABLED = False
 def enable():
     global _TRACING_ENABLED
     _TRACING_ENABLED = True
+    tracing.enable_tracing()
 
 
 def disable():
     global _TRACING_ENABLED
     _TRACING_ENABLED = False
+    tracing.disable_tracing()
 
 
 def get_tracer():

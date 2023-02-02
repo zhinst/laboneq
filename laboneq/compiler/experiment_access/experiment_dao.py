@@ -9,16 +9,18 @@ import logging
 import os
 import uuid
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+import numpy as np
 from jsonschema import ValidationError
 from jsonschema.validators import validator_for
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import AcquisitionType, AveragingMode, IODirection
+from laboneq.core.validators import dicts_equal
 
 _logger = logging.getLogger(__name__)
 
@@ -59,7 +61,7 @@ class PulseDef:
     amplitude: float
     amplitude_param: str
     play_mode: str
-    samples: ArrayLike
+    samples: Optional[ArrayLike]
 
     @property
     def effective_amplitude(self) -> float:
@@ -73,6 +75,17 @@ class PulseDef:
         if length is None and pulse_def.samples is not None:
             length = len(pulse_def.samples) / sampling_rate
         return length
+
+    def __eq__(self, other: PulseDef):
+        if isinstance(other, PulseDef):
+            for k, v in asdict(self).items():
+                if k == "samples":
+                    if not np.array_equal(self.samples, other.samples):
+                        return False
+                elif not v == getattr(other, k):
+                    return False
+            return True
+        return False
 
 
 @dataclass
@@ -142,7 +155,8 @@ class SectionSignalPulse:
     increment_oscillator_phase_param: str
     set_oscillator_phase: float
     set_oscillator_phase_param: str
-    pulse_parameters: Optional[Any]
+    play_pulse_parameters: Optional[Any]
+    pulse_pulse_parameters: Optional[Any]
     precompensation_clear: bool
 
 
@@ -186,6 +200,16 @@ class ExperimentDAO:
 
             self._load_experiment(experiment)
         self.validate_experiment()
+
+    def __eq__(self, other):
+        if not isinstance(other, ExperimentDAO):
+            return False
+
+        return (
+            self._root_section_ids == other._root_section_ids
+            and self._acquisition_type == other._acquisition_type
+            and dicts_equal(self._data, other._data)
+        )
 
     @property
     def acquisition_type(self) -> AcquisitionType:
@@ -518,6 +542,10 @@ class ExperimentDAO:
             if "trigger_output" in section:
                 trigger_output = section["trigger_output"]
 
+            if section["id"] in self._data["section"]:
+                raise LabOneQException(
+                    f"Duplicate section id '{section['id']}' in experiment"
+                )
             self._data["section"][section["id"]] = SectionInfo(
                 section_id=section["id"],
                 has_repeat=has_repeat,
@@ -618,7 +646,8 @@ class ExperimentDAO:
                                 increment_oscillator_phase_param=pulse_increment_oscillator_phase_param,
                                 set_oscillator_phase=pulse_set_oscillator_phase,
                                 set_oscillator_phase_param=pulse_set_oscillator_phase_param,
-                                pulse_parameters=None,
+                                play_pulse_parameters=None,
+                                pulse_pulse_parameters=None,
                                 precompensation_clear=precompensation_clear,
                             )
                             self._data["section_signal_pulse"].append(new_ssp)
@@ -1003,7 +1032,8 @@ class ExperimentDAO:
                         "increment_oscillator_phase_param",
                         "set_oscillator_phase",
                         "set_oscillator_phase_param",
-                        "pulse_parameters",
+                        "play_pulse_parameters",
+                        "pulse_pulse_parameters",
                         "precompensation_clear",
                     ]
                 }
@@ -1556,17 +1586,12 @@ class ExperimentDAO:
                         frequency = oscillator.frequency
                         try:
                             frequency = float(frequency)
-                        except ValueError:
-                            pass
-                        except TypeError:
-                            pass
-                        if not isinstance(frequency, float) and not isinstance(
-                            frequency, int
-                        ):
+                        except (ValueError, TypeError):
                             if frequency is not None and hasattr(frequency, "uid"):
                                 frequency_param = frequency.uid
-
-                            frequency = None
+                                frequency = None
+                            else:
+                                raise
                         modulated_paths[ls.path] = {
                             "oscillator_id": oscillator_uid,
                             "is_hardware": is_hardware,
@@ -1903,6 +1928,13 @@ class ExperimentDAO:
     ):
         if section.uid is None:
             raise RuntimeError(f"Section uid must not be None: {section}")
+        if (
+            section.uid in section_uid_map
+            and section is not section_uid_map[section.uid]
+        ):
+            raise LabOneQException(
+                f"Duplicate section uid '{section.uid}' found in experiment"
+            )
         section_uid_map[section.uid] = section
         current_acquisition_type = acquisition_type
 
@@ -2109,7 +2141,8 @@ class ExperimentDAO:
                             increment_oscillator_phase_param=None,
                             set_oscillator_phase=None,
                             set_oscillator_phase_param=None,
-                            pulse_parameters=None,
+                            play_pulse_parameters=None,
+                            pulse_pulse_parameters=None,
                             precompensation_clear=precompensation_clear,
                         )
                     )
@@ -2146,10 +2179,7 @@ class ExperimentDAO:
                         function = None
                         length = None
 
-                        combined_pulse_parameters = {}
                         pulse_parameters = getattr(pulse, "pulse_parameters", None)
-                        if pulse_parameters is not None:
-                            combined_pulse_parameters.update(pulse_parameters)
 
                         if pulse.uid not in pulse_uids:
                             samples = None
@@ -2215,16 +2245,20 @@ class ExperimentDAO:
                         operation_pulse_parameters = getattr(
                             operation, "pulse_parameters", None
                         )
-                        if operation_pulse_parameters is not None:
-                            combined_pulse_parameters.update(operation_pulse_parameters)
 
                         # Replace sweep params with their uid
-                        for param in combined_pulse_parameters:
-                            val = combined_pulse_parameters[param]
-                            if not isinstance(val, (float, int, complex)):
-                                combined_pulse_parameters[param] = getattr(
-                                    val, "uid", None
-                                )
+                        if pulse_parameters is not None:
+                            for param in pulse_parameters:
+                                val = pulse_parameters[param]
+                                if not isinstance(val, (float, int, complex)):
+                                    pulse_parameters[param] = getattr(val, "uid", None)
+                        if operation_pulse_parameters is not None:
+                            for param in operation_pulse_parameters:
+                                val = operation_pulse_parameters[param]
+                                if not isinstance(val, (float, int, complex)):
+                                    operation_pulse_parameters[param] = getattr(
+                                        val, "uid", None
+                                    )
 
                         self._data["section_signal_pulse"].append(
                             dict(
@@ -2246,7 +2280,8 @@ class ExperimentDAO:
                                 increment_oscillator_phase_param=pulse_increment_oscillator_phase_param,
                                 set_oscillator_phase=pulse_set_oscillator_phase,
                                 set_oscillator_phase_param=pulse_set_oscillator_phase_param,
-                                pulse_parameters=combined_pulse_parameters,
+                                play_pulse_parameters=operation_pulse_parameters,
+                                pulse_pulse_parameters=pulse_parameters,
                                 precompensation_clear=False,  # not supported
                             )
                         )

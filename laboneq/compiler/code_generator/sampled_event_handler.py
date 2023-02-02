@@ -4,8 +4,9 @@
 from __future__ import annotations
 
 import logging
+import textwrap
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set
 
 from laboneq.compiler.code_generator.compressor import compress_generators
 from laboneq.compiler.code_generator.seq_c_generator import (
@@ -53,11 +54,37 @@ class FeedbackConnection:
     drive: Set[str] = field(default_factory=set)
 
 
+def generate_if_else_tree(
+    iterations: int, variable: str, step_factory: Callable[[int], str]
+) -> List[str]:
+    def if_level(base, bit):
+        if bit == 0:
+            return [f"{step_factory(base)}"]
+        n_bit = bit - 1
+        n_base = base + (1 << n_bit)
+        if n_base < iterations:
+            return [
+                f"if ({variable} < {n_base}) {{",
+                *[f"  {l}" for l in if_level(base, n_bit)],
+                f"}} else {{  // {variable} >= {n_base}",
+                *[f"  {l}" for l in if_level(n_base, n_bit)],
+                "}",
+            ]
+        else:
+            return if_level(base, n_bit)
+
+    if iterations == 0:
+        return []
+    start_bit = iterations.bit_length()
+    return if_level(0, start_bit)
+
+
 class SampledEventHandler:
     def __init__(
         self,
         seqc_tracker: SeqCTracker,
         command_table_tracker: CommandTableTracker,
+        function_defs_generator: SeqCGenerator,
         declarations_generator: SeqCGenerator,
         wave_indices: WaveIndexTracker,
         feedback_connections: Dict[str, FeedbackConnection],
@@ -70,6 +97,7 @@ class SampledEventHandler:
     ):
         self.seqc_tracker = seqc_tracker
         self.command_table_tracker = command_table_tracker
+        self.function_defs_generator = function_defs_generator
         self.declarations_generator = declarations_generator
         self.wave_indices = wave_indices
         self.feedback_connections = feedback_connections
@@ -372,6 +400,47 @@ class SampledEventHandler:
             )
 
     def handle_set_oscillator_frequency(self, sampled_event):
+        if self.device_type == DeviceType.HDAWG:
+            self._handle_set_oscillator_frequency_hdawg(sampled_event)
+        else:
+            self._handle_set_oscillator_frequency_shf(sampled_event)
+
+    def _handle_set_oscillator_frequency_hdawg(self, sampled_event):
+        iteration = sampled_event["iteration"]
+        parameter_name = sampled_event["parameter_name"]
+        param_stem = string_sanitize(parameter_name)
+        counter_variable_name = string_sanitize(f"index_{parameter_name}")
+        if iteration == 0:
+            iterations = sampled_event["iterations"]
+            if iterations > 401:
+                raise LabOneQException(
+                    "HDAWG can only handle RT frequency sweeps up to 401 steps."
+                )
+            steps = "\n  ".join(
+                generate_if_else_tree(
+                    iterations=iterations,
+                    variable=f"arg_{param_stem}",
+                    step_factory=lambda i: f"setDouble(osc_node_{param_stem}, {sampled_event['start_frequency'] + sampled_event['step_frequency'] * i});",
+                )
+            )
+            self.function_defs_generator.add_function_def(
+                f"void set_{param_stem}(var arg_{param_stem}) {{\n"
+                f'  string osc_node_{param_stem} = "oscs/0/freq";\n'
+                f"  {steps}\n"
+                f"}}\n"
+            )
+            self.declarations_generator.add_variable_declaration(
+                counter_variable_name, 0
+            )
+            self.seqc_tracker.add_variable_assignment(counter_variable_name, 0)
+        self.seqc_tracker.add_required_playzeros(sampled_event)
+        self.seqc_tracker.add_function_call_statement(
+            f"set_{param_stem}",
+            args=(f"{counter_variable_name}++",),
+            deferred=True,
+        )
+
+    def _handle_set_oscillator_frequency_shf(self, sampled_event):
         iteration = sampled_event["iteration"]
         parameter_name = sampled_event["parameter_name"]
         counter_variable_name = string_sanitize(f"index_{parameter_name}")
@@ -410,7 +479,6 @@ class SampledEventHandler:
     def handle_loop_step_start(self, sampled_event):
         _logger.debug("  Processing LOOP_STEP_START EVENT %s", sampled_event)
         self.seqc_tracker.add_required_playzeros(sampled_event)
-        assert not self.seqc_tracker.deferred_function_calls
         self.seqc_tracker.append_loop_stack_generator()
 
     def handle_loop_step_end(self, sampled_event):
@@ -424,7 +492,6 @@ class SampledEventHandler:
             self.seqc_tracker.current_loop_stack_generator(),
         )
         self.seqc_tracker.add_required_playzeros(sampled_event)
-        assert not self.seqc_tracker.deferred_function_calls
         self.seqc_tracker.append_loop_stack_generator(outer=True)
 
         if self.emit_timing_comments:

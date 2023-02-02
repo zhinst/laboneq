@@ -14,6 +14,7 @@ from numpy.typing import ArrayLike
 
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.core.utilities.pulse_sampler import (
+    combine_pulse_parameters,
     sample_pulse,
     verify_amplitude_no_clipping,
 )
@@ -78,7 +79,6 @@ def _replace_pulse_in_wave(
         pulse_parameters = getattr(pulse_or_array, "pulse_parameters", None) or {}
 
     length = length or (0 if input_samples is None else len(input_samples))
-    assert length > 0 and abs(length - pwm.length_samples) < 2  # (rounding)
 
     if (
         not is_complex
@@ -94,11 +94,18 @@ def _replace_pulse_in_wave(
         ):
             continue
         phase = (instance.modulation_phase or 0.0) + (instance.iq_phase or 0.0)
-        combined_pulse_parameters = {**pulse_parameters, **instance.pulse_parameters}
+        combined_pulse_parameters = combine_pulse_parameters(
+            instance.pulse_pulse_parameters,
+            pulse_parameters,
+            instance.play_pulse_parameters,
+        )
         samples = sample_pulse(
             signal_type=pwm.signal_type,
             sampling_rate=pwm.sampling_rate,
-            length=pwm.length_samples / pwm.sampling_rate,
+            length=(
+                instance.length if instance.length is not None else pwm.length_samples
+            )
+            / pwm.sampling_rate,
             amplitude=amplitude * instance.amplitude,
             pulse_function=function,
             modulation_frequency=instance.modulation_frequency,

@@ -8,7 +8,7 @@ import logging
 import math
 import os
 from collections import Counter
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
@@ -17,9 +17,9 @@ from sortedcollections import SortedDict
 
 from laboneq._observability.tracing import trace
 from laboneq.compiler.code_generator import CodeGenerator
+from laboneq.compiler.common import compiler_settings
 from laboneq.compiler.common.awg_info import AWGInfo
 from laboneq.compiler.common.awg_signal_type import AWGSignalType
-from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.common.trigger_mode import TriggerMode
@@ -51,59 +51,12 @@ class LeaderProperties:
 _AWGMapping = Dict[str, Dict[int, AWGInfo]]
 
 
-def _calculate_compiler_settings(local_settings: Optional[Dict] = None):
-    def to_value(input_string):
-        try:
-            return int(input_string)
-        except ValueError:
-            pass
-        try:
-            return float(input_string)
-        except ValueError:
-            pass
-        if input_string.lower() in ["true", "false"]:
-            return input_string.lower() == "true"
-
-    PREFIX = "QCCS_COMPILER_"
-    compiler_settings_dict = asdict(CompilerSettings())
-
-    for settings_key in compiler_settings_dict.keys():
-        key = PREFIX + settings_key
-        if key in os.environ:
-            value = to_value(os.environ[key])
-            if value is not None:
-                compiler_settings_dict[settings_key] = value
-                _logger.warning(
-                    "Environment variable %s is set. %s overridden to be %s instead of default value %s",
-                    key,
-                    settings_key,
-                    value,
-                    getattr(CompilerSettings, settings_key),
-                )
-        else:
-            _logger.debug("Key %s not found in environment variables", key)
-
-    if local_settings is not None:
-        for k, v in local_settings.items():
-            if not k in compiler_settings_dict:
-                raise KeyError(f"Not a valid setting: {k}")
-            compiler_settings_dict[k] = v
-
-    compiler_settings = CompilerSettings(**compiler_settings_dict)
-
-    for k, v in asdict(compiler_settings).items():
-        _logger.debug("Setting %s=%s", k, v)
-
-    return compiler_settings
-
-
 class Compiler:
     def __init__(self, settings: Optional[Dict] = None):
-
         self._osc_numbering = None
         self._section_grids = {}
         self._experiment_dao: ExperimentDAO = None
-        self._settings = _calculate_compiler_settings(settings)
+        self._settings = compiler_settings.from_dict(settings)
         self._sampling_rate_tracker: SamplingRateTracker = None
         self._scheduler: Scheduler = None
 
@@ -118,6 +71,10 @@ class Compiler:
 
         _logger.info("Starting LabOne Q Compiler run...")
         self._check_tinysamples()
+
+    @classmethod
+    def from_user_settings(cls, settings: dict) -> "Compiler":
+        return cls(compiler_settings.filter_user_settings(settings))
 
     def _check_tinysamples(self):
         for t in DeviceType:

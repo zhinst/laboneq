@@ -111,6 +111,9 @@ class SeqCGenerator:
             raise Exception(f"Empty body for while loop")
         self.add_statement({"type": "do_while", "condition": condition, "body": body})
 
+    def add_function_def(self, text):
+        self.add_statement({"type": "function_def", "text": text})
+
     def add_variable_declaration(self, variable_name, initial_value=None):
         statement = {"type": "variable_declaration", "variable_name": variable_name}
         if initial_value is not None:
@@ -221,6 +224,8 @@ class SeqCGenerator:
         elif statement["type"] == "wave_declaration":
             if statement["device_type"].supports_binary_waves:
                 self._seq_c_text += self._gen_wave_declaration_placeholder(statement)
+        elif statement["type"] == "function_def":
+            self._seq_c_text += statement["text"]
         elif statement["type"] == "variable_declaration":
             self._seq_c_text += "var " + statement["variable_name"]
             if "initial_value" in statement:

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from typing import Any, Dict, Optional, Union
 
 import numpy as np
@@ -173,3 +174,12 @@ def verify_amplitude_no_clipping(
 
         message += " Signal will be clipped on the device."
         _logger.warning(message)
+
+
+def combine_pulse_parameters(initial_pulse, replaced_pulse, play):
+    combined_parameters = deepcopy(initial_pulse) or {}
+    if replaced_pulse is not None:
+        combined_parameters.update(replaced_pulse)
+    if play is not None:
+        combined_parameters.update(play)
+    return combined_parameters

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import atexit
+import warnings
 from typing import TYPE_CHECKING, Dict
 
 from numpy import typing as npt
@@ -49,28 +50,7 @@ class LabOneQFacade:
         session: Session, logger, do_simulation=False, compiler_settings: Dict = None
     ) -> CompiledExperiment:
         logger.debug("Calling LabOne Q Compiler...")
-        if compiler_settings is not None:
-            compiler_settings = {
-                k: v
-                for k, v in compiler_settings.items()
-                if k
-                in (
-                    "MAX_EVENTS_TO_PUBLISH",
-                    "PHASE_RESOLUTION_BITS",
-                    "HDAWG_MIN_PLAYWAVE_HINT",
-                    "HDAWG_MIN_PLAYZERO_HINT",
-                    "UHFQA_MIN_PLAYWAVE_HINT",
-                    "UHFQA_MIN_PLAYZERO_HINT",
-                    "SHFQA_MIN_PLAYWAVE_HINT",
-                    "SHFQA_MIN_PLAYZERO_HINT",
-                    "SHFSG_MIN_PLAYWAVE_HINT",
-                    "SHFSG_MIN_PLAYZERO_HINT",
-                    "EMIT_TIMING_COMMENTS",
-                    "HDAWG_FORCE_COMMAND_TABLE",
-                    "SHFSG_FORCE_COMMAND_TABLE",
-                )
-            }
-        compiler = Compiler(compiler_settings)
+        compiler = Compiler.from_user_settings(compiler_settings)
         compiled_experiment = compiler.run(
             {"setup": session.device_setup, "experiment": session.experiment}
         )
@@ -102,6 +82,10 @@ class LabOneQFacade:
     def simulate_outputs(
         compiled_experiment: CompiledExperiment, max_simulation_time: float, logger
     ):
+        warnings.warn(
+            "This output simulation API has been deprecated, and will be removed in the next version. Use the new output simulator instead.",
+            FutureWarning,
+        )
         from laboneq.core.types.device_output_signals import DeviceOutputSignals
         from laboneq.dsl.result import Waveform
         from laboneq.simulator import analyze_compiler_output_memory

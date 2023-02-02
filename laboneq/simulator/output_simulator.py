@@ -81,20 +81,20 @@ class OutputSimulator:
         compiled_experiment = session.compile(exp)
 
         # Create an output simulation object
-        output_simulation = OutputSimulation(compiled_experiment)
+        output_simulator = OutputSimulator(compiled_experiment)
 
         # By default, simulation is stopped after 1ms, but it can be explicitly specified
-        output_simulation = OutputSimulation(compiled_experiment, max_simulation_length = 10e-3)
+        output_simulator = OutputSimulator(compiled_experiment, max_simulation_length = 10e-3)
 
         # Also the maximum output snippet length is configurable, defaulting to 1us
-        output_simulation = OutputSimulation(compiled_experiment, max_output_length = 5e-6)
+        output_simulator = OutputSimulator(compiled_experiment, max_output_length = 5e-6)
 
         # Maximum output length can also be set later
-        output_simulation.max_output_length = 5e-6
+        output_simulator.max_output_length = 5e-6
 
 
         # As next, retrieve the actual simulated waveform
-        data = output_simulation.get_snippet(
+        data = output_simulator.get_snippet(
             physical_channel,
             start = 1e-6,
             output_length = 500e-9,

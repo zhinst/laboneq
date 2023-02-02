@@ -2,9 +2,9 @@ from laboneq.dsl.device import DeviceSetup
 from laboneq.dsl.calibration import SignalCalibration, Oscillator, MixerCalibration
 from laboneq.core.types.enums import ModulationType
 
+
 # functions that modifies the calibration on a given device setup
 def calibrate_devices(device_setup):
-
     local_oscillator_shfsg = Oscillator(uid="lo_shfsg", frequency=5e9)
     local_oscillator_shfqa = Oscillator(uid="lo_shfqa", frequency=5.5e9)
 

@@ -622,6 +622,9 @@
         },
         "length": {
           "$ref": "#/definitions/number-or-param-ref-def"
+        },
+        "precompensation_clear": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false

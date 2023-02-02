@@ -3,6 +3,8 @@
 
 from typing import Any, Dict
 
+import numpy as np
+
 from laboneq.core.exceptions import LabOneQException
 
 
@@ -32,3 +34,12 @@ def validating_allowed_values(allowed_values: Dict[str, Any]):
         return cls
 
     return f
+
+
+def dicts_equal(actual: Dict[Any, Any], desired: Dict[Any, Any]) -> bool:
+    """Checks if two dicts are equal."""
+    try:
+        np.testing.assert_equal(actual, desired)
+        return True
+    except AssertionError:
+        return False

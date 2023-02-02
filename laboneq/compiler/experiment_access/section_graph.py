@@ -533,8 +533,8 @@ class SectionGraph:
             if data.get("type") != "parent":
                 section_graph_parent.remove_edge(u, v)
 
-        # Note: We only use this function internal unit testing. Before this can be
-        # used in production code, we probably need to handle the RT subgraph properly.
+        # Note: We only use this function for internal unit testing. Before this can be
+        # used in production code, we need to handle the RT subgraph properly.
 
         return SectionGraph(
             section_graph=graph,

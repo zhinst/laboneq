@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import bisect
 import itertools
 import logging
 import math
@@ -32,6 +33,7 @@ from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.common.play_wave_type import PlayWaveType
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.pulse_sampler import (
+    combine_pulse_parameters,
     interval_to_samples,
     interval_to_samples_with_errors,
     length_to_samples,
@@ -242,7 +244,15 @@ def analyze_precomp_reset_times(
             "time": event["time"] + 32 / sampling_rate,
             **common,
         }
-        events.extend([play_start_event, play_end_event])
+
+        index = bisect.bisect(
+            [event["time"] for event in events], play_start_event["time"]
+        )
+        events.insert(index, play_start_event)
+        index = bisect.bisect(
+            [event["time"] for event in events], play_end_event["time"]
+        )
+        events.insert(index, play_end_event)
 
     return retval
 
@@ -301,9 +311,9 @@ def analyze_set_oscillator_times(
     if len(set_oscillator_events) == 0:
         return SortedDict()
 
-    if device_type not in (DeviceType.SHFQA, DeviceType.SHFSG):
+    if device_type not in (DeviceType.HDAWG, DeviceType.SHFQA, DeviceType.SHFSG):
         raise LabOneQException(
-            "Real-time frequency sweep only supported on SHF devices"
+            "Real-time frequency sweep only supported on SHF and HDAWG devices"
         )
 
     iterations = {event["iteration"]: event for event in set_oscillator_events}
@@ -333,6 +343,7 @@ def analyze_set_oscillator_times(
             "signature": "set_oscillator_frequency",
             "parameter_name": event["parameter"]["id"],
             "iteration": iteration,
+            "iterations": len(iterations),
         }
 
         add_to_dict_list(retval, event_time_in_samples, set_oscillator_event)
@@ -364,7 +375,8 @@ def analyze_acquire_times(
         play_wave_id: str
         acquisition_type: list
         acquire_handle: str
-        pulse_parameters: Optional[Dict[str, Any]]
+        play_pulse_parameters: Optional[Dict[str, Any]]
+        pulse_pulse_parameters: Optional[Dict[str, Any]]
 
     @dataclass
     class IntervalEndEvent:
@@ -381,7 +393,8 @@ def analyze_acquire_times(
                     event["play_wave_id"],
                     event.get("acquisition_type", []),
                     event["acquire_handle"],
-                    event.get("pulse_parameters"),
+                    event.get("play_pulse_parameters"),
+                    event.get("pulse_pulse_parameters"),
                 )
                 for event in events
                 if event["event_type"] in ["ACQUIRE_START"]
@@ -421,7 +434,8 @@ def analyze_acquire_times(
             "acquisition_type": interval_start.acquisition_type,
             "acquire_handles": [interval_start.acquire_handle],
             "channels": channels,
-            "pulse_parameters": interval_start.pulse_parameters,
+            "play_pulse_parameters": interval_start.play_pulse_parameters,
+            "pulse_pulse_parameters": interval_start.pulse_pulse_parameters,
         }
 
         add_to_dict_list(retval, acquire_event["start"], acquire_event)
@@ -583,7 +597,8 @@ def analyze_play_wave_times(
         phase: Optional[float]
         sub_channel: Optional[int]
         baseband_phase: Optional[float]
-        pulse_parameters: Optional[Dict[str, Any]]
+        play_pulse_parameters: Optional[Dict[str, Any]]
+        pulse_pulse_parameters: Optional[Dict[str, Any]]
         state: Optional[int]
 
     @dataclass
@@ -604,12 +619,13 @@ def analyze_play_wave_times(
         baseband_phase: float
         phase: float
         sub_channel: int
-        pulse_parameters: Optional[Dict[str, Any]]
+        play_pulse_parameters: Optional[Dict[str, Any]]
+        pulse_pulse_parameters: Optional[Dict[str, Any]]
         state: int
         start_rounding_error: float
 
     interval_zip: List[Tuple[IntervalStartEvent, IntervalEndEvent]] = []
-    for state in itertools.chain(states.values(), (None,)):
+    for state in itertools.chain(set(states.values()), (None,)):
         for index, cur_signal_id in enumerate(signal_ids):
             interval_zip.extend(
                 zip(
@@ -621,11 +637,12 @@ def analyze_play_wave_times(
                             event["amplitude"],
                             index,
                             event.get("oscillator_phase"),
-                            signals[cur_signal_id].oscillator_frequency,
+                            event.get("oscillator_frequency"),
                             event.get("phase"),
                             sub_channel,
                             event.get("baseband_phase"),
-                            event.get("pulse_parameters"),
+                            event.get("play_pulse_parameters"),
+                            event.get("pulse_pulse_parameters"),
                             states.get(event["section_name"], None),
                         )
                         for event in events
@@ -660,6 +677,7 @@ def analyze_play_wave_times(
                             None,
                             None,
                             sub_channel,
+                            None,
                             None,
                             None,
                             states.get(event["section_name"], None),
@@ -735,7 +753,8 @@ def analyze_play_wave_times(
                     baseband_phase=baseband_phase,
                     phase=interval_start.phase,
                     sub_channel=interval_start.sub_channel,
-                    pulse_parameters=interval_start.pulse_parameters,
+                    play_pulse_parameters=interval_start.play_pulse_parameters,
+                    pulse_pulse_parameters=interval_start.pulse_pulse_parameters,
                     state=interval_start.state,
                     start_rounding_error=start_rounding_error,
                     oscillator_frequency=interval_start.oscillator_frequency,
@@ -785,7 +804,9 @@ def analyze_play_wave_times(
         else:
             cut_points.add(event_time)
 
-    sequence_end = length_to_samples(events[-1]["time"] + delay, sampling_rate)
+    sequence_end = length_to_samples(
+        max(event["time"] for event in events) + delay, sampling_rate
+    )
     sequence_end += play_wave_size_hint + play_zero_size_hint  # slack
     sequence_end += (-sequence_end) % sample_multiple  # align to sequencer grid
     cut_points.add(sequence_end)
@@ -875,6 +896,7 @@ def analyze_play_wave_times(
 
         for state, intervals in v_state.items():
             signature_pulses = []
+            pulse_parameters = []
             has_child = False
             for iv in sorted(intervals, key=lambda x: (x.begin, x.data.channel)):
                 data: IntervalData = iv.data
@@ -909,6 +931,9 @@ def analyze_play_wave_times(
                         * PHASE_RESOLUTION_RANGE
                     )
 
+                combined_pulse_parameters = combine_pulse_parameters(
+                    data.pulse_pulse_parameters, None, data.play_pulse_parameters
+                )
                 signature_pulses.append(
                     PulseSignature(
                         start=start,
@@ -922,12 +947,20 @@ def analyze_play_wave_times(
                         channel=data.channel if len(signal_ids) > 1 else None,
                         sub_channel=data.sub_channel,
                         pulse_parameters=None
-                        if data.pulse_parameters is None
-                        else frozenset(data.pulse_parameters.items()),
+                        if combined_pulse_parameters is None
+                        else frozenset(combined_pulse_parameters.items()),
+                    )
+                )
+                pulse_parameters.append(
+                    (
+                        frozenset((data.play_pulse_parameters or {}).items()),
+                        frozenset((data.pulse_pulse_parameters or {}).items()),
                     )
                 )
             waveform_signature = WaveformSignature(k.length(), tuple(signature_pulses))
-            signature = PlaybackSignature(waveform_signature, hw_oscillator, state)
+            signature = PlaybackSignature(
+                waveform_signature, hw_oscillator, tuple(pulse_parameters), state
+            )
 
             if has_child:
                 signatures.add(signature)

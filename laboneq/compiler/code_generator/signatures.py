@@ -4,11 +4,9 @@
 from __future__ import annotations
 
 import hashlib
-import sys
-from dataclasses import asdict, dataclass
-from typing import Any, FrozenSet, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
-import numpy
 import numpy as np
 from orjson import orjson
 
@@ -105,4 +103,5 @@ class PlaybackSignature:
 
     waveform: WaveformSignature
     hw_oscillator: Optional[str]
+    pulse_parameters: List[Tuple[Dict, Dict]]
     state: Optional[int] = None

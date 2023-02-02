@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
@@ -58,8 +59,10 @@ class Section:
     #: Minimal length of the section in seconds. The scheduled section might be slightly longer, as its length is rounded to the next multiple of the section timing grid.
     length: Optional[float] = field(default=None)
 
-    #: Offset in sections at the beginning of the section. The content of the section will start after this offset.
     offset: Union[float, Parameter, None] = field(default=None)
+    """Offset in sections at the beginning of the section. The content of the section will start after this offset.
+    
+    .. deprecated:: 1.7"""
 
     #: Play after the section with the given ID.
     play_after: Optional[Union[str, List[str]]] = field(default=None)
@@ -75,6 +78,12 @@ class Section:
     def __post_init__(self):
         if self.uid is None:
             self.uid = section_id_generator()
+
+        if self.offset is not None:
+            warnings.warn(
+                "Section.offset has been deprecated and will be removed in the next version.",
+                FutureWarning,
+            )
 
     def add(self, section: Section):
         """Add a subsection, a sweep or a loop to the section.

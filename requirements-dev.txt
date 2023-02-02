@@ -21,23 +21,12 @@ jsonschema
 requests
 nbconvert
 RsInstrument
-pyvisa-py
-
-# For analysis
-pyyaml
-fs
-fs.sshfs
-tabulate
-python-gitlab
-python-dateutil
-gcovr
-markdown
-pymdown-extensions
+pyvisa-py==0.5.3
 
 # Formatting (must match version in CI)
-black==22.08.0
+black==22.12.0
 pre-commit
-isort>=5.10.1
+isort>=5.11.4
 
 # packaging/deployment
 wheel
@@ -48,3 +37,4 @@ twine
 click==8.0.4
 toml
 build
+python-gitlab

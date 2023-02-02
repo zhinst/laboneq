@@ -7,12 +7,10 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-import numpy as np
-
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.device_output_signals import DeviceOutputSignals
 from laboneq.core.types.enums.mixer_type import MixerType
-from laboneq.core.utilities.replace_pulse import replace_pulse
+from laboneq.core.validators import dicts_equal
 
 if TYPE_CHECKING:
     from numpy.typing import ArrayLike
@@ -26,13 +24,14 @@ if TYPE_CHECKING:
 class PulseInstance:
     offset_samples: int
     amplitude: float = None  # instance (final) amplitude
+    length: float = None  # instance (final) length
     iq_phase: float = None
     modulation_frequency: float = None
     modulation_phase: float = None
     channel: int = None  # The AWG channel for rf_signals
     needs_conjugate: bool = False  # SHF devices need that for now
-    # Resolved user pulse function parameters
-    pulse_parameters: Dict[str, Any] = field(default_factory=dict)
+    play_pulse_parameters: Optional[Dict[str, Any]] = field(default_factory=dict)
+    pulse_pulse_parameters: Optional[Dict[str, Any]] = field(default_factory=dict)
 
     # uid of pulses that this instance overlaps with
     overlaps: List[str] = None
@@ -109,25 +108,14 @@ class CompiledExperiment:
         if len(self.waves) != len(other.waves):
             return False
 
-        for i, wave in enumerate(self.waves):
-            other_wave = other.waves[i]
-            if other_wave.get("filename") != wave.get("filename"):
-                return False
-            if "samples" in wave:
-                if not "samples" in other_wave:
-                    return False
-                if not np.allclose(wave["samples"], other_wave["samples"]):
-                    return False
-            elif "samples" in other_wave:
-                return False
-
         return (
             self.experiment == other.experiment
             and self.recipe == other.recipe
             and self.src == other.src
             and self.wave_indices == other.wave_indices
             and self.schedule == other.schedule
-            and self.experiment_dict == other.experiment_dict
+            and dicts_equal(other.experiment_dict, self.experiment_dict)
+            and dicts_equal(other.waves, self.waves)
             and self.output_signals == other.output_signals
             and self.pulse_map == other.pulse_map
         )
@@ -147,6 +135,10 @@ class CompiledExperiment:
         See Also:
             - :py:meth:`Session.compile() <.dsl.session.Session.compile>`
             - :py:meth:`Session.run() <.dsl.session.Session.run>`
+
+        .. deprecated:: 1.7
+
+            Use the :class:`~.OutputSimulator` instead.
         """
         if self.output_signals is not None:
             return
@@ -182,9 +174,11 @@ class CompiledExperiment:
             pulse_uid: pulse to replace, can be :py:class:`~.dsl.experiment.pulse.Pulse`
                 object or uid of the pulse
             pulse_or_array: replacement pulse, can be
-               :py:class:`~.dsl.experiment.pulse.Pulse` object or value array (see
-               ``sampled_pulse_*`` from the :py:mod:`~.dsl.experiment.pulse_library`)
+                :py:class:`~.dsl.experiment.pulse.Pulse` object or value array (see
+                ``sampled_pulse_*`` from the :py:mod:`~.dsl.experiment.pulse_library`)
         """
+        from laboneq.core.utilities.replace_pulse import replace_pulse
+
         replace_pulse(self, pulse_uid, pulse_or_array)
 
     @classmethod

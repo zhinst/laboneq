@@ -842,8 +842,12 @@ class DeviceSHFQA(DeviceZI):
             self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
         ):
             marker_path = f"/{self.serial}/qachannels/{awg_index}/markers"
+            src = 32 + awg_index
             nodes_to_configure_triggers.append(
-                DaqNodeSetAction(self._daq, f"{marker_path}/source", 0),
+                DaqNodeSetAction(self._daq, f"{marker_path}/0/source", src),
+            )
+            nodes_to_configure_triggers.append(
+                DaqNodeSetAction(self._daq, f"{marker_path}/1/source", src),
             )
         return nodes_to_configure_triggers
 

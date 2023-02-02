@@ -58,6 +58,7 @@ from laboneq.core.types.compiled_experiment import (
 )
 from laboneq.core.types.enums.mixer_type import MixerType
 from laboneq.core.utilities.pulse_sampler import (
+    combine_pulse_parameters,
     length_to_samples,
     sample_pulse,
     verify_amplitude_no_clipping,
@@ -152,6 +153,11 @@ def calculate_integration_weights(acquire_events, signal_obj, pulse_defs, device
                         str(signal_obj.oscillator_frequency),
                     )
 
+                    pulse_parameters = combine_pulse_parameters(
+                        event.get("pulse_pulse_parameters"),
+                        None,
+                        event.get("play_pulse_parameters"),
+                    )
                     integration_weight = sample_pulse(
                         signal_type="iq",
                         sampling_rate=signal_obj.sampling_rate,
@@ -161,7 +167,7 @@ def calculate_integration_weights(acquire_events, signal_obj, pulse_defs, device
                         modulation_frequency=signal_obj.oscillator_frequency,
                         samples=samples,
                         mixer_type=signal_obj.mixer_type,
-                        pulse_parameters=event.get("pulse_parameters"),
+                        pulse_parameters=pulse_parameters,
                     )
 
                     verify_amplitude_no_clipping(
@@ -620,6 +626,7 @@ class CodeGenerator:
     def _gen_seq_c_per_awg(
         self, awg: AWGInfo, events: List[Any], pulse_defs: Dict[str, PulseDef]
     ):
+        function_defs_generator = SeqCGenerator()
         declarations_generator = SeqCGenerator()
         _logger.debug("Generating seqc for awg %d of %s", awg.awg_number, awg.device_id)
         _logger.debug("AWG Object = \n%s", awg)
@@ -928,6 +935,7 @@ class CodeGenerator:
         handler = SampledEventHandler(
             seqc_tracker=seqc_tracker,
             command_table_tracker=CommandTableTracker(),
+            function_defs_generator=function_defs_generator,
             declarations_generator=declarations_generator,
             wave_indices=WaveIndexTracker(),
             feedback_connections=self._feedback_connections,
@@ -965,6 +973,9 @@ class CodeGenerator:
                 main_generator.play_zero_counter_variable_name()
             )
         seq_c_generator = SeqCGenerator()
+        if function_defs_generator.num_statements() > 0:
+            seq_c_generator.append_statements_from(function_defs_generator)
+            seq_c_generator.add_comment("=== END-OF-FUNCTION-DEFS ===")
         seq_c_generator.append_statements_from(declarations_generator)
         seq_c_generator.append_statements_from(main_generator)
 
@@ -1046,7 +1057,9 @@ class CodeGenerator:
             samples_q = np.zeros(length)
             has_q = False
 
-            for pulse_part in signature.waveform.pulses:
+            for pulse_part, (play_pulse_parameters, pulse_pulse_parameters) in zip(
+                signature.waveform.pulses, signature.pulse_parameters
+            ):
                 _logger.debug(" Sampling pulse part %s", pulse_part)
                 pulse_def = pulse_defs.get(pulse_part.pulse)
                 if pulse_def is None:
@@ -1208,14 +1221,18 @@ class CodeGenerator:
                     PulseInstance(
                         offset_samples=pulse_part.start,
                         amplitude=amplitude_multiplier,
+                        length=pulse_part.length,
                         modulation_frequency=used_oscillator_frequency,
                         modulation_phase=oscillator_phase,
                         iq_phase=iq_phase,
                         channel=pulse_part.channel,
                         needs_conjugate=needs_conjugate,
-                        pulse_parameters=None
-                        if pulse_part.pulse_parameters is None
-                        else {k: v for k, v in pulse_part.pulse_parameters},
+                        play_pulse_parameters=None
+                        if play_pulse_parameters is None
+                        else {k: v for k, v in play_pulse_parameters},
+                        pulse_pulse_parameters=None
+                        if pulse_pulse_parameters is None
+                        else {k: v for k, v in pulse_pulse_parameters},
                     )
                 )
 

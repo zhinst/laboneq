@@ -69,8 +69,7 @@ class NodeMonitor:
             self._daq.getAsEvent(path)
 
     def stop(self):
-        all_paths = [p for p in self._nodes.keys()]
-        self._daq.unsubscribe(all_paths)
+        self._daq.unsubscribe("*")
         self.flush()
 
     def poll(self):
