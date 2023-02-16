@@ -46,6 +46,9 @@ class Section:
     that can be though of a container. A section can either contain other sections or a list of operations (but not both
     at the same time). Operations within a section can be aligned in various ways (left, right). Sections can have a offset
     and/or a predefined length, and they can be specified to play after another section.
+
+    .. versionchanged:: 2.0.0
+        Removed `offset` member variable.
     """
 
     #: Unique identifier of the section.
@@ -58,11 +61,6 @@ class Section:
 
     #: Minimal length of the section in seconds. The scheduled section might be slightly longer, as its length is rounded to the next multiple of the section timing grid.
     length: Optional[float] = field(default=None)
-
-    offset: Union[float, Parameter, None] = field(default=None)
-    """Offset in sections at the beginning of the section. The content of the section will start after this offset.
-    
-    .. deprecated:: 1.7"""
 
     #: Play after the section with the given ID.
     play_after: Optional[Union[str, List[str]]] = field(default=None)
@@ -78,12 +76,6 @@ class Section:
     def __post_init__(self):
         if self.uid is None:
             self.uid = section_id_generator()
-
-        if self.offset is not None:
-            warnings.warn(
-                "Section.offset has been deprecated and will be removed in the next version.",
-                FutureWarning,
-            )
 
     def add(self, section: Section):
         """Add a subsection, a sweep or a loop to the section.
@@ -112,15 +104,14 @@ class Section:
         Note that there may be other children of a section which are not operations but subsections."""
         return tuple([s for s in self.children if isinstance(s, Operation)])
 
-    def set(self, path: str, key: str, value):
+    def set(self, path: str, value: Any):
         """Set the value of an instrument node.
 
         Args:
             path: Path to the node whose value should be set.
-            key: Key of the node that should be set.
             value: Value that should be set.
         """
-        self._add_operation(Set(path=path, key=key, value=value))
+        self._add_operation(Set(path=path, value=value))
 
     def play(
         self,

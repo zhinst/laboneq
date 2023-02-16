@@ -380,6 +380,7 @@ class DaqWrapperDryRun(DaqWrapper):
                 return type
 
         self._zi_api_object.map_device_type(serial, calc_dev_type(type, opts))
+        self._zi_api_object.set_option(serial, "dev_type", opts.get("dev_type"))
 
     def set_emulation_option(self, serial: str, option: str, value: Any):
         assert isinstance(self._zi_api_object, ziDAQServerEmulator)

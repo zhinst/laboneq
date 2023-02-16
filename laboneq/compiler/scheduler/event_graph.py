@@ -241,7 +241,7 @@ class EventGraph:
             first_cycle = [
                 e[0] for e in rustworkx.digraph_find_cycle(self._event_graph)
             ]
-            _logger.debug("First cycle: %d", first_cycle)
+            _logger.debug("First cycle: %s", first_cycle)
             for node in first_cycle:
                 graph_node = self.node(node)
                 _logger.debug("   node_info=%s", node_info(graph_node))

@@ -170,6 +170,7 @@ class Scheduler:
 
         match_case_signals = {}
         empty_match_case_sections = {}
+        clear_bit_events_of_section = {}
         for section_node in self._section_graph_object.topologically_sorted_sections():
 
             parent = self._section_graph_object.parent(section_node)
@@ -214,6 +215,65 @@ class Scheduler:
                 section_info.section_display_name
             )
 
+            clear_bit_events = []
+            parent_section_trigger_states = set()
+            parent_section_id = section_name
+            while True:
+                parent_section_id = self._experiment_dao.section_parent(
+                    parent_section_id
+                )
+                if parent_section_id is None:
+                    break
+                parent_section_info = self._experiment_dao.section_info(
+                    parent_section_id
+                )
+                for trigger_info in parent_section_info.trigger_output:
+                    state = int(trigger_info["state"])
+                    if state:
+                        parent_section_trigger_states.add(state)
+
+            for trigger_info in section_info.trigger_output:
+                state = int(trigger_info["state"])
+                if state:
+                    for bit in range(2):
+                        bit_mask = 2**bit
+                        if bit_mask & state > 0:
+                            # check if the current bit is controlled by any parent section
+                            # if so, leave it alone
+                            if not any(
+                                [
+                                    parent_statee & bit_mask > 0
+                                    for parent_statee in parent_section_trigger_states
+                                ]
+                            ):
+                                set_bit_event = self._event_graph.add_node(
+                                    event_type=EventType.DIGITAL_SIGNAL_STATE_CHANGE,
+                                    section_name=section_node,
+                                    bit=bit,
+                                    change="SET",
+                                    signal=trigger_info["signal_id"],
+                                )
+                                self._event_graph.after_or_at(
+                                    set_bit_event, section_span.start
+                                )
+                                self._event_graph.after_or_at(
+                                    section_span.end, set_bit_event
+                                )
+                                clear_bit_event = self._event_graph.add_node(
+                                    event_type=EventType.DIGITAL_SIGNAL_STATE_CHANGE,
+                                    section_name=section_node,
+                                    bit=bit,
+                                    change="CLEAR",
+                                    signal=trigger_info["signal_id"],
+                                )
+                                self._event_graph.after_or_at(
+                                    clear_bit_event, section_span.start
+                                )
+                                self._event_graph.after_or_at(
+                                    section_span.end, clear_bit_event
+                                )
+                                clear_bit_events.append(clear_bit_event)
+
             if section_info.state is not None:
                 if signals:
                     match_case_signals.setdefault(parent, set()).update(signals)
@@ -241,30 +301,6 @@ class Scheduler:
                 sampling_rate = self._sampling_rate_tracker.sampling_rate_for_device(
                     device_id
                 )
-
-                section_offset = section_info.offset
-                section_offset_param = section_info.offset_param
-
-                if section_offset is not None or section_offset_param is not None:
-                    _logger.debug(
-                        "Section offset for section %s : %s, param: %s",
-                        section_name,
-                        section_offset,
-                        section_offset_param,
-                    )
-
-                    play_wave = _PlayWave(
-                        id=f"section_offset_{section_name}_{signal_id}",
-                        signal=signal_id,
-                        acquisition_type=["spectroscopy"],
-                    )
-
-                    if section_offset is not None:
-                        play_wave.offset = section_offset
-                    elif section_offset_param is not None:
-                        param_ref = ParamRef(section_offset_param)
-                        play_wave.offset = param_ref
-                    play_wave_chain.append(play_wave)
 
                 if signal_id in spectroscopy_trigger_signals:
                     play_wave = _PlayWave(
@@ -326,6 +362,20 @@ class Scheduler:
                     is_spectroscopy_signal=is_integration and is_spectroscopy_section,
                     spectroscopy_end_id=spectroscopy_end_id,
                 )
+
+            clear_bit_events_of_section[section_name] = clear_bit_events
+
+        for section_name, clear_bit_events in clear_bit_events_of_section.items():
+            section_span = self._event_graph.find_section_start_end(section_name)
+            for edge in self._event_graph.out_edges(section_span.end):
+                # make sure that the clearing of the trigger event happens after everything else in the section
+                # while also making sure there is a path in the graph from section end -> bit clear node -> section start
+                # so that the event gets properly copied in loops
+                for clear_bit_event in clear_bit_events:
+                    other_node = edge[1]
+                    if other_node != clear_bit_event:
+                        if edge[2]["relation"] == EventRelation.AFTER_OR_AT:
+                            self._event_graph.after_or_at(clear_bit_event, other_node)
 
         for empty_section, parent in empty_match_case_sections.items():
             for signal in match_case_signals[parent[0]]:
@@ -394,6 +444,7 @@ class Scheduler:
         EventGraphBuilder.complete_section_structure(
             self._event_graph, self._section_graph_object
         )
+
         self.generate_loop_events(repeat_sections)
         self._add_repetition_time_edges()
         self._sorted_events = self._event_graph.sorted_events()
@@ -464,13 +515,13 @@ class Scheduler:
                     amplitude = (
                         round(amplitude * amplitude_resolution) / amplitude_resolution
                     )
-                    if abs(amplitude) > 1.0:
-                        raise LabOneQException(
-                            f"Magnitude of amplitude {amplitude} cannot be larger than 1 for event {event}"
-                        )
 
                     self._event_graph.set_node_attributes(
                         event["id"], {"amplitude": amplitude}
+                    )
+                if amplitude is not None and abs(amplitude) > 1.0:
+                    raise LabOneQException(
+                        f"Magnitude of amplitude {amplitude} exceeding unity for event {event}"
                     )
 
                 phase = event["phase"]
@@ -2110,6 +2161,7 @@ class Scheduler:
                 EventType.SUBSECTION_END,
                 EventType.SECTION_SKELETON,
                 EventType.RESET_PRECOMPENSATION_FILTERS,
+                EventType.DIGITAL_SIGNAL_STATE_CHANGE,
             ]:
                 if (
                     event_type
@@ -2475,8 +2527,8 @@ class Scheduler:
             or section_info.state is not None
         ):
             return True
-        for signal, trigger in section_info.trigger_output.items():
-            if trigger["state"]:
+        for trigger_info in section_info.trigger_output:
+            if trigger_info["state"]:
                 return True
 
         for signal in self._experiment_dao.section_signals(section_display_name):

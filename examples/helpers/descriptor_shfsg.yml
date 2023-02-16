@@ -1,4 +1,4 @@
-instrument_list:
+instruments:
   SHFSG:
   - address: DEV12050
     uid: device_shfsg 

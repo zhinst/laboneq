@@ -8,7 +8,11 @@ from typing import Any, Dict, List, Optional
 import numpy
 from numpy import typing as npt
 
-from laboneq.controller.communication import CachingStrategy, DaqNodeSetAction
+from laboneq.controller.communication import (
+    CachingStrategy,
+    DaqNodeAction,
+    DaqNodeSetAction,
+)
 from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.recipe_1_4_0 import IO, Initialization
 from laboneq.controller.recipe_enums import DIOConfigType, ReferenceClockSource
@@ -335,7 +339,7 @@ class DeviceSHFSG(DeviceZI):
 
     def collect_trigger_configuration_nodes(
         self, initialization: Initialization.Data, recipe_data: RecipeData
-    ):
+    ) -> List[DaqNodeAction]:
         self._logger.debug("Configuring triggers...")
         self._wait_for_AWGs = True
         self._emit_trigger = False
@@ -446,10 +450,12 @@ class DeviceSHFSG(DeviceZI):
     def command_table_path(self, awg_index: int) -> str:
         return f"/{self.serial}/sgchannels/{awg_index}/awg/commandtable/"
 
-    def configure_as_leader(self, initialization):
+    def configure_as_leader(self, initialization: Initialization.Data):
         raise LabOneQControllerException("SHFSG cannot be configured as leader")
 
-    def collect_follower_configuration_nodes(self, initialization: Initialization.Data):
+    def collect_follower_configuration_nodes(
+        self, initialization: Initialization.Data
+    ) -> List[DaqNodeAction]:
         if self._get_option("qc_with_qa"):
             return []  # QC follower config is done over it's QA part
 
@@ -477,7 +483,7 @@ class DeviceSHFSG(DeviceZI):
 
         return nodes_to_configure_as_follower
 
-    def collect_reset_nodes(self):
+    def collect_reset_nodes(self) -> List[DaqNodeAction]:
         reset_nodes = super().collect_reset_nodes()
         reset_nodes.append(
             DaqNodeSetAction(

@@ -377,7 +377,7 @@ class DeviceHDAWG(DeviceZI):
 
     def collect_trigger_configuration_nodes(
         self, initialization: Initialization.Data, recipe_data: RecipeData
-    ):
+    ) -> List[DaqNodeAction]:
         self._logger.debug(
             "%s: Configuring trigger configuration nodes.", self.dev_repr
         )
@@ -499,10 +499,12 @@ class DeviceHDAWG(DeviceZI):
 
         return nodes_to_configure_triggers
 
-    def configure_as_leader(self, initialization):
+    def configure_as_leader(self, initialization: Initialization.Data):
         pass
 
-    def collect_follower_configuration_nodes(self, initialization):
+    def collect_follower_configuration_nodes(
+        self, initialization: Initialization.Data
+    ) -> List[DaqNodeAction]:
         return []
 
     def initialize_sweep_setting(self, setting):

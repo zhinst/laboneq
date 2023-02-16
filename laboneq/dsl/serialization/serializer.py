@@ -104,11 +104,9 @@ class Serializer:
             "laboneq.dsl.device.servers.data_server",
             "laboneq.core.types.enums",
             "laboneq.core.types.compiled_experiment",
-            "laboneq.core.types.device_output_signals",
             "laboneq.dsl.device.io_units.logical_signal",
             "laboneq.dsl.device.io_units.physical_channel",
             "laboneq.dsl.device.instruments",
-            "laboneq.dsl.result.waveform",
             "laboneq.dsl.calibration.units",
         ]
         _, classes_by_short_name = module_classes(dsl_modules)

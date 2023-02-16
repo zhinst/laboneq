@@ -226,6 +226,28 @@
         "connection"
       ]
     },
+    "trigger-output-item-def": {
+      "type": "object",
+      "propertes": {
+        "signal": {
+          "$ref": "#/definitions/reference-def"
+        },
+        "state": {
+          "$ref": "#/definitions/reference-def"
+        },
+        "additionalProperties": false,
+        "required": [
+          "signal",
+          "state"
+        ]
+      }
+    },
+    "trigger-outputs-def": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/trigger-output-item-def"
+      }
+    },
     "channels-def": {
       "type": "object",
       "propertes": {
@@ -718,6 +740,9 @@
         "handle": {
           "type": "string",
           "default": ""
+        },
+        "trigger_output": {
+          "$ref": "#/definitions/trigger-outputs-def"
         }
       },
       "additionalProperties": false,

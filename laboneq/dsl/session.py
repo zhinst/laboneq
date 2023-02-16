@@ -6,7 +6,6 @@ from __future__ import annotations
 import functools
 import json
 import logging
-import warnings
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
@@ -83,7 +82,6 @@ class Session:
         self,
         device_setup: DeviceSetup = None,
         log_level: int = logging.INFO,
-        pass_v3_to_compiler=True,
         performance_log=False,
         configure_logging=True,
         _last_results=None,
@@ -99,15 +97,13 @@ class Session:
             log_level: Log level of the session.
                 If no log level is specified, the session will use the logging.INFO level.
                 Other possible levels refer to the logging python package.
-            pass_v3_to_compiler: Compiler option with DSL version is used internally.
-                We currently only support True.
-
-                .. deprecated:: 1.7
-                    Parameter not used.
-
             performance_log: Flag to enable performance logging.
                 When True, the system creates a separate logfile containing logs aimed to analyze system performance.
             configure_logging: Whether to configure logger. Can be disabled for custom logging use cases.
+
+        .. versionchanged:: 2.0
+            Removed `pass_v3_to_compiler` argument.
+            Removed `max_simulation_time` instance variable.
         """
         self._device_setup = device_setup if device_setup else DeviceSetup()
         self._controller: Controller = None
@@ -126,7 +122,6 @@ class Session:
         else:
             self._logger = logging.getLogger("null")
         self._user_functions: Dict[str, Callable] = {}
-        self.max_simulation_time = 10e-6
         self._toolkit_devices = ToolkitDevices()
 
     @property
@@ -156,7 +151,6 @@ class Session:
             and self._compiled_experiment == other._compiled_experiment
             and self._last_results == other._last_results
             and self._user_functions == other._user_functions
-            and self.max_simulation_time == other.max_simulation_time
         )
 
     def _assert_connected(self, fail=True, message=None) -> bool:
@@ -238,27 +232,24 @@ class Session:
     def compile(
         self,
         experiment: Experiment,
-        do_simulation=False,
         compiler_settings: Dict = None,
     ) -> Optional[CompiledExperiment]:
         """Compiles the specified experiment and stores it in the compiled_experiment property.
 
         Args:
             experiment: Experiment instance that should be compiled.
-            do_simulation: Run the generated seqC code in the simulator, populating the
-                `output_signals` field in the return value. The simulation is truncated
-                after a configurable time, see `session.max_simulation_time`.
-
-                .. deprecated:: 1.7
-                  Use the :class:`~.OutputSimulator` instead.
             compiler_settings: Extra options passed to the compiler.
+
+        .. versionchanged:: 2.0
+
+            Removed `do_simulation` argument. Use :class:`~.OutputSimulator` instead.
         """
         if not self._assert_connected(fail=False):
             return
 
         self._experiment_definition = experiment
         self._compiled_experiment = LabOneQFacade.compile(
-            self, self.logger, do_simulation, compiler_settings
+            self, self.logger, compiler_settings=compiler_settings
         )
         self._last_results = None
         return self._compiled_experiment
@@ -276,7 +267,6 @@ class Session:
     def run(
         self,
         experiment: Optional[Union[Experiment, CompiledExperiment]] = None,
-        do_simulation=False,
     ) -> Optional[Results]:
         """Executes the compiled experiment.
 
@@ -284,17 +274,15 @@ class Session:
         If an experiment is specified, the provided experiment is assigned to the
         internal experiment of the session.
 
+        .. versionchanged:: 2.0
+
+            Removed `do_simulation` argument. Use :class:`~.OutputSimulator` instead.
+
         Args:
             experiment: Optional. Experiment instance that should be
                 run. The experiment will be compiled if it has not been yet. If no
                 experiment is specified the previously assigned and compiled experiment
                 is used.
-            do_simulation: Run the generated seqC code in the simulator, populating the
-                `output_signals` field in the return value. The simulation is truncated
-                after a configurable time, see `session.max_simulation_time`.
-
-                .. deprecated:: 1.7
-                  Use the :class:`~.OutputSimulator` instead.
 
         Returns:
             A `Results` object in case of success. `None` if the session is not
@@ -304,12 +292,7 @@ class Session:
             if isinstance(experiment, CompiledExperiment):
                 self._compiled_experiment = experiment
             else:
-                self.compile(experiment, do_simulation=do_simulation)
-
-        if do_simulation and self._compiled_experiment.output_signals is None:
-            self.compiled_experiment.simulate_outputs(
-                self.max_simulation_time, self.logger.level
-            )
+                self.compile(experiment)
 
         if not self._assert_connected(fail=False):
             return
@@ -324,32 +307,6 @@ class Session:
         )
         LabOneQFacade.run(self)
         return self.results
-
-    @_SessionDeco.entrypoint
-    def run_all(self, experiment: Experiment, do_simulation=False):
-        """Compiles and runs the specified experiment.
-
-        The provided experiment is assigned to the internal experiment of the session.
-
-        Args:
-            experiment: Experiment instance that should be compiled and run.
-            do_simulation: Simulate the output waveforms after compiling.
-                Available as `self.results.output_signals`. The simulation is truncated
-                after a configurable time, see `session.max_simulation_time`.
-
-        .. deprecated:: 1.7
-
-          `run_all()` will be removed in the next version.
-
-        """
-
-        warnings.warn(
-            "run_all() has been deprecated. Use run() instead.", FutureWarning
-        )
-
-        # TODO ErC: Shall we assert connection here already or let it compile prior to fail?
-        self.compile(experiment, do_simulation=do_simulation)
-        self.run()
 
     @_SessionDeco.entrypoint
     def submit(
@@ -672,31 +629,3 @@ class Session:
             )
         else:
             self._last_results.save(filename)
-
-    @_SessionDeco.entrypoint
-    def set(self, path: str, value: Any):
-        """
-        .. deprecated:: 1.7
-        """
-        warnings.warn(
-            "Session.set() has been deprecated. Use the toolkit API instead.",
-            FutureWarning,
-        )
-        self._assert_connected(
-            message="Session not connected. set() requires an established connection, call connect() first."
-        )
-        self._controller.set(path, value)
-
-    @_SessionDeco.entrypoint
-    def get(self, path: str) -> Any:
-        """
-        .. deprecated:: 1.7
-        """
-        warnings.warn(
-            "Session.get() has been deprecated. Use the toolkit API instead.",
-            FutureWarning,
-        )
-        self._assert_connected(
-            message="Session not connected. get() requires an established connection, call connect() first."
-        )
-        return self._controller.get(path)

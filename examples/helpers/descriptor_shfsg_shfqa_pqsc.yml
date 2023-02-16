@@ -1,4 +1,4 @@
-instrument_list:
+instruments:
   SHFQA:
   - address: DEV12XX1
     uid: device_shfqa

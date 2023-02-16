@@ -64,10 +64,10 @@ def generate_if_else_tree(
         n_base = base + (1 << n_bit)
         if n_base < iterations:
             return [
-                f"if ({variable} < {n_base}) {{",
-                *[f"  {l}" for l in if_level(base, n_bit)],
-                f"}} else {{  // {variable} >= {n_base}",
+                f"if ({variable} & 0b{(1 << n_bit):b}) {{  // {variable} >= {n_base}",
                 *[f"  {l}" for l in if_level(n_base, n_bit)],
+                f"}} else {{  // {variable} < {n_base}",
+                *[f"  {l}" for l in if_level(base, n_bit)],
                 "}",
             ]
         else:
@@ -412,9 +412,9 @@ class SampledEventHandler:
         counter_variable_name = string_sanitize(f"index_{parameter_name}")
         if iteration == 0:
             iterations = sampled_event["iterations"]
-            if iterations > 401:
+            if iterations > 512:
                 raise LabOneQException(
-                    "HDAWG can only handle RT frequency sweeps up to 401 steps."
+                    "HDAWG can only handle RT frequency sweeps up to 512 steps."
                 )
             steps = "\n  ".join(
                 generate_if_else_tree(

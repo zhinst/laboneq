@@ -658,7 +658,9 @@ class CodeGenerator:
                 EventType.INCREMENT_OSCILLATOR_PHASE,
                 EventType.SET_OSCILLATOR_FREQUENCY_START,
             )
-            or set(event.get("trigger_output", {}).keys()).intersection(signal_ids)
+            or set(
+                [to_item["signal_id"] for to_item in event.get("trigger_output", [])]
+            ).intersection(signal_ids)
         )
         for event in events:
             if (

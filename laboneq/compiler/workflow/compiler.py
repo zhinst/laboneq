@@ -25,6 +25,7 @@ from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.common.trigger_mode import TriggerMode
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.experiment_access.section_graph import SectionGraph
+from laboneq.compiler.new_scheduler.scheduler import Scheduler as NewScheduler
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.scheduler.scheduler import Scheduler
 from laboneq.compiler.workflow.precompensation_helpers import (
@@ -52,13 +53,18 @@ _AWGMapping = Dict[str, Dict[int, AWGInfo]]
 
 
 class Compiler:
+    Scheduler = Scheduler
+
     def __init__(self, settings: Optional[Dict] = None):
         self._osc_numbering = None
         self._section_grids = {}
         self._experiment_dao: ExperimentDAO = None
         self._settings = compiler_settings.from_dict(settings)
         self._sampling_rate_tracker: SamplingRateTracker = None
-        self._scheduler: Scheduler = None
+        self.Scheduler = Scheduler
+        if self._settings.USE_EXPERIMENTAL_SCHEDULER:
+            self.Scheduler = NewScheduler
+        self._scheduler: Compiler.Scheduler = None
 
         self._leader_properties = LeaderProperties()
         self._clock_settings = {}
@@ -221,7 +227,7 @@ class Compiler:
             self._experiment_dao, self._clock_settings
         )
 
-        self._scheduler = Scheduler(
+        self._scheduler = self.Scheduler(
             self._experiment_dao,
             self._section_graph_object,
             self._sampling_rate_tracker,

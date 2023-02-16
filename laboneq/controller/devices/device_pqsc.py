@@ -1,7 +1,7 @@
 # Copyright 2019 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from laboneq.controller.communication import (
     CachingStrategy,
@@ -86,7 +86,7 @@ class DevicePQSC(DeviceZI):
 
     def collect_trigger_configuration_nodes(
         self, initialization: Initialization.Data, recipe_data: RecipeData
-    ):
+    ) -> List[DaqNodeAction]:
         # Ensure ZSync links are established
         # TODO(2K): This is rather a hotfix, waiting to be done in parallel for all devices with subscription / poll
         # TODO(2K): Verify also the downlink device serial (.../connection/serial) matches
@@ -124,10 +124,12 @@ class DevicePQSC(DeviceZI):
 
         return nodes_to_configure_triggers
 
-    def collect_follower_configuration_nodes(self, initialization):
+    def collect_follower_configuration_nodes(
+        self, initialization: Initialization.Data
+    ) -> List[DaqNodeAction]:
         raise LabOneQControllerException("PQSC cannot be configured as follower")
 
-    def configure_as_leader(self, initialization):
+    def configure_as_leader(self, initialization: Initialization.Data):
         self._logger.debug("%s: Configuring as leader...", self.dev_repr)
         self._logger.debug("%s: Enabling reference clock...", self.dev_repr)
 

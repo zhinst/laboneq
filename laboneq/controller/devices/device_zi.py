@@ -216,21 +216,23 @@ class DeviceZI(ABC):
     def collect_output_initialization_nodes(
         self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
     ) -> List[DaqNodeAction]:
-        pass
+        ...
 
     @abstractmethod
     def collect_trigger_configuration_nodes(
         self, initialization: Initialization.Data, recipe_data: RecipeData
-    ):
-        pass
+    ) -> List[DaqNodeAction]:
+        ...
 
     @abstractmethod
-    def configure_as_leader(self, initialization):
-        pass
+    def configure_as_leader(self, initialization: Initialization.Data):
+        ...
 
     @abstractmethod
-    def collect_follower_configuration_nodes(self, initialization):
-        pass
+    def collect_follower_configuration_nodes(
+        self, initialization: Initialization.Data
+    ) -> List[DaqNodeAction]:
+        ...
 
     def connect(self):
         if self._connected:
@@ -998,7 +1000,7 @@ class DeviceZI(ABC):
             # Currently is returns 0 for all nodes...
             check_errors(all_errors[error_node], self.dev_repr)
 
-    def collect_reset_nodes(self):
+    def collect_reset_nodes(self) -> List[DaqNodeAction]:
         return [DaqNodeSetAction(self._daq, f"/{self.serial}/raw/error/clear", 1)]
 
     def _get_total_rounded_delay_samples(

@@ -212,12 +212,18 @@ class DeviceCollection:
         def make_device_qualifier(
             instrument: ZIStandardInstrument, daq: DaqWrapper
         ) -> DeviceQualifier:
-
             driver = instrument.calc_driver()
             options = {
                 **instrument.calc_options(),
                 "standalone_awg": is_using_standalone_compiler,
             }
+            if len(instrument.connections) == 0:
+                # Treat devices without connections as non-QC
+                if "dev_type" not in options:
+                    options["dev_type"] = driver
+                if options.get("is_qc", False):
+                    options["is_qc"] = False
+                driver = "NONQC"
 
             return DeviceQualifier(
                 dry_run=self._dry_run, driver=driver, server=daq, options=options
@@ -283,10 +289,11 @@ class DeviceCollection:
             )
             if server_qualifier.dry_run:
                 daq = DaqWrapperDryRun(server_uid, server_qualifier)
-                for instr in self._device_setup.instruments:
-                    daq.map_device_type(
-                        instr.address, instr.calc_driver(), instr.calc_options()
-                    )
+                for instr in self.ds_instruments:
+                    if instr.server_uid == server_uid:
+                        daq.map_device_type(
+                            instr.address, instr.calc_driver(), instr.calc_options()
+                        )
             else:
                 daq = DaqWrapper(server_uid, server_qualifier)
             updated_daqs[server_uid] = daq

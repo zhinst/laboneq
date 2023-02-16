@@ -15,10 +15,7 @@ class AcquisitionType(Enum):
             Returns acquired signal after demodulation and integration, using oscillator frequency (not limited to 4096 points).
 
         DISCRIMINATION:
-            Returns the list of qubit states determined from demodulated and integrated signal (not implemented).
-
-        DEMODULATION:
-            Reserved, not implemented.
+            Returns the list of qubit states determined from demodulated and integrated signal after thresholding.
 
         RAW:
             Returns raw data after ADC up to 4096 samples. Only a single raw acquire event within an averaging loop per experiment is allowed.
@@ -27,5 +24,4 @@ class AcquisitionType(Enum):
     INTEGRATION = "integration_trigger"
     SPECTROSCOPY = "spectroscopy"
     DISCRIMINATION = "discrimination"
-    DEMODULATION = "demodulation"
     RAW = "RAW"

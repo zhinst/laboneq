@@ -13,7 +13,12 @@ from laboneq.dsl.device.logical_signal_group import LogicalSignalGroup
 from laboneq.dsl.device.physical_channel_group import PhysicalChannelGroup
 from laboneq.dsl.serialization import Serializer
 
-from ._device_setup_generator import _DeviceSetupGenerator
+from ._device_setup_generator import (
+    ConnectionsType,
+    DataServersType,
+    InstrumentsType,
+    _DeviceSetupGenerator,
+)
 
 if TYPE_CHECKING:
     from laboneq.dsl.device.servers import DataServer
@@ -243,7 +248,10 @@ class DeviceSetup:
 
     @staticmethod
     def from_descriptor(
-        yaml_text, server_host, server_port="8004", setup_name="unknown"
+        yaml_text: str,
+        server_host: str = None,
+        server_port: str = None,
+        setup_name: str = None,
     ):
         """Construct the device setup from a YAML descriptor.
 
@@ -260,7 +268,12 @@ class DeviceSetup:
         )
 
     @staticmethod
-    def from_yaml(filepath, server_host, server_port="8004", setup_name="unknown"):
+    def from_yaml(
+        filepath,
+        server_host: str = None,
+        server_port: str = None,
+        setup_name: str = None,
+    ):
         """Construct the device setup from a YAML file.
 
         Args:
@@ -277,11 +290,14 @@ class DeviceSetup:
 
     @staticmethod
     def from_dicts(
-        instrument_list,
-        connections,
-        server_host,
-        server_port="8004",
-        setup_name="unknown",
+        *,
+        instrument_list: InstrumentsType = None,
+        instruments: InstrumentsType = None,
+        connections: ConnectionsType = None,
+        dataservers: DataServersType = None,
+        server_host: str = None,
+        server_port: str = None,
+        setup_name: str = None,
     ):
         """Construct the device setup from Python dicts, same structure as yaml
 
@@ -295,6 +311,12 @@ class DeviceSetup:
         """
         return DeviceSetup(
             **_DeviceSetupGenerator.from_dicts(
-                instrument_list, connections, server_host, server_port, setup_name
+                instrument_list=instrument_list,
+                instruments=instruments,
+                connections=connections,
+                dataservers=dataservers,
+                server_host=server_host,
+                server_port=server_port,
+                setup_name=setup_name,
             )
         )

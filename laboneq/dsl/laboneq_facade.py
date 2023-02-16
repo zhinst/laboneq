@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import atexit
-import warnings
 from typing import TYPE_CHECKING, Dict
 
 from numpy import typing as npt
@@ -34,7 +33,9 @@ class LabOneQFacade:
         )
         controller.connect()
         session._controller = controller
-        if not session._connection_state.emulated:
+        if session._connection_state.emulated:
+            session._toolkit_devices = ctrl.MockedToolkit()
+        else:
             session._toolkit_devices = ctrl.ToolkitDevices(controller._devices._devices)
 
     @staticmethod
@@ -47,7 +48,7 @@ class LabOneQFacade:
 
     @staticmethod
     def compile(
-        session: Session, logger, do_simulation=False, compiler_settings: Dict = None
+        session: Session, logger, compiler_settings: Dict = None
     ) -> CompiledExperiment:
         logger.debug("Calling LabOne Q Compiler...")
         compiler = Compiler.from_user_settings(compiler_settings)
@@ -56,10 +57,6 @@ class LabOneQFacade:
         )
         compiled_experiment.device_setup = session.device_setup
         compiled_experiment.experiment = session.experiment
-        if do_simulation:
-            compiled_experiment.output_signals = LabOneQFacade.simulate_outputs(
-                compiled_experiment, session.max_simulation_time, logger
-            )
         return compiled_experiment
 
     @staticmethod
@@ -77,54 +74,6 @@ class LabOneQFacade:
     ):
         controller: ctrl.Controller = session._controller
         controller.replace_pulse(pulse_uid, pulse_or_array)
-
-    @staticmethod
-    def simulate_outputs(
-        compiled_experiment: CompiledExperiment, max_simulation_time: float, logger
-    ):
-        warnings.warn(
-            "This output simulation API has been deprecated, and will be removed in the next version. Use the new output simulator instead.",
-            FutureWarning,
-        )
-        from laboneq.core.types.device_output_signals import DeviceOutputSignals
-        from laboneq.dsl.result import Waveform
-        from laboneq.simulator import analyze_compiler_output_memory
-
-        try:
-
-            output_signals = DeviceOutputSignals()
-            simulated_outputs = analyze_compiler_output_memory(
-                compiled_experiment, max_simulation_time
-            )
-
-            for simulated_result in simulated_outputs.values():
-                device_uid = simulated_result.device_uid
-
-                awg_index = simulated_result.awg_index
-                channel_index = 0
-                for k, v in sorted(simulated_result.output.items()):
-
-                    time_axis = simulated_result.times[k]
-                    time_axis_at_port = simulated_result.times_at_port[k]
-                    waveform = Waveform(
-                        uid=str(k),
-                        data=v,
-                        sampling_frequency=simulated_result.sample_frequency,
-                        time_axis=time_axis,
-                        time_axis_at_port=time_axis_at_port,
-                    )
-                    output_signals.map(
-                        device_uid=device_uid,
-                        signal_uid=str(awg_index),
-                        channel_index=channel_index,
-                        waveform=waveform,
-                    )
-                    channel_index += 1
-        except Exception as e:
-            logger.warning("Experiment simulation failed: %s", e)
-            raise e
-
-        return output_signals
 
     @staticmethod
     def init_logging(log_level=None, performance_log=None):

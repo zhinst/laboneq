@@ -3,4 +3,3 @@
 
 from .acquired_result import AcquiredResult
 from .results import Results
-from .waveform import Waveform

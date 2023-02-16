@@ -21,7 +21,6 @@ from laboneq._observability import tracing
 from laboneq.controller.communication import (
     CachingStrategy,
     DaqNodeAction,
-    DaqNodeGetAction,
     DaqNodeSetAction,
     DaqWrapper,
     batch_set,
@@ -345,24 +344,6 @@ class Controller:
         self._configure_followers()
         self._configure_triggers()
         self._wait_for_conditions_to_start()
-
-    def set(self, path: str, value: Any):
-        self.connect()
-        dev = self._devices.find_by_path(path)
-        daq: DaqWrapper = dev._daq
-        daq.batch_set(
-            [
-                DaqNodeSetAction(
-                    daq, path, value, caching_strategy=CachingStrategy.NO_CACHE
-                )
-            ]
-        )
-
-    def get(self, path: str) -> Any:
-        self.connect()
-        dev = self._devices.find_by_path(path)
-        daq: DaqWrapper = dev._daq
-        return daq.get(DaqNodeGetAction(daq, path))
 
     def _execute_one_step_followers(self):
         self._logger.debug("Settings nodes to start on followers")

@@ -25,7 +25,7 @@ from laboneq.compiler.code_generator.signatures import (
     PulseSignature,
     WaveformSignature,
 )
-from laboneq.compiler.code_generator.utils import normalize_phase
+from laboneq.compiler.code_generator.utils import normalize_phase, resample_state
 from laboneq.compiler.common.awg_info import AWGInfo
 from laboneq.compiler.common.awg_signal_type import AWGSignalType
 from laboneq.compiler.common.device_type import DeviceType
@@ -547,6 +547,9 @@ def analyze_play_wave_times(
     if sub_channel is not None:
         _logger.debug("Signal %s: using sub_channel = %s", signal_id, sub_channel)
 
+    if len(events) == 0:
+        return SortedDict()
+
     cut_points = set()
 
     # For feedback, the pulses in the branches create a single waveform which spans
@@ -988,98 +991,73 @@ def analyze_play_wave_times(
 
 
 def analyze_trigger_events(events: List[Dict], signal: SignalObj, loop_events):
+    digital_signal_change_events = [
+        event
+        for event in events
+        if event["event_type"] == EventType.DIGITAL_SIGNAL_STATE_CHANGE
+        and signal.id == event["signal"]
+    ]
     delay = signal.total_delay
     sampling_rate = signal.sampling_rate
     device_type = signal.awg.device_type
-    trigger_events = [
-        event
-        for event in events
-        if event["event_type"] in (EventType.SECTION_START, EventType.SECTION_END)
-        and event.get("trigger_output", {}).get(signal.id)
-    ]
-    chain_map = {}
-    for event in trigger_events:
-        chain_map.setdefault(event["chain_element_id"], []).append(event)
-    trigger_intervals = IntervalTree()
 
-    def start_end_event_pairs():
-        for chain in chain_map.values():
-            i = iter(chain)
-            # turn iterator over A, B, C, D, ... into (A, B), (C, D), ...
-            try:
-                while True:
-                    yield next(i), next(i)
-            except StopIteration:
-                continue
+    sampled_digital_signal_change_events = SortedDict()
 
-    for start, end in start_end_event_pairs():
-        trigger_intervals.addi(
-            length_to_samples(start["time"] + delay, sampling_rate),
-            length_to_samples(end["time"] + delay, sampling_rate),
-            start["trigger_output"][signal.id]["state"],
-        )
+    for event in digital_signal_change_events:
+        time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
+        add_to_dict_list(sampled_digital_signal_change_events, time_in_samples, event)
 
-    trigger_intervals.addi(0, trigger_intervals.end() + 1, data=0)
-    trigger_intervals.split_overlaps()
-    # In case of nested or overlapping triggers: OR the values
-    trigger_intervals.merge_overlaps(
-        data_reducer=lambda state1, state2: state1 | state2
-    )
-
-    # We now have a set of disjoint ranges, so no point in sticking with the tree.
-    trigger_intervals_list = sorted(
-        trigger_intervals.all_intervals, key=lambda i: i.begin
-    )
-
-    grouped = itertools.groupby(trigger_intervals_list, key=lambda i: i.data)
-    trigger_intervals_list = []
-    for val, group in grouped:
-        intervals = list(group)
-        trigger_intervals_list.append(
-            Interval(intervals[0].begin, intervals[-1].end, val)
-        )
-
-    if device_type in (DeviceType.SHFQA, DeviceType.SHFSG):
-        for interval in trigger_intervals_list:
-            if interval.data > 1:
-                raise LabOneQException(
-                    f"On device {device_type.value}, only a single trigger channel is "
-                    f"available."
-                )
-
+    current_state = 0
     retval = SortedDict()
+    state_progression = SortedDict()
 
-    if len(trigger_intervals_list) == 1 and trigger_intervals_list[0].data == 0:
-        # Triggers are not used at all
-        return retval
+    for time_in_samples, event_list in sampled_digital_signal_change_events.items():
+        if device_type in (DeviceType.SHFQA, DeviceType.SHFSG):
+            for event in event_list:
+                if event["bit"] > 0:
+                    raise LabOneQException(
+                        f"On device {device_type.value}, only a single trigger channel is "
+                        f"available (section {event['section_name']})."
+                    )
+        for event in [e for e in event_list if e["change"] == "CLEAR"]:
+            mask = ~(2 ** event["bit"])
+            current_state = current_state & mask
+        for event in [e for e in event_list if e["change"] == "SET"]:
+            mask = 2 ** event["bit"]
+            current_state = current_state | mask
+        state_progression[time_in_samples] = current_state
+        add_to_dict_list(
+            retval,
+            time_in_samples,
+            {
+                "start": time_in_samples,
+                "signature": "trigger_output",
+                "state": current_state,
+            },
+        )
 
-    seq_trigger_events = {
-        interval.begin: {
-            "start": interval.begin,
-            "signature": "trigger_output",
-            "state": interval.data,
-        }
-        for interval in trigger_intervals_list[1:]
-    }
+    if state_progression and 0 not in state_progression:
+        # assume that at time 0, the state is 0
+        state_progression[0] = 0
 
     # When the trigger is raised at the end of the averaging loop (which is not
     # unrolled), things get a bit dicey: the command to reset the trigger signal must
     # be deferred to the next iteration. Which means that the very first iteration must
     # already include this tigger reset, and that we must issue it again after the loop.
-    for time, event_list in loop_events.items():
-        if any(event["signature"] == "PUSH_LOOP" for event in event_list):
-            seq_trigger_events.setdefault(
-                time,
-                {
-                    "start": time,
-                    "signature": "trigger_output",
-                    "state": next(iter(trigger_intervals.at(time))).data,
-                },
-            )
 
-    for k, v in seq_trigger_events.items():
-        add_to_dict_list(retval, k, v)
-
+    resampled_states = resample_state(loop_events.keys(), state_progression)
+    if resampled_states:
+        for time_in_samples, event_list in sorted(loop_events.items()):
+            if any(event["signature"] == "PUSH_LOOP" for event in event_list):
+                add_to_dict_list(
+                    retval,
+                    time_in_samples,
+                    {
+                        "start": time_in_samples,
+                        "signature": "trigger_output",
+                        "state": resampled_states[time_in_samples][1],
+                    },
+                )
     return retval
 
 

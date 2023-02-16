@@ -181,9 +181,9 @@ class StopSimulation(Exception):
 def parse_set_func(param_name: str, stmt: Node, runtime: SimpleRuntime):
     def parse_step(lower_bound: int, stmt: Node):
         if isinstance(stmt, If):
-            upper_bound = int(stmt.cond.right.value)
-            parse_step(lower_bound, stmt.iftrue.block_items[0])
-            parse_step(upper_bound, stmt.iffalse.block_items[0])
+            upper_bound = parse_int_literal(stmt.cond.right.value) + lower_bound
+            parse_step(upper_bound, stmt.iftrue.block_items[0])
+            parse_step(lower_bound, stmt.iffalse.block_items[0])
         else:
             value = parse_expression(stmt.args.exprs[1], runtime)
             runtime.setParamVal(param_name, lower_bound, value)

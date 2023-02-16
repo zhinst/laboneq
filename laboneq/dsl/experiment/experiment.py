@@ -189,11 +189,11 @@ class Experiment:
         if msg is None:
             msg = ""
         raise LabOneQException(
-            f"Signal with id '{signal_uid}' not found in experiment{': ' if msg else '.' }{msg}"
+            f"Signal with id '{signal_uid}' not found in experiment{': ' if msg else '.'}{msg}"
         )
 
     def set_calibration(self, calibration: Calibration):
-        for (signal_uid, calib_item) in calibration.calibration_items.items():
+        for signal_uid, calib_item in calibration.calibration_items.items():
             if calib_item is not None:
                 if signal_uid not in self.signals.keys():
                     self._signal_not_found_error(
@@ -234,16 +234,19 @@ class Experiment:
 
     # Operations .....................................
 
-    def set(self, path, key, value):
+    def set_node(self, path: str, value: Any):
         """Set the value of an instrument node.
 
         Args:
-            path (str): Path to the node whose value should be set.
-            key (str): Key of the node that should be set.
+            path: Path to the node whose value should be set.
             value: Value that should be set.
+
+        .. versionchanged:: 2.0
+            Method name renamed from `set` to `set_node`.
+            Removed `key` argument.
         """
         current_section = self._peek_section()
-        current_section.set(path=path, key=key, value=value)
+        current_section.set(path=path, value=value)
 
     def play(
         self,
@@ -269,12 +272,18 @@ class Experiment:
         :param length: Length for which the pulse shall be played. Defaults to
             `None`, meaning that the pulse is played for its whole length.
         :type length: `float` or :class:`~.dsl.parameter.Parameter`, optional
-        :param phase: The desired phase in radians the pulse shall be played with. Defaults to
-            `None`, meaning that the pulse is played as is.
+        :param phase: The desired baseband phase (baseband rotation) with which the
+            pulse shall be played. Given in radians, defaults to `None`,
+            meaning that the pulse is played with its phase as defined.
         :type phase: `float`, optional
-        :param increment_oscillator_phase: The desired phase increment the pulse
-            shall be played with. Defaults to `None`, meaning that the pulse is
-            played as is.
+        :param set_oscillator_phase: The desired oscillator phase at the start of the played pulse, in radians.
+            The phase setting affects the pulse played in this command, and all following pulses.
+            Defaults to `None`, meaning no change is made and the phase remains continuous.
+        :type set_oscillator_phase: `float`, optional
+        :param increment_oscillator_phase: The desired phase increment of the oscillator phase
+            at the start of the played pulse, in radians.
+            The new, incremented phase affects the pulse played in this command, and all following pulses.
+            Defaults to `None`, meaning no change is made and the phase remains continuous.
         :type increment_oscillator_phase: `float`, optional
         :param pulse_parameters: Dictionary with user pulse function parameters (re)binding.
         :type pulse_parameters: `dict`, optional
@@ -352,6 +361,102 @@ class Experiment:
             length=length,
             pulse_parameters=pulse_parameters,
         )
+
+    def measure(
+        self,
+        signal_acquire: str,
+        pulse,
+        handle: str,
+        signal_play: Optional[str] = None,
+        kernel: Pulse = None,
+        pulse_length: float = None,
+        pulse_parameters: Optional[Dict[str, Any]] = None,
+        amplitude=None,
+        phase=None,
+        increment_oscillator_phase=None,
+        set_oscillator_phase=None,
+        integration_length=None,
+        inter_event_delay: Optional[float] = None,
+        precompensation_clear: Optional[bool] = None,
+    ):
+        """
+        Play a pulse and acquire a signal. It contains three events: read_out, an optional inter_event delay, and acquire.
+
+        :param signal_acquire: The signal to acquire data on.
+        :type signal_acquire: str
+        :param pulse: The pulse to play.
+        :type pulse: object
+        :param handle: A unique identifier string that allows to retrieve the acquired data in the `Result` object.
+        :type handle: str
+        :param signal_play: The signal to play the pulse on. The user should set it to None if not applied
+        :type signal_play: str, optional
+        :param kernel: Pulse for filtering the acquired signal.
+        :type kernel: :class:`~.experiment.pulse.Pulse`, optional
+        :param pulse_length: Length for which the pulse shall be played.
+        :type pulse_length: float, optional
+        :param pulse_parameters: Dictionary with user pulse function parameters (re)binding.
+        :type pulse_parameters: dict, optional
+        :param amplitude: Amplitude the pulse shall be played with.
+        :type amplitude: float, optional
+        :param phase: The desired phase in radians the pulse shall be played with.
+        :type phase: float, optional
+        :param increment_oscillator_phase: The desired phase increment the pulse shall be played with.
+        :type increment_oscillator_phase: float, optional
+        :param set_oscillator_phase: The desired phase the oscillator shall be set.
+        :type set_oscillator_phase: float, optional
+        :param integration_length: Integration length for spectroscopy mode.
+        :type integration_length: float, optional
+        :param inter_event_delay: optional delay between play and acquire.
+        :type inter_event_delay: float, optional
+        :param precompensation_clear: Clear precompensation after the pulse.
+        :type precompensation_clear: bool, optional
+        """
+
+        if signal_play is None and not isinstance(signal_acquire, str):
+            raise ValueError("signal_acquire must be specified.")
+
+        elif isinstance(signal_play, str) and not isinstance(signal_acquire, str):
+            raise ValueError("signal_acquire must be specified.")
+
+        elif signal_play is None and isinstance(signal_acquire, str):
+
+            current_section = self._peek_section()
+            current_section.acquire(
+                signal=signal_acquire,
+                handle=handle,
+                kernel=kernel,
+                length=integration_length,
+                pulse_parameters=pulse_parameters,
+            )
+
+        elif isinstance(signal_play, str) and isinstance(signal_acquire, str):
+
+            current_section = self._peek_section()
+            current_section.play(
+                signal=signal_play,
+                pulse=pulse,
+                amplitude=amplitude,
+                phase=phase,
+                increment_oscillator_phase=increment_oscillator_phase,
+                set_oscillator_phase=set_oscillator_phase,
+                length=pulse_length,
+                pulse_parameters=pulse_parameters,
+                precompensation_clear=precompensation_clear,
+            )
+
+            if inter_event_delay is not None:
+                current_section.delay(
+                    signal=signal_acquire,
+                    time=inter_event_delay,
+                    precompensation_clear=precompensation_clear,
+                )
+            current_section.acquire(
+                signal=signal_acquire,
+                handle=handle,
+                kernel=kernel,
+                length=integration_length,
+                pulse_parameters=pulse_parameters,
+            )
 
     def call(self, func_name, **kwargs):
         """Add a callback function in the execution of the experiment.
@@ -512,7 +617,8 @@ class Experiment:
             count: The number of acquire iterations.
             averaging_mode: The mode of how to average the acquired data.
                 Defaults to :attr:`.AveragingMode.CYCLIC`.
-                Further option: :attr:`.AveragingMode.SEQUENTIAL`.
+                Further options: :attr:`.AveragingMode.SEQUENTIAL` and :attr:`.AveragingMode.SINGLE_SHOT`.
+                Single shot measurements are always averaged in cyclic mode.
             repetition_mode: Defines the shot repetition mode. Defaults to
                 :attr:`.RepetitionMode.FASTEST`. Further options are
                 :attr:`.RepetitionMode.CONSTANT` and :attr:`.RepetitionMode.AUTO`.
@@ -522,7 +628,7 @@ class Experiment:
                 given as a float or as a sweep parameter (:class:`~.dsl.parameter.Parameter`).
             acquisition_type: This is the acquisition type.
                 Defaults to :attr:`.AcquisitionType.INTEGRATION`. Further options are
-                :attr:`.AcquisitionType.SPECTROSCOPY` and :attr:`.AcquisitionType.RAW`.
+                :attr:`.AcquisitionType.SPECTROSCOPY`, :attr:`.AcquisitionType.DISCRIMINATION` and :attr:`.AcquisitionType.RAW`.
             reset_oscillator_phase: When True, the phase of every oscillator is reset at
                 the start of the each step of the acquire loop.
         """
@@ -613,7 +719,6 @@ class Experiment:
 
     def section(
         self,
-        offset=None,
         length=None,
         alignment=None,
         uid=None,
@@ -632,10 +737,6 @@ class Experiment:
 
         Args:
             uid: The unique ID for this section.
-            offset: (deprecated) Offset in seconds the execution of the section
-                is delayed. Defaults to `None` which is equivalent to 0.0 secs
-                of delay. The parameter can either be given as a float or as a
-                sweep parameter (:class:`~.Parameter`).
             length: The minimal duration of the section in seconds. The
                 scheduled section might be slightly longer, as its length is
                 rounded to the next multiple of the section timing grid.
@@ -675,13 +776,16 @@ class Experiment:
 
         When trigger signals on the same signal are issued in nested sections, the values
         are ORed.
+
+        .. versionchanged:: 2.0.0
+
+            Removed deprecated `offset` argument.
         """
         return Experiment._SectionSectionContext(
             self,
             uid=uid,
             length=length,
             alignment=alignment,
-            offset=offset,
             play_after=play_after,
             trigger=trigger,
         )
@@ -691,7 +795,6 @@ class Experiment:
             self,
             experiment,
             uid,
-            offset=None,
             length=None,
             alignment=None,
             play_after=None,
@@ -701,8 +804,6 @@ class Experiment:
             args = {}
             if uid is not None:
                 args["uid"] = uid
-            if offset is not None:
-                args["offset"] = offset
             if length is not None:
                 args["length"] = length
             if alignment is not None:

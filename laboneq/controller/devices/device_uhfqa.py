@@ -551,7 +551,7 @@ class DeviceUHFQA(DeviceZI):
 
     def collect_trigger_configuration_nodes(
         self, initialization: Initialization.Data, recipe_data: RecipeData
-    ):
+    ) -> List[DaqNodeAction]:
         self._logger.debug("Configuring triggers...")
         self._logger.debug("Configuring strobe index: 16.")
         self._logger.debug("Configuring strobe slope: 0.")
@@ -618,10 +618,12 @@ class DeviceUHFQA(DeviceZI):
 
         return nodes_to_configure_triggers
 
-    def configure_as_leader(self, initialization):
+    def configure_as_leader(self, initialization: Initialization.Data):
         self._error_as_leader()
 
-    def collect_follower_configuration_nodes(self, initialization):
+    def collect_follower_configuration_nodes(
+        self, initialization: Initialization.Data
+    ) -> List[DaqNodeAction]:
         return []
 
     def _get_integrator_measurement_data(

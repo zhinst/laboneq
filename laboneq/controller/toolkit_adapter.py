@@ -3,10 +3,20 @@
 
 from collections.abc import Mapping
 from typing import Dict, Optional
+from unittest.mock import MagicMock
 
+import numpy
 from zhinst.toolkit.driver.devices import DeviceType
 
 from laboneq.controller.devices.device_zi import DeviceZI
+
+
+class MockedToolkit(MagicMock):
+    def __float__(self):
+        return 0
+
+    def __array__(self):
+        return numpy.array(0)
 
 
 class ToolkitDevices(Mapping):

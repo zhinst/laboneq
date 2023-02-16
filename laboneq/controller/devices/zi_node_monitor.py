@@ -62,7 +62,8 @@ class NodeMonitor:
 
     def start(self):
         all_paths = [p for p in self._nodes.keys()]
-        self._daq.subscribe(all_paths)
+        if len(all_paths) > 0:
+            self._daq.subscribe(all_paths)
 
     def fetch(self, paths: List[str]):
         for path in paths:

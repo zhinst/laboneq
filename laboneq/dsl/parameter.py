@@ -32,12 +32,20 @@ def _compare_nested(a, b):
 
 @dataclass(init=True, repr=True, order=True)
 class Parameter(ABC):
+    """Parent class for sweep parameters in a LabOne Q Experiment."""
+
     uid: str = field(default_factory=parameter_id_generator)
 
 
 @dataclass(init=True, repr=True, order=True)
 class SweepParameter(Parameter):
+    """An arbitrary sweep parameter."""
+
+    #: An arbitrary numpy array whose values are used as the sweep parameter.
     values: ArrayLike = field(default_factory=lambda x: np.array([]))
+
+    #: The name of the sweep axis for this parameter used in the results. If this
+    #: argument is not defined, the uid of the object will be used instead.
     axis_name: str = field(default=None)
 
     def __eq__(self, other):
@@ -50,9 +58,20 @@ class SweepParameter(Parameter):
 
 @dataclass(init=True, repr=True, order=True)
 class LinearSweepParameter(Parameter):
+    """A linear sweep parameter"""
+
+    #: The starting value of the parameter sweep.
     start: Number = field(default=None)
+
+    #: The final value of the parameter sweep.
     stop: Number = field(default=None)
+
+    #: The number of sweep steps in the parameter sweep.
     count: int = field(default=None)
+
+    #: The name of the sweep axis for this parameter used in the results.
+    #:
+    #: If this argument is not defined, the uid of the object will be used instead.
     axis_name: str = field(default=None)
 
     def __post_init__(self):

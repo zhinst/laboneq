@@ -799,7 +799,7 @@ class DeviceSHFQA(DeviceZI):
 
     def collect_trigger_configuration_nodes(
         self, initialization: Initialization.Data, recipe_data: RecipeData
-    ):
+    ) -> List[DaqNodeAction]:
         self._logger.debug("Configuring triggers...")
         self._wait_for_AWGs = True
         self._emit_trigger = False
@@ -851,10 +851,12 @@ class DeviceSHFQA(DeviceZI):
             )
         return nodes_to_configure_triggers
 
-    def configure_as_leader(self, initialization):
+    def configure_as_leader(self, initialization: Initialization.Data):
         raise LabOneQControllerException("SHFQA cannot be configured as leader")
 
-    def collect_follower_configuration_nodes(self, initialization):
+    def collect_follower_configuration_nodes(
+        self, initialization: Initialization.Data
+    ) -> List[DaqNodeAction]:
         dio_mode = initialization.config.dio_mode
         self._logger.debug("%s: Configuring as a follower...", self.dev_repr)
 
@@ -953,7 +955,7 @@ class DeviceSHFQA(DeviceZI):
                 f"The number of measurements ({actual_results}) executed for device {self.serial} on channel {channel} does not match the number of measurements defined ({expected_results}). Probably the time between measurements or within a loop is too short. Please contact Zurich Instruments."
             )
 
-    def collect_reset_nodes(self):
+    def collect_reset_nodes(self) -> List[DaqNodeAction]:
         reset_nodes = super().collect_reset_nodes()
         reset_nodes.append(
             DaqNodeSetAction(

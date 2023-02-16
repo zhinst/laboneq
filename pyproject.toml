@@ -42,6 +42,8 @@ dependencies = [
     "marshmallow_union",
     "matplotlib",
     "numpy",
+    "openpulse",
+    "openqasm3",
     "orjson",
     "pybase64",
     "pycparser",

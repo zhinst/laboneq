@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import functools
+import json
 import re
 import sched
 import time
@@ -57,6 +58,20 @@ class NodeVectorComplex(NodeBase):
     )
 
 
+@dataclass
+class NodeDynamic(NodeBase):
+    getter: Callable[[], Any] = None
+    setter: Callable[[Any], None] = None
+
+    @property
+    def value(self) -> Any:
+        return self.getter()
+
+    @value.setter
+    def value(self, v: Any):
+        self.setter(v)
+
+
 class NodeType(Enum):
     FLOAT = NodeFloat
     INT = NodeInt
@@ -64,6 +79,7 @@ class NodeType(Enum):
     VECTOR_FLOAT = NodeVectorFloat
     VECTOR_INT = NodeVectorInt
     VECTOR_COMPLEX = NodeVectorComplex
+    DYNAMIC = NodeDynamic
 
 
 @dataclass
@@ -73,15 +89,28 @@ class NodeInfo:
     default: Any = 0.0
     read_only: bool = False
     handler: Callable[[NodeBase], None] = None
+    # For DYNAMIC nodes
+    getter: Callable[[Any], None] = None
+    setter: Callable[[], Any] = None
 
-
-def _node_factory(node_info: NodeInfo) -> NodeBase:
-    "Helper function constructing concrete node instance from a NodeInfo descriptor."
-    return node_info.type.value(
-        read_only=node_info.read_only,
-        value=node_info.default,
-        handler=node_info.handler,
-    )
+    def make_node(self) -> NodeBase:
+        "Constructs concrete node instance from a node descriptor."
+        if self.type == NodeType.DYNAMIC:
+            node = NodeType.DYNAMIC.value(
+                read_only=self.read_only,
+                handler=self.handler,
+                getter=self.getter,
+                setter=self.setter,
+            )
+            if self.setter is not None:
+                node.value = self.default
+            return node
+        else:
+            return self.type.value(
+                read_only=self.read_only,
+                value=self.default,
+                handler=self.handler,
+            )
 
 
 @dataclass
@@ -119,7 +148,7 @@ class DevEmu(ABC):
         new_node_def = node_def.get(dev_path)
         if new_node_def is None:
             new_node_def = NodeInfo(type=NodeType.INT, default=0, read_only=False)
-        new_node = _node_factory(new_node_def)
+        new_node = new_node_def.make_node()
         return new_node
 
     def _get_node(self, dev_path: str) -> NodeBase:
@@ -132,6 +161,10 @@ class DevEmu(ABC):
     def get(self, dev_path: str) -> Any:
         node = self._get_node(dev_path)
         return node.value
+
+    def getString(self, dev_path: str) -> str:
+        node = self._get_node(dev_path)
+        return str(node.value)
 
     def _set_val(self, dev_path: str, value: Any) -> NodeBase:
         node = self._get_node(dev_path)
@@ -171,6 +204,16 @@ class DevEmuZI(DevEmu):
     def serial(self) -> str:
         return "ZI"
 
+    @property
+    def server(self) -> ziDAQServerEmulator:
+        return self._dev_opts["emu_server"]
+
+    def _devices_connected(self) -> str:
+        devices = [
+            d.serial().upper() for d in self.server._devices.values() if d != self
+        ]
+        return ",".join(devices)
+
     def _node_def(self) -> Dict[str, NodeInfo]:
         return {
             "about/version": NodeInfo(
@@ -178,6 +221,12 @@ class DevEmuZI(DevEmu):
             ),
             "about/revision": NodeInfo(
                 type=NodeType.STR, default="99999", read_only=True
+            ),
+            "about/dataserver": NodeInfo(
+                type=NodeType.STR, default="Emulated", read_only=True
+            ),
+            "devices/connected": NodeInfo(
+                type=NodeType.DYNAMIC, read_only=True, getter=self._devices_connected
             ),
         }
 
@@ -423,8 +472,13 @@ class DevEmuSHFQC(DevEmuHW):
         return nd
 
 
-def _serial_to_device_type(dev_id: str):
-    m = re.match(pattern="DEV([0-9]+)[0-9]{3}", string=dev_id.upper())
+class DevEmuNONQC(DevEmuHW):
+    def _node_def(self) -> Dict[str, NodeInfo]:
+        return {}
+
+
+def _serial_to_device_type(serial: str):
+    m = re.match(pattern="DEV([0-9]+)[0-9]{3}", string=serial.upper())
     if m:
         num = int(m.group(1))
         if num < 2:  # HF2 0 ... 1999 - not supported
@@ -464,7 +518,9 @@ class ziDAQServerEmulator:
         self._scheduler = sched.scheduler()
         self._device_type_map: Dict[str, str] = {}
         # TODO(2K): Defer "ZI" device initialization to allow passing options
-        self._devices: Dict[str, DevEmu] = {"ZI": DevEmuZI(self._scheduler, {})}
+        self._devices: Dict[str, DevEmu] = {
+            "ZI": DevEmuZI(self._scheduler, {"emu_server": self})
+        }
         self._options: Dict[str, Dict[str, Any]] = {}
 
     def map_device_type(self, serial: str, type: str):
@@ -474,8 +530,8 @@ class ziDAQServerEmulator:
         dev_opts = self._options.setdefault(serial.upper(), {})
         dev_opts[option] = value
 
-    def _device_factory(self, dev_id: str) -> DevEmu:
-        dev_type_str = self._device_type_map.get(dev_id.upper())
+    def _device_factory(self, serial: str) -> DevEmu:
+        dev_type_str = self._device_type_map.get(serial.upper())
         if dev_type_str == "HDAWG":
             dev_type = DevEmuHDAWG
         elif dev_type_str == "UHFQA":
@@ -488,33 +544,52 @@ class ziDAQServerEmulator:
             dev_type = DevEmuSHFSG
         elif dev_type_str == "SHFQC":
             dev_type = DevEmuSHFQC
+        elif dev_type_str == "NONQC":
+            dev_type = DevEmuNONQC
         else:
-            dev_type = _serial_to_device_type(dev_id)
-        dev_opts = self._options.setdefault(dev_id.upper(), {})
-        return dev_type(dev_id, self._scheduler, dev_opts)
+            dev_type = _serial_to_device_type(serial)
+        dev_opts = self._options.setdefault(serial.upper(), {})
+        return dev_type(serial, self._scheduler, dev_opts)
 
-    def _device_lookup(self, dev_id: str, create: bool = True) -> DevEmu:
-        dev_id = dev_id.upper()
-        device = self._devices.get(dev_id)
+    def _device_lookup(self, serial: str, create: bool = True) -> DevEmu:
+        serial = serial.upper()
+        device = self._devices.get(serial)
         if device is None and create:
-            device = self._device_factory(dev_id)
-            self._devices[dev_id] = device
+            device = self._device_factory(serial)
+            self._devices[serial] = device
         return device
 
-    def _resolve_dev(self, path: str) -> Tuple[DevEmu, str]:
+    def _resolve_dev(self, path: str) -> Tuple[List[DevEmu], str]:
         if path.startswith("/"):
             path = path[1:]
         path_parts = path.split("/")
-        device = self._device_lookup(path_parts[0])
-        return device, "/".join(path_parts[1:]).lower()
+        devices = []
+        dev_path = ""
+        if "*" in path_parts[0]:
+            serial_pattern = re.compile(
+                path_parts[0].replace("*", ".*"), flags=re.IGNORECASE
+            )
+            for serial, device in self._devices.items():
+                if serial_pattern.match(serial):
+                    devices.append(device)
+            if len(path_parts) == 1 and path_parts[0] == "*":
+                dev_path = "*"
+        else:
+            devices.append(self._device_lookup(path_parts[0]))
+            dev_path = "/".join(path_parts[1:]).lower()
+        return devices, dev_path
 
     def _resolve_paths_and_perform(
         self, path: Union[str, List[str]], handler: Callable
     ):
         results = {}
         for p in _canonical_path_list(path):
-            device, dev_path = self._resolve_dev(p)
-            results[p.lower()] = handler(device, dev_path)
+            devices, dev_path = self._resolve_dev(p)
+            dev_path_suffix = "" if len(dev_path) == 0 else f"/{dev_path}"
+            for device in devices:
+                results[f"/{device.serial().lower()}{dev_path_suffix}"] = handler(
+                    device, dev_path
+                )
         return results
 
     def connectDevice(self, dev: str, interface: str, params: str = ""):
@@ -576,6 +651,24 @@ class ziDAQServerEmulator:
             self._resolve_paths_and_perform(
                 paths, partial(self._set, value_dict=value_dict)
             )
+
+    def getString(self, path: str) -> str:
+        self._progress_scheduler()
+        devices, dev_path = self._resolve_dev(path)
+        assert len(devices) == 1
+        return devices[0].getString(dev_path)
+
+    def _listNodesJSON(self, device: DevEmu, dev_path: str):
+        # Not implemented. Was intended mainly for the toolkit, instead toolkit itself is mocked.
+        return {}
+
+    def listNodesJSON(self, path: str, *args, **kwargs) -> str:
+        self._progress_scheduler()
+        results = self._resolve_paths_and_perform(path, self._listNodesJSON)
+        combined_result = {}
+        for r in results.values():
+            combined_result.update(r)
+        return json.dumps(combined_result)
 
     def _subscribe(self, device: DevEmu, dev_path: str):
         device.subscribe(dev_path)

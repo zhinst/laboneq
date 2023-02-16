@@ -1,4 +1,4 @@
-instrument_list:
+instruments:
   HDAWG:
   - address: DEV8XXX
     uid: device_hdawg

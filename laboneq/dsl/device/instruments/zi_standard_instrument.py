@@ -22,4 +22,8 @@ class ZIStandardInstrument(Instrument):
     reference_clock_source: ReferenceClockSource = field(default=None)
 
     def calc_options(self):
-        return {"serial": self.address, "interface": self.interface}
+        return {
+            **super().calc_options(),
+            "serial": self.address,
+            "interface": self.interface,
+        }

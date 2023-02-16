@@ -3,12 +3,9 @@
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types.device_output_signals import DeviceOutputSignals
 from laboneq.core.types.enums.mixer_type import MixerType
 from laboneq.core.validators import dicts_equal
 
@@ -91,12 +88,6 @@ class CompiledExperiment:
     #: (dicts, lists, etc.)
     experiment_dict: Dict[str, Any] = field(default=None)
 
-    #: Simulated output of the devices. Optional, only populated after calling
-    #: :py:meth:`Session.compile() <.dsl.session.Session.compile>` or
-    #: :py:meth:`Session.run() <.dsl.session.Session.run>` with
-    #: ``do_simulation=True``, or by calling :py:meth:`simulate_outputs()`.
-    output_signals: Optional[DeviceOutputSignals] = field(default=None)
-
     #: Data structure for mapping pulses (in the experiment) to waveforms (on the
     #: device).
     pulse_map: Dict[str, PulseMapEntry] = field(default=None)
@@ -116,53 +107,8 @@ class CompiledExperiment:
             and self.schedule == other.schedule
             and dicts_equal(other.experiment_dict, self.experiment_dict)
             and dicts_equal(other.waves, self.waves)
-            and self.output_signals == other.output_signals
             and self.pulse_map == other.pulse_map
         )
-
-    def simulate_outputs(self, max_simulation_time=10e-6, log_level=None):
-        """Simulate the output of the devices.
-
-        This will populate the :py:attr:`output_signals` field.
-
-        Args:
-            max_simulation_time (float): The time after which the simulation is
-                truncated.
-            log_level (int): The log level when running the simulator. When `None`, the
-                log level is left unchanged.
-
-
-        See Also:
-            - :py:meth:`Session.compile() <.dsl.session.Session.compile>`
-            - :py:meth:`Session.run() <.dsl.session.Session.run>`
-
-        .. deprecated:: 1.7
-
-            Use the :class:`~.OutputSimulator` instead.
-        """
-        if self.output_signals is not None:
-            return
-
-        # delayed import because of circular references
-        from laboneq.dsl.laboneq_facade import LabOneQFacade
-
-        logger = logging.getLogger(__name__)
-        if log_level is not None:
-            logger.setLevel(log_level)
-
-        self.output_signals = LabOneQFacade.simulate_outputs(
-            self, max_simulation_time, logger
-        )
-
-    def get_output_signals(self, device_uid: str):
-        res = [
-            sig
-            for sig in self.output_signals.signals
-            if sig["device_uid"] == device_uid
-        ]
-        if not res:
-            raise LabOneQException(f"No output for device: {device_uid}")
-        return res
 
     def replace_pulse(
         self, pulse_uid: Union[str, Pulse], pulse_or_array: "Union[ArrayLike, Pulse]"

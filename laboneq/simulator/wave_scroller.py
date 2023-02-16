@@ -209,9 +209,14 @@ class WaveScroller:
             ev = self.sim.events[ev_idx]
             if ev.operation in target_events:
                 op_events.append(ev)
+            if cur_time_samples < ev.start_samples:
+                cur_time_samples = ev.start_samples
             cur_time_samples += ev.length_samples
             ev_idx += 1
-
+        if ev.length_samples == 0:
+            # in case the last event had zero length,
+            # add one sample so that for example a final setTrigger(0) can take effect and set the last sample to 0
+            cur_time_samples += 1
         self.prepare(cur_time_samples - snippet_start_samples)
         for ev in op_events:
             self.process(ev, snippet_start_samples)
@@ -223,10 +228,15 @@ class WaveScroller:
         if length_samples <= 0:
             return np.array([]), np.array([])
 
-        ofs = start_samples - snippet_start_samples
-        self.trim(ofs, length_samples)
-
         exact_start_secs = start_samples / self.sim.sampling_rate + time_delay_secs
+        ofs = start_samples - snippet_start_samples
+
+        if ofs > 0:
+            self.trim(ofs, length_samples)
+        else:
+            self.trim(0, length_samples)
+            exact_start_secs -= ofs / self.sim.sampling_rate
+
         exact_length_secs = (length_samples - 1) / self.sim.sampling_rate
         self.time_axis = np.linspace(
             exact_start_secs, exact_start_secs + exact_length_secs, length_samples

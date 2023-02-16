@@ -54,10 +54,10 @@ class DeviceType(DeviceTraits, Enum):
         # @2.4GHz, device grid of 16 samples
         # - 7x16 = 112 cycles (~ 46.7ns) for the setDouble sequence to ensure gapless playback (measured)
         # - 4x16 = 64 additional cycles for the frequency switching (~ 24ns after the above 112 cycles, measured)
-        # - 45x16 = 720 cycles for if/else tree for up to 9 tests for 512 steps, assuming ~10 sequencer
+        # - 27x16 = 432 cycles for if/else tree for up to 9 tests for 512 steps, assuming ~6 sequencer
         #           cycles (1/8 of sampling rate) per test with possible wait states (estimated worst case)
         # As the value below is given in seconds, calculate it for the worst case of running at 2.0GHz:
-        oscillator_set_latency=448e-9,
+        oscillator_set_latency=304e-9,
         # Verified by PW (2022-10-13) on dev8047, proc. FPGA 68603. Observed ~77 ns.
         reset_osc_duration=80e-9,
         supports_oscillator_switching=False,

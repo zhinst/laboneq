@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from laboneq.controller.devices.device_hdawg import DeviceHDAWG
+from laboneq.controller.devices.device_nonqc import DeviceNonQC
 from laboneq.controller.devices.device_pqsc import DevicePQSC
 from laboneq.controller.devices.device_shfqa import DeviceSHFQA
 from laboneq.controller.devices.device_shfsg import DeviceSHFSG
@@ -19,6 +20,7 @@ class DeviceFactory:
             "SHFQA": DeviceSHFQA,
             "SHFSG": DeviceSHFSG,
             "PQSC": DevicePQSC,
+            "NONQC": DeviceNonQC,
         }.get(device_qualifier.driver.upper())
         if dev_class is None:
             raise LabOneQControllerException(

@@ -97,8 +97,6 @@ class SectionInfo:
     averaging_type: Optional[str]
     count: int
     align: Optional[str]
-    offset: Optional[float]
-    offset_param: Optional[str]
     length: Optional[float]
     averaging_mode: Optional[str]
     repetition_mode: Optional[str]
@@ -109,7 +107,7 @@ class SectionInfo:
     state: Optional[int]
     local: Optional[bool]
     section_display_name: Optional[str] = None
-    trigger_output: Dict[str, Dict] = field(default_factory=dict)
+    trigger_output: List[Dict] = field(default_factory=list)
 
 
 @dataclass
@@ -148,7 +146,7 @@ class SectionSignalPulse:
     signal_id: str
     offset: float
     offset_param: str
-    acquire_params: str
+    acquire_params: Any
     phase: float
     phase_param: str
     increment_oscillator_phase: float
@@ -445,8 +443,6 @@ class ExperimentDAO:
             has_repeat = False
             execution_type = None
             align = None
-            offset = None
-            offset_param = None
             length = None
             count: int = 1
             averaging_type = None
@@ -500,13 +496,6 @@ class ExperimentDAO:
             if "align" in section:
                 align = section["align"]
 
-            if "offset" in section:
-                offset = section["offset"]
-                if not isinstance(offset, float) and not isinstance(offset, int):
-                    if offset is not None and "$ref" in offset:
-                        offset_param = offset["$ref"]
-                        offset = None
-
             reset_oscillator_phase = False
             if "reset_oscillator_phase" in section:
                 reset_oscillator_phase = section["reset_oscillator_phase"]
@@ -538,9 +527,12 @@ class ExperimentDAO:
             if "repetition_mode" in section:
                 repetition_mode = section["repetition_mode"]
 
-            trigger_output = {}
+            trigger_output = []
             if "trigger_output" in section:
-                trigger_output = section["trigger_output"]
+                trigger_output = [
+                    {"signal_id": to_item["signal"]["$ref"], "state": to_item["state"]}
+                    for to_item in section["trigger_output"]
+                ]
 
             if section["id"] in self._data["section"]:
                 raise LabOneQException(
@@ -554,8 +546,6 @@ class ExperimentDAO:
                 acquisition_types=acquisition_types,
                 averaging_type=averaging_type,
                 align=align,
-                offset=offset,
-                offset_param=offset_param,
                 length=length,
                 averaging_mode=averaging_mode,
                 repetition_mode=repetition_mode,
@@ -723,6 +713,16 @@ class ExperimentDAO:
             if sc["signal_id"] in section_signals
         }
         return devices
+
+    def devices_in_section(self, section_id):
+        if self.is_branch(section_id):
+            return self.devices_in_section(self.section_parent(section_id))
+        retval = set()
+        section_with_children = self.all_section_children(section_id)
+        section_with_children.add(section_id)
+        for child in section_with_children:
+            retval = retval.union(self.devices_in_section_no_descend(child))
+        return retval
 
     def _device_types_in_section_no_descend(self, section_id):
         devices = self.devices_in_section_no_descend(section_id)
@@ -1330,7 +1330,13 @@ class ExperimentDAO:
                     "reset_oscillator_phase"
                 ] = section_info.reset_oscillator_phase
             if section_info.trigger_output:
-                out_section["trigger_output"] = section_info.trigger_output
+                out_section["trigger_output"] = [
+                    {
+                        "signal": {"$ref": to_item["signal_id"]},
+                        "state": to_item["state"],
+                    }
+                    for to_item in section_info.trigger_output
+                ]
 
             signals_list = []
             for signal_id in experiment_dao._section_signals_list(section_id):
@@ -2013,14 +2019,6 @@ class ExperimentDAO:
         if exchanger_map(section).alignment is not None:
             align = exchanger_map(section).alignment.value
 
-        offset = None
-        offset_param = None
-        if section.offset is not None:
-            offset = section.offset
-            if not isinstance(offset, float) and not isinstance(offset, int):
-                offset_param = offset.uid
-                offset = None
-
         length = None
         if section.length is not None:
             length = section.length
@@ -2053,7 +2051,9 @@ class ExperimentDAO:
         if hasattr(section, "local"):
             local = section.local
 
-        trigger = section.trigger
+        trigger = [
+            {"signal_id": k, "state": v["state"]} for k, v in section.trigger.items()
+        ]
 
         acquisition_types = None
         for operation in exchanger_map(section).operations:
@@ -2069,8 +2069,6 @@ class ExperimentDAO:
             acquisition_types=acquisition_types,
             averaging_type=averaging_type,
             align=align,
-            offset=offset,
-            offset_param=offset_param,
             length=length,
             averaging_mode=averaging_mode,
             repetition_mode=repetition_mode,
@@ -2092,7 +2090,7 @@ class ExperimentDAO:
                     "section_uid": section.uid,
                     "signal_uid": operation.signal,
                 }
-        for signal_uid, section_signal in section_signals.items():
+        for _, section_signal in section_signals.items():
 
             section_signal["section_signal_id"] = section_signal_id["current"]
             self._data["section_signal"].append(
@@ -2286,6 +2284,63 @@ class ExperimentDAO:
                             )
                         )
 
+                        seq_nr += 1
+                    elif (
+                        getattr(operation, "increment_oscillator_phase", None)
+                        is not None
+                        or getattr(operation, "set_oscillator_phase", None) is not None
+                    ):
+                        # virtual Z gate
+                        (
+                            pulse_increment_oscillator_phase,
+                            pulse_increment_oscillator_phase_param,
+                        ) = find_value_or_parameter_attr(
+                            operation, "increment_oscillator_phase", (int, float)
+                        )
+                        (
+                            pulse_set_oscillator_phase,
+                            pulse_set_oscillator_phase_param,
+                        ) = find_value_or_parameter_attr(
+                            operation, "set_oscillator_phase", (int, float)
+                        )
+                        for par in [
+                            "precompensation_clear",
+                            "amplitude",
+                            "phase",
+                            "pulse_parameters",
+                            "handle",
+                            "length",
+                        ]:
+                            if getattr(operation, par, None) is not None:
+                                raise LabOneQException(
+                                    f"parameter {par} not supported for virtual Z gates"
+                                )
+
+                        self._data["section_signal_pulse"].append(
+                            dict(
+                                section_signal_id=section_signal["section_signal_id"],
+                                section_id=section.uid,
+                                signal_id=operation.signal,
+                                pulse_id=None,
+                                offset=pulse_offset,
+                                offset_param=pulse_offset_param,
+                                amplitude=None,
+                                amplitude_param=None,
+                                length=None,
+                                length_param=None,
+                                seq_nr=seq_nr,
+                                acquire_params=None,
+                                phase=None,
+                                phase_param=None,
+                                increment_oscillator_phase=pulse_increment_oscillator_phase,
+                                increment_oscillator_phase_param=pulse_increment_oscillator_phase_param,
+                                set_oscillator_phase=pulse_set_oscillator_phase,
+                                set_oscillator_phase_param=pulse_set_oscillator_phase_param,
+                                play_pulse_parameters=None,
+                                pulse_pulse_parameters=None,
+                                precompensation_clear=False,  # not supported
+                            )
+                        )
                         seq_nr += 1
 
     def validate_experiment(self):

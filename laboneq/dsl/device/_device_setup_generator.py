@@ -5,14 +5,15 @@ import abc
 import copy
 import itertools
 import logging
-from typing import Dict, Iterator, List, Optional, Tuple
+import warnings
+from typing import Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 import laboneq.core.path as qct_path
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import ReferenceClockSource
 from laboneq.dsl.device import Instrument
 from laboneq.dsl.device.connection import Connection
-from laboneq.dsl.device.instruments import HDAWG, PQSC, SHFQA, SHFSG, UHFQA
+from laboneq.dsl.device.instruments import HDAWG, PQSC, SHFQA, SHFSG, UHFQA, NonQC
 from laboneq.dsl.device.io_units import (
     LogicalSignal,
     PhysicalChannel,
@@ -33,6 +34,14 @@ T_SHFQA_DEVICE = "SHFQA"
 T_SHFSG_DEVICE = "SHFSG"
 T_SHFQC_DEVICE = "SHFQC"
 T_PQSC_DEVICE = "PQSC"
+T_ALL_DEVICE_TYPES = [
+    T_HDAWG_DEVICE,
+    T_UHFQA_DEVICE,
+    T_SHFQA_DEVICE,
+    T_SHFSG_DEVICE,
+    T_SHFQC_DEVICE,
+    T_PQSC_DEVICE,
+]
 T_UID = "uid"
 T_ADDRESS = "address"
 T_INTERFACE = "interface"
@@ -46,8 +55,46 @@ T_PORT = "port"
 T_PORTS = "ports"
 
 
-def _iterate_over_descriptors_of_type(instrument_list, device_type):
-    for descriptor in instrument_list.get(device_type, []):
+# Models 'instruments' (former 'instrument_list') part of the descriptor:
+#     instruments:
+#       HDAWG:
+#       - address: DEV8001
+#         uid: device_hdawg
+#       SHFQA:
+#       - address: DEV12001
+#         uid: device_shfqa
+#       PQSC:
+#       - address: DEV10001
+#         uid: device_pqsc
+InstrumentsType = Dict[str, List[Dict[str, str]]]
+
+# Models 'connections' part of the descriptor:
+#     connections:
+#       device_hdawg:
+#         - iq_signal: q0/drive_line
+#           ports: [SIGOUTS/0, SIGOUTS/1]
+#         - to: device_uhfqa
+#           port: DIOS/0
+#       device_uhfqa:
+#         - iq_signal: q0/measure_line
+#           ports: [SIGOUTS/0, SIGOUTS/1]
+#         - acquire_signal: q0/acquire_line
+#       device_pqsc:
+#         - to: device_hdawg
+#           port: ZSYNCS/0
+ConnectionsType = Dict[str, List[Dict[str, Union[str, List[str]]]]]
+
+# Models 'dataservers' part of the descriptor:
+#     dataservers:
+#       zi_server:
+#         host: 127.0.0.1
+#         port: 8004
+#         instruments: [device_hdawg, device_uhfqa, device_pqsc]
+DataServersType = Dict[str, Dict[str, Union[str, List[str]]]]
+
+
+def _iterate_over_descriptors_of_type(instruments: InstrumentsType, device_type: str):
+    for descriptor in instruments.get(device_type, []):
         yield descriptor[T_UID], descriptor[T_ADDRESS], descriptor.get(T_INTERFACE)
 
 
@@ -59,24 +106,12 @@ class _ProcessorBase(abc.ABC):
     @classmethod
     def process(
         cls,
-        instruments: Dict[str, List],
-        connections: Dict[str, List],
-        server_uid: str,
+        instruments: InstrumentsType,
+        connections: ConnectionsType,
+        server_finder: Callable[[str], str],
         logical_signals_candidates: List[Dict],
         physical_signals: Dict[str, PhysicalChannel],
     ) -> Iterator[Instrument]:
-        ...
-
-    @staticmethod
-    def make_device(
-        uid,
-        address,
-        interface,
-        connections,
-        server_uid,
-        logical_signals_candidates,
-        physical_signals,
-    ) -> Instrument:
         ...
 
 
@@ -84,9 +119,9 @@ class _HDAWGProcessor(_ProcessorBase):
     @classmethod
     def process(
         cls,
-        instruments,
-        connections,
-        server_uid,
+        instruments: InstrumentsType,
+        connections: ConnectionsType,
+        server_finder: Callable[[str], str],
         logical_signals_candidates,
         physical_signals,
     ) -> Iterator[Instrument]:
@@ -98,7 +133,7 @@ class _HDAWGProcessor(_ProcessorBase):
                 address,
                 interface,
                 connections,
-                server_uid,
+                server_finder,
                 logical_signals_candidates,
                 physical_signals,
             )
@@ -108,8 +143,8 @@ class _HDAWGProcessor(_ProcessorBase):
         uid,
         address,
         interface,
-        connections,
-        server_uid,
+        connections: ConnectionsType,
+        server_finder: Callable[[str], str],
         logical_signals_candidates,
         physical_signals,
     ) -> Instrument:
@@ -190,7 +225,7 @@ class _HDAWGProcessor(_ProcessorBase):
 
         return HDAWG(
             **_skip_nones(
-                server_uid=server_uid,
+                server_uid=server_finder(uid),
                 uid=uid,
                 address=address,
                 interface=interface,
@@ -204,9 +239,9 @@ class _UHFQAProcessor(_ProcessorBase):
     @classmethod
     def process(
         cls,
-        instruments,
-        connections,
-        server_uid,
+        instruments: InstrumentsType,
+        connections: ConnectionsType,
+        server_finder: Callable[[str], str],
         logical_signals_candidates,
         physical_signals,
     ) -> Iterator[Instrument]:
@@ -218,7 +253,7 @@ class _UHFQAProcessor(_ProcessorBase):
                 address,
                 interface,
                 connections,
-                server_uid,
+                server_finder,
                 logical_signals_candidates,
                 physical_signals,
             )
@@ -228,8 +263,8 @@ class _UHFQAProcessor(_ProcessorBase):
         uid,
         address,
         interface,
-        connections,
-        server_uid,
+        connections: ConnectionsType,
+        server_finder: Callable[[str], str],
         logical_signals_candidates,
         physical_signals,
     ) -> Instrument:
@@ -330,7 +365,7 @@ class _UHFQAProcessor(_ProcessorBase):
 
         return UHFQA(
             **_skip_nones(
-                server_uid=server_uid,
+                server_uid=server_finder(uid),
                 uid=uid,
                 address=address,
                 interface=interface,
@@ -354,9 +389,9 @@ class _SHFQAProcessor(_ProcessorBase):
     @classmethod
     def process(
         cls,
-        instruments,
-        connections,
-        server_uid,
+        instruments: InstrumentsType,
+        connections: ConnectionsType,
+        server_finder: Callable[[str], str],
         logical_signals_candidates,
         physical_signals,
     ) -> Iterator[Instrument]:
@@ -368,7 +403,7 @@ class _SHFQAProcessor(_ProcessorBase):
                 address,
                 interface,
                 connections,
-                server_uid,
+                server_finder,
                 logical_signals_candidates,
                 physical_signals,
             )
@@ -378,8 +413,8 @@ class _SHFQAProcessor(_ProcessorBase):
         uid,
         address,
         interface,
-        connections,
-        server_uid,
+        connections: ConnectionsType,
+        server_finder: Callable[[str], str],
         logical_signals_candidates,
         physical_signals,
         is_qc: bool = False,
@@ -478,7 +513,7 @@ class _SHFQAProcessor(_ProcessorBase):
 
         return SHFQA(
             **_skip_nones(
-                server_uid=server_uid,
+                server_uid=server_finder(uid),
                 uid=uid,
                 address=address,
                 interface=interface,
@@ -508,9 +543,9 @@ class _SHFSGProcessor(_ProcessorBase):
     @classmethod
     def process(
         cls,
-        instruments,
-        connections,
-        server_uid,
+        instruments: InstrumentsType,
+        connections: ConnectionsType,
+        server_finder: Callable[[str], str],
         logical_signals_candidates,
         physical_signals,
     ) -> Iterator[Instrument]:
@@ -522,7 +557,7 @@ class _SHFSGProcessor(_ProcessorBase):
                 address,
                 interface,
                 connections,
-                server_uid,
+                server_finder,
                 logical_signals_candidates,
                 physical_signals,
             )
@@ -532,8 +567,8 @@ class _SHFSGProcessor(_ProcessorBase):
         uid,
         address,
         interface,
-        connections,
-        server_uid,
+        connections: ConnectionsType,
+        server_finder: Callable[[str], str],
         logical_signals_candidates,
         physical_signals,
         is_qc: bool = False,
@@ -610,7 +645,7 @@ class _SHFSGProcessor(_ProcessorBase):
 
         return SHFSG(
             **_skip_nones(
-                server_uid=server_uid,
+                server_uid=server_finder(uid),
                 uid=uid + ("_sg" if is_qc and qc_with_qa else ""),
                 address=address,
                 interface=interface,
@@ -641,9 +676,9 @@ class _SHFQCProcessor(_ProcessorBase):
     @classmethod
     def process(
         cls,
-        instruments,
-        connections,
-        server_uid,
+        instruments: InstrumentsType,
+        connections: ConnectionsType,
+        server_finder: Callable[[str], str],
         logical_signals_candidates,
         physical_signals,
     ) -> Iterator[Instrument]:
@@ -655,7 +690,7 @@ class _SHFQCProcessor(_ProcessorBase):
                 address,
                 interface,
                 connections,
-                server_uid,
+                server_finder,
                 logical_signals_candidates,
                 physical_signals,
                 is_qc=True,
@@ -668,7 +703,7 @@ class _SHFQCProcessor(_ProcessorBase):
                 address,
                 interface,
                 connections,
-                server_uid,
+                server_finder,
                 logical_signals_candidates,
                 physical_signals,
                 is_qc=True,
@@ -681,10 +716,10 @@ class _PQSCProcessor:
     @classmethod
     def process(
         cls,
-        instruments,
+        instruments: InstrumentsType,
         out_instrument_list,
-        connections,
-        server_uid,
+        connections: ConnectionsType,
+        server_finder: Callable[[str], str],
         logical_signals_candidates,
         physical_signals,
     ):
@@ -696,7 +731,7 @@ class _PQSCProcessor:
                 address,
                 interface,
                 connections,
-                server_uid,
+                server_finder,
                 logical_signals_candidates,
                 physical_signals,
             )
@@ -728,14 +763,14 @@ class _PQSCProcessor:
         uid,
         address,
         interface,
-        connections,
-        server_uid,
+        connections: ConnectionsType,
+        server_finder: Callable[[str], str],
         logical_signals_candidates,
         physical_signals,
     ):
         internal_clock_signal = None
         device_connections = []
-        for port_desc in connections[uid]:
+        for port_desc in connections.get(uid, []):
             signal_type_keyword, remote_path, local_ports = _port_decoder(
                 port_desc, [T_INTCLK]
             )
@@ -753,7 +788,7 @@ class _PQSCProcessor:
 
         return PQSC(
             **_skip_nones(
-                server_uid=server_uid,
+                server_uid=server_finder(uid),
                 uid=uid,
                 address=address,
                 interface=interface,
@@ -762,6 +797,31 @@ class _PQSCProcessor:
                 reference_clock=10e6,
             )
         )
+
+
+class _NonQCProcessor(_ProcessorBase):
+    @classmethod
+    def process(
+        cls,
+        instruments: InstrumentsType,
+        connections: ConnectionsType,
+        server_finder: Callable[[str], str],
+        logical_signals_candidates,
+        physical_signals,
+    ) -> Iterator[Instrument]:
+        for dev_type, devices in instruments.items():
+            if dev_type not in T_ALL_DEVICE_TYPES:
+                for descriptor in devices:
+                    uid = descriptor[T_UID]
+                    yield NonQC(
+                        **_skip_nones(
+                            server_uid=server_finder(uid),
+                            uid=uid,
+                            address=descriptor[T_ADDRESS],
+                            interface=descriptor.get(T_INTERFACE),
+                            dev_type=dev_type,
+                        )
+                    )
 
 
 def _port_decoder(port_desc, additional_switch_keys=None) -> Tuple[str, str, List[str]]:
@@ -875,28 +935,39 @@ def _create_physical_channel(
 class _DeviceSetupGenerator:
     @staticmethod
     def from_descriptor(
-        yaml_text, server_host, server_port="8004", setup_name="unknown"
+        yaml_text: str,
+        server_host: str = None,
+        server_port: str = None,
+        setup_name: str = None,
     ):
         from yaml import load
 
         try:
-            from yaml import CDumper as Dumper
             from yaml import CLoader as Loader
         except ImportError:
-            from yaml import Dumper, Loader
+            from yaml import Loader
 
         setup_desc = load(yaml_text, Loader=Loader)
 
         return _DeviceSetupGenerator.from_dicts(
-            setup_desc["instrument_list"],
-            setup_desc["connections"],
-            server_host,
-            server_port,
-            setup_name,
+            instrument_list=setup_desc.get("instrument_list"),
+            instruments=setup_desc.get("instruments"),
+            connections=setup_desc.get("connections"),
+            dataservers=setup_desc.get("dataservers"),
+            server_host=server_host,
+            server_port=server_port,
+            setup_name=setup_desc.get("setup_name")
+            if setup_name is None
+            else setup_name,
         )
 
     @staticmethod
-    def from_yaml(filepath, server_host, server_port="8004", setup_name="unknown"):
+    def from_yaml(
+        filepath,
+        server_host: str = None,
+        server_port: str = None,
+        setup_name: str = None,
+    ):
         from yaml import load
 
         try:
@@ -908,29 +979,101 @@ class _DeviceSetupGenerator:
             setup_desc = load(fp, Loader=Loader)
 
         return _DeviceSetupGenerator.from_dicts(
-            setup_desc["instrument_list"],
-            setup_desc["connections"],
-            server_host,
-            server_port,
-            setup_name,
+            instrument_list=setup_desc.get("instrument_list"),
+            instruments=setup_desc.get("instruments"),
+            connections=setup_desc.get("connections"),
+            dataservers=setup_desc.get("dataservers"),
+            server_host=server_host,
+            server_port=server_port,
+            setup_name=setup_desc.get("setup_name")
+            if setup_name is None
+            else setup_name,
         )
 
     @staticmethod
     def from_dicts(
-        instrument_list,
-        connections,
-        server_host,
-        server_port="8004",
-        setup_name="unknown",
+        instrument_list: InstrumentsType = None,
+        instruments: InstrumentsType = None,
+        connections: ConnectionsType = None,
+        dataservers: DataServersType = None,
+        server_host: str = None,
+        server_port: str = None,
+        setup_name: str = None,
     ):
-        # Define server
-        zi_server = DataServer(
-            uid="zi_server", host=server_host, port=server_port, api_level=6
-        )
+        if instrument_list is not None:
+            if instruments is None:
+                warnings.warn(
+                    "'instrument_list' section is deprecated in setup descriptor, use 'instruments' instead.",
+                    FutureWarning,
+                )
+                instruments = instrument_list
+            else:
+                warnings.warn(
+                    "Both 'instrument_list' and 'instruments' are present in the setup descriptor, deprecated 'instrument_list' ignored.",
+                    FutureWarning,
+                )
 
-        pqsc_dicts = instrument_list.get(T_PQSC_DEVICE, [])
-        if len(pqsc_dicts) > 0:
-            zi_server.leader_uid = pqsc_dicts[0][T_UID]
+        if instruments is None:
+            raise LabOneQException(
+                "'instruments' section is mandatory in the setup descriptor."
+            )
+
+        if connections is None:
+            connections = {}
+
+        if setup_name is None:
+            setup_name = "unknown"
+
+        if server_host is not None:
+            if dataservers is not None:
+                logger.warning(
+                    "Servers definition in the descriptor will be overridden by the server passed to the constructor."
+                )
+            dataservers = {
+                "zi_server": {
+                    "host": server_host,
+                    "port": "8004" if server_port is None else server_port,
+                }
+            }
+
+        if dataservers is None:
+            raise LabOneQException(
+                "At least one server must be defined either in the descriptor or in the constructor."
+            )
+
+        # Construct servers
+        servers: List[Tuple[DataServer, List[str]]] = [
+            (
+                DataServer(
+                    uid=server_uid,
+                    host=server_def["host"],
+                    port=server_def.get("port", 8004),
+                    api_level=6,
+                ),
+                server_def.get("instruments", []),
+            )
+            for server_uid, server_def in dataservers.items()
+        ]
+
+        # TODO(2K): Remove, leader device must be determined from connections
+        # Keeping this only to satisfy the tests
+        if len(servers) == 1:
+            pqsc_dicts = instruments.get(T_PQSC_DEVICE, [])
+            if len(pqsc_dicts) > 0:
+                servers[0][0].leader_uid = pqsc_dicts[0][T_UID]
+
+        def server_finder(device_uid: str) -> str:
+            default_data_server = None
+            for data_server, devices in servers:
+                if default_data_server is None and len(devices) == 0:
+                    default_data_server = data_server
+                if device_uid in devices:
+                    return data_server.uid
+            if default_data_server is None:
+                raise LabOneQException(
+                    f"Couldn't determine the data server for the device '{device_uid}'."
+                )
+            return default_data_server.uid
 
         processors: List[_ProcessorBase] = [
             _HDAWGProcessor,
@@ -938,26 +1081,27 @@ class _DeviceSetupGenerator:
             _SHFQAProcessor,
             _SHFSGProcessor,
             _SHFQCProcessor,
+            _NonQCProcessor,
         ]
 
         # Define instruments
-        out_instrument_list: List[Instrument] = []
+        out_instruments: List[Instrument] = []
         logical_signals_candidates = []
         physical_signals = {}  # device_uid -> PhysicalChannel
         for processor in processors:
-            out_instrument_list += processor.process(
-                instrument_list,
+            out_instruments += processor.process(
+                instruments,
                 connections,
-                zi_server.uid,
+                server_finder,
                 logical_signals_candidates,
                 physical_signals,
             )
         # PQSC processor needs to know about yielded instruments:
-        out_instrument_list += _PQSCProcessor.process(
-            instrument_list,
-            out_instrument_list,
+        out_instruments += _PQSCProcessor.process(
+            instruments,
+            out_instruments,
             connections,
-            zi_server.uid,
+            server_finder,
             logical_signals_candidates,
             physical_signals,
         )
@@ -998,8 +1142,8 @@ class _DeviceSetupGenerator:
 
         device_setup_constructor_args = {
             "uid": setup_name,
-            "servers": {zi_server.uid: zi_server},
-            "instruments": out_instrument_list,
+            "servers": {server.uid: server for server, _ in servers},
+            "instruments": out_instruments,
             "logical_signal_groups": logical_signal_groups,
             "physical_channel_groups": physical_channel_groups,
         }
