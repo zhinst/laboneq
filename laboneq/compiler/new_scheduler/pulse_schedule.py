@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.event_type import EventType
+from laboneq.compiler.common.play_wave_type import PlayWaveType
 from laboneq.compiler.experiment_access.experiment_dao import SectionSignalPulse
 from laboneq.compiler.new_scheduler.interval_schedule import IntervalSchedule
 
@@ -17,11 +18,15 @@ class PulseSchedule(IntervalSchedule):
     pulse: SectionSignalPulse
     amplitude: float
     phase: float
-    offset: float
+    offset: int
     oscillator_frequency: Optional[float]
     set_oscillator_phase: Optional[float]
     increment_oscillator_phase: Optional[float]
     section: str
+    play_pulse_params: Dict[str, str | float]
+    pulse_pulse_params: Dict[str, str | float]
+    is_acquire: bool
+    markers: Any
 
     def generate_event_list(
         self,
@@ -30,7 +35,7 @@ class PulseSchedule(IntervalSchedule):
         id_tracker: Iterator[int],
         expand_loops=False,
         settings: CompilerSettings = None,
-    ) -> List[Dict]:
+    ) -> List[Dict[Any]]:
         params_list = []
         for field in ("length_param", "amplitude_param", "phase_param", "offset_param"):
             if getattr(self.pulse, field) is not None:
@@ -46,15 +51,22 @@ class PulseSchedule(IntervalSchedule):
             "section_name": self.section,
             "signal": self.pulse.signal_id,
             "play_wave_id": play_wave_id,
-            "parametrized_with": params_list,
+            "parameterized_with": params_list,
             "phase": self.phase,
             "amplitude": amplitude,
-            "chain_element_id": start_id
-            # todo: play_wave_type, pulse parameters
+            "chain_element_id": start_id,
         }
+
+        if self.markers is not None:
+            d["markers"] = [vars(m) for m in self.markers]
 
         if self.oscillator_frequency is not None:
             d["oscillator_frequency"] = self.oscillator_frequency
+
+        if self.pulse_pulse_params:
+            d["pulse_pulse_parameters"] = self.pulse_pulse_params
+        if self.play_pulse_params:
+            d["play_pulse_parameters"] = self.play_pulse_params
 
         osc_events = []
         osc_common = {
@@ -71,7 +83,7 @@ class PulseSchedule(IntervalSchedule):
                     **osc_common,
                 }
             )
-        if self.set_oscillator_phase:
+        if self.set_oscillator_phase is not None:
             osc_events.append(
                 {
                     "event_type": EventType.SET_OSCILLATOR_PHASE,
@@ -89,6 +101,7 @@ class PulseSchedule(IntervalSchedule):
                     "event_type": EventType.DELAY_START,
                     "time": start,
                     "id": start_id,
+                    "play_wave_type": PlayWaveType.DELAY.value,
                     **d,
                 },
                 {
@@ -99,18 +112,17 @@ class PulseSchedule(IntervalSchedule):
                 },
             ]
 
-        is_acquire = self.is_acquire()
-        if is_acquire:
-            d.update(
-                {
-                    "acquisition_type": [self.pulse.acquire_params.acquisition_type],
-                    "acquire_handle": self.pulse.acquire_params.handle,
-                }
-            )
+        if self.is_acquire:
+            if self.pulse.acquire_params is not None:
+                d["acquisition_type"] = [self.pulse.acquire_params.acquisition_type]
+                d["acquire_handle"] = self.pulse.acquire_params.handle
+            else:
+                d["acquisition_type"] = []
+                d["acquire_handle"] = None
             return osc_events + [
                 {
                     "event_type": EventType.ACQUIRE_START,
-                    "time": start,
+                    "time": start + self.offset,
                     "id": start_id,
                     **d,
                 },
@@ -123,7 +135,12 @@ class PulseSchedule(IntervalSchedule):
             ]
 
         return osc_events + [
-            {"event_type": EventType.PLAY_START, "time": start, "id": start_id, **d},
+            {
+                "event_type": EventType.PLAY_START,
+                "time": start + self.offset,
+                "id": start_id,
+                **d,
+            },
             {
                 "event_type": EventType.PLAY_END,
                 "time": start + self.length,
@@ -132,8 +149,33 @@ class PulseSchedule(IntervalSchedule):
             },
         ]
 
-    def is_acquire(self):
-        return self.pulse.acquire_params is not None
-
     def __hash__(self):
         return super().__hash__()
+
+
+@dataclass(frozen=True)
+class PrecompClearSchedule(IntervalSchedule):
+    pulse: PulseSchedule
+
+    def generate_event_list(
+        self,
+        start: int,
+        max_events: int,
+        id_tracker: Iterator[int],
+        expand_loops=False,
+        settings: CompilerSettings = None,
+    ) -> List[Dict]:
+        # if max_events < 1:
+        #     return []
+        return [
+            {
+                "event_type": EventType.RESET_PRECOMPENSATION_FILTERS,
+                "time": start,
+                "signal_id": self.pulse.pulse.signal_id,
+                "section_name": self.pulse.section,
+                "id": next(id_tracker),
+            }
+        ]
+
+    def __hash__(self):
+        super().__hash__()

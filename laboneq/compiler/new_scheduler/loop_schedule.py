@@ -31,9 +31,18 @@ class LoopSchedule(SectionSchedule):
         if not self.compressed:  # unrolled loop
             children_events = list(
                 self.children_events(
-                    start, max_events, settings, id_tracker, expand_loops
+                    start,
+                    max_events,
+                    settings,
+                    id_tracker,
+                    expand_loops,
+                    subsection_events=False,
                 )
             )
+            for iteration, event_list in enumerate(children_events):
+                for e in event_list:
+                    if "loop_iteration" not in e:
+                        e["loop_iteration"] = f"{self.section}_{iteration}"
         else:
             children_events = [
                 self.children[0].generate_event_list(
@@ -50,13 +59,20 @@ class LoopSchedule(SectionSchedule):
             if expand_loops:
                 prototype = self.children[0]
                 assert isinstance(prototype, LoopIterationSchedule)
+                iteration_start = start
                 for iteration in range(1, self.iterations):
                     max_events -= len(children_events[-1])
-                    start += prototype.length
+                    if max_events <= 0:
+                        break
+                    iteration_start += prototype.length
                     shadow_iteration = prototype.compressed_iteration(iteration)
                     children_events.append(
                         shadow_iteration.generate_event_list(
-                            start, max_events, id_tracker, expand_loops, settings
+                            iteration_start,
+                            max_events,
+                            id_tracker,
+                            expand_loops,
+                            settings,
                         )
                     )
 

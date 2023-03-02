@@ -43,7 +43,10 @@ from laboneq.compiler.code_generator.utils import normalize_phase
 from laboneq.compiler.code_generator.wave_index_tracker import WaveIndexTracker
 from laboneq.compiler.common.awg_info import AWGInfo
 from laboneq.compiler.common.awg_signal_type import AWGSignalType
-from laboneq.compiler.common.compiler_settings import CompilerSettings
+from laboneq.compiler.common.compiler_settings import (
+    CompilerSettings,
+    round_min_playwave_hint,
+)
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.common.signal_obj import SignalObj
@@ -56,7 +59,6 @@ from laboneq.core.types.compiled_experiment import (
     PulseMapEntry,
     PulseWaveformMap,
 )
-from laboneq.core.types.enums.mixer_type import MixerType
 from laboneq.core.utilities.pulse_sampler import (
     combine_pulse_parameters,
     length_to_samples,
@@ -277,7 +279,8 @@ class CodeGenerator:
         self, samples, signature_pulse_map, sig_string: str, suffix: str
     ):
         filename = sig_string + suffix + ".wave"
-        self._waves.append({"filename": filename, "samples": samples})
+        wave = {"filename": filename, "samples": samples}
+        self._waves.append(wave)
         self._append_to_pulse_map(signature_pulse_map, sig_string)
 
     def gen_waves(self):
@@ -357,6 +360,21 @@ class CodeGenerator:
                                             sig_string,
                                             "_q",
                                         )
+                                    if "samples_marker1" in sampled_signature:
+                                        self._save_wave_bin(
+                                            sampled_signature["samples_marker1"],
+                                            sampled_signature["signature_pulse_map"],
+                                            sig_string,
+                                            "_marker1",
+                                        )
+                                    if "samples_marker2" in sampled_signature:
+                                        self._save_wave_bin(
+                                            sampled_signature["samples_marker2"],
+                                            sampled_signature["signature_pulse_map"],
+                                            sig_string,
+                                            "_marker2",
+                                        )
+
                             elif signal_obj.device_type.supports_complex_waves:
                                 self._save_wave_bin(
                                     CodeGenerator.SHFQA_COMPLEX_SAMPLE_SCALING
@@ -459,18 +477,11 @@ class CodeGenerator:
         )
         # timestamp -> map[signal -> handle]
         self._simultaneous_acquires: Dict[float, Dict[str, str]] = {}
-        for e in events:
-            if (
-                e["event_type"] == "ACQUIRE_START"
-                # Skip injected spectroscopy events (obsolete hack)
-                and e["acquisition_type"] != ["spectroscopy"]
-            ):
-                if e.get("shadow") and unrolled_avg_matcher.match(
-                    e.get("loop_iteration")
-                ):
-                    continue  # Skip events for unrolled averaging loop
-                time_events = self._simultaneous_acquires.setdefault(e["time"], {})
-                time_events[e["signal"]] = e["acquire_handle"]
+        for e in (e for e in events if e["event_type"] == "ACQUIRE_START"):
+            if e.get("shadow") and unrolled_avg_matcher.match(e.get("loop_iteration")):
+                continue  # Skip events for unrolled averaging loop
+            time_events = self._simultaneous_acquires.setdefault(e["time"], {})
+            time_events[e["signal"]] = e["acquire_handle"]
 
     def gen_seq_c(self, events: List[Any], pulse_defs: Dict[str, PulseDef]):
         signal_keys = [
@@ -817,6 +828,8 @@ class CodeGenerator:
                         awg.signal_type.value,
                         sig_string,
                         length,
+                        False,
+                        False,
                     )
 
         if awg.signal_type != AWGSignalType.DOUBLE:
@@ -857,10 +870,19 @@ class CodeGenerator:
                 if signal_obj.id in self._sampled_signatures:
                     signature_infos = []
                     for sig, sampled in self._sampled_signatures[signal_obj.id].items():
+                        has_marker1 = False
+                        has_marker2 = False
                         if sampled:
+                            if "samples_marker1" in sampled:
+                                has_marker1 = True
+                            if "samples_marker2" in sampled:
+                                has_marker2 = True
+
                             sig_string = sig.signature_string()
                             length = sig.length
-                            signature_infos.append((sig_string, length))
+                            signature_infos.append(
+                                (sig_string, length, (has_marker1, has_marker2))
+                            )
 
                     for siginfo in sorted(signature_infos):
                         declarations_generator.add_wave_declaration(
@@ -868,6 +890,8 @@ class CodeGenerator:
                             signal_obj.signal_type,
                             siginfo[0],
                             siginfo[1],
+                            siginfo[2][0],
+                            siginfo[2][1],
                         )
         else:
             virtual_signal_id = (
@@ -911,6 +935,8 @@ class CodeGenerator:
                         awg.signal_type.value,
                         sig_string,
                         length,
+                        False,
+                        False,
                     )
         self._sampled_events = sampled_events
         self.post_process_sampled_events(awg, sampled_events)
@@ -1003,14 +1029,35 @@ class CodeGenerator:
 
     def waveform_size_hints(self, device: DeviceType):
         settings = self._settings
+
+        def sanitize_min_playwave_hint(n: int, multiple: int) -> int:
+            if n % multiple != 0:
+                n2 = round_min_playwave_hint(n, multiple)
+                _logger.warning(
+                    f"Compiler setting `MIN_PLAYWAVE_HINT`={n} for device {device.name} is not multiple of {multiple} and is rounded to {n2}."
+                )
+                return n2
+            return n
+
+        min_pw_hint = None
+        min_pz_hint = None
         if device == DeviceType.HDAWG:
-            return settings.HDAWG_MIN_PLAYWAVE_HINT, settings.HDAWG_MIN_PLAYZERO_HINT
-        if device == DeviceType.UHFQA:
-            return settings.UHFQA_MIN_PLAYWAVE_HINT, settings.UHFQA_MIN_PLAYZERO_HINT
-        if device == DeviceType.SHFQA:
-            return settings.SHFQA_MIN_PLAYWAVE_HINT, settings.SHFQA_MIN_PLAYZERO_HINT
-        if device == DeviceType.SHFSG:
-            return settings.SHFSG_MIN_PLAYWAVE_HINT, settings.SHFSG_MIN_PLAYZERO_HINT
+            min_pw_hint = settings.HDAWG_MIN_PLAYWAVE_HINT
+            min_pz_hint = settings.HDAWG_MIN_PLAYZERO_HINT
+        elif device == DeviceType.UHFQA:
+            min_pw_hint = settings.UHFQA_MIN_PLAYWAVE_HINT
+            min_pz_hint = settings.UHFQA_MIN_PLAYZERO_HINT
+        elif device == DeviceType.SHFQA:
+            min_pw_hint = settings.SHFQA_MIN_PLAYWAVE_HINT
+            min_pz_hint = settings.SHFQA_MIN_PLAYZERO_HINT
+        elif device == DeviceType.SHFSG:
+            min_pw_hint = settings.SHFSG_MIN_PLAYWAVE_HINT
+            min_pz_hint = settings.SHFSG_MIN_PLAYZERO_HINT
+        if min_pw_hint is not None and min_pz_hint is not None:
+            return (
+                sanitize_min_playwave_hint(min_pw_hint, device.sample_multiple),
+                min_pz_hint,
+            )
 
     def _sample_pulses(
         self,
@@ -1057,6 +1104,11 @@ class CodeGenerator:
             signature_pulse_map: Dict[str, PulseWaveformMap] = {}
             samples_i = np.zeros(length)
             samples_q = np.zeros(length)
+            samples_marker1 = np.zeros(length, dtype=np.int16)
+            samples_marker2 = np.zeros(length, dtype=np.int16)
+            has_marker1 = False
+            has_marker2 = False
+
             has_q = False
 
             for pulse_part, (play_pulse_parameters, pulse_pulse_parameters) in zip(
@@ -1154,6 +1206,9 @@ class CodeGenerator:
                     pulse_parameters=None
                     if pulse_part.pulse_parameters is None
                     else {k: v for k, v in pulse_part.pulse_parameters},
+                    markers=None
+                    if pulse_part.markers is None
+                    else [{k: v for k, v in m} for m in pulse_part.markers],
                 )
 
                 verify_amplitude_no_clipping(
@@ -1210,6 +1265,22 @@ class CodeGenerator:
                         )
                         has_q = True
 
+                if "samples_marker1" in sampled_pulse:
+                    self.stencil_samples(
+                        pulse_part.start,
+                        sampled_pulse["samples_marker1"],
+                        samples_marker1,
+                    )
+                    has_marker1 = True
+
+                if "samples_marker2" in sampled_pulse:
+                    self.stencil_samples(
+                        pulse_part.start,
+                        sampled_pulse["samples_marker2"],
+                        samples_marker2,
+                    )
+                    has_marker2 = True
+
                 pm = signature_pulse_map.get(pulse_def.id)
                 if pm is None:
                     pm = PulseWaveformMap(
@@ -1235,6 +1306,8 @@ class CodeGenerator:
                         pulse_pulse_parameters=None
                         if pulse_pulse_parameters is None
                         else {k: v for k, v in pulse_pulse_parameters},
+                        has_marker1=has_marker1,
+                        has_marker2=has_marker2,
                     )
                 )
 
@@ -1252,6 +1325,11 @@ class CodeGenerator:
                 if needs_conjugate:
                     samples_q = -samples_q
                 sampled_pulse_obj["samples_q"] = samples_q
+
+            if has_marker1:
+                sampled_pulse_obj["samples_marker1"] = samples_marker1
+            if has_marker2:
+                sampled_pulse_obj["samples_marker2"] = samples_marker2
 
             if max_amplitude > 1e-9:
                 sampled_signatures[signature.waveform] = sampled_pulse_obj
@@ -1344,7 +1422,7 @@ class CodeGenerator:
                     _logger.warning("Problem:")
                     for log_event in sampled_event_list:
                         _logger.warning("  %s", log_event)
-                    raise Exception(f"Play and acquire must happen at the same time")
+                    raise Exception("Play and acquire must happen at the same time")
                 if len(play) > 0 or len(acquire) > 0:
                     end = (
                         round(end / DeviceType.SHFQA.sample_multiple)

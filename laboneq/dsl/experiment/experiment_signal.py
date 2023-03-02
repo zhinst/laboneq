@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from laboneq.core.exceptions import LabOneQException
-from laboneq.dsl.calibration import MixerCalibration, Precompensation, SignalCalibration
+from laboneq.dsl.calibration import MixerCalibration, SignalCalibration
 
 experiment_signal_id = 0
 

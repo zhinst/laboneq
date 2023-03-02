@@ -86,9 +86,9 @@ class DeviceCollection:
             raise LabOneQControllerException(
                 f"Path '{path}' is not referring to any device"
             )
-        serial = m.group(1)
+        serial = m.group(1).lower()
         for dev in self._devices.values():
-            if dev._get_option("serial").upper() == serial:
+            if dev.serial == serial:
                 return dev
         raise LabOneQControllerException(f"Could not find device for the path '{path}'")
 
@@ -110,7 +110,7 @@ class DeviceCollection:
             set_clock_nodes.extend(
                 [
                     DaqNodeSetAction(
-                        daq=device._daq,
+                        daq=device.daq,
                         path=path,
                         value=val,
                         caching_strategy=CachingStrategy.NO_CACHE,
@@ -135,13 +135,16 @@ class DeviceCollection:
         timeout = 5
         if not response_waiter.wait_all(timeout=timeout):
             raise RuntimeError(
-                f"Internal error: Reference clock switching for devices {[d.dev_repr for d in devices]} is not complete within {timeout}s. Not fulfilled:\n{response_waiter.remaining_str()}"
+                f"Internal error: Reference clock switching for devices "
+                f"{[d.dev_repr for d in devices]} is not complete within {timeout}s. "
+                f"Not fulfilled:\n{response_waiter.remaining_str()}"
             )
 
         failed_path, expected = conditions_checker.check_all()
         if failed_path is not None:
             raise RuntimeError(
-                f"Internal error: Reference clock switching for devices {[d.dev_repr for d in devices]} failed at {failed_path} != {expected}."
+                f"Internal error: Reference clock switching for devices "
+                f"{[d.dev_repr for d in devices]} failed at {failed_path} != {expected}."
             )
 
     def init_clocks(self):
@@ -160,8 +163,9 @@ class DeviceCollection:
             )
 
         if not response_waiter.wait_all(timeout=2):
-            raise RuntimeError(
-                f"Internal error: Didn't get all the clock status node values within 2s. Missing:\n{response_waiter.remaining_str()}"
+            raise LabOneQControllerException(
+                f"Internal error: Didn't get all the clock status node values within 2s. "
+                f"Missing:\n{response_waiter.remaining_str()}"
             )
 
         # Begin switching extrefs from the leaders, and then by downstream links,
@@ -249,7 +253,9 @@ class DeviceCollection:
                     to_dev = self._devices.get(connection.remote_path)
                     if to_dev is None:
                         raise LabOneQControllerException(
-                            f"Could not find destination device '{connection.remote_path}' for the port '{connection.local_port}' connection of the device '{instrument.uid}'"
+                            f"Could not find destination device '{connection.remote_path}' for "
+                            f"the port '{connection.local_port}' connection of the "
+                            f"device '{instrument.uid}'"
                         )
                     to_port = f"{connection.signal_type.name}/{connection.remote_port}"
                     from_dev.add_downlink(from_port, to_dev)

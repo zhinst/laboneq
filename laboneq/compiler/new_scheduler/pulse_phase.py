@@ -43,7 +43,7 @@ def calculate_osc_phase(event_list, experiment_dao: ExperimentDAO):
             oscillator_phase_cumulative[signal_id] = osc_phase
             oscillator_phase_sets[signal_id] = event["time"]
 
-        if event["event_type"] in [EventType.PLAY_START, EventType.ACQUIRE_START]:
+        elif event["event_type"] in [EventType.PLAY_START, EventType.ACQUIRE_START]:
             oscillator_phase = None
             baseband_phase = None
             signal_id = event["signal"]
@@ -72,11 +72,9 @@ def calculate_osc_phase(event_list, experiment_dao: ExperimentDAO):
                                 phase_reset_time, oscillator_phase_sets[signal_id]
                             )
                         oscillator_phase = (
-                            (event["time"] - phase_reference_time)
-                            * 2.0
-                            * math.pi
-                            * oscillator_info.frequency
-                            + incremented_phase
-                        )
+                            event["time"] - phase_reference_time
+                        ) * 2.0 * math.pi * event.get(
+                            "oscillator_frequency", 0.0
+                        ) + incremented_phase
             event["oscillator_phase"] = oscillator_phase
             event["baseband_phase"] = baseband_phase

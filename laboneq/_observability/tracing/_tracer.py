@@ -33,13 +33,15 @@ def get_tracer():
 
 def trace(
     span_name: t.Optional[str] = None,
+    attributes: t.Optional[t.Dict[str, t.Any]] = None,
     attribute_callback: t.Callable = None,
     disable_tracing_during=False,
 ):
-    """Decorator to turn function to span.
+    """Decorator to turn function to a span.
 
     Args:
         span_name: Name of the span. Otherwise function name is used to name the span.
+        attributes: Span attributes as key-value pairs.
         attribute_callback: A callback function for getting attributes.
             The callback function must return a flat dictionary with keys as strings.
         disable_tracing_during: Disable tracing during the execution of the function.
@@ -50,16 +52,17 @@ def trace(
         @wraps(func)
         def wrapper(*args, **kwargs):
             if _TRACING_ENABLED:
-                attributes = {
+                attrs = {
                     "code.function": func.__qualname__,
                     "code.namespace": func.__module__,
                 }
-                attributes.update(
-                    attribute_callback(*args, **kwargs)
-                ) if attribute_callback else ...
+                if attributes:
+                    attrs.update(attributes)
+                if attribute_callback:
+                    attrs.update(attribute_callback(*args, **kwargs))
                 with get_tracer().start_span(
                     func.__qualname__ if not span_name else span_name,
-                    attributes,
+                    attrs,
                 ) as _:
                     if disable_tracing_during:
                         tracing.disable_tracing()

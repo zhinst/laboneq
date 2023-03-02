@@ -645,8 +645,54 @@
         "length": {
           "$ref": "#/definitions/number-or-param-ref-def"
         },
+        "markers": {
+          "$ref": "#/definitions/markers-def"
+        },
         "precompensation_clear": {
           "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "markers-def": {
+      "type": "object",
+      "properties": {
+        "marker1": {
+          "$ref": "#/definitions/marker-def"
+        },
+        "marker2": {
+          "$ref": "#/definitions/marker-def"
+        }
+      },
+      "additionalProperties": false
+    },
+    "marker-def": {
+      "type": "object",
+      "properties": {
+        "enable": {
+          "type": "boolean",
+          "default": false
+        },
+        "start": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"}
+          ]
+        },
+        "length": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"}
+          ]
+        },
+        "waveform": {
+          "$ref": "#/definitions/reference-def"
         }
       },
       "additionalProperties": false
@@ -678,6 +724,9 @@
         },
         "length": {
           "$ref": "#/definitions/length-def"
+        },
+        "on_system_grid": {
+          "$ref": "#/definitions/on_system_grid-def"
         },
         "repeat": {
           "$ref": "#/definitions/repeat-def"
@@ -809,6 +858,11 @@
     "play-after-def": {
       "description": "Play after the section with the given ID.",
       "type": "string"
+    },
+    "on_system_grid-def": {
+      "description": "Align the section boundaries to the system grid.",
+      "type": "boolean",
+      "default": false
     },
     "length-def": {
       "title": "Section length in seconds, 'auto', or defined by a parameter 'param-...'.",

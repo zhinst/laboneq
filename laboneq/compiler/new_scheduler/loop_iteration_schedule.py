@@ -40,7 +40,7 @@ class LoopIterationSchedule(SectionSchedule):
         if self.iteration == 0:
             max_events -= 1
 
-        # we'll add one LOOP_STEP_START, LOOP_STEP_BODY_START, LOOP_STEP_END each
+        # we'll add one LOOP_STEP_START, LOOP_STEP_END, LOOP_ITERATION_END each
         max_events -= 3
 
         children_events = self.children_events(
@@ -68,12 +68,6 @@ class LoopIterationSchedule(SectionSchedule):
                 else []
             ),
         ]
-
-        # todo: This is for backwards compatibility. The new scheduler itself does not
-        #  need this.
-        for e in event_list:
-            if "loop_iteration" not in e:
-                e["loop_iteration"] = f"{self.section}_{self.iteration}"
 
         if self.shadow:
             for e in event_list:

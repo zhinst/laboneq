@@ -11,6 +11,7 @@ import numpy as np
 import scipy.optimize as opt
 
 from laboneq.dsl import device
+from laboneq.simulator.output_simulator import OutputSimulator
 import re
 
 style.use("default")
@@ -30,7 +31,6 @@ plt.rcParams.update(
 
 def plot_simulation(
     compiled_experiment,
-    simulation,
     start_time=0.0,
     length=10e-6,
     xaxis_label="Time (s)",
@@ -38,6 +38,8 @@ def plot_simulation(
     plot_width=6,
     plot_height=2,
 ):
+    simulation=OutputSimulator(compiled_experiment)
+
     mapped_signals = compiled_experiment.experiment.signal_mapping_status[
         "mapped_signals"
     ]
@@ -62,64 +64,35 @@ def plot_simulation(
             .physical_channel
         )
 
+        my_snippet=simulation.get_snippet(
+            compiled_experiment.device_setup.logical_signal_groups[
+                signal_group_name
+            ]
+            .logical_signals[signal_line_name]
+            .physical_channel,
+            start=start_time,
+            output_length=length,
+            get_trigger=True,
+            get_frequency=True,
+        )
+
         if "iq_channel" in str(
             physical_channel_path.type
-        ).lower() and not "input" in str(physical_channel_path.name):
+        ).lower() and "input" not in str(physical_channel_path.name):
+            
             try:
-                if (
-                    simulation.get_snippet(
-                        compiled_experiment.device_setup.logical_signal_groups[
-                            signal_group_name
-                        ]
-                        .logical_signals[signal_line_name]
-                        .physical_channel,
-                        start=start_time,
-                        output_length=length,
-                        get_trigger=True,
-                        get_frequency=True,
-                    ).time
-                ) is not None:
+                if my_snippet.time is not None:
                     xs.append(
-                        simulation.get_snippet(
-                            compiled_experiment.device_setup.logical_signal_groups[
-                                signal_group_name
-                            ]
-                            .logical_signals[signal_line_name]
-                            .physical_channel,
-                            start=start_time,
-                            output_length=length,
-                            get_trigger=True,
-                            get_frequency=True,
-                        ).time
+                        my_snippet.time
                     )
 
                     y1s.append(
-                        simulation.get_snippet(
-                            compiled_experiment.device_setup.logical_signal_groups[
-                                signal_group_name
-                            ]
-                            .logical_signals[signal_line_name]
-                            .physical_channel,
-                            start=start_time,
-                            output_length=length,
-                            get_trigger=True,
-                            get_frequency=True,
-                        ).wave.real
+                        my_snippet.wave.real
                     )
                     labels1.append(f"{signal} I")
 
                     y2s.append(
-                        simulation.get_snippet(
-                            compiled_experiment.device_setup.logical_signal_groups[
-                                signal_group_name
-                            ]
-                            .logical_signals[signal_line_name]
-                            .physical_channel,
-                            start=start_time,
-                            output_length=length,
-                            get_trigger=True,
-                            get_frequency=True,
-                        ).wave.imag
+                        my_snippet.wave.imag
                     )
                     labels2.append(f"{signal} Q")
             except Exception:
@@ -130,59 +103,17 @@ def plot_simulation(
             or "input" in physical_channel_path.name
         ):
             try:
-                if (
-                    simulation.get_snippet(
-                        compiled_experiment.device_setup.logical_signal_groups[
-                            signal_group_name
-                        ]
-                        .logical_signals[signal_line_name]
-                        .physical_channel,
-                        start=start_time,
-                        output_length=length,
-                        get_trigger=True,
-                        get_frequency=True,
-                    ).time
-                ) is not None:
+                if my_snippet.time is not None:
                     time_length = len(
-                        simulation.get_snippet(
-                            compiled_experiment.device_setup.logical_signal_groups[
-                                signal_group_name
-                            ]
-                            .logical_signals[signal_line_name]
-                            .physical_channel,
-                            start=start_time,
-                            output_length=length,
-                            get_trigger=True,
-                            get_frequency=True,
-                        ).time
+                        my_snippet.time
                     )
 
                     xs.append(
-                        simulation.get_snippet(
-                            compiled_experiment.device_setup.logical_signal_groups[
-                                signal_group_name
-                            ]
-                            .logical_signals[signal_line_name]
-                            .physical_channel,
-                            start=start_time,
-                            output_length=length,
-                            get_trigger=True,
-                            get_frequency=True,
-                        ).time
+                        my_snippet.time
                     )
 
                     y1s.append(
-                        simulation.get_snippet(
-                            compiled_experiment.device_setup.logical_signal_groups[
-                                signal_group_name
-                            ]
-                            .logical_signals[signal_line_name]
-                            .physical_channel,
-                            start=start_time,
-                            output_length=length,
-                            get_trigger=True,
-                            get_frequency=True,
-                        ).wave.real
+                        my_snippet.wave.real
                     )
                     labels1.append(f"{signal}")
 

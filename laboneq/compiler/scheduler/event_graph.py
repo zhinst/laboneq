@@ -11,7 +11,6 @@ from typing import Any, Dict, Optional
 import rustworkx
 
 from laboneq.compiler.common.event_type import EventType
-from laboneq.compiler.fastlogging import NullLogger
 
 _logger = logging.getLogger(__name__)
 
@@ -298,7 +297,7 @@ class EventGraph:
         first_cycle_edges = []
         try:
             rustworkx.topological_sort(self._event_graph)[::-1]
-        except rustworkx.DAGHasCycle as ex:
+        except rustworkx.DAGHasCycle:
 
             # Note: If root is not given, tha algorithm below will pick one random node, and then sometimes find a cycle, sometimes not
             # Whether the root we pick here is a good one is currently unclear. The networkx implementation of find_cycle

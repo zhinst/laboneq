@@ -3,35 +3,48 @@
 
 from __future__ import annotations
 
+import dataclasses
+import functools
 import itertools
 import logging
+import math
 from dataclasses import replace
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
-from numpy import lcm
+import numpy as np
 
+from laboneq._observability.tracing import trace
 from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.experiment_access.experiment_dao import (
     ExperimentDAO,
+    SectionInfo,
     SectionSignalPulse,
 )
 from laboneq.compiler.experiment_access.section_graph import SectionGraph
+from laboneq.compiler.new_scheduler.case_schedule import CaseSchedule, EmptyBranch
 from laboneq.compiler.new_scheduler.interval_schedule import IntervalSchedule
 from laboneq.compiler.new_scheduler.loop_iteration_schedule import LoopIterationSchedule
 from laboneq.compiler.new_scheduler.loop_schedule import LoopSchedule
+from laboneq.compiler.new_scheduler.match_schedule import CaseEvaluation, MatchSchedule
 from laboneq.compiler.new_scheduler.oscillator_schedule import (
     OscillatorFrequencyStepSchedule,
     SweptHardwareOscillator,
 )
+from laboneq.compiler.new_scheduler.phase_reset_schedule import PhaseResetSchedule
 from laboneq.compiler.new_scheduler.pulse_phase import calculate_osc_phase
-from laboneq.compiler.new_scheduler.pulse_schedule import PulseSchedule
+from laboneq.compiler.new_scheduler.pulse_schedule import (
+    PrecompClearSchedule,
+    PulseSchedule,
+)
 from laboneq.compiler.new_scheduler.reserve_schedule import ReserveSchedule
+from laboneq.compiler.new_scheduler.root_schedule import RootSchedule
 from laboneq.compiler.new_scheduler.section_schedule import SectionSchedule
 from laboneq.compiler.new_scheduler.utils import (
     ceil_to_grid,
     floor_to_grid,
+    lcm,
     round_to_grid,
 )
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
@@ -39,6 +52,13 @@ from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import RepetitionMode, SectionAlignment
 
 _logger = logging.getLogger(__name__)
+
+
+@dataclasses.dataclass
+class RepetitionInfo:
+    section: str
+    mode: RepetitionMode
+    time: float
 
 
 class Scheduler:
@@ -61,16 +81,14 @@ class Scheduler:
 
         self._signal_grids = {}
         self._section_grids = {}
+        self._system_grid = self.grid(*self._experiment_dao.signals())[1]
         self._root_schedule: Optional[IntervalSchedule] = None
 
-    def run(self):
-        root_sections = self._section_graph.root_sections()
-        if len(root_sections) == 0:
-            self._root_schedule = None
-        elif len(root_sections) == 1:
-            self._root_schedule = self._schedule_section(root_sections[0], {})
-        else:
-            raise LabOneQException("Multiple root sections not supported")
+    @trace("scheduler.run()", {"version": "v2"})
+    def run(self, nt_parameters=None):
+        if nt_parameters is None:
+            nt_parameters = {}
+        self._root_schedule = self._schedule_root(nt_parameters)
         _logger.info("Schedule completed")
 
     def generate_event_list(self, expand_loops: bool, max_events: int):
@@ -130,6 +148,32 @@ class Scheduler:
             max_events = float("inf")
         return self.generate_event_list(expand_loops, max_events)
 
+    def _schedule_root(self, nt_parameters: Dict[str, float]) -> Optional[RootSchedule]:
+
+        root_sections = self._section_graph.root_sections()
+        if len(root_sections) == 0:
+            return None
+
+        self._repetition_info = self._resolve_repetition_time(root_sections)
+
+        schedules = tuple(
+            self._schedule_section(s, nt_parameters) for s in root_sections
+        )
+
+        # todo: we do currently not actually support multiple root sections in the DSL.
+        #  Some of our tests do however do this. For now, we always run all root
+        #  sections *in parallel*.
+        start = tuple(0 for s in schedules)
+        grid = 1
+        length = 0
+        signals = set()
+        for s in schedules:
+            grid = lcm(grid, s.grid)
+            length = max(length, s.length)
+            signals = signals.union(s.signals)
+        length = ceil_to_grid(length, grid)
+        return RootSchedule(grid, length, frozenset(signals), schedules, start)
+
     def _schedule_section(
         self,
         section_id: str,
@@ -151,17 +195,28 @@ class Scheduler:
 
         section_info = self._experiment_dao.section_info(section_id)
         sweep_parameters = self._experiment_dao.section_parameters(section_id)
+        for param in sweep_parameters:
+            if "values" not in param or param["values"] is None:
+                param["values"] = (
+                    param["start"] + np.arange(section_info.count) * param["step"]
+                )
 
         is_loop = section_info.has_repeat
         if is_loop:
             schedule = self._schedule_loop(
                 section_id, section_info, current_parameters, sweep_parameters
             )
-        else:
+        elif section_info.handle is not None:
+            schedule = self._schedule_match(
+                section_id, section_info, current_parameters
+            )
+        else:  # regular section
             children_schedules = self._collect_children_schedules(
                 section_id, current_parameters
             )
-            schedule = self._schedule_children(section_id, children_schedules)
+            schedule = self._schedule_children(
+                section_id, section_info, children_schedules
+            )
 
         self._scheduled_sections[
             (section_id, frozenset(current_parameters.items()))
@@ -201,7 +256,7 @@ class Scheduler:
     def _schedule_loop(
         self,
         section_id,
-        section_info,
+        section_info: SectionInfo,
         current_parameters: Dict[str, float],
         sweep_parameters: List[Dict],
     ) -> LoopSchedule:
@@ -217,10 +272,10 @@ class Scheduler:
         children_schedules = []
         for param in sweep_parameters:
             if param["values"] is not None:
-                assert len(param["values"]) == section_info.count
+                assert len(param["values"]) >= section_info.count
         # todo: unroll loops that are too short
         if len(sweep_parameters) == 0:
-            compressed = True
+            compressed = section_info.count > 1
             prototype = self._schedule_loop_iteration(
                 section_id,
                 iteration=0,
@@ -258,21 +313,42 @@ class Scheduler:
                         swept_hw_oscillators,
                     )
                 )
-        repetition_mode = RepetitionMode(
-            section_info.repetition_mode or RepetitionMode.FASTEST
-        )
-        if repetition_mode != RepetitionMode.FASTEST:
-            if repetition_mode == RepetitionMode.AUTO:
-                repetition_time = max(c.length for c in children_schedules)
-            else:
-                repetition_time = section_info.repetition_time / self._TINYSAMPLE
 
-            # todo: This is not what the old scheduler does in cyclical mode.
+        repetition_info = self._repetition_info
+        if repetition_info is not None and repetition_info.section == section_id:
+            # This loop is the loop that we must pad to the shot repetition rate!
+
+            # assume all children have the same grid...
+            grid = children_schedules[0].grid
+
+            if repetition_info.mode == RepetitionMode.CONSTANT:
+                repetition_time = ceil_to_grid(
+                    repetition_info.time / self._TINYSAMPLE, grid
+                )
+                longest_child_index, longest_child = max(
+                    enumerate(children_schedules), key=lambda x: x[1].length
+                )
+
+                if longest_child.length > repetition_time:
+                    raise LabOneQException(
+                        f"Specified repetition time ({repetition_info.time*1e6:.3f} us) "
+                        f"is insufficient to fit the content of '{section_id}', "
+                        f"iteration {longest_child_index} "
+                        f"({longest_child.length*self._TINYSAMPLE*1e6:.3f} us)"
+                    )
+            else:
+                # 'fastest' mode should already have been intercepted earlier in
+                # `_resolve_repetition_time`, and `repetition_info` should then be None.
+                assert repetition_info.mode == RepetitionMode.AUTO
+
+                repetition_time = ceil_to_grid(
+                    max(c.length for c in children_schedules), grid
+                )
             children_schedules = [
                 c.adjust_length(repetition_time) for c in children_schedules
             ]
 
-        schedule = self._schedule_children(section_id, children_schedules)
+        schedule = self._schedule_children(section_id, section_info, children_schedules)
         if compressed:
             # Note: we cannot use schedule.adjust_length here, we do not want to shift
             # the content in the case of right alignment.
@@ -332,6 +408,57 @@ class Scheduler:
             iteration=iteration,
         )
 
+    @functools.lru_cache(8)
+    def _schedule_phase_reset(
+        self,
+        section_id: str,
+        grid: int,
+        signals: FrozenSet[str],
+        hw_signals: FrozenSet[str],
+    ) -> List[PhaseResetSchedule]:
+        reset_sw_oscillators = (
+            len(hw_signals)
+            or self._experiment_dao.section_info(section_id).averaging_type
+            == "hardware"
+        )
+
+        if not reset_sw_oscillators and len(hw_signals) == 0:
+            return []
+
+        length = 0
+        hw_osc_devices = {}
+        for signal in hw_signals:
+            device = self._experiment_dao.device_from_signal(signal)
+            device_type = DeviceType(
+                self._experiment_dao.device_info(device).device_type
+            )
+            if not device_type.supports_reset_osc_phase:
+                continue
+            duration = device_type.reset_osc_duration / self._TINYSAMPLE
+            hw_osc_devices[device] = duration
+            length = max(length, duration)
+
+        hw_osc_devices = [(k, v) for k, v in hw_osc_devices.items()]
+        length = ceil_to_grid(length, grid)
+
+        if reset_sw_oscillators:
+            sw_signals = signals
+        else:
+            sw_signals = ()
+
+        return [
+            PhaseResetSchedule(
+                grid,
+                length,
+                frozenset((*hw_signals, *sw_signals)),
+                (),
+                (),
+                section_id,
+                hw_osc_devices,
+                reset_sw_oscillators,
+            )
+        ]
+
     def _schedule_loop_iteration(
         self,
         section_id: str,
@@ -352,15 +479,32 @@ class Scheduler:
             swept_hw_oscillators: The hardware oscillators driven by the sweep parameters.
         """
 
-        # todo: Loops generate subsection events where both the section and the
-        #  subsection have the same name. This breaks the section collapse in the PSV.
-
+        # add child sections
+        signals = set()
         children_schedules = self._collect_children_schedules(
             section_id, all_parameters
         )
-        signals = set()
+
         for c in children_schedules:
             signals.update(c.signals)
+
+        section_info = self._experiment_dao.section_info(section_id)
+        hw_osc_reset_signals = set()
+        if section_info.reset_oscillator_phase:
+            # todo: This behaves differently than the legacy scheduler.
+            #  The old scheduler would reset ALL devices in the setup.
+            #  Unfortunately, the section grid of the loop (and hence of the phase
+            #  reset) was still defined by the *section signals*. This would potentially
+            #  lead to problems when resetting an otherwise unused device that cannot
+            #  align with the loop grid.
+            #  The new scheduler does not reset devices with unused signals.
+            for signal in self._experiment_dao.section_signals_with_children(
+                section_id
+            ):
+                osc_info = self._experiment_dao.signal_oscillator(signal)
+                if osc_info is not None and osc_info.hardware:
+                    hw_osc_reset_signals.add(signal)
+
         for _, osc in swept_hw_oscillators.items():
             signals.add(osc.signal)
 
@@ -369,8 +513,12 @@ class Scheduler:
         #  relax in the future
         _, grid = self.grid(*signals)
 
+        osc_phase_reset = self._schedule_phase_reset(
+            section_id, grid, frozenset(signals), frozenset(hw_osc_reset_signals)
+        )
+
         if len(swept_hw_oscillators):
-            children_schedules = [
+            osc_sweep = [
                 self._schedule_oscillator_frequency_step(
                     swept_hw_oscillators,
                     iteration,
@@ -379,9 +527,14 @@ class Scheduler:
                     grid,
                     section_id,
                 ),
-                *children_schedules,
             ]
-        schedule = self._schedule_children(section_id, children_schedules, grid)
+        else:
+            osc_sweep = []
+
+        children_schedules = [*osc_phase_reset, *osc_sweep, *children_schedules]
+        schedule = self._schedule_children(
+            section_id, section_info, children_schedules, grid
+        )
         return LoopIterationSchedule.from_section_schedule(
             schedule,
             iteration=iteration,
@@ -399,8 +552,10 @@ class Scheduler:
     ) -> Tuple[int, List[int]]:
         current_signal_start = {}
         for i, c in enumerate(children):
-            grid = int(lcm(grid, c.grid))
-            start = max([current_signal_start.setdefault(s, 0) for s in c.signals])
+            grid = lcm(grid, c.grid)
+            start = max(
+                [0] + [current_signal_start.setdefault(s, 0) for s in c.signals]
+            )
             if isinstance(c, SectionSchedule):
                 for pa_name in c.play_after:
                     if pa_name not in children_index_by_name:
@@ -416,6 +571,18 @@ class Scheduler:
                         )
                     pa = children[pa_index]
                     start = max(start, children_start[pa_index] + pa.length)
+
+            elif isinstance(c, PrecompClearSchedule):
+                # find the referenced pulse
+                for j, other_child in enumerate(children[:i]):
+                    if other_child is c.pulse:
+                        break
+                else:
+                    raise RuntimeError(
+                        "The precompensation clear refers to a pulse that could not be "
+                        "found."
+                    )
+                start = children_start[j]
 
             start = ceil_to_grid(start, c.grid)
             children_start[i] = start
@@ -438,7 +605,7 @@ class Scheduler:
                 for pa_name in c.play_after:
                     play_before.setdefault(pa_name, []).append(c.section)
         for i, c in reversed(list(enumerate(children))):
-            grid = int(lcm(grid, c.grid))
+            grid = lcm(grid, c.grid)
             start = (
                 min([current_signal_end.setdefault(s, 0) for s in c.signals]) - c.length
             )
@@ -456,6 +623,11 @@ class Scheduler:
                             f"but is actually defined earlier."
                         )
                     start = min(start, children_start[pb_index] - c.length)
+            elif isinstance(c, PrecompClearSchedule):
+                raise LabOneQException(
+                    "Cannot reset the precompensation filter inside a right-aligned section."
+                )
+
             start = floor_to_grid(start, c.grid)
             children_start[i] = start
             for s in c.signals:
@@ -469,7 +641,7 @@ class Scheduler:
         return grid, children_start
 
     def _schedule_children(
-        self, section_id, children: List[IntervalSchedule], grid=1
+        self, section_id, section_info, children: List[IntervalSchedule], grid=1
     ) -> SectionSchedule:
         """Schedule the given children of a section, arranging them in the required
         order.
@@ -477,13 +649,33 @@ class Scheduler:
         The final grid of the section is chosen to be commensurate (via LCM) with all
         the children's grids. By passing a value for the `grid`argument, the caller can
         additionally enforce a grid. The default value (`grid=1`) does not add any
-        restrictions beyond those imposed by the children.
+        restrictions beyond those imposed by the children. In addition, escalation to
+        the system grid can be enforced via the DSL.
         """
-        section_info = self._experiment_dao.section_info(section_id)
         right_align = section_info.align == SectionAlignment.RIGHT.value
         signals = set()
         for c in children:
             signals.update(c.signals)
+
+        signals.update(self._experiment_dao.section_signals(section_id))
+        play_after = section_info.play_after or ()
+        if isinstance(play_after, str):
+            play_after = (play_after,)
+
+        signal_grid, sequencer_grid = self.grid(*signals)
+
+        signal_grids = {self.grid(s)[0] for s in signals}
+        if section_info.on_system_grid:
+            grid = lcm(grid, self._system_grid)
+        if len(signal_grids) > 1:
+            # two different sample rates -> escalate to sequencer grid
+            grid = lcm(grid, sequencer_grid)
+        else:
+            grid = lcm(grid, signal_grid)
+
+        trigger_output = self._compute_trigger_output(section_info)
+        if len(trigger_output):
+            grid = lcm(grid, sequencer_grid)
 
         children_start: List[int] = [None] * len(children)
         children_index_by_name = {
@@ -500,28 +692,17 @@ class Scheduler:
             grid, children_start = self._arrange_right_aligned(
                 children, children_index_by_name, children_start, grid
             )
+        if len(children):
+            length = ceil_to_grid(
+                max(
+                    0.0,
+                    *[start + c.length for (c, start) in zip(children, children_start)],
+                ),
+                grid,
+            )
+        else:
+            length = 0
 
-        signals.update(self._experiment_dao.section_signals(section_id))
-        play_after = section_info.play_after or ()
-        if isinstance(play_after, str):
-            play_after = (play_after,)
-
-        signal_grid, sequencer_grid = self.grid(*signals)
-        assert grid % signal_grid == 0
-
-        # An acquisition escalates the grid of the containing section
-        for c in children:
-            if isinstance(c, PulseSchedule) and c.is_acquire():
-                grid = int(lcm(grid, sequencer_grid))
-                break
-
-        length = ceil_to_grid(
-            max(
-                0.0,
-                *[start + c.length for (c, start) in zip(children, children_start)],
-            ),
-            grid,
-        )
         schedule = SectionSchedule(
             grid=grid,
             length=length,
@@ -531,16 +712,26 @@ class Scheduler:
             play_after=play_after,
             right_aligned=right_align,
             section=section_id,
+            trigger_output=trigger_output,
         )
+
+        # An acquisition escalates the grid of the containing section
+        for c in children:
+            if isinstance(c, PulseSchedule) and c.is_acquire:
+                grid = lcm(grid, sequencer_grid)
+                schedule = schedule.adjust_grid(grid)
+                break
 
         force_length = section_info.length
         if force_length is not None:
-            force_length /= self._TINYSAMPLE
+            force_length = ceil_to_grid(
+                math.ceil(force_length / self._TINYSAMPLE), grid
+            )
             if force_length < length:
                 raise LabOneQException(
-                    f"Contents of section '{section_id}' "
-                    f"({length * self._TINYSAMPLE:.3e} s) do not "
-                    f"fit the requested fixed section length ({force_length * self._TINYSAMPLE:.3e} s)"
+                    f"Content of section '{section_id}' "
+                    f"({length * self._TINYSAMPLE:.3e} s) does not fit into "
+                    f"the requested fixed section length ({force_length * self._TINYSAMPLE:.3e} s)"
                 )
             length = max(length, ceil_to_grid(force_length, grid))
             schedule = schedule.adjust_length(length)
@@ -556,6 +747,8 @@ class Scheduler:
 
         # todo: add memoization
 
+        grid, _ = self.grid(pulse.signal_id)
+
         def resolve_value_or_parameter(name, default):
             value = default
             param_name = name + "_param"
@@ -566,14 +759,30 @@ class Scheduler:
                     value = current_parameters[getattr(pulse, param_name)]
                 except KeyError as e:
                     raise LabOneQException(
-                        f"Parameter '{name}' requested outside of sweep."
+                        f"Parameter '{name}' requested outside of sweep. "
+                        "Note that only RT sweep parameters are currently supported here."
                     ) from e
             return value
 
-        length = resolve_value_or_parameter("length", 0.0)
         offset = resolve_value_or_parameter("offset", 0.0)
+        length = resolve_value_or_parameter("length", None)
+        if length is None:
+            pulse_def = self._experiment_dao.pulse(pulse.pulse_id)
+            if pulse_def is not None:
+                assert pulse_def.length is None
+                if pulse_def.samples is None:
+                    raise LabOneQException(
+                        f"Cannot determine length of pulse '{pulse.pulse_id}' in section "
+                        f"'{section}'. Either specify the length at the pulse definition, "
+                        f"when playing the pulse, or by specifying the samples."
+                    )
+                length = len(pulse_def.samples) * grid * self._TINYSAMPLE
+            else:
+                assert offset is not None
+                length = 0.0
+
         amplitude = resolve_value_or_parameter("amplitude", 1.0)
-        if abs(amplitude) > 1.0:
+        if abs(amplitude) > 1.0 + 1e-9:
             raise LabOneQException(
                 f"Magnitude of amplitude {amplitude} exceeding unity for pulse "
                 f"'{pulse.pulse_id}' on signal '{pulse.signal_id}' in section '{section}'"
@@ -583,12 +792,34 @@ class Scheduler:
         increment_oscillator_phase = resolve_value_or_parameter(
             "increment_oscillator_phase", None
         )
-        # todo: user pulse parameters
+
+        def resolve_pulse_params(params: Dict[str, Any]):
+            for param, value in params.items():
+                if isinstance(value, str):
+                    try:
+                        resolved = current_parameters[value]
+                    except KeyError as e:
+                        raise LabOneQException(
+                            f"Pulse '{pulse.pulse_id}' in section '{section}' requires "
+                            f"parameter '{param}' which is not available. "
+                            f"Note that only RT sweep parameters are currently supported here."
+                        ) from e
+                    params[param] = resolved
+
+        pulse_pulse_params = None
+        if pulse.pulse_pulse_parameters is not None:
+            pulse_pulse_params = pulse.pulse_pulse_parameters.copy()
+            resolve_pulse_params(pulse_pulse_params)
+
+        play_pulse_params = None
+        if pulse.play_pulse_parameters is not None:
+            play_pulse_params = pulse.play_pulse_parameters.copy()
+            resolve_pulse_params(play_pulse_params)
 
         scheduled_length = length + offset
 
-        grid, _ = self.grid(pulse.signal_id)
         length_int = round_to_grid(scheduled_length / self._settings.TINYSAMPLE, grid)
+        offset_int = round_to_grid(offset / self._settings.TINYSAMPLE, grid)
 
         osc = self._experiment_dao.signal_oscillator(pulse.signal_id)
         if osc is None:
@@ -606,6 +837,10 @@ class Scheduler:
         else:
             freq = osc.frequency if osc is not None else None
 
+        signal_info = self._experiment_dao.signal_info(pulse.signal_id)
+        is_acquire = signal_info.signal_type == "integration"
+        markers = pulse.markers
+
         return PulseSchedule(
             grid=grid,
             length=length_int,
@@ -616,11 +851,142 @@ class Scheduler:
             section=section,
             amplitude=amplitude,
             phase=phase,
-            offset=offset,
+            offset=offset_int,
             set_oscillator_phase=set_oscillator_phase,
             increment_oscillator_phase=increment_oscillator_phase,
             oscillator_frequency=freq,
+            play_pulse_params=play_pulse_params,
+            pulse_pulse_params=pulse_pulse_params,
+            is_acquire=is_acquire,
+            markers=markers,
         )
+
+    def _schedule_match(
+        self,
+        section_id: str,
+        section_info: SectionInfo,
+        current_parameters: Dict[str, float],
+    ) -> MatchSchedule:
+        handle = section_info.handle
+        local = section_info.local
+
+        children_schedules = []
+        section_children = self._experiment_dao.direct_section_children(section_id)
+        if len(section_children) == 0:
+            raise LabOneQException("Must provide at least one branch option")
+        for case_section in section_children:
+            children_schedules.append(
+                self._schedule_case(case_section, current_parameters)
+            )
+
+        signals = set()
+        for c in children_schedules:
+            signals.update(c.signals)
+        signals = frozenset(signals)
+        _, grid = self.grid(*signals)
+
+        for i, cs in enumerate(children_schedules):
+            if cs.length == 0:  # empty branch
+                children_schedules[i] = EmptyBranch(
+                    grid,
+                    grid,
+                    signals,
+                    children=(),
+                    children_start=(),
+                    right_aligned=False,
+                    section=cs.section,
+                    play_after=(),
+                    trigger_output=set(),
+                    state=cs.state,
+                )
+
+        case_evaluation_length = 2 * grid  # long enough to fit a minimal waveform
+
+        length = ceil_to_grid(
+            max(0, *(c.length for c in children_schedules)) + case_evaluation_length,
+            grid,
+        )
+
+        children_schedules = [
+            c.adjust_length(length - case_evaluation_length) for c in children_schedules
+        ]
+
+        # todo: timing model, place branches sufficiently late after acquire
+        #  For now, schedule all elements as early as possible.
+        children_start = [case_evaluation_length for _ in children_schedules]
+
+        children_schedules.append(
+            CaseEvaluation(
+                grid,
+                length=case_evaluation_length,
+                signals=signals,
+                children=(),
+                children_start=(),
+                section=section_id,
+            )
+        )
+        children_start.append(0)
+
+        play_after = section_info.play_after or ()
+        if isinstance(play_after, str):
+            play_after = (play_after,)
+
+        return MatchSchedule(
+            grid=grid,
+            length=length,
+            signals=signals,
+            children=tuple(children_schedules),
+            children_start=tuple(children_start),
+            right_aligned=False,
+            section=section_id,
+            play_after=play_after,
+            handle=handle,
+            local=local,
+            trigger_output=set(),
+        )
+
+    def _schedule_case(self, section_id, current_parameters) -> CaseSchedule:
+        try:
+            # todo: do not hash the entire current_parameters dict, but just the param values
+            # todo: reduce key to those parameters actually required by the section
+            return self._scheduled_sections[
+                (section_id, frozenset(current_parameters.items()))
+            ]
+        except KeyError:
+            pass
+
+        section_info = self._experiment_dao.section_info(section_id)
+
+        assert not section_info.has_repeat  # case must not be a loop
+        assert section_info.handle is None
+        state = section_info.state
+
+        children_schedules = self._collect_children_schedules(
+            section_id, current_parameters
+        )
+        for cs in children_schedules:
+            if not isinstance(cs, PulseSchedule):
+                raise LabOneQException(
+                    "Only pulses, not sections, are allowed inside a case"
+                )
+        # We don't want any branches that are empty, but we don't know yet what signals
+        # the placeholder should cover. So we defer the creation of placeholders to
+        # `_schedule_match()`.
+        schedule = self._schedule_children(section_id, section_info, children_schedules)
+        schedule = CaseSchedule.from_section_schedule(schedule, state)
+        self._scheduled_sections[
+            (section_id, frozenset(current_parameters.items()))
+        ] = schedule
+
+        return schedule
+
+    def _schedule_precomp_clear(self, section_id, pulse: PulseSchedule):
+        signal = pulse.pulse.signal_id
+        _, grid = self.grid(signal)
+        # The precompensation clearing overlaps with a 'pulse' on the same signal,
+        # whereas regular scheduling rules disallow this. For this reason we do not
+        # assign a signal to the precomp schedule, and pass `frozenset()` instead.
+        return PrecompClearSchedule(grid, 0, frozenset(), (), (), pulse)
 
     def _collect_children_schedules(
         self, section_id: str, parameters: Dict[str, float]
@@ -638,6 +1004,10 @@ class Scheduler:
                 children_schedules.append(
                     self._schedule_pulse(pulse, section_id, parameters)
                 )
+                if pulse.precompensation_clear:
+                    children_schedules.append(
+                        self._schedule_precomp_clear(section_id, children_schedules[-1])
+                    )
 
             signal_grid, _ = self.grid(signal_id)
             if len(pulses) == 0:
@@ -682,3 +1052,101 @@ class Scheduler:
                 )
             )
         return signal_grid, sequencer_grid
+
+    def _compute_trigger_output(
+        self, section_info: SectionInfo
+    ) -> Set[Tuple[str, int]]:
+        """Compute the effective trigger signals for the given section.
+
+        The return value is a set of `(signal_id, bit_index)` tuples.
+        """
+        if len(section_info.trigger_output) == 0:
+            return set()
+        section_name = section_info.section_display_name or section_info.section_id
+        parent_section_trigger_states = {}  # signal -> state
+        parent_section_id = section_name
+        while True:
+            parent_section_id = self._experiment_dao.section_parent(parent_section_id)
+            if parent_section_id is None:
+                break
+            parent_section_info = self._experiment_dao.section_info(parent_section_id)
+            for trigger_info in parent_section_info.trigger_output:
+                state = trigger_info["state"]
+                signal = trigger_info["signal_id"]
+                parent_section_trigger_states[signal] = (
+                    parent_section_trigger_states.get(signal, 0) | state
+                )
+
+        section_trigger_signals = set()
+        for trigger_info in section_info.trigger_output:
+            signal = trigger_info["signal_id"]
+            state = trigger_info["state"]
+            parent_state = parent_section_trigger_states.get(signal, 0)
+            if not state:
+                continue
+            for bit, bit_mask in enumerate([0b01, 0b10]):
+                # skip the current bit if it is controlled by any parent section
+                if parent_state & bit_mask != state & bit_mask and state & bit_mask > 0:
+                    section_trigger_signals.add((signal, bit))
+        return section_trigger_signals
+
+    def _resolve_repetition_time(
+        self, root_sections: List[str]
+    ) -> Optional[RepetitionInfo]:
+        """Locate the loop section which corresponds to the shot boundary.
+
+        This section will be padded to the repetition length."""
+
+        repetition_info: Optional[RepetitionInfo] = None
+        for section in self._experiment_dao.sections():
+            section_info = self._experiment_dao.section_info(section)
+            if (
+                section_info.repetition_mode is not None
+                or section_info.repetition_time is not None
+            ):
+                if repetition_info is not None:
+                    raise LabOneQException(
+                        f"Both sections '{repetition_info.section}' and '{section} define"
+                        f"a repetition mode."
+                    )
+                repetition_info = RepetitionInfo(
+                    section,
+                    RepetitionMode(section_info.repetition_mode),
+                    section_info.repetition_time,
+                )
+
+        if repetition_info is None or repetition_info.mode == RepetitionMode.FASTEST:
+            return None
+
+        # Multi-root experiment not allowed in DSL anyway. For non-trivial repetition
+        # mode, scheduling of these is not possible.
+        assert len(root_sections) == 1
+        root_section = root_sections[0]
+
+        def search_lowest_level_loop(section):
+            loop: Optional[str] = None
+            section_info = self._experiment_dao.section_info(section)
+            if section_info.has_repeat:
+                loop = section
+
+            children = self._experiment_dao.direct_section_children(section)
+            if len(children) == 0:
+                return loop
+            if len(children) == 1:
+                return search_lowest_level_loop(children[0]) or loop
+
+            # Two or more children - no loops allowed!
+            for child in children:
+                nested_loop = search_lowest_level_loop(child)
+                if nested_loop:
+                    raise LabOneQException(
+                        f"Section '{section}' contains multiple children, including "
+                        f"other loops (e.g. '{nested_loop}'). This is not permitted in "
+                        f"repetition mode '{repetition_info.mode}'."
+                    )
+            return loop
+
+        shot_loop = search_lowest_level_loop(root_section)
+        if shot_loop is None:
+            return None
+        return replace(repetition_info, section=shot_loop)

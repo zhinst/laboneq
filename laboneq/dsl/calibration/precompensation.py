@@ -24,38 +24,45 @@ def precompensation_id_generator():
 
 @dataclass
 class ExponentialCompensation(Observable):
-    """Data object containing exponential compensation parameters"""
+    """Data object containing exponential filter parameters for the signal precompensation"""
 
+    #: Exponential filter timeconstant
     timeconstant: float = 1e-6
+    #: Exponential filter amplitude
     amplitude: float = 0.0
 
 
 @dataclass
 class HighPassCompensation(Observable):
-    """Data object containing highpass compensation parameters"""
+    """Data object containing highpass filter parameters for the signal precompensation"""
 
+    #: high-pass filter time constant
     timeconstant: float = 1e-6
+    #: choose the clearing mode of the high-pass filter
     clearing: HighPassCompensationClearing = HighPassCompensationClearing.RISE
 
 
 @dataclass
 class FIRCompensation(Observable):
-    """Data object containing FIR filter compensation parameters"""
+    """Data object containing FIR filter parameters for the signal precompensation"""
 
+    #: FIR filter coefficients
     coefficients: ArrayLike = field(default_factory=lambda: np.zeros(40))
 
 
 @dataclass
 class BounceCompensation(Observable):
-    """Data object containing bounce compensation parameters"""
+    """Data object containing parameters for the bounce compensation component of the signal precompensation"""
 
+    #: Delay time to compensate
     delay: float = 0.0
+    #: bounce compensation amplitude
     amplitude: float = 0.0
 
 
 @dataclass(init=True, repr=True, order=True)
 class Precompensation(RecursiveObservable):
-    """Data object containing mixer calibration."""
+    """Data object containing a collection of parameters for the different filters possible to enable for precompensation of signal distortion."""
 
     #: Unique identifier. If left blank, a new unique ID will be generated.
     uid: str = field(default_factory=precompensation_id_generator)

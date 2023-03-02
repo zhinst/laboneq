@@ -227,15 +227,14 @@ class DaqWrapper(ZiApiWrapperBase):
             else:
                 raise LabOneQControllerException(err_msg)
 
-        if not server_qualifier.dry_run:
-            [major, minor] = zi.__version__.split(".")[0:2]
-            zi_python_version = f"{major}.{minor}"
-            if zi_python_version != version_str:
-                err_msg = f"Version of dataserver ({version_str}) and zi python ({zi_python_version}) do not match."
-                if self.server_qualifier.ignore_lab_one_version_error:
-                    self._logger.warning("Ignoring that %s", err_msg)
-                else:
-                    raise LabOneQControllerException(err_msg)
+        [major, minor] = zi.__version__.split(".")[0:2]
+        zi_python_version = f"{major}.{minor}"
+        if zi_python_version != version_str:
+            err_msg = f"Version of dataserver ({version_str}) and zi python ({zi_python_version}) do not match."
+            if self.server_qualifier.ignore_lab_one_version_error:
+                self._logger.warning("Ignoring that %s", err_msg)
+            else:
+                raise LabOneQControllerException(err_msg)
 
         self._logger.info(
             "Connected to Zurich Instrument's Data Server version %s at %s:%s",

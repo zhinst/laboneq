@@ -20,12 +20,12 @@ def mixer_calib_id_generator():
 
 @dataclass(init=True, repr=True, order=True)
 class MixerCalibration(Observable):
-    """Data object containing mixer calibration."""
+    """Data object containing mixer calibration correction settings."""
 
     #: Unique identifier. If left blank, a new unique ID will be generated.
     uid: str = field(default_factory=mixer_calib_id_generator)
 
-    #: DC voltage offsets, two vlaues (for I and Q channels), epxresses in volts.
+    #: DC voltage offsets, two values (for I and Q channels), expressed in volts.
     voltage_offsets: Optional[List[float]] = field(default=None)
 
     #: Matrix for correcting gain and phase mismatch between I and Q.

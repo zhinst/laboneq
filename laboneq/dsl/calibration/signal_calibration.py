@@ -13,17 +13,42 @@ from laboneq.dsl.calibration.precompensation import Precompensation
 
 @dataclass(init=False, order=True)
 class SignalCalibration(Observable):
-    amplitude: Optional[float]
-    delay_signal: Optional[float]
-    local_oscillator: Optional[Oscillator]
-    voltage_offset: Optional[float]
-    mixer_calibration: Optional[MixerCalibration]
-    precompensation: Optional[Precompensation]
+    """Dataclass containing all calibration parameters
+    and settings related to a :class:`~.LogicalSignal`.
+    """
+
+    #: The oscillator assigned to the :class:`~.LogicalSignal`
+    #: - determines the frequency and type of modulation for any pulses played back on this line.
     oscillator: Optional[Oscillator]
+    #: The local oscillator assigned to the :class:`~.LogicalSignal`
+    #: - sets the center frequency of the playback - only relevant on SHFSG, SHFQA and SHFQC
+    local_oscillator: Optional[Oscillator]
+    #: Settings to enable the optional mixer calibration correction
+    #: - only applies to IQ signals on HDAWG
+    mixer_calibration: Optional[MixerCalibration]
+    #: Settings to enable signal distortion precomensation
+    #: - only applies to HDAWG instruments
+    precompensation: Optional[Precompensation]
+    #: An optional delay of all output on this signal.
+    #: Works by setting delay nodes on the instruments, and will not be visible in the pulse sheet.
+    #: Not currently available on SHFSG output channels.
     port_delay: Optional[float]
+    #: Allows to switch between amplified high-frequency mode (PortMode.RF)
+    #: and direct low_frequency mode (PortMode.LF) on SHFSG output channels.
     port_mode: Optional[PortMode]
+    #: Defines an additional global delay on this signal line.
+    #: Will be mapped to the waveforms and sequencer code emitted for this logical signal,
+    #: and thus visible in the pulse sheet viewer.
+    delay_signal: Optional[float]
+    #: Allows to set a constant voltage offset on individual rf lines on the HDAWG.
+    voltage_offset: Optional[float]
+    #: The output or input range setting for the logical signal
     range: Union[int, float, None]
+    #: The state discrimination threshold
+    #: - only relevant for acquisition type signals on UHFQA and SHFQA/SHFQC
     threshold: Optional[float]
+    #: (Not Implemented) Amplitude multiplying all waveforms played on a signal line
+    amplitude: Optional[float]
 
     def __init__(
         self,

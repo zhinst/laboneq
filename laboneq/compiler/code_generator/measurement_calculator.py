@@ -427,7 +427,6 @@ class MeasurementCalculator:
 
 def itemgetter_robust(item):
     def retval(obj):
-        obj_list = obj
         if item in obj:
             return obj[item]
         return None

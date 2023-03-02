@@ -2,21 +2,13 @@
 # Packages required to just run the software will be installed in the respective
 # component setup.py modules.
 
-# For documentation
-sphinx
-sphinxcontrib-apidoc
-sphinxcontrib-napoleon
-sphinx_tabs
-sphinx_autodoc_typehints
-sphinx_rtd_theme
-pydata-sphinx-theme==0.11.0
-
 # For tests
 pytest
 pytest-assume
 pytest-cov
 pytest_mock
 pytest-httpserver
+pytest-xdist
 jsonschema
 requests
 nbconvert

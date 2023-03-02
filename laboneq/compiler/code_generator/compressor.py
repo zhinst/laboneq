@@ -20,7 +20,7 @@ def compress_generators(
     _logger.debug("Compressing generators %s", generators)
     for generator in generators:
         if generator is None:
-            raise Exception(f"None of the generators to be compressed may be None")
+            raise Exception("None of the generators to be compressed may be None")
         _logger.debug(
             "Generator with %d statements, hash %s",
             generator.num_statements(),
@@ -53,7 +53,7 @@ def compress_generators_rle(
 ):
     for generator in seq_c_generators:
         if generator is None:
-            raise Exception(f"None of the generators to be compressed may be None")
+            raise Exception("None of the generators to be compressed may be None")
     hash_pairs = [(hash(generator), generator) for generator in seq_c_generators]
 
     hashes_back_converter = {hash_pair[0]: hash_pair[1] for hash_pair in hash_pairs}

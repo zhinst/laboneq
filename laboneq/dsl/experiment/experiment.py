@@ -259,6 +259,7 @@ class Experiment:
         length=None,
         pulse_parameters: Optional[Dict[str, Any]] = None,
         precompensation_clear: Optional[bool] = None,
+        marker=None,
     ):
         """Play a pulse.
 
@@ -287,6 +288,9 @@ class Experiment:
         :type increment_oscillator_phase: `float`, optional
         :param pulse_parameters: Dictionary with user pulse function parameters (re)binding.
         :type pulse_parameters: `dict`, optional
+        :param marker: Dictionary with markers to play. Example: `marker={"marker1": {"enable": True}}`
+        :type marker: `dict`, optional
+
         """
         current_section = self._peek_section()
         current_section.play(
@@ -299,6 +303,7 @@ class Experiment:
             length=length,
             pulse_parameters=pulse_parameters,
             precompensation_clear=precompensation_clear,
+            marker=marker,
         )
 
     def delay(
@@ -364,98 +369,89 @@ class Experiment:
 
     def measure(
         self,
-        signal_acquire: str,
-        pulse,
+        acquire_signal: str,
         handle: str,
-        signal_play: Optional[str] = None,
-        kernel: Pulse = None,
-        pulse_length: float = None,
-        pulse_parameters: Optional[Dict[str, Any]] = None,
-        amplitude=None,
-        phase=None,
-        increment_oscillator_phase=None,
-        set_oscillator_phase=None,
-        integration_length=None,
-        inter_event_delay: Optional[float] = None,
-        precompensation_clear: Optional[bool] = None,
+        integration_kernel: Optional[Pulse] = None,
+        integration_kernel_parameters: Optional[Dict[str, Any]] = None,
+        integration_length: Optional[float] = None,
+        measure_signal: Optional[str] = None,
+        measure_pulse: Optional[Pulse] = None,
+        measure_pulse_length: Optional[float] = None,
+        measure_pulse_parameters: Optional[Dict[str, Any]] = None,
+        measure_pulse_amplitude: Optional[float] = None,
+        acquire_delay: Optional[float] = None,
+        reset_delay: Optional[float] = None,
     ):
         """
-        Play a pulse and acquire a signal. It contains three events: read_out, an optional inter_event delay, and acquire.
+        Execute a measurement in the experiment - contains the optional playback of a measurement pulse, the signal acquisition and an optional delay after the signal acquisition.
 
-        :param signal_acquire: The signal to acquire data on.
-        :type signal_acquire: str
-        :param pulse: The pulse to play.
-        :type pulse: object
-        :param handle: A unique identifier string that allows to retrieve the acquired data in the `Result` object.
+        :param acquire_signal: A string that specifies the signal to acquire.
+        :type acquire_signal: str
+        :param handle: A string that specifies the handle of the acquisition.
         :type handle: str
-        :param signal_play: The signal to play the pulse on. The user should set it to None if not applied
-        :type signal_play: str, optional
-        :param kernel: Pulse for filtering the acquired signal.
-        :type kernel: :class:`~.experiment.pulse.Pulse`, optional
-        :param pulse_length: Length for which the pulse shall be played.
-        :type pulse_length: float, optional
-        :param pulse_parameters: Dictionary with user pulse function parameters (re)binding.
-        :type pulse_parameters: dict, optional
-        :param amplitude: Amplitude the pulse shall be played with.
-        :type amplitude: float, optional
-        :param phase: The desired phase in radians the pulse shall be played with.
-        :type phase: float, optional
-        :param increment_oscillator_phase: The desired phase increment the pulse shall be played with.
-        :type increment_oscillator_phase: float, optional
-        :param set_oscillator_phase: The desired phase the oscillator shall be set.
-        :type set_oscillator_phase: float, optional
-        :param integration_length: Integration length for spectroscopy mode.
-        :type integration_length: float, optional
-        :param inter_event_delay: optional delay between play and acquire.
-        :type inter_event_delay: float, optional
-        :param precompensation_clear: Clear precompensation after the pulse.
-        :type precompensation_clear: bool, optional
+        :param integration_kernel: An optional Pulse object that specifies the kernel for integration.
+        :type integration_kernel: Optional[Pulse]
+        :param integration_kernel_parameters: An optional dictionary that contains parameters for the integration kernel.
+        :type integration_kernel_parameters: Optional[Dict[str, Any]]
+        :param integration_length: An optional float that specifies the integration length.
+        :type integration_length: Optional[float]
+        :param measure_signal: An optional string that specifies the signal to measure.
+        :type measure_signal: Optional[str]
+        :param measure_pulse: An optional Pulse object that specifies the pulse for measurement.
+        :type measure_pulse: Optional[Pulse]
+        :param measure_pulse_length: An optional float that specifies the length of the measurement pulse.
+        :type measure_pulse_length: Optional[float]
+        :param measure_pulse_parameters: An optional dictionary that contains parameters for the measurement pulse.
+        :type measure_pulse_parameters: Optional[Dict[str, Any]]
+        :param measure_pulse_amplitude: An optional float that specifies the amplitude of the measurement pulse.
+        :type measure_pulse_amplitude: Optional[float]
+        :param acquire_delay: An optional float that specifies the delay between the acquisition and the measurement.
+        :type acquire_delay: Optional[float]
+        :param reset_delay: An optional float that specifies the delay after the acquisition to allow for state relaxation or signal processing.
+        :type reset_delay: Optional[float]
         """
 
-        if signal_play is None and not isinstance(signal_acquire, str):
-            raise ValueError("signal_acquire must be specified.")
+        if measure_signal is None and not isinstance(acquire_signal, str):
+            raise ValueError("acquire_signal must be specified.")
 
-        elif isinstance(signal_play, str) and not isinstance(signal_acquire, str):
-            raise ValueError("signal_acquire must be specified.")
+        if isinstance(measure_signal, str) and not isinstance(acquire_signal, str):
+            raise ValueError("acquire_signal must be specified.")
 
-        elif signal_play is None and isinstance(signal_acquire, str):
+        current_section = self._peek_section()
 
-            current_section = self._peek_section()
+        if measure_signal is None and isinstance(acquire_signal, str):
             current_section.acquire(
-                signal=signal_acquire,
+                signal=acquire_signal,
                 handle=handle,
-                kernel=kernel,
                 length=integration_length,
-                pulse_parameters=pulse_parameters,
             )
 
-        elif isinstance(signal_play, str) and isinstance(signal_acquire, str):
-
-            current_section = self._peek_section()
+        elif isinstance(measure_signal, str) and isinstance(acquire_signal, str):
             current_section.play(
-                signal=signal_play,
-                pulse=pulse,
-                amplitude=amplitude,
-                phase=phase,
-                increment_oscillator_phase=increment_oscillator_phase,
-                set_oscillator_phase=set_oscillator_phase,
-                length=pulse_length,
-                pulse_parameters=pulse_parameters,
-                precompensation_clear=precompensation_clear,
+                signal=measure_signal,
+                pulse=measure_pulse,
+                amplitude=measure_pulse_amplitude,
+                length=measure_pulse_length,
+                pulse_parameters=measure_pulse_parameters,
             )
 
-            if inter_event_delay is not None:
+            if acquire_delay is not None:
                 current_section.delay(
-                    signal=signal_acquire,
-                    time=inter_event_delay,
-                    precompensation_clear=precompensation_clear,
+                    signal=acquire_signal,
+                    time=acquire_delay,
                 )
             current_section.acquire(
-                signal=signal_acquire,
+                signal=acquire_signal,
                 handle=handle,
-                kernel=kernel,
+                kernel=integration_kernel,
                 length=integration_length,
-                pulse_parameters=pulse_parameters,
+                pulse_parameters=integration_kernel_parameters,
+            )
+
+        if reset_delay is not None:
+            current_section.delay(
+                signal=acquire_signal,
+                time=reset_delay,
             )
 
     def call(self, func_name, **kwargs):
@@ -495,7 +491,7 @@ class Experiment:
             uid: The unique ID for this section.
             parameter: The sweep parameter(s) that is used in this section.
                 The argument can be given as a single sweep parameter or a list
-                of sweep parameters. If multiple sweep parameters are given, the
+                of sweep parameters of equal length. If multiple sweep parameters are given, the
                 parameters are executed in parallel in this sweep loop.
             execution_type: Defines if the sweep is executed in near time or
                 real time. Defaults to :class:`.~ExecutionType.NEAR_TIME`.
@@ -722,6 +718,7 @@ class Experiment:
         length=None,
         alignment=None,
         uid=None,
+        on_system_grid=None,
         play_after: Optional[Union[str, List[str]]] = None,
         trigger: Optional[Dict[str, Dict[str, int]]] = None,
     ):
@@ -750,6 +747,8 @@ class Experiment:
                 given ID(s) (single string or list of strings). Defaults to None.
             trigger: Play a pulse a trigger pulse for the duration of this section.
                 See below for details.
+            on_system_grid: If True, the section boundaries are always rounded to the
+                system grid, even if the signals would allow for tighter alignment.
 
         The individual trigger (a.k.a marker) ports on the device are addressed via the
         experiment signal that is mapped to the corresponding analog port.
@@ -788,6 +787,7 @@ class Experiment:
             alignment=alignment,
             play_after=play_after,
             trigger=trigger,
+            on_system_grid=on_system_grid,
         )
 
     class _SectionSectionContext:
@@ -799,6 +799,7 @@ class Experiment:
             alignment=None,
             play_after=None,
             trigger=None,
+            on_system_grid=None,
         ):
             self.exp = experiment
             args = {}
@@ -812,6 +813,8 @@ class Experiment:
                 args["play_after"] = play_after
             if trigger is not None:
                 args["trigger"] = trigger
+            if on_system_grid is not None:
+                args["on_system_grid"] = on_system_grid
 
             self.section = Section(**args)
 

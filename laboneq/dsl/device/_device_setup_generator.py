@@ -1063,12 +1063,20 @@ class _DeviceSetupGenerator:
                 servers[0][0].leader_uid = pqsc_dicts[0][T_UID]
 
         def server_finder(device_uid: str) -> str:
-            default_data_server = None
+            default_data_server: DataServer = None
+            explicit_data_server: DataServer = None
             for data_server, devices in servers:
                 if default_data_server is None and len(devices) == 0:
                     default_data_server = data_server
                 if device_uid in devices:
-                    return data_server.uid
+                    if explicit_data_server is not None:
+                        raise LabOneQException(
+                            f"Device '{device_uid}' assigned to multiple data servers: "
+                            f"[{explicit_data_server.uid}, {data_server.uid}]."
+                        )
+                    explicit_data_server = data_server
+            if explicit_data_server is not None:
+                return explicit_data_server.uid
             if default_data_server is None:
                 raise LabOneQException(
                     f"Couldn't determine the data server for the device '{device_uid}'."

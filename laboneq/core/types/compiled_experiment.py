@@ -32,6 +32,8 @@ class PulseInstance:
 
     # uid of pulses that this instance overlaps with
     overlaps: List[str] = None
+    has_marker1: bool = False
+    has_marker2: bool = False
 
 
 @dataclass

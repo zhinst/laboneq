@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from numpy import typing as npt
@@ -59,7 +59,7 @@ class DeviceSHFQA(DeviceZI):
         self.dev_type = "SHFQA4"
         self.dev_opts = []
         self._channels = 4
-        self._wait_for_AWGs = True
+        self._wait_for_awgs = True
         self._emit_trigger = False
 
     @property
@@ -94,7 +94,7 @@ class DeviceSHFQA(DeviceZI):
             "ready": "/{serial}/qachannels/{index}/generator/ready",
         }
 
-    def _get_num_AWGs(self):
+    def _get_num_awgs(self):
         return self._channels
 
     def _validate_range(self, io: IO.Data, is_out: bool):
@@ -116,7 +116,8 @@ class DeviceSHFQA(DeviceZI):
             )
         if not any(np.isclose([io.range] * len(range_list), range_list)):
             self._logger.warning(
-                "%s: %s channel %d range %.1f is not on the list of allowed ranges: %s. Nearest allowed range will be used.",
+                "%s: %s channel %d range %.1f is not on the list of allowed ranges: %s. "
+                "Nearest allowed range will be used.",
                 self.dev_repr,
                 label,
                 io.channel,
@@ -139,7 +140,7 @@ class DeviceSHFQA(DeviceZI):
 
     def _nodes_to_monitor_impl(self) -> List[str]:
         nodes = []
-        for awg in range(self._get_num_AWGs()):
+        for awg in range(self._get_num_awgs()):
             nodes.extend(
                 [
                     f"/{self.serial}/qachannels/{awg}/generator/enable",
@@ -245,7 +246,8 @@ class DeviceSHFQA(DeviceZI):
                     nodes_to_initialize_readout.append(
                         DaqNodeSetAction(
                             self._daq,
-                            f"/{self.serial}/qachannels/{channel}/readout/discriminators/{integrator_idx}/threshold",
+                            f"/{self.serial}/qachannels/{channel}/readout/discriminators/"
+                            f"{integrator_idx}/threshold",
                             integrator.threshold,
                         )
                     )
@@ -336,14 +338,16 @@ class DeviceSHFQA(DeviceZI):
                     ),
                     # TODO(2K): multiple acquire events per monitor
                     # DaqNodeSetAction(self._daq, f"/{self.serial}/scopes/0/segments/enable", 1),
-                    # DaqNodeSetAction(self._daq, f"/{self.serial}/scopes/0/segments/count", measurement.result_length),
+                    # DaqNodeSetAction(self._daq, f"/{self.serial}/scopes/0/segments/count",
+                    #                  measurement.result_length),
                     # TODO(2K): only one trigger is possible for all channels. Which one to use?
                     DaqNodeSetAction(
                         self._daq,
                         f"/{self.serial}/scopes/0/trigger/channel",
                         64 + channel,
                     ),  # channelN_sequencer_monitor0
-                    # TODO(2K): 200ns input-to-output delay was taken from one of the example notebooks, what value to use?
+                    # TODO(2K): 200ns input-to-output delay was taken from one of the example
+                    # notebooks, what value to use?
                     DaqNodeSetAction(
                         self._daq, f"/{self.serial}/scopes/0/trigger/delay", 200e-9
                     ),
@@ -393,11 +397,11 @@ class DeviceSHFQA(DeviceZI):
         return []
 
     def conditions_for_execution_ready(self) -> Dict[str, Any]:
-        # TODO(janl): Not sure whether we need this condition this on the SHFQA (including SHFQC) as well
-        # The state of the generator enable wasn't always pickup up reliably, so we
+        # TODO(janl): Not sure whether we need this condition this on the SHFQA (including SHFQC)
+        # as well. The state of the generator enable wasn't always pickup up reliably, so we
         # only check in cases where we rely on external triggering mechanisms.
         conditions: Dict[str, Any] = {}
-        if self._wait_for_AWGs:
+        if self._wait_for_awgs:
             for awg_index in self._allocated_awgs:
                 conditions[
                     f"/{self.serial}/qachannels/{awg_index}/generator/enable"
@@ -514,52 +518,58 @@ class DeviceSHFQA(DeviceZI):
         )
 
     def prepare_upload_all_binary_waves(
-        self, awg_index, waves, acquisition_type: AcquisitionType
+        self,
+        awg_index,
+        waves: List[Tuple[str, npt.ArrayLike]],
+        acquisition_type: AcquisitionType,
     ):
         waves_upload: List[DaqNodeSetAction] = []
         has_spectroscopy_envelope = False
         if acquisition_type == AcquisitionType.SPECTROSCOPY:
             if len(waves) > 1:
                 raise LabOneQControllerException(
-                    f"{self.dev_repr}: Only one envelope waveform per channel is possible in spectroscopy mode. Check play commands for channel {awg_index}."
+                    f"{self.dev_repr}: Only one envelope waveform per channel is possible in "
+                    f"spectroscopy mode. Check play commands for channel {awg_index}."
                 )
             max_len = 65536
-            for i in range(len(waves)):
+            for wave_index, (filename, waveform) in enumerate(waves):
                 has_spectroscopy_envelope = True
-                wave_name = waves[i][0]
-                wave = waves[i][1]
-                wave_len = len(wave)
+                wave_len = len(waveform)
                 if wave_len > max_len:
                     max_pulse_len = max_len / SAMPLE_FREQUENCY_HZ
                     raise LabOneQControllerException(
-                        f"{self.dev_repr}: Length {wave_len} of the envelope waveform '{wave_name}' for spectroscopy unit {awg_index} exceeds maximum of {max_len} samples. Ensure measure pulse doesn't exceed {max_pulse_len * 1e6:.3f} us."
+                        f"{self.dev_repr}: Length {wave_len} of the envelope waveform "
+                        f"'{filename}' for spectroscopy unit {awg_index} exceeds maximum "
+                        f"of {max_len} samples. Ensure measure pulse doesn't "
+                        f"exceed {max_pulse_len * 1e6:.3f} us."
                     )
                 waves_upload.append(
                     self.prepare_upload_binary_wave(
-                        filename=wave_name,
-                        waveform=wave,
+                        filename=filename,
+                        waveform=waveform,
                         awg_index=awg_index,
-                        wave_index=i,
+                        wave_index=wave_index,
                         acquisition_type=acquisition_type,
                     )
                 )
         else:
             max_len = 4096
-            for i in range(len(waves)):
-                wave_name = waves[i][0]
-                wave = waves[i][1]
-                wave_len = len(wave)
+            for wave_index, (filename, waveform) in enumerate(waves):
+                wave_len = len(waveform)
                 if wave_len > max_len:
                     max_pulse_len = max_len / SAMPLE_FREQUENCY_HZ
                     raise LabOneQControllerException(
-                        f"{self.dev_repr}: Length {wave_len} of the waveform '{wave_name}' for generator {awg_index} / wave slot {i} exceeds maximum of {max_len} samples. Ensure measure pulse doesn't exceed {max_pulse_len * 1e6:.3f} us."
+                        f"{self.dev_repr}: Length {wave_len} of the waveform '{filename}' "
+                        f"for generator {awg_index} / wave slot {wave_index} exceeds maximum "
+                        f"of {max_len} samples. Ensure measure pulse doesn't exceed "
+                        f"{max_pulse_len * 1e6:.3f} us."
                     )
                 waves_upload.append(
                     self.prepare_upload_binary_wave(
-                        filename=wave_name,
-                        waveform=wave,
+                        filename=filename,
+                        waveform=waveform,
                         awg_index=awg_index,
-                        wave_index=i,
+                        wave_index=wave_index,
                         acquisition_type=acquisition_type,
                     )
                 )
@@ -574,8 +584,8 @@ class DeviceSHFQA(DeviceZI):
 
     def _configure_readout_mode_nodes(
         self,
-        input: IO.Data,
-        output: IO.Data,
+        dev_input: IO.Data,
+        dev_output: IO.Data,
         measurement: Optional[Measurement.Data],
         device_uid: str,
         recipe_data: RecipeData,
@@ -583,13 +593,13 @@ class DeviceSHFQA(DeviceZI):
         self._logger.debug("%s: Setting measurement mode to 'Readout'.", self.dev_repr)
 
         measurement_delay_output = 0
-        if output is not None:
-            if output.port_delay is not None:
-                measurement_delay_output += output.port_delay * SAMPLE_FREQUENCY_HZ
+        if dev_output is not None:
+            if dev_output.port_delay is not None:
+                measurement_delay_output += dev_output.port_delay * SAMPLE_FREQUENCY_HZ
 
         measurement_delay_rounded = (
             self._get_total_rounded_delay_samples(
-                input,
+                dev_input,
                 SAMPLE_FREQUENCY_HZ,
                 DELAY_NODE_GRANULARITY_SAMPLES,
                 DELAY_NODE_MAX_SAMPLES,
@@ -627,7 +637,9 @@ class DeviceSHFQA(DeviceZI):
 
             if len(integrator_allocation.channels) != 1:
                 raise LabOneQControllerException(
-                    f"{self.dev_repr}: Internal error - expected 1 integrator for signal '{integrator_allocation.signal_id}', got {len(integrator_allocation.channels)}"
+                    f"{self.dev_repr}: Internal error - expected 1 integrator for "
+                    f"signal '{integrator_allocation.signal_id}', "
+                    f"got {len(integrator_allocation.channels)}"
                 )
             integration_unit_index = integrator_allocation.channels[0]
             wave_name = integrator_allocation.weights + ".wave"
@@ -638,9 +650,15 @@ class DeviceSHFQA(DeviceZI):
             if wave_len > max_len:
                 max_pulse_len = max_len / SAMPLE_FREQUENCY_HZ
                 raise LabOneQControllerException(
-                    f"{self.dev_repr}: Length {wave_len} of the integration weight '{integration_unit_index}' of channel {measurement.channel} exceeds maximum of {max_len} samples. Ensure length of acquire kernels don't exceed {max_pulse_len * 1e6:.3f} us."
+                    f"{self.dev_repr}: Length {wave_len} of the integration weight "
+                    f"'{integration_unit_index}' of channel {measurement.channel} exceeds "
+                    f"maximum of {max_len} samples. Ensure length of acquire kernels don't "
+                    f"exceed {max_pulse_len * 1e6:.3f} us."
                 )
-            node_path = f"/{self.serial}/qachannels/{measurement.channel}/readout/integration/weights/{integration_unit_index}/wave"
+            node_path = (
+                f"/{self.serial}/qachannels/{measurement.channel}/readout/integration/"
+                f"weights/{integration_unit_index}/wave"
+            )
             nodes_to_set_for_readout_mode.append(
                 DaqNodeSetAction(
                     self._daq,
@@ -653,7 +671,7 @@ class DeviceSHFQA(DeviceZI):
         return nodes_to_set_for_readout_mode
 
     def _configure_spectroscopy_mode_nodes(
-        self, input, measurement: Optional[Measurement.Data]
+        self, dev_input, measurement: Optional[Measurement.Data]
     ):
         self._logger.debug(
             "%s: Setting measurement mode to 'Spectroscopy'.", self.dev_repr
@@ -661,7 +679,7 @@ class DeviceSHFQA(DeviceZI):
 
         measurement_delay_rounded = (
             self._get_total_rounded_delay_samples(
-                input,
+                dev_input,
                 SAMPLE_FREQUENCY_HZ,
                 DELAY_NODE_GRANULARITY_SAMPLES,
                 DELAY_NODE_MAX_SAMPLES,
@@ -706,7 +724,9 @@ class DeviceSHFQA(DeviceZI):
                     prev_io_idx = center_frequencies[io.channel]
                     if ios[prev_io_idx].lo_frequency != io.lo_frequency:
                         raise LabOneQControllerException(
-                            f"{self.dev_repr}: Local oscillator frequency mismatch between IOs sharing channel {io.channel}: {ios[prev_io_idx].lo_frequency} != {io.lo_frequency}"
+                            f"{self.dev_repr}: Local oscillator frequency mismatch between IOs "
+                            f"sharing channel {io.channel}: "
+                            f"{ios[prev_io_idx].lo_frequency} != {io.lo_frequency}"
                         )
                 else:
                     center_frequencies[io.channel] = idx
@@ -727,7 +747,7 @@ class DeviceSHFQA(DeviceZI):
                 )
             )
 
-            input = next(
+            dev_input = next(
                 (
                     inp
                     for inp in initialization.inputs
@@ -735,23 +755,23 @@ class DeviceSHFQA(DeviceZI):
                 ),
                 None,
             )
-            output = next(
+            dev_output = next(
                 (
-                    outp
-                    for outp in initialization.outputs
-                    if outp.channel == measurement.channel
+                    output
+                    for output in initialization.outputs
+                    if output.channel == measurement.channel
                 ),
                 None,
             )
             if acquisition_type == AcquisitionType.SPECTROSCOPY:
                 nodes_to_initialize_measurement.extend(
-                    self._configure_spectroscopy_mode_nodes(input, measurement)
+                    self._configure_spectroscopy_mode_nodes(dev_input, measurement)
                 )
             else:
                 nodes_to_initialize_measurement.extend(
                     self._configure_readout_mode_nodes(
-                        input,
-                        output,
+                        dev_input,
+                        dev_output,
                         measurement,
                         initialization.device_uid,
                         recipe_data,
@@ -762,19 +782,21 @@ class DeviceSHFQA(DeviceZI):
     def collect_awg_after_upload_nodes(self, initialization: Initialization.Data):
         nodes_to_initialize_measurement = []
         inputs = initialization.inputs or []
-        for input in inputs:
+        for dev_input in inputs:
             nodes_to_initialize_measurement.append(
                 DaqNodeSetAction(
-                    self._daq, f"/{self.serial}/qachannels/{input.channel}/input/on", 1
+                    self._daq,
+                    f"/{self.serial}/qachannels/{dev_input.channel}/input/on",
+                    1,
                 )
             )
-            if input.range is not None:
-                self._validate_range(input, is_out=False)
+            if dev_input.range is not None:
+                self._validate_range(dev_input, is_out=False)
                 nodes_to_initialize_measurement.append(
                     DaqNodeSetAction(
                         self._daq,
-                        f"/{self.serial}/qachannels/{input.channel}/input/range",
-                        input.range,
+                        f"/{self.serial}/qachannels/{dev_input.channel}/input/range",
+                        dev_input.range,
                     )
                 )
 
@@ -790,7 +812,8 @@ class DeviceSHFQA(DeviceZI):
             nodes_to_initialize_measurement.append(
                 DaqNodeSetAction(
                     self._daq,
-                    f"/{self.serial}/qachannels/{measurement.channel}/generator/auxtriggers/0/channel",
+                    f"/{self.serial}/qachannels/{measurement.channel}/generator/"
+                    f"auxtriggers/0/channel",
                     channel,
                 )
             )
@@ -801,7 +824,7 @@ class DeviceSHFQA(DeviceZI):
         self, initialization: Initialization.Data, recipe_data: RecipeData
     ) -> List[DaqNodeAction]:
         self._logger.debug("Configuring triggers...")
-        self._wait_for_AWGs = True
+        self._wait_for_awgs = True
         self._emit_trigger = False
 
         nodes_to_configure_triggers = []
@@ -811,12 +834,12 @@ class DeviceSHFQA(DeviceZI):
         if dio_mode == DIOConfigType.ZSYNC_DIO:
             pass
         elif dio_mode == DIOConfigType.HDAWG_LEADER:
-            self._wait_for_AWGs = False
+            self._wait_for_awgs = False
             self._emit_trigger = True
             clock_source = initialization.config.reference_clock_source
             ntc = [
                 (
-                    f"system/clocks/referenceclock/in/source",
+                    "system/clocks/referenceclock/in/source",
                     REFERENCE_CLOCK_SOURCE_INTERNAL
                     if clock_source
                     and clock_source.value == ReferenceClockSource.INTERNAL.value
@@ -887,46 +910,39 @@ class DeviceSHFQA(DeviceZI):
         hw_averages: int,
     ):
         assert len(result_indices) == 1
-        # @TODO(andreyk): remove dry_run field from devices, instead inject MockCommunication from controller
-        if not self.dry_run:
-            result_path = (
-                f"/{self.serial}/qachannels/{channel}/spectroscopy/result/data/wave"
-                if acquisition_type == AcquisitionType.SPECTROSCOPY
-                else f"/{self.serial}/qachannels/{channel}/readout/result/data/{result_indices[0]}/wave"
+        result_path = f"/{self.serial}/qachannels/{channel}/" + (
+            "spectroscopy/result/data/wave"
+            if acquisition_type == AcquisitionType.SPECTROSCOPY
+            else f"readout/result/data/{result_indices[0]}/wave"
+        )
+        attempts = 3  # Hotfix HBAR-949
+        while attempts > 0:
+            attempts -= 1
+            # @TODO(andreyk): replace the raw daq reply parsing on site here and hide it
+            # inside Communication class
+            data_node_query = self._daq.get_raw(result_path)
+            actual_num_measurement_points = len(
+                data_node_query[result_path][0]["vector"]
             )
-            attempts = 3  # Hotfix QCSW-949
-            while attempts > 0:
-                attempts -= 1
-                # @TODO(andreyk): replace the raw daq reply parsing on site here and hide it inside Communication class
-                data_node_query = self._daq.get_raw(result_path)
-                actual_num_measurement_points = len(
-                    data_node_query[result_path][0]["vector"]
-                )
-                if actual_num_measurement_points < num_results:
-                    time.sleep(0.1)
-                    continue
-                else:
-                    break
-            assert actual_num_measurement_points == num_results, (
-                f"number of measurement points {actual_num_measurement_points} returned by daq from device "
-                f"'{self.dev_repr}' does not match length of recipe"
-                f" measurement_map which is {num_results}"
-            )
-            result: npt.ArrayLike = data_node_query[result_path][0]["vector"]
-            if acquisition_type == AcquisitionType.DISCRIMINATION:
-                return result.real
-            return result
-        else:
-            return [(42 + 42j) if result_indices[0] == 0 else (0 + 0j)] * num_results
+            if actual_num_measurement_points < num_results:
+                time.sleep(0.1)
+                continue
+            break
+        assert actual_num_measurement_points == num_results, (
+            f"number of measurement points {actual_num_measurement_points} returned by daq "
+            f"from device '{self.dev_repr}' does not match length of recipe "
+            f"measurement_map which is {num_results}"
+        )
+        result: npt.ArrayLike = data_node_query[result_path][0]["vector"]
+        if acquisition_type == AcquisitionType.DISCRIMINATION:
+            return result.real
+        return result
 
     def get_input_monitor_data(self, channel: int, num_results: int):
-        if not self.dry_run:
-            result_path_ch = f"/{self.serial}/scopes/0/channels/{channel}/wave"
-            node_data = self._daq.get_raw(result_path_ch)
-            data = node_data[result_path_ch][0]["vector"][0:num_results]
-            return data
-        else:
-            return [(52 + 52j)] * num_results
+        result_path_ch = f"/{self.serial}/scopes/0/channels/{channel}/wave"
+        node_data = self._daq.get_raw(result_path_ch)
+        data = node_data[result_path_ch][0]["vector"][0:num_results]
+        return data
 
     def check_results_acquired_status(
         self, channel, acquisition_type: AcquisitionType, result_length, hw_averages
@@ -950,9 +966,12 @@ class DeviceSHFQA(DeviceZI):
         )
         actual_results = batch_get_results[results_acquired_path]
         expected_results = result_length * hw_averages
-        if not self.dry_run and actual_results != expected_results:
+        if actual_results != expected_results:
             raise LabOneQControllerException(
-                f"The number of measurements ({actual_results}) executed for device {self.serial} on channel {channel} does not match the number of measurements defined ({expected_results}). Probably the time between measurements or within a loop is too short. Please contact Zurich Instruments."
+                f"The number of measurements ({actual_results}) executed for device {self.serial} "
+                f"on channel {channel} does not match the number of measurements "
+                f"defined ({expected_results}). Probably the time between measurements or within "
+                f"a loop is too short. Please contact Zurich Instruments."
             )
 
     def collect_reset_nodes(self) -> List[DaqNodeAction]:

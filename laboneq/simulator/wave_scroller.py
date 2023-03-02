@@ -183,46 +183,53 @@ class WaveScroller:
         )
         length_samples = int(np.round(length_secs * self.sim.sampling_rate))
         end_samples = start_samples + length_samples
-        start_ev_idx = next(
+
+        def overlaps(a_start, a_length, b_start, b_length):
+            return (
+                min(a_start + a_length, b_start + b_length) - max(a_length, b_length)
+                != 0
+            )
+
+        max_event_idx = next(
             (
                 i
-                for i, p in enumerate(self.sim.events)
-                if p.start_samples > start_samples
+                for i, e in enumerate(self.sim.events)
+                if e.start_samples > start_samples + length_samples
             ),
             None,
         )
-        if start_ev_idx is None:
-            start_ev_idx = len(self.sim.events) - 1
-        elif start_ev_idx > 0:
-            start_ev_idx -= 1
 
-        snippet_start_samples = self.sim.events[start_ev_idx].start_samples
-        while (
-            start_ev_idx > 0
-            and self.sim.events[start_ev_idx - 1].start_samples == snippet_start_samples
-        ):
-            start_ev_idx -= 1
-        ev_idx = start_ev_idx
-        cur_time_samples = snippet_start_samples
-        op_events: List[SeqCEvent] = []
-        while ev_idx < len(self.sim.events) and cur_time_samples < end_samples:
-            ev = self.sim.events[ev_idx]
-            if ev.operation in target_events:
-                op_events.append(ev)
-            if cur_time_samples < ev.start_samples:
-                cur_time_samples = ev.start_samples
-            cur_time_samples += ev.length_samples
-            ev_idx += 1
-        if ev.length_samples == 0:
-            # in case the last event had zero length,
-            # add one sample so that for example a final setTrigger(0) can take effect and set the last sample to 0
-            cur_time_samples += 1
-        self.prepare(cur_time_samples - snippet_start_samples)
+        events_in_window = [
+            ev
+            for ev in self.sim.events[:max_event_idx]
+            if overlaps(
+                start_samples, length_samples, ev.start_samples, ev.length_samples
+            )
+        ]
+        if len(events_in_window):
+            snippet_start_samples = min(ev.start_samples for ev in events_in_window)
+            snippet_length = (
+                max(
+                    # in case the last event had zero length, add one sample so that
+                    # for example a final setTrigger(0) can take effect and set the
+                    # last sample to 0
+                    ev.start_samples + (ev.length_samples or 1)
+                    for ev in events_in_window
+                )
+                - snippet_start_samples
+            )
+        else:
+            snippet_start_samples = start_samples
+            snippet_length = length_samples
+
+        op_events = [ev for ev in events_in_window if ev.operation in target_events]
+        self.prepare(snippet_length)
+
         for ev in op_events:
             self.process(ev, snippet_start_samples)
 
         # clip to actually available samples, even if wider range requested
-        end_samples = min(end_samples, cur_time_samples)
+        end_samples = min(end_samples, snippet_start_samples + snippet_length)
         start_samples = max(0, start_samples)
         length_samples = end_samples - start_samples
         if length_samples <= 0:

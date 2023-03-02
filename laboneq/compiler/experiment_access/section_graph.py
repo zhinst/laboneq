@@ -217,7 +217,7 @@ class SectionGraph:
 
         if len(nt_parents_of_rt) != 1:
             raise RuntimeError(
-                f"Real-time root sections must all be located at the same level."
+                "Real-time root sections must all be located at the same level."
             )
 
         for nt_section in nt_parents_of_rt:
@@ -234,7 +234,7 @@ class SectionGraph:
             for child in children:
                 if section_infos[child].execution_type == "controller":
                     raise RuntimeError(
-                        f"Real-time root sections cannot be siblings of near-time sections."
+                        "Real-time root sections cannot be siblings of near-time sections."
                     )
 
         return rt_root_sections

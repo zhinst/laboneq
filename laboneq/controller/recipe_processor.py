@@ -298,7 +298,7 @@ class _ResultShapeCalculator(ExecutorBase):
         else:
             if self.current_rt_info is None:
                 raise LabOneQControllerException(
-                    f"Nested 'acquire_loop_rt' are not allowed."
+                    "Nested 'acquire_loop_rt' are not allowed."
                 )
             self.current_rt_uid = None
             self.current_rt_info = None

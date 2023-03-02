@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass, field
-from typing import Any, AnyStr, Dict, List, Optional, Union
+from typing import Any, AnyStr, Dict, List, Optional
 
 from marshmallow import EXCLUDE, Schema, fields, post_load
 
@@ -124,6 +124,7 @@ class IO(QCCSSchema):
             "port_mode",
             "port_delay",
             "delay_signal",
+            "marker_mode",
         )
         ordered = True
 
@@ -143,6 +144,7 @@ class IO(QCCSSchema):
         port_mode: Optional[str] = None
         port_delay: Optional[float] = None
         delay_signal: Optional[float] = None
+        marker_mode: Optional[str] = None
 
     channel = fields.Integer()
     enable = fields.Boolean(required=False)
@@ -158,6 +160,7 @@ class IO(QCCSSchema):
     port_mode = fields.Str(required=False)
     port_delay = fields.Float(required=False)
     delay_signal = fields.Float(required=False)
+    marker_mode = fields.Str(required=False)
 
 
 class SignalTypeField(fields.Field):

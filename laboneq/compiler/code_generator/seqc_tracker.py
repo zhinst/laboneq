@@ -52,22 +52,15 @@ class SeqCTracker:
 
             self.add_timing_comment(self.current_time + play_zero_samples)
             self.current_loop_stack_generator().add_play_zero_statement(
-                play_zero_samples, self.device_type
+                play_zero_samples, self.device_type, self.deferred_function_calls
             )
-            self.clear_deferred_function_calls(sampled_event)
             self.current_time += play_zero_samples
 
         return self.current_time
 
-    def clear_deferred_function_calls(self, sampled_event):
+    def clear_deferred_function_calls(self):
         """Emit the deferred function calls *now*."""
         if len(self.deferred_function_calls) > 0:
-            self.logger.debug(
-                "  Emitting deferred function calls: %s at sampled_event %s",
-                self.deferred_function_calls,
-                sampled_event or "None",
-            )
-
             for call in self.deferred_function_calls:
                 self.current_loop_stack_generator().add_function_call_statement(
                     call["name"], call["args"]
@@ -90,7 +83,7 @@ class SeqCTracker:
                 self.add_play_zero_statement(32)
             else:
                 self.add_function_call_statement("waitWave", [])
-            self.clear_deferred_function_calls(None)
+            self.clear_deferred_function_calls()
 
     def add_timing_comment(self, end_samples):
         if self.emit_timing_comments:
@@ -119,7 +112,7 @@ class SeqCTracker:
 
     def add_play_zero_statement(self, num_samples):
         self.current_loop_stack_generator().add_play_zero_statement(
-            num_samples, self.device_type
+            num_samples, self.device_type, self.deferred_function_calls
         )
 
     def add_play_wave_statement(

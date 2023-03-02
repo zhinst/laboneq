@@ -2,17 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
-import csv
-import json
 import logging
 import math
-import os
 from collections import Counter
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
-import numpy as np
 from sortedcollections import SortedDict
 
 from laboneq._observability.tracing import trace
@@ -215,7 +210,6 @@ class Compiler:
         self._leader_properties.global_leader = leader
 
     def _process_experiment(self, experiment):
-
         self.use_experiment(experiment)
         self._analyze_setup()
         self._calc_osc_numbering()
@@ -260,6 +254,7 @@ class Compiler:
             )
         return delay_rounded
 
+    @trace("compiler.generate-code()")
     def _generate_code(self):
         self._calc_awgs()
         self._calc_shfqa_generator_allocation()
@@ -485,7 +480,7 @@ class Compiler:
 
     def osc_number(self, osc_name):
         if self._osc_numbering is None:
-            raise Exception(f"Oscillator numbers not yet calculated")
+            raise Exception("Oscillator numbers not yet calculated")
         return self._osc_numbering[osc_name]
 
     @staticmethod
@@ -587,6 +582,9 @@ class Compiler:
 
         flipper = [1, 0]
 
+        marker_signals = self._experiment_dao.marker_signals()
+        trigger_signals = self._experiment_dao.trigger_signals()
+
         for signal_id in self._experiment_dao.signals():
             signal_info = self._experiment_dao.signal_info(signal_id)
             if signal_info.signal_type == "integration":
@@ -622,6 +620,11 @@ class Compiler:
                 port_delay = (port_delay or 0) + pc_port_delay
 
             base_channel = min(signal_info.channels)
+
+            markers = marker_signals.get(signal_id, None)
+
+            triggers = trigger_signals.get(signal_id)
+
             for channel in signal_info.channels:
                 output = {
                     "device_id": signal_info.device_id,
@@ -693,6 +696,25 @@ class Compiler:
                     if warnings:
                         _logger.warn(warnings)
                     output["precompensation"] = precompensation
+                if markers is not None:
+                    if signal_info.signal_type == "iq":
+                        marker_key = channel % 2 + 1
+                        if f"marker{marker_key}" in markers:
+                            output["marker_mode"] = "MARKER"
+
+                if triggers is not None:
+                    if signal_info.signal_type == "iq":
+                        trigger_bit = 2 ** (channel % 2)
+                        if triggers & trigger_bit:
+                            if (
+                                "marker_mode" in output
+                                and output["marker_mode"] == "MARKER"
+                            ):
+                                raise RuntimeError(
+                                    f"Trying to use marker and trigger on the same output channel {channel} with signal {signal_id}"
+                                )
+                            else:
+                                output["marker_mode"] = "TRIGGER"
 
                 output["oscillator_frequency"] = oscillator_frequency
                 output["oscillator"] = oscillator_number
@@ -872,6 +894,7 @@ class Compiler:
                 output_range=output["range"],
                 output_range_unit=output["range_unit"],
                 port_delay=output["port_delay"],
+                marker_mode=output.get("marker_mode"),
             )
 
         for input in self.calc_inputs():
@@ -1041,42 +1064,6 @@ class Compiler:
             "sampling_rates": sampling_rates,
         }
 
-    def write_files_from_output(self, output: CompiledExperiment):
-        Path("awg").mkdir(parents=True, exist_ok=True)
-        _logger.debug("Writing files to %s", os.path.abspath("awg"))
-        recipe_file = os.path.join("awg", "recipe.json")
-        _logger.debug("Writing %s", os.path.abspath(recipe_file))
-        with open(recipe_file, "w") as f:
-            f.write(json.dumps(output.recipe, indent=2))
-        Path("awg/src").mkdir(parents=True, exist_ok=True)
-        for src in output.src:
-            filename = os.path.join("awg", "src", src["filename"])
-            _logger.debug("Writing %s", os.path.abspath(filename))
-            with open(filename, "w") as f:
-                f.write(src["text"])
-        for awg in output.wave_indices:
-            filename = os.path.join("awg", "src", awg["filename"])
-            _logger.debug("Writing %s", os.path.abspath(filename))
-            with open(filename, "w", newline="") as f:
-                iw = csv.writer(
-                    f, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL
-                )
-                iw.writerow(["signature", "index", "type"])
-                for signature, (index, stype) in awg["value"].items():
-                    iw.writerow([signature, index, stype])
-
-        Path("awg/waves").mkdir(parents=True, exist_ok=True)
-        for wave in output.waves:
-            filename = os.path.join("awg", "waves", wave["filename"])
-            _logger.debug("Writing %s", os.path.abspath(filename))
-            np.savetxt(filename, wave["samples"], delimiter=",")
-
-    def write_files(self):
-        self.write_files_from_output(self.compiler_output())
-        _logger.debug(
-            "Recipe, source and wave files written to %s", os.path.abspath(".")
-        )
-
     def dump_src(self, info=False):
         for src in self.compiler_output().src:
             if info:
@@ -1093,7 +1080,7 @@ class Compiler:
         else:
             _logger.debug("END %s", src["filename"])
 
-    @trace("compiler-run()")
+    @trace("compiler.run()")
     def run(self, data) -> CompiledExperiment:
         _logger.debug("ES Compiler run")
 

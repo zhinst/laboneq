@@ -28,6 +28,7 @@ class PulseSignature:
     channel: Optional[int]
     sub_channel: Optional[int]
     pulse_parameters: FrozenSet[Tuple[str, Any]]
+    markers: Any
 
 
 @dataclass(frozen=True)

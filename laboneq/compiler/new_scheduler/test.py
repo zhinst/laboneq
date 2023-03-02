@@ -12,7 +12,7 @@ from tests.helpers.blank_experiment import create_blank_experiment
 
 
 def create_setup():
-    descriptor = f"""\
+    descriptor = """\
         instrument_list:
           HDAWG:
           - address: dev8001

@@ -20,7 +20,6 @@ from laboneq.controller.recipe_1_4_0 import Initialization
 from laboneq.controller.recipe_enums import DIOConfigType, SignalType
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.controller.util import LabOneQControllerException
-from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 
 DIG_TRIGGER_1_LEVEL = 0.225
@@ -70,7 +69,7 @@ class DeviceHDAWG(DeviceZI):
 
         self._multi_freq = "MF" in self.dev_opts
 
-    def _get_num_AWGs(self):
+    def _get_num_awgs(self):
         return self._channels // 2
 
     def _osc_group_by_channel(self, channel: int) -> int:
@@ -91,7 +90,7 @@ class DeviceHDAWG(DeviceZI):
 
     def _nodes_to_monitor_impl(self) -> List[str]:
         nodes = [node.path for node in self.clock_source_control_nodes()]
-        for awg in range(self._get_num_AWGs()):
+        for awg in range(self._get_num_awgs()):
             nodes.append(f"/{self.serial}/awgs/{awg}/enable")
             nodes.append(f"/{self.serial}/awgs/{awg}/ready")
         return nodes
@@ -201,9 +200,10 @@ class DeviceHDAWG(DeviceZI):
                     )
                 if output.range not in (0.2, 0.4, 0.6, 0.8, 1.0, 2.0, 3.0, 4.0, 5.0):
                     self._logger.warning(
-                        f"The specified output range {output.range} for device "
-                        f"{self.dev_repr} is not in the list of supported values. It "
-                        f"will be rounded to the next higher allowed value."
+                        "The specified output range %s for device %s is not in the list of "
+                        "supported values. It will be rounded to the next higher allowed value.",
+                        output.range,
+                        self.dev_repr,
                     )
                 nodes.append(
                     (
@@ -328,8 +328,8 @@ class DeviceHDAWG(DeviceZI):
                 try:
                     fir = np.array(precomp["FIR"]["coefficients"])
                     if len(fir) > 40:
-                        raise LabOneQException(
-                            "FIR coefficents must be a list of at most 40 doubles"
+                        raise LabOneQControllerException(
+                            "FIR coefficients must be a list of at most 40 doubles"
                         )
                     fir = np.concatenate((fir, np.zeros((40 - len(fir)))))
                     nodes += [(fir_p + "enable", 1), (fir_p + "coefficients", fir)]
@@ -337,6 +337,22 @@ class DeviceHDAWG(DeviceZI):
                     nodes.append((fir_p + "enable", 0))
             except (KeyError, TypeError, AttributeError):
                 nodes.append((precomp_p + "enable", 0))
+            if output.marker_mode is not None:
+                if output.marker_mode == "TRIGGER":
+                    nodes.append(
+                        (f"triggers/out/{output.channel}/source", output.channel % 2)
+                    )
+                elif output.marker_mode == "MARKER":
+                    nodes.append(
+                        (
+                            f"triggers/out/{output.channel}/source",
+                            4 + 2 * (output.channel % 2),
+                        )
+                    )
+                else:
+                    raise ValueError(
+                        f"Maker mode must be either 'MARKER' or 'TRIGGER', but got {output.marker_mode} for output {output.channel} on HDAWG {self.serial}"
+                    )
 
         osc_selects = {
             ch: osc.index for osc in self._allocated_oscs for ch in osc.channels
@@ -399,8 +415,9 @@ class DeviceHDAWG(DeviceZI):
                 DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/drive", 0xC)
             )
 
-            # Loop over at least AWG instance to cover the case that the instrument is only used as a communication proxy.
-            # Some of the nodes on the AWG branch are needed to get proper communication between HDAWG and UHFQA.
+            # Loop over at least AWG instance to cover the case that the instrument is only used
+            # as a communication proxy. Some of the nodes on the AWG branch are needed to get
+            # proper communication between HDAWG and UHFQA.
             for awg_index in (
                 self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
             ):
@@ -459,8 +476,9 @@ class DeviceHDAWG(DeviceZI):
                 ]
             )
 
-            # Loop over at least AWG instance to cover the case that the instrument is only used as a communication proxy.
-            # Some of the nodes on the AWG branch are needed to get proper communication between HDAWG and UHFQA.
+            # Loop over at least AWG instance to cover the case that the instrument is only used
+            # as a communication proxy. Some of the nodes on the AWG branch are needed to get
+            # proper communication between HDAWG and UHFQA.
             for awg_index in (
                 self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
             ):

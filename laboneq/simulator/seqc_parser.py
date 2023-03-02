@@ -595,6 +595,7 @@ class SimpleRuntime:
             generators_mask = self.resolve("QA_INT_ALL")
 
         wave_data_idx = []
+        event_length = 0
         for gen_index in range(16):
             if (generators_mask & (1 << gen_index)) != 0:
                 wave_key = self._args2key(["gen", gen_index])
@@ -604,6 +605,8 @@ class SimpleRuntime:
                     self.wave_lookup[wave_key] = known_wave
                 wave = self.descriptor.wave_index[gen_index]
                 wave_names = [wave["wave_name"] + ".wave"]
+                wave_length_samples = len(self.waves[wave_names[0]])
+                event_length = max(event_length, wave_length_samples)
                 self._update_wave_refs(wave_names, known_wave)
                 wave_data_idx = known_wave.wave_data_idx
 
@@ -612,7 +615,7 @@ class SimpleRuntime:
             insert_at,
             SeqCEvent(
                 start_samples=start_samples,
-                length_samples=0,
+                length_samples=event_length,
                 operation=Operation.START_QA,
                 args=[
                     generators_mask,

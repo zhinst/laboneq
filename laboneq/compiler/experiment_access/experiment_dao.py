@@ -12,7 +12,7 @@ from collections import OrderedDict
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from jsonschema import ValidationError
@@ -97,6 +97,7 @@ class SectionInfo:
     averaging_type: Optional[str]
     count: int
     align: Optional[str]
+    on_system_grid: bool
     length: Optional[float]
     averaging_mode: Optional[str]
     repetition_mode: Optional[str]
@@ -135,6 +136,15 @@ class SignalInfo:
 
 
 @dataclass
+class Marker:
+    marker_selector: str
+    enable: bool
+    start: float
+    length: float
+    pulse_id: str
+
+
+@dataclass
 class SectionSignalPulse:
     seq_nr: int
     pulse_id: str
@@ -156,6 +166,7 @@ class SectionSignalPulse:
     play_pulse_parameters: Optional[Any]
     pulse_pulse_parameters: Optional[Any]
     precompensation_clear: bool
+    markers: Optional[List[Marker]]
 
 
 @dataclass
@@ -442,7 +453,6 @@ class ExperimentDAO:
         for section in sorted(experiment["sections"], key=lambda x: x["id"]):
             has_repeat = False
             execution_type = None
-            align = None
             length = None
             count: int = 1
             averaging_type = None
@@ -493,8 +503,13 @@ class ExperimentDAO:
             if self._acquisition_type is None and acquisition_types is not None:
                 self._acquisition_type = AcquisitionType(acquisition_types[0])
 
+            align = None
             if "align" in section:
                 align = section["align"]
+
+            on_system_grid = False
+            if "on_system_grid" in section:
+                on_system_grid = section["on_system_grid"]
 
             reset_oscillator_phase = False
             if "reset_oscillator_phase" in section:
@@ -546,6 +561,7 @@ class ExperimentDAO:
                 acquisition_types=acquisition_types,
                 averaging_type=averaging_type,
                 align=align,
+                on_system_grid=on_system_grid,
                 length=length,
                 averaging_mode=averaging_mode,
                 repetition_mode=repetition_mode,
@@ -617,6 +633,33 @@ class ExperimentDAO:
                             if pulse_ref.get("pulse") is not None:
                                 pulse_id = pulse_ref["pulse"]["$ref"]
 
+                            acquire_params = None
+                            signal_type = self._data["signal"][signal_id]["signal_type"]
+                            if signal_type == "integration":
+                                acquire_params = AcquireInfo(
+                                    handle=None,
+                                    acquisition_type=getattr(
+                                        self._acquisition_type, "value", None
+                                    ),
+                                )
+                            markers = []
+                            if "markers" in pulse_ref:
+                                for k, v in pulse_ref["markers"].items():
+                                    marker_pulse_id = None
+                                    pulse_ref = v.get("waveform")
+                                    if pulse_ref is not None:
+                                        marker_pulse_id = pulse_ref["$ref"]
+
+                                    markers.append(
+                                        Marker(
+                                            k,
+                                            enable=v.get("enable"),
+                                            start=v.get("start"),
+                                            length=v.get("length"),
+                                            pulse_id=marker_pulse_id,
+                                        )
+                                    )
+
                             new_ssp = dict(
                                 section_signal_id=section_signal_id,
                                 pulse_id=pulse_id,
@@ -629,7 +672,7 @@ class ExperimentDAO:
                                 length=resulting_pulse_instance_length,
                                 length_param=resulting_pulse_instance_length_param,
                                 seq_nr=seq_nr,
-                                acquire_params=None,
+                                acquire_params=acquire_params,
                                 phase=pulse_phase,
                                 phase_param=pulse_phase_param,
                                 increment_oscillator_phase=pulse_increment,
@@ -639,6 +682,7 @@ class ExperimentDAO:
                                 play_pulse_parameters=None,
                                 pulse_pulse_parameters=None,
                                 precompensation_clear=precompensation_clear,
+                                markers=markers,
                             )
                             self._data["section_signal_pulse"].append(new_ssp)
                             seq_nr += 1
@@ -1035,6 +1079,7 @@ class ExperimentDAO:
                         "play_pulse_parameters",
                         "pulse_pulse_parameters",
                         "precompensation_clear",
+                        "markers",
                     ]
                 }
             )
@@ -1043,6 +1088,36 @@ class ExperimentDAO:
                 key=lambda x: (x["section_id"], x["signal_id"], x["seq_nr"]),
             )
         ]
+        return retval
+
+    def marker_signals(self):
+        marker_pulses = [
+            ssp
+            for ssp in self._data["section_signal_pulse"]
+            if ssp.get("markers") is not None
+        ]
+        retval = {}
+        for ssp in marker_pulses:
+            retval.setdefault(ssp["signal_id"], set()).update(
+                [m.marker_selector for m in ssp["markers"]]
+            )
+        return retval
+
+    def trigger_signals(self):
+        trigger_section_output = [
+            s.trigger_output
+            for s in self._data["section"].values()
+            if s.trigger_output is not None
+        ]
+        retval = {}
+        for tso in trigger_section_output:
+            for t in tso:
+                if "signal_id" in t:
+                    signal_id = t["signal_id"]
+                    if signal_id not in retval:
+                        retval[signal_id] = 0
+                    retval[signal_id] = retval[signal_id] | t["state"]
+
         return retval
 
     def section_parameters(self, section_id):
@@ -1260,10 +1335,10 @@ class ExperimentDAO:
             pulse = experiment_dao.pulse(pulse_id)
             pulse_entry = {"id": pulse.id}
             fields = ["function", "length", "samples", "amplitude", "play_mode"]
-            for field in fields:
-                val = getattr(pulse, field, None)
+            for field_ in fields:
+                val = getattr(pulse, field_, None)
                 if val is not None:
-                    pulse_entry[field] = val
+                    pulse_entry[field_] = val
 
             if pulse_entry.get("amplitude_param"):
                 pulse_entry["amplitude"] = {"$ref": pulse_entry["amplitude_param"]}
@@ -1370,6 +1445,20 @@ class ExperimentDAO:
                             section_signal_pulse_object[key] = {
                                 "$ref": getattr(section_pulse, key + "_param")
                             }
+                    markers = getattr(section_pulse, "markers")
+                    if markers is not None:
+                        markers_object = {}
+                        for m in markers:
+                            marker_object = {}
+                            for k in ["enable", "start", "length"]:
+                                value = getattr(m, k)
+                                if value is not None:
+                                    marker_object[k] = value
+                            if m.pulse_id is not None:
+                                marker_object["waveform"] = {"$ref": m.pulse_id}
+                            markers_object[m.marker_selector] = marker_object
+                        if len(markers_object) > 0:
+                            section_signal_pulse_object["markers"] = markers_object
 
                     section_signal_pulses.append(section_signal_pulse_object)
 
@@ -1529,14 +1618,14 @@ class ExperimentDAO:
         # Merge the calibration of those ExperimentSignals that touch the same
         # PhysicalChannel.
         for pc, exp_signals in experiment_signals_by_physical_channel.items():
-            for field in PHYSICAL_CHANNEL_CALIBRATION_FIELDS:
-                if field in ["mixer_calibration", "precompensation"]:
+            for field_ in PHYSICAL_CHANNEL_CALIBRATION_FIELDS:
+                if field_ in ["mixer_calibration", "precompensation"]:
                     continue
                 values = set()
                 for exp_signal in exp_signals:
                     if not exp_signal.is_calibrated():
                         continue
-                    value = getattr(exp_signal, field)
+                    value = getattr(exp_signal, field_)
                     if value is not None:
                         values.add(value)
                 if len(values) > 1:
@@ -1544,19 +1633,19 @@ class ExperimentDAO:
                         exp_signal.uid
                         for exp_signal in exp_signals
                         if exp_signal.is_calibrated()
-                        and getattr(exp_signal.calibration, field) is not None
+                        and getattr(exp_signal.calibration, field_) is not None
                     ]
                     raise LabOneQException(
                         f"The experiment signals {', '.join(conflicting_signals)} all "
                         f"touch physical channel '{pc.uid}', but provide conflicting "
-                        f"settings for calibration field '{field}'."
+                        f"settings for calibration field '{field_}'."
                     )
                 if len(values) > 0:
                     # Make sure all the experiment signals agree.
                     value = values.pop()
                     for exp_signal in exp_signals:
                         if exp_signal.is_calibrated():
-                            setattr(exp_signal.calibration, field, value)
+                            setattr(exp_signal.calibration, field_, value)
 
         for ls in all_logical_signals:
             calibration = ls.calibration
@@ -2019,6 +2108,10 @@ class ExperimentDAO:
         if exchanger_map(section).alignment is not None:
             align = exchanger_map(section).alignment.value
 
+        on_system_grid = None
+        if exchanger_map(section).on_system_grid is not None:
+            on_system_grid = exchanger_map(section).on_system_grid
+
         length = None
         if section.length is not None:
             length = section.length
@@ -2069,6 +2162,7 @@ class ExperimentDAO:
             acquisition_types=acquisition_types,
             averaging_type=averaging_type,
             align=align,
+            on_system_grid=on_system_grid,
             length=length,
             averaging_mode=averaging_mode,
             repetition_mode=repetition_mode,
@@ -2234,14 +2328,12 @@ class ExperimentDAO:
                         acquire_params = None
                         if hasattr(operation, "handle"):
                             acquire_params = AcquireInfo(
-                                **{
-                                    "handle": operation.handle,
-                                    "acquisition_type": acquisition_type.name,
-                                }
+                                handle=operation.handle,
+                                acquisition_type=acquisition_type.value,
                             )
 
-                        operation_pulse_parameters = getattr(
-                            operation, "pulse_parameters", None
+                        operation_pulse_parameters = copy.deepcopy(
+                            getattr(operation, "pulse_parameters", None)
                         )
 
                         # Replace sweep params with their uid
@@ -2256,6 +2348,27 @@ class ExperimentDAO:
                                 if not isinstance(val, (float, int, complex)):
                                     operation_pulse_parameters[param] = getattr(
                                         val, "uid", None
+                                    )
+
+                        markers = None
+                        if hasattr(operation, "marker"):
+                            markers_raw = operation.marker
+                            if markers_raw is not None:
+                                markers = []
+                                for k, v in markers_raw.items():
+                                    marker_pulse_id = None
+                                    pulse_ref = v.get("waveform")
+                                    if pulse_ref is not None:
+                                        marker_pulse_id = pulse_ref["$ref"]
+
+                                    markers.append(
+                                        Marker(
+                                            k,
+                                            enable=v.get("enable"),
+                                            start=v.get("start"),
+                                            length=v.get("length"),
+                                            pulse_id=marker_pulse_id,
+                                        )
                                     )
 
                         self._data["section_signal_pulse"].append(
@@ -2281,6 +2394,7 @@ class ExperimentDAO:
                                 play_pulse_parameters=operation_pulse_parameters,
                                 pulse_pulse_parameters=pulse_parameters,
                                 precompensation_clear=False,  # not supported
+                                markers=markers,
                             )
                         )
 
@@ -2289,7 +2403,12 @@ class ExperimentDAO:
                         getattr(operation, "increment_oscillator_phase", None)
                         is not None
                         or getattr(operation, "set_oscillator_phase", None) is not None
+                        or getattr(operation, "phase", None) is not None
                     ):
+                        if getattr(operation, "phase", None) is not None:
+                            raise LabOneQException(
+                                "Phase argument has no effect for virtual Z gates."
+                            )
                         # virtual Z gate
                         (
                             pulse_increment_oscillator_phase,
@@ -2369,8 +2488,6 @@ class ExperimentDAO:
 
 class AttributeOverrider(object):
     def __init__(self, base, overrider):
-        if base is None:
-            raise RuntimeError("base must not be none")
         if overrider is None:
             raise RuntimeError("overrider must not be none")
 
@@ -2380,9 +2497,9 @@ class AttributeOverrider(object):
     def __getattr__(self, attr):
         if hasattr(self._overrider, attr):
             overrider_value = getattr(self._overrider, attr)
-            if overrider_value is not None:
+            if overrider_value is not None or self._base is None:
                 return overrider_value
-        if hasattr(self._base, attr):
+        if self._base is not None and hasattr(self._base, attr):
             return getattr(self._base, attr)
         raise AttributeError(
             f"Field {attr} not found on overrider {self._overrider} (type {type(self._overrider)}) nor on base {self._base}"

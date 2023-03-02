@@ -4,7 +4,6 @@
 import functools
 import hashlib
 import logging
-import math
 import re
 from enum import Enum
 
@@ -82,7 +81,13 @@ class SeqCGenerator:
         self.add_statement(statement)
 
     def add_wave_declaration(
-        self, device_type: DeviceType, signal_type, wave_id, length
+        self,
+        device_type: DeviceType,
+        signal_type,
+        wave_id,
+        length,
+        has_marker1,
+        has_marker2,
     ):
         self.add_statement(
             {
@@ -91,6 +96,8 @@ class SeqCGenerator:
                 "signal_type": signal_type,
                 "wave_id": wave_id,
                 "length": length,
+                "has_marker1": has_marker1,
+                "has_marker2": has_marker2,
             }
         )
 
@@ -108,7 +115,7 @@ class SeqCGenerator:
 
     def add_do_while(self, condition, body):
         if body is None:
-            raise Exception(f"Empty body for while loop")
+            raise Exception("Empty body for while loop")
         self.add_statement({"type": "do_while", "condition": condition, "body": body})
 
     def add_function_def(self, text):
@@ -161,18 +168,25 @@ class SeqCGenerator:
             }
         )
 
-    def add_play_zero_statement(self, num_samples, device_type):
+    def add_play_zero_statement(self, num_samples, device_type, deferred_calls=None):
+        """Add a playZero command
+
+        If the requested number of samples exceeds the allowed number of samples for
+        a single playZero, a tight loop of playZeros will be emitted.
+
+        If deferred_calls is passed, the deferred function calls are cleared in the
+        context of the added playZero(s). The passed list will be drained.
+        """
+        if deferred_calls is None:
+            deferred_calls = []
+
+        assert isinstance(deferred_calls, list)
+
         if isinstance(device_type, str):
             device_type = DeviceType(device_type)
 
         sample_multiple = device_type.sample_multiple
         if num_samples % sample_multiple != 0:
-            _logger.warning(
-                "Emitting playZero(%d), which is not divisble by %d, which it should be for %s",
-                num_samples,
-                sample_multiple,
-                device_type,
-            )
             raise Exception(
                 f"Emitting playZero({num_samples}), which is not divisble by {sample_multiple}, which it should be for {device_type}"
             )
@@ -182,22 +196,66 @@ class SeqCGenerator:
                 f"minimum waveform length {device_type.min_play_wave} of device "
                 f"'{device_type.value}' (sample multiple is {device_type.sample_multiple})"
             )
-        statement = {
-            "type": "playZero",
-            "device_type": device_type,
-            "num_samples": int(num_samples),
-        }
-
         max_play_zero = (
             MAX_PLAY_ZERO_HDAWG
             if device_type == DeviceType.HDAWG
             else MAX_PLAY_ZERO_UHFQA
         )
-        if statement["num_samples"] > 2 * max_play_zero:
-            self._needs_play_zero_counter = True
 
-        statement["max_play_zero"] = max_play_zero
-        self.add_statement(statement)
+        def statement_factory(samples):
+            self.add_statement(
+                {
+                    "type": "playZero",
+                    "device_type": device_type,
+                    "num_samples": samples,
+                }
+            )
+
+        def clear_deferred_calls():
+            for call in deferred_calls:
+                self.add_function_call_statement(call["name"], call["args"])
+            del deferred_calls[:]
+
+        if num_samples <= max_play_zero:
+            statement_factory(num_samples)
+            clear_deferred_calls()
+        elif num_samples <= 2 * max_play_zero:
+            # split in the middle
+            half_samples = (num_samples // 2 // 16) * 16
+            statement_factory(half_samples)
+            clear_deferred_calls()
+            statement_factory(num_samples - half_samples)
+        else:  # non-unrolled loop
+            self._needs_play_zero_counter = True
+            num_segments, rest = divmod(num_samples, max_play_zero)
+            if 0 < rest < MIN_PLAY_ZERO:
+                chunk = (max_play_zero // 2 // 16) * 16
+                statement_factory(chunk)
+                clear_deferred_calls()
+                num_samples -= chunk
+                num_segments, rest = divmod(num_samples, max_play_zero)
+            if rest > 0:
+                statement_factory(rest)
+                clear_deferred_calls()
+            if deferred_calls:
+                statement_factory(max_play_zero)
+                clear_deferred_calls()
+                num_segments -= 1
+            if num_segments == 1:
+                statement_factory(max_play_zero)
+                return
+
+            inner_loop = SeqCGenerator()
+            inner_loop.add_statement(
+                {
+                    "type": "playZero",
+                    "device_type": device_type,
+                    "num_samples": max_play_zero,
+                }
+            )
+            self.add_countdown_loop(
+                self.play_zero_counter_variable_name(), num_segments, inner_loop
+            )
 
     def generate_seq_c(self):
         self._seq_c_text = ""
@@ -268,52 +326,7 @@ class SeqCGenerator:
         elif statement["type"] == "comment":
             self._seq_c_text += "/* " + statement["text"] + " */\n"
         elif statement["type"] == "playZero":
-            play_zero_text = self._gen_play_zero(
-                statement["num_samples"], statement["max_play_zero"]
-            )
-            self._seq_c_text += play_zero_text
-
-    def _gen_play_zero(self, num_samples, max_play_zero):
-        seq_c_text = ""
-        _logger.debug(
-            "Generating play zero for num_samples %d max_play_zero %d",
-            num_samples,
-            max_play_zero,
-        )
-        if num_samples <= max_play_zero:
-            seq_c_text += "playZero(" + str(num_samples) + ");\n"
-        elif num_samples <= (2 * max_play_zero):
-            half_samples = round(num_samples / 2 / 16) * 16
-            seq_c_text += "playZero(" + str(half_samples) + ");\n"
-            seq_c_text += "playZero(" + str(num_samples - half_samples) + ");\n"
-        else:
-            num_segments = math.floor(num_samples / max_play_zero)
-            rest = num_samples - max_play_zero * num_segments
-            if rest < MIN_PLAY_ZERO:
-                num_segments -= 1
-                extended_rest = rest + max_play_zero
-                half_samples = round(extended_rest / 2 / 16) * 16
-                seq_c_text += "playZero(" + str(half_samples) + ");\n"
-                seq_c_text += "playZero(" + str(extended_rest - half_samples) + ");\n"
-            else:
-                seq_c_text += "playZero(" + str(rest) + ");\n"
-            if num_segments > 1:
-                seq_c_text += (
-                    self.play_zero_counter_variable_name()
-                    + " = "
-                    + str(num_segments)
-                    + ";\n"
-                )
-                seq_c_text += "do {\n"
-                seq_c_text += "  playZero(" + str(max_play_zero) + ");\n"
-                seq_c_text += "  " + self.play_zero_counter_variable_name() + " -= 1;\n"
-                seq_c_text += (
-                    "} while(" + self.play_zero_counter_variable_name() + ");\n"
-                )
-            else:
-                seq_c_text += "playZero(" + str(max_play_zero) + ");\n"
-
-        return seq_c_text
+            self._seq_c_text += f"playZero({statement['num_samples']});\n"
 
     def _gen_wave_declaration_placeholder(self, statement) -> str:
         dual_channel = statement["signal_type"] in ["iq", "double", "multi"]
@@ -321,14 +334,21 @@ class SeqCGenerator:
         length = statement["length"]
         device_type = statement["device_type"]
         assert length >= device_type.min_play_wave
+        makers_declaration1 = ""
+        makers_declaration2 = ""
+        if statement["has_marker1"]:
+            makers_declaration1 = ",true"
+        if statement["has_marker2"]:
+            makers_declaration2 = ",true"
 
         if dual_channel:
+
             return (
-                f"wave w{sig_string}_i = placeholder({length});\n"
-                + f"wave w{sig_string}_q = placeholder({length});\n"
+                f"wave w{sig_string}_i = placeholder({length}{makers_declaration1});\n"
+                + f"wave w{sig_string}_q = placeholder({length}{makers_declaration2});\n"
             )
         else:
-            return f"wave w{sig_string} = placeholder({length});\n"
+            return f"wave w{sig_string} = placeholder({length}{makers_declaration1});\n"
 
     def _build_wave_channel_assignment(self, statement) -> str:
         dual_channel = statement["signal_type"] in ["iq", "double", "multi"]

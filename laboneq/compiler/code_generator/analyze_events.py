@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from engineering_notation import EngNumber
-from intervaltree import Interval, IntervalTree
+from intervaltree import IntervalTree
 from sortedcontainers import SortedDict
 
 from laboneq.compiler.code_generator.dict_list import add_to_dict_list, merge_dict_list
@@ -206,12 +206,15 @@ def analyze_precomp_reset_times(
     delay: float,
 ):
     retval = SortedDict()
-    for event in events:
+    precomp_events = [
+        event
+        for event in events
         if (
-            event["event_type"] != EventType.RESET_PRECOMPENSATION_FILTERS
-            or event.get("signal_id", None) not in signals
-        ):
-            continue
+            event["event_type"] == EventType.RESET_PRECOMPENSATION_FILTERS
+            and event.get("signal_id", None) in signals
+        )
+    ]
+    for event in precomp_events:
         event_time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
 
         sampled_event = {
@@ -487,6 +490,7 @@ def analyze_oscillator_switch_events(
 
     active_osc = None
     active_play_segments = set()
+    current_osc = None
 
     for event in events:
         if event.get("signal") not in signal_ids:
@@ -501,19 +505,22 @@ def analyze_oscillator_switch_events(
             active_osc = hw_oscillators.get(signal_id)
             active_play_segments.add(event["chain_element_id"])
 
-            # Round down to sequencer grid. Collisions with other playback will be
-            # detected downstream when calculating waveform intervals.
-            osc_switch_time = event_time_in_samples // granularity * granularity
+            if active_osc != current_osc:
+                current_osc = active_osc
 
-            osc_switch_event = {
-                "signature": "switch_oscillator",
-                "start": osc_switch_time,
-                "oscillator": active_osc,
-                "signal": signal_id,
-                "section_name": event["section_name"],
-                "play_wave_id": event["play_wave_id"],
-            }
-            add_to_dict_list(osc_switch_events, osc_switch_time, osc_switch_event)
+                # Round down to sequencer grid. Collisions with other playback will be
+                # detected downstream when calculating waveform intervals.
+                osc_switch_time = event_time_in_samples // granularity * granularity
+
+                osc_switch_event = {
+                    "signature": "switch_oscillator",
+                    "start": osc_switch_time,
+                    "oscillator": active_osc,
+                    "signal": signal_id,
+                    "section_name": event["section_name"],
+                    "play_wave_id": event["play_wave_id"],
+                }
+                add_to_dict_list(osc_switch_events, osc_switch_time, osc_switch_event)
         elif event["event_type"] == EventType.PLAY_END:
             active_play_segments.remove(event["chain_element_id"])
             if len(active_play_segments) == 0:
@@ -555,7 +562,7 @@ def analyze_play_wave_times(
     # For feedback, the pulses in the branches create a single waveform which spans
     # the whole duration of the section; also keep the state to be able to split
     # later
-    branching_intervals: Dict[str, MutableInterval] = {}
+    branching_intervals: Dict[str, List[MutableInterval]] = {}
     states: Dict[str, int] = {}
     for ev in events:
         if ev["event_type"] == "SECTION_START":
@@ -566,19 +573,21 @@ def analyze_play_wave_times(
                 cut_points.add(begin)
                 begin += 32
                 cut_points.add(begin)
-                branching_intervals[ev["section_name"]] = MutableInterval(
-                    # Add min_play_wave samples for executing executeTableEntry at the
-                    # right time; todo(JL): Use actual min_play_wave
-                    begin=begin,
-                    end=None,
-                    data=(handle, ev["local"]),
+                branching_intervals.setdefault(ev["section_name"], []).append(
+                    MutableInterval(
+                        # Add min_play_wave samples for executing executeTableEntry at the
+                        # right time; todo(JL): Use actual min_play_wave
+                        begin=begin,
+                        end=None,
+                        data=(handle, ev["local"]),
+                    )
                 )
             else:
                 if "state" in ev:
                     states[ev["section_name"]] = ev["state"]
         if ev["event_type"] == "SECTION_END":
             if ev["section_name"] in branching_intervals:
-                iv = branching_intervals[ev["section_name"]]
+                iv = branching_intervals[ev["section_name"]][-1]
                 end = length_to_samples(ev["time"] + delay, sampling_rate)
                 cut_points.add(end)
                 iv.end = end
@@ -603,6 +612,7 @@ def analyze_play_wave_times(
         play_pulse_parameters: Optional[Dict[str, Any]]
         pulse_pulse_parameters: Optional[Dict[str, Any]]
         state: Optional[int]
+        markers: Optional[Any]
 
     @dataclass
     class IntervalEndEvent:
@@ -626,6 +636,7 @@ def analyze_play_wave_times(
         pulse_pulse_parameters: Optional[Dict[str, Any]]
         state: int
         start_rounding_error: float
+        markers: Any
 
     interval_zip: List[Tuple[IntervalStartEvent, IntervalEndEvent]] = []
     for state in itertools.chain(set(states.values()), (None,)):
@@ -647,6 +658,7 @@ def analyze_play_wave_times(
                             event.get("play_pulse_parameters"),
                             event.get("pulse_pulse_parameters"),
                             states.get(event["section_name"], None),
+                            event.get("markers"),
                         )
                         for event in events
                         if event["event_type"] in ["PLAY_START"]
@@ -684,6 +696,7 @@ def analyze_play_wave_times(
                             None,
                             None,
                             states.get(event["section_name"], None),
+                            None,
                         )
                         for event in events
                         if (
@@ -761,6 +774,7 @@ def analyze_play_wave_times(
                     state=interval_start.state,
                     start_rounding_error=start_rounding_error,
                     oscillator_frequency=interval_start.oscillator_frequency,
+                    markers=interval_start.markers,
                 ),
             )
 
@@ -816,8 +830,9 @@ def analyze_play_wave_times(
 
     # Check whether any cut point is within a command table interval
     for cp in cut_points:
-        for iv in branching_intervals.values():
-            assert not (iv.begin < cp < iv.end)
+        for ivs in branching_intervals.values():
+            for iv in ivs:
+                assert not (iv.begin < cp < iv.end)
 
     cut_points = sorted(list(cut_points))
 
@@ -840,7 +855,9 @@ def analyze_play_wave_times(
             playwave_max_hint,
             cut_points,
             granularity=sample_multiple,
-            force_command_table_intervals=branching_intervals.values(),
+            force_command_table_intervals=[
+                iv for ivs in branching_intervals.values() for iv in ivs
+            ],
         )
     except MinimumWaveformLengthViolation as e:
         raise LabOneQException(
@@ -866,17 +883,18 @@ def analyze_play_wave_times(
     signatures = set()
 
     # Add branching points as events
-    for section_name, interval in branching_intervals.items():
-        interval_event = {
-            "start": interval.begin,
-            "end": interval.end,
-            "signature": "match",
-            "handle": interval.data[0],
-            "local": interval.data[1],
-            "signal_id": signal_id,
-            "section_name": section_name,
-        }
-        add_to_dict_list(interval_events, interval.begin, interval_event)
+    for section_name, ivs in branching_intervals.items():
+        for interval in ivs:
+            interval_event = {
+                "start": interval.begin,
+                "end": interval.end,
+                "signature": "match",
+                "handle": interval.data[0],
+                "local": interval.data[1],
+                "signal_id": signal_id,
+                "section_name": section_name,
+            }
+            add_to_dict_list(interval_events, interval.begin, interval_event)
 
     _logger.debug("Calculating waveform signatures for signal %s", signal_id)
 
@@ -937,6 +955,7 @@ def analyze_play_wave_times(
                 combined_pulse_parameters = combine_pulse_parameters(
                     data.pulse_pulse_parameters, None, data.play_pulse_parameters
                 )
+                markers = data.markers
                 signature_pulses.append(
                     PulseSignature(
                         start=start,
@@ -952,6 +971,9 @@ def analyze_play_wave_times(
                         pulse_parameters=None
                         if combined_pulse_parameters is None
                         else frozenset(combined_pulse_parameters.items()),
+                        markers=None
+                        if markers is None
+                        else tuple(frozenset(m.items()) for m in markers),
                     )
                 )
                 pulse_parameters.append(

@@ -99,7 +99,7 @@ class RecipeGenerator:
         self._recipe["devices"] = devices
         self._recipe["experiment"]["initializations"] = initializations
 
-    def _find_initalization(self, device_uid):
+    def _find_initialization(self, device_uid):
         for initialization in self._recipe["experiment"]["initializations"]:
             if initialization["device_uid"] == device_uid:
                 return initialization
@@ -109,7 +109,7 @@ class RecipeGenerator:
         self, experiment_dao, leader_properties, clock_settings
     ):
         if leader_properties.global_leader is not None:
-            initialization = self._find_initalization(leader_properties.global_leader)
+            initialization = self._find_initialization(leader_properties.global_leader)
             initialization["config"]["repetitions"] = 1
             initialization["config"]["holdoff"] = 0
             if leader_properties.is_desktop_setup:
@@ -119,12 +119,12 @@ class RecipeGenerator:
             # is necessary for the standalone SHFQC, where the SHFSG part does neither
             # appear in the PQSC device connections nor the DIO connections.
             for f in leader_properties.internal_followers:
-                initialization = self._find_initalization(f)
+                initialization = self._find_initialization(f)
                 initialization["config"]["dio_mode"] = "hdawg"
 
         for device in experiment_dao.device_infos():
             device_uid = device.id
-            initialization = self._find_initalization(device_uid)
+            initialization = self._find_initialization(device_uid)
             reference_clock = experiment_dao.device_reference_clock(device_uid)
             if reference_clock is not None:
                 initialization["config"]["reference_clock"] = reference_clock
@@ -144,7 +144,7 @@ class RecipeGenerator:
                 ] = DeviceType.HDAWG.sampling_rate_2GHz
 
             for follower in experiment_dao.dio_followers():
-                initialization = self._find_initalization(follower)
+                initialization = self._find_initialization(follower)
                 if not leader_properties.is_desktop_setup:
                     initialization["config"]["dio_mode"] = "hdawg"
                 else:
@@ -153,14 +153,14 @@ class RecipeGenerator:
                     ] = "dio_follower_of_hdawg_leader"
 
         for pqsc_device_id in experiment_dao.pqscs():
-            pqsc_device = self._find_initalization(pqsc_device_id)
+            pqsc_device = self._find_initialization(pqsc_device_id)
             out_ports = []
             for port in experiment_dao.pqsc_ports(pqsc_device_id):
                 follower_device_id = port["device"]
                 out_ports.append(
                     {"port": port["port"], "device_uid": follower_device_id}
                 )
-                follower_device_init = self._find_initalization(follower_device_id)
+                follower_device_init = self._find_initialization(follower_device_id)
                 follower_device_init["config"]["dio_mode"] = "zsync_dio"
 
             pqsc_device["ports"] = out_ports
@@ -181,6 +181,7 @@ class RecipeGenerator:
         output_range=None,
         output_range_unit=None,
         port_delay=None,
+        marker_mode=None,
     ):
         output = {"channel": channel, "enable": True}
         if offset is not None:
@@ -206,8 +207,10 @@ class RecipeGenerator:
             output["oscillator_frequency"] = oscillator_frequency
         if port_delay is not None:
             output["port_delay"] = port_delay
+        if marker_mode is not None:
+            output["marker_mode"] = marker_mode
 
-        initialization: dict = self._find_initalization(device_id)
+        initialization: dict = self._find_initialization(device_id)
         outputs: list = initialization.setdefault("outputs", [])
         outputs.append(output)
 
@@ -230,7 +233,7 @@ class RecipeGenerator:
         if port_delay is not None:
             input["port_delay"] = port_delay
 
-        initialization: dict = self._find_initalization(device_id)
+        initialization: dict = self._find_initialization(device_id)
         inputs: list = initialization.setdefault("inputs", [])
         inputs.append(input)
 
@@ -243,7 +246,7 @@ class RecipeGenerator:
         qa_signal_id: Optional[str],
         command_table_match_offset: Optional[int],
     ):
-        initialization = self._find_initalization(device_id)
+        initialization = self._find_initialization(device_id)
 
         if "awgs" not in initialization:
             initialization["awgs"] = []

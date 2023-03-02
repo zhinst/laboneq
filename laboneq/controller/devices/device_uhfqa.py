@@ -16,7 +16,7 @@ from laboneq.controller.communication import (
 from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.devices.zi_node_monitor import Command, NodeControlBase
 from laboneq.controller.recipe_1_4_0 import IO, Initialization, IntegratorAllocation
-from laboneq.controller.recipe_enums import DIOConfigType, ReferenceClockSource
+from laboneq.controller.recipe_enums import DIOConfigType
 from laboneq.controller.recipe_processor import (
     AwgConfig,
     AwgKey,
@@ -42,8 +42,9 @@ class DeviceUHFQA(DeviceZI):
         super().__init__(*args, **kwargs)
         self.dev_type = "UHFQA"
         self.dev_opts = ["AWG", "DIG", "QA"]
+        self._use_internal_clock = True
 
-    def _get_num_AWGs(self):
+    def _get_num_awgs(self):
         return 1
 
     def _osc_group_by_channel(self, channel: int) -> int:
@@ -58,27 +59,24 @@ class DeviceUHFQA(DeviceZI):
 
     def _nodes_to_monitor_impl(self) -> List[str]:
         nodes = [f"/{self.serial}/system/extclk"]
-        for awg in range(self._get_num_AWGs()):
+        for awg in range(self._get_num_awgs()):
             nodes.append(f"/{self.serial}/awgs/{awg}/enable")
             nodes.append(f"/{self.serial}/awgs/{awg}/ready")
         return nodes
 
     def _error_as_leader(self):
         raise LabOneQControllerException(
-            f"{self.dev_repr}: UHFQA cannot be configured as leader, ensure correct DIO connection in the device setup"
+            f"{self.dev_repr}: UHFQA cannot be configured as leader, ensure correct DIO "
+            f"connection in the device setup"
         )
 
     def _error_ambiguous_upstream(self):
         raise LabOneQControllerException(
-            f"{self.dev_repr}: Can't determine unambiguously upstream device for UHFQA, ensure correct DIO connection in the device setup"
+            f"{self.dev_repr}: Can't determine unambiguously upstream device for UHFQA, ensure "
+            f"correct DIO connection in the device setup"
         )
 
     def update_clock_source(self, force_internal: Optional[bool]):
-        if self.is_standalone():
-            # TODO(2K): Special handling for scope devices,
-            # consider separating it from the main device setup
-            self._use_internal_clock = True
-            return
         if len(self._uplinks) == 0:
             self._error_as_leader()
         if len(self._uplinks) > 1:
@@ -92,13 +90,9 @@ class DeviceUHFQA(DeviceZI):
         # For non-desktop, always use external clock,
         # for desktop - internal is the default (force_internal is None),
         # but allow override to external.
-        self._use_internal_clock = is_desktop and (force_internal != False)
+        self._use_internal_clock = is_desktop and (force_internal is not False)
 
     def clock_source_control_nodes(self) -> List[NodeControlBase]:
-        if self.is_standalone():
-            # TODO(2K): Special handling for scope devices,
-            # consider separating it from the main device setup
-            return []
         source = (
             REFERENCE_CLOCK_SOURCE_INTERNAL
             if self._use_internal_clock
@@ -259,7 +253,8 @@ class DeviceUHFQA(DeviceZI):
 
         if not any(np.isclose([io.range] * len(range_list), range_list)):
             self._logger.warning(
-                "%s: %s channel %d range %.1f is not on the list of allowed ranges: %s. Nearest allowed range will be used.",
+                "%s: %s channel %d range %.1f is not on the list of allowed ranges: %s. Nearest "
+                "allowed range will be used.",
                 self.dev_repr,
                 label,
                 io.channel,
@@ -328,7 +323,7 @@ class DeviceUHFQA(DeviceZI):
 
             if output.port_delay is not None:
                 if output.port_delay != 0:
-                    raise Exception(
+                    raise LabOneQControllerException(
                         f"{self.dev_repr}'s output does not support port delay"
                     )
                 self._logger.debug(
@@ -371,12 +366,15 @@ class DeviceUHFQA(DeviceZI):
             if integrator_allocation.device_id != device_uid:
                 continue
 
-            # TODO(2K): RAW was treated same as integration, as once was considered for use in parallel,
-            # but actually this is not the case, and integration settings are not needed for RAW.
+            # TODO(2K): RAW was treated same as integration, as once was considered for use in
+            # parallel, but actually this is not the case, and integration settings are not needed
+            # for RAW.
             if acquisition_type in [AcquisitionType.INTEGRATION, AcquisitionType.RAW]:
                 if len(integrator_allocation.channels) != 2:
                     raise LabOneQControllerException(
-                        f"{self.dev_repr}: Internal error - expected 2 integrators for signal '{integrator_allocation.signal_id}' in integration mode, got {len(integrator_allocation.channels)}"
+                        f"{self.dev_repr}: Internal error - expected 2 integrators for signal "
+                        f"'{integrator_allocation.signal_id}' in integration mode, "
+                        f"got {len(integrator_allocation.channels)}"
                     )
                 if integrator_allocation.weights is None:
                     # Skip configuration if no integration weights provided to keep same behavior
@@ -389,7 +387,9 @@ class DeviceUHFQA(DeviceZI):
             else:
                 if len(integrator_allocation.channels) != 1:
                     raise LabOneQControllerException(
-                        f"{self.dev_repr}: Internal error - expected 1 integrator for signal '{integrator_allocation.signal_id}', got {len(integrator_allocation.channels)}"
+                        f"{self.dev_repr}: Internal error - expected 1 integrator for signal "
+                        f"'{integrator_allocation.signal_id}', "
+                        f"got {len(integrator_allocation.channels)}"
                     )
                 # 0: 1 -> Real, 2 -> Imag
                 inputs_mapping = [0]
@@ -412,7 +412,8 @@ class DeviceUHFQA(DeviceZI):
                         ),
                         DaqNodeSetAction(
                             self._daq,
-                            f"/{self.serial}/qas/0/integration/weights/{integration_unit_index}/real",
+                            f"/{self.serial}/qas/0/integration/weights/"
+                            f"{integration_unit_index}/real",
                             get_wave(
                                 integrator_allocation.weights + "_i.wave",
                                 recipe_data.compiled.waves,
@@ -420,7 +421,8 @@ class DeviceUHFQA(DeviceZI):
                         ),
                         DaqNodeSetAction(
                             self._daq,
-                            f"/{self.serial}/qas/0/integration/weights/{integration_unit_index}/imag",
+                            f"/{self.serial}/qas/0/integration/weights/"
+                            f"{integration_unit_index}/imag",
                             np.negative(
                                 get_wave(
                                     integrator_allocation.weights + "_q.wave",
@@ -435,7 +437,8 @@ class DeviceUHFQA(DeviceZI):
                         [
                             DaqNodeSetAction(
                                 self._daq,
-                                f"/{self.serial}/qas/0/thresholds/{integration_unit_index}/correlation/enable",
+                                f"/{self.serial}/qas/0/thresholds/"
+                                f"{integration_unit_index}/correlation/enable",
                                 0,
                             ),
                             DaqNodeSetAction(
@@ -470,8 +473,9 @@ class DeviceUHFQA(DeviceZI):
         )
 
         # The rotation coefficients in spectroscopy mode have to take into account that I and Q are
-        # swapped between in- and outputs, i.e. the AWG outputs are I = AWG_wave_I * cos, Q = AWG_wave_Q * sin,
-        # while the weights are I = sin and Q = cos. For more details, see "Complex multiplication in UHFQA":
+        # swapped between in- and outputs, i.e. the AWG outputs are I = AWG_wave_I * cos,
+        # Q = AWG_wave_Q * sin, while the weights are I = sin and Q = cos. For more details,
+        # see "Complex multiplication in UHFQA":
         # https://zhinst.atlassian.net/wiki/spaces/~andreac/pages/787742991/Complex+multiplication+in+UHFQA
         # https://oldwiki.zhinst.com/wiki/display/~andreac/Complex+multiplication+in+UHFQA)
         nodes_to_set_for_spectroscopy_mode.append(
@@ -514,9 +518,9 @@ class DeviceUHFQA(DeviceZI):
                 )
             )
 
-            input = None if inputs is None or len(inputs) == 0 else inputs[0]
+            dev_input = None if inputs is None or len(inputs) == 0 else inputs[0]
             measurement_delay_rounded = self._get_total_rounded_delay_samples(
-                input,
+                dev_input,
                 SAMPLE_FREQUENCY_HZ,
                 DELAY_NODE_GRANULARITY_SAMPLES,
                 DELAY_NODE_MAX_SAMPLES,
@@ -535,15 +539,15 @@ class DeviceUHFQA(DeviceZI):
                 )
             )
 
-        for input in inputs or []:
-            if input.range is None:
+        for dev_input in inputs or []:
+            if dev_input.range is None:
                 continue
-            self._validate_range(input, is_out=False)
+            self._validate_range(dev_input, is_out=False)
             nodes_to_initialize_measurement.append(
                 DaqNodeSetAction(
                     self._daq,
-                    f"/{self.serial}/sigins/{input.channel}/range",
-                    input.range,
+                    f"/{self.serial}/sigins/{dev_input.channel}/range",
+                    dev_input.range,
                 )
             )
 
@@ -563,8 +567,9 @@ class DeviceUHFQA(DeviceZI):
 
         nodes_to_configure_triggers = []
 
-        # Loop over at least AWG instance to cover the case that the instrument is only used as a communication proxy.
-        # Some of the nodes on the AWG branch are needed to get proper communication between HDAWG and UHFQA.
+        # Loop over at least AWG instance to cover the case that the instrument is only used as a
+        # communication proxy. Some of the nodes on the AWG branch are needed to get proper
+        # communication between HDAWG and UHFQA.
         for awg_index in (
             self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
         ):
@@ -629,21 +634,16 @@ class DeviceUHFQA(DeviceZI):
     def _get_integrator_measurement_data(
         self, result_index, num_results, averages_divider: int
     ):
-        # @TODO(andreyk): remove dry_run field from devices, instead inject MockCommunication from controller
-        if not self.dry_run:
-            result_path = f"/{self.serial}/qas/0/result/data/{result_index}/wave"
-            # @TODO(andreyk): replace the raw daq reply parsing on site here and hide it inside Communication class
-            data_node_query = self._daq.get_raw(result_path)
-            assert len(data_node_query[result_path][0]["vector"]) == num_results, (
-                "number of measurement points returned by daq from device "
-                "'{self.uid}' does not match length of recipe"
-                " measurement_map"
-            )
-            return data_node_query[result_path][0]["vector"] / averages_divider
-        else:
-            return [
-                (42 + 42j) / averages_divider if result_index == 0 else (0 + 0j)
-            ] * num_results
+        result_path = f"/{self.serial}/qas/0/result/data/{result_index}/wave"
+        # @TODO(andreyk): replace the raw daq reply parsing on site here and hide it inside
+        # Communication class
+        data_node_query = self._daq.get_raw(result_path)
+        assert len(data_node_query[result_path][0]["vector"]) == num_results, (
+            "number of measurement points returned by daq from device "
+            "'{self.uid}' does not match length of recipe"
+            " measurement_map"
+        )
+        return data_node_query[result_path][0]["vector"] / averages_divider
 
     def get_measurement_data(
         self,
@@ -671,16 +671,13 @@ class DeviceUHFQA(DeviceZI):
             return [complex(real, imag) for real, imag in zip(in_phase, quadrature)]
 
     def get_input_monitor_data(self, channel: int, num_results: int):
-        if not self.dry_run:
-            result_path_ch0 = f"/{self.serial}/qas/0/monitor/inputs/0/wave".lower()
-            result_path_ch1 = f"/{self.serial}/qas/0/monitor/inputs/1/wave".lower()
-            data = self._daq.get_raw(",".join([result_path_ch0, result_path_ch1]))
-            # Truncate returned vectors to the expected length -> hotfix for GCE-681
-            ch0 = data[result_path_ch0][0]["vector"][0:num_results]
-            ch1 = data[result_path_ch1][0]["vector"][0:num_results]
-            return [complex(real, imag) for real, imag in zip(ch0, ch1)]
-        else:
-            return [(52 + 52j)] * num_results
+        result_path_ch0 = f"/{self.serial}/qas/0/monitor/inputs/0/wave".lower()
+        result_path_ch1 = f"/{self.serial}/qas/0/monitor/inputs/1/wave".lower()
+        data = self._daq.get_raw(",".join([result_path_ch0, result_path_ch1]))
+        # Truncate returned vectors to the expected length -> hotfix for GCE-681
+        ch0 = data[result_path_ch0][0]["vector"][0:num_results]
+        ch1 = data[result_path_ch1][0]["vector"][0:num_results]
+        return [complex(real, imag) for real, imag in zip(ch0, ch1)]
 
     def check_results_acquired_status(
         self, channel, acquisition_type: AcquisitionType, result_length, hw_averages
@@ -695,7 +692,9 @@ class DeviceUHFQA(DeviceZI):
                 )
             ]
         )
-        if not self.dry_run and batch_get_results[results_acquired_path] != 0:
+        if batch_get_results[results_acquired_path] != 0:
             raise LabOneQControllerException(
-                f"The number of measurements executed for device {self.serial} does not match the number of measurements defined. Probably the time between measurements or within a loop is too short. Please contact Zurich Instruments."
+                f"The number of measurements executed for device {self.serial} does not match "
+                f"the number of measurements defined. Probably the time between measurements or "
+                f"within a loop is too short. Please contact Zurich Instruments."
             )

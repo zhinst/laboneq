@@ -46,6 +46,7 @@ def sample_pulse(
     samples: Optional[np.ndarray] = None,
     mixer_type: Optional[MixerType] = MixerType.IQ,
     pulse_parameters: Optional[Dict[str, Any]] = None,
+    markers=None,
 ):
     """Create a waveform from a pulse definition.
 
@@ -146,7 +147,31 @@ def sample_pulse(
             )
         samples = samples.real * (1.0 + 1.0j)
 
-    return {"samples_i": samples.real, "samples_q": samples.imag}
+    retval = {"samples_i": samples.real, "samples_q": samples.imag}
+    if markers:
+        if next(
+            (
+                True
+                for m in markers
+                if m.get("marker_selector") == "marker1" and m.get("enable")
+            ),
+            False,
+        ):  #  and m.get("enabled"), False):
+            samples_markers = np.ones_like(samples, dtype=np.int16)
+            retval["samples_marker1"] = samples_markers
+        if next(
+            (
+                m.get("enable")
+                for m in markers
+                if m.get("marker_selector") == "marker2" and m.get("enable")
+            ),
+            False,
+        ):
+
+            samples_markers = np.ones(len(samples), dtype=np.int16)
+            retval["samples_marker2"] = samples_markers
+
+    return retval
 
 
 pulse_function_library = dict()

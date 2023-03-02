@@ -4,7 +4,6 @@
 import json
 import logging
 import os
-from cmath import e
 from pathlib import Path
 
 _logger = logging.getLogger(__name__)
@@ -58,7 +57,7 @@ def show_event_graph(name, event_graph_dict):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     filename = f"{name}_{timestamp}.html"
     event_graph_dict["title"] = name
-    viewer_url = EventGraphViewer.generate_viewer_html_file(
+    EventGraphViewer.generate_viewer_html_file(
         events=event_graph_dict, filename=filename
     )
     return ipd.FileLink(filename)

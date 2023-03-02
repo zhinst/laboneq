@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import math
 import os
 from dataclasses import asdict, dataclass
 from typing import Dict, Optional, TypeVar
@@ -25,6 +26,10 @@ _USER_ENABLED_SETTINGS = [
     "SHFSG_FORCE_COMMAND_TABLE",
     "USE_EXPERIMENTAL_SCHEDULER",
 ]
+
+
+def round_min_playwave_hint(n: int, multiple: int) -> int:
+    return math.ceil(n / multiple) * multiple
 
 
 @dataclass(frozen=True)

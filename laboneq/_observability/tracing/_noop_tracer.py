@@ -1,7 +1,6 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-import typing as t
 from functools import wraps
 
 

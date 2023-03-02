@@ -10,6 +10,7 @@ import os
 import traceback
 from collections import defaultdict
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -30,7 +31,7 @@ from laboneq.controller.devices.device_uhfqa import DeviceUHFQA
 from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.devices.zi_node_monitor import ResponseWaiter
 from laboneq.controller.protected_session import ProtectedSession
-from laboneq.controller.recipe_1_4_0 import *
+from laboneq.controller.recipe_1_4_0 import *  # noqa: F401, F403
 from laboneq.controller.recipe_processor import (
     RecipeData,
     RtExecutionInfo,
@@ -96,7 +97,7 @@ class Controller:
         self._logger.debug("Controller created")
         self._logger.debug("Controller debug logging is on")
 
-        self._logger.info(f"VERSION: laboneq {__version__}")
+        self._logger.info("VERSION: laboneq %s", __version__)
 
         # TODO: Remove this option and support of AWG module.
         self._is_using_standalone_compiler = os.environ.get(
@@ -362,7 +363,8 @@ class Controller:
             )
         if not response_waiter.wait_all(timeout=2):
             self._logger.warning(
-                "Conditions to start RT on followers still not fulfilled after 2 seconds, nonetheless trying to continue..."
+                "Conditions to start RT on followers still not fulfilled after 2 seconds, "
+                "nonetheless trying to continue..."
             )
 
         # Standalone workaround: The device is triggering itself,
@@ -402,7 +404,8 @@ class Controller:
             )
         if not response_waiter.wait_all(timeout=guarded_wait_time):
             self._logger.warning(
-                "Stop conditions still not fulfilled after %f s, estimated execution time was %.2f s. Continuing to the next step.",
+                "Stop conditions still not fulfilled after %f s, estimated execution time "
+                "was %.2f s. Continuing to the next step.",
                 guarded_wait_time,
                 min_wait_time,
             )
@@ -477,7 +480,8 @@ class Controller:
             self.disconnect()
 
     def _find_awg(self, seqc_name: str) -> Tuple[str, int]:
-        # TODO(2K): Do this in the recipe preprocessor, or even modify the compiled experiment data model
+        # TODO(2K): Do this in the recipe preprocessor, or even modify the compiled experiment
+        # data model
         for init in self._recipe_data.initializations:
             if init.awgs is None:
                 continue
@@ -491,12 +495,13 @@ class Controller:
     ):
         """Replaces specific pulse with the new sample data on the device.
 
-        This is useful when called from the user function, allows fast waveform replacement within near-time
-        loop without experiment recompilation.
+        This is useful when called from the user function, allows fast waveform replacement within
+        near-time loop without experiment recompilation.
 
         Args:
             pulse_uid: pulse to replace, can be Pulse object or uid of the pulse
-            pulse_or_array: replacement pulse, can be Pulse object or value array (see sampled_pulse_* from the pulse library)
+            pulse_or_array: replacement pulse, can be Pulse object or value array
+            (see sampled_pulse_* from the pulse library)
         """
         acquisition_type = RtExecutionInfo.get_acquisition_type(
             self._recipe_data.rt_execution_infos
@@ -510,7 +515,7 @@ class Controller:
                 for a in self._recipe_data.compiled.wave_indices
                 if a["filename"] == repl.awg_id
             )
-            awg_wave_map = awg_indices["value"]
+            awg_wave_map: Dict[str, List[Union[int, str]]] = awg_indices["value"]
             target_wave = awg_wave_map.get(repl.sig_string)
             seqc_name = repl.awg_id[: -len("_waveindices.csv")] + ".seqc"
             awg = self._find_awg(seqc_name)
@@ -578,11 +583,11 @@ class Controller:
             self.step_param_nodes = []
             self.nt_loop_indices: List[int] = []
 
-        def set_handler(self, path: str, val):
+        def set_handler(self, path: str, value):
             dev = self.controller._devices.find_by_path(path)
             self.step_param_nodes.append(
                 DaqNodeSetAction(
-                    dev._daq, path, val, caching_strategy=CachingStrategy.NO_CACHE
+                    dev._daq, path, value, caching_strategy=CachingStrategy.NO_CACHE
                 )
             )
 
@@ -602,7 +607,7 @@ class Controller:
             self,
             name: str,
             index: int,
-            val: float,
+            value: float,
             axis_name: str,
             values: npt.ArrayLike,
         ):
@@ -610,7 +615,7 @@ class Controller:
             for device_id in device_ids:
                 device = self.controller._devices.find_by_uid(device_id)
                 self.step_param_nodes.extend(
-                    device.collect_prepare_sweep_step_nodes_for_param(name, val)
+                    device.collect_prepare_sweep_step_nodes_for_param(name, value)
                 )
 
         def for_loop_handler(self, count: int, index: int, enter: bool):
@@ -635,9 +640,7 @@ class Controller:
                 self.step_param_nodes.clear()
                 for retry in range(3):  # Up to 3 retries
                     if retry > 0:
-                        self.controller._logger.info(
-                            f"Step retry %s of 3...", retry + 1
-                        )
+                        self.controller._logger.info("Step retry %s of 3...", retry + 1)
                         batch_set(step_prepare_nodes)
                     try:
                         self.controller._execute_one_step(acquisition_type)
@@ -669,7 +672,9 @@ class Controller:
             if rt_info.acquisition_type == AcquisitionType.RAW:
                 if len(self._recipe_data.result_shapes) > 1:
                     raise LabOneQControllerException(
-                        f"Multiple raw acquire events with handles {list(self._recipe_data.result_shapes.keys())}. Only single raw acquire per experiment allowed."
+                        f"Multiple raw acquire events with handles "
+                        f"{list(self._recipe_data.result_shapes.keys())}. "
+                        f"Only single raw acquire per experiment allowed."
                     )
                 empty_res = make_acquired_result(
                     data=np.empty(shape=[acquire_length], dtype=np.complex128),
@@ -708,7 +713,7 @@ class Controller:
         for awg_key, awg_config in rt_execution_info.per_awg_configs.items():
             device = self._devices.find_by_uid(awg_key.device_uid)
             if rt_execution_info.acquisition_type == AcquisitionType.RAW:
-                raw_result = device.get_input_monitor_data(
+                raw_results = device.get_input_monitor_data(
                     awg_key.awg_index, awg_config.acquire_length
                 )
                 # Copy to all result handles, but actually only one handle is supported for now
@@ -717,8 +722,8 @@ class Controller:
                     unique_handles = set(mapping)
                     for handle in unique_handles:
                         result = self._results.acquired_results[handle]
-                        for raw_result_idx in range(len(raw_result)):
-                            result.data[raw_result_idx] = raw_result[raw_result_idx]
+                        for raw_result_idx, raw_result in enumerate(raw_results):
+                            result.data[raw_result_idx] = raw_result
             else:
                 if rt_execution_info.averaging_mode == AveragingMode.SINGLE_SHOT:
                     effective_averages = 1
@@ -739,7 +744,7 @@ class Controller:
                     assert integrator_allocation.device_id == awg_key.device_uid
                     assert integrator_allocation.awg == awg_key.awg_index
                     result_indices = integrator_allocation.channels
-                    raw_result = device.get_measurement_data(
+                    raw_results = device.get_measurement_data(
                         awg_key.awg_index,
                         rt_execution_info.acquisition_type,
                         result_indices,
@@ -753,7 +758,7 @@ class Controller:
                             continue  # unused entries in sparse result vector map to None handle
                         result = self._results.acquired_results[handle]
                         build_partial_result(
-                            result, nt_loop_indices, raw_result, mapping, handle
+                            result, nt_loop_indices, raw_results, mapping, handle
                         )
 
     def _report_step_error(

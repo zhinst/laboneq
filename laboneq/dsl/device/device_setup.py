@@ -302,7 +302,9 @@ class DeviceSetup:
         """Construct the device setup from Python dicts, same structure as yaml
 
         Args:
-            instrument_list (dict): List of instruments in the setup
+            instrument_list (dict): List of instruments in the setup (deprecated; for
+                backwards compatibility)
+            instruments (dict): List of instruments in the setup
             connections (dict): Connections between devices
             filepath (str): Path to the YAML file containing the device description.
             server_host (str): Server host of the setup that should be created.

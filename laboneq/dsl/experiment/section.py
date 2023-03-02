@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import warnings
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
@@ -73,6 +72,10 @@ class Section:
     #: Optional trigger pulses to play during this section. See :meth:`~.Experiment.section`.
     trigger: Dict[str, Dict] = field(default_factory=dict)
 
+    #: Whether to escalate to the system grid even if tighter alignment is possible.
+    #: See :meth:`~.Experiment.section`.
+    on_system_grid: Optional[bool] = field(default=False)
+
     def __post_init__(self):
         if self.uid is None:
             self.uid = section_id_generator()
@@ -124,6 +127,7 @@ class Section:
         length=None,
         pulse_parameters: Optional[Dict[str, Any]] = None,
         precompensation_clear: Optional[bool] = None,
+        marker: Optional[Dict[str, Any]] = None,
     ):
         """Play a pulse on a signal.
 
@@ -134,6 +138,7 @@ class Section:
             phase: Phase of the pulse that should be played.
             pulse_parameters: Dictionary with user pulse function parameters (re)binding.
             precompensation_clear: Clear the precompensation filter during the pulse.
+            marker: Instruction for playing marker signals along with the pulse
         """
         self._add_operation(
             PlayPulse(
@@ -146,6 +151,7 @@ class Section:
                 length=length,
                 pulse_parameters=pulse_parameters,
                 precompensation_clear=precompensation_clear,
+                marker=marker,
             )
         )
 

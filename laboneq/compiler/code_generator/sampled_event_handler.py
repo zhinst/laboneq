@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import logging
-import textwrap
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set
 
@@ -191,8 +190,6 @@ class SampledEventHandler:
                         wave_index,
                         play_wave_channel,
                     )
-            else:
-                wave_index = wave_index[0]
 
         if not match_statement_active:
             if self.use_command_table:
@@ -214,7 +211,7 @@ class SampledEventHandler:
                     sig_string,
                     play_wave_channel,
                 )
-            self.seqc_tracker.clear_deferred_function_calls(sampled_event)
+            self.seqc_tracker.clear_deferred_function_calls()
             self.seqc_tracker.current_time = sampled_event["end"]
         else:
             assert self.use_command_table
@@ -338,14 +335,13 @@ class SampledEventHandler:
         self.seqc_tracker.add_required_playzeros(sampled_event)
 
         if sampled_event["end"] > self.seqc_tracker.current_time:
-            play_zero_after_qa = sampled_event["end"] - self.seqc_tracker.current_time
             self.seqc_tracker.add_timing_comment(sampled_event["end"])
-            self.seqc_tracker.add_play_zero_statement(play_zero_after_qa)
-        self.seqc_tracker.current_time = sampled_event["end"]
 
-        self.seqc_tracker.add_function_call_statement("startQA", args)
+        self.seqc_tracker.add_function_call_statement("startQA", args, deferred=True)
         if "spectroscopy" in sampled_event["acquisition_type"]:
-            self.seqc_tracker.add_function_call_statement("setTrigger", [0])
+            self.seqc_tracker.add_function_call_statement(
+                "setTrigger", [0], deferred=True
+            )
 
         for ev in sampled_event["acquire_events"]:
             for h in ev["acquire_handles"]:
@@ -505,6 +501,7 @@ class SampledEventHandler:
         if (
             self.seqc_tracker.current_loop_stack_generator().num_noncomment_statements()
             > 0
+            or len(self.seqc_tracker.deferred_function_calls) > 0
         ):
             _logger.debug(
                 "  Processing ITERATE EVENT %s, loop stack is %s",
@@ -558,7 +555,6 @@ class SampledEventHandler:
 
     def handle_match(self, sampled_event):
         self.match_parent_event = sampled_event
-        self._match_command_table_entries = {}
 
     def close_event_list(self):
         if self.match_parent_event is not None:
@@ -594,7 +590,7 @@ class SampledEventHandler:
             ev = self.match_parent_event
             if ev["local"]:
                 if ev["start"] - self.seqc_tracker.current_time < 32:
-                    _logger.warn(
+                    _logger.warning(
                         f"Match section for handle {handle} too close to "
                         "previous play event, will be delayed by up to 32 samples."
                     )
@@ -612,7 +608,7 @@ class SampledEventHandler:
             else:
                 assert ev["local"], "Global feedback not supported yet."
             self.seqc_tracker.add_timing_comment(ev["end"])
-            self.seqc_tracker.clear_deferred_function_calls(self.match_parent_event)
+            self.seqc_tracker.clear_deferred_function_calls()
             self.seqc_tracker.current_time = self.match_parent_event["end"]
             self.match_parent_event = None
 

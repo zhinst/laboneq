@@ -37,7 +37,7 @@ class DevicePQSC(DeviceZI):
         return nodes
 
     def update_clock_source(self, force_internal: Optional[bool]):
-        self._use_internal_clock = force_internal == True
+        self._use_internal_clock = force_internal is True
 
     def clock_source_control_nodes(self) -> List[NodeControlBase]:
         source = (
@@ -88,7 +88,8 @@ class DevicePQSC(DeviceZI):
         self, initialization: Initialization.Data, recipe_data: RecipeData
     ) -> List[DaqNodeAction]:
         # Ensure ZSync links are established
-        # TODO(2K): This is rather a hotfix, waiting to be done in parallel for all devices with subscription / poll
+        # TODO(2K): This is rather a hotfix, waiting to be done in parallel for all devices with
+        # subscription / poll
         # TODO(2K): Verify also the downlink device serial (.../connection/serial) matches
         for port, _ in self._downlinks.items():
             self._wait_for_node(

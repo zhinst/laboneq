@@ -25,6 +25,9 @@ class NodeBase:
     subscribed: bool = False
     handler: Callable[[NodeBase], None] = None
 
+    def node_value(self) -> Any:
+        return {"value": [self.value]}
+
 
 @dataclass
 class NodeFloat(NodeBase):
@@ -42,17 +45,23 @@ class NodeStr(NodeBase):
 
 
 @dataclass
-class NodeVectorFloat(NodeBase):
+class NodeVectorBase(NodeBase):
+    def node_value(self) -> Any:
+        return [{"vector": self.value}]
+
+
+@dataclass
+class NodeVectorFloat(NodeVectorBase):
     value: npt.ArrayLike = field(default_factory=lambda: np.array([], dtype=np.float64))
 
 
 @dataclass
-class NodeVectorInt(NodeBase):
+class NodeVectorInt(NodeVectorBase):
     value: npt.ArrayLike = field(default_factory=lambda: np.array([], dtype=np.int64))
 
 
 @dataclass
-class NodeVectorComplex(NodeBase):
+class NodeVectorComplex(NodeVectorBase):
     value: npt.ArrayLike = field(
         default_factory=lambda: np.array([], dtype=np.complex128)
     )
@@ -86,7 +95,7 @@ class NodeType(Enum):
 class NodeInfo:
     "Node descriptor to use in node definitions."
     type: NodeType = NodeType.FLOAT
-    default: Any = 0.0
+    default: Optional[Any] = None
     read_only: bool = False
     handler: Callable[[NodeBase], None] = None
     # For DYNAMIC nodes
@@ -102,15 +111,21 @@ class NodeInfo:
                 getter=self.getter,
                 setter=self.setter,
             )
-            if self.setter is not None:
+            if self.setter is not None and self.default is not None:
                 node.value = self.default
             return node
-        else:
+
+        if self.default is None:
             return self.type.value(
                 read_only=self.read_only,
-                value=self.default,
                 handler=self.handler,
             )
+
+        return self.type.value(
+            read_only=self.read_only,
+            value=self.default,
+            handler=self.handler,
+        )
 
 
 @dataclass
@@ -160,7 +175,7 @@ class DevEmu(ABC):
 
     def get(self, dev_path: str) -> Any:
         node = self._get_node(dev_path)
-        return node.value
+        return node.node_value()
 
     def getString(self, dev_path: str) -> str:
         node = self._get_node(dev_path)
@@ -262,7 +277,7 @@ class DevEmuHDAWG(DevEmuHW):
         # 1 -> external (freq 10e6)
         # 2 -> zsync (freq 100e6)
         target_freq = 10e6 if source == 1 else 100e6
-        current_freq = self.get("system/clocks/referenceclock/freq")
+        current_freq = self._get_node("system/clocks/referenceclock/freq").value
         if current_freq != target_freq:
             self._set_val("system/clocks/referenceclock/freq", target_freq)
 
@@ -297,20 +312,35 @@ class DevEmuHDAWG(DevEmuHW):
 
 class DevEmuUHFQA(DevEmuHW):
     def _awg_stop(self):
-        self._set_val(f"awgs/0/enable", 0)
+        self._set_val("awgs/0/enable", 0)
+        result_enable = self._get_node("qas/0/result/enable").value
+        monitor_enable = self._get_node("qas/0/monitor/enable").value
+        if result_enable != 0:
+            length = self._get_node("qas/0/result/length").value
+            averages = self._get_node("qas/0/result/averages").value
+            self._set_val("qas/0/result/acquired", 0)  # Wraps around to 0 on success
+            for result_index in range(10):
+                self._set_val(
+                    f"qas/0/result/data/{result_index}/wave",
+                    np.array([42 / averages if result_index in [0, 1] else 0] * length),
+                )
+        if monitor_enable != 0:
+            length = self._get_node("qas/0/monitor/length").value
+            self._set_val("qas/0/monitor/inputs/0/wave", [52] * length)
+            self._set_val("qas/0/monitor/inputs/1/wave", [52] * length)
 
     def _awg_execute(self, node: NodeBase):
         self._scheduler.enter(delay=0.001, priority=0, action=self._awg_stop)
 
     def _awg_ready(self):
-        self._set_val(f"awgs/0/ready", 1)
+        self._set_val("awgs/0/ready", 1)
 
     def _elf_upload(self, node: NodeBase):
-        self._set_val(f"awgs/0/ready", 0)
+        self._set_val("awgs/0/ready", 0)
         self._scheduler.enter(delay=0.001, priority=0, action=self._awg_ready)
 
     def _node_def(self) -> Dict[str, NodeInfo]:
-        return {
+        nd = {
             "awgs/0/enable": NodeInfo(
                 type=NodeType.INT, default=0, handler=DevEmuUHFQA._awg_execute
             ),
@@ -318,12 +348,19 @@ class DevEmuUHFQA(DevEmuHW):
                 type=NodeType.VECTOR_INT, default=[], handler=DevEmuUHFQA._elf_upload
             ),
             "awgs/0/ready": NodeInfo(type=NodeType.INT, default=0),
+            "qas/0/monitor/inputs/0/wave": NodeInfo(type=NodeType.VECTOR_COMPLEX),
+            "qas/0/monitor/inputs/1/wave": NodeInfo(type=NodeType.VECTOR_COMPLEX),
         }
+        for result_index in range(10):
+            nd[f"qas/0/result/data/{result_index}/wave"] = NodeInfo(
+                type=NodeType.VECTOR_COMPLEX
+            )
+        return nd
 
 
 class DevEmuPQSC(DevEmuHW):
     def _trig_stop(self):
-        self._set_val(f"execution/enable", 0)
+        self._set_val("execution/enable", 0)
 
     def _trig_execute(self, node: NodeBase):
         self._scheduler.enter(delay=0.001, priority=0, action=self._trig_stop)
@@ -362,44 +399,117 @@ class DevEmuPQSC(DevEmuHW):
         }
 
 
-class DevEmuSHFQA(DevEmuHW):
-    def _awg_stop(self, channel: int):
+class DevEmuSHFQABase(DevEmuHW):
+    def _awg_stop_qa(self, channel: int):
+        readout_enable = self._get_node(
+            f"qachannels/{channel}/readout/result/enable"
+        ).value
+        spectroscopy_enable = self._get_node(
+            f"qachannels/{channel}/spectroscopy/result/enable"
+        ).value
+        scope_enable = self._get_node("scopes/0/enable").value
         self._set_val(f"qachannels/{channel}/generator/enable", 0)
         self._set_val(f"qachannels/{channel}/readout/result/enable", 0)
         self._set_val(f"qachannels/{channel}/spectroscopy/result/enable", 0)
+        if readout_enable != 0:
+            length = self._get_node(f"qachannels/{channel}/readout/result/length").value
+            averages = self._get_node(
+                f"qachannels/{channel}/readout/result/averages"
+            ).value
+            self._set_val(
+                f"qachannels/{channel}/readout/result/acquired", length * averages
+            )
+            for integrator in range(16):
+                self._set_val(
+                    f"qachannels/{channel}/readout/result/data/{integrator}/wave",
+                    np.array([(42 + 42j) if integrator == 0 else (0 + 0j)] * length),
+                )
+        if spectroscopy_enable != 0:
+            length = self._get_node(
+                f"qachannels/{channel}/spectroscopy/result/length"
+            ).value
+            averages = self._get_node(
+                f"qachannels/{channel}/spectroscopy/result/averages"
+            ).value
+            self._set_val(
+                f"qachannels/{channel}/spectroscopy/result/acquired", length * averages
+            )
+            self._set_val(
+                f"qachannels/{channel}/spectroscopy/result/data/wave",
+                np.array([(42 + 42j)] * length),
+            )
+        if scope_enable != 0:
+            # Assuming here that the scope was triggered by AWG and channels configured to capture
+            # QA channels 1:1. Not emulating various trigger, input source, etc. settings!
+            scope_single = self._get_node("scopes/0/single").value
+            if scope_single != 0:
+                self._set_val("scopes/0/enable", 0)
+            length = self._get_node("scopes/0/length").value
+            for scope_ch in range(4):
+                self._set_val(
+                    f"scopes/0/channels/{scope_ch}/wave",
+                    np.array([(52 + 52j)] * length),
+                )
 
-    def _awg_execute(self, node: NodeBase, channel: int):
+    def _awg_execute_qa(self, node: NodeBase, channel: int):
         self._scheduler.enter(
-            delay=0.001, priority=0, action=self._awg_stop, argument=(channel,)
+            delay=0.001, priority=0, action=self._awg_stop_qa, argument=(channel,)
         )
 
-    def _node_def(self) -> Dict[str, NodeInfo]:
+    def _node_def_qa(self) -> Dict[str, NodeInfo]:
         nd = {}
         for channel in range(4):
             nd[f"qachannels/{channel}/generator/enable"] = NodeInfo(
                 type=NodeType.INT,
                 default=0,
-                handler=partial(DevEmuSHFQA._awg_execute, channel=channel),
+                handler=partial(DevEmuSHFQABase._awg_execute_qa, channel=channel),
             )
-            # TODO(2K): emulate result logging
             nd[f"qachannels/{channel}/readout/result/enable"] = NodeInfo(
                 type=NodeType.INT, default=0
             )
             nd[f"qachannels/{channel}/spectroscopy/result/enable"] = NodeInfo(
                 type=NodeType.INT, default=0
             )
+            for integrator in range(16):
+                nd[
+                    f"qachannels/{channel}/readout/result/data/{integrator}/wave"
+                ] = NodeInfo(type=NodeType.VECTOR_COMPLEX)
+            nd[f"qachannels/{channel}/spectroscopy/result/data/wave"] = NodeInfo(
+                type=NodeType.VECTOR_COMPLEX
+            )
+            for scope_ch in range(4):
+                nd[f"scopes/0/channels/{scope_ch}/wave"] = NodeInfo(
+                    type=NodeType.VECTOR_COMPLEX
+                )
         return nd
 
 
-class DevEmuSHFSG(DevEmuHW):
-    def _awg_stop(self, channel: int):
+class DevEmuSHFQA(DevEmuSHFQABase):
+    def _node_def(self) -> Dict[str, NodeInfo]:
+        return self._node_def_qa()
+
+
+class DevEmuSHFSGBase(DevEmuHW):
+    def _awg_stop_sg(self, channel: int):
         self._set_val(f"sgchannels/{channel}/awg/enable", 0)
 
-    def _awg_execute(self, node: NodeBase, channel: int):
+    def _awg_execute_sg(self, node: NodeBase, channel: int):
         self._scheduler.enter(
-            delay=0.001, priority=0, action=self._awg_stop, argument=(channel,)
+            delay=0.001, priority=0, action=self._awg_stop_sg, argument=(channel,)
         )
 
+    def _node_def_sg(self) -> Dict[str, NodeInfo]:
+        nd = {}
+        for channel in range(8):
+            nd[f"sgchannels/{channel}/awg/enable"] = NodeInfo(
+                type=NodeType.INT,
+                default=0,
+                handler=partial(DevEmuSHFSGBase._awg_execute_sg, channel=channel),
+            )
+        return nd
+
+
+class DevEmuSHFSG(DevEmuSHFSGBase):
     def _node_def(self) -> Dict[str, NodeInfo]:
         nd = {
             "features/devtype": NodeInfo(
@@ -411,34 +521,11 @@ class DevEmuSHFSG(DevEmuHW):
                 default=self._dev_opts.get("features/options", ""),
             ),
         }
-        for channel in range(8):
-            nd[f"sgchannels/{channel}/awg/enable"] = NodeInfo(
-                type=NodeType.INT,
-                default=0,
-                handler=partial(DevEmuSHFSG._awg_execute, channel=channel),
-            )
+        nd.update(self._node_def_sg())
         return nd
 
 
-class DevEmuSHFQC(DevEmuHW):
-    def _qa_awg_stop(self, channel: int):
-        self._set_val(f"qachannels/{channel}/generator/enable", 0)
-        self._set_val(f"qachannels/{channel}/readout/result/enable", 0)
-        self._set_val(f"qachannels/{channel}/spectroscopy/result/enable", 0)
-
-    def _qa_awg_execute(self, node: NodeBase, channel: int):
-        self._scheduler.enter(
-            delay=0.001, priority=0, action=self._qa_awg_stop, argument=(channel,)
-        )
-
-    def _sg_awg_stop(self, channel: int):
-        self._set_val(f"sgchannels/{channel}/awg/enable", 0)
-
-    def _sg_awg_execute(self, node: NodeBase, channel: int):
-        self._scheduler.enter(
-            delay=0.001, priority=0, action=self._sg_awg_stop, argument=(channel,)
-        )
-
+class DevEmuSHFQC(DevEmuSHFQABase, DevEmuSHFSGBase):
     def _node_def(self) -> Dict[str, NodeInfo]:
         nd = {
             "features/devtype": NodeInfo(
@@ -450,25 +537,8 @@ class DevEmuSHFQC(DevEmuHW):
                 default=self._dev_opts.get("features/options", "QC6CH"),
             ),
         }
-        for channel in range(1):
-            nd[f"qachannels/{channel}/generator/enable"] = NodeInfo(
-                type=NodeType.INT,
-                default=0,
-                handler=partial(DevEmuSHFQC._qa_awg_execute, channel=channel),
-            )
-            # TODO(2K): emulate result logging
-            nd[f"qachannels/{channel}/readout/result/enable"] = NodeInfo(
-                type=NodeType.INT, default=0
-            )
-            nd[f"qachannels/{channel}/spectroscopy/result/enable"] = NodeInfo(
-                type=NodeType.INT, default=0
-            )
-        for channel in range(6):
-            nd[f"sgchannels/{channel}/awg/enable"] = NodeInfo(
-                type=NodeType.INT,
-                default=0,
-                handler=partial(DevEmuSHFQC._sg_awg_execute, channel=channel),
-            )
+        nd.update(self._node_def_qa())
+        nd.update(self._node_def_sg())
         return nd
 
 
@@ -581,8 +651,8 @@ class ziDAQServerEmulator:
 
     def _resolve_paths_and_perform(
         self, path: Union[str, List[str]], handler: Callable
-    ):
-        results = {}
+    ) -> Dict[str, NodeBase]:
+        results: Dict[str, NodeBase] = {}
         for p in _canonical_path_list(path):
             devices, dev_path = self._resolve_dev(p)
             dev_path_suffix = "" if len(dev_path) == 0 else f"/{dev_path}"
@@ -621,8 +691,7 @@ class ziDAQServerEmulator:
         # TODO(2K): reshape results
         assert flat == True
         # TODO(2K): emulate timestamp
-        results = {p: {"value": [r]} for p, r in raw_results.items()}
-        return results
+        return raw_results
 
     def _set(self, device: DevEmu, dev_path: str, value_dict: Dict[str, Any]):
         full_path = device._full_path(dev_path)
@@ -642,7 +711,7 @@ class ziDAQServerEmulator:
     ):
         self._progress_scheduler()
         if isinstance(path_or_items, str):
-            path = path_or_items
+            pass
             # TODO(2K): stub
         else:
             items = path_or_items
@@ -751,9 +820,9 @@ class AWGModuleEmulator:
         self, path_or_items: Union[str, List[List[Any]]], value: Optional[Any] = None
     ):
         if isinstance(path_or_items, str):
-            path = path_or_items
+            _ = path_or_items
         else:
-            items = path_or_items
+            _ = path_or_items
         # TODO(2K): stub
 
     def get(self, path: str, flat: bool = False):

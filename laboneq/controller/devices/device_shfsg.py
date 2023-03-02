@@ -32,7 +32,7 @@ class DeviceSHFSG(DeviceZI):
         self.dev_opts = []
         self._channels = 8
         self._output_to_synth_map = [0, 0, 1, 1, 2, 2, 3, 3]
-        self._wait_for_AWGs = True
+        self._wait_for_awgs = True
         self._emit_trigger = False
 
     @property
@@ -61,7 +61,8 @@ class DeviceSHFSG(DeviceZI):
                 self._output_to_synth_map = [1, 1, 2, 2, 3, 3]
             else:
                 self._logger.warning(
-                    "%s: No valid channel option found, installed options: [%s]. Assuming 2ch device.",
+                    "%s: No valid channel option found, installed options: [%s]. "
+                    "Assuming 2ch device.",
                     self.dev_repr,
                     ", ".join(self.dev_opts),
                 )
@@ -87,7 +88,7 @@ class DeviceSHFSG(DeviceZI):
             "ready": "/{serial}/sgchannels/{index}/awg/ready",
         }
 
-    def _get_num_AWGs(self):
+    def _get_num_awgs(self):
         return self._channels
 
     def _validate_range(self, io: IO.Data):
@@ -105,7 +106,8 @@ class DeviceSHFSG(DeviceZI):
             )
         if not any(numpy.isclose([io.range] * len(range_list), range_list)):
             self._logger.warning(
-                "%s: %s channel %d range %.1f is not on the list of allowed ranges: %s. Nearest allowed range will be used.",
+                "%s: %s channel %d range %.1f is not on the list of allowed ranges: %s. "
+                "Nearest allowed range will be used.",
                 self.dev_repr,
                 label,
                 io.channel,
@@ -128,7 +130,7 @@ class DeviceSHFSG(DeviceZI):
 
     def _nodes_to_monitor_impl(self) -> List[str]:
         nodes = []
-        for awg in range(self._get_num_AWGs()):
+        for awg in range(self._get_num_awgs()):
             nodes.append(f"/{self.serial}/sgchannels/{awg}/awg/enable")
             nodes.append(f"/{self.serial}/sgchannels/{awg}/awg/ready")
         return nodes
@@ -159,7 +161,7 @@ class DeviceSHFSG(DeviceZI):
 
     def conditions_for_execution_ready(self) -> Dict[str, Any]:
         conditions: Dict[str, Any] = {}
-        if self._wait_for_AWGs:
+        if self._wait_for_awgs:
             for awg_index in self._allocated_awgs:
                 conditions[f"/{self.serial}/sgchannels/{awg_index}/awg/enable"] = 1
         return conditions
@@ -225,7 +227,7 @@ class DeviceSHFSG(DeviceZI):
 
             if output.port_delay is not None:
                 if output.port_delay != 0:
-                    raise Exception(
+                    raise LabOneQControllerException(
                         f"{self.dev_repr}'s output does not support port delay"
                     )
                 self._logger.info(
@@ -286,7 +288,8 @@ class DeviceSHFSG(DeviceZI):
         def get_synth_idx(io: IO.Data):
             if io.channel >= self._channels:
                 raise LabOneQControllerException(
-                    f"{self.dev_repr}: Attempt to configure channel {io.channel + 1} on a device with {self._channels} channels. Verify your device setup."
+                    f"{self.dev_repr}: Attempt to configure channel {io.channel + 1} on a device "
+                    f"with {self._channels} channels. Verify your device setup."
                 )
             synth_idx = self._output_to_synth_map[io.channel]
             prev_io = center_frequencies.get(synth_idx)
@@ -294,7 +297,9 @@ class DeviceSHFSG(DeviceZI):
                 center_frequencies[synth_idx] = io
             elif prev_io.lo_frequency != io.lo_frequency:
                 raise LabOneQControllerException(
-                    f"{self.dev_repr}: Local oscillator frequency mismatch between outputs {prev_io.channel} and {io.channel} sharing synthesizer {synth_idx}: {prev_io.lo_frequency} != {io.lo_frequency}"
+                    f"{self.dev_repr}: Local oscillator frequency mismatch between outputs "
+                    f"{prev_io.channel} and {io.channel} sharing synthesizer {synth_idx}: "
+                    f"{prev_io.lo_frequency} != {io.lo_frequency}"
                 )
             return synth_idx
 
@@ -302,7 +307,8 @@ class DeviceSHFSG(DeviceZI):
         for io in ios:
             if io.lo_frequency is None:
                 raise LabOneQControllerException(
-                    f"{self.dev_repr}: Local oscillator for channel {io.channel} is required, but is not provided."
+                    f"{self.dev_repr}: Local oscillator for channel {io.channel} is required, "
+                    f"but is not provided."
                 )
             if io.port_mode is None or io.port_mode == "RF":
                 nodes_to_initialize_measurement.append(
@@ -341,7 +347,7 @@ class DeviceSHFSG(DeviceZI):
         self, initialization: Initialization.Data, recipe_data: RecipeData
     ) -> List[DaqNodeAction]:
         self._logger.debug("Configuring triggers...")
-        self._wait_for_AWGs = True
+        self._wait_for_awgs = True
         self._emit_trigger = False
 
         nodes_to_configure_triggers = []
@@ -350,9 +356,9 @@ class DeviceSHFSG(DeviceZI):
 
         if dio_mode == DIOConfigType.ZSYNC_DIO:
             pass
-        elif dio_mode == DIOConfigType.HDAWG_LEADER or dio_mode == DIOConfigType.HDAWG:
+        elif dio_mode in (DIOConfigType.HDAWG_LEADER, DIOConfigType.HDAWG):
             # standalone SHFSG or SHFQC
-            self._wait_for_AWGs = False
+            self._wait_for_awgs = False
             ntc = []
             if not self._get_option("qc_with_qa"):
                 # otherwise, the QA will initialize the nodes
@@ -402,7 +408,9 @@ class DeviceSHFSG(DeviceZI):
                             or len(matching_integrator.channels) != 1
                         ):
                             raise LabOneQControllerException(
-                                f"{self.dev_repr}: Internal error - can't find integrator config for mapped QA signal {awg.qa_signal_id}, that is suitable for the feedback configuration."
+                                f"{self.dev_repr}: Internal error - can't find integrator config "
+                                f"for mapped QA signal {awg.qa_signal_id}, that is suitable for "
+                                f"the feedback configuration."
                             )
 
                         shift = matching_integrator.channels[0]

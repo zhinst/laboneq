@@ -35,3 +35,5 @@ class PlayPulse(Operation):
     pulse_parameters: Optional[Dict[str, Any]] = field(default=None)
     #: Clear the precompensation filter of the signal while playing the pulse.
     precompensation_clear: Optional[bool] = field(default=None)
+    #: Instructions for playing marker signals while playing the pulse.
+    marker: Optional[Dict] = field(default=None)

@@ -31,7 +31,7 @@ def precompensation_is_nonzero(precompensation: PrecompensationType):
 
 
 def precompensation_delay_samples(precompensation: PrecompensationType):
-    """Compute the additiontal delay (in samples) caused by the precompensation"""
+    """Compute the additional delay (in samples) caused by the precompensation"""
     if not precompensation_is_nonzero(precompensation):
         return 0
     delay = 72

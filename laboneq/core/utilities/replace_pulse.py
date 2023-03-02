@@ -7,7 +7,7 @@ import logging
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import TYPE_CHECKING, List, Optional, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -174,12 +174,12 @@ def calc_wave_replacements(
     replacements: List[WaveReplacement] = []
     for sig_string, pwm in pm.waveforms.items():
         for awgs in compiled_experiment.wave_indices:
-            awg_wave_map = awgs["value"]
+            awg_wave_map: Dict[str, List[Union[int, str]]] = awgs["value"]
             target_wave = awg_wave_map.get(sig_string)
             if target_wave is None:
                 continue
-            wave_type = target_wave[1]
-            is_complex = wave_type == "iq" or wave_type == "complex"
+            wave_type: str = target_wave[1]
+            is_complex = wave_type in ("iq", "complex")
             if wave_type == "single":
                 replacement_type = ReplacementType.I_Q
                 samples_i = _replace_pulse_in_wave(

@@ -3,7 +3,15 @@
 
 from __future__ import annotations
 
+import functools
 import math
+
+import numpy as np
+
+
+@functools.lru_cache(64)
+def lcm(a, b):
+    return int(np.lcm(a, b))
 
 
 def round_to_grid(value, grid: int):

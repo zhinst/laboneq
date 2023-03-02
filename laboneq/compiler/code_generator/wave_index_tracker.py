@@ -3,16 +3,17 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 
 class WaveIndexTracker:
     def __init__(self):
-        self._wave_indices: Dict[str, Tuple[int, Any]] = {}
+        self._wave_indices: Dict[str, Tuple[int, str]] = {}
         self._next_wave_index: int = 0
 
     def lookup_index_by_wave_id(self, wave_id: str) -> Optional[int]:
-        return self._wave_indices.get(wave_id)
+        wave_index_entry = self._wave_indices.get(wave_id)
+        return None if wave_index_entry is None else wave_index_entry[0]
 
     def create_index_for_wave(self, wave_id: str, signal_type: str) -> Optional[int]:
         assert wave_id not in self._wave_indices
@@ -29,8 +30,8 @@ class WaveIndexTracker:
     def add_numbered_wave(self, wave_id: str, signal_type: str, index):
         self._wave_indices[wave_id] = (index, signal_type)
 
-    def wave_indices(self) -> Dict[str, List[int, Any]]:
+    def wave_indices(self) -> Dict[str, List[Union[int, str]]]:
         # Cast entries to list. This will end up in the compiled experiment, and we want
         # invariance under serialization + deserialization, but the JSON decoder
         # produces lists, not tuples.
-        return {k: list(v) for k, v in self._wave_indices.items()}
+        return {k: list(v)[:2] for k, v in self._wave_indices.items()}

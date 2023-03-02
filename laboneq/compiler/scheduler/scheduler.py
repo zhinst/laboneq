@@ -19,6 +19,7 @@ from engineering_notation import EngNumber
 from sortedcollections import ValueSortedDict
 from sortedcontainers import SortedDict
 
+from laboneq._observability.tracing import trace
 from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.event_type import EventType
@@ -58,6 +59,7 @@ class _PlayWave:
     play_pulse_parameters: Dict[str, Any] = field(default_factory=dict)
     pulse_pulse_parameters: Dict[str, Any] = field(default_factory=dict)
     precompensation_clear: bool = field(default=False)
+    markers: Any = None
 
 
 @dataclass
@@ -160,6 +162,7 @@ class Scheduler:
 
         self._loop_step_events: Dict[str, Dict[int, Tuple[int, int, int]]] = {}
 
+    @trace("scheduler.run()", {"version": "v1"})
     def run(self):
         root_sections = self._section_graph_object.root_sections()
         start_events = self._add_start_events()
@@ -178,38 +181,9 @@ class Scheduler:
             section_info = self._section_graph_object.section_info(section_node)
             section_name = section_info.section_id
 
-            spectroscopy_trigger_signals = set()
-            if section_info.acquisition_types is not None:
-                if "spectroscopy" in section_info.acquisition_types:
-                    for device in self._experiment_dao.devices_in_section_no_descend(
-                        section_info.section_display_name
-                    ):
-                        for signal_name in self._experiment_dao.device_signals(device):
-                            if (
-                                self._experiment_dao.signal_info(
-                                    signal_name
-                                ).signal_type
-                                == "integration"
-                            ):
-                                spectroscopy_trigger_signals.add(signal_name)
-
-            _logger.debug(
-                "Calculating signal offsets for section %s, spectroscopy signals are: %s",
-                section_name,
-                spectroscopy_trigger_signals,
-            )
-
             section_span = self._event_graph.find_section_start_end(section_name)
 
             section_start_node = section_span.start
-
-            spectroscopy_end_id = None
-            is_spectroscopy_section = False
-            if len(spectroscopy_trigger_signals) > 0:
-                is_spectroscopy_section = True
-                spectroscopy_end_id = self._event_graph.find_section_events_by_type(
-                    section_name, EventType.SPECTROSCOPY_END
-                )[0]["id"]
 
             signals = self._experiment_dao.section_signals(
                 section_info.section_display_name
@@ -283,7 +257,6 @@ class Scheduler:
                         section_start_node,
                     )
 
-            signals = signals.union(spectroscopy_trigger_signals)
             for signal_id in signals:
                 _logger.debug(
                     "Considering signal %s in section %s", signal_id, section_name
@@ -301,16 +274,6 @@ class Scheduler:
                 sampling_rate = self._sampling_rate_tracker.sampling_rate_for_device(
                     device_id
                 )
-
-                if signal_id in spectroscopy_trigger_signals:
-                    play_wave = _PlayWave(
-                        id="spectroscopy_" + signal_id,
-                        signal=signal_id,
-                        acquisition_type=["spectroscopy"],
-                        play_wave_type=PlayWaveType.INTEGRATION,
-                    )
-                    play_wave_chain.append(play_wave)
-                    _logger.debug("Added play_wave=%s to play wave chain", play_wave)
 
                 if section_info.state is not None:
                     # Add an additional anchor to time the executeTableEntry evaluation:
@@ -337,6 +300,7 @@ class Scheduler:
                             play_wave_type=PlayWaveType.INTEGRATION
                             if is_integration
                             else PlayWaveType.PLAY,
+                            markers=section_pulse.markers,
                         )
                     else:
                         play_wave = _PlayWave(
@@ -359,8 +323,6 @@ class Scheduler:
                     section_info.section_id,
                     right_aligned=(section_info.align == "right"),
                     section_start_node=section_start_node,
-                    is_spectroscopy_signal=is_integration and is_spectroscopy_section,
-                    spectroscopy_end_id=spectroscopy_end_id,
                 )
 
             clear_bit_events_of_section[section_name] = clear_bit_events
@@ -478,6 +440,13 @@ class Scheduler:
                 key = (event["time"], priority_map[event["event_type"]], event["id"])
                 sorted_events[key] = event
 
+        def make_error_nt_param(param: ParamRef, event):
+            return LabOneQException(
+                f"Parameter {param.param_name} in section {event['section_name']} "
+                f"could not be resolved. "
+                f"Note that only RT sweep parameters are currently supported here."
+            )
+
         for event in sorted_events.values():
             if event["event_type"] == EventType.PARAMETER_SET:
                 param_obj = event["parameter"]
@@ -493,13 +462,19 @@ class Scheduler:
                     oscillator_phase_cumulative[signal_id] = 0.0
                 phase_incr = event["increment_oscillator_phase"]
                 if isinstance(phase_incr, ParamRef):
-                    phase_incr = parameter_values[phase_incr.param_name]
+                    try:
+                        phase_incr = parameter_values[phase_incr.param_name]
+                    except KeyError as e:
+                        raise make_error_nt_param(phase_incr, event) from e
                 oscillator_phase_cumulative[signal_id] += phase_incr
             if event["event_type"] == EventType.SET_OSCILLATOR_PHASE:
                 signal_id = event["signal"]
                 osc_phase = event["set_oscillator_phase"]
                 if isinstance(osc_phase, ParamRef):
-                    osc_phase = parameter_values[osc_phase.param_name]
+                    try:
+                        osc_phase = parameter_values[osc_phase.param_name]
+                    except KeyError as e:
+                        raise make_error_nt_param(osc_phase, event) from e
                 oscillator_phase_cumulative[signal_id] = osc_phase
                 oscillator_phase_sets[signal_id] = event["time"]
 
@@ -511,7 +486,10 @@ class Scheduler:
                         amplitude.param_name,
                         parameter_values,
                     )
-                    amplitude = parameter_values[amplitude.param_name]
+                    try:
+                        amplitude = parameter_values[amplitude.param_name]
+                    except KeyError as e:
+                        raise make_error_nt_param(amplitude, event) from e
                     amplitude = (
                         round(amplitude * amplitude_resolution) / amplitude_resolution
                     )
@@ -526,7 +504,10 @@ class Scheduler:
 
                 phase = event["phase"]
                 if isinstance(phase, ParamRef):
-                    phase = parameter_values[phase.param_name]
+                    try:
+                        phase = parameter_values[phase.param_name]
+                    except KeyError as e:
+                        raise make_error_nt_param(phase, event) from e
                     self._event_graph.set_node_attributes(event["id"], {"phase": phase})
 
                 oscillator_frequency = event["oscillator_frequency"]
@@ -543,11 +524,17 @@ class Scheduler:
                 has_updates = False
                 for k, v in play_pulse_parameters.items():
                     if isinstance(v, ParamRef):
-                        play_pulse_parameters[k] = parameter_values[v.param_name]
+                        try:
+                            play_pulse_parameters[k] = parameter_values[v.param_name]
+                        except KeyError as e:
+                            raise make_error_nt_param(v, event) from e
                         has_updates = True
                 for k, v in pulse_pulse_parameters.items():
                     if isinstance(v, ParamRef):
-                        pulse_pulse_parameters[k] = parameter_values[v.param_name]
+                        try:
+                            pulse_pulse_parameters[k] = parameter_values[v.param_name]
+                        except KeyError as e:
+                            raise make_error_nt_param(v, event) from e
                         has_updates = True
                 if has_updates:
                     self._event_graph.set_node_attributes(
@@ -569,9 +556,17 @@ class Scheduler:
                         "shfsg",
                     ]:
                         if oscillator_info.frequency_param is not None:
-                            frequency = parameter_values.get(
-                                oscillator_info.frequency_param
-                            )
+                            try:
+                                frequency = parameter_values[
+                                    oscillator_info.frequency_param
+                                ]
+                            except KeyError as e:
+                                # HW oscillator sweeps with a NT parameter is fine - the
+                                # controller will take care of it.
+                                if not oscillator_info.hardware:
+                                    raise make_error_nt_param(
+                                        oscillator_info.frequency_param, event
+                                    ) from e
                         else:
                             frequency = oscillator_info.frequency
 
@@ -1431,8 +1426,6 @@ class Scheduler:
         parent_section_name,
         right_aligned=False,
         section_start_node=None,
-        spectroscopy_end_id=None,
-        is_spectroscopy_signal=False,
     ):
         section_span = self._event_graph.find_section_start_end(parent_section_name)
         if section_start_node is None:
@@ -1565,6 +1558,11 @@ class Scheduler:
                     "pulse_pulse_parameters"
                 ] = play_wave.pulse_pulse_parameters
 
+                if play_wave.markers is not None:
+                    chain_element.start_attributes["markers"] = [
+                        copy.deepcopy(vars(m)) for m in play_wave.markers
+                    ]
+
                 if (
                     play_wave.play_wave_type != PlayWaveType.DELAY
                     or play_wave.length is not None
@@ -1591,10 +1589,6 @@ class Scheduler:
         else:
             terminal_id = section_span.end
             pull_out_node_id = None
-            if not is_spectroscopy_signal and spectroscopy_end_id is not None:
-                terminal_id = spectroscopy_end_id
-            if is_spectroscopy_signal and spectroscopy_end_id is not None:
-                pull_out_node_id = spectroscopy_end_id
             added_nodes = EventGraphBuilder.add_chain(
                 self._event_graph,
                 section_start_node,
@@ -2557,10 +2551,10 @@ class Scheduler:
             return section_grid
 
         if self._section_graph_object is not None:
-            section_display_name = self._section_graph_object.section_info(
-                section
-            ).section_display_name
+            section_info = self._section_graph_object.section_info(section)
+            section_display_name = section_info.section_display_name
         else:
+            section_info = self._experiment_dao.section_info(section)
             section_display_name = section
 
         device_types = [
@@ -2577,12 +2571,17 @@ class Scheduler:
             device_types,
             self._clock_settings["use_2GHz_for_HDAWG"],
             has_control_elements,
+            section_info.on_system_grid,
         )
         return self._section_grids[section]
 
     @staticmethod
     def _calculate_section_grid(
-        section, device_types, use_2GHz_for_HDAWG, has_control_elements
+        section,
+        device_types,
+        use_2GHz_for_HDAWG,
+        has_control_elements,
+        on_system_grid=False,
     ):
 
         if len(device_types) == 0:
@@ -2606,13 +2605,21 @@ class Scheduler:
                 signal_frequencies.add(d.sampling_rate)
 
         signal_frequencies = list(signal_frequencies)
-        if len(signal_frequencies) == 1 and not has_control_elements:
+        if (
+            len(signal_frequencies) == 1
+            and not has_control_elements
+            and not on_system_grid
+        ):
             _logger.debug(
                 "signal frequencies are %s - returning signal frequency grid",
                 [str(EngNumber(f)) for f in signal_frequencies],
             )
             return 1 / signal_frequencies[0]
 
+        # Actually, we should return the total system grid when on_system_grid is True
+        # and not only the sequencer frequencies here, but since this scheduler will
+        # be replaced soon and the two grids anyway match for the relevant case, this is
+        # fine.
         _logger.debug(
             "Sequencer frequencies are %s",
             [str(EngNumber(f)) for f in sequencer_frequencies],

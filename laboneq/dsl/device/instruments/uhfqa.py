@@ -40,7 +40,7 @@ class UHFQA(ZIStandardInstrument):
         outputs = [
             Port(
                 IODirection.OUT,
-                uid=f"SIGOUTS/0",
+                uid="SIGOUTS/0",
                 signal_type=IOSignalType.RF,
                 physical_port_ids=["0"],
                 connector_labels=["Signal Output 1"],

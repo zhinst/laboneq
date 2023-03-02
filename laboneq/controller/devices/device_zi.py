@@ -15,8 +15,14 @@ from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
 from math import floor
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Union
 from weakref import ReferenceType, ref
+
+import numpy as np
+import zhinst.core
+import zhinst.utils
+from numpy import typing as npt
+from zhinst.core.errors import CoreError as LabOneCoreError  # pylint: disable=E0401
 
 from laboneq.controller.communication import (
     AwgModuleWrapper,
@@ -45,12 +51,6 @@ from laboneq.core.types.enums.averaging_mode import AveragingMode
 
 if TYPE_CHECKING:
     from laboneq.core.types import CompiledExperiment
-
-import numpy as np
-import zhinst.core
-import zhinst.utils
-from numpy import typing as npt
-from zhinst.core.errors import CoreError as LabOneCoreError
 
 seqc_osc_match = re.compile(
     r'(\s*string\s+osc_node_)(\w+)(\s*=\s*"oscs/)[0-9]+(/freq"\s*;\s*)', re.ASCII
@@ -130,7 +130,7 @@ class DeviceZI(ABC):
 
     @property
     def has_awg(self) -> bool:
-        return self._get_num_AWGs() > 0
+        return self._get_num_awgs() > 0
 
     @property
     def serial(self):
@@ -243,8 +243,10 @@ class DeviceZI(ABC):
         )
         try:
             self._daq.connectDevice(self.serial, self.interface)
-        except RuntimeError as exp:
-            raise LabOneQControllerException(f"{self.dev_repr}: {str(exp)}")
+        except RuntimeError as exc:
+            raise LabOneQControllerException(
+                f"{self.dev_repr}: Connecting failed"
+            ) from exc
 
         self._logger.debug(
             "%s: Connected to %s interface.", self.dev_repr, self.interface
@@ -267,7 +269,7 @@ class DeviceZI(ABC):
         self._process_dev_opts()
 
         if not self._is_using_standalone_compiler:
-            for i in range(self._get_num_AWGs()):
+            for i in range(self._get_num_awgs()):
                 awg_module = self._daq.create_awg_module(
                     f"{self.serial}:awg_module{str(i)}"
                 )
@@ -328,7 +330,8 @@ class DeviceZI(ABC):
             new_index = self._get_next_osc_index(osc_group, len(osc_group_oscs))
             if new_index is None:
                 raise LabOneQControllerException(
-                    f"{self.dev_repr}: exceeded the number of available oscillators for channel {osc_param.channel}"
+                    f"{self.dev_repr}: exceeded the number of available oscillators for "
+                    f"channel {osc_param.channel}"
                 )
             self._allocated_oscs.append(
                 AllocatedOscillator(
@@ -343,7 +346,8 @@ class DeviceZI(ABC):
         else:
             if same_id_osc.frequency != osc_param.frequency:
                 raise LabOneQControllerException(
-                    f"{self.dev_repr}: ambiguous frequency in recipe for oscillator '{osc_param.id}': {same_id_osc.frequency} != {osc_param.frequency}"
+                    f"{self.dev_repr}: ambiguous frequency in recipe for oscillator "
+                    f"'{osc_param.id}': {same_id_osc.frequency} != {osc_param.frequency}"
                 )
             same_id_osc.channels.add(osc_param.channel)
 
@@ -402,11 +406,13 @@ class DeviceZI(ABC):
                 elapsed = floor(now - start_time)
                 if now - start_time > timeout:
                     raise LabOneQControllerException(
-                        f"{self.dev_repr}: Node '{path}' didn't switch to '{expected}' within {timeout}s. Last value: {last_val}"
+                        f"{self.dev_repr}: Node '{path}' didn't switch to '{expected}' "
+                        f"within {timeout}s. Last value: {last_val}"
                     )
                 if now - last_report > 5:
                     self._logger.debug(
-                        "Waiting for node '%s' switching to '%s', %f s remaining until %f s timeout...",
+                        "Waiting for node '%s' switching to '%s', %f s remaining "
+                        "until %f s timeout...",
                         path,
                         expected,
                         timeout - elapsed,
@@ -473,12 +479,14 @@ class DeviceZI(ABC):
                 elapsed = floor(now - start_time)
                 if now - start_time > timeout:
                     raise LabOneQControllerException(
-                        f"Unable to switch reference clock within {timeout}s. Requested source: {source},"
-                        f" actual: {sourceactual}, status: {status}, expected frequencies: {expected_freqs}, actual: {freq}"
+                        f"Unable to switch reference clock within {timeout}s. "
+                        f"Requested source: {source}, actual: {sourceactual}, status: {status}, "
+                        f"expected frequencies: {expected_freqs}, actual: {freq}"
                     )
                 if now - last_report > 5:
                     self._logger.debug(
-                        "Waiting for reference clock switching, %f s remaining until %f s timeout...",
+                        "Waiting for reference clock switching, %f s remaining "
+                        "until %f s timeout...",
                         timeout - elapsed,
                         timeout,
                     )
@@ -514,7 +522,9 @@ class DeviceZI(ABC):
                     continue
                 if status == 1:  # error while locking
                     raise LabOneQControllerException(
-                        f"Unable to switch reference clock, device returned error after {elapsed}s. Requested source: {source}, actual: {sourceactual}, status: {status}, expected frequency: {expected_freqs}, actual: {freq}"
+                        f"Unable to switch reference clock, device returned error "
+                        f"after {elapsed}s. Requested source: {source}, actual: {sourceactual}, "
+                        f"status: {status}, expected frequency: {expected_freqs}, actual: {freq}"
                     )
 
             if expected_freqs is None:
@@ -531,7 +541,9 @@ class DeviceZI(ABC):
                 break
             else:
                 raise LabOneQControllerException(
-                    f"Unexpected frequency after switching the reference clock. Requested source: {source}, actual: {sourceactual}, status: {status}, expected frequency: {expected_freqs}, actual: {freq}"
+                    f"Unexpected frequency after switching the reference clock. "
+                    f"Requested source: {source}, actual: {sourceactual}, status: {status}, "
+                    f"expected frequency: {expected_freqs}, actual: {freq}"
                 )
 
     def _adjust_frequency(self, freq):
@@ -589,7 +601,8 @@ class DeviceZI(ABC):
 
             if compiler_status == AwgCompilerStatus.SUCCESS.value:
                 self._logger.debug(
-                    "%s: Compilation successful on AWG #%d with no warnings, will upload the program to the instrument.",
+                    "%s: Compilation successful on AWG #%d with no warnings, will upload the "
+                    "program to the instrument.",
                     self.dev_repr,
                     awg_index,
                 )
@@ -603,16 +616,22 @@ class DeviceZI(ABC):
                 )
             )
 
-            if (
-                compiler_status == AwgCompilerStatus.ERROR.value
-                or compiler_status == AwgCompilerStatus.WARNING.value
+            if compiler_status in (
+                AwgCompilerStatus.ERROR.value,
+                AwgCompilerStatus.WARNING.value,
             ):
                 raise LabOneQControllerException(
                     f"{self.dev_repr}: AWG compilation failed, compiler output:\n{status_string}"
                 )
             time.sleep(0.1)
 
-    def _prepare_wave_iq(self, waves, sig):
+    @staticmethod
+    def _contains_only_zero_or_one(a):
+        if a is None:
+            return True
+        return not np.any(a * (1 - a))
+
+    def _prepare_wave_iq(self, waves, sig: str) -> Tuple[str, npt.ArrayLike]:
         wave_i = next((w for w in waves if w["filename"] == f"{sig}_i.wave"), None)
         if not wave_i:
             raise LabOneQControllerException(
@@ -625,23 +644,82 @@ class DeviceZI(ABC):
                 f"Q wave not found, IQ wave signature '{sig}'"
             )
 
+        marker1_samples = None
+        marker2_samples = None
+        try:
+            marker1_samples = next(
+                (w for w in waves if w["filename"] == f"{sig}_marker1.wave")
+            )["samples"]
+        except StopIteration:
+            pass
+
+        try:
+            marker2_samples = next(
+                (w for w in waves if w["filename"] == f"{sig}_marker2.wave")
+            )["samples"]
+        except StopIteration:
+            pass
+
+        marker_samples = None
+        if marker1_samples is not None:
+            if not self._contains_only_zero_or_one(marker1_samples):
+                raise LabOneQControllerException(
+                    "Marker samples must only contain ones and zeros"
+                )
+            marker_samples = np.array(marker1_samples)
+        if marker2_samples is not None:
+            if marker_samples is None:
+                marker_samples = np.zeros(len(marker2_samples), dtype=np.int32)
+            elif len(marker1_samples) != len(marker2_samples):
+                raise LabOneQControllerException(
+                    "Samples for marker1 and marker2 must have the same length"
+                )
+            if not self._contains_only_zero_or_one(marker2_samples):
+                raise LabOneQControllerException(
+                    "Marker samples must only contain ones and zeros"
+                )
+            marker2_samples = np.array(marker2_samples)
+            # we want marker 2 to be played on output 2, marker 1
+            # bits 0/1 = marker 1/2 of output 1, bit 2/4 = marker 1/2 output 2
+            # bit 2 is factor 4
+            factor = 4
+            marker_samples += factor * marker2_samples
+
         return (
             sig,
             zhinst.utils.convert_awg_waveform(
-                np.clip(wave_i["samples"], -1, 1), np.clip(wave_q["samples"], -1, 1)
+                np.clip(wave_i["samples"], -1, 1),
+                np.clip(wave_q["samples"], -1, 1),
+                markers=marker_samples,
             ),
         )
 
-    def _prepare_wave_single(self, waves, sig):
+    def _prepare_wave_single(self, waves, sig: str) -> Tuple[str, npt.ArrayLike]:
         wave = next((w for w in waves if w["filename"] == f"{sig}.wave"), None)
+        marker_samples = None
+        try:
+            marker_samples = next(
+                (w for w in waves if w["filename"] == f"{sig}_marker1.wave")
+            )["samples"]
+        except StopIteration:
+            pass
+
+        if not self._contains_only_zero_or_one(marker_samples):
+            raise LabOneQControllerException(
+                "Marker samples must only contain ones and zeros"
+            )
+
         if not wave:
             raise LabOneQControllerException(f"Wave not found, signature '{sig}'")
 
-        return sig, zhinst.utils.convert_awg_waveform(np.clip(wave["samples"], -1, 1))
+        return sig, zhinst.utils.convert_awg_waveform(
+            np.clip(wave["samples"], -1, 1), markers=marker_samples
+        )
 
-    def _prepare_wave_complex(self, waves, sig):
+    def _prepare_wave_complex(self, waves, sig: str) -> Tuple[str, npt.ArrayLike]:
         filename_to_find = f"{sig}.wave"
         wave = next((w for w in waves if w["filename"] == filename_to_find), None)
+
         if not wave:
             raise LabOneQControllerException(
                 f"Wave not found, signature '{sig}' filename '{filename_to_find}'"
@@ -649,9 +727,11 @@ class DeviceZI(ABC):
 
         return sig, np.array(wave["samples"], dtype=np.complex128)
 
-    def _prepare_waves(self, compiled: CompiledExperiment, seqc_filename: str):
+    def _prepare_waves(
+        self, compiled: CompiledExperiment, seqc_filename: str
+    ) -> List[Tuple[str, npt.ArrayLike]]:
         wave_indices_filename = os.path.splitext(seqc_filename)[0] + "_waveindices.csv"
-        wave_indices = next(
+        wave_indices: Dict[str, List[Union[int, str]]] = next(
             (
                 i
                 for i in compiled.wave_indices
@@ -662,19 +742,20 @@ class DeviceZI(ABC):
 
         waves_by_index = {}
         waves = compiled.waves or []
-        for sig, (idx, sigtype) in wave_indices.items():
-            if sigtype in ["iq", "double", "multi"]:
+        for sig, [idx, sig_type] in wave_indices.items():
+            if sig_type in ("iq", "double", "multi"):
                 waves_by_index[idx] = self._prepare_wave_iq(waves, sig)
-            elif sigtype == "single":
+            elif sig_type == "single":
                 waves_by_index[idx] = self._prepare_wave_single(waves, sig)
-            elif sigtype == "complex":
+            elif sig_type == "complex":
                 waves_by_index[idx] = self._prepare_wave_complex(waves, sig)
             else:
                 raise LabOneQControllerException(
-                    f"Unexpected signal type for binary wave for '{sig}' in '{seqc_filename}' - '{sigtype}', should be one of [iq, double, multi, single, complex]"
+                    f"Unexpected signal type for binary wave for '{sig}' in '{seqc_filename}' - "
+                    f"'{sig_type}', should be one of [iq, double, multi, single, complex]"
                 )
 
-        bin_waves = []
+        bin_waves: List[Tuple[str, npt.ArrayLike]] = []
         idx = 0
         while idx in waves_by_index:
             bin_waves.append(waves_by_index[idx])
@@ -704,7 +785,7 @@ class DeviceZI(ABC):
 
     def prepare_seqc(
         self, seqc_filename: str, compiled: CompiledExperiment
-    ) -> Tuple[str, List[Any], Dict[Any]]:
+    ) -> Tuple[str, List[Tuple[str, npt.ArrayLike]], Dict[Any]]:
         """
         `compiled` expected to have the following members:
          - `src`   -> List[Dict[str, str]]
@@ -716,7 +797,7 @@ class DeviceZI(ABC):
 
         Returns a tuple of
          1. str: seqc text to pass to the awg compiler
-         2. list[array]: waves to upload to the instrument (ordered by index)
+         2. list[(str, array)]: waves(id, samples) to upload to the instrument (ordered by index)
          3. dict: command table
         """
         seqc = next((s for s in compiled.src if s["filename"] == seqc_filename), None)
@@ -727,8 +808,7 @@ class DeviceZI(ABC):
 
         # Substitute oscillator nodes by actual assignment
         seqc_lines = seqc["text"].split("\n")
-        for i in range(len(seqc_lines)):
-            seqc_line = seqc_lines[i]
+        for i, seqc_line in enumerate(seqc_lines):
             m = seqc_osc_match.match(seqc_line)
             if m is not None:
                 param = m.group(2)
@@ -771,22 +851,28 @@ class DeviceZI(ABC):
         )
 
     def prepare_upload_all_binary_waves(
-        self, awg_index, waves, acquisition_type: AcquisitionType
+        self,
+        awg_index,
+        waves: List[Tuple[str, npt.ArrayLike]],
+        acquisition_type: AcquisitionType,
     ):
         # Default implementation for "old" devices, override for newer devices
         return [
             self.prepare_upload_binary_wave(
-                filename=w[0],
-                waveform=w[1],
+                filename=filename,
+                waveform=waveform,
                 awg_index=awg_index,
-                wave_index=i,
+                wave_index=wave_index,
                 acquisition_type=acquisition_type,
             )
-            for i, w in enumerate(waves)
+            for wave_index, [filename, waveform] in enumerate(waves)
         ]
 
     def _upload_all_binary_waves(
-        self, awg_index, waves, acquisition_type: AcquisitionType
+        self,
+        awg_index,
+        waves: List[Tuple[str, npt.ArrayLike]],
+        acquisition_type: AcquisitionType,
     ):
         waves_upload = self.prepare_upload_all_binary_waves(
             awg_index, waves, acquisition_type
@@ -821,11 +907,11 @@ class DeviceZI(ABC):
             )[status_path]
         )
 
-        if status & 0b1000:
-            raise ValueError("Failed to parse command table JSON")
+        if status & 0b1000 != 0:
+            raise LabOneQControllerException("Failed to parse command table JSON")
         if not self.dry_run:
-            if not (status & 0b0001):
-                raise ValueError("Failed to upload command table")
+            if status & 0b0001 == 0:
+                raise LabOneQControllerException("Failed to upload command table")
 
     def _compile_and_upload_seqc(
         self, code: str, awg_index: int, filename_hint: str = None
@@ -848,11 +934,11 @@ class DeviceZI(ABC):
                     )
                 ]
             )
-        except LabOneQControllerException as exp:
+        except LabOneQControllerException as exc:
             raise LabOneQControllerException(
-                f"Exception raised while uploading program from file {filename_hint} to AWG #{awg_index}\n"
-                f"details:\n{str(exp)}\n{code}\n"
-            )
+                f"Exception raised while uploading program from file {filename_hint} "
+                f"to AWG #{awg_index}\nSeqC code:\n{code}"
+            ) from exc
 
         # TODO(2K): handle timeout, emit:
         # f"{str(exp)}\nAWG compiler timed out while trying to compile:\n{data}\n"
@@ -879,14 +965,15 @@ class DeviceZI(ABC):
                 samplerate=self._sampling_rate,
             )
         except LabOneCoreError as exc:
-            raise LabOneQControllerException(
+            raise LabOneQControllerException(  # pylint: disable=W0707
                 f"{self.dev_repr}: AWG compilation failed.\n{str(exc)}"
             )
 
         compiler_warnings = extra["messages"]
         if compiler_warnings:
             raise LabOneQControllerException(
-                f"{self.dev_repr}: AWG compilation succeeded, but there are warnings:\n{compiler_warnings}"
+                f"{self.dev_repr}: AWG compilation succeeded, but there are warnings:\n"
+                f"{compiler_warnings}"
             )
 
         self._logger.debug(
@@ -929,7 +1016,7 @@ class DeviceZI(ABC):
             if command_table is not None:
                 self.upload_command_table(awg_index, command_table)
 
-    def _get_num_AWGs(self):
+    def _get_num_awgs(self):
         return 0
 
     def collect_osc_initialization_nodes(self) -> List[DaqNodeAction]:
@@ -1023,7 +1110,7 @@ class DeviceZI(ABC):
             )
 
         if measurement_delay_samples < 0:
-            raise Exception(
+            raise LabOneQControllerException(
                 f"Negative node delay for device {self.dev_repr} and channel {channel} specified."
             )
         # Quantize to granularity and round ties towards zero
@@ -1031,7 +1118,7 @@ class DeviceZI(ABC):
             math.ceil(measurement_delay_samples / granularity_samples + 0.5) - 1
         ) * granularity_samples
         if measurement_delay_rounded > max_node_delay_samples:
-            raise Exception(
+            raise LabOneQControllerException(
                 f"Maximum delay via {self.dev_repr}'s node is "
                 + f"{max_node_delay_samples / sample_frequency_hz * 1e9:.2f} ns - for larger "
                 + "values, use the delay_signal property."
@@ -1039,11 +1126,11 @@ class DeviceZI(ABC):
         if abs(measurement_delay_samples - measurement_delay_rounded) > 1:
             self._logger.debug(
                 "Node delay %.2f ns of %s, channel %d will be rounded to "
-                + "%.2f ns, a multiple of %.0f samples.",
-                (measurement_delay_samples / sample_frequency_hz * 1e9),
+                "%.2f ns, a multiple of %.0f samples.",
+                measurement_delay_samples / sample_frequency_hz * 1e9,
                 self.dev_repr,
                 channel,
-                (measurement_delay_rounded / sample_frequency_hz * 1e9),
+                measurement_delay_rounded / sample_frequency_hz * 1e9,
                 granularity_samples,
             )
         return measurement_delay_rounded
@@ -1058,7 +1145,8 @@ class ErrorLevels(Enum):
 def check_errors(errors, serial):
     collected_messages = []
     for error in errors:
-        # the key in error["vector"] looks like a dict, but it's a string. so we have to use json.loads to convert it into a dict.
+        # the key in error["vector"] looks like a dict, but it's a string. so we have to use
+        # json.loads to convert it into a dict.
         error_vector = json.loads(error["vector"])
         for message in error_vector["messages"]:
             if message["code"] == "AWGRUNTIMEERROR" and message["params"][0] == 1:
@@ -1072,6 +1160,7 @@ def check_errors(errors, serial):
     if len(collected_messages) > 0:
         all_messages = "\n".join(collected_messages)
         raise LabOneQControllerException(
-            f"An error happened on device {serial} during the execution of the experiment. Error messages:\n{all_messages}"
+            f"An error happened on device {serial} during the execution of the experiment. "
+            f"Error messages:\n{all_messages}"
         )
         # should we return the warnings in the log?

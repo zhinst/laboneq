@@ -25,6 +25,7 @@ ALLOWED_NODE_TYPES = {
     ast.IntegerLiteral,
     ast.RangeDefinition,
     ast.IndexedIdentifier,
+    ast.QuantumReset,
 }
 
 
@@ -82,7 +83,11 @@ class VariableStore:
             else:
                 target_var = self.variables[target]
                 if not isinstance(target_var, ArrayVariable):
-                    raise ValueError(f"Variable '{target}' is not an array.")
+                    if index == 0:
+                        self.variables[name] = self.variables[target]
+                        return
+                    else:
+                        raise ValueError(f"Variable '{target}' is not an array.")
                 if index >= target_var.size:
                     raise ValueError(f"Index {index} out of range for array {target}.")
                 self.variables[name] = VariableInArray(target_var, index)
@@ -95,7 +100,7 @@ class VariableStore:
         except KeyError as e:
             raise KeyError(f"Variable '{name}' not found.") from e
         if isinstance(variable, Variable):
-            if index is not None:
+            if index is not None and index > 0:
                 raise ValueError(f"Variable '{name}' is not an array.")
             qubit = variable.qubit_index
         elif isinstance(variable, VariableInArray):
@@ -194,6 +199,8 @@ class OpenQasm3Importer:
                     self._handle_include(statement)
                 elif isinstance(statement, ast.QuantumGate):
                     self._handle_quantum_gate(statement, root)
+                elif isinstance(statement, ast.QuantumReset):
+                    self._handle_quantum_reset(statement, root)
                 else:
                     raise ValueError(f"Statement type {type(statement)} not supported")
 
@@ -239,21 +246,7 @@ class OpenQasm3Importer:
         if not isinstance(statement.name, ast.Identifier):
             raise ValueError("Gate name must be an identifier.")
         name = statement.name.name
-        qubit_indices = []
-        for q in statement.qubits:
-            if isinstance(q, ast.Identifier):
-                qubit_indices.append(self.variables.get_qubit_number(q.name))
-            elif isinstance(q, ast.IndexedIdentifier):
-                collection, idx = get_collection_and_single_index(q)
-                if collection is None:
-                    raise ValueError("Qubit name must be an identifier.")
-                if idx is None:
-                    raise ValueError("Qubit index must be a single integer.")
-                qubit_indices.append(self.variables.get_qubit_number(collection, idx))
-            else:
-                raise ValueError(
-                    "Qubit names must be identifiers or index expressions."
-                )
+        qubit_indices = tuple(self._get_qubit_index(q) for q in statement.qubits)
         try:
             root.add(
                 self.gate_store[self.gate_map.get(name, name), tuple(qubit_indices)]
@@ -268,3 +261,26 @@ class OpenQasm3Importer:
             raise ValueError(
                 f"Only 'stdgates.inc' is supported for include, found '{statement.filename}'."
             )
+
+    def _handle_quantum_reset(self, statement: ast.QuantumReset, root: Section):
+        # Although ``qubits`` is plural, only a single qubit is allowed.
+        qubit_index = self._get_qubit_index(statement.qubits)
+        try:
+            root.add(
+                self.gate_store[self.gate_map.get("reset", "reset"), (qubit_index,)]
+            )
+        except KeyError:
+            raise ValueError(f"Reset gate for qubit index {qubit_index} not found.")
+
+    def _get_qubit_index(self, q: Union[ast.IndexedIdentifier, ast.Identifier]):
+        if isinstance(q, ast.Identifier):
+            return self.variables.get_qubit_number(q.name)
+        elif isinstance(q, ast.IndexedIdentifier):
+            collection, idx = get_collection_and_single_index(q)
+            if collection is None:
+                raise ValueError("Qubit name must be an identifier.")
+            if idx is None:
+                raise ValueError("Qubit index must be a single integer.")
+            return self.variables.get_qubit_number(collection, idx)
+        else:
+            raise ValueError("Qubit names must be identifiers or index expressions.")
