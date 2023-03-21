@@ -3,36 +3,43 @@
 
 from __future__ import annotations
 
+import bisect
 import copy
 import logging
 import math
 import os
 import re
 from contextlib import suppress
-from dataclasses import dataclass
 from itertools import groupby
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
 from engineering_notation import EngNumber
-from sortedcontainers import SortedDict
 
 from laboneq.compiler.code_generator.analyze_events import (
     analyze_acquire_times,
     analyze_init_times,
     analyze_loop_times,
     analyze_phase_reset_times,
-    analyze_play_wave_times,
     analyze_precomp_reset_times,
     analyze_set_oscillator_times,
     analyze_trigger_events,
-    phase_int_to_float,
 )
+from laboneq.compiler.code_generator.analyze_playback import analyze_play_wave_times
 from laboneq.compiler.code_generator.command_table_tracker import CommandTableTracker
 from laboneq.compiler.code_generator.compressor import compress_generators_rle
-from laboneq.compiler.code_generator.dict_list import merge_dict_list
-from laboneq.compiler.code_generator.measurement_calculator import MeasurementCalculator
-from laboneq.compiler.code_generator.sampled_event_handler import SampledEventHandler
+from laboneq.compiler.code_generator.feedback_register_allocator import (
+    FeedbackRegisterAllocator,
+)
+from laboneq.compiler.code_generator.measurement_calculator import (
+    IntegrationTimes,
+    MeasurementCalculator,
+    SignalDelays,
+)
+from laboneq.compiler.code_generator.sampled_event_handler import (
+    FeedbackConnection,
+    SampledEventHandler,
+)
 from laboneq.compiler.code_generator.seq_c_generator import SeqCGenerator
 from laboneq.compiler.code_generator.seqc_tracker import SeqCTracker
 from laboneq.compiler.code_generator.signatures import (
@@ -41,7 +48,12 @@ from laboneq.compiler.code_generator.signatures import (
 )
 from laboneq.compiler.code_generator.utils import normalize_phase
 from laboneq.compiler.code_generator.wave_index_tracker import WaveIndexTracker
-from laboneq.compiler.common.awg_info import AWGInfo
+from laboneq.compiler.common.awg_info import AWGInfo, AwgKey
+from laboneq.compiler.common.awg_sampled_event import (
+    AWGEvent,
+    AWGEventType,
+    AWGSampledEventSequence,
+)
 from laboneq.compiler.common.awg_signal_type import AWGSignalType
 from laboneq.compiler.common.compiler_settings import (
     CompilerSettings,
@@ -51,8 +63,9 @@ from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.common.trigger_mode import TriggerMode
-from laboneq.compiler.experiment_access.experiment_dao import PulseDef, SectionInfo
+from laboneq.compiler.experiment_access.pulse_def import PulseDef
 from laboneq.compiler.experiment_access.section_graph import SectionGraph
+from laboneq.compiler.experiment_access.section_info import SectionInfo
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.compiled_experiment import (
     PulseInstance,
@@ -69,7 +82,7 @@ from laboneq.core.utilities.pulse_sampler import (
 _logger = logging.getLogger(__name__)
 
 
-def add_init_statements(awg: AWGInfo, init_generator, deferred_function_calls):
+def add_wait_trigger_statements(awg: AWGInfo, init_generator, deferred_function_calls):
     if awg.trigger_mode == TriggerMode.DIO_TRIGGER:
         if awg.awg_number == 0:
             init_generator.add_function_call_statement("setDIO", ["0"])
@@ -123,13 +136,38 @@ def add_init_statements(awg: AWGInfo, init_generator, deferred_function_calls):
             init_generator.add_function_call_statement("waitDIOTrigger")
 
 
-def calculate_integration_weights(acquire_events, signal_obj, pulse_defs, device_type):
+def setup_sine_phase(
+    awg: AWGInfo,
+    command_table_tracker: CommandTableTracker,
+    init_generator: SeqCGenerator,
+    use_ct: bool,
+):
+    if awg.device_type != DeviceType.HDAWG or not use_ct:
+        return
+
+    index = command_table_tracker.create_entry(
+        PlaybackSignature(
+            waveform=None,
+            hw_oscillator=None,
+            pulse_parameters=(),
+            state=None,
+            set_phase=0,
+            increment_phase=None,
+        ),
+        None,
+    )
+    init_generator.add_command_table_execution(index)
+
+
+def calculate_integration_weights(
+    acquire_events: AWGSampledEventSequence, signal_obj, pulse_defs, device_type
+):
     integration_weights = {}
-    for event_list in acquire_events.values():
+    for event_list in acquire_events.sequence.values():
         for event in event_list:
             _logger.debug("For weights, look at %s", event)
-            if "play_wave_id" in event:
-                play_wave_id = event["play_wave_id"]
+            play_wave_id = event.params.get("play_wave_id")
+            if play_wave_id is not None:
                 _logger.debug("Event %s has play wave id %s", event, play_wave_id)
                 if (
                     play_wave_id in pulse_defs
@@ -156,9 +194,9 @@ def calculate_integration_weights(acquire_events, signal_obj, pulse_defs, device
                     )
 
                     pulse_parameters = combine_pulse_parameters(
-                        event.get("pulse_pulse_parameters"),
+                        event.params.get("pulse_pulse_parameters"),
                         None,
-                        event.get("play_pulse_parameters"),
+                        event.params.get("play_pulse_parameters"),
                     )
                     integration_weight = sample_pulse(
                         signal_type="iq",
@@ -222,13 +260,15 @@ class CodeGenerator:
         self._command_tables: List[Dict[str, Any]] = []
         self._pulse_map: Dict[str, PulseMapEntry] = {}
         self._sampled_signatures: Dict[str, Dict[WaveformSignature, Dict]] = {}
-        self._sampled_events = None
-        self._awgs: Dict[CodeGenerator.AwgKey, AWGInfo] = {}
+        self._awgs: Dict[AwgKey, AWGInfo] = {}
         self._events_in_samples = {}
+        self._integration_times: IntegrationTimes = None
+        self._signal_delays: SignalDelays = None
         self._integration_weights = None
         self._simultaneous_acquires = None
-        self._command_table_match_offsets = {}
-        self._feedback_connections = {}
+        self._command_table_match_offsets: Dict[AwgKey, int] = {}
+        self._feedback_connections: Dict[str, FeedbackConnection] = {}
+        self._feedback_register_allocator: FeedbackRegisterAllocator = None
         self._total_execution_time = None
 
         self.EMIT_TIMING_COMMENTS = self._settings.EMIT_TIMING_COMMENTS
@@ -243,13 +283,8 @@ class CodeGenerator:
     def total_execution_time(self):
         return self._total_execution_time
 
-    @dataclass(init=True, repr=True, order=True, frozen=True)
-    class AwgKey:
-        device_id: str
-        awg_number: int
-
     def _add_signal_to_awg(self, signal_obj: SignalObj):
-        awg_key = CodeGenerator.AwgKey(signal_obj.device_id, signal_obj.awg.awg_number)
+        awg_key = signal_obj.awg.key
         if awg_key not in self._awgs:
             self._awgs[awg_key] = copy.deepcopy(signal_obj.awg)
             self._awgs[awg_key].device_type = signal_obj.device_type
@@ -499,23 +534,22 @@ class CodeGenerator:
             s["awg_number"] = self._signals[k].awg.awg_number
 
         (
-            integration_times,
-            signal_delays,
-            delays_per_awg,
+            self._integration_times,
+            self._signal_delays,
         ) = self._measurement_calculator.calculate_integration_times(
             signal_info_map, events
         )
 
         for signal_id, signal_obj in self._signals.items():
-            code_generation_delay = signal_delays.get(signal_id)
+            code_generation_delay = self._signal_delays.get(signal_id)
             if code_generation_delay is not None:
 
                 signal_obj.total_delay = (
                     signal_obj.start_delay
                     + signal_obj.delay_signal
-                    + code_generation_delay["code_generation"]
+                    + code_generation_delay.code_generation
                 )
-                signal_obj.on_device_delay = code_generation_delay["on_device"]
+                signal_obj.on_device_delay = code_generation_delay.on_device
             else:
                 signal_obj.total_delay = (
                     signal_obj.start_delay + signal_obj.delay_signal
@@ -551,22 +585,23 @@ class CodeGenerator:
             if "play_wave_id" not in event or event["play_wave_id"] not in ignore_pulses
         ]
 
+        self._feedback_register_allocator = FeedbackRegisterAllocator(
+            self._signals, filtered_events
+        )
+
         for _, awg in sorted(
             self._awgs.items(),
             key=lambda item: item[0].device_id + str(item[0].awg_number),
         ):
             self._gen_seq_c_per_awg(awg, filtered_events, pulse_defs)
 
-        return integration_times, signal_delays
+        return self._signal_delays
 
     @staticmethod
     def _calc_global_awg_params(awg: AWGInfo) -> Tuple[float, float]:
         global_sampling_rate = None
         global_delay = None
         signals_so_far = set()
-        all_total_delays = set()
-        all_start_delays = set()
-        all_delay_signals = set()
         all_relevant_delays = {}
         for signal_obj in awg.signals:
 
@@ -588,9 +623,6 @@ class CodeGenerator:
                 raise RuntimeError(
                     f"Delay {relevant_delay} s = {round(relevant_delay*signal_obj.sampling_rate)} samples on signal {signal_obj.id} is not compatible with the sample multiple of {signal_obj.device_type.sample_multiple} on {signal_obj.device_type}"
                 )
-            all_total_delays.add(signal_obj.total_delay)
-            all_start_delays.add(relevant_delay)
-            all_delay_signals.add(signal_obj.delay_signal)
             all_relevant_delays[signal_obj.id] = relevant_delay
 
             if signal_obj.signal_type != "integration":
@@ -635,13 +667,16 @@ class CodeGenerator:
         return global_sampling_rate, global_delay
 
     def _gen_seq_c_per_awg(
-        self, awg: AWGInfo, events: List[Any], pulse_defs: Dict[str, PulseDef]
+        self,
+        awg: AWGInfo,
+        events: List[Any],
+        pulse_defs: Dict[str, PulseDef],
     ):
         function_defs_generator = SeqCGenerator()
         declarations_generator = SeqCGenerator()
         _logger.debug("Generating seqc for awg %d of %s", awg.awg_number, awg.device_id)
         _logger.debug("AWG Object = \n%s", awg)
-        sampled_events = SortedDict()
+        sampled_events = AWGSampledEventSequence()
         filename = awg.seqc
 
         global_sampling_rate, global_delay = self._calc_global_awg_params(awg)
@@ -673,6 +708,15 @@ class CodeGenerator:
                 [to_item["signal_id"] for to_item in event.get("trigger_output", [])]
             ).intersection(signal_ids)
         )
+        has_match_case = False
+        for event in events:
+            if (
+                event["event_type"] == EventType.SECTION_START
+                and event.get("state") is not None
+                and event["section_name"] in own_sections
+            ):
+                has_match_case = True
+                use_command_table = True
         for event in events:
             if (
                 event["event_type"] == EventType.SUBSECTION_END
@@ -681,8 +725,8 @@ class CodeGenerator:
                 # by looking at SUBSECTION_END, we'll always walk towards the tree root
                 own_sections.add(event["section_name"])
 
-            if event["event_type"] == EventType.SECTION_START and event.get("handle"):
-                use_command_table = True
+        if has_match_case:
+            declarations_generator.add_variable_declaration("current_seq_step", 0)
 
         if awg.device_type not in [DeviceType.HDAWG, DeviceType.SHFSG]:
             use_command_table = False
@@ -704,52 +748,49 @@ class CodeGenerator:
         init_events = analyze_init_times(
             awg.device_id, global_sampling_rate, global_delay
         )
-        merge_dict_list(sampled_events, init_events)
+        sampled_events.merge(init_events)
 
-        precomp_reset_events = analyze_precomp_reset_times(
+        precomp_reset_events, fake_play_events = analyze_precomp_reset_times(
             events, [s.id for s in awg.signals], global_sampling_rate, global_delay
         )
-        merge_dict_list(sampled_events, precomp_reset_events)
+        sampled_events.merge(precomp_reset_events)
+        # Todo: Remove when HULK-1246 is fixed, see analyze_precomp_reset_times for details.
+        for ev in fake_play_events:
+            index = bisect.bisect([event["time"] for event in events], ev["time"])
+            events.insert(index, ev)
 
         phase_reset_events = analyze_phase_reset_times(
             events, awg.device_id, global_sampling_rate, global_delay
         )
-        merge_dict_list(sampled_events, phase_reset_events)
+        sampled_events.merge(phase_reset_events)
 
         loop_events = analyze_loop_times(
             awg, events, global_sampling_rate, global_delay
         )
-        merge_dict_list(sampled_events, loop_events)
+        sampled_events.merge(loop_events)
 
         for signal_obj in awg.signals:
 
             set_oscillator_events = analyze_set_oscillator_times(
                 events,
-                signal_obj.id,
-                device_id=signal_obj.device_id,
-                device_type=signal_obj.device_type,
-                sampling_rate=signal_obj.sampling_rate,
-                delay=signal_obj.total_delay,
+                signal_obj,
             )
-            merge_dict_list(sampled_events, set_oscillator_events)
+            sampled_events.merge(set_oscillator_events)
+
+            trigger_events = analyze_trigger_events(events, signal_obj, loop_events)
+            sampled_events.merge(trigger_events)
 
             acquire_events = analyze_acquire_times(
                 events,
-                signal_obj.id,
-                sampling_rate=signal_obj.sampling_rate,
-                delay=signal_obj.total_delay,
-                sample_multiple=signal_obj.device_type.sample_multiple,
-                channels=signal_obj.channels,
+                signal_obj,
+                feedback_register_allocator=self._feedback_register_allocator,
             )
-            trigger_events = analyze_trigger_events(events, signal_obj, loop_events)
-            merge_dict_list(sampled_events, trigger_events)
 
             if (
-                trigger_events
+                trigger_events.sequence
                 and signal_obj.awg.device_type == DeviceType.SHFQA
-                and any(
-                    "spectroscopy" in acquire_event.get("acquisition_type")
-                    for acquire_event in acquire_events
+                and acquire_events.has_matching_event(
+                    lambda ev: "spectroscopy" in ev.get("acquisition_type")
                 )
             ):
                 raise LabOneQException(
@@ -760,7 +801,7 @@ class CodeGenerator:
                 _logger.debug(
                     "Calculating integration weights for signal %s. There are %d acquire events.",
                     signal_obj.id,
-                    len(acquire_events.values()),
+                    len(acquire_events.sequence),
                 )
                 self._integration_weights[
                     signal_obj.id
@@ -768,54 +809,50 @@ class CodeGenerator:
                     acquire_events, signal_obj, pulse_defs, awg.device_type
                 )
 
-            merge_dict_list(sampled_events, acquire_events)
-
-        signals_to_process = awg.signals
+            sampled_events.merge(acquire_events)
 
         if awg.signal_type == AWGSignalType.MULTI:
             _logger.debug("Multi signal %s", awg)
-            iq_signal_ids = []
-            signals_to_process = []
-            iq_signals = []
-            delay = None
+            assert len(awg.signals) > 0
+            delay = 0.0
+            device_type = awg.signals[0].device_type
+            sampling_rate = awg.signals[0].sampling_rate
+            mixer_type = awg.signals[0].mixer_type
             for signal_obj in awg.signals:
                 if signal_obj.signal_type != "integration":
                     _logger.debug(
                         "Non-integration signal in multi signal: %s", signal_obj
                     )
-                    iq_signal_ids.append(signal_obj.id)
-                    iq_signals.append(signal_obj)
-                    delay = signal_obj.total_delay
-                else:
-                    signals_to_process.append(signal_obj)
+                    delay = max(delay, signal_obj.total_delay)
 
-            virtual_signal_id = "_".join(iq_signal_ids)
+            signals = {s.id: s for s in awg.signals if s.signal_type != "integration"}
+            virtual_signal_id = "_".join(signals.keys())
 
             interval_events = analyze_play_wave_times(
                 events=events,
-                signals=self._signals,
-                signal_ids=iq_signal_ids,
-                device_type=signal_obj.device_type,
-                sampling_rate=signal_obj.sampling_rate,
+                signals=signals,
+                device_type=device_type,
+                sampling_rate=sampling_rate,
                 delay=delay,
                 other_events=sampled_events,
                 phase_resolution_range=self.phase_resolution_range(),
-                waveform_size_hints=self.waveform_size_hints(signal_obj.device_type),
+                waveform_size_hints=self.waveform_size_hints(device_type),
+                use_command_table=use_command_table,
             )
 
             sampled_signatures = self._sample_pulses(
                 virtual_signal_id,
                 interval_events,
                 pulse_defs=pulse_defs,
-                sampling_rate=signal_obj.sampling_rate,
+                sampling_rate=sampling_rate,
                 signal_type="iq",
-                device_type=signal_obj.device_type,
+                device_type=device_type,
                 multi_iq_signal=True,
-                mixer_type=signal_obj.mixer_type,
+                mixer_type=mixer_type,
             )
 
             self._sampled_signatures[virtual_signal_id] = sampled_signatures
-            merge_dict_list(sampled_events, interval_events)
+            sampled_events.merge(interval_events)
             if virtual_signal_id in self._sampled_signatures:
                 for sig, sampled in self._sampled_signatures[virtual_signal_id].items():
                     if not sampled:
@@ -824,7 +861,7 @@ class CodeGenerator:
 
                     length = sig.length
                     declarations_generator.add_wave_declaration(
-                        signal_obj.device_type,
+                        device_type,
                         awg.signal_type.value,
                         sig_string,
                         length,
@@ -832,8 +869,8 @@ class CodeGenerator:
                         False,
                     )
 
-        if awg.signal_type != AWGSignalType.DOUBLE:
-            for signal_obj in signals_to_process:
+        elif awg.signal_type != AWGSignalType.DOUBLE:
+            for signal_obj in awg.signals:
 
                 if signal_obj.device_type == DeviceType.SHFQA:
                     sub_channel = signal_obj.channels[0]
@@ -841,8 +878,7 @@ class CodeGenerator:
                     sub_channel = None
                 interval_events = analyze_play_wave_times(
                     events=events,
-                    signals=self._signals,
-                    signal_ids=[signal_obj.id],
+                    signals={signal_obj.id: signal_obj},
                     device_type=signal_obj.device_type,
                     sampling_rate=signal_obj.sampling_rate,
                     delay=signal_obj.total_delay,
@@ -852,6 +888,7 @@ class CodeGenerator:
                         signal_obj.device_type
                     ),
                     sub_channel=sub_channel,
+                    use_command_table=use_command_table,
                 )
 
                 sampled_signatures = self._sample_pulses(
@@ -865,7 +902,7 @@ class CodeGenerator:
                 )
 
                 self._sampled_signatures[signal_obj.id] = sampled_signatures
-                merge_dict_list(sampled_events, interval_events)
+                sampled_events.merge(interval_events)
 
                 if signal_obj.id in self._sampled_signatures:
                     signature_infos = []
@@ -893,37 +930,34 @@ class CodeGenerator:
                             siginfo[2][0],
                             siginfo[2][1],
                         )
-        else:
-            virtual_signal_id = (
-                signals_to_process[0].id + "_" + signals_to_process[1].id
-            )
+        else:  # awg.signal_type == AWGSignalType.DOUBLE
+            assert len(awg.signals) == 2
+            signal_a, signal_b = awg.signals
+            virtual_signal_id = signal_a.id + "_" + signal_b.id
             interval_events = analyze_play_wave_times(
                 events=events,
-                signals=self._signals,
-                signal_ids=[
-                    signals_to_process[0].id,
-                    signals_to_process[1].id,
-                ],
-                device_type=signal_obj.device_type,
-                sampling_rate=signal_obj.sampling_rate,
-                delay=signal_obj.total_delay,
+                signals={s.id: s for s in awg.signals},
+                device_type=signal_a.device_type,
+                sampling_rate=signal_a.sampling_rate,
+                delay=signal_a.total_delay,
                 other_events=sampled_events,
                 phase_resolution_range=self.phase_resolution_range(),
-                waveform_size_hints=self.waveform_size_hints(signal_obj.device_type),
+                waveform_size_hints=self.waveform_size_hints(signal_a.device_type),
+                use_command_table=False,  # do not set oscillator phase via CT
             )
 
             sampled_signatures = self._sample_pulses(
                 virtual_signal_id,
                 interval_events,
                 pulse_defs=pulse_defs,
-                sampling_rate=signals_to_process[0].sampling_rate,
-                signal_type=signals_to_process[0].signal_type,
-                device_type=signals_to_process[0].device_type,
-                mixer_type=signals_to_process[0].mixer_type,
+                sampling_rate=signal_a.sampling_rate,
+                signal_type=signal_a.signal_type,
+                device_type=signal_a.device_type,
+                mixer_type=signal_a.mixer_type,
             )
 
             self._sampled_signatures[virtual_signal_id] = sampled_signatures
-            merge_dict_list(sampled_events, interval_events)
+            sampled_events.merge(interval_events)
             if virtual_signal_id in self._sampled_signatures:
                 for sig, sampled in self._sampled_signatures[virtual_signal_id].items():
                     if not sampled:
@@ -931,25 +965,25 @@ class CodeGenerator:
                     sig_string = sig.signature_string()
                     length = sig.length
                     declarations_generator.add_wave_declaration(
-                        signals_to_process[0].device_type,
+                        signal_a.device_type,
                         awg.signal_type.value,
                         sig_string,
                         length,
                         False,
                         False,
                     )
-        self._sampled_events = sampled_events
         self.post_process_sampled_events(awg, sampled_events)
-
-        deferred_function_calls = []
-        init_generator = SeqCGenerator()
-        add_init_statements(awg, init_generator, deferred_function_calls)
 
         _logger.debug(
             "** Start processing events for awg %d of %s",
             awg.awg_number,
             awg.device_id,
         )
+        command_table_tracker = CommandTableTracker(awg.device_type)
+
+        deferred_function_calls = []
+        init_generator = SeqCGenerator()
+
         seqc_tracker = SeqCTracker(
             init_generator=init_generator,
             deferred_function_calls=deferred_function_calls,
@@ -962,7 +996,7 @@ class CodeGenerator:
 
         handler = SampledEventHandler(
             seqc_tracker=seqc_tracker,
-            command_table_tracker=CommandTableTracker(),
+            command_table_tracker=command_table_tracker,
             function_defs_generator=function_defs_generator,
             declarations_generator=declarations_generator,
             wave_indices=WaveIndexTracker(),
@@ -973,12 +1007,15 @@ class CodeGenerator:
             sampled_signatures=self._sampled_signatures,
             use_command_table=use_command_table,
             emit_timing_comments=self.EMIT_TIMING_COMMENTS,
+            use_current_sequencer_step=has_match_case,
         )
 
+        setup_sine_phase(awg, command_table_tracker, init_generator, use_command_table)
+
+        add_wait_trigger_statements(awg, init_generator, deferred_function_calls)
+
         handler.handle_sampled_events(sampled_events)
-        self._command_table_match_offsets[
-            (awg.device_id, awg.awg_number)
-        ] = handler.command_table_match_offset
+        self._command_table_match_offsets[awg.key] = handler.command_table_match_offset
 
         seq_c_generators = []
         _logger.debug(
@@ -1062,7 +1099,7 @@ class CodeGenerator:
     def _sample_pulses(
         self,
         signal_id,
-        interval_events,
+        interval_events: AWGSampledEventSequence,
         pulse_defs: Dict[str, PulseDef],
         sampling_rate,
         signal_type,
@@ -1070,13 +1107,14 @@ class CodeGenerator:
         mixer_type,
         multi_iq_signal=False,
     ):
-        PHASE_RESOLUTION_RANGE = self.phase_resolution_range()
         sampled_signatures: Dict[WaveformSignature, Dict] = {}
         signatures = set()
-        for interval_event_list in interval_events.values():
+        for interval_event_list in interval_events.sequence.values():
             for interval_event in interval_event_list:
                 with suppress(KeyError):
-                    signature: PlaybackSignature = interval_event["playback_signature"]
+                    signature: PlaybackSignature = interval_event.params[
+                        "playback_signature"
+                    ]
                     _logger.debug("Signature found %s in %s", signature, interval_event)
                     if any(p.pulse for p in signature.waveform.pulses):
                         signatures.add(signature)
@@ -1150,20 +1188,9 @@ class CodeGenerator:
                 if abs(amplitude) > max_amplitude:
                     max_amplitude = abs(amplitude)
 
-                oscillator_phase = None
-                if pulse_part.oscillator_phase is not None:
-                    oscillator_phase = (
-                        2
-                        * math.pi
-                        * pulse_part.oscillator_phase
-                        / PHASE_RESOLUTION_RANGE
-                    )
+                oscillator_phase = pulse_part.oscillator_phase
 
-                baseband_phase = None
-                if pulse_part.baseband_phase is not None:
-                    baseband_phase = (
-                        2 * math.pi * pulse_part.baseband_phase / PHASE_RESOLUTION_RANGE
-                    )
+                baseband_phase = pulse_part.baseband_phase
                 used_oscillator_frequency = pulse_part.oscillator_frequency
 
                 _logger.debug(
@@ -1179,9 +1206,8 @@ class CodeGenerator:
                 iq_phase = 0.0
 
                 if pulse_part.phase is not None:
-                    float_phase = phase_int_to_float(pulse_part.phase)
                     # According to "LabOne Q Software: Signal, channel and oscillator concept" REQ 1.3
-                    iq_phase += float_phase % (2 * math.pi)
+                    iq_phase += pulse_part.phase
 
                 # In case oscillator phase can't be set at runtime (e.g. HW oscillator without
                 # phase control from a sequencer), apply oscillator phase on a baseband (iq) signal
@@ -1358,11 +1384,20 @@ class CodeGenerator:
     def pulse_map(self) -> Dict[str, PulseMapEntry]:
         return self._pulse_map
 
-    def command_table_match_offsets(self):
+    def integration_times(self) -> IntegrationTimes:
+        return self._integration_times
+
+    def signal_delays(self) -> SignalDelays:
+        return self._signal_delays
+
+    def command_table_match_offsets(self) -> Dict[AwgKey, int]:
         return self._command_table_match_offsets
 
-    def feedback_connections(self):
+    def feedback_connections(self) -> Dict[str, FeedbackConnection]:
         return self._feedback_connections
+
+    def feedback_registers(self) -> Dict[AwgKey, int]:
+        return self._feedback_register_allocator.feedback_registers
 
     @staticmethod
     def stencil_samples(start, source, target):
@@ -1388,55 +1423,72 @@ class CodeGenerator:
                 target_end,
             )
 
-    def phase_resolution_range(self):
+    def phase_resolution_range(self) -> int:
+        if self.PHASE_RESOLUTION_BITS < 0:
+            # disable quantization
+            return 0
         return 1 << self.PHASE_RESOLUTION_BITS
 
     @staticmethod
-    def post_process_sampled_events(awg: AWGInfo, sampled_events):
+    def post_process_sampled_events(
+        awg: AWGInfo, sampled_events: AWGSampledEventSequence
+    ):
         if awg.device_type == DeviceType.SHFQA:
-            has_acquire = False
-            for sampled_event_list in sampled_events.values():
-                for x in sampled_event_list:
-                    if x["signature"] == "acquire":
-                        has_acquire = True
-                        break
+            has_acquire = sampled_events.has_matching_event(
+                lambda ev: ev.type == AWGEventType.ACQUIRE
+            )
 
-            for sampled_event_list in sampled_events.values():
+            for sampled_event_list in sampled_events.sequence.values():
                 start = None
                 end = None
                 acquisition_types = set()
-                play = []
-                acquire = []
+                feedback_registers = list()
+                play: List[AWGEvent] = []
+                acquire: List[AWGEvent] = []
                 for x in sampled_event_list:
-                    if "signal_id" in x and x["signature"] != "acquire":
+                    if "signal_id" in x.params and x.type != AWGEventType.ACQUIRE:
                         play.append(x)
-                        start = x["start"]
-                        end = x["end"] if end is None else max(end, x["end"])
-                    elif x["signature"] == "acquire":
-                        start = x["start"]
-                        if "acquisition_type" in x:
-                            acquisition_types.update(x["acquisition_type"])
+                        start = x.start
+                        end = x.end if end is None else max(end, x.end)
+                    elif x.type == AWGEventType.ACQUIRE:
+                        start = x.start
+                        if "acquisition_type" in x.params:
+                            acquisition_types.update(x.params["acquisition_type"])
+                        feedback_register = x.params.get("feedback_register")
+                        if feedback_register is not None:
+                            feedback_registers.append(feedback_register)
                         acquire.append(x)
-                        end = x["end"] if end is None else max(end, x["end"])
+                        end = x.end if end is None else max(end, x.end)
                 if len(play) > 0 and len(acquire) == 0 and has_acquire:
                     _logger.warning("Problem:")
                     for log_event in sampled_event_list:
                         _logger.warning("  %s", log_event)
                     raise Exception("Play and acquire must happen at the same time")
+                if len(feedback_registers) > 1:
+                    _logger.warning(
+                        "Conflicting feedback register allocation detected, please contact development."
+                    )
                 if len(play) > 0 or len(acquire) > 0:
                     end = (
                         round(end / DeviceType.SHFQA.sample_multiple)
                         * DeviceType.SHFQA.sample_multiple
                     )
-                    qa_event = {
-                        "signature": "QA_EVENT",
-                        "acquire_events": acquire,
-                        "play_events": play,
-                        "start": start,
-                        "end": end,
-                        "acquisition_type": list(acquisition_types),
-                        "acquire_handles": [a["acquire_handles"][0] for a in acquire],
-                    }
+                    qa_event = AWGEvent(
+                        type=AWGEventType.QA_EVENT,
+                        start=start,
+                        end=end,
+                        params={
+                            "acquire_events": acquire,
+                            "play_events": play,
+                            "acquisition_type": list(acquisition_types),
+                            "acquire_handles": [
+                                a.params["acquire_handles"][0] for a in acquire
+                            ],
+                            "feedback_register": None
+                            if len(feedback_registers) == 0
+                            else feedback_registers[0],
+                        },
+                    )
 
                     for to_delete in play + acquire:
                         sampled_event_list.remove(to_delete)

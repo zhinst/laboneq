@@ -3,13 +3,19 @@
 
 from __future__ import annotations
 
+import math
 from enum import Flag
-from typing import List, Set, Tuple
+from typing import List, Optional, Set, Tuple
 
 import numpy as np
 from numpy.typing import ArrayLike
 
-from laboneq.simulator.seqc_parser import Operation, SeqCEvent, SeqCSimulation
+from laboneq.simulator.seqc_parser import (
+    CommandTableEntryInfo,
+    Operation,
+    SeqCEvent,
+    SeqCSimulation,
+)
 
 
 class SimTarget(Flag):
@@ -44,6 +50,7 @@ class WaveScroller:
         self.last_trig = 0
         self.last_freq_set_samples = 0
         self.last_freq = np.nan
+        self.oscillator_phase: Optional[float] = None
 
         self.processors = {
             Operation.PLAY_WAVE: self._process_play_wave,
@@ -75,6 +82,7 @@ class WaveScroller:
         target_events: Set[Operation] = set()
         if (
             SimTarget.ACQUIRE in self.sim_targets
+            or SimTarget.TRIGGER in self.sim_targets
             or SimTarget.PLAY in self.sim_targets
             and self.is_shfqa
         ):
@@ -88,18 +96,36 @@ class WaveScroller:
         return target_events
 
     def _process_play_wave(self, event: SeqCEvent, snippet_start_samples: int):
+        ct_info: CommandTableEntryInfo = event.args[1]
         if len(self.ch) > 1:
+
+            ct_abs_phase = ct_info.abs_phase if ct_info is not None else None
+            ct_rel_phase = ct_info.rel_phase if ct_info is not None else None
+            if ct_abs_phase is not None:
+                self.oscillator_phase = ct_abs_phase / (180 / math.pi)
+            if ct_rel_phase is not None:
+                self.oscillator_phase = (
+                    self.oscillator_phase or 0.0
+                ) + ct_rel_phase / (180 / math.pi)
             wave = 1j * self.sim.waves[event.args[0][self.ch[1] % 2]]
             wave += self.sim.waves[event.args[0][self.ch[0] % 2]]
+
+            # If the command table phase is set, assume that the signal is complex (rather than 2x real)
+            if self.oscillator_phase is not None:
+                wave *= np.exp(-1j * self.oscillator_phase)
         else:
             wave = self.sim.waves[event.args[0][self.ch[0] % 2]]
+            # Note: CT phase not implemented on RF signals
         wave_start_samples = event.start_samples - snippet_start_samples
         self.wave_snippet[wave_start_samples : wave_start_samples + len(wave)] = wave
 
     def _process_start_qa(self, event: SeqCEvent, snippet_start_samples: int):
         if SimTarget.PLAY in self.sim_targets and self.is_shfqa:
             self._process_shfqa_gen(event, snippet_start_samples)
-        if SimTarget.ACQUIRE in self.sim_targets:
+        if (
+            SimTarget.ACQUIRE in self.sim_targets
+            or SimTarget.TRIGGER in self.sim_targets
+        ):
             self._process_acquire(event, snippet_start_samples)
 
     def _process_shfqa_gen(self, event: SeqCEvent, snippet_start_samples: int):
@@ -115,15 +141,35 @@ class WaveScroller:
             ] = wave
 
     def _process_acquire(self, event: SeqCEvent, snippet_start_samples: int):
-        integrator_mask: int = event.args[1]
-        test_mask = 0xFFFF if self.ch[0] < 0 else (1 << self.ch[0])
-        if (integrator_mask & test_mask) != 0:
-            measurement_delay_samples: int = event.args[2]
-            wave_start_samples = (
-                event.start_samples - snippet_start_samples + measurement_delay_samples
-            )
-            if wave_start_samples < len(self.acquire_snippet):
-                self.acquire_snippet[wave_start_samples] = 1.0
+        if SimTarget.ACQUIRE in self.sim_targets:
+            integrator_mask: int = event.args[1]
+            test_mask = 0xFFFF if self.ch[0] < 0 else (1 << self.ch[0])
+            if (integrator_mask & test_mask) != 0:
+                measurement_delay_samples: int = event.args[2]
+                wave_start_samples = (
+                    event.start_samples
+                    - snippet_start_samples
+                    + measurement_delay_samples
+                )
+                if wave_start_samples < len(self.acquire_snippet):
+                    self.acquire_snippet[wave_start_samples] = 1.0
+        if SimTarget.TRIGGER in self.sim_targets:
+            trigger_index = 5 if self.is_shfqa else 4
+            if event.args[trigger_index] is None:
+                self._process_set_trigger(
+                    SeqCEvent(event.start_samples, 0, Operation.SET_TRIGGER, [0]),
+                    snippet_start_samples,
+                )
+            else:
+                self._process_set_trigger(
+                    SeqCEvent(
+                        event.start_samples,
+                        0,
+                        Operation.SET_TRIGGER,
+                        [event.args[trigger_index]],
+                    ),
+                    snippet_start_samples,
+                )
 
     def _process_set_trigger(self, event: SeqCEvent, snippet_start_samples: int):
         value: int = int(event.args[0])

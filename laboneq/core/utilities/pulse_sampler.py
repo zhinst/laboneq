@@ -15,7 +15,7 @@ from laboneq.core.types.enums.mixer_type import MixerType
 _logger = logging.getLogger(__name__)
 
 
-def length_to_samples(length, sampling_rate):
+def length_to_samples(length, sampling_rate) -> int:
     return round(length * sampling_rate)
 
 

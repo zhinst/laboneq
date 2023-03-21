@@ -49,7 +49,7 @@ class CompilerSettings:
     SHFSG_LEAD_PQSC: float = 80e-9
 
     AMPLITUDE_RESOLUTION_BITS: int = 24
-    PHASE_RESOLUTION_BITS: int = 12
+    PHASE_RESOLUTION_BITS: int = 16
     MAX_EVENTS_TO_PUBLISH: int = 1000
     EXPAND_LOOPS_FOR_SCHEDULE: bool = True
     CONSTRAINT_TOLERANCE: float = 1e-15
@@ -72,7 +72,7 @@ class CompilerSettings:
     EMIT_TIMING_COMMENTS: bool = False
     IGNORE_GRAPH_VERIFY_RESULTS: bool = False
 
-    USE_EXPERIMENTAL_SCHEDULER: bool = False
+    USE_EXPERIMENTAL_SCHEDULER: bool = True
 
 
 UserSettings = TypeVar("UserSettings", Dict, None)

@@ -18,6 +18,8 @@ from .cache import Cache
 from .util import LabOneQControllerException
 from .versioning import LabOneVersion
 
+_logger = logging.getLogger(__name__)
+
 
 class CachingStrategy(Enum):
     CACHE = "cache"
@@ -71,7 +73,6 @@ class DaqNodeGetAction(DaqNodeAction):
 class ZiApiWrapperBase(ABC):
     def __init__(self, name):
         self._name = name
-        self._logger = logging.getLogger(__name__)
         self._node_logger = logging.getLogger("node.log")
         self._node_cache_root = Cache(f"cache({name})")
 
@@ -103,7 +104,7 @@ class ZiApiWrapperBase(ABC):
         ):
             self._log_node(f"{method_name} {path} {value}")
 
-        self._logger.debug("%s - %s -> %s", method_name, path, value)
+        _logger.debug("%s - %s -> %s", method_name, path, value)
 
     def _log_sets(self, method_name, daq_actions: list):
         for action in daq_actions:
@@ -111,7 +112,7 @@ class ZiApiWrapperBase(ABC):
 
     def _log_get(self, method_name: str, path: str):
         self._log_node(f"{method_name} {path} -")
-        self._logger.debug("%s - %s", method_name, path)
+        _logger.debug("%s - %s", method_name, path)
 
     def _log_gets(self, method_name, daq_actions):
         for daq_action in daq_actions:
@@ -139,7 +140,7 @@ class ZiApiWrapperBase(ABC):
             raise LabOneQControllerException("List expected")
 
         node_list = [daq_action.path for daq_action in daq_actions]
-        self._logger.debug("Batch set node list: %s", node_list)
+        _logger.debug("Batch set node list: %s", node_list)
 
         api_input = []
         daq_actions_to_execute = []
@@ -153,7 +154,7 @@ class ZiApiWrapperBase(ABC):
                 if self._node_cache_root.set(action.path, action.value) is not None:
                     continue
             else:
-                self._logger.debug("set not caching: %s", action.path)
+                _logger.debug("set not caching: %s", action.path)
                 self._node_cache_root.force_set(action.path, action.value)
 
             daq_actions_to_execute.append(action)
@@ -161,7 +162,7 @@ class ZiApiWrapperBase(ABC):
         self._log_sets("set", daq_actions_to_execute)
 
         api_input = self._actions_to_set_api_input(daq_actions_to_execute)
-        self._logger.debug("API set node list: %s", api_input)
+        _logger.debug("API set node list: %s", api_input)
 
         return self._api_wrapper("set", api_input)
 
@@ -222,7 +223,7 @@ class DaqWrapper(ZiApiWrapperBase):
         except ValueError:
             err_msg = f"Version {version_str} is not supported by LabOne Q."
             if server_qualifier.ignore_lab_one_version_error:
-                self._logger.warning("Ignoring that %s", err_msg)
+                _logger.warning("Ignoring that %s", err_msg)
                 self._dataserver_version = LabOneVersion.LATEST
             else:
                 raise LabOneQControllerException(err_msg)
@@ -232,12 +233,12 @@ class DaqWrapper(ZiApiWrapperBase):
         if zi_python_version != version_str:
             err_msg = f"Version of dataserver ({version_str}) and zi python ({zi_python_version}) do not match."
             if self.server_qualifier.ignore_lab_one_version_error:
-                self._logger.warning("Ignoring that %s", err_msg)
+                _logger.warning("Ignoring that %s", err_msg)
             else:
                 raise LabOneQControllerException(err_msg)
 
-        self._logger.info(
-            "Connected to Zurich Instrument's Data Server version %s at %s:%s",
+        _logger.info(
+            "Connected to Zurich Instruments LabOne Data Server version %s at %s:%s",
             version_str,
             self.server_qualifier.host,
             self.server_qualifier.port,
@@ -273,7 +274,7 @@ class DaqWrapper(ZiApiWrapperBase):
         return self._server_qualifier
 
     def create_awg_module(self, name):
-        self._logger.info("Create AWG module %s", name)
+        _logger.info("Create AWG module %s", name)
         self._awg_module_wrappers = [
             wrapper for wrapper in self._awg_module_wrappers if wrapper.name != name
         ]
@@ -293,14 +294,14 @@ class DaqWrapper(ZiApiWrapperBase):
         if not isinstance(serial, str) or not isinstance(interface, str):
             raise LabOneQControllerException("Serial and interface must be strings")
 
-        self._logger.debug("connectDevice %s:%s", serial, interface)
+        _logger.debug("connectDevice %s:%s", serial, interface)
         self._api_wrapper("connectDevice", serial, interface)
 
     def disconnectDevice(self, serial: str):
         if not isinstance(serial, str):
             raise LabOneQControllerException("Serial must be string")
 
-        self._logger.debug("disconnectDevice %s", serial)
+        _logger.debug("disconnectDevice %s", serial)
         self._api_wrapper("disconnectDevice", serial)
 
     def get_raw(self, path):
@@ -352,7 +353,7 @@ class DaqWrapper(ZiApiWrapperBase):
         cached_values, actions_to_perform = self._filter_cached_actions(daq_actions)
 
         for daq_action in actions_to_perform:
-            self._logger.debug("get not caching: %s", daq_action.path)
+            _logger.debug("get not caching: %s", daq_action.path)
 
         api_input = ",".join([daq_action.path for daq_action in actions_to_perform])
 

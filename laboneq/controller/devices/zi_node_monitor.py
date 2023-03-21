@@ -9,6 +9,8 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from laboneq._observability.tracing import trace
 
+_logger = logging.getLogger(__name__)
+
 
 @dataclass
 class Node:
@@ -36,11 +38,10 @@ class Node:
 class NodeMonitor:
     def __init__(self, daq):
         self._daq = daq
-        self._logger = logging.getLogger(__name__)
         self._nodes: Dict[str, Node] = {}
 
     def _log_missing_node(self, path: str):
-        self._logger.warning(
+        _logger.warning(
             "Internal error: Node %s is not registered for monitoring", path
         )
 

@@ -43,7 +43,7 @@ class AwgKey:
 
 @dataclass
 class AwgConfig:
-    acquire_length: int
+    raw_acquire_length: int
     result_length: int
     signals: Set[str]
 
@@ -320,7 +320,7 @@ def _calculate_result_shapes(
         awg_signals.add(a.signal_id)
 
     for rt_execution_uid, rt_execution_info in rs_calc.rt_execution_infos.items():
-        acquire_lengths: Set[int] = set()
+        raw_acquire_lengths: Set[int] = set()
         for signal, sections in rt_execution_info._acquire_sections.items():
             for section in sections:
                 for acquire_length_info in experiment.acquire_lengths:
@@ -328,13 +328,15 @@ def _calculate_result_shapes(
                         acquire_length_info.signal_id == signal
                         and acquire_length_info.section_id == section
                     ):
-                        acquire_lengths.add(acquire_length_info.acquire_length)
-        if len(acquire_lengths) > 1:
+                        raw_acquire_lengths.add(acquire_length_info.acquire_length)
+        if len(raw_acquire_lengths) > 1:
             raise LabOneQControllerException(
                 f"Can't determine unique acquire length for the acquire_loop_rt(uid='{rt_execution_uid}') section. Ensure all 'acquire' statements within this section use the same kernel length."
             )
         # Use dummy acquire_length 4096 if there's no acquire statements in experiment
-        acquire_length = acquire_lengths.pop() if len(acquire_lengths) > 0 else 4096
+        raw_acquire_length = (
+            raw_acquire_lengths.pop() if len(raw_acquire_lengths) > 0 else 4096
+        )
 
         for awg_key, signals in awg_key_to_signals.items():
             # signal -> list of handles (for one AWG with 'awg_key')
@@ -354,7 +356,7 @@ def _calculate_result_shapes(
                 )
                 rt_execution_info.per_awg_configs[awg_key] = AwgConfig(
                     result_length=len(any_awg_signal_result_map) * mapping_repeats,
-                    acquire_length=acquire_length,
+                    raw_acquire_length=raw_acquire_length,
                     signals=signals,
                 )
 

@@ -24,7 +24,7 @@ from laboneq.dsl.device.physical_channel_group import PhysicalChannelGroup
 from laboneq.dsl.device.servers import DataServer
 from laboneq.dsl.enums import IODirection, IOSignalType
 
-logger = logging.getLogger(__name__)
+_logger = logging.getLogger(__name__)
 
 
 # Terminal Symbols
@@ -170,7 +170,7 @@ class _HDAWGProcessor(_ProcessorBase):
                     physical_channel = _create_physical_channel(
                         local_ports, signal_type_keyword, uid, physical_signals
                     )
-                    logger.debug(
+                    _logger.debug(
                         "%s Creating port remote_path=%s local_port=%s from %s",
                         uid,
                         remote_path,
@@ -310,7 +310,7 @@ class _UHFQAProcessor(_ProcessorBase):
                             }
                         )
 
-                    logger.debug(
+                    _logger.debug(
                         "%s Creating port remote_path=%s local_ports=%s from description: %s",
                         uid,
                         remote_path,
@@ -464,7 +464,7 @@ class _SHFQAProcessor(_ProcessorBase):
                         }
                     )
 
-                logger.debug(
+                _logger.debug(
                     "%s Creating port remote_path=%s local_port=%s from description: %s",
                     uid,
                     remote_path,
@@ -535,7 +535,7 @@ class _SHFQAProcessor(_ProcessorBase):
             if local_port not in available_ports:
                 raise LabOneQException(
                     f"Device {T_SHFQA_DEVICE} has no port with uid {local_port}. Available port uids are: {available_ports}.",
-                    logger,
+                    _logger,
                 )
 
 
@@ -619,7 +619,7 @@ class _SHFSGProcessor(_ProcessorBase):
                             }
                         )
 
-                    logger.debug(
+                    _logger.debug(
                         "%s Creating port remote_path=%s local_port=%s from description: %s",
                         uid,
                         remote_path,
@@ -668,7 +668,7 @@ class _SHFSGProcessor(_ProcessorBase):
             if local_port not in available_ports:
                 raise LabOneQException(
                     f"Device {T_SHFSG_DEVICE} has no port with uid {local_port}. Available port uids are: {available_ports}.",
-                    logger,
+                    _logger,
                 )
 
 
@@ -1026,7 +1026,7 @@ class _DeviceSetupGenerator:
 
         if server_host is not None:
             if dataservers is not None:
-                logger.warning(
+                _logger.warning(
                     "Servers definition in the descriptor will be overridden by the server passed to the constructor."
                 )
             dataservers = {

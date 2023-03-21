@@ -56,6 +56,9 @@ if TYPE_CHECKING:
     from laboneq.dsl.result.results import Results
 
 
+_logger = logging.getLogger(__name__)
+
+
 class ControllerRunParameters:
     shut_down: bool = False
     dry_run: bool = False
@@ -93,11 +96,10 @@ class Controller:
         self._session = None
         self._results: Results = None
 
-        self._logger = logging.getLogger(__name__)
-        self._logger.debug("Controller created")
-        self._logger.debug("Controller debug logging is on")
+        _logger.debug("Controller created")
+        _logger.debug("Controller debug logging is on")
 
-        self._logger.info("VERSION: laboneq %s", __version__)
+        _logger.info("VERSION: laboneq %s", __version__)
 
         # TODO: Remove this option and support of AWG module.
         self._is_using_standalone_compiler = os.environ.get(
@@ -187,7 +189,7 @@ class Controller:
                     item.seqc_code, item.awg_index, item.seqc_filename
                 )
 
-        self._logger.debug("Started compilation of AWG programs...")
+        _logger.debug("Started compilation of AWG programs...")
         with tracing.get_tracer().start_span("compile-awg-programs") as awg_span:
             max_workers = os.environ.get("LABONEQ_AWG_COMPILER_MAX_WORKERS")
             max_workers = int(max_workers) if max_workers is not None else None
@@ -209,7 +211,7 @@ class Controller:
                     raise LabOneQControllerException(
                         "Compilation failed. See log output for details."
                     )
-        self._logger.debug("Finished compilation.")
+        _logger.debug("Finished compilation.")
 
         # Upload AWG programs, waveforms, and command tables:
         elf_node_settings: Dict[DaqWrapper, List[DaqNodeSetAction]] = defaultdict(list)
@@ -245,13 +247,13 @@ class Controller:
             for daq in elf_upload_conditions.keys():
                 daq.node_monitor.flush()
 
-        self._logger.debug("Started upload of AWG programs...")
+        _logger.debug("Started upload of AWG programs...")
         with tracing.get_tracer().start_span("upload-awg-programs") as _:
             for daq, nodes in elf_node_settings.items():
                 daq.batch_set(nodes)
 
             if len(elf_upload_conditions) > 0:
-                self._logger.debug("Waiting for devices...")
+                _logger.debug("Waiting for devices...")
                 response_waiter = ResponseWaiter()
                 for daq, conditions in elf_upload_conditions.items():
                     response_waiter.add(
@@ -264,11 +266,11 @@ class Controller:
                         f"AWGs not in ready state within timeout ({timeout_s} s)."
                     )
 
-                self._logger.debug("Started upload of waveforms...")
+                _logger.debug("Started upload of waveforms...")
                 with tracing.get_tracer().start_span("upload-waveforms") as _:
                     for daq, nodes in wf_node_settings.items():
                         daq.batch_set(nodes)
-        self._logger.debug("Finished upload.")
+        _logger.debug("Finished upload.")
 
     def _upload_awg_programs(self):
         if self._is_using_standalone_compiler:
@@ -294,7 +296,7 @@ class Controller:
         self._set_nodes_after_awg_program_upload()
 
     def _configure_leaders(self):
-        self._logger.debug(
+        _logger.debug(
             "Using %s as leaders.",
             [d.dev_repr for _, d in self._devices.leaders],
         )
@@ -305,7 +307,7 @@ class Controller:
             device.configure_as_leader(init)
 
     def _configure_followers(self):
-        self._logger.debug(
+        _logger.debug(
             "Using %s as followers.",
             [d.dev_repr for _, d in self._devices.followers],
         )
@@ -347,7 +349,7 @@ class Controller:
         self._wait_for_conditions_to_start()
 
     def _execute_one_step_followers(self):
-        self._logger.debug("Settings nodes to start on followers")
+        _logger.debug("Settings nodes to start on followers")
 
         nodes_to_execute = []
         for _, device in self._devices.followers:
@@ -362,7 +364,7 @@ class Controller:
                 conditions=device.conditions_for_execution_ready(),
             )
         if not response_waiter.wait_all(timeout=2):
-            self._logger.warning(
+            _logger.warning(
                 "Conditions to start RT on followers still not fulfilled after 2 seconds, "
                 "nonetheless trying to continue..."
             )
@@ -376,7 +378,7 @@ class Controller:
         batch_set(nodes_to_execute)
 
     def _execute_one_step_leaders(self):
-        self._logger.debug("Settings nodes to start on leaders")
+        _logger.debug("Settings nodes to start on leaders")
         nodes_to_execute = []
 
         for _, device in self._devices.leaders:
@@ -386,12 +388,12 @@ class Controller:
     def _wait_execution_to_stop(self, acquisition_type: AcquisitionType):
         min_wait_time = self._recipe_data.recipe.experiment.total_execution_time
         if min_wait_time is None:
-            self._logger.warning(
+            _logger.warning(
                 "No estimation available for the execution time, assuming 10 sec."
             )
             min_wait_time = 10.0
         elif min_wait_time > 5:  # Only inform about RT executions taking longer than 5s
-            self._logger.info("Estimated RT execution time: %.2f s.", min_wait_time)
+            _logger.info("Estimated RT execution time: %.2f s.", min_wait_time)
         guarded_wait_time = round(
             min_wait_time * 1.1 + 1
         )  # +10% and fixed 1sec guard time
@@ -403,7 +405,7 @@ class Controller:
                 conditions=device.conditions_for_execution_done(acquisition_type),
             )
         if not response_waiter.wait_all(timeout=guarded_wait_time):
-            self._logger.warning(
+            _logger.warning(
                 "Stop conditions still not fulfilled after %f s, estimated execution time "
                 "was %.2f s. Continuing to the next step.",
                 guarded_wait_time,
@@ -411,7 +413,7 @@ class Controller:
             )
 
     def _execute_one_step(self, acquisition_type: AcquisitionType):
-        self._logger.debug("Step executing")
+        _logger.debug("Step executing")
 
         self._devices.flush_monitor()
 
@@ -420,11 +422,11 @@ class Controller:
         self._execute_one_step_followers()
         self._execute_one_step_leaders()
 
-        self._logger.debug("Execution started")
+        _logger.debug("Execution started")
 
         self._wait_execution_to_stop(acquisition_type)
 
-        self._logger.debug("Execution stopped")
+        _logger.debug("Execution stopped")
 
     def connect(self):
         if not self._connected:
@@ -432,14 +434,14 @@ class Controller:
             self._connected = True
 
     def shut_down(self):
-        self._logger.info("Shutting down all devices...")
+        _logger.info("Shutting down all devices...")
         self._devices.shut_down()
-        self._logger.info("Successfully Shut down all devices.")
+        _logger.info("Successfully Shut down all devices.")
 
     def disconnect(self):
-        self._logger.info("Disconnecting from all devices and servers...")
+        _logger.info("Disconnecting from all devices and servers...")
         self._devices.disconnect()
-        self._logger.info("Successfully disconnected from all devices and servers.")
+        _logger.info("Successfully disconnected from all devices and servers.")
         self._connected = False
 
     def execute_compiled(
@@ -462,12 +464,12 @@ class Controller:
             # Ensure no side effects from the previous execution in the same session
             self._current_waves = []
             self._nodes_from_user_functions = []
-            self._logger.info("Starting near-time execution...")
+            _logger.info("Starting near-time execution...")
             with tracing.get_tracer().start_span("near-time-execution"):
                 Controller.NearTimeExecutor(controller=self).run(
                     self._recipe_data.execution
                 )
-            self._logger.info("Finished near-time execution.")
+            _logger.info("Finished near-time execution.")
             for _, device in self._devices.all:
                 device.check_errors()
         finally:
@@ -640,7 +642,7 @@ class Controller:
                 self.step_param_nodes.clear()
                 for retry in range(3):  # Up to 3 retries
                     if retry > 0:
-                        self.controller._logger.info("Step retry %s of 3...", retry + 1)
+                        _logger.info("Step retry %s of 3...", retry + 1)
                         batch_set(step_prepare_nodes)
                     try:
                         self.controller._execute_one_step(acquisition_type)
@@ -664,10 +666,12 @@ class Controller:
             raise LabOneQControllerException(
                 "Multiple 'acquire_loop_rt' sections per experiment is not supported."
             )
-        rt_info = next(r for r in self._recipe_data.rt_execution_infos.values())
-        awg_config = next((c for c in rt_info.per_awg_configs.values()), None)
+        rt_info = next(iter(self._recipe_data.rt_execution_infos.values()))
+        awg_config = next(iter(rt_info.per_awg_configs.values()), None)
         # Use default length 4096, in case AWG config is not available
-        acquire_length = 4096 if awg_config is None else awg_config.acquire_length
+        raw_acquire_length = (
+            4096 if awg_config is None else awg_config.raw_acquire_length
+        )
         for handle, shape_info in self._recipe_data.result_shapes.items():
             if rt_info.acquisition_type == AcquisitionType.RAW:
                 if len(self._recipe_data.result_shapes) > 1:
@@ -677,9 +681,9 @@ class Controller:
                         f"Only single raw acquire per experiment allowed."
                     )
                 empty_res = make_acquired_result(
-                    data=np.empty(shape=[acquire_length], dtype=np.complex128),
+                    data=np.empty(shape=[raw_acquire_length], dtype=np.complex128),
                     axis_name=["samples"],
-                    axis=[np.arange(acquire_length)],
+                    axis=[np.arange(raw_acquire_length)],
                 )
                 empty_res.data[:] = np.nan
                 self._results.acquired_results[handle] = empty_res
@@ -714,7 +718,7 @@ class Controller:
             device = self._devices.find_by_uid(awg_key.device_uid)
             if rt_execution_info.acquisition_type == AcquisitionType.RAW:
                 raw_results = device.get_input_monitor_data(
-                    awg_key.awg_index, awg_config.acquire_length
+                    awg_key.awg_index, awg_config.raw_acquire_length
                 )
                 # Copy to all result handles, but actually only one handle is supported for now
                 for signal in awg_config.signals:

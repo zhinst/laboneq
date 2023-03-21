@@ -232,7 +232,7 @@ class DevEmuZI(DevEmu):
     def _node_def(self) -> Dict[str, NodeInfo]:
         return {
             "about/version": NodeInfo(
-                type=NodeType.STR, default="22.08", read_only=True
+                type=NodeType.STR, default="23.02", read_only=True
             ),
             "about/revision": NodeInfo(
                 type=NodeType.STR, default="99999", read_only=True
@@ -311,19 +311,39 @@ class DevEmuHDAWG(DevEmuHW):
 
 
 class DevEmuUHFQA(DevEmuHW):
+    """Emulated UHFQA.
+
+    Supported emulation options:
+        - user_readout_data - callable matching the following signature:
+            user_readout_data(
+                result_index: int,
+                length: int,
+                averages: int) -> ArrayLike | List[float]
+            The function is called after every AWG execution, once for every integrator with the
+            corresponding 'result_index'. It must return the vector of values of size 'length',
+            that will be set to the corresponding '<devN>/qas/0/result/data/<result_index>/wave'
+            node.
+            The argument 'averages' is provided for convenience, as the real device returns the
+            sum of all the averaged readouts. The function may also return None, in which case
+            the emulator falls back to the default emulated results for this integrator.
+    """
+
     def _awg_stop(self):
         self._set_val("awgs/0/enable", 0)
         result_enable = self._get_node("qas/0/result/enable").value
         monitor_enable = self._get_node("qas/0/monitor/enable").value
         if result_enable != 0:
             length = self._get_node("qas/0/result/length").value
-            averages = self._get_node("qas/0/result/averages").value
             self._set_val("qas/0/result/acquired", 0)  # Wraps around to 0 on success
             for result_index in range(10):
-                self._set_val(
-                    f"qas/0/result/data/{result_index}/wave",
-                    np.array([42 / averages if result_index in [0, 1] else 0] * length),
-                )
+                user_readout_data = self._dev_opts.get("user_readout_data")
+                res = None
+                if callable(user_readout_data):
+                    averages = self._get_node("qas/0/result/averages").value
+                    res = user_readout_data(result_index, length, averages)
+                if res is None:
+                    res = [42 if result_index in [0, 1] else 0] * length
+                self._set_val(f"qas/0/result/data/{result_index}/wave", np.array(res))
         if monitor_enable != 0:
             length = self._get_node("qas/0/monitor/length").value
             self._set_val("qas/0/monitor/inputs/0/wave", [52] * length)

@@ -12,6 +12,10 @@ from sortedcollections import SortedDict
 
 from laboneq._observability.tracing import trace
 from laboneq.compiler.code_generator import CodeGenerator
+from laboneq.compiler.code_generator.measurement_calculator import (
+    IntegrationTimes,
+    SignalDelays,
+)
 from laboneq.compiler.common import compiler_settings
 from laboneq.compiler.common.awg_info import AWGInfo
 from laboneq.compiler.common.awg_signal_type import AWGSignalType
@@ -370,16 +374,16 @@ class Compiler:
         _logger.debug("Preparing events for code generator")
         events = self._scheduler.event_timing(expand_loops=False)
         code_generator.gen_acquire_map(events, self._section_graph_object)
-        integration_times, signal_delays = code_generator.gen_seq_c(
+        code_generator.gen_seq_c(
             events,
             {k: self._experiment_dao.pulse(k) for k in self._experiment_dao.pulses()},
         )
         self._command_table_match_offsets = code_generator.command_table_match_offsets()
         self._feedback_connections = code_generator.feedback_connections()
+        self._feedback_registers = code_generator.feedback_registers()
         code_generator.gen_waves()
 
         _logger.debug("Code generation completed")
-        return integration_times, signal_delays
 
     def _calc_osc_numbering(self):
         self._osc_numbering = {}
@@ -577,13 +581,10 @@ class Compiler:
             awg_number = 0
         return self._awgs[device_id][awg_number]
 
-    def calc_outputs(self, signal_delays):
+    def calc_outputs(self, signal_delays: SignalDelays):
         all_channels = {}
 
         flipper = [1, 0]
-
-        marker_signals = self._experiment_dao.marker_signals()
-        trigger_signals = self._experiment_dao.trigger_signals()
 
         for signal_id in self._experiment_dao.signals():
             signal_info = self._experiment_dao.signal_info(signal_id)
@@ -611,7 +612,7 @@ class Compiler:
             device_type = DeviceType(signal_info.device_type)
             port_delay = self._experiment_dao.port_delay(signal_id)
             if signal_id in signal_delays:
-                port_delay = (port_delay or 0) + signal_delays[signal_id]["on_device"]
+                port_delay = (port_delay or 0) + signal_delays[signal_id].on_device
                 if abs(port_delay) < 1e-12:
                     port_delay = None
             precompensation = self._precompensations[signal_id]
@@ -621,9 +622,9 @@ class Compiler:
 
             base_channel = min(signal_info.channels)
 
-            markers = marker_signals.get(signal_id, None)
+            markers = self._experiment_dao.markers_on_signal(signal_id)
 
-            triggers = trigger_signals.get(signal_id)
+            triggers = self._experiment_dao.triggers_on_signal(signal_id)
 
             for channel in signal_info.channels:
                 output = {
@@ -679,8 +680,8 @@ class Compiler:
                             flipper[channel - base_channel]
                         ][channel - base_channel]
 
+                device_type = DeviceType(signal_info.device_type)
                 if precompensation_is_nonzero(precompensation):
-                    device_type = DeviceType(signal_info.device_type)
                     if not device_type.supports_precompensation:
                         raise RuntimeError(
                             f"Device {signal_info.device_id} does not"
@@ -698,23 +699,42 @@ class Compiler:
                     output["precompensation"] = precompensation
                 if markers is not None:
                     if signal_info.signal_type == "iq":
-                        marker_key = channel % 2 + 1
-                        if f"marker{marker_key}" in markers:
-                            output["marker_mode"] = "MARKER"
-
+                        if device_type == DeviceType.HDAWG:
+                            marker_key = channel % 2 + 1
+                            if f"marker{marker_key}" in markers:
+                                output["marker_mode"] = "MARKER"
+                        elif device_type == DeviceType.SHFSG:
+                            if "marker1" in markers:
+                                output["marker_mode"] = "MARKER"
+                            if "marker2" in markers:
+                                raise RuntimeError("Only marker1 supported on SHFSG")
                 if triggers is not None:
                     if signal_info.signal_type == "iq":
-                        trigger_bit = 2 ** (channel % 2)
-                        if triggers & trigger_bit:
-                            if (
-                                "marker_mode" in output
-                                and output["marker_mode"] == "MARKER"
-                            ):
-                                raise RuntimeError(
-                                    f"Trying to use marker and trigger on the same output channel {channel} with signal {signal_id}"
-                                )
-                            else:
-                                output["marker_mode"] = "TRIGGER"
+                        if device_type == DeviceType.HDAWG:
+                            trigger_bit = 2 ** (channel % 2)
+                            if triggers & trigger_bit:
+                                if (
+                                    "marker_mode" in output
+                                    and output["marker_mode"] == "MARKER"
+                                ):
+                                    raise RuntimeError(
+                                        f"Trying to use marker and trigger on the same output channel {channel} with signal {signal_id} on device {signal_info.device_id}"
+                                    )
+                                else:
+                                    output["marker_mode"] = "TRIGGER"
+                        elif device_type == DeviceType.SHFSG:
+                            if triggers & 2:
+                                raise RuntimeError("Only trigger 1 supported on SHFSG")
+                            if triggers & 1:
+                                if (
+                                    "marker_mode" in output
+                                    and output["marker_mode"] == "MARKER"
+                                ):
+                                    raise RuntimeError(
+                                        f"Trying to use marker and trigger on the same SG output channel {channel} with signal {signal_id} on device {signal_info.device_id}"
+                                    )
+                                else:
+                                    output["marker_mode"] = "TRIGGER"
 
                 output["oscillator_frequency"] = oscillator_frequency
                 output["oscillator"] = oscillator_number
@@ -757,8 +777,8 @@ class Compiler:
         )
         return retval
 
-    def calc_measurement_map(self, integration_times):
-        measurement_sections = []
+    def calc_measurement_map(self, integration_times: IntegrationTimes):
+        measurement_sections: List[str] = []
         for (
             graph_section_name
         ) in self._section_graph_object.topologically_sorted_sections():
@@ -871,13 +891,13 @@ class Compiler:
 
         return retval
 
-    def _generate_recipe(self, integration_times, signal_delays):
+    def _generate_recipe(self):
         recipe_generator = RecipeGenerator()
         recipe_generator.from_experiment(
             self._experiment_dao, self._leader_properties, self._clock_settings
         )
 
-        for output in self.calc_outputs(signal_delays):
+        for output in self.calc_outputs(self._code_generator.signal_delays()):
             _logger.debug("Adding output %s", output)
             recipe_generator.add_output(
                 output["device_id"],
@@ -929,12 +949,15 @@ class Compiler:
                         f"one acquire signal for feedback, got {qa_signal_ids}."
                     )
                 recipe_generator.add_awg(
-                    device_id,
-                    awg.awg_number,
-                    signal_type.value,
-                    awg.seqc,
-                    next(iter(qa_signal_ids), None),
-                    self._command_table_match_offsets.get((device_id, awg.awg_number)),
+                    device_id=device_id,
+                    awg_number=awg.awg_number,
+                    signal_type=signal_type.value,
+                    seqc=awg.seqc,
+                    qa_signal_id=next(iter(qa_signal_ids), None),
+                    command_table_match_offset=self._command_table_match_offsets.get(
+                        awg.key
+                    ),
+                    feedback_register=self._feedback_registers.get(awg.key),
                 )
 
         if self._code_generator is None:
@@ -946,10 +969,14 @@ class Compiler:
             self._code_generator.integration_weights(),
         )
 
-        recipe_generator.add_acquire_lengths(integration_times)
+        recipe_generator.add_acquire_lengths(
+            integration_times=self._code_generator.integration_times()
+        )
 
         recipe_generator.add_measurements(
-            self.calc_measurement_map(integration_times=integration_times)
+            self.calc_measurement_map(
+                integration_times=self._code_generator.integration_times()
+            )
         )
 
         recipe_generator.add_simultaneous_acquires(
@@ -1027,10 +1054,10 @@ class Compiler:
         section_signals_with_children = {}
 
         for section in self._section_graph_object.sections():
-            section_info = self._section_graph_object.section_info(section)
+            section_info = self._experiment_dao.section_info(section)
             section_display_name = section_info.section_display_name
             section_signals_with_children[section] = list(
-                self._experiment_dao.section_signals_with_children(section_display_name)
+                self._experiment_dao.section_signals_with_children(section)
             )
             section_info_out[section]["section_display_name"] = section_display_name
 
@@ -1087,8 +1114,8 @@ class Compiler:
         self._process_experiment(data)
         self._calc_integration_unit_allocation()
 
-        integration_times, signal_delays = self._generate_code()
-        self._generate_recipe(integration_times, signal_delays)
+        self._generate_code()
+        self._generate_recipe()
 
         retval = self.compiler_output()
 

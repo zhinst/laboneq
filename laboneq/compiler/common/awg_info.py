@@ -9,9 +9,15 @@ from typing import TYPE_CHECKING, List, Optional, Tuple
 from laboneq.compiler.common.trigger_mode import TriggerMode
 
 if TYPE_CHECKING:
-    from laboneq.compiler.common import DeviceType
     from laboneq.compiler.common.awg_signal_type import AWGSignalType
+    from laboneq.compiler.common.device_type import DeviceType
     from laboneq.compiler.common.signal_obj import SignalObj
+
+
+@dataclass(init=True, repr=True, order=True, frozen=True)
+class AwgKey:
+    device_id: str
+    awg_number: int
 
 
 @dataclass
@@ -26,3 +32,7 @@ class AWGInfo:
     reference_clock_source: Optional[str] = None
     signal_channels: List[Tuple[str, int]] = field(default_factory=list)
     signals: List[SignalObj] = field(default_factory=list)
+
+    @property
+    def key(self) -> AwgKey:
+        return AwgKey(self.device_id, self.awg_number)

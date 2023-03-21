@@ -131,6 +131,18 @@ def parse_expression(item, runtime: SimpleRuntime):
             return parse_expression(item.left, runtime) ^ parse_expression(
                 item.right, runtime
             )
+        if item.op == "+":
+            return parse_expression(item.left, runtime) + parse_expression(
+                item.right, runtime
+            )
+        if item.op == "-":
+            return parse_expression(item.left, runtime) - parse_expression(
+                item.right, runtime
+            )
+        if item.op == "*":
+            return parse_expression(item.left, runtime) * parse_expression(
+                item.right, runtime
+            )
     elif isinstance(item, UnaryOp):
         if item.op == "-":
             return -parse_expression(item.expr, runtime)
@@ -300,6 +312,42 @@ class WaveRefInfo:
     assigned_index: int = -1
     wave_data_idx: List[int] = field(default_factory=list)
     length_samples: int = None
+
+
+@dataclass
+class CommandTableEntryInfo:
+    abs_phase: Optional[float] = None
+    rel_phase: Optional[float] = None
+
+    @classmethod
+    def from_ct_entry(cls, ct_entry: Dict):
+        d = {}
+        if "phase" in ct_entry:
+            # SHFSG
+            incr = ct_entry["phase"].get("increment", False)
+            if incr:
+                d["rel_phase"] = ct_entry["phase"]["value"]
+            else:
+                d["abs_phase"] = ct_entry["phase"]["value"]
+
+        if "phase0" in ct_entry:
+            # HDAWG
+            incr = ct_entry["phase0"].get("increment", False)
+            assert ct_entry["phase1"].get("increment", False) == incr
+            phase = ct_entry["phase0"]["value"]
+            if not incr:
+                phase -= 90
+            assert (
+                abs((phase - ct_entry["phase1"]["value"] + 180.0) % 360.0 - 180.0)
+                < 1e-6
+            )
+
+            if incr:
+                d["rel_phase"] = phase
+            else:
+                d["abs_phase"] = phase
+
+        return cls(**d)
 
 
 @dataclass
@@ -485,7 +533,12 @@ class SimpleRuntime:
                     f"Inconsistent wave lengths {known_wave.length_samples} != {wave_len} in single 'playWave': {wave_names}"
                 )
 
-    def _append_wave_event(self, wave_names: List[str], known_wave: WaveRefInfo):
+    def _append_wave_event(
+        self,
+        wave_names: List[str],
+        known_wave: WaveRefInfo,
+        ct_info: Optional[CommandTableEntryInfo],
+    ):
         self._update_wave_refs(wave_names, known_wave)
 
         time_samples = self._last_played_sample()
@@ -494,7 +547,7 @@ class SimpleRuntime:
                 start_samples=time_samples,
                 length_samples=known_wave.length_samples,
                 operation=Operation.PLAY_WAVE,
-                args=[known_wave.wave_data_idx],
+                args=[known_wave.wave_data_idx, ct_info],
             )
         )
 
@@ -531,7 +584,7 @@ class SimpleRuntime:
         if not wave_names or wave_names == [None]:
             raise RuntimeError(f"Couldn't determine wave name(s) from {args}")
 
-        self._append_wave_event(wave_names, known_wave)
+        self._append_wave_event(wave_names, known_wave, None)
 
     def playZero(self, length):
         if length > 0:
@@ -545,7 +598,7 @@ class SimpleRuntime:
                 )
             )
 
-    def executeTableEntry(self, ct_index):
+    def executeTableEntry(self, ct_index, latency=None):
         wave_key = self._args2key(["ct", ct_index])
         known_wave = self.wave_lookup.get(wave_key)
         if known_wave is None:
@@ -561,6 +614,8 @@ class SimpleRuntime:
         ct_entry = next(
             iter(i for i in self.descriptor.command_table if i["index"] == ct_index)
         )
+        if "waveform" not in ct_entry:
+            return  # todo: simulator does not yet support playZero via command table
 
         wave_index = ct_entry["waveform"]["index"]
 
@@ -573,7 +628,25 @@ class SimpleRuntime:
 
         wave_names = [wave["wave_name"] + suffix + ".wave" for suffix in ("_i", "_q")]
 
-        self._append_wave_event(wave_names, known_wave)
+        ct_info = CommandTableEntryInfo.from_ct_entry(ct_entry)
+
+        if latency is not None:
+            time_samples = self._last_played_sample()
+            if latency * 8 < time_samples:
+                raise RuntimeError(
+                    f"ExecuteTableEntry scheduled with latency {latency} before current time {time_samples}"
+                )
+            elif latency * 8 > time_samples:
+                raise RuntimeError(
+                    f"Play queue starved at current time {time_samples} for ExecuteTableEntry scheduled with latency {latency}"
+                )
+
+        if ct_entry["waveform"].get("precompClear", False):
+            self.setPrecompClear(1)
+            self._append_wave_event(wave_names, known_wave, ct_info)
+            self.setPrecompClear(0)
+        else:
+            self._append_wave_event(wave_names, known_wave, ct_info)
 
     def startQA(self, *args):
         if self.descriptor.device_type == "SHFQA":
@@ -587,7 +660,7 @@ class SimpleRuntime:
         integrators_mask=None,
         input_monitor=0,
         result_addr=0,
-        trigger=0,
+        trigger=None,
     ):
         if generators_mask is None:
             generators_mask = self.resolve("QA_GEN_ALL")
@@ -623,6 +696,7 @@ class SimpleRuntime:
                     self.descriptor.measurement_delay_samples,
                     input_monitor,
                     wave_data_idx,
+                    trigger,
                 ],
             ),
         )
@@ -632,7 +706,7 @@ class SimpleRuntime:
         weighted_integrator_mask=None,
         monitor=False,
         result_address=0x0,
-        trigger=0x0,
+        trigger=None,
     ):
         if weighted_integrator_mask is None:
             weighted_integrator_mask = self.predefined_consts["QA_INT_ALL"]
@@ -648,7 +722,7 @@ class SimpleRuntime:
                     weighted_integrator_mask,
                     self.descriptor.measurement_delay_samples,
                     monitor,
-                    None,
+                    trigger,
                 ],
             ),
         )

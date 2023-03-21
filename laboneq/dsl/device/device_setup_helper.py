@@ -7,7 +7,7 @@ import logging
 import requests
 import yaml
 
-logger = logging.getLogger(__name__)
+_logger = logging.getLogger(__name__)
 
 
 class DeviceSetupHelper:
@@ -26,7 +26,7 @@ class DeviceSetupHelper:
         with requests.Session() as session:
             response = session.post(api_url, data=wiring_text, timeout=5)
             response.raise_for_status()
-            logger.info("Wiring successfully uploaded at %s", api_url)
+            _logger.info("Wiring successfully uploaded at %s", api_url)
             return response.status_code
 
     @staticmethod
@@ -56,7 +56,7 @@ class DeviceSetupHelper:
         with requests.Session() as session:
             response = session.delete(api_url, timeout=5)
             response.raise_for_status()
-            logger.info("Wiring successfully deleted at %s", api_url)
+            _logger.info("Wiring successfully deleted at %s", api_url)
             return response.status_code
 
     @staticmethod
@@ -73,5 +73,5 @@ class DeviceSetupHelper:
         with requests.Session() as session:
             response = session.get(api_url, timeout=5)
             response.raise_for_status()
-            logger.info("Successfully downloaded wiring information from %s", api_url)
+            _logger.info("Successfully downloaded wiring information from %s", api_url)
             return response.text

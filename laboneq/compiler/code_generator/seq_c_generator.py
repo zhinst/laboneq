@@ -132,6 +132,11 @@ class SeqCGenerator:
         statement["value"] = value
         self.add_statement(statement)
 
+    def add_variable_increment(self, variable_name, value):
+        statement = {"type": "variable_increment", "variable_name": variable_name}
+        statement["value"] = value
+        self.add_statement(statement)
+
     def add_assign_wave_index_statement(
         self, device_type: DeviceType, signal_type, wave_id, wave_index, channel
     ):
@@ -159,11 +164,12 @@ class SeqCGenerator:
             }
         )
 
-    def add_command_table_execution(self, ct_index, comment=""):
+    def add_command_table_execution(self, ct_index, latency=None, comment=""):
         self.add_statement(
             {
                 "type": "executeTableEntry",
                 "table_index": ct_index,
+                "latency": latency,
                 "comment": comment,
             }
         )
@@ -260,7 +266,7 @@ class SeqCGenerator:
     def generate_seq_c(self):
         self._seq_c_text = ""
         for statement in self._statements:
-            logging.getLogger(__name__).debug("processing statement %s", statement)
+            _logger.debug("processing statement %s", statement)
             self.emit_statement(statement)
         return self._seq_c_text
 
@@ -293,6 +299,9 @@ class SeqCGenerator:
         elif statement["type"] == "variable_assignment":
             self._seq_c_text += statement["variable_name"]
             self._seq_c_text += " = " + str(statement["value"]) + ";\n"
+        elif statement["type"] == "variable_increment":
+            self._seq_c_text += statement["variable_name"]
+            self._seq_c_text += " += " + str(statement["value"]) + ";\n"
 
         elif statement["type"] == "countdown_loop":
             self._seq_c_text += (
@@ -319,7 +328,11 @@ class SeqCGenerator:
             wave_channels = self._build_wave_channel_assignment(statement)
             self._seq_c_text += f"playWave({wave_channels});\n"
         elif statement["type"] == "executeTableEntry":
-            self._seq_c_text += f"executeTableEntry({statement['table_index']});"
+            self._seq_c_text += f"executeTableEntry({statement['table_index']}"
+            latency = statement.get("latency", None)
+            if latency is not None:
+                self._seq_c_text += f", {latency}"
+            self._seq_c_text += ");"
             if statement["comment"] != "":
                 self._seq_c_text += f"  // {statement['comment']}"
             self._seq_c_text += "\n"

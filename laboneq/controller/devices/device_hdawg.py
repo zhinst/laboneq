@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 from enum import IntEnum
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -21,6 +22,8 @@ from laboneq.controller.recipe_enums import DIOConfigType, SignalType
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
+
+_logger = logging.getLogger(__name__)
 
 DIG_TRIGGER_1_LEVEL = 0.225
 
@@ -60,7 +63,7 @@ class DeviceHDAWG(DeviceZI):
         elif self.dev_type == "HDAWG4":
             self._channels = 4
         else:
-            self._logger.warning(
+            _logger.warning(
                 "%s: Unknown device type '%s', assuming 4 channels device.",
                 self.dev_repr,
                 self.dev_type,
@@ -128,7 +131,7 @@ class DeviceHDAWG(DeviceZI):
         nodes_to_configure_phase = []
 
         for awg in initialization.awgs or []:
-            self._logger.debug(
+            _logger.debug(
                 "%s: Configure modulation phase depending on IQ enabling on awg %d.",
                 self.dev_repr,
                 awg.awg,
@@ -166,7 +169,7 @@ class DeviceHDAWG(DeviceZI):
     def collect_output_initialization_nodes(
         self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
     ) -> List[DaqNodeAction]:
-        self._logger.debug("%s: Initializing device...", self.dev_repr)
+        _logger.debug("%s: Initializing device...", self.dev_repr)
 
         nodes: List[Tuple[str, Any]] = []
 
@@ -199,7 +202,7 @@ class DeviceHDAWG(DeviceZI):
                         f"units of {output.range_unit}. Units must be 'volt'."
                     )
                 if output.range not in (0.2, 0.4, 0.6, 0.8, 1.0, 2.0, 3.0, 4.0, 5.0):
-                    self._logger.warning(
+                    _logger.warning(
                         "The specified output range %s for device %s is not in the list of "
                         "supported values. It will be rounded to the next higher allowed value.",
                         output.range,
@@ -394,19 +397,15 @@ class DeviceHDAWG(DeviceZI):
     def collect_trigger_configuration_nodes(
         self, initialization: Initialization.Data, recipe_data: RecipeData
     ) -> List[DaqNodeAction]:
-        self._logger.debug(
-            "%s: Configuring trigger configuration nodes.", self.dev_repr
-        )
+        _logger.debug("%s: Configuring trigger configuration nodes.", self.dev_repr)
         nodes_to_configure_triggers = []
 
         dio_mode = initialization.config.dio_mode
         if dio_mode == DIOConfigType.ZSYNC_DIO:
-            self._logger.debug(
+            _logger.debug(
                 "%s: Configuring DIO mode: ZSync pass-through.", self.dev_repr
             )
-            self._logger.debug(
-                "%s: Configuring external clock to ZSync.", self.dev_repr
-            )
+            _logger.debug("%s: Configuring external clock to ZSync.", self.dev_repr)
             nodes_to_configure_triggers.append(
                 DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/mode", 3)
             )

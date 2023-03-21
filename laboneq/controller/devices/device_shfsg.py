@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
 
 import numpy
@@ -19,6 +20,8 @@ from laboneq.controller.recipe_enums import DIOConfigType, ReferenceClockSource
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
+
+_logger = logging.getLogger(__name__)
 
 REFERENCE_CLOCK_SOURCE_INTERNAL = 0
 REFERENCE_CLOCK_SOURCE_EXTERNAL = 1
@@ -60,7 +63,7 @@ class DeviceSHFSG(DeviceZI):
                 self._channels = 6
                 self._output_to_synth_map = [1, 1, 2, 2, 3, 3]
             else:
-                self._logger.warning(
+                _logger.warning(
                     "%s: No valid channel option found, installed options: [%s]. "
                     "Assuming 2ch device.",
                     self.dev_repr,
@@ -69,7 +72,7 @@ class DeviceSHFSG(DeviceZI):
                 self._channels = 2
                 self._output_to_synth_map = [1, 1]
         else:
-            self._logger.warning(
+            _logger.warning(
                 "%s: Unknown device type '%s', assuming SHFSG4 device.",
                 self.dev_repr,
                 self.dev_type,
@@ -105,7 +108,7 @@ class DeviceSHFSG(DeviceZI):
                 f"units of {io.range_unit}. Units must be 'dBm'."
             )
         if not any(numpy.isclose([io.range] * len(range_list), range_list)):
-            self._logger.warning(
+            _logger.warning(
                 "%s: %s channel %d range %.1f is not on the list of allowed ranges: %s. "
                 "Nearest allowed range will be used.",
                 self.dev_repr,
@@ -136,7 +139,7 @@ class DeviceSHFSG(DeviceZI):
         return nodes
 
     def collect_execution_nodes(self):
-        self._logger.debug("Starting execution...")
+        _logger.debug("Starting execution...")
         return [
             DaqNodeSetAction(
                 self._daq,
@@ -177,11 +180,12 @@ class DeviceSHFSG(DeviceZI):
     def collect_output_initialization_nodes(
         self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
     ) -> List[DaqNodeSetAction]:
-        self._logger.debug("%s: Initializing device...", self.dev_repr)
+        _logger.debug("%s: Initializing device...", self.dev_repr)
 
         nodes_to_initialize_output: List[DaqNodeSetAction] = []
 
         outputs = initialization.outputs or []
+
         for output in outputs:
             self._warn_for_unsupported_param(
                 output.offset is None or output.offset == 0,
@@ -191,6 +195,7 @@ class DeviceSHFSG(DeviceZI):
             self._warn_for_unsupported_param(
                 output.gains is None, "correction_matrix", output.channel
             )
+
             self._allocated_awgs.add(output.channel)
             nodes_to_initialize_output.append(
                 DaqNodeSetAction(
@@ -230,8 +235,29 @@ class DeviceSHFSG(DeviceZI):
                     raise LabOneQControllerException(
                         f"{self.dev_repr}'s output does not support port delay"
                     )
-                self._logger.info(
+                _logger.info(
                     "%s's output port delay should be set to None, not 0", self.dev_repr
+                )
+
+            if output.marker_mode is None or output.marker_mode == "TRIGGER":
+                nodes_to_initialize_output.append(
+                    DaqNodeSetAction(
+                        self.daq,
+                        f"/{self.serial}/sgchannels/{output.channel}/marker/source",
+                        0,
+                    )
+                )
+            elif output.marker_mode == "MARKER":
+                nodes_to_initialize_output.append(
+                    DaqNodeSetAction(
+                        self.daq,
+                        f"/{self.serial}/sgchannels/{output.channel}/marker/source",
+                        4,
+                    )
+                )
+            else:
+                raise ValueError(
+                    f"Marker mode must be either 'MARKER' or 'TRIGGER', but got {output.marker_mode} for output {output.channel} on SHFSG {self.serial}"
                 )
 
         osc_selects = {
@@ -259,7 +285,6 @@ class DeviceSHFSG(DeviceZI):
                     0,
                 )
             )
-
         return nodes_to_initialize_output
 
     def prepare_upload_binary_wave(
@@ -346,7 +371,7 @@ class DeviceSHFSG(DeviceZI):
     def collect_trigger_configuration_nodes(
         self, initialization: Initialization.Data, recipe_data: RecipeData
     ) -> List[DaqNodeAction]:
-        self._logger.debug("Configuring triggers...")
+        _logger.debug("Configuring triggers...")
         self._wait_for_awgs = True
         self._emit_trigger = False
 
@@ -413,7 +438,7 @@ class DeviceSHFSG(DeviceZI):
                                 f"the feedback configuration."
                             )
 
-                        shift = matching_integrator.channels[0]
+                        shift = matching_integrator.channels[0] * 2
                         offset = awg.command_table_match_offset
                         ntc += [
                             (
@@ -439,13 +464,6 @@ class DeviceSHFSG(DeviceZI):
                 f"Unsupported DIO mode: {dio_mode} for device type SHFSG."
             )
 
-        for awg_index in (
-            self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
-        ):
-            marker_path = f"/{self.serial}/sgchannels/{awg_index}/marker"
-            nodes_to_configure_triggers.append(
-                DaqNodeSetAction(self._daq, f"{marker_path}/source", 0),
-            )
         return nodes_to_configure_triggers
 
     def add_command_table_header(self, body: dict) -> Dict:
@@ -468,12 +486,12 @@ class DeviceSHFSG(DeviceZI):
             return []  # QC follower config is done over it's QA part
 
         dio_mode = initialization.config.dio_mode
-        self._logger.debug("%s: Configuring as a follower...", self.dev_repr)
+        _logger.debug("%s: Configuring as a follower...", self.dev_repr)
 
         nodes_to_configure_as_follower = []
 
         if dio_mode == DIOConfigType.ZSYNC_DIO:
-            self._logger.debug(
+            _logger.debug(
                 "%s: Configuring reference clock to use ZSYNC as a reference...",
                 self.dev_repr,
             )

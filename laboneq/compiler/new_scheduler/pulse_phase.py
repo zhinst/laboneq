@@ -31,6 +31,8 @@ def calculate_osc_phase(event_list, experiment_dao: ExperimentDAO):
     for event in sorted_events:
         if event["event_type"] == EventType.RESET_SW_OSCILLATOR_PHASE:
             phase_reset_time = event["time"]
+            for signal_id in oscillator_phase_cumulative.keys():
+                oscillator_phase_cumulative[signal_id] = 0.0
         elif event["event_type"] == EventType.INCREMENT_OSCILLATOR_PHASE:
             signal_id = event["signal"]
             if signal_id not in oscillator_phase_cumulative:
@@ -57,7 +59,7 @@ def calculate_osc_phase(event_list, experiment_dao: ExperimentDAO):
                     incremented_phase = oscillator_phase_cumulative.get(signal_id, 0.0)
 
                     if oscillator_info.hardware:
-                        if len(oscillator_phase_sets) > 0:
+                        if signal_id in oscillator_phase_sets:
                             raise Exception(
                                 f"There are set_oscillator_phase entries for signal "
                                 f"'{signal_id}', but oscillator '{oscillator_info.id}' "

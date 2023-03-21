@@ -4,6 +4,7 @@
 import logging
 from typing import Optional
 
+from laboneq.compiler.code_generator.measurement_calculator import IntegrationTimes
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 
@@ -76,7 +77,7 @@ class RecipeGenerator:
             for signal_id, integrator in integration_unit_allocation.items()
         ]
 
-    def add_acquire_lengths(self, integration_times):
+    def add_acquire_lengths(self, integration_times: IntegrationTimes):
         self._recipe["experiment"]["acquire_lengths"] = [
             {
                 "section_id": section_id,
@@ -245,6 +246,7 @@ class RecipeGenerator:
         seqc: str,
         qa_signal_id: Optional[str],
         command_table_match_offset: Optional[int],
+        feedback_register: Optional[int],
     ):
         initialization = self._find_initialization(device_id)
 
@@ -256,6 +258,7 @@ class RecipeGenerator:
             "signal_type": signal_type,
             "qa_signal_id": qa_signal_id,
             "command_table_match_offset": command_table_match_offset,
+            "feedback_register": feedback_register,
         }
         initialization["awgs"].append(awg)
 

@@ -6,7 +6,7 @@ import math
 from sortedcontainers import SortedDict
 
 
-def normalize_phase(phase):
+def normalize_phase(phase: float):
     if phase < 0:
         retval = phase + (int(-phase / 2 / math.pi) + 1) * 2 * math.pi
     else:

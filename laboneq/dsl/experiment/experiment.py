@@ -261,7 +261,7 @@ class Experiment:
         precompensation_clear: Optional[bool] = None,
         marker=None,
     ):
-        """Play a pulse.
+        """Play a pulse on a signal line.
 
         :param signal: The unique id of the signal to play the pulse on.
         :type signal: `str`
@@ -327,7 +327,7 @@ class Experiment:
         )
 
     def reserve(self, signal):
-        """Reserves an experiment signal for the active section.
+        """Reserves an experiment signal for the duration of the active section.
 
         Reserving an experiment signal in a section means that if there is no
         operation defined on that signal, it is not available for other sections
@@ -383,22 +383,26 @@ class Experiment:
         reset_delay: Optional[float] = None,
     ):
         """
-        Execute a measurement in the experiment - contains the optional playback of a measurement pulse, the signal acquisition and an optional delay after the signal acquisition.
+        Execute a measurement - unifies the (optional) playback of a measurement pulse, the acquisition of the return signal and an (optional) delay after the signal acquisition.
+        For pulsed spectroscopy, set integration_length and either measure_pulse or measure_pulse_length.
+        For CW spectroscopy, set only integration_length and do not specify the measure signal.
+        For all other measurements, set either length or pulse for both the measure pulse and integration kernel.
 
-        :param acquire_signal: A string that specifies the signal to acquire.
+        :param acquire_signal: A string that specifies the signal for the data acquisition.
         :type acquire_signal: str
-        :param handle: A string that specifies the handle of the acquisition.
+        :param handle: A string that specifies the handle of the acquired results.
         :type handle: str
         :param integration_kernel: An optional Pulse object that specifies the kernel for integration.
-        :type integration_kernel: Optional[Pulse]
-        :param integration_kernel_parameters: An optional dictionary that contains parameters for the integration kernel.
+        :type integration_kernel: Optional[:class:`~.experiment.pulse.Pulse`]
+        :param integration_kernel_parameters: An optional dictionary that contains pulse parameters for the integration kernel.
         :type integration_kernel_parameters: Optional[Dict[str, Any]]
         :param integration_length: An optional float that specifies the integration length.
         :type integration_length: Optional[float]
         :param measure_signal: An optional string that specifies the signal to measure.
         :type measure_signal: Optional[str]
-        :param measure_pulse: An optional Pulse object that specifies the pulse for measurement.
-        :type measure_pulse: Optional[Pulse]
+        :param measure_pulse: An optional Pulse object that specifies the readout pulse for measurement.
+            If this parameter is not supplied, no pulse will be played back for the measurement, which enables CW spectroscopy on SHFQA instruments.
+        :type measure_pulse: Optional[:class:`~.experiment.pulse.Pulse`]
         :param measure_pulse_length: An optional float that specifies the length of the measurement pulse.
         :type measure_pulse_length: Optional[float]
         :param measure_pulse_parameters: An optional dictionary that contains parameters for the measurement pulse.
@@ -411,22 +415,19 @@ class Experiment:
         :type reset_delay: Optional[float]
         """
 
-        if measure_signal is None and not isinstance(acquire_signal, str):
-            raise ValueError("acquire_signal must be specified.")
-
-        if isinstance(measure_signal, str) and not isinstance(acquire_signal, str):
+        if not isinstance(acquire_signal, str):
             raise ValueError("acquire_signal must be specified.")
 
         current_section = self._peek_section()
 
-        if measure_signal is None and isinstance(acquire_signal, str):
+        if measure_signal is None:
             current_section.acquire(
                 signal=acquire_signal,
                 handle=handle,
                 length=integration_length,
             )
 
-        elif isinstance(measure_signal, str) and isinstance(acquire_signal, str):
+        elif isinstance(measure_signal, str):
             current_section.play(
                 signal=measure_signal,
                 pulse=measure_pulse,
@@ -440,6 +441,7 @@ class Experiment:
                     signal=acquire_signal,
                     time=acquire_delay,
                 )
+
             current_section.acquire(
                 signal=acquire_signal,
                 handle=handle,
@@ -928,7 +930,9 @@ class Experiment:
                 given ID(s) (single string or list of strings). Defaults to None.
 
         """
-        raise LabOneQException("Global feedback via the PQSC is not yet supported.")
+        return Experiment._MatchSectionContext(
+            self, uid=uid, handle=handle, play_after=play_after, local=False
+        )
 
     class _MatchSectionContext:
         def __init__(

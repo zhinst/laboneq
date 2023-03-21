@@ -17,6 +17,8 @@ import pybase64 as base64
 from numpy.lib.format import read_array, write_array
 from sortedcontainers import SortedDict
 
+_logger = logging.getLogger(__name__)
+
 ID_KEY = "__id"
 
 
@@ -178,7 +180,7 @@ def construct_object(content, mapped_class):
         elif has_kwargs and isinstance(v, Mapping):
             filtered_args.update(v)
         else:
-            logging.getLogger(__name__).debug(
+            _logger.debug(
                 f"Ignoring field {k} in {mapped_class} because it is not in the __init__ method"
             )
     return mapped_class(**filtered_args)

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -35,6 +36,8 @@ from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
+
+_logger = logging.getLogger(__name__)
 
 REFERENCE_CLOCK_SOURCE_INTERNAL = 0
 REFERENCE_CLOCK_SOURCE_EXTERNAL = 1
@@ -76,7 +79,7 @@ class DeviceSHFQA(DeviceZI):
         elif self.dev_type == "SHFQC":
             self._channels = 1
         else:
-            self._logger.warning(
+            _logger.warning(
                 "%s: Unknown device type '%s', assuming SHFQA4 device.",
                 self.dev_repr,
                 self.dev_type,
@@ -115,7 +118,7 @@ class DeviceSHFQA(DeviceZI):
                 f"units of {io.range_unit}. Units must be 'dBm'."
             )
         if not any(np.isclose([io.range] * len(range_list), range_list)):
-            self._logger.warning(
+            _logger.warning(
                 "%s: %s channel %d range %.1f is not on the list of allowed ranges: %s. "
                 "Nearest allowed range will be used.",
                 self.dev_repr,
@@ -179,10 +182,10 @@ class DeviceSHFQA(DeviceZI):
                 average_mode,
             ),
             *self._configure_scope(
-                acquisition_type == AcquisitionType.RAW,
-                awg_key.awg_index,
-                averages,
-                awg_config.acquire_length,
+                enable=acquisition_type == AcquisitionType.RAW,
+                channel=awg_key.awg_index,
+                averages=averages,
+                acquire_length=awg_config.raw_acquire_length,
             ),
         ]
         return nodes
@@ -371,7 +374,7 @@ class DeviceSHFQA(DeviceZI):
         return nodes_to_initialize_scope
 
     def collect_execution_nodes(self):
-        self._logger.debug("Starting execution...")
+        _logger.debug("Starting execution...")
         return [
             DaqNodeSetAction(
                 self._daq,
@@ -430,7 +433,7 @@ class DeviceSHFQA(DeviceZI):
     def collect_output_initialization_nodes(
         self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
     ) -> List[DaqNodeSetAction]:
-        self._logger.debug("%s: Initializing device...", self.dev_repr)
+        _logger.debug("%s: Initializing device...", self.dev_repr)
 
         nodes_to_initialize_output: List[DaqNodeSetAction] = []
 
@@ -590,7 +593,7 @@ class DeviceSHFQA(DeviceZI):
         device_uid: str,
         recipe_data: RecipeData,
     ):
-        self._logger.debug("%s: Setting measurement mode to 'Readout'.", self.dev_repr)
+        _logger.debug("%s: Setting measurement mode to 'Readout'.", self.dev_repr)
 
         measurement_delay_output = 0
         if dev_output is not None:
@@ -673,9 +676,7 @@ class DeviceSHFQA(DeviceZI):
     def _configure_spectroscopy_mode_nodes(
         self, dev_input, measurement: Optional[Measurement.Data]
     ):
-        self._logger.debug(
-            "%s: Setting measurement mode to 'Spectroscopy'.", self.dev_repr
-        )
+        _logger.debug("%s: Setting measurement mode to 'Spectroscopy'.", self.dev_repr)
 
         measurement_delay_rounded = (
             self._get_total_rounded_delay_samples(
@@ -823,7 +824,7 @@ class DeviceSHFQA(DeviceZI):
     def collect_trigger_configuration_nodes(
         self, initialization: Initialization.Data, recipe_data: RecipeData
     ) -> List[DaqNodeAction]:
-        self._logger.debug("Configuring triggers...")
+        _logger.debug("Configuring triggers...")
         self._wait_for_awgs = True
         self._emit_trigger = False
 
@@ -881,12 +882,12 @@ class DeviceSHFQA(DeviceZI):
         self, initialization: Initialization.Data
     ) -> List[DaqNodeAction]:
         dio_mode = initialization.config.dio_mode
-        self._logger.debug("%s: Configuring as a follower...", self.dev_repr)
+        _logger.debug("%s: Configuring as a follower...", self.dev_repr)
 
         nodes_to_configure_as_follower = []
 
         if dio_mode == DIOConfigType.ZSYNC_DIO:
-            self._logger.debug(
+            _logger.debug(
                 "%s: Configuring reference clock to use ZSYNC as a reference...",
                 self.dev_repr,
             )

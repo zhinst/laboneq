@@ -6,8 +6,8 @@ from enum import Enum
 
 class LabOneVersion(Enum):
     UNKNOWN = "unknown"
-    V_22_08 = "22.08"
-    LATEST = V_22_08
+    V_23_02 = "23.02"
+    LATEST = V_23_02
 
     def __le__(self, other):
         return float(self.value) <= float(other.value)

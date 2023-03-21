@@ -8,7 +8,8 @@ from typing import Dict, List, Tuple
 
 import rustworkx as rx
 
-from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO, SectionInfo
+from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
+from laboneq.compiler.experiment_access.section_info import SectionInfo
 
 _logger = logging.getLogger(__name__)
 

@@ -4,7 +4,7 @@
 import logging
 from dataclasses import dataclass, field
 from itertools import groupby
-from typing import Any, Dict
+from typing import Any, Dict, Iterator, Optional, Tuple
 
 from engineering_notation import EngNumber
 
@@ -23,60 +23,71 @@ else:
 
 @dataclass(init=True, repr=True, order=True)
 class SignalIntegrationInfo:
-    is_spectroscopy: bool = field(default=False)
-    is_play: bool = field(default=False)
+    is_spectroscopy: bool = False
+    is_play: bool = False
     start: Any = field(default=None)
     end: Any = field(default=None)
     num_plays: Any = field(default=0)
     awg: Any = field(default=None)
+    device_id: Any = field(default=None)
     length: Any = field(default=None)
     device_type: Any = field(default=None)
     delay_signal: Any = field(default=None)
+    length_in_samples: int = None
+    delay_in_samples: int = None
 
 
 @dataclass(init=True, repr=True, order=True)
 class SectionIntegrationInfo:
-    signals: Any = field(default_factory=dict)
-    section_start: Any = field(default=0)
+    signals: Dict[str, SignalIntegrationInfo] = field(default_factory=dict)
+    section_start: float = field(default=0.0)
 
-    def signal_info(self, signal_id):
+    def signal_info(self, signal_id: str):
         if signal_id not in self.signals:
             self.signals[signal_id] = SignalIntegrationInfo()
         return self.signals[signal_id]
 
-    def items(self):
+    def items(self) -> Iterator[Tuple[str, SignalIntegrationInfo]]:
         return self.signals.items()
 
-    def values(self):
+    def values(self) -> Iterator[SignalIntegrationInfo]:
         return self.signals.values()
 
 
 @dataclass(init=True, repr=True, order=True)
 class IntegrationTimes:
-    section_infos: Dict = field(default_factory=dict)
+    section_infos: Dict[str, SectionIntegrationInfo] = field(default_factory=dict)
 
-    def get_or_create_section_info(self, section_name):
+    def get_or_create_section_info(self, section_name) -> SectionIntegrationInfo:
         if section_name not in self.section_infos:
             self.section_infos[section_name] = SectionIntegrationInfo()
         return self.section_infos[section_name]
 
-    def section_info(self, section_name):
+    def section_info(self, section_name) -> Optional[SectionIntegrationInfo]:
         return self.section_infos.get(section_name)
 
-    def items(self):
+    def items(self) -> Iterator[Tuple[str, SectionIntegrationInfo]]:
         return self.section_infos.items()
 
-    def values(self):
+    def values(self) -> Iterator[SectionIntegrationInfo]:
         return self.section_infos.values()
 
-    def remove_section(self, section_name):
-        del self.section_infos[section_name]
+
+@dataclass
+class SignalDelay:
+    code_generation: float
+    on_device: float
+
+
+SignalDelays = Dict[str, SignalDelay]
 
 
 class MeasurementCalculator:
     @classmethod
-    def calculate_integration_times(cls, signal_info_map, events):
-        section_infos = IntegrationTimes()
+    def calculate_integration_times(
+        cls, signal_info_map, events
+    ) -> Tuple[IntegrationTimes, SignalDelays]:
+        integration_times = IntegrationTimes()
         acquire_and_play_events = cls._filter_event_types(
             events, {"ACQUIRE_START", "ACQUIRE_END", "PLAY_START", "PLAY_END"}
         )
@@ -108,7 +119,7 @@ class MeasurementCalculator:
                     signal_id = k[0]
                     section_name = k[1]
 
-                    section_info = section_infos.get_or_create_section_info(
+                    section_info = integration_times.get_or_create_section_info(
                         section_name
                     )
 
@@ -163,7 +174,7 @@ class MeasurementCalculator:
                         signals_on_sequencer = signals_on_awg[awg_key]
                         acquire_signals_on_same_sequencer = [
                             k
-                            for k, v in section_info.signals.items()
+                            for k, v in section_info.items()
                             if not v.is_play and k in signals_on_sequencer
                         ]
                         raise RuntimeError(
@@ -171,17 +182,14 @@ class MeasurementCalculator:
                         )
 
         for event in cls._filter_event_types(events, "SECTION_START"):
-            if (
-                event["section_name"] in section_infos.section_infos
-                and not event["shadow"]
-            ):
-                section_info = section_infos.section_info(event["section_name"])
+            section_info = integration_times.section_info(event["section_name"])
+            if section_info is not None and not event["shadow"]:
                 section_info.section_start = event["time"]
 
         delays_per_awg = {}
-        for section_name, section_info in section_infos.section_infos.items():
+        for section_name, section_info in integration_times.items():
 
-            for signal, signal_integration_info in section_info.signals.items():
+            for signal, signal_integration_info in section_info.items():
                 signal_info = signal_info_map[signal]
                 device_type = DeviceType(signal_info["device_type"])
                 sampling_rate = device_type.sampling_rate
@@ -230,7 +238,7 @@ class MeasurementCalculator:
                 raise Exception(
                     f"Inconsistent integration delays {list(delays['delays'])} on awg {awg_key[1]} on device {awg_key[0]} from signals {set(delays['signals'])}, coming from sections {set(delays['sections'])}"
                 )
-        signal_delays = {}
+        signal_delays: SignalDelays = {}
 
         short_awg_keys = {(k[0], k[1]) for k in delays_per_awg.keys()}
         for short_key in short_awg_keys:
@@ -283,22 +291,20 @@ class MeasurementCalculator:
                                 rounding_error_acquire,
                             ) = calc_and_round_delay(signal, acquire_delay)
 
-                            signal_delays[signal] = {
-                                "code_generation": (
-                                    acquire_delay_in_s - play_delay_in_s
-                                ),
-                                "on_device": -(acquire_delay_in_s - play_delay_in_s),
-                            }
+                            signal_delays[signal] = SignalDelay(
+                                code_generation=acquire_delay_in_s - play_delay_in_s,
+                                on_device=-(acquire_delay_in_s - play_delay_in_s),
+                            )
                         for signal in acquire["signals"]:
                             (
                                 acquire_delay_in_s,
                                 rounding_error_acquire,
                             ) = calc_and_round_delay(signal, acquire_delay)
 
-                            signal_delays[signal] = {
-                                "code_generation": 0,
-                                "on_device": rounding_error_acquire,
-                            }
+                            signal_delays[signal] = SignalDelay(
+                                code_generation=0,
+                                on_device=rounding_error_acquire,
+                            )
                     else:
                         _dlogger.debug(
                             "SHF ** NOT play_delay > acquire_delay  %s, play_delay=%s acquire_delay=%s",
@@ -308,10 +314,10 @@ class MeasurementCalculator:
                         )
 
                         for signal in play["signals"]:
-                            signal_delays[signal] = {
-                                "code_generation": 0,
-                                "on_device": 0,
-                            }
+                            signal_delays[signal] = SignalDelay(
+                                code_generation=0,
+                                on_device=0,
+                            )
 
                         for signal in acquire["signals"]:
                             (
@@ -323,13 +329,11 @@ class MeasurementCalculator:
                                 signal, play_delay
                             )
 
-                            signal_delays[signal] = {
-                                "code_generation": -(
-                                    acquire_delay_in_s - play_delay_in_s
-                                ),
-                                "on_device": (acquire_delay_in_s - play_delay_in_s)
+                            signal_delays[signal] = SignalDelay(
+                                code_generation=-(acquire_delay_in_s - play_delay_in_s),
+                                on_device=(acquire_delay_in_s - play_delay_in_s)
                                 + rounding_error_acquire,
-                            }
+                            )
                 else:
                     _dlogger.debug(
                         "UHFQA ** play_delay=%s acquire_delay=%s",
@@ -339,10 +343,10 @@ class MeasurementCalculator:
 
                     for signal in play["signals"]:
 
-                        signal_delays[signal] = {
-                            "code_generation": 0,
-                            "on_device": 0,
-                        }
+                        signal_delays[signal] = SignalDelay(
+                            code_generation=0,
+                            on_device=0,
+                        )
 
                     for signal in acquire["signals"]:
                         (
@@ -360,38 +364,44 @@ class MeasurementCalculator:
                             EngNumber(play_delay_in_s),
                         )
 
-                        signal_delays[signal] = {
-                            "code_generation": -acquire_delay_in_s,
-                            "on_device": +acquire_delay_in_s + rounding_error_acquire,
-                        }
+                        signal_delays[signal] = SignalDelay(
+                            code_generation=-acquire_delay_in_s,
+                            on_device=acquire_delay_in_s + rounding_error_acquire,
+                        )
 
             except StopIteration:
                 pass
 
-        for k, v in section_infos.items():
+        for k, v in integration_times.items():
             for signal, section_signal_info in v.items():
                 if signal in signal_delays and section_signal_info.delay is not None:
-                    section_signal_info.delay = signal_delays[signal]["on_device"]
+                    section_signal_info.delay = signal_delays[signal].on_device
                     sampling_rate = signal_info["sampling_rate"]
                     section_signal_info.delay_in_samples = round(
                         section_signal_info.delay * sampling_rate
                     )
 
-        for k, v in section_infos.items():
+        for k, v in integration_times.items():
             _dlogger.debug("%s:", k)
             for x, y in v.items():
                 _dlogger.debug("  %s:%s", x, y)
 
-        for k, v in signal_delays.items():
-            _dlogger.debug("Signal delay for %s:", k)
+        for signal_id, signal_delay in signal_delays.items():
+            _dlogger.debug("Signal delay for %s:", signal_id)
+            signal_info = signal_info_map[signal_id]
             sampling_rate = signal_info["sampling_rate"]
+            _dlogger.debug(
+                " code_generation %s %s samples ",
+                EngNumber(signal_delay.code_generation),
+                round(signal_delay.code_generation * sampling_rate),
+            )
+            _dlogger.debug(
+                " on_device %s %s samples ",
+                EngNumber(signal_delay.on_device),
+                round(signal_delay.on_device * sampling_rate),
+            )
 
-            for x, y in v.items():
-                _dlogger.debug(
-                    " %s %s %s samples ", x, EngNumber(y), round(y * sampling_rate)
-                )
-
-        return section_infos, signal_delays, delays_per_awg
+        return integration_times, signal_delays
 
     @classmethod
     def _filter_event_types(cls, events, types):

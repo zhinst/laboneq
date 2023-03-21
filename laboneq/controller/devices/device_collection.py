@@ -35,6 +35,9 @@ if TYPE_CHECKING:
     from laboneq.dsl.device.servers import DataServer
 
 
+_logger = logging.getLogger(__name__)
+
+
 class DeviceCollection:
     def __init__(
         self,
@@ -47,7 +50,6 @@ class DeviceCollection:
         self._ignore_lab_one_version_error = ignore_lab_one_version_error
         self._daqs: Dict[str, DaqWrapper] = {}
         self._devices: Dict[str, DeviceZI] = {}
-        self._logger = logging.getLogger(__name__)
 
     @property
     def ds_instruments(self) -> Iterator[ZIStandardInstrument]:
@@ -148,7 +150,7 @@ class DeviceCollection:
             )
 
     def init_clocks(self):
-        self._logger.info("Configuring clock sources")
+        _logger.info("Configuring clock sources")
         # Wait until clock status is available for all devices
         response_waiter = ResponseWaiter()
         for device in self._devices.values():
@@ -182,7 +184,7 @@ class DeviceCollection:
                     if dev is not None:
                         children.append(dev)
             parents = children
-        self._logger.info("Clock sources configured")
+        _logger.info("Clock sources configured")
 
     def disconnect(self):
         self.stop_monitor()
@@ -290,9 +292,7 @@ class DeviceCollection:
                 updated_daqs[server_uid] = existing
                 continue
 
-            self._logger.info(
-                "Connecting to data server at %s:%s", server.host, server.port
-            )
+            _logger.info("Connecting to data server at %s:%s", server.host, server.port)
             if server_qualifier.dry_run:
                 daq = DaqWrapperDryRun(server_uid, server_qualifier)
                 for instr in self.ds_instruments:

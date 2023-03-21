@@ -1,6 +1,7 @@
 # Copyright 2019 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from laboneq.controller.communication import (
@@ -19,6 +20,8 @@ from laboneq.controller.recipe_1_4_0 import Initialization
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
+
+_logger = logging.getLogger(__name__)
 
 REFERENCE_CLOCK_SOURCE_INTERNAL = 0
 REFERENCE_CLOCK_SOURCE_EXTERNAL = 1
@@ -63,7 +66,7 @@ class DevicePQSC(DeviceZI):
         return []
 
     def collect_execution_nodes(self):
-        self._logger.debug("Starting execution...")
+        _logger.debug("Starting execution...")
         return [
             DaqNodeSetAction(
                 self._daq,
@@ -96,12 +99,12 @@ class DevicePQSC(DeviceZI):
                 f"/{self.serial}/{port.lower()}/connection/status", 2, timeout=10
             )
 
-        self._logger.debug(
+        _logger.debug(
             "%s: Configuring holdoff time: %f s.",
             self.dev_repr,
             initialization.config.holdoff,
         )
-        self._logger.debug(
+        _logger.debug(
             "%s: Configuring repetitions: %d.",
             self.dev_repr,
             initialization.config.repetitions,
@@ -131,10 +134,10 @@ class DevicePQSC(DeviceZI):
         raise LabOneQControllerException("PQSC cannot be configured as follower")
 
     def configure_as_leader(self, initialization: Initialization.Data):
-        self._logger.debug("%s: Configuring as leader...", self.dev_repr)
-        self._logger.debug("%s: Enabling reference clock...", self.dev_repr)
+        _logger.debug("%s: Configuring as leader...", self.dev_repr)
+        _logger.debug("%s: Enabling reference clock...", self.dev_repr)
 
-        self._logger.debug(
+        _logger.debug(
             "%s: Setting reference clock frequency to %d MHz...",
             self.dev_repr,
             initialization.config.reference_clock,

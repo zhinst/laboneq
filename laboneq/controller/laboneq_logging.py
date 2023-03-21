@@ -7,6 +7,7 @@ import os
 
 import yaml
 
+_logger = logging.getLogger(__name__)
 _log_dir = os.path.join("laboneq_output", "log")
 _logging_initialized = False
 
@@ -82,7 +83,7 @@ def initialize_logging(performance_log=False, logging_config_dict=None, log_leve
     global _logging_initialized
     logdir = get_log_dir()
     if _logging_initialized:
-        logging.getLogger(__name__).debug(
+        _logger.debug(
             "Logging has already been initialized - initializing again with logdir %s and console log level %d.",
             logdir,
             log_level,
@@ -133,16 +134,14 @@ def initialize_logging(performance_log=False, logging_config_dict=None, log_leve
     if log_level is not None:
         logging.getLogger("laboneq").setLevel(log_level)
 
-    logging.getLogger(__name__).info(
+    _logger.info(
         "Logging initialized from [%s] logdir is %s",
         config_source,
         os.path.abspath(logdir),
     )
 
     if performance_log:
-        logging.getLogger(__name__).info(
-            "Performance logging into %s", performance_log_file
-        )
+        _logger.info("Performance logging into %s", performance_log_file)
 
 
 def set_level(log_level=logging.INFO):

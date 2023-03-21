@@ -3,14 +3,17 @@
 
 from __future__ import annotations
 
+import math
 from typing import Dict, List, Optional
 
 from laboneq.compiler.code_generator.signatures import PlaybackSignature
+from laboneq.compiler.common.device_type import DeviceType
 
 
 class CommandTableTracker:
-    def __init__(self):
+    def __init__(self, device_type: DeviceType):
         self._command_table: Dict[PlaybackSignature, Dict] = {}
+        self._device_type = device_type
 
     def lookup_index_by_signature(self, signature: PlaybackSignature) -> Optional[int]:
         table_entry = self._command_table.get(signature)
@@ -36,34 +39,58 @@ class CommandTableTracker:
     ) -> int:
         assert signature not in self._command_table
         index = len(self._command_table)
+        ct_entry = {"index": index}
         if wave_index is None:
-            self._command_table[signature] = self._create_playzero_command_table_entry(
-                index, signature.waveform.length
-            )
+            if signature.waveform is not None:
+                length = signature.waveform.length
+                ct_entry["waveform"] = {"playZero": True, "length": length}
+
         else:
-            self._command_table[signature] = self._create_command_table_entry(
-                index, wave_index, signature.hw_oscillator
-            )
+            ct_entry["waveform"] = {"index": wave_index}
+            if signature.clear_precompensation:
+                ct_entry["waveform"]["precompClear"] = True
+        ct_entry.update(self._oscillator_part(signature))
+        self._command_table[signature] = ct_entry
         return index
 
-    @staticmethod
-    def _create_command_table_entry(
-        ct_index: int, wave_index: int, oscillator: Optional[str]
-    ):
-        d = {
-            "index": ct_index,
-            "waveform": {"index": wave_index},
-        }
+    def _oscillator_part(self, signature: PlaybackSignature):
+        d = {}
+        oscillator = signature.hw_oscillator
         if oscillator is not None:
             d["oscillatorSelect"] = {"value": {"$ref": oscillator}}
-        return d
 
-    @staticmethod
-    def _create_playzero_command_table_entry(ct_index: int, length: int):
-        d = {
-            "index": ct_index,
-            "waveform": {"playZero": True, "length": length},
-        }
+        ct_phase = None
+        do_incr = None
+        set_phase = signature.set_phase
+        if set_phase is not None:
+            ct_phase = set_phase
+            do_incr = False
+        incr_phase = signature.increment_phase
+        if incr_phase is not None:
+            assert set_phase is None, "Cannot set and increment phase at the same time"
+            ct_phase = incr_phase
+            do_incr = True
+
+        if ct_phase is not None:
+            assert do_incr is not None
+            ct_phase *= 180 / math.pi
+            ct_phase %= 360
+            if self._device_type == DeviceType.HDAWG:
+                if do_incr:
+                    d["phase0"] = {"value": ct_phase % 360, "increment": True}
+                    d["phase1"] = {"value": ct_phase}
+                else:
+                    d["phase0"] = {"value": (ct_phase + 90) % 360}
+                    d["phase1"] = {"value": ct_phase}
+                if do_incr:
+                    d["phase1"]["increment"] = True
+            elif self._device_type == DeviceType.SHFSG:
+                d["phase"] = {"value": ct_phase}
+                if do_incr:
+                    d["phase"]["increment"] = True
+            else:
+                raise ValueError(f"Unsupported device type: {self._device_type}")
+
         return d
 
     def command_table(self) -> List[Dict]:

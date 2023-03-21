@@ -52,6 +52,9 @@ from laboneq.core.types.enums.averaging_mode import AveragingMode
 if TYPE_CHECKING:
     from laboneq.core.types import CompiledExperiment
 
+
+_logger = logging.getLogger(__name__)
+
 seqc_osc_match = re.compile(
     r'(\s*string\s+osc_node_)(\w+)(\s*=\s*"oscs/)[0-9]+(/freq"\s*;\s*)', re.ASCII
 )
@@ -84,7 +87,6 @@ class DeviceQualifier:
 class DeviceZI(ABC):
     def __init__(self, device_qualifier: DeviceQualifier):
         self._device_qualifier: DeviceQualifier = device_qualifier
-        self._logger = logging.getLogger(__name__)
         self._downlinks: Dict[str, ReferenceType[DeviceZI]] = {}
         self._uplinks: Dict[str, ReferenceType[DeviceZI]] = {}
 
@@ -146,12 +148,12 @@ class DeviceZI(ABC):
 
     def add_command_table_header(self, body: Dict) -> Dict:
         # Stub, implement in sub-class
-        self._logger.debug("Command table unavailable on device %s", self.dev_repr)
+        _logger.debug("Command table unavailable on device %s", self.dev_repr)
         return {}
 
     def command_table_path(self, awg_index: int) -> str:
         # Stub, implement in sub-class
-        self._logger.debug("No command table available for device %s", self.dev_repr)
+        _logger.debug("No command table available for device %s", self.dev_repr)
         return ""
 
     def _get_option(self, key):
@@ -162,7 +164,7 @@ class DeviceZI(ABC):
             channel_clause = (
                 "" if channel is None else f" specified for the channel {channel}"
             )
-            self._logger.warning(
+            _logger.warning(
                 "%s: parameter '%s'%s is not supported on this device type.",
                 self.dev_repr,
                 param_name,
@@ -238,9 +240,7 @@ class DeviceZI(ABC):
         if self._connected:
             return
 
-        self._logger.debug(
-            "%s: Connecting to %s interface.", self.dev_repr, self.interface
-        )
+        _logger.debug("%s: Connecting to %s interface.", self.dev_repr, self.interface)
         try:
             self._daq.connectDevice(self.serial, self.interface)
         except RuntimeError as exc:
@@ -248,9 +248,7 @@ class DeviceZI(ABC):
                 f"{self.dev_repr}: Connecting failed"
             ) from exc
 
-        self._logger.debug(
-            "%s: Connected to %s interface.", self.dev_repr, self.interface
-        )
+        _logger.debug("%s: Connected to %s interface.", self.dev_repr, self.interface)
 
         dev_type_path = f"/{self.serial}/features/devtype"
         dev_opts_path = f"/{self.serial}/features/options"
@@ -286,7 +284,7 @@ class DeviceZI(ABC):
                     )
                 awg_module.batch_set(awg_config)
                 awg_module.execute()
-                self._logger.debug("%s: Creating AWG Module #%d", self.dev_repr, i)
+                _logger.debug("%s: Creating AWG Module #%d", self.dev_repr, i)
 
         self._daq.node_monitor.add_nodes(self.nodes_to_monitor())
 
@@ -410,7 +408,7 @@ class DeviceZI(ABC):
                         f"within {timeout}s. Last value: {last_val}"
                     )
                 if now - last_report > 5:
-                    self._logger.debug(
+                    _logger.debug(
                         "Waiting for node '%s' switching to '%s', %f s remaining "
                         "until %f s timeout...",
                         path,
@@ -484,7 +482,7 @@ class DeviceZI(ABC):
                         f"expected frequencies: {expected_freqs}, actual: {freq}"
                     )
                 if now - last_report > 5:
-                    self._logger.debug(
+                    _logger.debug(
                         "Waiting for reference clock switching, %f s remaining "
                         "until %f s timeout...",
                         timeout - elapsed,
@@ -578,13 +576,13 @@ class DeviceZI(ABC):
                     caching_strategy=CachingStrategy.NO_CACHE,
                 )
             )
-            self._logger.error("ELF upload error:\n%s", status_string)
+            _logger.error("ELF upload error:\n%s", status_string)
             raise LabOneQControllerException(
                 "ELF file upload to the instrument failed."
             )
 
     def _check_awg_compiler_status(self, awg_index):
-        self._logger.debug(
+        _logger.debug(
             "%s: Checking the status of compilation for AWG #%d...",
             self.dev_repr,
             awg_index,
@@ -600,7 +598,7 @@ class DeviceZI(ABC):
             )
 
             if compiler_status == AwgCompilerStatus.SUCCESS.value:
-                self._logger.debug(
+                _logger.debug(
                     "%s: Compilation successful on AWG #%d with no warnings, will upload the "
                     "program to the instrument.",
                     self.dev_repr,
@@ -917,7 +915,7 @@ class DeviceZI(ABC):
         self, code: str, awg_index: int, filename_hint: str = None
     ):
         try:
-            self._logger.debug(
+            _logger.debug(
                 "%s: Running AWG compiler on AWG #%d...",
                 self.dev_repr,
                 awg_index,
@@ -946,7 +944,7 @@ class DeviceZI(ABC):
         self._wait_for_elf_upload(awg_index)
 
     def compile_seqc(self, code: str, awg_index: int, filename_hint: str = None):
-        self._logger.debug(
+        _logger.debug(
             "%s: Compiling sequence for AWG #%d...",
             self.dev_repr,
             awg_index,
@@ -976,7 +974,7 @@ class DeviceZI(ABC):
                 f"{compiler_warnings}"
             )
 
-        self._logger.debug(
+        _logger.debug(
             "%s: Compilation successful on AWG #%d with no warnings.",
             self.dev_repr,
             awg_index,
@@ -999,7 +997,7 @@ class DeviceZI(ABC):
         for awg_obj in initialization.awgs:
             awg_index = awg_obj.awg
 
-            self._logger.debug(
+            _logger.debug(
                 "%s: Starting to compile and upload AWG program '%s' to AWG #%d",
                 self.dev_repr,
                 awg_obj.seqc,
@@ -1044,11 +1042,11 @@ class DeviceZI(ABC):
 
     def collect_execution_nodes(self):
         nodes_to_execute = []
-        self._logger.debug("%s: Executing AWGS...", self.dev_repr)
+        _logger.debug("%s: Executing AWGS...", self.dev_repr)
 
         if self._daq is not None:
             for awg_index in self._allocated_awgs:
-                self._logger.debug(
+                _logger.debug(
                     "%s: Starting AWG #%d sequencer", self.dev_repr, awg_index
                 )
                 path = f"/{self.serial}/awgs/{awg_index}/enable"
@@ -1066,12 +1064,12 @@ class DeviceZI(ABC):
     def shut_down(self):
         for awg_module in self._awg_modules:
             if awg_module is not None:
-                self._logger.debug(
+                _logger.debug(
                     "%s: Stopping AWG sequencer (stub, not implemented).", self.dev_repr
                 )
 
         if self._daq is not None:
-            self._logger.debug(
+            _logger.debug(
                 "%s: Turning off signal output (stub, not implemented).", self.dev_repr
             )
 
@@ -1104,7 +1102,7 @@ class DeviceZI(ABC):
                 measurement_delay_samples += port.port_delay * sample_frequency_hz
                 channel = port.channel
         else:
-            self._logger.debug(
+            _logger.debug(
                 "Port argument of %s is None, please check whether port delays are as specified.",
                 self.dev_repr,
             )
@@ -1124,7 +1122,7 @@ class DeviceZI(ABC):
                 + "values, use the delay_signal property."
             )
         if abs(measurement_delay_samples - measurement_delay_rounded) > 1:
-            self._logger.debug(
+            _logger.debug(
                 "Node delay %.2f ns of %s, channel %d will be rounded to "
                 "%.2f ns, a multiple of %.0f samples.",
                 measurement_delay_samples / sample_frequency_hz * 1e9,

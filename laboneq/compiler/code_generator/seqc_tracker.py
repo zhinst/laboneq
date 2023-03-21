@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Union
 
 from laboneq.compiler.code_generator.seq_c_generator import SeqCGenerator
+from laboneq.compiler.common.awg_sampled_event import AWGEvent
 from laboneq.compiler.common.device_type import DeviceType
 
 
@@ -34,12 +35,12 @@ class SeqCTracker:
     def current_loop_stack_generator(self):
         return self.loop_stack_generators[-1][-1]
 
-    def add_required_playzeros(self, sampled_event):
+    def add_required_playzeros(self, sampled_event: AWGEvent):
         """If `current_time` precedes the scheduled start of the event, emit playZero to catch up.
 
         Also clears deferred function calls within the context of the new playZero."""
-        start = sampled_event["start"]
-        signature = sampled_event["signature"]
+        start = sampled_event.start
+        signature = sampled_event.type
 
         if start > self.current_time:
             play_zero_samples = start - self.current_time
@@ -122,15 +123,19 @@ class SeqCTracker:
             device_type, signal_type, wave_id, channel
         )
 
-    def add_command_table_execution(self, ct_index, comment=""):
+    def add_command_table_execution(self, ct_index, latency=None, comment=""):
+        assert latency is None or not isinstance(latency, int) or latency >= 31
         self.current_loop_stack_generator().add_command_table_execution(
-            ct_index=ct_index, comment=comment
+            ct_index=ct_index, latency=latency, comment=comment
         )
 
     def add_variable_assignment(self, variable_name, value):
         self.current_loop_stack_generator().add_variable_assignment(
             variable_name, value
         )
+
+    def add_variable_increment(self, variable_name, value):
+        self.current_loop_stack_generator().add_variable_increment(variable_name, value)
 
     def add_assign_wave_index_statement(
         self, device_type: DeviceType, signal_type, wave_id, wave_index, channel

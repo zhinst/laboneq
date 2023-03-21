@@ -24,11 +24,9 @@ from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.common.play_wave_type import PlayWaveType
-from laboneq.compiler.experiment_access.experiment_dao import (
-    ExperimentDAO,
-    ParamRef,
-    PulseDef,
-)
+from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
+from laboneq.compiler.experiment_access.param_ref import ParamRef
+from laboneq.compiler.experiment_access.pulse_def import PulseDef
 from laboneq.compiler.experiment_access.section_graph import SectionGraph
 from laboneq.compiler.scheduler.event_graph import EventGraph, EventRelation, node_info
 from laboneq.compiler.scheduler.event_graph_builder import (
@@ -275,20 +273,8 @@ class Scheduler:
                     device_id
                 )
 
-                if section_info.state is not None:
-                    # Add an additional anchor to time the executeTableEntry evaluation:
-                    play_wave_chain.append(
-                        _PlayWave(
-                            id="CASE_EVALUATION",
-                            signal=signal_id,
-                            play_wave_type=PlayWaveType.CASE_EVALUATION,
-                            offset=32 / sampling_rate,
-                        )
-                    )
-                for pulse_index, section_pulse in enumerate(
-                    self._experiment_dao.section_pulses(
-                        section_info.section_display_name, signal_id
-                    )
+                for section_pulse in self._experiment_dao.section_pulses(
+                    section_info.section_display_name, signal_id
                 ):
                     pulse_name = section_pulse.pulse_id
                     pulse_def = None
@@ -349,12 +335,6 @@ class Scheduler:
                 sampling_rate = self._sampling_rate_tracker.sampling_rate_for_device(
                     signal_info_main.device_id
                 )
-                timing_anchor = _PlayWave(
-                    id="CASE_EVALUATION",
-                    signal=signal,
-                    play_wave_type=PlayWaveType.CASE_EVALUATION,
-                    offset=32 / sampling_rate,
-                )
                 play_zeros = _PlayWave(
                     id="EMPTY_MATCH_CASE_DELAY",
                     play_wave_type=PlayWaveType.EMPTY_CASE,
@@ -362,7 +342,7 @@ class Scheduler:
                     length=1e-9,
                 )
                 self.add_play_wave_chain(
-                    [timing_anchor, play_zeros],
+                    [play_zeros],
                     parent_section_name=empty_section,
                     right_aligned=False,
                     section_start_node=parent[1],
@@ -455,6 +435,8 @@ class Scheduler:
                 ]
             if event["event_type"] == EventType.RESET_SW_OSCILLATOR_PHASE:
                 phase_reset_time = event["time"]
+                for signal_id in oscillator_phase_cumulative.keys():
+                    oscillator_phase_cumulative[signal_id] = 0.0
 
             if event["event_type"] == EventType.INCREMENT_OSCILLATOR_PHASE:
                 signal_id = event["signal"]
@@ -464,6 +446,7 @@ class Scheduler:
                 if isinstance(phase_incr, ParamRef):
                     try:
                         phase_incr = parameter_values[phase_incr.param_name]
+                        event["increment_oscillator_phase"] = phase_incr
                     except KeyError as e:
                         raise make_error_nt_param(phase_incr, event) from e
                 oscillator_phase_cumulative[signal_id] += phase_incr
@@ -473,6 +456,7 @@ class Scheduler:
                 if isinstance(osc_phase, ParamRef):
                     try:
                         osc_phase = parameter_values[osc_phase.param_name]
+                        event["set_oscillator_phase"] = osc_phase
                     except KeyError as e:
                         raise make_error_nt_param(osc_phase, event) from e
                 oscillator_phase_cumulative[signal_id] = osc_phase
@@ -488,6 +472,7 @@ class Scheduler:
                     )
                     try:
                         amplitude = parameter_values[amplitude.param_name]
+                        event["amplitude"] = amplitude
                     except KeyError as e:
                         raise make_error_nt_param(amplitude, event) from e
                     amplitude = (
@@ -506,6 +491,7 @@ class Scheduler:
                 if isinstance(phase, ParamRef):
                     try:
                         phase = parameter_values[phase.param_name]
+                        event["phase"] = phase
                     except KeyError as e:
                         raise make_error_nt_param(phase, event) from e
                     self._event_graph.set_node_attributes(event["id"], {"phase": phase})
@@ -575,7 +561,7 @@ class Scheduler:
                             incremented_phase = oscillator_phase_cumulative[signal_id]
 
                         if oscillator_info.hardware:
-                            if len(oscillator_phase_sets) > 0:
+                            if signal_id in oscillator_phase_sets:
                                 raise Exception(
                                     f"There are set_oscillator_phase entries for signal '{signal_id}', but oscillator '{oscillator_info.id}' is a hardware oscillator. Setting absolute phase is not supported for hardware oscillators."
                                 )
@@ -799,7 +785,8 @@ class Scheduler:
                         #
                         if acquire.local:
                             # todo(JL): Proper timing model; but does it work for right alignment?
-                            timing = lambda _: 50e-9
+                            # timing = lambda _: 50e-9
+                            timing = lambda _: 0
                         else:
                             # todo(JL): Proper timing model; but does it work for right alignment?
                             timing = lambda _: 500e-9

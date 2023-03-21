@@ -17,17 +17,15 @@ from laboneq._observability.tracing import trace
 from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.event_type import EventType
-from laboneq.compiler.experiment_access.experiment_dao import (
-    ExperimentDAO,
-    SectionInfo,
-    SectionSignalPulse,
-)
+from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.experiment_access.section_graph import SectionGraph
+from laboneq.compiler.experiment_access.section_info import SectionInfo
+from laboneq.compiler.experiment_access.section_signal_pulse import SectionSignalPulse
 from laboneq.compiler.new_scheduler.case_schedule import CaseSchedule, EmptyBranch
 from laboneq.compiler.new_scheduler.interval_schedule import IntervalSchedule
 from laboneq.compiler.new_scheduler.loop_iteration_schedule import LoopIterationSchedule
 from laboneq.compiler.new_scheduler.loop_schedule import LoopSchedule
-from laboneq.compiler.new_scheduler.match_schedule import CaseEvaluation, MatchSchedule
+from laboneq.compiler.new_scheduler.match_schedule import MatchSchedule
 from laboneq.compiler.new_scheduler.oscillator_schedule import (
     OscillatorFrequencyStepSchedule,
     SweptHardwareOscillator,
@@ -554,7 +552,7 @@ class Scheduler:
         for i, c in enumerate(children):
             grid = lcm(grid, c.grid)
             start = max(
-                [0] + [current_signal_start.setdefault(s, 0) for s in c.signals]
+                (current_signal_start.setdefault(s, 0) for s in c.signals), default=0
             )
             if isinstance(c, SectionSchedule):
                 for pa_name in c.play_after:
@@ -607,7 +605,8 @@ class Scheduler:
         for i, c in reversed(list(enumerate(children))):
             grid = lcm(grid, c.grid)
             start = (
-                min([current_signal_end.setdefault(s, 0) for s in c.signals]) - c.length
+                min((current_signal_end.setdefault(s, 0) for s in c.signals), default=0)
+                - c.length
             )
             if isinstance(c, SectionSchedule):
                 for pb_name in play_before.get(c.section, []):
@@ -634,7 +633,7 @@ class Scheduler:
                 current_signal_end[s] = start
 
         section_start = floor_to_grid(
-            min(v for v in children_start if v is not None), grid
+            min((v for v in children_start if v is not None), default=0), grid
         )
 
         children_start = [start - section_start for start in children_start]
@@ -695,8 +694,8 @@ class Scheduler:
         if len(children):
             length = ceil_to_grid(
                 max(
-                    0.0,
-                    *[start + c.length for (c, start) in zip(children, children_start)],
+                    (start + c.length for (c, start) in zip(children, children_start)),
+                    default=0,
                 ),
                 grid,
             )
@@ -867,8 +866,10 @@ class Scheduler:
         section_info: SectionInfo,
         current_parameters: Dict[str, float],
     ) -> MatchSchedule:
-        handle = section_info.handle
-        local = section_info.local
+        assert section_info.handle is not None
+        handle: str = section_info.handle
+        assert section_info.local is not None
+        local: bool = section_info.local
 
         children_schedules = []
         section_children = self._experiment_dao.direct_section_children(section_id)
@@ -900,36 +901,16 @@ class Scheduler:
                     state=cs.state,
                 )
 
-        case_evaluation_length = 2 * grid  # long enough to fit a minimal waveform
-
+        children_start = [0 for _ in children_schedules]
         length = ceil_to_grid(
-            max(0, *(c.length for c in children_schedules)) + case_evaluation_length,
-            grid,
+            max((c.length for c in children_schedules), default=0), grid
         )
-
-        children_schedules = [
-            c.adjust_length(length - case_evaluation_length) for c in children_schedules
-        ]
-
-        # todo: timing model, place branches sufficiently late after acquire
-        #  For now, schedule all elements as early as possible.
-        children_start = [case_evaluation_length for _ in children_schedules]
-
-        children_schedules.append(
-            CaseEvaluation(
-                grid,
-                length=case_evaluation_length,
-                signals=signals,
-                children=(),
-                children_start=(),
-                section=section_id,
-            )
-        )
-        children_start.append(0)
 
         play_after = section_info.play_after or ()
         if isinstance(play_after, str):
             play_after = (play_after,)
+        elif isinstance(play_after, list):
+            play_after = tuple(play_after)
 
         return MatchSchedule(
             grid=grid,
@@ -992,32 +973,39 @@ class Scheduler:
         self, section_id: str, parameters: Dict[str, float]
     ):
         """Return a list of the schedules of the children"""
-        children_schedules = []
+        subsection_schedules = []
         section_children = self._experiment_dao.direct_section_children(section_id)
         for child_section in section_children:
-            children_schedules.append(self._schedule_section(child_section, parameters))
+            subsection_schedules.append(
+                self._schedule_section(child_section, parameters)
+            )
 
+        pulse_schedules = []
         section_signals = self._experiment_dao.section_signals(section_id)
         for signal_id in section_signals:
             pulses = self._experiment_dao.section_pulses(section_id, signal_id)
             for pulse in pulses:
-                children_schedules.append(
+                pulse_schedules.append(
                     self._schedule_pulse(pulse, section_id, parameters)
                 )
                 if pulse.precompensation_clear:
-                    children_schedules.append(
-                        self._schedule_precomp_clear(section_id, children_schedules[-1])
+                    pulse_schedules.append(
+                        self._schedule_precomp_clear(section_id, pulse_schedules[-1])
                     )
 
             signal_grid, _ = self.grid(signal_id)
             if len(pulses) == 0:
                 # the section occupies the signal via a reserve, so add a placeholder
                 # to include this signal in the grid calculation
-                children_schedules.append(
-                    ReserveSchedule.create(signal_id, signal_grid)
+                pulse_schedules.append(ReserveSchedule.create(signal_id, signal_grid))
+
+        if len(pulse_schedules) and len(subsection_schedules):
+            if any(not isinstance(ps, ReserveSchedule) for ps in pulse_schedules):
+                raise LabOneQException(
+                    f"sections and pulses cannot be mixed in section '{section_id}'"
                 )
 
-        return children_schedules
+        return subsection_schedules + pulse_schedules
 
     def grid(self, *signal_ids: Iterable[str]) -> Tuple[int, int]:
         """Compute signal and sequencer grid for the given signals. If multiple signals

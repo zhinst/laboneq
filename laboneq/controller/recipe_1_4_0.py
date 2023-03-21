@@ -179,6 +179,7 @@ class AWG(QCCSSchema):
             "signal_type",
             "qa_signal_id",
             "command_table_match_offset",
+            "feedback_register",
         )
         ordered = False
 
@@ -189,12 +190,14 @@ class AWG(QCCSSchema):
         signal_type: SignalType = SignalType.SINGLE
         qa_signal_id: Optional[str] = None
         command_table_match_offset: Optional[int] = None
+        feedback_register: Optional[int] = None
 
     awg = fields.Integer()
     seqc = fields.Str()
     signal_type = SignalTypeField()
     qa_signal_id = fields.Str(required=False, allow_none=True)
     command_table_match_offset = fields.Integer(required=False, allow_none=True)
+    feedback_register = fields.Integer(required=False, allow_none=True)
 
 
 class Port(QCCSSchema):

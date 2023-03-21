@@ -27,6 +27,9 @@ if TYPE_CHECKING:
     from laboneq.dsl.experiment.pulse import Pulse
 
 
+_logger = logging.getLogger(__name__)
+
+
 class ConnectionState:
     connected: bool = False
     emulated: bool = False
@@ -465,7 +468,7 @@ class Session:
         constructor_args = {}
 
         for field, field_type in Session._session_fields().items():
-            logging.getLogger(__name__).info("Loading %s of type %s", field, field_type)
+            _logger.info("Loading %s of type %s", field, field_type)
             constructor_args[field] = Serializer.load(session_dict[field], field_type)
 
         return Session(**constructor_args)

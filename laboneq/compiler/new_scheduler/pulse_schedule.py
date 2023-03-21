@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterator, List, Optional
 from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.common.play_wave_type import PlayWaveType
-from laboneq.compiler.experiment_access.experiment_dao import SectionSignalPulse
+from laboneq.compiler.experiment_access.section_signal_pulse import SectionSignalPulse
 from laboneq.compiler.new_scheduler.interval_schedule import IntervalSchedule
 
 

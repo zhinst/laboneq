@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -28,6 +29,8 @@ from laboneq.controller.recipe_processor import (
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
+
+_logger = logging.getLogger(__name__)
 
 SAMPLE_FREQUENCY_HZ = 1.8e9
 DELAY_NODE_GRANULARITY_SAMPLES = 4
@@ -121,9 +124,9 @@ class DeviceUHFQA(DeviceZI):
                 acquisition_type,
             ),
             *self._configure_input_monitor(
-                acquisition_type == AcquisitionType.RAW,
-                averages,
-                awg_config.acquire_length,
+                enable=acquisition_type == AcquisitionType.RAW,
+                averages=averages,
+                acquire_length=awg_config.raw_acquire_length,
             ),
         ]
         return nodes
@@ -175,7 +178,7 @@ class DeviceUHFQA(DeviceZI):
                 ]
             )
 
-        self._logger.debug("Turning %s result logger...", "on" if enable else "off")
+        _logger.debug("Turning %s result logger...", "on" if enable else "off")
         nodes_to_initialize_result_acquisition.append(
             DaqNodeSetAction(
                 self._daq, f"/{self.serial}/qas/0/result/enable", 1 if enable else 0
@@ -252,7 +255,7 @@ class DeviceUHFQA(DeviceZI):
             )
 
         if not any(np.isclose([io.range] * len(range_list), range_list)):
-            self._logger.warning(
+            _logger.warning(
                 "%s: %s channel %d range %.1f is not on the list of allowed ranges: %s. Nearest "
                 "allowed range will be used.",
                 self.dev_repr,
@@ -265,7 +268,7 @@ class DeviceUHFQA(DeviceZI):
     def collect_output_initialization_nodes(
         self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
     ) -> List[DaqNodeAction]:
-        self._logger.debug("%s: Initializing device...", self.dev_repr)
+        _logger.debug("%s: Initializing device...", self.dev_repr)
 
         nodes_to_initialize_output: List[DaqNodeAction] = []
 
@@ -326,7 +329,7 @@ class DeviceUHFQA(DeviceZI):
                     raise LabOneQControllerException(
                         f"{self.dev_repr}'s output does not support port delay"
                     )
-                self._logger.debug(
+                _logger.debug(
                     "%s's output port delay should be set to None, not 0", self.dev_repr
                 )
 
@@ -353,7 +356,7 @@ class DeviceUHFQA(DeviceZI):
         device_uid: str,
         recipe_data: RecipeData,
     ):
-        self._logger.debug("%s: Setting measurement mode to 'Standard'.", self.dev_repr)
+        _logger.debug("%s: Setting measurement mode to 'Standard'.", self.dev_repr)
 
         nodes_to_set_for_standard_mode = []
 
@@ -452,9 +455,7 @@ class DeviceUHFQA(DeviceZI):
         return nodes_to_set_for_standard_mode
 
     def _configure_spectroscopy_mode_nodes(self):
-        self._logger.debug(
-            "%s: Setting measurement mode to 'Spectroscopy'.", self.dev_repr
-        )
+        _logger.debug("%s: Setting measurement mode to 'Spectroscopy'.", self.dev_repr)
 
         nodes_to_set_for_spectroscopy_mode = []
         nodes_to_set_for_spectroscopy_mode.append(
@@ -505,7 +506,7 @@ class DeviceUHFQA(DeviceZI):
         if len(initialization.measurements) > 0:
             measurement = initialization.measurements[0]
 
-            self._logger.debug(
+            _logger.debug(
                 "%s: Setting measurement sample length to %d",
                 self.dev_repr,
                 measurement.length,
@@ -556,14 +557,14 @@ class DeviceUHFQA(DeviceZI):
     def collect_trigger_configuration_nodes(
         self, initialization: Initialization.Data, recipe_data: RecipeData
     ) -> List[DaqNodeAction]:
-        self._logger.debug("Configuring triggers...")
-        self._logger.debug("Configuring strobe index: 16.")
-        self._logger.debug("Configuring strobe slope: 0.")
-        self._logger.debug("Configuring valid polarity: 2.")
-        self._logger.debug("Configuring valid index: 16.")
-        self._logger.debug("Configuring dios mode: 2.")
-        self._logger.debug("Configuring dios drive: 0x3.")
-        self._logger.debug("Configuring dios extclk: 0x2.")
+        _logger.debug("Configuring triggers...")
+        _logger.debug("Configuring strobe index: 16.")
+        _logger.debug("Configuring strobe slope: 0.")
+        _logger.debug("Configuring valid polarity: 2.")
+        _logger.debug("Configuring valid index: 16.")
+        _logger.debug("Configuring dios mode: 2.")
+        _logger.debug("Configuring dios drive: 0x3.")
+        _logger.debug("Configuring dios extclk: 0x2.")
 
         nodes_to_configure_triggers = []
 
