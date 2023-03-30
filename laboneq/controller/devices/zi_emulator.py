@@ -271,6 +271,17 @@ class DevEmuHDAWG(DevEmuHW):
             delay=0.001, priority=0, action=self._awg_stop, argument=(awg_idx,)
         )
 
+    def _sample_clock_switched(self):
+        self._set_val("system/clocks/sampleclock/status", 0)
+
+    def _sample_clock(self, node: NodeFloat):
+        self._set_val("system/clocks/sampleclock/status", 2)
+        self._scheduler.enter(
+            delay=0.001,
+            priority=0,
+            action=self._sample_clock_switched,
+        )
+
     def _ref_clock_switched(self, source):
         self._set_val("system/clocks/referenceclock/status", 0)
         # 0 -> internal (freq 100e6)
@@ -291,6 +302,10 @@ class DevEmuHDAWG(DevEmuHW):
 
     def _node_def(self) -> Dict[str, NodeInfo]:
         nd = {
+            "system/clocks/sampleclock/status": NodeInfo(type=NodeType.INT, default=0),
+            "system/clocks/sampleclock/freq": NodeInfo(
+                type=NodeType.FLOAT, default=2.4e9, handler=DevEmuHDAWG._sample_clock
+            ),
             "system/clocks/referenceclock/source": NodeInfo(
                 type=NodeType.INT, default=0, handler=DevEmuHDAWG._ref_clock
             ),
@@ -709,7 +724,7 @@ class ziDAQServerEmulator:
         # TODO(2K): handle flags
         raw_results = self._resolve_paths_and_perform(paths, self._get)
         # TODO(2K): reshape results
-        assert flat == True
+        assert flat is True
         # TODO(2K): emulate timestamp
         return raw_results
 
@@ -797,7 +812,7 @@ class ziDAQServerEmulator:
             events.extend(dev.poll())
         result = {}
         # TODO(2K): reshape results
-        assert flat == True
+        assert flat is True
         for event in events:
             path_res = result.setdefault(event.path, {"value": []})
             path_res["value"].append(event.value)
@@ -855,7 +870,7 @@ class AWGModuleEmulator:
                 val = 0
             results[p] = [val]
         # TODO(2K): reshape results
-        assert flat == True
+        assert flat is True
         return results
 
     def getInt(self, path: str) -> int:

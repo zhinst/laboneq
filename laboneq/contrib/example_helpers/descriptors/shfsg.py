@@ -1,9 +1,16 @@
+# Copyright 2020 Zurich Instruments AG
+# SPDX-License-Identifier: Apache-2.0
+
+"""Descriptor for a QCCS consisting of a single SHFSG
+"""
+
+descriptor_shfsg = """
 instruments:
   SHFSG:
   - address: DEV12050
-    uid: device_shfsg 
-    
-connections:     
+    uid: device_shfsg
+
+connections:
   device_shfsg:
     - iq_signal: q0/drive_line
       ports: SGCHANNELS/0/OUTPUT
@@ -37,5 +44,5 @@ connections:
     # - iq_signal: q3/measure_line
     #   ports: [QACHANNELS/0/OUTPUT]
     # - acquire_signal: q3/acquire_line
-      # ports: [QACHANNELS/0/INPUT] 
-    
+      # ports: [QACHANNELS/0/INPUT]
+"""

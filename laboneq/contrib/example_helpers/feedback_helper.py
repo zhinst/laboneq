@@ -1,9 +1,15 @@
-###
-# Common helper functions for setting up a threshold for state discrimination and for feedback
-###
+# Copyright 2020 Zurich Instruments AG
+# SPDX-License-Identifier: Apache-2.0
 
-from laboneq.simple import *
+"""Common helper functions for setting up a threshold for state discrimination and for feedback experiments
+"""
+
 import numpy as np
+
+from laboneq.core.types.enums import AcquisitionType, AveragingMode
+from laboneq.dsl.calibration import SignalCalibration
+from laboneq.dsl.experiment import Experiment, pulse_library
+from laboneq.dsl.parameter import LinearSweepParameter
 
 
 ## create readout pulse waveform with IQ encoded phase and optional software modulation

@@ -1,3 +1,10 @@
+# Copyright 2020 Zurich Instruments AG
+# SPDX-License-Identifier: Apache-2.0
+
+"""Descriptor for a QCCS consisting of HDAWG, SHFSG, SHFQA, and PQSC
+"""
+
+descriptor_shfsg_shfqa_hdawg_pqsc = """
 instruments:
   HDAWG:
   - address: DEV8XXX
@@ -8,9 +15,6 @@ instruments:
   SHFQA:
    - address: DEV12XX2
      uid: device_shfqa
-  SHFQC:
-   - address: DEV12XX3
-     uid: device_shfqc
   PQSC:
    - address: DEV10XXX
      uid: device_pqsc
@@ -18,15 +22,13 @@ instruments:
 connections:
   device_hdawg:
     - rf_signal: q0/flux_line
-      ports: SIGOUTS/0  
+      ports: SIGOUTS/0
     - rf_signal: q1/flux_line
-      ports: SIGOUTS/1  
+      ports: SIGOUTS/1
     - rf_signal: q2/flux_line
-      ports: SIGOUTS/2  
+      ports: SIGOUTS/2
     - rf_signal: q3/flux_line
-      ports: SIGOUTS/3  
-    - rf_signal: q4/flux_line
-      ports: SIGOUTS/4   
+      ports: SIGOUTS/3
 
   device_shfsg:
     - iq_signal: q0/drive_line
@@ -45,8 +47,8 @@ connections:
       ports: SGCHANNELS/3/OUTPUT
     - iq_signal: q3/drive_line_ef
       ports: SGCHANNELS/3/OUTPUT
-    
-  device_shfqa:    
+
+  device_shfqa:
     - iq_signal: q0/measure_line
       ports: [QACHANNELS/0/OUTPUT]
     - acquire_signal: q0/acquire_line
@@ -64,16 +66,6 @@ connections:
     - acquire_signal: q3/acquire_line
       ports: [QACHANNELS/0/INPUT]
 
-  device_shfqc:
-    - iq_signal: q4/drive_line
-      ports: SGCHANNELS/0/OUTPUT
-    - iq_signal: q4/drive_line_ef
-      ports: SGCHANNELS/0/OUTPUT
-    - iq_signal: q4/measure_line
-      ports: [QACHANNELS/0/OUTPUT]
-    - acquire_signal: q4/acquire_line
-      ports: [QACHANNELS/0/INPUT] 
-
   device_pqsc:
     - to: device_hdawg
       port: ZSYNCS/0
@@ -81,5 +73,4 @@ connections:
       port: ZSYNCS/1
     - to: device_shfqa
       port: ZSYNCS/2
-    - to: device_shfqc
-      port: ZSYNCS/3
+"""

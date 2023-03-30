@@ -32,7 +32,7 @@ def plot_pulse(pulse):
     fig, axs = plt.subplots(4)
     fig.suptitle("Waveform")
 
-    ylab1 = ["$\mathcal{I}$", "$\mathcal{Q}$", "$\mathcal{A}$", "$\Phi$"]
+    ylab1 = [r"$\mathcal{I}$", r"$\mathcal{Q}$", r"$\mathcal{A}$", r"$\Phi$"]
 
     for i in range(4):
         axs[i].set_ylabel(ylab1[i])
@@ -67,9 +67,9 @@ def plot_pulse_iq(pulse):
     """
 
     fig, axs = plt.subplots(2)
-    fig.suptitle("$\mathcal{I}$ and $\mathcal{Q}$")
+    fig.suptitle(r"$\mathcal{I}$ and $\mathcal{Q}$")
 
-    ylab1 = ["$\mathcal{I}$", "$\mathcal{Q}$"]
+    ylab1 = [r"$\mathcal{I}$", r"$\mathcal{Q}$"]
 
     for i in range(2):
         axs[i].set_ylabel(ylab1[i])
@@ -102,7 +102,7 @@ def plot_pulse_amp_phi(pulse):
     fig, axs = plt.subplots(2)
     fig.suptitle("Amplitude and Phase")
 
-    ylab1 = ["$\mathcal{A}$", "$\Phi$"]
+    ylab1 = [r"$\mathcal{A}$", r"$\Phi$"]
 
     for i in range(2):
         axs[i].set_ylabel(ylab1[i])
@@ -120,10 +120,6 @@ def plot_pulse_amp_phi(pulse):
     plt.show()
 
 
-# Copyright 2020 Zurich Instruments AG
-# SPDX-License-Identifier: Apache-2.0
-
-
 def plot_excitation_profile(state_mat, offs):
 
     """
@@ -137,7 +133,7 @@ def plot_excitation_profile(state_mat, offs):
         None. This function only generates a plot.
     """
 
-    ylab2 = ["$x$", "$y$", "$z$", "$\sqrt{x^2+y^2}$"]
+    ylab2 = ["$x$", "$y$", "$z$", r"$\sqrt{x^2+y^2}$"]
 
     fig, axs = plt.subplots(4)
     for i in range(4):

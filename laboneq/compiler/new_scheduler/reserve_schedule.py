@@ -9,9 +9,13 @@ from laboneq.compiler.new_scheduler.interval_schedule import IntervalSchedule
 class ReserveSchedule(IntervalSchedule):
     @classmethod
     def create(cls, signal, grid):
-        return cls(grid, 0, frozenset((signal,)), (), ())
+        return cls(grid=grid, signals={signal})
+
+    def _calculate_timing(self, *_, **__):
+        self.length = 0
 
     def generate_event_list(self, *_, **__) -> List[Dict]:
+        assert self.length is not None
         return []
 
     def __hash__(self):

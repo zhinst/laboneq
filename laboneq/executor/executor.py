@@ -17,6 +17,7 @@ from laboneq.core.types.enums.averaging_mode import AveragingMode
 class LoopType(Enum):
     SWEEP = auto()
     AVERAGE = auto()
+    RT_AVERAGE = auto()
     HARDWARE = auto()
 
 
@@ -167,10 +168,10 @@ class ForLoop(Statement):
     def run(self, scope: ExecutionScope):
         sub_scope = scope.make_sub_scope()
         for i in self._loop_iterator(scope):
-            scope.root.for_loop_handler(self._count, i, True)
+            scope.root.for_loop_handler(self._count, i, self._loop_type, True)
             sub_scope.set_variable(LOOP_INDEX, i)
             self._body.run(sub_scope)
-            scope.root.for_loop_handler(None, None, False)
+            scope.root.for_loop_handler(None, None, None, False)
 
 
 class ExecRT(ForLoop):
@@ -182,7 +183,7 @@ class ExecRT(ForLoop):
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
     ):
-        super().__init__(count, body, LoopType.AVERAGE)
+        super().__init__(count, body, LoopType.RT_AVERAGE)
         self._uid = uid
         self._averaging_mode = averaging_mode
         self._acquisition_type = acquisition_type
@@ -236,7 +237,9 @@ class ExecutorBase:
     ):
         pass
 
-    def for_loop_handler(self, count: int, index: int, enter: bool):
+    def for_loop_handler(
+        self, count: int, index: int, loop_type: LoopType, enter: bool
+    ):
         pass
 
     def rt_handler(

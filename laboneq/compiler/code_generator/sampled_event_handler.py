@@ -585,6 +585,12 @@ class SampledEventHandler:
             self.loop_stack.pop()
 
     def handle_match(self, sampled_event: AWGEvent):
+        if self.match_parent_event is not None:
+            raise LabOneQException(
+                f"Simultaneous match events on the same physical AWG are not supported. "
+                f"Affected handles: '{self.match_parent_event.params['handle']}' and "
+                f"'{sampled_event.params['handle']}'"
+            )
         self.match_parent_event = sampled_event
 
     def close_event_list(self):

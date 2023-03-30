@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
-from typing import Optional
+from typing import Dict, Optional
 
 from laboneq.compiler.code_generator.measurement_calculator import IntegrationTimes
 from laboneq.compiler.common.device_type import DeviceType
@@ -268,11 +268,13 @@ class RecipeGenerator:
             experiment_dao, leader_properties, clock_settings
         )
 
-    def add_simultaneous_acquires(self, simultaneous_acquires):
+    def add_simultaneous_acquires(
+        self, simultaneous_acquires: Dict[float, Dict[str, str]]
+    ):
         # Keys are of no interest, only order and simultaneity is important
-        self._recipe["experiment"]["simultaneous_acquires"] = [
-            v for v in simultaneous_acquires.values()
-        ]
+        self._recipe["experiment"]["simultaneous_acquires"] = list(
+            simultaneous_acquires.values()
+        )
 
     def add_total_execution_time(self, total_execution_time):
         self._recipe["experiment"]["total_execution_time"] = total_execution_time

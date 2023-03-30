@@ -34,6 +34,32 @@ def interval_to_samples_with_errors(start, end, sampling_rate):
     return (start_samples, end_samples), (start_rounding_error, end_rounding_error)
 
 
+def sample_marker(num_total_samples, sampling_rate, enable, start, length):
+    """Sample a marker.
+
+    Args:
+        num_total_samples: Number of samples in the pulse
+        enable: Whether the marker is fully enabled
+        start: Start time of the marker
+        length: Length of the marker
+
+    Returns:
+        A numpy array of the marker samples
+    """
+    if enable:
+        return np.ones(num_total_samples, dtype=np.uint8)
+    if start is None:
+        return None
+
+    if length is None:
+        length = num_total_samples / sampling_rate - start
+    start_samples = length_to_samples(start, sampling_rate)
+    end_samples = start_samples + length_to_samples(length, sampling_rate)
+    marker_samples = np.zeros(num_total_samples, dtype=np.uint8)
+    marker_samples[start_samples:end_samples] = 1
+    return marker_samples
+
+
 def sample_pulse(
     *,
     signal_type: str,
@@ -149,27 +175,24 @@ def sample_pulse(
 
     retval = {"samples_i": samples.real, "samples_q": samples.imag}
     if markers:
-        if next(
-            (
-                True
-                for m in markers
-                if m.get("marker_selector") == "marker1" and m.get("enable")
-            ),
-            False,
-        ):  #  and m.get("enabled"), False):
-            samples_markers = np.ones_like(samples, dtype=np.int16)
-            retval["samples_marker1"] = samples_markers
-        if next(
-            (
-                m.get("enable")
-                for m in markers
-                if m.get("marker_selector") == "marker2" and m.get("enable")
-            ),
-            False,
-        ):
-
-            samples_markers = np.ones(len(samples), dtype=np.int16)
-            retval["samples_marker2"] = samples_markers
+        for i in ["1", "2"]:
+            m = next(
+                (m for m in markers if m.get("marker_selector") == "marker" + i),
+                None,
+            )
+            if m:
+                start = m.get("start")
+                length = m.get("length")
+                enable = m.get("enable")
+                m_sampled = sample_marker(
+                    len(samples),
+                    sampling_rate=sampling_rate,
+                    enable=enable,
+                    start=start,
+                    length=length,
+                )
+                if m_sampled is not None:
+                    retval["samples_marker" + i] = m_sampled
 
     return retval
 

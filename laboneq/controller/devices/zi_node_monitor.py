@@ -100,7 +100,7 @@ class NodeMonitor:
         for path, expected in conditions.items():
             if path not in self._nodes:
                 self._log_missing_node(path)
-                return False
+                return path
             # expected may be None, single value or a list
             all_expected = expected if isinstance(expected, Iterable) else [expected]
             val = self.get_last(path)
@@ -241,6 +241,7 @@ class NodeControlKind(Enum):
     Condition = auto()
     Command = auto()
     Response = auto()
+    Prepare = auto()
 
 
 @dataclass
@@ -279,8 +280,22 @@ class Response(NodeControlBase):
         self.kind = NodeControlKind.Response
 
 
+@dataclass
+class Prepare(NodeControlBase):
+    """Represents a command node, that has to be set only as
+    a preparation before the main Command(s), but shouldn't be touched
+    or be in a specific state otherwise."""
+
+    def __post_init__(self):
+        self.kind = NodeControlKind.Prepare
+
+
 def filter_commands(nodes: List[NodeControlBase]) -> Dict[str, Any]:
-    return {n.path: n.value for n in nodes if n.kind in [NodeControlKind.Command]}
+    return {
+        n.path: n.value
+        for n in nodes
+        if n.kind in [NodeControlKind.Prepare, NodeControlKind.Command]
+    }
 
 
 def filter_responses(nodes: List[NodeControlBase]) -> Dict[str, Any]:
@@ -292,5 +307,13 @@ def filter_responses(nodes: List[NodeControlBase]) -> Dict[str, Any]:
 
 
 def filter_conditions(nodes: List[NodeControlBase]) -> Dict[str, Any]:
-    # All entries treated as conditions
-    return {n.path: n.value for n in nodes}
+    return {
+        n.path: n.value
+        for n in nodes
+        if n.kind
+        in [
+            NodeControlKind.Condition,
+            NodeControlKind.Command,
+            NodeControlKind.Response,
+        ]
+    }

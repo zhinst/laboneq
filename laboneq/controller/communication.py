@@ -1,12 +1,14 @@
 # Copyright 2019 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List
 
 import zhinst.core as zi
 from zhinst.toolkit import Session as TKSession
@@ -17,6 +19,9 @@ from laboneq.controller.devices.zi_node_monitor import NodeMonitor
 from .cache import Cache
 from .util import LabOneQControllerException
 from .versioning import LabOneVersion
+
+if TYPE_CHECKING:
+    from laboneq.controller.devices.device_zi import DeviceQualifier
 
 _logger = logging.getLogger(__name__)
 
@@ -193,7 +198,7 @@ class DaqWrapper(ZiApiWrapperBase):
     def __init__(self, name, server_qualifier: ServerQualifier):
         super().__init__(name)
         self._server_qualifier = server_qualifier
-        self._awg_module_wrappers = []
+        self._awg_module_wrappers: List[AwgModuleWrapper] = []
         self._is_valid = False
         self._dataserver_version = LabOneVersion.LATEST
         self._vector_counter = 0
@@ -367,20 +372,26 @@ class DaqWrapper(ZiApiWrapperBase):
 
 class DaqWrapperDryRun(DaqWrapper):
     def __init__(self, name, server_qualifier: ServerQualifier = ServerQualifier()):
-        assert server_qualifier.dry_run == True
+        assert server_qualifier.dry_run is True
         super().__init__(name, server_qualifier)
 
-    def map_device_type(self, serial: str, type: str, opts: Dict[str, Any]):
+    def map_device_type(self, device_qualifier: DeviceQualifier):
         assert isinstance(self._zi_api_object, ziDAQServerEmulator)
 
-        def calc_dev_type(type: str, opts: Dict[str, Any]) -> str:
-            if opts.get("is_qc", False):
+        def calc_dev_type(device_qualifier: DeviceQualifier) -> str:
+            if device_qualifier.options.is_qc is True:
                 return "SHFQC"
             else:
-                return type
+                return device_qualifier.driver
 
-        self._zi_api_object.map_device_type(serial, calc_dev_type(type, opts))
-        self._zi_api_object.set_option(serial, "dev_type", opts.get("dev_type"))
+        self._zi_api_object.map_device_type(
+            device_qualifier.options.serial, calc_dev_type(device_qualifier)
+        )
+        self._zi_api_object.set_option(
+            device_qualifier.options.serial,
+            "dev_type",
+            device_qualifier.options.dev_type,
+        )
 
     def set_emulation_option(self, serial: str, option: str, value: Any):
         assert isinstance(self._zi_api_object, ziDAQServerEmulator)

@@ -7,7 +7,7 @@ name = "laboneq"
 dynamic = ["version", "readme"]
 description = "Zurich Instruments LabOne Q software framework for quantum computing control"
 license = {text = "Apache 2.0"}
-requires-python = ">=3.7"
+requires-python = ">=3.9"
 authors = [
     { name = "Zurich Instruments Development Team", email = "info@zhinst.com" },
 ]
@@ -24,8 +24,6 @@ classifiers = [
     "Operating System :: MacOS",
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
-    "Programming Language :: Python :: 3.7",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -82,7 +80,7 @@ laboneq = [
 
 [tool.black]
 line-length = 88
-target-version = ["py37"]
+target-version = ["py39"]
 include = "\\.pyi?$"
 
 [tool.isort]

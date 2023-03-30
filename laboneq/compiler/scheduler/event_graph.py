@@ -151,7 +151,7 @@ class EventGraph:
             match = True
             if properties is not None:
                 for k, v in properties.items():
-                    if not k in event or event[k] != v:
+                    if k not in event or event[k] != v:
                         match = False
                         break
             if match:

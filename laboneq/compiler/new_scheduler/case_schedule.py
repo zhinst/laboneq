@@ -1,8 +1,9 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
-from typing import Dict, Iterator, List
+from typing import Dict, Iterator, List, Optional
+
+from attrs import asdict, define
 
 from laboneq.compiler import CompilerSettings
 from laboneq.compiler.common.event_type import EventType
@@ -10,7 +11,7 @@ from laboneq.compiler.common.play_wave_type import PlayWaveType
 from laboneq.compiler.new_scheduler.section_schedule import SectionSchedule
 
 
-@dataclass(frozen=True)
+@define(kw_only=True, slots=True)
 class CaseSchedule(SectionSchedule):
     state: int
 
@@ -20,7 +21,7 @@ class CaseSchedule(SectionSchedule):
         max_events: int,
         id_tracker: Iterator[int],
         expand_loops=False,
-        settings: CompilerSettings = None,
+        settings: Optional[CompilerSettings] = None,
     ) -> List[Dict]:
         events = super().generate_event_list(
             start, max_events, id_tracker, expand_loops, settings
@@ -33,7 +34,7 @@ class CaseSchedule(SectionSchedule):
     @classmethod
     def from_section_schedule(cls, schedule: SectionSchedule, state: int):
         """Down-cast from SectionSchedule."""
-        return cls(**schedule.__dict__, state=state)
+        return cls(**asdict(schedule, recurse=False), state=state)
 
 
 class EmptyBranch(CaseSchedule):
@@ -43,11 +44,12 @@ class EmptyBranch(CaseSchedule):
         max_events: int,
         id_tracker: Iterator[int],
         expand_loops=False,
-        settings: CompilerSettings = None,
+        settings: Optional[CompilerSettings] = None,
     ) -> List[Dict]:
         section_start, *rest, section_end = super().generate_event_list(
             start, max_events, id_tracker, expand_loops, settings
         )
+        assert self.length is not None
         assert len(rest) == 0
         assert section_start["event_type"] == EventType.SECTION_START
         assert section_end["event_type"] == EventType.SECTION_END
@@ -88,3 +90,6 @@ class EmptyBranch(CaseSchedule):
             )
 
         return [section_start, *delay_events, section_end]
+
+    def _calculate_timing(self, *_, **__):
+        self.length = self.grid

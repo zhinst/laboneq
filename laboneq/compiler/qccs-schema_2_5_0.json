@@ -650,6 +650,9 @@
         },
         "precompensation_clear": {
           "type": "boolean"
+        },
+        "readout_handle": {
+          "type": "string"
         }
       },
       "additionalProperties": false

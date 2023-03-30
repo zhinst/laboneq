@@ -3,15 +3,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from typing import Dict, Iterator, List
+from typing import Dict, Iterator, List, Optional
+
+from attrs import asdict, define, evolve
 
 from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.new_scheduler.section_schedule import SectionSchedule
 
 
-@dataclass(frozen=True)
+@define(kw_only=True, slots=True)
 class LoopIterationSchedule(SectionSchedule):
     """Schedule of a single iteration of a loop (sweep or average)"""
 
@@ -20,14 +21,20 @@ class LoopIterationSchedule(SectionSchedule):
     num_repeats: int
     shadow: bool
 
+    def __attrs_post_init__(self):
+        # We always "steal" the data from a SectionSchedule which has already done
+        # all the hard work in its own __attrs_post_init__().
+        pass
+
     def generate_event_list(
         self,
         start: int,
         max_events: int,
         id_tracker: Iterator[int],
         expand_loops=False,
-        settings: CompilerSettings = None,
+        settings: Optional[CompilerSettings] = None,
     ) -> List[Dict]:
+        assert self.length is not None
         common = {
             "section_name": self.section,
             "iteration": self.iteration,
@@ -77,11 +84,7 @@ class LoopIterationSchedule(SectionSchedule):
     def compressed_iteration(self, iteration: int):
         """Make a copy of this schedule, but replace ``iteration`` and set the
         ``shadow`` flag."""
-        return replace(
-            self,
-            iteration=iteration,
-            shadow=True,
-        )
+        return evolve(self, iteration=iteration, shadow=True)
 
     @classmethod
     def from_section_schedule(
@@ -89,7 +92,7 @@ class LoopIterationSchedule(SectionSchedule):
     ):
         """Down-cast from SectionSchedule."""
         return cls(
-            **schedule.__dict__,
+            **asdict(schedule, recurse=False),
             iteration=iteration,
             num_repeats=num_repeats,
             shadow=shadow,

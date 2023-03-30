@@ -3,13 +3,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Dict, FrozenSet, Iterator, List, Tuple
+from typing import Dict, Iterator, List, Optional, Set
+
+from attrs import define, field
 
 from laboneq.compiler.common.compiler_settings import CompilerSettings
+from laboneq.compiler.new_scheduler.utils import lcm
+
+# A deferred value is not really optional, but will initialized later; using this alias,
+# we can still use None as sentinel, but express that this property shall not be seen
+# as optional after (possibly external) initialization.
+Deferred = Optional
 
 
-@dataclass(frozen=True)
+@define(kw_only=True, slots=True)
 class IntervalSchedule:
     """Base class of a scheduled interval.
 
@@ -27,23 +34,58 @@ class IntervalSchedule:
     attributes. This 'shifting' in time is valid as long as the start time of a sub-
     schedule, in absolute terms, remains on the grid required by the sub-schedule
     (`IntervalSchedule.grid`). For example, if a section must be aligned to the _system
-    grid_ of 4 ns, then we are free to move"""
+    grid_ of 4 ns, then we are free to move. One exception are match sections, which
+    need a minimal distance to their acquire event; `_calculate_timing` thus has a
+    parameter `start_may_change` to express that the given start time may not be final.
+    """
+
+    #: The children of this interval.
+    children: List[IntervalSchedule] = field(factory=list)
 
     #: The time grid along which the interval may be scheduled/shifted. Expressed in
     #: tiny samples.
     grid: int
 
-    #: The length of the interval. Expressed in tiny samples.
-    length: int
+    #: The time grid along which the interval may be scheduled/shifted, commensurate
+    #: with the sequencer rate. Expressed in tiny samples.
+    sequencer_grid: Optional[int] = None
+
+    #: The time grid to be used for compressed loops which contain this section.
+    #: Expressed in tiny samples.
+    compressed_loop_grid: Optional[int] = None
+
+    #: The length of the interval. Expressed in tiny samples
+    length: Deferred[int] = None
 
     #: The signals reserved by this interval.
-    signals: FrozenSet[str]
-
-    #: The children of this interval.
-    children: Tuple[IntervalSchedule, ...]
+    signals: Set[str] = field(factory=set)
 
     #: The start points of the children *relative to the start of the interval itself*.
-    children_start: Tuple[int, ...]
+    children_start: Deferred[List[int]] = None
+
+    #: Whether the schedule can be cached, for example, if no match statements are used
+    #: in the section which may lead to timing differences.
+    cacheable: bool = True
+
+    def __attrs_post_init__(self):
+        for child in self.children:
+            self.grid = lcm(self.grid, child.grid)
+            self.sequencer_grid = (
+                lcm(self.sequencer_grid, child.sequencer_grid)
+                if self.sequencer_grid is not None or child.sequencer_grid is not None
+                else None
+            )
+            self.compressed_loop_grid = (
+                lcm(self.compressed_loop_grid, child.compressed_loop_grid)
+                if self.compressed_loop_grid is not None
+                or child.compressed_loop_grid is not None
+                else None
+            )
+            # An acquisition escalates the grid of the containing section
+            if getattr(child, "is_acquire", False):
+                self.grid = lcm(self.grid, self.sequencer_grid)
+            if not child.cacheable:
+                self.cacheable = False
 
     def generate_event_list(
         self,
@@ -51,7 +93,7 @@ class IntervalSchedule:
         max_events: int,
         id_tracker: Iterator[int],
         expand_loops=False,
-        settings: CompilerSettings = None,
+        settings: Optional[CompilerSettings] = None,
     ) -> List[Dict]:
         raise NotImplementedError
 
@@ -59,12 +101,14 @@ class IntervalSchedule:
         self,
         start: int,
         max_events: int,
-        settings: CompilerSettings,
+        settings: Optional[CompilerSettings],
         id_tracker: Iterator[int],
         expand_loops: bool,
     ) -> List[List[Dict]]:
 
         event_list_nested = []
+        assert self.children_start is not None
+        assert self.length is not None
         for child, child_start in zip(self.children, self.children_start):
             if max_events <= 0:
                 break
@@ -80,6 +124,21 @@ class IntervalSchedule:
             )
             max_events -= len(event_list_nested[-1])
         return event_list_nested
+
+    def calculate_timing(
+        self,
+        schedule_data: ScheduleData,  # type: ignore # noqa: F821
+        start: int,
+        start_may_change: bool,
+    ):
+        if self.children_start is not None:
+            # We have already calculated the timing.
+            return
+        self.children_start = [0] * len(self.children)
+        self._calculate_timing(schedule_data, start, start_may_change)
+
+    def _calculate_timing(self, *_, **__):
+        raise NotImplementedError()
 
     def __hash__(self):
         # Hashing an interval schedule is expensive! We need to recursively hash the

@@ -6,6 +6,7 @@ import math
 
 from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.experiment_access import ExperimentDAO
+from laboneq.core.exceptions.laboneq_exception import LabOneQException
 
 _logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ def calculate_osc_phase(event_list, experiment_dao: ExperimentDAO):
 
                     if oscillator_info.hardware:
                         if signal_id in oscillator_phase_sets:
-                            raise Exception(
+                            raise LabOneQException(
                                 f"There are set_oscillator_phase entries for signal "
                                 f"'{signal_id}', but oscillator '{oscillator_info.id}' "
                                 f"is a hardware oscillator. Setting absolute phase is "

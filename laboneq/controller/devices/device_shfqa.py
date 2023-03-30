@@ -67,9 +67,9 @@ class DeviceSHFQA(DeviceZI):
 
     @property
     def dev_repr(self) -> str:
-        if self._get_option("is_qc"):
-            return f"SHFQC/QA:{self._get_option('serial')}"
-        return f"SHFQA:{self._get_option('serial')}"
+        if self.options.is_qc:
+            return f"SHFQC/QA:{self.serial}"
+        return f"SHFQA:{self.serial}"
 
     def _process_dev_opts(self):
         if self.dev_type == "SHFQA4":
@@ -241,7 +241,7 @@ class DeviceSHFQA(DeviceZI):
                 for integrator in integrator_allocations:
                     if (
                         integrator.device_id != awg_key.device_uid
-                        or integrator.signal_id not in awg_config.signals
+                        or integrator.signal_id not in awg_config.acquire_signals
                     ):
                         continue
                     assert len(integrator.channels) == 1
@@ -391,7 +391,7 @@ class DeviceSHFQA(DeviceZI):
                 DaqNodeSetAction(
                     self._daq,
                     f"/{self.serial}/system/internaltrigger/enable"
-                    if self._get_option("is_qc")
+                    if self.options.is_qc
                     else f"/{self.serial}/system/swtriggers/0/single",
                     1,
                     caching_strategy=CachingStrategy.NO_CACHE,
@@ -807,7 +807,7 @@ class DeviceSHFQA(DeviceZI):
                 # standalone QA oder QC
                 channel = (
                     SOFTWARE_TRIGGER_CHANNEL
-                    if self._get_option("is_qc")
+                    if self.options.is_qc
                     else INTERNAL_TRIGGER_CHANNEL
                 )
             nodes_to_initialize_measurement.append(
@@ -847,7 +847,7 @@ class DeviceSHFQA(DeviceZI):
                     else REFERENCE_CLOCK_SOURCE_EXTERNAL,
                 )
             ]
-            if self._get_option("is_qc"):
+            if self.options.is_qc:
                 ntc += [
                     ("system/internaltrigger/enable", 0),
                     ("system/internaltrigger/repetitions", 1),

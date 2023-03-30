@@ -24,6 +24,7 @@ from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.common.play_wave_type import PlayWaveType
+from laboneq.compiler.common.pulse_parameters import encode_pulse_parameters
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.experiment_access.param_ref import ParamRef
 from laboneq.compiler.experiment_access.pulse_def import PulseDef
@@ -120,20 +121,14 @@ def _assign_playwave_parameters(play_wave, section_pulse, oscillator, length):
     pulse_pulse_parameters = section_pulse.pulse_pulse_parameters
     if play_pulse_parameters is not None:
         for param, val in play_pulse_parameters.items():
-            if isinstance(val, (float, int, complex)):
-                play_wave.play_pulse_parameters[param] = val
-            else:
-                param_ref = ParamRef(val)
-                play_wave.play_pulse_parameters[param] = param_ref
-                play_wave.parameterized_with.append(param_ref)
+            if isinstance(val, ParamRef):
+                play_wave.parameterized_with.append(val)
+        play_wave.play_pulse_parameters = play_pulse_parameters
     if pulse_pulse_parameters is not None:
         for param, val in pulse_pulse_parameters.items():
-            if isinstance(val, (float, int, complex)):
-                play_wave.pulse_pulse_parameters[param] = val
-            else:
-                param_ref = ParamRef(val)
-                play_wave.pulse_pulse_parameters[param] = param_ref
-                play_wave.parameterized_with.append(param_ref)
+            if isinstance(val, ParamRef):
+                play_wave.parameterized_with.append(val)
+        play_wave.pulse_pulse_parameters = pulse_pulse_parameters
 
     if section_pulse.acquire_params is not None:
         play_wave.acquire_handle = section_pulse.acquire_params.handle
@@ -144,13 +139,11 @@ class Scheduler:
     def __init__(
         self,
         experiment_dao: ExperimentDAO,
-        section_graph: SectionGraph,
         sampling_rate_tracker: SamplingRateTracker,
         clock_settings: Optional[Dict] = None,
         settings: Optional[CompilerSettings] = None,
     ):
         self._experiment_dao = experiment_dao
-        self._section_graph_object = section_graph
         self._sampling_rate_tracker = sampling_rate_tracker
         self._clock_settings = clock_settings or {}
         self._settings = settings or CompilerSettings()
@@ -159,6 +152,8 @@ class Scheduler:
         self._section_events = {}
 
         self._loop_step_events: Dict[str, Dict[int, Tuple[int, int, int]]] = {}
+
+        self._section_graph_object = SectionGraph.from_dao(self._experiment_dao)
 
     @trace("scheduler.run()", {"version": "v1"})
     def run(self):
@@ -507,29 +502,29 @@ class Scheduler:
 
                 play_pulse_parameters = event.get("play_pulse_parameters", {})
                 pulse_pulse_parameters = event.get("pulse_pulse_parameters", {})
-                has_updates = False
                 for k, v in play_pulse_parameters.items():
                     if isinstance(v, ParamRef):
                         try:
                             play_pulse_parameters[k] = parameter_values[v.param_name]
                         except KeyError as e:
                             raise make_error_nt_param(v, event) from e
-                        has_updates = True
                 for k, v in pulse_pulse_parameters.items():
                     if isinstance(v, ParamRef):
                         try:
                             pulse_pulse_parameters[k] = parameter_values[v.param_name]
                         except KeyError as e:
                             raise make_error_nt_param(v, event) from e
-                        has_updates = True
-                if has_updates:
-                    self._event_graph.set_node_attributes(
-                        event["id"],
-                        {
-                            "play_pulse_parameters": play_pulse_parameters,
-                            "pulse_pulse_parameters": pulse_pulse_parameters,
-                        },
-                    )
+                self._event_graph.set_node_attributes(
+                    event["id"],
+                    {
+                        "play_pulse_parameters": encode_pulse_parameters(
+                            play_pulse_parameters
+                        ),
+                        "pulse_pulse_parameters": encode_pulse_parameters(
+                            pulse_pulse_parameters
+                        ),
+                    },
+                )
 
                 oscillator_phase = None
                 baseband_phase = None
@@ -2648,3 +2643,6 @@ class Scheduler:
                 break
         _logger.debug("Path to root from %s : %s", section_id, path_to_root)
         return path_to_root
+
+    def preorder_map(self):
+        return self._section_graph_object.preorder_map()

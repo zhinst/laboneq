@@ -1,9 +1,14 @@
-###
-# Simple Qubit class for simplifying device setup calibration
-###
+# Copyright 2020 Zurich Instruments AG
+# SPDX-License-Identifier: Apache-2.0
 
-from laboneq.simple import *
+"""Simple Qubit class for simplifying device setup calibration
+"""
+
 from copy import deepcopy
+
+from laboneq.core.types.enums import ModulationType
+from laboneq.dsl.calibration import Calibration, Oscillator, SignalCalibration
+from laboneq.dsl.experiment import pulse_library
 
 
 def flatten(l):

@@ -61,10 +61,11 @@ from laboneq.compiler.common.compiler_settings import (
 )
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.event_type import EventType
+from laboneq.compiler.common.pulse_parameters import decode_pulse_parameters
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.common.trigger_mode import TriggerMode
+from laboneq.compiler.experiment_access import ExperimentDAO
 from laboneq.compiler.experiment_access.pulse_def import PulseDef
-from laboneq.compiler.experiment_access.section_graph import SectionGraph
 from laboneq.compiler.experiment_access.section_info import SectionInfo
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.compiled_experiment import (
@@ -198,6 +199,7 @@ def calculate_integration_weights(
                         None,
                         event.params.get("play_pulse_parameters"),
                     )
+                    pulse_parameters = decode_pulse_parameters(pulse_parameters)
                     integration_weight = sample_pulse(
                         signal_type="iq",
                         sampling_rate=signal_obj.sampling_rate,
@@ -265,7 +267,7 @@ class CodeGenerator:
         self._integration_times: IntegrationTimes = None
         self._signal_delays: SignalDelays = None
         self._integration_weights = None
-        self._simultaneous_acquires = None
+        self._simultaneous_acquires: Dict[float, Dict[str, str]] = None
         self._command_table_match_offsets: Dict[AwgKey, int] = {}
         self._feedback_connections: Dict[str, FeedbackConnection] = {}
         self._feedback_register_allocator: FeedbackRegisterAllocator = None
@@ -277,7 +279,7 @@ class CodeGenerator:
     def integration_weights(self):
         return self._integration_weights
 
-    def simultaneous_acquires(self):
+    def simultaneous_acquires(self) -> Dict[float, Dict[str, str]]:
         return self._simultaneous_acquires
 
     def total_execution_time(self):
@@ -445,6 +447,21 @@ class CodeGenerator:
                                 sig_string,
                                 "_q",
                             )
+                        if "samples_marker1" in sampled_signature:
+                            self._save_wave_bin(
+                                sampled_signature["samples_marker1"],
+                                sampled_signature["signature_pulse_map"],
+                                sig_string,
+                                "_marker1",
+                            )
+                        if "samples_marker2" in sampled_signature:
+                            self._save_wave_bin(
+                                sampled_signature["samples_marker2"],
+                                sampled_signature["signature_pulse_map"],
+                                sig_string,
+                                "_marker2",
+                            )
+
                     else:
                         raise RuntimeError(
                             f"Device type {signal_obj.device_type} has invalid supported waves config."
@@ -464,7 +481,7 @@ class CodeGenerator:
 
             _logger.debug(self._waves)
 
-    def gen_acquire_map(self, events: List[Any], sections: SectionGraph):
+    def gen_acquire_map(self, events: List[Any], sections: ExperimentDAO):
         # todo (PW): this can EASILY be factored out into a separate file
         loop_events = [
             e
@@ -943,7 +960,7 @@ class CodeGenerator:
                 other_events=sampled_events,
                 phase_resolution_range=self.phase_resolution_range(),
                 waveform_size_hints=self.waveform_size_hints(signal_a.device_type),
-                use_command_table=False,  # do not set oscillator phase via CT
+                use_command_table=False,  # do not set amplitude/oscillator phase via CT
             )
 
             sampled_signatures = self._sample_pulses(
@@ -1179,11 +1196,8 @@ class CodeGenerator:
 
                 amplitude = pulse_def.effective_amplitude
 
-                amplitude_multiplier = 1.0
                 if pulse_part.amplitude is not None:
-                    amplitude_multiplier = pulse_part.amplitude
-
-                amplitude *= amplitude_multiplier
+                    amplitude *= pulse_part.amplitude
 
                 if abs(amplitude) > max_amplitude:
                     max_amplitude = abs(amplitude)
@@ -1201,7 +1215,6 @@ class CodeGenerator:
 
                 if used_oscillator_frequency and device_type == DeviceType.SHFSG:
                     amplitude /= math.sqrt(2)
-                    amplitude_multiplier /= math.sqrt(2)
 
                 iq_phase = 0.0
 
@@ -1219,6 +1232,12 @@ class CodeGenerator:
 
                 samples = pulse_def.samples
 
+                decoded_pulse_parameters = decode_pulse_parameters(
+                    {}
+                    if pulse_part.pulse_parameters is None
+                    else {k: v for k, v in pulse_part.pulse_parameters}
+                )
+
                 sampled_pulse = sample_pulse(
                     signal_type=sampling_signal_type,
                     sampling_rate=sampling_rate,
@@ -1229,9 +1248,7 @@ class CodeGenerator:
                     phase=iq_phase,
                     samples=samples,
                     mixer_type=mixer_type,
-                    pulse_parameters=None
-                    if pulse_part.pulse_parameters is None
-                    else {k: v for k, v in pulse_part.pulse_parameters},
+                    pulse_parameters=decoded_pulse_parameters,
                     markers=None
                     if pulse_part.markers is None
                     else [{k: v for k, v in m} for m in pulse_part.markers],
@@ -1292,6 +1309,15 @@ class CodeGenerator:
                         has_q = True
 
                 if "samples_marker1" in sampled_pulse:
+                    if (
+                        pulse_part.channel == 1
+                        and not multi_iq_signal
+                        and not device_type == DeviceType.SHFQA
+                    ):
+                        raise LabOneQException(
+                            f"Marker 1 not supported on channel 2 of multiplexed RF signal {signal_id}"
+                        )
+
                     self.stencil_samples(
                         pulse_part.start,
                         sampled_pulse["samples_marker1"],
@@ -1300,6 +1326,15 @@ class CodeGenerator:
                     has_marker1 = True
 
                 if "samples_marker2" in sampled_pulse:
+                    if (
+                        pulse_part.channel == 0
+                        and not multi_iq_signal
+                        and not device_type == DeviceType.SHFQA
+                    ):
+                        raise LabOneQException(
+                            f"Marker 2 not supported on channel 1 of multiplexed RF signal {signal_id}"
+                        )
+
                     self.stencil_samples(
                         pulse_part.start,
                         sampled_pulse["samples_marker2"],
@@ -1316,6 +1351,7 @@ class CodeGenerator:
                         mixer_type=mixer_type,
                     )
                     signature_pulse_map[pulse_def.id] = pm
+                amplitude_multiplier = amplitude / pulse_def.effective_amplitude
                 pm.instances.append(
                     PulseInstance(
                         offset_samples=pulse_part.start,

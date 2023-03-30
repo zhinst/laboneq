@@ -65,6 +65,52 @@ class DevicePQSC(DeviceZI):
     ) -> List[DaqNodeAction]:
         return []
 
+    def configure_feedback(self, recipe_data: RecipeData) -> List[DaqNodeAction]:
+        # TODO(2K): Code duplication with Controller._wait_execution_to_stop
+        # Make this mandatory in the recipe instead.
+        min_wait_time = recipe_data.recipe.experiment.total_execution_time
+        if min_wait_time is None:
+            min_wait_time = 10.0
+        # This is required because PQSC is only receiving the feedback events
+        # during the holdoff time, even for a single trigger.
+        feedback_actions = [
+            DaqNodeSetAction(
+                self.daq, f"/{self.serial}/execution/holdoff", min_wait_time
+            )
+        ]
+        for port, (follower_uid, follower_ref) in self._downlinks.items():
+            [p_kind, p_addr] = port.split("/")
+            follower = follower_ref()
+            if p_kind != "ZSYNCS" or follower is None:
+                continue
+            for awg_key, awg_config in recipe_data.awg_configs.items():
+                if (
+                    awg_key.device_uid != follower_uid
+                    or awg_config.source_feedback_register is None
+                ):
+                    continue  # Only consider devices receiving feedback from PQSC
+                zsync_base = f"/{self.serial}/zsyncs/{p_addr}/output/registerbank"
+                feedback_actions.append(
+                    DaqNodeSetAction(self.daq, f"{zsync_base}/enable", 1)
+                )
+                bit_base = f"{zsync_base}/sources/{awg_config.zsync_bit}"
+                feedback_actions.extend(
+                    [
+                        DaqNodeSetAction(self.daq, f"{bit_base}/enable", 1),
+                        DaqNodeSetAction(
+                            self.daq,
+                            f"{bit_base}/register",
+                            awg_config.source_feedback_register,
+                        ),
+                        DaqNodeSetAction(
+                            self.daq,
+                            f"{bit_base}/index",
+                            awg_config.feedback_register_bit,
+                        ),
+                    ]
+                )
+        return feedback_actions
+
     def collect_execution_nodes(self):
         _logger.debug("Starting execution...")
         return [
@@ -94,7 +140,7 @@ class DevicePQSC(DeviceZI):
         # TODO(2K): This is rather a hotfix, waiting to be done in parallel for all devices with
         # subscription / poll
         # TODO(2K): Verify also the downlink device serial (.../connection/serial) matches
-        for port, _ in self._downlinks.items():
+        for port in self._downlinks:
             self._wait_for_node(
                 f"/{self.serial}/{port.lower()}/connection/status", 2, timeout=10
             )
@@ -111,13 +157,20 @@ class DevicePQSC(DeviceZI):
         )
         nodes_to_configure_triggers = []
 
-        nodes_to_configure_triggers.append(
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/execution/holdoff",
-                initialization.config.holdoff,
-            )
-        )
+        # TODO(2K): 'recipe.initialization.config.holdoff' is hard-coded to 0 in the compiler,
+        # but the PQSC hold-off needs to be set for the feedback, see 'configure_feedback()'.
+        # Resolve this uncertainty by either dropping 'recipe.initialization.config.holdoff',
+        # or setting it to the right value in the compiler, but then it may duplicate
+        # 'recipe.experiment.total_execution_time'.
+
+        # nodes_to_configure_triggers.append(
+        #     DaqNodeSetAction(
+        #         self._daq,
+        #         f"/{self.serial}/execution/holdoff",
+        #         initialization.config.holdoff,
+        #     )
+        # )
+
         nodes_to_configure_triggers.append(
             DaqNodeSetAction(
                 self._daq,

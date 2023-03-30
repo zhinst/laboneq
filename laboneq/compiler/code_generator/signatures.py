@@ -32,7 +32,7 @@ class PulseSignature:
     baseband_phase: Optional[float]  #: phase offsets from `set_oscillator_phase`
     channel: Optional[int]  #: the channel of the pulse (for HDAWG)
     sub_channel: Optional[int]  #: the sub-channel of the pulse (for SHFQA)
-    pulse_parameters: FrozenSet[Tuple[str, Any]]  #: additional user pulse parameters
+    pulse_parameters: FrozenSet[Tuple[str, str]]  #: additional user pulse parameters
     markers: Any  #: markers played during this pulse
 
 
@@ -113,6 +113,7 @@ class PlaybackSignature:
     state: Optional[int] = None
     set_phase: Optional[float] = None
     increment_phase: Optional[float] = None
+    set_amplitude: Optional[float] = None
     clear_precompensation: bool = False
 
     def quantize_phase(self, phase_resolution_range: int):
@@ -178,5 +179,28 @@ def reduce_signature_phase(
         if pulse.oscillator_phase is not None:
             pulse.phase = (pulse.phase or 0.0) + pulse.oscillator_phase
             pulse.oscillator_phase = None
+
+    return signature
+
+
+def reduce_signature_amplitude(signature: PlaybackSignature) -> PlaybackSignature:
+    # Absorb the pulse amplitude into the command table. Whenever possible, the
+    # waveforms will be sampled at unit amplitude, making waveform reuse more likely.
+
+    signature = deepcopy(signature)
+
+    if len(signature.waveform.pulses) == 0:
+        return signature
+    signature.set_amplitude = 1.0
+    if any(pulse.amplitude is None for pulse in signature.waveform.pulses):
+        return signature
+
+    ct_amplitude = max(abs(pulse.amplitude) for pulse in signature.waveform.pulses)
+    ct_amplitude = min(ct_amplitude, +1.0)
+    if ct_amplitude != 0:
+        for pulse in signature.waveform.pulses:
+            pulse.amplitude /= ct_amplitude
+
+    signature.set_amplitude = ct_amplitude
 
     return signature

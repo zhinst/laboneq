@@ -1,6 +1,18 @@
-from laboneq.dsl.device import DeviceSetup
-from laboneq.dsl.calibration import SignalCalibration, Oscillator, MixerCalibration
+# Copyright 2020 Zurich Instruments AG
+# SPDX-License-Identifier: Apache-2.0
+
+""" Helper functions for definition of device setup and calibration settings
+"""
+
+from laboneq.contrib.example_helpers.descriptors.hdawg_uhfqa_pqsc import (
+    descriptor_hdawg_uhfqa_pqsc,
+)
+from laboneq.contrib.example_helpers.descriptors.shfsg_shfqa_hdawg_pqsc import (
+    descriptor_shfsg_shfqa_hdawg_pqsc,
+)
 from laboneq.core.types.enums import ModulationType
+from laboneq.dsl.calibration import Oscillator, SignalCalibration
+from laboneq.dsl.device import DeviceSetup
 
 
 # functions that modifies the calibration on a given device setup
@@ -107,16 +119,17 @@ def create_device_setup(generation=2):
     Function returning a calibrated device setup
     """
     if generation == 2:
-        descriptor = "helpers/descriptor_shfsg_shfqa_hdawg_pqsc.yml"
+        descriptor = descriptor_shfsg_shfqa_hdawg_pqsc
     elif generation == 1:
-        descriptor = "helpers/descriptor_hdawg_uhfqa_pqsc.yml"
+        descriptor = descriptor_hdawg_uhfqa_pqsc
 
     else:
         raise ValueError("Invalid instrument generation given")
 
-    device_setup = DeviceSetup.from_yaml(
+    # device_setup = DeviceSetup.from_yaml(
+    device_setup = DeviceSetup.from_descriptor(
         descriptor,
-        server_host="my_ip_address",  # ip address of the LabOne dataserver used to communicate with the instruments
+        server_host="my_ip_address",  # IP address of the LabOne dataserver used to communicate with the instruments
         server_port="8004",  # port number of the dataserver - default is 8004
         setup_name="my_QCCS_setup",  # setup name
     )

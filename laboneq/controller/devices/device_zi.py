@@ -77,17 +77,28 @@ class AllocatedOscillator:
 
 
 @dataclass
+class DeviceOptions:
+    serial: str
+    interface: str
+    dev_type: Optional[str] = None
+    is_qc: bool = False
+    qc_with_qa: bool = False
+    is_using_standalone_compiler: bool = True
+    gen2: bool = False
+
+
+@dataclass
 class DeviceQualifier:
     dry_run: bool = True
     driver: str = None
     server: DaqWrapper = None
-    options: Dict[str, str] = None
+    options: DeviceOptions = None
 
 
 class DeviceZI(ABC):
     def __init__(self, device_qualifier: DeviceQualifier):
         self._device_qualifier: DeviceQualifier = device_qualifier
-        self._downlinks: Dict[str, ReferenceType[DeviceZI]] = {}
+        self._downlinks: Dict[str, Tuple[str, ReferenceType[DeviceZI]]] = {}
         self._uplinks: Dict[str, ReferenceType[DeviceZI]] = {}
 
         self._daq: DaqWrapper = device_qualifier.server
@@ -99,8 +110,8 @@ class DeviceZI(ABC):
         self._nodes_to_monitor = None
         self._sampling_rate = None
 
-        self._is_using_standalone_compiler = device_qualifier.options.get(
-            "standalone_awg", False
+        self._is_using_standalone_compiler = (
+            device_qualifier.options.is_using_standalone_compiler
         )
 
         if self._daq is None:
@@ -128,19 +139,23 @@ class DeviceZI(ABC):
 
     @property
     def dev_repr(self) -> str:
-        return f"{self._device_qualifier.driver.upper()}:{self._get_option('serial')}"
+        return f"{self._device_qualifier.driver.upper()}:{self.serial}"
 
     @property
     def has_awg(self) -> bool:
         return self._get_num_awgs() > 0
 
     @property
+    def options(self) -> DeviceOptions:
+        return self._device_qualifier.options
+
+    @property
     def serial(self):
-        return self._get_option("serial").lower()
+        return self.options.serial.lower()
 
     @property
     def interface(self):
-        return self._get_option("interface").lower()
+        return self.options.interface.lower()
 
     @property
     def daq(self):
@@ -155,9 +170,6 @@ class DeviceZI(ABC):
         # Stub, implement in sub-class
         _logger.debug("No command table available for device %s", self.dev_repr)
         return ""
-
-    def _get_option(self, key):
-        return self._device_qualifier.options.get(key)
 
     def _warn_for_unsupported_param(self, param_assert, param_name, channel):
         if not param_assert:
@@ -193,8 +205,8 @@ class DeviceZI(ABC):
         patterns = self._get_sequencer_path_patterns()
         return {k: v.format(**props) for k, v in patterns.items()}
 
-    def add_downlink(self, port: str, linked_device: DeviceZI):
-        self._downlinks[port] = ref(linked_device)
+    def add_downlink(self, port: str, linked_device_uid: str, linked_device: DeviceZI):
+        self._downlinks[port] = (linked_device_uid, ref(linked_device))
 
     def add_uplink(self, port: str, linked_device: DeviceZI):
         self._uplinks[port] = ref(linked_device)
@@ -236,7 +248,7 @@ class DeviceZI(ABC):
     ) -> List[DaqNodeAction]:
         ...
 
-    def connect(self):
+    def _connect_to_data_server(self):
         if self._connected:
             return
 
@@ -276,7 +288,7 @@ class DeviceZI(ABC):
                     DaqNodeSetAction(awg_module, "/index", i),
                     DaqNodeSetAction(awg_module, "/device", self.serial),
                 ]
-                if self._get_option("is_qc"):
+                if self.options.is_qc:
                     awg_config.append(
                         DaqNodeSetAction(
                             awg_module, "/sequencertype", self._get_sequencer_type()
@@ -286,9 +298,36 @@ class DeviceZI(ABC):
                 awg_module.execute()
                 _logger.debug("%s: Creating AWG Module #%d", self.dev_repr, i)
 
+        self._connected = True
+
+    def connect(self):
+        self._connect_to_data_server()
         self._daq.node_monitor.add_nodes(self.nodes_to_monitor())
 
-        self._connected = True
+    def disconnect(self):
+        if not self._connected:
+            return
+
+        if not self._is_using_standalone_compiler:
+            for awg_module in self._awg_modules:
+                # Hack, but soon awg modules will be removed entirely,
+                # making proper interface is not feasible
+                self._daq._awg_module_wrappers = [
+                    wrapper
+                    for wrapper in self._daq._awg_module_wrappers
+                    if wrapper.name != awg_module.name
+                ]
+                awg_module._api_wrapper("finish")
+                awg_module._api_wrapper("clear")
+            self._awg_modules = []
+
+        self._daq.disconnectDevice(self.serial)
+        self._connected = False
+
+    def shut_down(self):
+        _logger.debug(
+            "%s: Turning off signal output (stub, not implemented).", self.dev_repr
+        )
 
     def free_allocations(self):
         self._allocated_oscs.clear()
@@ -301,6 +340,9 @@ class DeviceZI(ABC):
         pass
 
     def clock_source_control_nodes(self) -> List[NodeControlBase]:
+        return []
+
+    def system_freq_control_nodes(self) -> List[NodeControlBase]:
         return []
 
     def nodes_to_monitor(self) -> List[str]:
@@ -348,6 +390,9 @@ class DeviceZI(ABC):
                     f"'{osc_param.id}': {same_id_osc.frequency} != {osc_param.frequency}"
                 )
             same_id_osc.channels.add(osc_param.channel)
+
+    def configure_feedback(self, recipe_data: RecipeData) -> List[DaqNodeAction]:
+        return []
 
     def configure_acquisition(
         self,
@@ -882,7 +927,7 @@ class DeviceZI(ABC):
         return DaqNodeSetAction(
             self._daq,
             command_table_path + "data",
-            json.dumps(command_table),
+            json.dumps(command_table, sort_keys=True),
             caching_strategy=CachingStrategy.NO_CACHE,
         )
 
@@ -1060,22 +1105,6 @@ class DeviceZI(ABC):
 
     def collect_start_execution_nodes(self):
         return []
-
-    def shut_down(self):
-        for awg_module in self._awg_modules:
-            if awg_module is not None:
-                _logger.debug(
-                    "%s: Stopping AWG sequencer (stub, not implemented).", self.dev_repr
-                )
-
-        if self._daq is not None:
-            _logger.debug(
-                "%s: Turning off signal output (stub, not implemented).", self.dev_repr
-            )
-
-    def disconnect(self):
-        if self._daq is not None:
-            self._daq.disconnectDevice(self.serial)
 
     def check_errors(self):
         error_node = f"/{self.serial}/raw/error/json/errors"

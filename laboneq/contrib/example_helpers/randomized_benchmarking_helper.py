@@ -1,16 +1,17 @@
-## Helper Functions for RB
+# Copyright 2020 Zurich Instruments AG
+# SPDX-License-Identifier: Apache-2.0
 
-## Definitions of the basic Clifford gates and functionality to calculate the recovery gate for an arbitrary sequence of Clifford gates
+"""Helper Functions for Randomized Benchmarking examples, containing
+    - Definitions of the basic Clifford gates
+    - Functionality to calculate the recovery gate
+"""
 
-
-# convenience import of all LabOne Q functionality
-from laboneq.simple import *
 
 # additional imports for Clifford gate calculation
+import numpy as np
 from scipy.linalg import expm as matrix_exponential
 
-import numpy as np
-import random
+from laboneq.dsl.experiment import pulse_library
 
 
 def pulse_envelope(amplitude, pulse_length, phase, sigma, sample_rate):
@@ -277,9 +278,9 @@ def generate_play_rb_pulses(exp, signal, seq_length, cliffords, pulse_set):
         pulse_set: basic pulse set
     """
 
-    seq_list = [random.randint(0, 23) for it in range(seq_length)]
+    seq_list = np.random.randint(0, 23, size=seq_length)
     rec_gate = calculate_inverse_clifford(seq_list)
-    seq_list.append(rec_gate)
+    np.append(seq_list, [rec_gate])
 
     for it in seq_list:
         for jt in range(len(cliffords[it])):

@@ -2,15 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from dataclasses import dataclass
-from typing import Dict, Iterator, List, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
+
+from attrs import define
 
 from laboneq.compiler import CompilerSettings
 from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.new_scheduler.interval_schedule import IntervalSchedule
 
 
-@dataclass(frozen=True)
+@define(kw_only=True, slots=True)
 class PhaseResetSchedule(IntervalSchedule):
     section: str
     hw_osc_devices: List[Tuple[str, float]]
@@ -22,7 +23,7 @@ class PhaseResetSchedule(IntervalSchedule):
         max_events: int,
         id_tracker: Iterator[int],
         expand_loops=False,
-        settings: CompilerSettings = None,
+        settings: Optional[CompilerSettings] = None,
     ) -> List[Dict]:
         events = [
             {
@@ -47,6 +48,10 @@ class PhaseResetSchedule(IntervalSchedule):
             )
 
         return events
+
+    def _calculate_timing(self, *_, **__):
+        # Length must be set via parameter, so nothing to do here
+        assert self.length is not None
 
     def __hash__(self):
         super().__hash__()

@@ -49,11 +49,12 @@ class CommandTableTracker:
             ct_entry["waveform"] = {"index": wave_index}
             if signature.clear_precompensation:
                 ct_entry["waveform"]["precompClear"] = True
-        ct_entry.update(self._oscillator_part(signature))
+        ct_entry.update(self._oscillator_config(signature))
+        ct_entry.update(self._amplitude_config(signature))
         self._command_table[signature] = ct_entry
         return index
 
-    def _oscillator_part(self, signature: PlaybackSignature):
+    def _oscillator_config(self, signature: PlaybackSignature):
         d = {}
         oscillator = signature.hw_oscillator
         if oscillator is not None:
@@ -91,6 +92,19 @@ class CommandTableTracker:
             else:
                 raise ValueError(f"Unsupported device type: {self._device_type}")
 
+        return d
+
+    def _amplitude_config(self, signature: PlaybackSignature):
+        d = {}
+        ct_amplitude = signature.set_amplitude
+        if ct_amplitude is not None:
+            if self._device_type == DeviceType.HDAWG:
+                d["amplitude0"] = d["amplitude1"] = {"value": ct_amplitude}
+            elif self._device_type == DeviceType.SHFSG:
+                d["amplitude00"] = d["amplitude10"] = d["amplitude11"] = {
+                    "value": ct_amplitude
+                }
+                d["amplitude01"] = {"value": -ct_amplitude}
         return d
 
     def command_table(self) -> List[Dict]:

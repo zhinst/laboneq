@@ -37,6 +37,7 @@ class DeviceSetup:
     servers: Dict[str, DataServer] = field(default_factory=dict)
 
     #: Instruments of the device setup.
+    #: Instruments must have unique UIDs.
     instruments: List[Instrument] = field(default_factory=list)
 
     #: Physical channels of this device setup, by name of the device.

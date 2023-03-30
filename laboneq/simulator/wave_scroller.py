@@ -116,6 +116,9 @@ class WaveScroller:
         else:
             wave = self.sim.waves[event.args[0][self.ch[0] % 2]]
             # Note: CT phase not implemented on RF signals
+        ct_abs_amplitude = ct_info.abs_amplitude if ct_info is not None else None
+        if ct_abs_amplitude is not None:
+            wave = wave * ct_abs_amplitude
         wave_start_samples = event.start_samples - snippet_start_samples
         self.wave_snippet[wave_start_samples : wave_start_samples + len(wave)] = wave
 

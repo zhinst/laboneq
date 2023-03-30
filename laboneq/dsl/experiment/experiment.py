@@ -882,7 +882,7 @@ class Experiment:
         self,
         handle: str,
         uid: str = None,
-        play_after: Optional[Union[str, List[str]]] = None,
+        play_after: str | List[str] | type(None) = None,
     ):
         """Define a section which switches between different child sections based
         on a QA measurement on an SHFQC.
@@ -898,7 +898,7 @@ class Experiment:
             uid: The unique ID for this section.
             handle: A unique identifier string that allows to retrieve the
                 acquired data.
-            play_after Play this section after the end of the section(s) with the
+            play_after: Play this section after the end of the section(s) with the
                 given ID(s) (single string or list of strings). Defaults to None.
 
         """
@@ -910,7 +910,7 @@ class Experiment:
         self,
         handle: str,
         uid: str = None,
-        play_after: Optional[Union[str, List[str]]] = None,
+        play_after: str | List[str] | type(None) = None,
     ):
         """Define a section which switches between different child sections based
         on a QA measurement via the PQSC.
@@ -926,7 +926,7 @@ class Experiment:
             uid: The unique ID for this section.
             handle: A unique identifier string that allows to retrieve the
                 acquired data.
-            play_after Play this section after the end of the section(s) with the
+            play_after: Play this section after the end of the section(s) with the
                 given ID(s) (single string or list of strings). Defaults to None.
 
         """
@@ -959,6 +959,36 @@ class Experiment:
 
         def __exit__(self, exc_type, exc_val, exc_tb):
             self.exp._pop_and_add_section()
+
+    def match(
+        self,
+        handle: str,
+        uid: str = None,
+        play_after: str | List[str] | type(None) = None,
+    ):
+        """Define a section which switches between different child sections based
+        on a QA measurement.
+
+        The feedback path (local, or global, via PQSC) is chosen automatically.
+
+        Match needs to open a scope in the following way::
+
+            with exp.match(...):
+                # here come the different branches to be selected
+
+        :note: Only subsections of type ``Case`` are allowed.
+
+        Args:
+            uid: The unique ID for this section.
+            handle: A unique identifier string that allows to retrieve the
+                acquired data.
+            play_after: Play this section after the end of the section(s) with the
+                given ID(s) (single string or list of strings). Defaults to None.
+
+        """
+        return Experiment._MatchSectionContext(
+            self, uid=uid, handle=handle, play_after=play_after, local=None
+        )
 
     def case(self, state: int, uid: str = None):
         """Define a section which plays after matching with the given value to the

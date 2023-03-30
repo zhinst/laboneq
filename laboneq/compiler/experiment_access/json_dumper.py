@@ -309,6 +309,10 @@ def dump(experiment_dao: ExperimentDAO):
                         section_signal_pulse_object[key] = {
                             "$ref": getattr(section_pulse, key + "_param")
                         }
+                if section_pulse.acquire_params is not None:
+                    handle = section_pulse.acquire_params.handle
+                    if handle is not None:
+                        section_signal_pulse_object["readout_handle"] = handle
                 markers = getattr(section_pulse, "markers")
                 if markers is not None:
                     markers_object = {}

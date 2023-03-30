@@ -40,9 +40,9 @@ class DeviceSHFSG(DeviceZI):
 
     @property
     def dev_repr(self) -> str:
-        if self._get_option("is_qc"):
-            return f"SHFQC/SG:{self._get_option('serial')}"
-        return f"SHFSG:{self._get_option('serial')}"
+        if self.options.is_qc:
+            return f"SHFQC/SG:{self.serial}"
+        return f"SHFSG:{self.serial}"
 
     def _process_dev_opts(self):
         if self.dev_type == "SHFSG8":
@@ -260,6 +260,15 @@ class DeviceSHFSG(DeviceZI):
                     f"Marker mode must be either 'MARKER' or 'TRIGGER', but got {output.marker_mode} for output {output.channel} on SHFSG {self.serial}"
                 )
 
+            # set trigger delay to 0
+            nodes_to_initialize_output.append(
+                DaqNodeSetAction(
+                    self.daq,
+                    f"/{self.serial}/sgchannels/{output.channel}/trigger/delay",
+                    0.0,
+                )
+            )
+
         osc_selects = {
             ch: osc.index for osc in self._allocated_oscs for ch in osc.channels
         }
@@ -375,8 +384,54 @@ class DeviceSHFSG(DeviceZI):
         self._wait_for_awgs = True
         self._emit_trigger = False
 
-        nodes_to_configure_triggers = []
+        ntc = []
 
+        for awg_key, awg_config in recipe_data.awg_configs.items():
+            if (
+                awg_key.device_uid != initialization.device_uid
+                or awg_config.qa_signal_id is None
+            ):
+                continue
+            if awg_config.source_feedback_register is None and self.options.qc_with_qa:
+                # local feedback
+                ntc.extend(
+                    [
+                        (
+                            f"sgchannels/{awg_key.awg_index}/awg/intfeedback/direct/shift",
+                            awg_config.feedback_register_bit,
+                        ),
+                        (
+                            f"sgchannels/{awg_key.awg_index}/awg/intfeedback/direct/mask",
+                            0b1,
+                        ),
+                        (
+                            f"sgchannels/{awg_key.awg_index}/awg/intfeedback/direct/offset",
+                            awg_config.command_table_match_offset,
+                        ),
+                    ]
+                )
+            else:
+                # global feedback
+                ntc.extend(
+                    [
+                        (
+                            f"sgchannels/{awg_key.awg_index}/awg/diozsyncswitch",
+                            1,  # ZSync Trigger
+                        ),
+                        (
+                            f"sgchannels/{awg_key.awg_index}/awg/zsync/register/shift",
+                            awg_config.zsync_bit,
+                        ),
+                        (
+                            f"sgchannels/{awg_key.awg_index}/awg/zsync/register/mask",
+                            0b1,
+                        ),
+                        (
+                            f"sgchannels/{awg_key.awg_index}/awg/zsync/register/offset",
+                            awg_config.command_table_match_offset,
+                        ),
+                    ]
+                )
         dio_mode = initialization.config.dio_mode
 
         if dio_mode == DIOConfigType.ZSYNC_DIO:
@@ -384,8 +439,7 @@ class DeviceSHFSG(DeviceZI):
         elif dio_mode in (DIOConfigType.HDAWG_LEADER, DIOConfigType.HDAWG):
             # standalone SHFSG or SHFQC
             self._wait_for_awgs = False
-            ntc = []
-            if not self._get_option("qc_with_qa"):
+            if not self.options.qc_with_qa:
                 # otherwise, the QA will initialize the nodes
                 self._emit_trigger = True
                 clock_source = initialization.config.reference_clock_source
@@ -409,61 +463,14 @@ class DeviceSHFSG(DeviceZI):
                     # Internal trigger
                     (f"sgchannels/{awg_index}/awg/auxtriggers/0/channel", 8),
                 ]
-                if initialization.awgs is not None and self._get_option("qc_with_qa"):
-                    awg = next(
-                        (awg for awg in initialization.awgs if awg.awg == awg_index),
-                        None,
-                    )
-                    if (
-                        awg is not None
-                        and awg.qa_signal_id is not None
-                        and awg.command_table_match_offset is not None
-                    ):
-                        # Internal feedback requested in the recipe
-                        matching_integrator = next(
-                            (
-                                i
-                                for i in recipe_data.recipe.experiment.integrator_allocations
-                                if i.signal_id == awg.qa_signal_id
-                            ),
-                            None,
-                        )
-                        if (
-                            matching_integrator is None
-                            or len(matching_integrator.channels) != 1
-                        ):
-                            raise LabOneQControllerException(
-                                f"{self.dev_repr}: Internal error - can't find integrator config "
-                                f"for mapped QA signal {awg.qa_signal_id}, that is suitable for "
-                                f"the feedback configuration."
-                            )
-
-                        shift = matching_integrator.channels[0] * 2
-                        offset = awg.command_table_match_offset
-                        ntc += [
-                            (
-                                f"sgchannels/{awg_index}/awg/intfeedback/direct/shift",
-                                shift,
-                            ),
-                            (
-                                f"sgchannels/{awg_index}/awg/intfeedback/direct/mask",
-                                0b1,
-                            ),
-                            (
-                                f"sgchannels/{awg_index}/awg/intfeedback/direct/offset",
-                                offset,
-                            ),
-                        ]
-
-            nodes_to_configure_triggers = [
-                DaqNodeSetAction(self._daq, f"/{self.serial}/{node}", v)
-                for node, v in ntc
-            ]
         else:
             raise LabOneQControllerException(
                 f"Unsupported DIO mode: {dio_mode} for device type SHFSG."
             )
 
+        nodes_to_configure_triggers = [
+            DaqNodeSetAction(self._daq, f"/{self.serial}/{node}", v) for node, v in ntc
+        ]
         return nodes_to_configure_triggers
 
     def add_command_table_header(self, body: dict) -> Dict:
@@ -482,7 +489,7 @@ class DeviceSHFSG(DeviceZI):
     def collect_follower_configuration_nodes(
         self, initialization: Initialization.Data
     ) -> List[DaqNodeAction]:
-        if self._get_option("qc_with_qa"):
+        if self.options.qc_with_qa:
             return []  # QC follower config is done over it's QA part
 
         dio_mode = initialization.config.dio_mode

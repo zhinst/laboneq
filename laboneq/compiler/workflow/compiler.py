@@ -23,7 +23,6 @@ from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.common.trigger_mode import TriggerMode
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
-from laboneq.compiler.experiment_access.section_graph import SectionGraph
 from laboneq.compiler.new_scheduler.scheduler import Scheduler as NewScheduler
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.scheduler.scheduler import Scheduler
@@ -68,7 +67,6 @@ class Compiler:
         self._leader_properties = LeaderProperties()
         self._clock_settings = {}
         self._integration_unit_allocation = None
-        self._section_graph_object = None
         self._awgs: _AWGMapping = {}
         self._precompensations: Dict[
             str, Dict[str, Union[Dict[str, Any], float]]
@@ -219,15 +217,12 @@ class Compiler:
         self._calc_osc_numbering()
         self._calc_awgs()
         _logger.debug("Processing Sections:::::::")
-        self._section_graph_object = SectionGraph.from_dao(self._experiment_dao)
-        self.print_section_graph()
         self._sampling_rate_tracker = SamplingRateTracker(
             self._experiment_dao, self._clock_settings
         )
 
         self._scheduler = self.Scheduler(
             self._experiment_dao,
-            self._section_graph_object,
             self._sampling_rate_tracker,
             self._clock_settings,
             self._settings,
@@ -373,7 +368,7 @@ class Compiler:
 
         _logger.debug("Preparing events for code generator")
         events = self._scheduler.event_timing(expand_loops=False)
-        code_generator.gen_acquire_map(events, self._section_graph_object)
+        code_generator.gen_acquire_map(events, self._experiment_dao)
         code_generator.gen_seq_c(
             events,
             {k: self._experiment_dao.pulse(k) for k in self._experiment_dao.pulses()},
@@ -779,13 +774,8 @@ class Compiler:
 
     def calc_measurement_map(self, integration_times: IntegrationTimes):
         measurement_sections: List[str] = []
-        for (
-            graph_section_name
-        ) in self._section_graph_object.topologically_sorted_sections():
-            graph_section_info = self._section_graph_object.section_info(
-                graph_section_name
-            )
-            section_name = graph_section_info.section_display_name
+
+        for section_name in self._experiment_dao.sections():
             section_info = self._experiment_dao.section_info(section_name)
             if section_info.acquisition_types is not None:
                 measurement_sections.append(section_name)
@@ -932,12 +922,16 @@ class Compiler:
             for awg in awgs.values():
                 signal_type = awg.signal_type
                 if signal_type == AWGSignalType.DOUBLE:
+                    awg_signals = {
+                        f"{awg.signal_channels[0][0]}_{awg.signal_channels[1][0]}"
+                    }
                     signal_type = AWGSignalType.SINGLE
+                else:
+                    awg_signals = {c for c, _ in awg.signal_channels}
                 if signal_type == AWGSignalType.MULTI:
                     signal_type = AWGSignalType.IQ
                 # Find the acquire signal from which we read the feedback from and which
                 # is used via a match/state construct for the drive signals of this awg
-                awg_signals = {c for c, _ in awg.signal_channels}
                 qa_signal_ids = {
                     h.acquire
                     for h in self._feedback_connections.values()
@@ -1012,12 +1006,8 @@ class Compiler:
             {k: v for k, v in event.items() if v is not None} for event in event_list
         ]
 
-        section_graph = []
-        section_info_out = {}
-        subsection_map = {}
-
         try:
-            root_section = self._section_graph_object.root_sections()[0]
+            root_section = self._experiment_dao.root_rt_sections()[0]
         except IndexError:
             return {
                 "event_list": [],
@@ -1028,38 +1018,25 @@ class Compiler:
                 "sampling_rates": [],
             }
 
-        section_info_out = {
-            k: {"depth": v} for k, v in self._section_graph_object.depth_map().items()
-        }
+        preorder_map = self._scheduler.preorder_map()
 
-        if len(list(section_info_out.keys())) == 0:
-            section_info_out = {root_section: {"depth": 0}}
+        section_info_out = {}
 
-        preorder_map = self._section_graph_object.preorder_map()
-
-        section_info_out = {
-            k: {**v, **{"preorder": preorder_map[k]}}
-            for k, v in section_info_out.items()
-        }
-
-        _logger.debug("Section_info: %s", section_info_out)
-        subsection_map = self._section_graph_object.subsection_map()
-        _logger.debug("subsection_map=%s", subsection_map)
-        for k, v in section_info_out.items():
-            if len(subsection_map[k]) == 0:
-                v["is_leaf"] = True
-            else:
-                v["is_leaf"] = False
-        section_graph = self._section_graph_object.as_primitive()
         section_signals_with_children = {}
 
-        for section in self._section_graph_object.sections():
+        for section in [
+            root_section,
+            *self._experiment_dao.all_section_children(root_section),
+        ]:
             section_info = self._experiment_dao.section_info(section)
             section_display_name = section_info.section_display_name
             section_signals_with_children[section] = list(
                 self._experiment_dao.section_signals_with_children(section)
             )
-            section_info_out[section]["section_display_name"] = section_display_name
+            section_info_out[section] = {
+                "section_display_name": section_display_name,
+                "preorder": preorder_map[section],
+            }
 
         sampling_rate_tuples = []
         for signal_id in self._experiment_dao.signals():
@@ -1084,9 +1061,9 @@ class Compiler:
 
         return {
             "event_list": event_list,
-            "section_graph": section_graph,
+            "section_graph": [],  # deprecated: not needed by PSV
             "section_info": section_info_out,
-            "subsection_map": subsection_map,
+            "subsection_map": {},  # deprecated: not needed by PSV
             "section_signals_with_children": section_signals_with_children,
             "sampling_rates": sampling_rates,
         }

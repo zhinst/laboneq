@@ -15,6 +15,7 @@ from laboneq.controller.devices.zi_node_monitor import (
     Command,
     Condition,
     NodeControlBase,
+    Prepare,
     Response,
 )
 from laboneq.controller.recipe_1_4_0 import Initialization
@@ -30,6 +31,7 @@ DIG_TRIGGER_1_LEVEL = 0.225
 DELAY_NODE_GRANULARITY_SAMPLES = 1
 DELAY_NODE_MAX_SAMPLES = 62
 DEFAULT_SAMPLE_FREQUENCY_HZ = 2.4e9
+GEN2_SAMPLE_FREQUENCY_HZ = 2.0e9
 
 
 class ReferenceClockSourceHDAWG(IntEnum):
@@ -56,6 +58,11 @@ class DeviceHDAWG(DeviceZI):
         self._channels = 8
         self._multi_freq = True
         self._reference_clock_source = ReferenceClockSourceHDAWG.INTERNAL
+        self._sampling_rate = (
+            GEN2_SAMPLE_FREQUENCY_HZ
+            if self.options.gen2
+            else DEFAULT_SAMPLE_FREQUENCY_HZ
+        )
 
     def _process_dev_opts(self):
         if self.dev_type == "HDAWG8":
@@ -92,7 +99,9 @@ class DeviceHDAWG(DeviceZI):
         return osc_index_base + previously_allocated
 
     def _nodes_to_monitor_impl(self) -> List[str]:
-        nodes = [node.path for node in self.clock_source_control_nodes()]
+        nodes = []
+        nodes.extend([node.path for node in self.clock_source_control_nodes()])
+        nodes.extend([node.path for node in self.system_freq_control_nodes()])
         for awg in range(self._get_num_awgs()):
             nodes.append(f"/{self.serial}/awgs/{awg}/enable")
             nodes.append(f"/{self.serial}/awgs/{awg}/ready")
@@ -119,6 +128,7 @@ class DeviceHDAWG(DeviceZI):
             ReferenceClockSourceHDAWG.ZSYNC: 100e6,
         }[self._reference_clock_source]
         source = self._reference_clock_source.value
+
         return [
             Condition(
                 f"/{self.serial}/system/clocks/referenceclock/freq", expected_freq
@@ -126,6 +136,26 @@ class DeviceHDAWG(DeviceZI):
             Command(f"/{self.serial}/system/clocks/referenceclock/source", source),
             Response(f"/{self.serial}/system/clocks/referenceclock/status", 0),
         ]
+
+    def system_freq_control_nodes(self) -> List[NodeControlBase]:
+        nodes = []
+        # If we do not turn all channels off, we get the following error message from
+        # the server/device: 'An error happened on device dev8330 during the execution
+        # of the experiment. Error message: Reinitialized signal output delay on
+        # channel 0 (numbered from 0)'
+        # See also https://zhinst.atlassian.net/browse/HBAR-1374?focusedCommentId=41373
+        for channel in range(self._channels):
+            nodes.append(Prepare(f"/{self.serial}/sigouts/{channel}/on", 0))
+        nodes.extend(
+            [
+                Command(
+                    f"/{self.serial}/system/clocks/sampleclock/freq",
+                    self._sampling_rate,
+                ),
+                Response(f"/{self.serial}/system/clocks/sampleclock/status", 0),
+            ]
+        )
+        return nodes
 
     def collect_awg_after_upload_nodes(self, initialization: Initialization.Data):
         nodes_to_configure_phase = []
@@ -173,20 +203,6 @@ class DeviceHDAWG(DeviceZI):
 
         nodes: List[Tuple[str, Any]] = []
 
-        # If we do not turn all channels off, we get the following error message from
-        # the server/device: 'An error happened on device dev8330 during the execution
-        # of the experiment. Error message: Reinitialized signal output delay on
-        # channel 0 (numbered from 0)'
-        #
-        for channel in range(self._channels):
-            nodes.append((f"sigouts/{channel}/on", 0))
-
-        sampling_rate = initialization.config.sampling_rate
-        if sampling_rate is None or sampling_rate == 0:
-            sampling_rate = DEFAULT_SAMPLE_FREQUENCY_HZ
-        self._sampling_rate = sampling_rate
-        nodes.append(("system/clocks/sampleclock/freq", sampling_rate))
-
         outputs = initialization.outputs or []
         for output in outputs:
 
@@ -220,12 +236,12 @@ class DeviceHDAWG(DeviceZI):
             measurement_delay_rounded = (
                 self._get_total_rounded_delay_samples(
                     output,
-                    sampling_rate,
+                    self._sampling_rate,
                     DELAY_NODE_GRANULARITY_SAMPLES,
                     DELAY_NODE_MAX_SAMPLES,
                     0,
                 )
-                / sampling_rate
+                / self._sampling_rate
             )
 
             nodes.append((f"sigouts/{output.channel}/delay", measurement_delay_rounded))
@@ -356,6 +372,8 @@ class DeviceHDAWG(DeviceZI):
                     raise ValueError(
                         f"Maker mode must be either 'MARKER' or 'TRIGGER', but got {output.marker_mode} for output {output.channel} on HDAWG {self.serial}"
                     )
+                # set trigger delay to 0
+                nodes.append((f"triggers/out/{output.channel}/delay", 0.0))
 
         osc_selects = {
             ch: osc.index for osc in self._allocated_oscs for ch in osc.channels
@@ -425,15 +443,42 @@ class DeviceHDAWG(DeviceZI):
                     [
                         DaqNodeSetAction(self._daq, f"{awg_path}/dio/strobe/slope", 0),
                         DaqNodeSetAction(
-                            self._daq, f"{awg_path}/dio/valid/polarity", 2
+                            self._daq, f"{awg_path}/dio/valid/polarity", 0
                         ),
-                        DaqNodeSetAction(self._daq, f"{awg_path}/dio/valid/index", 0),
-                        DaqNodeSetAction(
-                            self._daq, f"{awg_path}/dio/mask/value", 0x3FF
-                        ),
-                        DaqNodeSetAction(self._daq, f"{awg_path}/dio/mask/shift", 1),
                     ]
                 )
+                awg_config = next(
+                    (
+                        awg_config
+                        for awg_key, awg_config in recipe_data.awg_configs.items()
+                        if (
+                            awg_key.device_uid == initialization.device_uid
+                            and awg_key.awg_index == awg_index
+                            and awg_config.qa_signal_id is not None
+                        )
+                    ),
+                    None,
+                )
+                if awg_config is not None:
+                    nodes_to_configure_triggers.extend(
+                        [
+                            DaqNodeSetAction(
+                                self._daq,
+                                f"{awg_path}/zsync/register/shift",
+                                awg_config.zsync_bit,
+                            ),
+                            DaqNodeSetAction(
+                                self._daq,
+                                f"{awg_path}/zsync/register/mask",
+                                0b1,
+                            ),
+                            DaqNodeSetAction(
+                                self._daq,
+                                f"{awg_path}/zsync/register/offset",
+                                awg_config.command_table_match_offset,
+                            ),
+                        ]
+                    )
         elif dio_mode == DIOConfigType.HDAWG_LEADER:
 
             nodes_to_configure_triggers.append(

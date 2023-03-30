@@ -79,7 +79,7 @@ class LabOneQFacade:
     def init_logging(log_level=None, performance_log=None):
         import sys
 
-        if not "pytest" in sys.modules:
+        if "pytest" not in sys.modules:
             # Only initialize logging outside pytest
             # pytest initializes the logging itself
             ctrl.initialize_logging(

@@ -13,10 +13,17 @@ from typing import Any, Callable, Dict, Tuple
 from laboneq.compiler.experiment_access.acquire_info import AcquireInfo
 from laboneq.compiler.experiment_access.loader_base import LoaderBase
 from laboneq.compiler.experiment_access.marker import Marker
+from laboneq.compiler.experiment_access.param_ref import ParamRef
 from laboneq.compiler.experiment_access.pulse_def import PulseDef
 from laboneq.compiler.experiment_access.section_info import SectionInfo
+from laboneq.compiler.experiment_access.section_signal_pulse import SectionSignalPulse
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types.enums import AcquisitionType, AveragingMode, IODirection
+from laboneq.core.types.enums import (
+    AcquisitionType,
+    AveragingMode,
+    IODirection,
+    IOSignalType,
+)
 
 if typing.TYPE_CHECKING:
     from laboneq.dsl.device import DeviceSetup
@@ -37,31 +44,12 @@ def find_value_or_parameter_attr(entity: Any, attr: str, value_types: Tuple[type
 
 class DSLLoader(LoaderBase):
     def load(self, experiment: Experiment, device_setup: DeviceSetup):
-
         global_leader_device_id = None
-        self.data["server"] = {}
-        self.data["device"] = {}
-        self.data["oscillator"] = {}
-        self.data["device_oscillator"] = {}
-        self.data["signal"] = {}
-        self.data["signal_oscillator"] = {}
-        self.data["section_signal_pulse"] = {}
-        self.data["signal_marker"] = {}
-        self.data["signal_trigger"] = {}
-        self.data["section_parameter"] = {}
-        self.data["pulse"] = {}
 
         for server in device_setup.servers.values():
             if hasattr(server, "leader_uid"):
                 global_leader_device_id = server.leader_uid
-            self.data["server"][server.uid] = {
-                k: getattr(server, k) for k in ["host", "port", "api_level"]
-            }
-            if self.data["server"][server.uid]["port"] is not None:
-                self.data["server"][server.uid]["port"] = int(
-                    self.data["server"][server.uid]["port"]
-                )
-            self.data["server"][server.uid]["id"] = server.uid
+            self.add_server(server.uid, server.host, server.port, server.api_level)
 
         dest_path_devices = {}
 
@@ -83,18 +71,18 @@ class DSLLoader(LoaderBase):
                 is_global_leader = 1
             reference_clock_source = getattr(device, "reference_clock_source", None)
 
-            self.data["device"][device.uid] = {
-                "id": device.uid,
-                "device_type": driver,
-                "serial": serial,
-                "server": server,
-                "interface": interface,
-                "is_global_leader": is_global_leader,
-                "reference_clock": reference_clock,
-                "reference_clock_source": None
+            self.add_device(
+                device.uid,
+                driver,
+                serial,
+                server,
+                interface,
+                is_global_leader,
+                reference_clock,
+                reference_clock_source=None
                 if reference_clock_source is None
                 else reference_clock_source.value,
-            }
+            )
 
             for connection in device.connections:
                 multiplex_key = (
@@ -247,25 +235,15 @@ class DSLLoader(LoaderBase):
                             "oscillator_id": oscillator_uid,
                             "is_hardware": is_hardware,
                         }
-                        known_oscillator = self.data["oscillator"].get(oscillator_uid)
+                        known_oscillator = self._oscillators.get(oscillator_uid)
                         if known_oscillator is None:
-                            self.data["oscillator"][oscillator_uid] = {
-                                "id": oscillator_uid,
-                                "frequency": frequency,
-                                "frequency_param": frequency_param,
-                                "hardware": is_hardware,
-                            }
+                            self.add_oscillator(
+                                oscillator_uid, frequency, frequency_param, is_hardware
+                            )
 
                             if is_hardware:
                                 device_id = dest_path_devices[ls.path]["device"]
-                                self.data["device_oscillator"].setdefault(
-                                    device_id, []
-                                ).append(
-                                    {
-                                        "device_id": device_id,
-                                        "oscillator_id": oscillator_uid,
-                                    }
-                                )
+                                self.add_device_oscillator(device_id, oscillator_uid)
                         else:
                             if (
                                 known_oscillator["frequency"],
@@ -367,20 +345,18 @@ class DSLLoader(LoaderBase):
             else:
                 _logger.debug("exp signal %s ls %s IS AN OUTPUT", signal, ls)
 
-            self.data["signal"][signal.uid] = {
-                "signal_id": signal.uid,
-                "signal_type": signal_type,
-                "modulation": signal.mapped_logical_signal_path in modulated_paths,
-                "offset": None,
-            }
+            self.add_signal(
+                signal.uid,
+                signal_type,
+                modulation=signal.mapped_logical_signal_path in modulated_paths,
+            )
 
             if signal.mapped_logical_signal_path in modulated_paths:
                 oscillator_id = modulated_paths[signal.mapped_logical_signal_path][
                     "oscillator_id"
                 ]
-                self.data["signal_oscillator"][signal.uid] = oscillator_id
+                self.add_signal_oscillator(signal.uid, oscillator_id)
 
-        self.data["signal_connection"] = {}
         for signal, lsuid in experiment.get_signal_map().items():
             local_paths = dest_path_devices[lsuid].get("local_paths")
 
@@ -426,22 +402,25 @@ class DSLLoader(LoaderBase):
                         f"Channels for a signal must be distinct, but got {channels} for signal {signal}, connection ports: {local_ports}"
                     )
 
-            self.data["signal_connection"][signal] = {
-                "signal_id": signal,
-                "device_id": dest_path_devices[lsuid]["device"],
-                "connection_type": dest_path_devices[lsuid]["type"],
-                "channels": channels,
-                "voltage_offset": ls_voltage_offsets.get(lsuid),
-                "mixer_calibration": ls_mixer_calibrations.get(lsuid),
-                "precompensation": ls_precompensations.get(lsuid),
-                "lo_frequency": ls_lo_frequencies.get(lsuid),
-                "range": ls_ranges.get(lsuid),
-                "range_unit": ls_range_units.get(lsuid),
-                "port_delay": ls_port_delays.get(lsuid),
-                "delay_signal": ls_delays_signal.get(lsuid),
-                "port_mode": ls_port_modes.get(lsuid),
-                "threshold": ls_thresholds.get(lsuid),
-            }
+            self.add_signal_connection(
+                signal,
+                {
+                    "signal_id": signal,
+                    "device_id": dest_path_devices[lsuid]["device"],
+                    "connection_type": dest_path_devices[lsuid]["type"],
+                    "channels": channels,
+                    "voltage_offset": ls_voltage_offsets.get(lsuid),
+                    "mixer_calibration": ls_mixer_calibrations.get(lsuid),
+                    "precompensation": ls_precompensations.get(lsuid),
+                    "lo_frequency": ls_lo_frequencies.get(lsuid),
+                    "range": ls_ranges.get(lsuid),
+                    "range_unit": ls_range_units.get(lsuid),
+                    "port_delay": ls_port_delays.get(lsuid),
+                    "delay_signal": ls_delays_signal.get(lsuid),
+                    "port_mode": ls_port_modes.get(lsuid),
+                    "threshold": ls_thresholds.get(lsuid),
+                },
+            )
 
         open_inputs = {}
         for instrument in device_setup.instruments:
@@ -469,27 +448,20 @@ class DSLLoader(LoaderBase):
                             output,
                         )
                     )
-        from laboneq.core.types.enums import IOSignalType
-
-        self.data["pqsc_port"] = []
-        self.data["dio"] = []
-        self.data["section_tree"] = []
-        self.data["section_signal"] = {}
-        self.data["section"] = {}
 
         for syncing_connection in syncing_connections:
             signal_type = syncing_connection[2]
-            assert type(syncing_connection[2]) == type(IOSignalType.DIO)
+            assert isinstance(syncing_connection[2], type(IOSignalType.DIO))
             if signal_type == IOSignalType.DIO:
                 dio_leader = syncing_connection[0]
                 dio_follower = syncing_connection[1]
-                self.data["dio"].append((dio_leader, dio_follower))
+                self._dios.append((dio_leader, dio_follower))
 
             elif signal_type == IOSignalType.ZSYNC:
                 zsync_leader = syncing_connection[0]
                 zsync_follower = syncing_connection[1]
                 port = syncing_connection[4].physical_port_ids[0]
-                self.data["pqsc_port"].append((zsync_leader, zsync_follower, int(port)))
+                self._pqsc_ports.append((zsync_leader, zsync_follower, int(port)))
 
         seq_avg_section, sweep_sections = find_sequential_averaging(experiment)
         if seq_avg_section is not None and len(sweep_sections) > 0:
@@ -510,7 +482,7 @@ class DSLLoader(LoaderBase):
         else:
             exchanger_map = lambda section: section
 
-        self.root_section_ids = [exchanger_map(s).uid for s in experiment.sections]
+        self._root_sections = [exchanger_map(s).uid for s in experiment.sections]
 
         section_uid_map = {}
         acquisition_type_map = {}
@@ -520,15 +492,18 @@ class DSLLoader(LoaderBase):
             )
 
         if seq_avg_section is not None and len(sweep_sections):
-            for edge in self.data["section_tree"]:
-                if edge["child_section_id"] == sweep_sections[0].uid:
-                    edge["child_section_id"] = seq_avg_section.uid
-                elif edge["child_section_id"] == seq_avg_section.uid:
-                    edge["child_section_id"] = sweep_sections[0].uid
-                if edge["parent_section_id"] == sweep_sections[0].uid:
-                    edge["parent_section_id"] = seq_avg_section.uid
-                elif edge["parent_section_id"] == seq_avg_section.uid:
-                    edge["parent_section_id"] = sweep_sections[0].uid
+            avg_children = self._section_tree.get(sweep_sections[0].uid, [])
+            sweep_children = self._section_tree.get(seq_avg_section.uid, [])
+
+            self._section_tree[seq_avg_section.uid] = avg_children
+            self._section_tree[sweep_sections[0].uid] = sweep_children
+
+            for _parent, children in self._section_tree.items():
+                for i, c in enumerate(children):
+                    if c == sweep_sections[0].uid:
+                        children[i] = seq_avg_section.uid
+                    elif c == seq_avg_section.uid:
+                        children[i] = sweep_sections[0].uid
 
         self.acquisition_type = AcquisitionType(
             next(
@@ -574,12 +549,7 @@ class DSLLoader(LoaderBase):
         )
 
         if parent_instance_id is not None:
-            self.data["section_tree"].append(
-                {
-                    "parent_section_id": parent_instance_id,
-                    "child_section_id": instance_id,
-                }
-            )
+            self.add_section_child(parent_instance_id, instance_id)
 
         for index, child_section in enumerate(section.sections):
             self._process_section(
@@ -616,15 +586,11 @@ class DSLLoader(LoaderBase):
                     values_list = list(parameter.values)
                 axis_name = getattr(parameter, "axis_name", None)
                 has_repeat = True
-                self.data["section_parameter"].setdefault(instance_id, []).append(
-                    {
-                        "section_id": instance_id,
-                        "id": parameter.uid,
-                        "start": None,
-                        "step": None,
-                        "values": values_list,
-                        "axis_name": axis_name,
-                    }
+                self.add_section_parameter(
+                    instance_id,
+                    parameter.uid,
+                    values_list=values_list,
+                    axis_name=axis_name,
                 )
                 if hasattr(parameter, "count"):
                     count = parameter.count
@@ -689,48 +655,41 @@ class DSLLoader(LoaderBase):
                 # an acquire event - add acquisition_types
                 acquisition_types = [acquisition_type.value]
 
-        self.data["section"][instance_id] = SectionInfo(
-            section_id=instance_id,
-            section_display_name=section.uid,
-            has_repeat=has_repeat,
-            execution_type=execution_type,
-            count=count,
-            acquisition_types=acquisition_types,
-            averaging_type=averaging_type,
-            align=align,
-            on_system_grid=on_system_grid,
-            length=length,
-            averaging_mode=averaging_mode,
-            repetition_mode=repetition_mode,
-            repetition_time=repetition_time,
-            play_after=getattr(section, "play_after", None),
-            reset_oscillator_phase=reset_oscillator_phase,
-            trigger_output=trigger,
-            handle=handle,
-            state=state,
-            local=local,
+        self.add_section(
+            instance_id,
+            SectionInfo(
+                section_id=instance_id,
+                section_display_name=section.uid,
+                has_repeat=has_repeat,
+                execution_type=execution_type,
+                count=count,
+                acquisition_types=acquisition_types,
+                averaging_type=averaging_type,
+                align=align,
+                on_system_grid=on_system_grid,
+                length=length,
+                averaging_mode=averaging_mode,
+                repetition_mode=repetition_mode,
+                repetition_time=repetition_time,
+                play_after=getattr(section, "play_after", None),
+                reset_oscillator_phase=reset_oscillator_phase,
+                trigger_output=trigger,
+                handle=handle,
+                state=state,
+                local=local,
+            ),
         )
 
         for t in trigger:
             if "signal_id" in t:
                 signal_id = t["signal_id"]
-                v = self.data["signal_trigger"].get(signal_id, 0)
-                self.data["signal_trigger"][signal_id] = v | t["state"]
+                v = self._signal_trigger.get(signal_id, 0)
+                self._signal_trigger[signal_id] = v | t["state"]
 
-        section_signals = {}
         for operation in exchanger_map(section).operations:
             if not hasattr(operation, "signal"):
                 continue
-            if hasattr(operation, "signal"):
-                section_signals[operation.signal] = {
-                    "section_uid": instance_id,
-                    "signal_uid": operation.signal,
-                }
-        for _, section_signal in section_signals.items():
-
-            self.data["section_signal"].setdefault(
-                section_signal["section_uid"], set()
-            ).add(section_signal["signal_uid"])
+            self.add_section_signal(instance_id, operation.signal)
 
         for operation in exchanger_map(section).operations:
             if hasattr(operation, "signal"):
@@ -749,29 +708,13 @@ class DSLLoader(LoaderBase):
                         pulse_offset = None
                         pulse_offset_param = operation.time.uid
 
-                    ssp = dict(
-                        section_id=instance_id,
+                    ssp = SectionSignalPulse(
                         signal_id=operation.signal,
-                        pulse_id=None,
                         offset=pulse_offset,
                         offset_param=pulse_offset_param,
-                        amplitude=None,
-                        amplitude_param=None,
-                        acquire_params=None,
-                        phase=None,
-                        phase_param=None,
-                        increment_oscillator_phase=None,
-                        increment_oscillator_phase_param=None,
-                        set_oscillator_phase=None,
-                        set_oscillator_phase_param=None,
-                        play_pulse_parameters=None,
-                        pulse_pulse_parameters=None,
                         precompensation_clear=precompensation_clear,
                     )
-                    self.data["section_signal_pulse"].setdefault(
-                        instance_id, {}
-                    ).setdefault(operation.signal, []).append(ssp)
-
+                    self.add_section_signal_pulse(instance_id, operation.signal, ssp)
                 else:  # All operations, except Delay
                     pulse = None
                     operation_length_param = None
@@ -805,7 +748,7 @@ class DSLLoader(LoaderBase):
 
                         pulse_parameters = getattr(pulse, "pulse_parameters", None)
 
-                        if pulse.uid not in self.data["pulse"].keys():
+                        if pulse.uid not in self._pulses:
                             samples = None
                             if hasattr(pulse, "function"):
                                 function = pulse.function
@@ -819,16 +762,18 @@ class DSLLoader(LoaderBase):
                                 pulse, "amplitude", (float, int, complex)
                             )
 
-                            self.data["pulse"][pulse.uid] = PulseDef(
-                                id=pulse.uid,
-                                function=function,
-                                length=length,
-                                amplitude=amplitude,
-                                amplitude_param=amplitude_param,
-                                play_mode=None,
-                                samples=samples,
+                            self.add_pulse(
+                                pulse.uid,
+                                PulseDef(
+                                    id=pulse.uid,
+                                    function=function,
+                                    length=length,
+                                    amplitude=amplitude,
+                                    amplitude_param=amplitude_param,
+                                    play_mode=None,
+                                    samples=samples,
+                                ),
                             )
-
                         (
                             pulse_amplitude,
                             pulse_amplitude_param,
@@ -862,18 +807,18 @@ class DSLLoader(LoaderBase):
                             getattr(operation, "pulse_parameters", None)
                         )
 
-                        # Replace sweep params with their uid
+                        # Replace sweep params with a ParamRef
                         if pulse_parameters is not None:
-                            for param in pulse_parameters:
-                                val = pulse_parameters[param]
-                                if not isinstance(val, (float, int, complex)):
-                                    pulse_parameters[param] = getattr(val, "uid", None)
+                            for param, val in pulse_parameters.items():
+                                if hasattr(val, "uid"):
+                                    # Take the presence of "uid" as a proxy for isinstance(val, SweepParameter)
+                                    pulse_parameters[param] = ParamRef(val.uid)
                         if operation_pulse_parameters is not None:
-                            for param in operation_pulse_parameters:
-                                val = operation_pulse_parameters[param]
-                                if not isinstance(val, (float, int, complex)):
-                                    operation_pulse_parameters[param] = getattr(
-                                        val, "uid", None
+                            for param, val in operation_pulse_parameters.items():
+                                if hasattr(val, "uid"):
+                                    # Take the presence of "uid" as a proxy for isinstance(val, SweepParameter)
+                                    operation_pulse_parameters[param] = ParamRef(
+                                        val.uid
                                     )
 
                         markers = None
@@ -896,13 +841,9 @@ class DSLLoader(LoaderBase):
                                             pulse_id=marker_pulse_id,
                                         )
                                     )
+                                    self.add_signal_marker(operation.signal, k)
 
-                                    self.data["signal_marker"].setdefault(
-                                        operation.signal, set()
-                                    ).add(k)
-
-                        ssp = dict(
-                            section_id=instance_id,
+                        ssp = SectionSignalPulse(
                             signal_id=operation.signal,
                             pulse_id=pulse.uid,
                             offset=pulse_offset,
@@ -923,9 +864,9 @@ class DSLLoader(LoaderBase):
                             precompensation_clear=False,  # not supported
                             markers=markers,
                         )
-                        self.data["section_signal_pulse"].setdefault(
-                            instance_id, {}
-                        ).setdefault(operation.signal, []).append(ssp)
+                        self.add_section_signal_pulse(
+                            instance_id, operation.signal, ssp
+                        )
                     elif (
                         getattr(operation, "increment_oscillator_phase", None)
                         is not None
@@ -962,30 +903,19 @@ class DSLLoader(LoaderBase):
                                     f"parameter {par} not supported for virtual Z gates"
                                 )
 
-                        ssp = dict(
-                            section_id=instance_id,
+                        ssp = SectionSignalPulse(
                             signal_id=operation.signal,
-                            pulse_id=None,
                             offset=pulse_offset,
                             offset_param=pulse_offset_param,
-                            amplitude=None,
-                            amplitude_param=None,
-                            length=None,
-                            length_param=None,
-                            acquire_params=None,
-                            phase=None,
-                            phase_param=None,
                             increment_oscillator_phase=pulse_increment_oscillator_phase,
                             increment_oscillator_phase_param=pulse_increment_oscillator_phase_param,
                             set_oscillator_phase=pulse_set_oscillator_phase,
                             set_oscillator_phase_param=pulse_set_oscillator_phase_param,
-                            play_pulse_parameters=None,
-                            pulse_pulse_parameters=None,
                             precompensation_clear=False,  # not supported
                         )
-                        self.data["section_signal_pulse"].setdefault(
-                            instance_id, {}
-                        ).setdefault(operation.signal, []).append(ssp)
+                        self.add_section_signal_pulse(
+                            instance_id, operation.signal, ssp
+                        )
 
 
 def find_sequential_averaging(section) -> Tuple[Any, Tuple]:

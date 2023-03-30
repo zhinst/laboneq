@@ -22,6 +22,7 @@ from laboneq.compiler.code_generator.signatures import (
     PlaybackSignature,
     PulseSignature,
     WaveformSignature,
+    reduce_signature_amplitude,
     reduce_signature_phase,
 )
 from laboneq.compiler.code_generator.utils import normalize_phase
@@ -726,6 +727,8 @@ def analyze_play_wave_times(
                 use_ct_phase,
                 current_hw_oscillator_phase,
             )
+            if use_command_table:
+                signature = reduce_signature_amplitude(signature)
 
             if hw_oscillator is not None:
                 if signature.set_phase is not None:

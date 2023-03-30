@@ -11,7 +11,7 @@ import numpy as np
 
 @functools.lru_cache(64)
 def lcm(a, b):
-    return int(np.lcm(a, b))
+    return int(np.lcm(a or 1, b or 1))
 
 
 def round_to_grid(value, grid: int):

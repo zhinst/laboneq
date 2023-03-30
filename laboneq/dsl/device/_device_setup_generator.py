@@ -1018,6 +1018,14 @@ class _DeviceSetupGenerator:
                 "'instruments' section is mandatory in the setup descriptor."
             )
 
+        # Check for unique device UIDs
+        instrument_uids = []
+        for instrument_info in instruments.values():
+            for info in instrument_info:
+                instrument_uids.append(info["uid"])
+        if len(instrument_uids) > len(set(instrument_uids)):
+            raise LabOneQException("Device setup instrument UIDs must be unique.")
+
         if connections is None:
             connections = {}
 

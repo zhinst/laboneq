@@ -318,6 +318,7 @@ class WaveRefInfo:
 class CommandTableEntryInfo:
     abs_phase: Optional[float] = None
     rel_phase: Optional[float] = None
+    abs_amplitude: Optional[float] = None
 
     @classmethod
     def from_ct_entry(cls, ct_entry: Dict):
@@ -346,6 +347,29 @@ class CommandTableEntryInfo:
                 d["rel_phase"] = phase
             else:
                 d["abs_phase"] = phase
+
+        if "amplitude0" in ct_entry:
+            # HDAWG
+            assert not ct_entry["amplitude0"].get(
+                "increment", False
+            ), "Amplitude increment via command table not supported by simulator"
+            assert (
+                ct_entry["amplitude0"].get("register") is None
+            ), "Amplitude registers not supported by simulator"
+
+            amplitude = ct_entry["amplitude0"]["value"]
+            assert ct_entry["amplitude1"]["value"] == amplitude
+            d["abs_amplitude"] = amplitude
+        elif "amplitude00" in ct_entry:
+            # SHFSG
+            assert not ct_entry["amplitude00"].get(
+                "increment", False
+            ), "Amplitude increment via command table not supported by simulator"
+            amplitude = ct_entry["amplitude00"]["value"]
+            assert ct_entry["amplitude01"]["value"] == -amplitude
+            assert ct_entry["amplitude10"]["value"] == amplitude
+            assert ct_entry["amplitude11"]["value"] == amplitude
+            d["abs_amplitude"] = amplitude
 
         return cls(**d)
 
@@ -429,7 +453,8 @@ class SimpleRuntime:
         self.descriptor = descriptor
         self.waves = waves
         self.source = preprocess_source(descriptor.source)
-        self.wave_lookup: Dict[Any, WaveRefInfo] = {}
+        self.wave_lookup_by_args: Dict[Any, WaveRefInfo] = {}
+        self.wave_names_by_index: Dict[int, List[str]] = {}
         self.wave_data: List[Any] = []
         self.max_time: Optional[float] = max_time
         self._oscillator_sweep_config = {}
@@ -554,9 +579,14 @@ class SimpleRuntime:
     def assignWaveIndex(self, *args):
         idx = args[-1]
         wave_key = self._args2key(args[:-1])
-        known_wave = self.wave_lookup.get(wave_key)
+        known_wave = self.wave_lookup_by_args.get(wave_key)
         if known_wave is None:
-            self.wave_lookup[wave_key] = WaveRefInfo(assigned_index=idx)
+            wave_ref = WaveRefInfo(assigned_index=idx)
+            self.wave_lookup_by_args[wave_key] = wave_ref
+            wave_names = [
+                name[1:-1] or None for name in wave_key if isinstance(name, str)
+            ]
+            self.wave_names_by_index[idx] = wave_names
         else:
             if known_wave.assigned_index != idx:
                 raise Exception(
@@ -565,10 +595,10 @@ class SimpleRuntime:
 
     def playWave(self, *args):
         wave_key = self._args2key(args)
-        known_wave = self.wave_lookup.get(wave_key)
+        known_wave = self.wave_lookup_by_args.get(wave_key)
         if known_wave is None:
             known_wave = WaveRefInfo()
-            self.wave_lookup[wave_key] = known_wave
+            self.wave_lookup_by_args[wave_key] = known_wave
 
         wave_format = ".csv" if known_wave.assigned_index == -1 else ".wave"
 
@@ -599,12 +629,6 @@ class SimpleRuntime:
             )
 
     def executeTableEntry(self, ct_index, latency=None):
-        wave_key = self._args2key(["ct", ct_index])
-        known_wave = self.wave_lookup.get(wave_key)
-        if known_wave is None:
-            known_wave = WaveRefInfo()
-            self.wave_lookup[wave_key] = known_wave
-
         QA_DATA_PROCESSED_SG = 0b1000000000100
         if ct_index == QA_DATA_PROCESSED_SG:
             assert self.descriptor.device_type == "SHFSG"
@@ -618,15 +642,21 @@ class SimpleRuntime:
             return  # todo: simulator does not yet support playZero via command table
 
         wave_index = ct_entry["waveform"]["index"]
+        known_wave = WaveRefInfo(assigned_index=wave_index)
 
         wave = self.descriptor.wave_index[wave_index]
 
-        if wave["type"] not in ("iq", "multi"):
-            raise RuntimeError(
-                f"Command table execution in seqc parser only supports iq signals. Device type: {self.descriptor.device_type}, signal type: {wave['type']}"
-            )
-
-        wave_names = [wave["wave_name"] + suffix + ".wave" for suffix in ("_i", "_q")]
+        if wave["type"] in ("iq", "multi"):
+            wave_names = [
+                wave["wave_name"] + suffix + ".wave" for suffix in ("_i", "_q")
+            ]
+        elif wave["type"] in ["single", "double"]:
+            wave_names = [
+                name + ".wave" if name is not None else None
+                for name in self.wave_names_by_index[wave_index]
+            ]
+        else:
+            assert False, f"Unknown signal type: {wave['type']}"
 
         ct_info = CommandTableEntryInfo.from_ct_entry(ct_entry)
 
@@ -672,10 +702,10 @@ class SimpleRuntime:
         for gen_index in range(16):
             if (generators_mask & (1 << gen_index)) != 0:
                 wave_key = self._args2key(["gen", gen_index])
-                known_wave = self.wave_lookup.get(wave_key)
+                known_wave = self.wave_lookup_by_args.get(wave_key)
                 if known_wave is None:
                     known_wave = WaveRefInfo()
-                    self.wave_lookup[wave_key] = known_wave
+                    self.wave_lookup_by_args[wave_key] = known_wave
                 wave = self.descriptor.wave_index[gen_index]
                 wave_names = [wave["wave_name"] + ".wave"]
                 wave_length_samples = len(self.waves[wave_names[0]])

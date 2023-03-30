@@ -7,6 +7,7 @@ import concurrent.futures
 import itertools
 import logging
 import os
+import time
 import traceback
 from collections import defaultdict
 from copy import deepcopy
@@ -46,7 +47,7 @@ from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.core.utilities.replace_pulse import ReplacementType, calc_wave_replacements
-from laboneq.executor.executor import ExecutorBase, LoopingMode
+from laboneq.executor.executor import ExecutorBase, LoopingMode, LoopType
 
 if TYPE_CHECKING:
     from laboneq.core.types import CompiledExperiment
@@ -57,6 +58,12 @@ if TYPE_CHECKING:
 
 
 _logger = logging.getLogger(__name__)
+
+
+# Only recheck for the proper connected state if there was no check since more than
+# the below amount of seconds. Important for performance with many small experiments
+# executed in a batch.
+CONNECT_CHECK_HOLDOFF = 10  # sec
 
 
 class ControllerRunParameters:
@@ -87,7 +94,9 @@ class Controller:
             self._run_parameters.dry_run,
             self._run_parameters.ignore_lab_one_version_error,
         )
-        self._connected = False
+
+        self._last_connect_check_ts: float = None
+
         # Waves which are uploaded to the devices via pulse replacements
         self._current_waves = []
         self._user_functions: Dict[str, Callable] = user_functions
@@ -429,9 +438,13 @@ class Controller:
         _logger.debug("Execution stopped")
 
     def connect(self):
-        if not self._connected:
+        now = time.time()
+        if (
+            self._last_connect_check_ts is None
+            or now - self._last_connect_check_ts > CONNECT_CHECK_HOLDOFF
+        ):
             self._devices.connect(self._is_using_standalone_compiler)
-            self._connected = True
+        self._last_connect_check_ts = now
 
     def shut_down(self):
         _logger.info("Shutting down all devices...")
@@ -441,8 +454,8 @@ class Controller:
     def disconnect(self):
         _logger.info("Disconnecting from all devices and servers...")
         self._devices.disconnect()
+        self._last_connect_check_ts = None
         _logger.info("Successfully disconnected from all devices and servers.")
-        self._connected = False
 
     def execute_compiled(
         self, compiled_experiment: CompiledExperiment, session: Session = None
@@ -455,7 +468,7 @@ class Controller:
         else:
             self._results = session._last_results
 
-        self.connect()
+        self.connect()  # Ensure all connect configurations are still valid!
         self._prepare_result_shapes()
         try:
             self._devices.start_monitor()
@@ -557,7 +570,9 @@ class Controller:
         self._nodes_from_user_functions.sort(key=lambda v: v.path)
         nodes_to_prepare_rt = [*self._nodes_from_user_functions]
         self._nodes_from_user_functions.clear()
-        for awg_key, awg_config in rt_execution_info.per_awg_configs.items():
+        for _, device in self._devices.leaders:
+            nodes_to_prepare_rt.extend(device.configure_feedback(self._recipe_data))
+        for awg_key, awg_config in self._recipe_data.awgs_producing_results():
             device = self._devices.find_by_uid(awg_key.device_uid)
             if rt_execution_info.averaging_mode == AveragingMode.SINGLE_SHOT:
                 effective_averages = 1
@@ -620,7 +635,9 @@ class Controller:
                     device.collect_prepare_sweep_step_nodes_for_param(name, value)
                 )
 
-        def for_loop_handler(self, count: int, index: int, enter: bool):
+        def for_loop_handler(
+            self, count: int, index: int, loop_type: LoopType, enter: bool
+        ):
             if enter:
                 self.nt_loop_indices.append(index)
             else:
@@ -667,11 +684,6 @@ class Controller:
                 "Multiple 'acquire_loop_rt' sections per experiment is not supported."
             )
         rt_info = next(iter(self._recipe_data.rt_execution_infos.values()))
-        awg_config = next(iter(rt_info.per_awg_configs.values()), None)
-        # Use default length 4096, in case AWG config is not available
-        raw_acquire_length = (
-            4096 if awg_config is None else awg_config.raw_acquire_length
-        )
         for handle, shape_info in self._recipe_data.result_shapes.items():
             if rt_info.acquisition_type == AcquisitionType.RAW:
                 if len(self._recipe_data.result_shapes) > 1:
@@ -680,6 +692,12 @@ class Controller:
                         f"{list(self._recipe_data.result_shapes.keys())}. "
                         f"Only single raw acquire per experiment allowed."
                     )
+                signal_id = rt_info.signal_by_handle(handle)
+                awg_config = self._recipe_data.awg_config_by_acquire_signal(signal_id)
+                # Use default length 4096, in case AWG config is not available
+                raw_acquire_length = (
+                    4096 if awg_config is None else awg_config.raw_acquire_length
+                )
                 empty_res = make_acquired_result(
                     data=np.empty(shape=[raw_acquire_length], dtype=np.complex128),
                     axis_name=["samples"],
@@ -714,14 +732,14 @@ class Controller:
         if rt_section_uid is None:
             return  # Old recipe-based execution - skip partial result processing
         rt_execution_info = self._recipe_data.rt_execution_infos[rt_section_uid]
-        for awg_key, awg_config in rt_execution_info.per_awg_configs.items():
+        for awg_key, awg_config in self._recipe_data.awgs_producing_results():
             device = self._devices.find_by_uid(awg_key.device_uid)
             if rt_execution_info.acquisition_type == AcquisitionType.RAW:
                 raw_results = device.get_input_monitor_data(
                     awg_key.awg_index, awg_config.raw_acquire_length
                 )
                 # Copy to all result handles, but actually only one handle is supported for now
-                for signal in awg_config.signals:
+                for signal in awg_config.acquire_signals:
                     mapping = rt_execution_info.signal_result_map.get(signal, [])
                     unique_handles = set(mapping)
                     for handle in unique_handles:
@@ -739,7 +757,7 @@ class Controller:
                     awg_config.result_length,
                     effective_averages,
                 )
-                for signal in awg_config.signals:
+                for signal in awg_config.acquire_signals:
                     integrator_allocation = next(
                         i
                         for i in self._recipe_data.recipe.experiment.integrator_allocations

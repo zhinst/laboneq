@@ -5,7 +5,7 @@ import copy
 import json
 import logging
 import os
-from collections import Counter, OrderedDict, deque
+from collections import Counter, deque
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
@@ -16,6 +16,7 @@ from laboneq.compiler.experiment_access.loader_base import LoaderBase
 from laboneq.compiler.experiment_access.marker import Marker
 from laboneq.compiler.experiment_access.pulse_def import PulseDef
 from laboneq.compiler.experiment_access.section_info import SectionInfo
+from laboneq.compiler.experiment_access.section_signal_pulse import SectionSignalPulse
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import AcquisitionType
 
@@ -48,15 +49,15 @@ class JsonLoader(LoaderBase):
         self._load_sections(experiment)
 
     def _load_servers(self, experiment):
-        self.data["server"] = {}
         for server in experiment["servers"]:
-            self.data["server"][server["id"]] = {
-                k: server.get(k) for k in ["id", "host", "port", "api_level"]
-            }
+            self.add_server(
+                server["id"],
+                server.get("host"),
+                server.get("port"),
+                server.get("api_level"),
+            )
 
     def _load_devices(self, experiment):
-        self.data["device"] = OrderedDict()
-        self.data["device_oscillator"] = {}
         for device in sorted(experiment["devices"], key=lambda x: x["id"]):
             if "server" in device:
                 server = device["server"]["$ref"]
@@ -85,25 +86,18 @@ class JsonLoader(LoaderBase):
             else:
                 reference_clock_source = None
 
-            self.data["device"][device["id"]] = {
-                "id": device["id"],
-                "device_type": driver,
-                "serial": serial,
-                "server": server,
-                "interface": interface,
-                "reference_clock_source": reference_clock_source,
-            }
+            self.add_device(
+                device["id"],
+                driver,
+                serial,
+                server,
+                interface,
+                reference_clock_source=reference_clock_source,
+            )
 
             if "oscillators_list" in device:
                 for oscillator_ref in device["oscillators_list"]:
-                    self.data["device_oscillator"].setdefault(device["id"], []).append(
-                        {
-                            "device_id": device["id"],
-                            "oscillator_id": oscillator_ref["$ref"],
-                        }
-                    )
-
-        self.data["oscillator"] = OrderedDict()
+                    self.add_device_oscillator(device["id"], oscillator_ref["$ref"])
 
     def _load_oscillator(self, experiment):
         if "oscillators" in experiment:
@@ -119,30 +113,26 @@ class JsonLoader(LoaderBase):
                             frequency_param = frequency["$ref"]
                         frequency = None
 
-                self.data["oscillator"][oscillator["id"]] = {
-                    "id": oscillator["id"],
-                    "frequency": frequency,
-                    "frequency_param": frequency_param,
-                    "hardware": True if oscillator["hardware"] else False,
-                }
+                self.add_oscillator(
+                    oscillator["id"],
+                    frequency,
+                    frequency_param,
+                    bool(oscillator["hardware"]),
+                )
 
     def _load_connectivity(self, experiment):
-        self.data["dio"] = []
-        self.data["pqsc_port"] = []
         if "connectivity" in experiment:
             if "dios" in experiment["connectivity"]:
                 for dio in experiment["connectivity"]["dios"]:
-                    self.data["dio"].append(
-                        (dio["leader"]["$ref"], dio["follower"]["$ref"])
-                    )
+                    self._dios.append((dio["leader"]["$ref"], dio["follower"]["$ref"]))
             if "leader" in experiment["connectivity"]:
 
                 leader_device_id = experiment["connectivity"]["leader"]["$ref"]
-                self.data["device"][leader_device_id]["is_global_leader"] = True
+                self._devices[leader_device_id]["is_global_leader"] = True
 
             if "reference_clock" in experiment["connectivity"]:
                 reference_clock = experiment["connectivity"]["reference_clock"]
-                for device in self.data["device"].values():
+                for device in self._devices.values():
                     if device["device_type"] in {"hdawg", "uhfqa", "pqsc"}:
                         device["reference_clock"] = reference_clock
 
@@ -152,28 +142,23 @@ class JsonLoader(LoaderBase):
                     pqsc_device_id = pqsc["device"]["$ref"]
                     if "ports" in pqsc:
                         for port in pqsc["ports"]:
-                            self.data["pqsc_port"].append(
+                            self._pqsc_ports.append(
                                 (pqsc_device_id, port["device"]["$ref"], port["port"])
                             )
 
     def _load_signals(self, experiment):
-        self.data["signal"] = {}
-        self.data["signal_oscillator"] = {}
         for signal in sorted(experiment["signals"], key=lambda s: s["id"]):
-
-            self.data["signal"][signal["id"]] = {
-                "signal_id": signal["id"],
-                "signal_type": signal["signal_type"],
-                "modulation": True if signal.get("modulation") else False,
-                "offset": None,
-            }
+            self.add_signal(
+                signal["id"],
+                signal["signal_type"],
+                modulation=bool(signal.get("modulation")),
+            )
             if "oscillators_list" in signal:
                 for oscillator_ref in signal["oscillators_list"]:
                     oscillator_id = oscillator_ref["$ref"]
-                    self.data["signal_oscillator"][signal["id"]] = oscillator_id
+                    self.add_signal_oscillator(signal["id"], oscillator_id)
 
     def _load_signal_connections(self, experiment):
-        self.data["signal_connection"] = {}
         for connection in experiment["signal_connections"]:
             try:
                 voltage_offset = copy.deepcopy(connection["voltage_offset"])
@@ -193,25 +178,27 @@ class JsonLoader(LoaderBase):
             port_delay = connection.get("port_delay")
             delay_signal = connection.get("delay_signal")
 
-            self.data["signal_connection"][connection["signal"]["$ref"]] = {
-                "signal_id": connection["signal"]["$ref"],
-                "device_id": connection["device"]["$ref"],
-                "connection_type": connection["connection"]["type"],
-                "channels": connection["connection"]["channels"],
-                "voltage_offset": voltage_offset,
-                "mixer_calibration": mixer_calibration,
-                "precompensation": precompensation,
-                "lo_frequency": lo_frequency,
-                "range": range,
-                "range_unit": range_unit,
-                "port_delay": port_delay,
-                "delay_signal": delay_signal,
-                "port_mode": None,
-                "threshold": None,
-            }
+            self.add_signal_connection(
+                connection["signal"]["$ref"],
+                {
+                    "signal_id": connection["signal"]["$ref"],
+                    "device_id": connection["device"]["$ref"],
+                    "connection_type": connection["connection"]["type"],
+                    "channels": connection["connection"]["channels"],
+                    "voltage_offset": voltage_offset,
+                    "mixer_calibration": mixer_calibration,
+                    "precompensation": precompensation,
+                    "lo_frequency": lo_frequency,
+                    "range": range,
+                    "range_unit": range_unit,
+                    "port_delay": port_delay,
+                    "delay_signal": delay_signal,
+                    "port_mode": None,
+                    "threshold": None,
+                },
+            )
 
     def _load_pulses(self, experiment):
-        self.data["pulse"] = {}
         for pulse in experiment["pulses"]:
             samples = pulse.get("samples", None)
 
@@ -219,27 +206,21 @@ class JsonLoader(LoaderBase):
                 pulse, "amplitude", (int, float, complex)
             )
 
-            self.data["pulse"][pulse["id"]] = PulseDef(
-                id=pulse["id"],
-                function=pulse.get("function"),
-                length=pulse.get("length"),
-                amplitude=amplitude,
-                amplitude_param=amplitude_param,
-                play_mode=pulse.get("play_mode"),
-                samples=samples,
+            self.add_pulse(
+                pulse["id"],
+                PulseDef(
+                    id=pulse["id"],
+                    function=pulse.get("function"),
+                    length=pulse.get("length"),
+                    amplitude=amplitude,
+                    amplitude_param=amplitude_param,
+                    play_mode=pulse.get("play_mode"),
+                    samples=samples,
+                ),
             )
 
-        self.data["section_parameter"] = {}
-        self.data["section_tree"] = []
-        self.data["section_signal"] = {}
-        self.data["section_signal_pulse"] = {}
-        self.data["signal_marker"] = {}
-        self.data["signal_trigger"] = {}
-
-        self.data["section"] = {}
-
     def _load_sections(self, experiment):
-        self.root_section_ids = sorted(
+        self._root_sections = sorted(
             [s["$ref"] for s in experiment["experiment"]["sections_list"]]
         )
 
@@ -248,14 +229,17 @@ class JsonLoader(LoaderBase):
             for (s, count) in Counter(s["id"] for s in experiment["sections"]).items()
             if count > 1
         }
-        if len(duplicate_sections) > 0:
+        if len(duplicate_sections) == 1:
             section = next(iter(duplicate_sections.keys()))
             raise LabOneQException(f"Duplicate section id '{section}' in experiment")
+        elif len(duplicate_sections) > 0:
+            sections = ", ".join(f"'{s}'" for s in duplicate_sections.keys())
+            raise LabOneQException(f"Duplicate section ids {sections} in experiment")
 
         sections_proto = {section["id"]: section for section in experiment["sections"]}
         section_reuse_counter = {}
 
-        sections_to_process = deque((s, None) for s in self.root_section_ids)
+        sections_to_process = deque((s, None) for s in self._root_sections)
 
         while len(sections_to_process) > 0:
             section_name, parent_instance = sections_to_process.pop()
@@ -269,12 +253,7 @@ class JsonLoader(LoaderBase):
             section = sections_proto[section_name]
 
             if parent_instance is not None:
-                self.data["section_tree"].append(
-                    {
-                        "parent_section_id": parent_instance,
-                        "child_section_id": instance_id,
-                    }
-                )
+                self.add_section_child(parent_instance, instance_id)
 
             sections_list = None
             if "repeat" in section and "sections_list" in section["repeat"]:
@@ -286,7 +265,6 @@ class JsonLoader(LoaderBase):
                     sections_to_process.appendleft(
                         (child_section_ref["$ref"], instance_id)
                     )
-
             has_repeat = False
             execution_type = None
             length = None
@@ -306,17 +284,12 @@ class JsonLoader(LoaderBase):
                         if parameter.get("values") is not None:
                             values = copy.deepcopy(list(parameter["values"]))
 
-                        self.data["section_parameter"].setdefault(
-                            instance_id, []
-                        ).append(
-                            {
-                                "section_id": instance_id,
-                                "id": parameter["id"],
-                                "start": parameter.get("start"),
-                                "step": parameter.get("step"),
-                                "values": values,
-                                "axis_name": None,
-                            }
+                        self.add_section_parameter(
+                            instance_id,
+                            parameter["id"],
+                            parameter.get("start"),
+                            parameter.get("step"),
+                            values,
                         )
 
             acquisition_types = section.get("acquisition_types")
@@ -371,37 +344,38 @@ class JsonLoader(LoaderBase):
                 trigger_output.append(
                     {"signal_id": trigger_signal, "state": trigger_state}
                 )
-                v = self.data["signal_trigger"].get(trigger_signal, 0)
-                self.data["signal_trigger"][trigger_signal] = v | trigger_state
+                v = self._signal_trigger.get(trigger_signal, 0)
+                self._signal_trigger[trigger_signal] = v | trigger_state
 
-            self.data["section"][instance_id] = SectionInfo(
-                section_id=instance_id,
-                section_display_name=section["id"],
-                has_repeat=has_repeat,
-                execution_type=execution_type,
-                count=count,
-                acquisition_types=acquisition_types,
-                averaging_type=averaging_type,
-                align=align,
-                on_system_grid=on_system_grid,
-                length=length,
-                averaging_mode=averaging_mode,
-                repetition_mode=repetition_mode,
-                repetition_time=repetition_time,
-                play_after=section.get("play_after"),
-                reset_oscillator_phase=reset_oscillator_phase,
-                trigger_output=trigger_output,
-                handle=handle,
-                state=state,
-                local=local,
+            self.add_section(
+                instance_id,
+                SectionInfo(
+                    section_id=instance_id,
+                    section_display_name=section["id"],
+                    has_repeat=has_repeat,
+                    execution_type=execution_type,
+                    count=count,
+                    acquisition_types=acquisition_types,
+                    averaging_type=averaging_type,
+                    align=align,
+                    on_system_grid=on_system_grid,
+                    length=length,
+                    averaging_mode=averaging_mode,
+                    repetition_mode=repetition_mode,
+                    repetition_time=repetition_time,
+                    play_after=section.get("play_after"),
+                    reset_oscillator_phase=reset_oscillator_phase,
+                    trigger_output=trigger_output,
+                    handle=handle,
+                    state=state,
+                    local=local,
+                ),
             )
 
             if "signals_list" in section:
                 for signals_list_entry in section["signals_list"]:
                     signal_id = signals_list_entry["signal"]["$ref"]
-                    self.data["section_signal"].setdefault(instance_id, set()).add(
-                        signal_id
-                    )
+                    self.add_section_signal(instance_id, signal_id)
 
                     if "pulses_list" in signals_list_entry:
                         for pulse_ref in signals_list_entry["pulses_list"]:
@@ -451,10 +425,10 @@ class JsonLoader(LoaderBase):
                                 pulse_id = pulse_ref["pulse"]["$ref"]
 
                             acquire_params = None
-                            signal_type = self.data["signal"][signal_id]["signal_type"]
+                            signal_type = self._signals[signal_id]["signal_type"]
                             if signal_type == "integration":
                                 acquire_params = AcquireInfo(
-                                    handle=None,
+                                    handle=pulse_ref.get("readout_handle"),
                                     acquisition_type=getattr(
                                         self.acquisition_type, "value", None
                                     ),
@@ -476,13 +450,10 @@ class JsonLoader(LoaderBase):
                                             pulse_id=marker_pulse_id,
                                         )
                                     )
-                                    self.data["signal_marker"].setdefault(
-                                        signal_id, set()
-                                    ).add(k)
+                                    self.add_signal_marker(signal_id, k)
 
-                            new_ssp = dict(
+                            new_ssp = SectionSignalPulse(
                                 pulse_id=pulse_id,
-                                section_id=section["id"],
                                 signal_id=signal_id,
                                 offset=pulse_offset,
                                 offset_param=pulse_offset_param,
@@ -502,9 +473,9 @@ class JsonLoader(LoaderBase):
                                 precompensation_clear=precompensation_clear,
                                 markers=markers,
                             )
-                            self.data["section_signal_pulse"].setdefault(
-                                instance_id, {}
-                            ).setdefault(signal_id, []).append(new_ssp)
+                            self.add_section_signal_pulse(
+                                instance_id, signal_id, new_ssp
+                            )
 
     @staticmethod
     def experiment_json_schema():

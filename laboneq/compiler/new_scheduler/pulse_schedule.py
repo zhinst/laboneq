@@ -3,30 +3,32 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional
+
+from attrs import define
 
 from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.common.play_wave_type import PlayWaveType
+from laboneq.compiler.common.pulse_parameters import encode_pulse_parameters
 from laboneq.compiler.experiment_access.section_signal_pulse import SectionSignalPulse
 from laboneq.compiler.new_scheduler.interval_schedule import IntervalSchedule
 
 
-@dataclass(frozen=True)
+@define(kw_only=True, slots=True)
 class PulseSchedule(IntervalSchedule):
     pulse: SectionSignalPulse
     amplitude: float
     phase: float
     offset: int
-    oscillator_frequency: Optional[float]
-    set_oscillator_phase: Optional[float]
-    increment_oscillator_phase: Optional[float]
+    oscillator_frequency: Optional[float] = None
+    set_oscillator_phase: Optional[float] = None
+    increment_oscillator_phase: Optional[float] = None
     section: str
-    play_pulse_params: Dict[str, str | float]
-    pulse_pulse_params: Dict[str, str | float]
+    play_pulse_params: Optional[Dict[str, Any]] = None
+    pulse_pulse_params: Optional[Dict[str, Any]] = None
     is_acquire: bool
-    markers: Any
+    markers: Any = None
 
     def generate_event_list(
         self,
@@ -34,16 +36,19 @@ class PulseSchedule(IntervalSchedule):
         max_events: int,
         id_tracker: Iterator[int],
         expand_loops=False,
-        settings: CompilerSettings = None,
-    ) -> List[Dict[Any]]:
+        settings: Optional[CompilerSettings] = None,
+    ) -> List[Dict]:
+        assert self.length is not None
         params_list = []
-        for field in ("length_param", "amplitude_param", "phase_param", "offset_param"):
-            if getattr(self.pulse, field) is not None:
-                params_list.append(getattr(self.pulse, field))
+        for f in ("length_param", "amplitude_param", "phase_param", "offset_param"):
+            if getattr(self.pulse, f) is not None:
+                params_list.append(getattr(self.pulse, f))
 
         play_wave_id = self.pulse.pulse_id or "delay"
 
-        amplitude_resolution = pow(2, settings.AMPLITUDE_RESOLUTION_BITS)
+        amplitude_resolution = pow(
+            2, getattr(settings, "AMPLITUDE_RESOLUTION_BITS", 24)
+        )
         amplitude = round(self.amplitude * amplitude_resolution) / amplitude_resolution
 
         start_id = next(id_tracker)
@@ -64,9 +69,11 @@ class PulseSchedule(IntervalSchedule):
             d["oscillator_frequency"] = self.oscillator_frequency
 
         if self.pulse_pulse_params:
-            d["pulse_pulse_parameters"] = self.pulse_pulse_params
+            d["pulse_pulse_parameters"] = encode_pulse_parameters(
+                self.pulse_pulse_params
+            )
         if self.play_pulse_params:
-            d["play_pulse_parameters"] = self.play_pulse_params
+            d["play_pulse_parameters"] = encode_pulse_parameters(self.play_pulse_params)
 
         osc_events = []
         osc_common = {
@@ -149,11 +156,15 @@ class PulseSchedule(IntervalSchedule):
             },
         ]
 
+    def _calculate_timing(self, *_, **__):
+        # Length must be set via parameter, so nothing to do here
+        assert self.length is not None
+
     def __hash__(self):
         return super().__hash__()
 
 
-@dataclass(frozen=True)
+@define(kw_only=True, slots=True)
 class PrecompClearSchedule(IntervalSchedule):
     pulse: PulseSchedule
 
@@ -163,10 +174,9 @@ class PrecompClearSchedule(IntervalSchedule):
         max_events: int,
         id_tracker: Iterator[int],
         expand_loops=False,
-        settings: CompilerSettings = None,
+        settings: Optional[CompilerSettings] = None,
     ) -> List[Dict]:
-        # if max_events < 1:
-        #     return []
+        assert self.length is not None
         return [
             {
                 "event_type": EventType.RESET_PRECOMPENSATION_FILTERS,
@@ -176,6 +186,9 @@ class PrecompClearSchedule(IntervalSchedule):
                 "id": next(id_tracker),
             }
         ]
+
+    def _calculate_timing(self, *_, **__):
+        self.length = 0
 
     def __hash__(self):
         super().__hash__()

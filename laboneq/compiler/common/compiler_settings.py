@@ -66,7 +66,7 @@ class CompilerSettings:
     SHFSG_MIN_PLAYWAVE_HINT: int = 64
     SHFSG_MIN_PLAYZERO_HINT: int = 64
 
-    HDAWG_FORCE_COMMAND_TABLE: bool = False
+    HDAWG_FORCE_COMMAND_TABLE: bool = True
     SHFSG_FORCE_COMMAND_TABLE: bool = True
 
     EMIT_TIMING_COMMENTS: bool = False
@@ -118,7 +118,7 @@ def from_dict(settings: Optional[Dict] = None) -> CompilerSettings:
 
     if settings is not None:
         for k, v in settings.items():
-            if not k in compiler_settings_dict:
+            if k not in compiler_settings_dict:
                 raise KeyError(f"Not a valid setting: {k}")
             compiler_settings_dict[k] = v
 

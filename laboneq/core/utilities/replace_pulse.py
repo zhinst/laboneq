@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Union
 import numpy as np
 from numpy.typing import ArrayLike
 
+from laboneq.compiler.common.pulse_parameters import decode_pulse_parameters
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.core.utilities.pulse_sampler import (
     combine_pulse_parameters,
@@ -63,7 +64,6 @@ def _replace_pulse_in_wave(
     input_samples = None
     amplitude = 1.0
     function = None
-    length = None
     pulse_id = "<replaced pulse>"
     pulse_parameters = {}
     if isinstance(pulse_or_array, list):
@@ -71,14 +71,11 @@ def _replace_pulse_in_wave(
     if isinstance(pulse_or_array, np.ndarray):
         input_samples = pulse_or_array
     else:
-        length = int(getattr(pulse_or_array, "length", 0) * pwm.sampling_rate)
         input_samples = getattr(pulse_or_array, "samples", None)
         amplitude = getattr(pulse_or_array, "amplitude", 1.0)
         function = getattr(pulse_or_array, "function", None)
         pulse_id = getattr(pulse_or_array, "uid", pulse_id)
         pulse_parameters = getattr(pulse_or_array, "pulse_parameters", None) or {}
-
-    length = length or (0 if input_samples is None else len(input_samples))
 
     if (
         not is_complex
@@ -95,9 +92,9 @@ def _replace_pulse_in_wave(
             continue
         phase = (instance.modulation_phase or 0.0) + (instance.iq_phase or 0.0)
         combined_pulse_parameters = combine_pulse_parameters(
-            instance.pulse_pulse_parameters,
+            decode_pulse_parameters(instance.pulse_pulse_parameters),
             pulse_parameters,
-            instance.play_pulse_parameters,
+            decode_pulse_parameters(instance.play_pulse_parameters),
         )
         samples = sample_pulse(
             signal_type=pwm.signal_type,
