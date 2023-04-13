@@ -99,8 +99,8 @@ class NodeInfo:
     read_only: bool = False
     handler: Callable[[NodeBase], None] = None
     # For DYNAMIC nodes
-    getter: Callable[[Any], None] = None
-    setter: Callable[[], Any] = None
+    getter: Callable[[], Any] = None
+    setter: Callable[[Any], None] = None
 
     def make_node(self) -> NodeBase:
         "Constructs concrete node instance from a node descriptor."
@@ -302,6 +302,14 @@ class DevEmuHDAWG(DevEmuHW):
 
     def _node_def(self) -> Dict[str, NodeInfo]:
         nd = {
+            "features/devtype": NodeInfo(
+                type=NodeType.STR,
+                default=self._dev_opts.get("features/devtype", "HDAWG8"),
+            ),
+            "features/options": NodeInfo(
+                type=NodeType.STR,
+                default=self._dev_opts.get("features/options", "MF\nME\nSKW"),
+            ),
             "system/clocks/sampleclock/status": NodeInfo(type=NodeType.INT, default=0),
             "system/clocks/sampleclock/freq": NodeInfo(
                 type=NodeType.FLOAT, default=2.4e9, handler=DevEmuHDAWG._sample_clock
@@ -376,6 +384,14 @@ class DevEmuUHFQA(DevEmuHW):
 
     def _node_def(self) -> Dict[str, NodeInfo]:
         nd = {
+            "features/devtype": NodeInfo(
+                type=NodeType.STR,
+                default=self._dev_opts.get("features/devtype", "UHFQA"),
+            ),
+            "features/options": NodeInfo(
+                type=NodeType.STR,
+                default=self._dev_opts.get("features/options", "AWG\nDIG\nQA"),
+            ),
             "awgs/0/enable": NodeInfo(
                 type=NodeType.INT, default=0, handler=DevEmuUHFQA._awg_execute
             ),
@@ -521,7 +537,18 @@ class DevEmuSHFQABase(DevEmuHW):
 
 class DevEmuSHFQA(DevEmuSHFQABase):
     def _node_def(self) -> Dict[str, NodeInfo]:
-        return self._node_def_qa()
+        nd = {
+            "features/devtype": NodeInfo(
+                type=NodeType.STR,
+                default=self._dev_opts.get("features/devtype", "SHFQA4"),
+            ),
+            "features/options": NodeInfo(
+                type=NodeType.STR,
+                default=self._dev_opts.get("features/options", ""),
+            ),
+        }
+        nd.update(self._node_def_qa())
+        return nd
 
 
 class DevEmuSHFSGBase(DevEmuHW):

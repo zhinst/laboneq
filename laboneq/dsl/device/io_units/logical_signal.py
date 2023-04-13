@@ -3,8 +3,9 @@
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Union
 
+from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.core.types.enums import IODirection
 from laboneq.dsl.calibration import MixerCalibration, SignalCalibration
 from laboneq.dsl.calibration.calibratable import Calibratable
@@ -321,3 +322,22 @@ class LogicalSignal(Calibratable):
     @property
     def physical_channel(self):
         return self._physical_channel
+
+
+LogicalSignalRef = Union[LogicalSignal, str]
+
+
+def resolve_logical_signal_ref(logical_signal_ref: LogicalSignalRef) -> str:
+    if logical_signal_ref is None:
+        return None
+    if isinstance(logical_signal_ref, str):
+        return logical_signal_ref
+    if (
+        not isinstance(logical_signal_ref, LogicalSignal)
+        or logical_signal_ref.path is None
+    ):
+        raise LabOneQException(
+            "Invalid LogicalSignal: Seems like the logical signal is not part of a qubit setup. "
+            "Make sure the object is retrieved from a device setup."
+        )
+    return logical_signal_ref.path

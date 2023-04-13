@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Union
+from typing import List
 
 from laboneq.compiler.code_generator.seq_c_generator import SeqCGenerator
 from laboneq.compiler.common.awg_sampled_event import AWGEvent
@@ -14,7 +14,7 @@ class SeqCTracker:
     def __init__(
         self,
         init_generator: SeqCGenerator,
-        deferred_function_calls: List[Union[str, Dict[str, List[Any]]]],
+        deferred_function_calls: SeqCGenerator,
         sampling_rate: float,
         delay: float,
         device_type: DeviceType,
@@ -59,14 +59,13 @@ class SeqCTracker:
 
         return self.current_time
 
-    def clear_deferred_function_calls(self):
+    def flush_deferred_function_calls(self):
         """Emit the deferred function calls *now*."""
-        if len(self.deferred_function_calls) > 0:
-            for call in self.deferred_function_calls:
-                self.current_loop_stack_generator().add_function_call_statement(
-                    call["name"], call["args"]
-                )
-            self.deferred_function_calls = []
+        if self.deferred_function_calls.num_statements() > 0:
+            self.current_loop_stack_generator().append_statements_from(
+                self.deferred_function_calls
+            )
+            self.deferred_function_calls.clear()
 
     def force_deferred_function_calls(self):
         """There may be deferred function calls issued *at the end of the sequence*.
@@ -76,15 +75,15 @@ class SeqCTracker:
         This function should not be needed anywhere but at the end of the sequence.
         (In the future, maybe at the end of a loop iteration?)
         """
-        if self.deferred_function_calls:
+        if self.deferred_function_calls.num_statements() > 0:
             # Flush any remaining deferred calls (ie those that should execute at the
             # end of the sequence)
             if self.device_type == DeviceType.SHFQA:
                 # SHFQA does not support waitWave()
                 self.add_play_zero_statement(32)
             else:
-                self.add_function_call_statement("waitWave", [])
-            self.clear_deferred_function_calls()
+                self.add_function_call_statement("waitWave")
+            self.flush_deferred_function_calls()
 
     def add_timing_comment(self, end_samples):
         if self.emit_timing_comments:
@@ -105,7 +104,7 @@ class SeqCTracker:
         self, name, args=None, assign_to=None, deferred=False
     ):
         if deferred:
-            self.deferred_function_calls.append({"name": name, "args": args})
+            self.deferred_function_calls.add_function_call_statement(name, args)
         else:
             self.current_loop_stack_generator().add_function_call_statement(
                 name, args, assign_to
@@ -137,20 +136,22 @@ class SeqCTracker:
     def add_variable_increment(self, variable_name, value):
         self.current_loop_stack_generator().add_variable_increment(variable_name, value)
 
-    def add_assign_wave_index_statement(
-        self, device_type: DeviceType, signal_type, wave_id, wave_index, channel
-    ):
-        self.current_loop_stack_generator().add_assign_wave_index_statement(
-            device_type, signal_type, wave_id, wave_index, channel
-        )
-
-    def append_loop_stack_generator(self, outer=False, always=False, generator=None):
+    # todo: remove `always` argument
+    def append_loop_stack_generator(self, always=False, generator=None):
         if not generator:
             generator = SeqCGenerator()
-        if outer:
-            self.loop_stack_generators.append([generator])
-        elif always or self.loop_stack_generators[-1][-1].num_statements() > 0:
+
+        top_of_stack = self.loop_stack_generators[-1]
+        if always or len(top_of_stack) == 0 or top_of_stack[-1].num_statements() > 0:
             self.loop_stack_generators[-1].append(generator)
 
+    def push_loop_stack_generator(self, generator=None):
+        self.loop_stack_generators.append([])
+        self.append_loop_stack_generator(generator)
+
     def pop_loop_stack_generators(self):
-        return self.loop_stack_generators.pop()
+        top_of_stack = self.loop_stack_generators.pop()
+        for i, gen in enumerate(top_of_stack):
+            compressed = gen.compressed()
+            top_of_stack[i] = compressed
+        return top_of_stack

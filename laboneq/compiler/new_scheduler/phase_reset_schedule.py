@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import Dict, Iterator, List, Tuple
 
 from attrs import define
 
@@ -22,9 +22,11 @@ class PhaseResetSchedule(IntervalSchedule):
         start: int,
         max_events: int,
         id_tracker: Iterator[int],
-        expand_loops=False,
-        settings: Optional[CompilerSettings] = None,
+        expand_loops,
+        settings: CompilerSettings,
     ) -> List[Dict]:
+        assert self.length is not None
+        assert self.absolute_start is not None
         events = [
             {
                 "event_type": EventType.RESET_HW_OSCILLATOR_PHASE,
@@ -49,9 +51,10 @@ class PhaseResetSchedule(IntervalSchedule):
 
         return events
 
-    def _calculate_timing(self, *_, **__):
+    def _calculate_timing(self, _schedule_data, start: int, *__, **___) -> int:
         # Length must be set via parameter, so nothing to do here
         assert self.length is not None
+        return start
 
     def __hash__(self):
         super().__hash__()

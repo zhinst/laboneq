@@ -1,12 +1,17 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import logging
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Dict, Optional
 
 from laboneq.compiler.code_generator.measurement_calculator import IntegrationTimes
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
+
+if TYPE_CHECKING:
+    from laboneq.compiler.workflow.compiler import LeaderProperties
 
 _logger = logging.getLogger(__name__)
 
@@ -107,7 +112,10 @@ class RecipeGenerator:
         return None
 
     def add_connectivity_from_experiment(
-        self, experiment_dao, leader_properties, clock_settings
+        self,
+        experiment_dao: ExperimentDAO,
+        leader_properties: LeaderProperties,
+        clock_settings,
     ):
         if leader_properties.global_leader is not None:
             initialization = self._find_initialization(leader_properties.global_leader)
@@ -262,7 +270,12 @@ class RecipeGenerator:
         }
         initialization["awgs"].append(awg)
 
-    def from_experiment(self, experiment_dao, leader_properties, clock_settings):
+    def from_experiment(
+        self,
+        experiment_dao: ExperimentDAO,
+        leader_properties: LeaderProperties,
+        clock_settings,
+    ):
         self.add_devices_from_experiment(experiment_dao)
         self.add_connectivity_from_experiment(
             experiment_dao, leader_properties, clock_settings

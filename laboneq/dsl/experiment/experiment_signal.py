@@ -4,8 +4,11 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from laboneq.core.exceptions import LabOneQException
 from laboneq.dsl.calibration import MixerCalibration, SignalCalibration
+from laboneq.dsl.device.io_units.logical_signal import (
+    LogicalSignalRef,
+    resolve_logical_signal_ref,
+)
 
 experiment_signal_id = 0
 
@@ -28,7 +31,7 @@ class ExperimentSignal:
     def __init__(
         self,
         uid=None,
-        map_to=None,
+        map_to: LogicalSignalRef = None,
         calibration=None,
         oscillator=None,
         amplitude: float = None,
@@ -81,15 +84,8 @@ class ExperimentSignal:
     def is_mapped(self):
         return self.mapped_logical_signal_path is not None
 
-    def map(self, to):
-        if isinstance(to, str):
-            self.mapped_logical_signal_path = to
-        else:
-            if to is not None and (not hasattr(to, "path") or to.path is None):
-                raise LabOneQException(
-                    "Invalid LogicalSignal: Seems like the logical signal is not part of a qubit setup. Make sure the object is retrieved from a device setup."
-                )
-            self.mapped_logical_signal_path = to.path if to is not None else None
+    def map(self, to: LogicalSignalRef):
+        self.mapped_logical_signal_path = resolve_logical_signal_ref(to)
 
     def disconnect(self):
         """Disconnect the experiment signal from the logical signal."""

@@ -25,6 +25,7 @@ from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.common.play_wave_type import PlayWaveType
 from laboneq.compiler.common.pulse_parameters import encode_pulse_parameters
+from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.experiment_access.param_ref import ParamRef
 from laboneq.compiler.experiment_access.pulse_def import PulseDef
@@ -140,6 +141,7 @@ class Scheduler:
         self,
         experiment_dao: ExperimentDAO,
         sampling_rate_tracker: SamplingRateTracker,
+        signal_objects: Dict[str, SignalObj],
         clock_settings: Optional[Dict] = None,
         settings: Optional[CompilerSettings] = None,
     ):

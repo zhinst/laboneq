@@ -27,7 +27,6 @@ from laboneq.compiler.code_generator.analyze_events import (
 )
 from laboneq.compiler.code_generator.analyze_playback import analyze_play_wave_times
 from laboneq.compiler.code_generator.command_table_tracker import CommandTableTracker
-from laboneq.compiler.code_generator.compressor import compress_generators_rle
 from laboneq.compiler.code_generator.feedback_register_allocator import (
     FeedbackRegisterAllocator,
 )
@@ -40,7 +39,10 @@ from laboneq.compiler.code_generator.sampled_event_handler import (
     FeedbackConnection,
     SampledEventHandler,
 )
-from laboneq.compiler.code_generator.seq_c_generator import SeqCGenerator
+from laboneq.compiler.code_generator.seq_c_generator import (
+    SeqCGenerator,
+    merge_generators,
+)
 from laboneq.compiler.code_generator.seqc_tracker import SeqCTracker
 from laboneq.compiler.code_generator.signatures import (
     PlaybackSignature,
@@ -83,7 +85,11 @@ from laboneq.core.utilities.pulse_sampler import (
 _logger = logging.getLogger(__name__)
 
 
-def add_wait_trigger_statements(awg: AWGInfo, init_generator, deferred_function_calls):
+def add_wait_trigger_statements(
+    awg: AWGInfo,
+    init_generator: SeqCGenerator,
+    deferred_function_calls: SeqCGenerator,
+):
     if awg.trigger_mode == TriggerMode.DIO_TRIGGER:
         if awg.awg_number == 0:
             init_generator.add_function_call_statement("setDIO", ["0"])
@@ -97,20 +103,20 @@ def add_wait_trigger_statements(awg: AWGInfo, init_generator, deferred_function_
                 round(awg.sampling_rate * CodeGenerator.DELAY_FIRST_AWG / 16) * 16
             )
             if int(delay_first_awg_samples) > 0:
-                deferred_function_calls.append(
-                    {"name": "playZero", "args": [delay_first_awg_samples]}
+                deferred_function_calls.add_function_call_statement(
+                    "playZero", [delay_first_awg_samples]
                 )
-                deferred_function_calls.append({"name": "waitWave", "args": []})
+                deferred_function_calls.add_function_call_statement("waitWave")
         else:
             init_generator.add_function_call_statement("waitDIOTrigger")
             delay_other_awg_samples = str(
                 round(awg.sampling_rate * CodeGenerator.DELAY_OTHER_AWG / 16) * 16
             )
             if int(delay_other_awg_samples) > 0:
-                deferred_function_calls.append(
-                    {"name": "playZero", "args": [delay_other_awg_samples]}
+                deferred_function_calls.add_function_call_statement(
+                    "playZero", [delay_other_awg_samples]
                 )
-                deferred_function_calls.append({"name": "waitWave", "args": []})
+                deferred_function_calls.add_function_call_statement("waitWave")
 
     elif awg.trigger_mode == TriggerMode.DIO_WAIT:
         init_generator.add_variable_declaration("dio", "0xffffffff")
@@ -998,7 +1004,7 @@ class CodeGenerator:
         )
         command_table_tracker = CommandTableTracker(awg.device_type)
 
-        deferred_function_calls = []
+        deferred_function_calls = SeqCGenerator()
         init_generator = SeqCGenerator()
 
         seqc_tracker = SeqCTracker(
@@ -1046,14 +1052,8 @@ class CodeGenerator:
             "***  collected generators, seq_c_generators: %s", seq_c_generators
         )
 
-        main_generator = compress_generators_rle(
-            seq_c_generators, declarations_generator
-        )
+        main_generator = merge_generators(seq_c_generators)
 
-        if main_generator.needs_play_zero_counter():
-            declarations_generator.add_variable_declaration(
-                main_generator.play_zero_counter_variable_name()
-            )
         seq_c_generator = SeqCGenerator()
         if function_defs_generator.num_statements() > 0:
             seq_c_generator.append_statements_from(function_defs_generator)

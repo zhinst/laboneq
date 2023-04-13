@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import numpy
 from numpy import typing as npt
@@ -130,6 +130,22 @@ class DeviceSHFSG(DeviceZI):
 
     def _make_osc_path(self, channel: int, index: int) -> str:
         return f"/{self.serial}/sgchannels/{channel}/oscs/{index}/freq"
+
+    def disable_outputs(
+        self, outputs: Set[int], invert: bool
+    ) -> List[DaqNodeSetAction]:
+        channels_to_disable: List[DaqNodeSetAction] = []
+        for ch in range(self._channels):
+            if (ch in outputs) != invert:
+                channels_to_disable.append(
+                    DaqNodeSetAction(
+                        self._daq,
+                        f"/{self.serial}/sgchannels/{ch}/output/on",
+                        0,
+                        caching_strategy=CachingStrategy.NO_CACHE,
+                    )
+                )
+        return channels_to_disable
 
     def _nodes_to_monitor_impl(self) -> List[str]:
         nodes = []

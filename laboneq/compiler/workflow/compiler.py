@@ -22,6 +22,7 @@ from laboneq.compiler.common.awg_signal_type import AWGSignalType
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.common.trigger_mode import TriggerMode
+from laboneq.compiler.experiment_access.device_info import DeviceInfo
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.new_scheduler.scheduler import Scheduler as NewScheduler
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
@@ -71,6 +72,7 @@ class Compiler:
         self._precompensations: Dict[
             str, Dict[str, Union[Dict[str, Any], float]]
         ] = None
+        self._signal_objects: Dict[str, SignalObj] = {}
 
         _logger.info("Starting LabOne Q Compiler run...")
         self._check_tinysamples()
@@ -103,7 +105,7 @@ class Compiler:
             self._experiment_dao = ExperimentDAO(experiment)
 
     def _analyze_setup(self):
-        def get_first_instr_of(device_infos, type):
+        def get_first_instr_of(device_infos: List[DeviceInfo], type) -> DeviceInfo:
             return next((instr for instr in device_infos if instr.device_type == type))
 
         device_infos = self._experiment_dao.device_infos()
@@ -212,18 +214,22 @@ class Compiler:
         self._leader_properties.global_leader = leader
 
     def _process_experiment(self, experiment):
-        self.use_experiment(experiment)
-        self._analyze_setup()
         self._calc_osc_numbering()
         self._calc_awgs()
-        _logger.debug("Processing Sections:::::::")
+        self._calc_shfqa_generator_allocation()
+
         self._sampling_rate_tracker = SamplingRateTracker(
             self._experiment_dao, self._clock_settings
         )
+        self._calc_integration_unit_allocation()
+        self._precompensations = self._calc_precompensations()
+        self._signal_objects = self._generate_signal_objects()
+        _logger.debug("Processing Sections:::::::")
 
         self._scheduler = self.Scheduler(
             self._experiment_dao,
             self._sampling_rate_tracker,
+            self._signal_objects,
             self._clock_settings,
             self._settings,
         )
@@ -255,119 +261,15 @@ class Compiler:
 
     @trace("compiler.generate-code()")
     def _generate_code(self):
-        self._calc_awgs()
-        self._calc_shfqa_generator_allocation()
-        self._precompensations = compute_precompensations_and_delays(
-            self._experiment_dao
-        )
-        compute_precompensation_delays_on_grid(
-            self._precompensations,
-            self._experiment_dao,
-            self._clock_settings["use_2GHz_for_HDAWG"],
-        )
-
         code_generator = CodeGenerator(self._settings)
         self._code_generator = code_generator
 
-        for signal_id in self._experiment_dao.signals():
-
-            signal_info = self._experiment_dao.signal_info(signal_id)
-            delay_signal = signal_info.delay_signal
-
-            device_type = DeviceType(signal_info.device_type)
-            device_id = signal_info.device_id
-
-            sampling_rate = self._sampling_rate_tracker.sampling_rate_for_device(
-                device_id
-            )
-            start_delay = self.get_lead_delay(
-                device_type,
-                self._leader_properties.is_desktop_setup,
-                self._clock_settings["use_2GHz_for_HDAWG"],
-            )
-            start_delay += self._precompensations[signal_id]["computed_delay_signal"]
-
-            if delay_signal is not None:
-                delay_signal = self._get_total_rounded_delay(
-                    delay_signal, signal_id, device_type, sampling_rate
-                )
-            else:
-                delay_signal = 0
-
-            awg = self.get_awg(signal_id)
-            awg.trigger_mode = TriggerMode.NONE
-            device_info = self._experiment_dao.device_info(device_id)
-            try:
-                awg.reference_clock_source = self._clock_settings[device_id]
-            except KeyError:
-                awg.reference_clock_source = device_info.reference_clock_source
-            if self._leader_properties.is_desktop_setup:
-                awg.trigger_mode = {
-                    DeviceType.HDAWG: TriggerMode.DIO_TRIGGER,
-                    DeviceType.SHFSG: TriggerMode.INTERNAL_TRIGGER_WAIT,
-                    DeviceType.SHFQA: TriggerMode.INTERNAL_TRIGGER_WAIT,
-                    DeviceType.UHFQA: TriggerMode.DIO_WAIT,
-                }.get(device_type, TriggerMode.NONE)
-            awg.sampling_rate = sampling_rate
-
-            signal_type = signal_info.signal_type
-
-            _logger.debug(
-                "Adding signal %s with signal type %s", signal_id, signal_type
-            )
-
-            oscillator_frequency = None
-
-            oscillator_info = self._experiment_dao.signal_oscillator(signal_id)
-            if (
-                oscillator_info is not None
-                and not oscillator_info.hardware
-                and signal_info.modulation
-            ):
-                oscillator_frequency = oscillator_info.frequency
-            channels = copy.deepcopy(signal_info.channels)
-            if signal_id in self._integration_unit_allocation:
-                channels = copy.deepcopy(
-                    self._integration_unit_allocation[signal_id]["channels"]
-                )
-            elif signal_id in self._shfqa_generator_allocation:
-                channels = copy.deepcopy(
-                    self._shfqa_generator_allocation[signal_id]["channels"]
-                )
-            hw_oscillator = (
-                oscillator_info.id
-                if oscillator_info is not None and oscillator_info.hardware
-                else None
-            )
-
-            mixer_type = MixerType.IQ
-            if (
-                device_type == DeviceType.UHFQA
-                and oscillator_info
-                and oscillator_info.hardware
-            ):
-                mixer_type = MixerType.UHFQA_ENVELOPE
-            elif signal_type in ("single",):
-                mixer_type = None
-
-            signal_obj = SignalObj(
-                id=signal_id,
-                sampling_rate=sampling_rate,
-                start_delay=start_delay,
-                delay_signal=delay_signal,
-                signal_type=signal_type,
-                device_id=device_id,
-                awg=awg,
-                device_type=device_type,
-                oscillator_frequency=oscillator_frequency,
-                channels=channels,
-                mixer_type=mixer_type,
-                hw_oscillator=hw_oscillator,
-            )
+        for signal_obj in self._signal_objects.values():
             code_generator.add_signal(signal_obj)
 
         _logger.debug("Preparing events for code generator")
         events = self._scheduler.event_timing(expand_loops=False)
+
         code_generator.gen_acquire_map(events, self._experiment_dao)
         code_generator.gen_seq_c(
             events,
@@ -575,6 +477,118 @@ class Compiler:
         if signal_info.signal_type == "integration" and device_type != DeviceType.SHFQA:
             awg_number = 0
         return self._awgs[device_id][awg_number]
+
+    def _calc_precompensations(self):
+        precompensations = compute_precompensations_and_delays(self._experiment_dao)
+        compute_precompensation_delays_on_grid(
+            precompensations,
+            self._experiment_dao,
+            self._clock_settings["use_2GHz_for_HDAWG"],
+        )
+        return precompensations
+
+    def _generate_signal_objects(self):
+        signal_objects = {}
+        for signal_id in self._experiment_dao.signals():
+
+            signal_info = self._experiment_dao.signal_info(signal_id)
+            delay_signal = signal_info.delay_signal
+
+            device_type = DeviceType(signal_info.device_type)
+            device_id = signal_info.device_id
+
+            sampling_rate = self._sampling_rate_tracker.sampling_rate_for_device(
+                device_id
+            )
+            start_delay = get_lead_delay(
+                self._settings,
+                device_type,
+                self._leader_properties.is_desktop_setup,
+                self._clock_settings["use_2GHz_for_HDAWG"],
+            )
+            start_delay += self._precompensations[signal_id]["computed_delay_signal"]
+
+            if delay_signal is not None:
+                delay_signal = self._get_total_rounded_delay(
+                    delay_signal, signal_id, device_type, sampling_rate
+                )
+            else:
+                delay_signal = 0
+
+            awg = self.get_awg(signal_id)
+            awg.trigger_mode = TriggerMode.NONE
+            device_info = self._experiment_dao.device_info(device_id)
+            try:
+                awg.reference_clock_source = self._clock_settings[device_id]
+            except KeyError:
+                awg.reference_clock_source = device_info.reference_clock_source
+            if self._leader_properties.is_desktop_setup:
+                awg.trigger_mode = {
+                    DeviceType.HDAWG: TriggerMode.DIO_TRIGGER,
+                    DeviceType.SHFSG: TriggerMode.INTERNAL_TRIGGER_WAIT,
+                    DeviceType.SHFQA: TriggerMode.INTERNAL_TRIGGER_WAIT,
+                    DeviceType.UHFQA: TriggerMode.DIO_WAIT,
+                }.get(device_type, TriggerMode.NONE)
+            awg.sampling_rate = sampling_rate
+
+            signal_type = signal_info.signal_type
+
+            _logger.debug(
+                "Adding signal %s with signal type %s", signal_id, signal_type
+            )
+
+            oscillator_frequency = None
+
+            oscillator_info = self._experiment_dao.signal_oscillator(signal_id)
+            if (
+                oscillator_info is not None
+                and not oscillator_info.hardware
+                and signal_info.modulation
+            ):
+                oscillator_frequency = oscillator_info.frequency
+            channels = copy.deepcopy(signal_info.channels)
+            if signal_id in self._integration_unit_allocation:
+                channels = copy.deepcopy(
+                    self._integration_unit_allocation[signal_id]["channels"]
+                )
+            elif signal_id in self._shfqa_generator_allocation:
+                channels = copy.deepcopy(
+                    self._shfqa_generator_allocation[signal_id]["channels"]
+                )
+            hw_oscillator = (
+                oscillator_info.id
+                if oscillator_info is not None and oscillator_info.hardware
+                else None
+            )
+
+            mixer_type = MixerType.IQ
+            if (
+                device_type == DeviceType.UHFQA
+                and oscillator_info
+                and oscillator_info.hardware
+            ):
+                mixer_type = MixerType.UHFQA_ENVELOPE
+            elif signal_type in ("single",):
+                mixer_type = None
+
+            signal_obj = SignalObj(
+                id=signal_id,
+                sampling_rate=sampling_rate,
+                start_delay=start_delay,
+                delay_signal=delay_signal,
+                signal_type=signal_type,
+                device_id=device_id,
+                awg=awg,
+                device_type=device_type,
+                oscillator_frequency=oscillator_frequency,
+                channels=channels,
+                port_delay=self._experiment_dao.port_delay(signal_id),
+                mixer_type=mixer_type,
+                hw_oscillator=hw_oscillator,
+                is_qc=device_info.is_qc,
+            )
+            signal_objects[signal_id] = signal_obj
+        return signal_objects
 
     def calc_outputs(self, signal_delays: SignalDelays):
         all_channels = {}
@@ -1088,8 +1102,9 @@ class Compiler:
     def run(self, data) -> CompiledExperiment:
         _logger.debug("ES Compiler run")
 
+        self.use_experiment(data)
+        self._analyze_setup()
         self._process_experiment(data)
-        self._calc_integration_unit_allocation()
 
         self._generate_code()
         self._generate_recipe()
@@ -1112,28 +1127,34 @@ class Compiler:
         _logger.info("Finished LabOne Q Compiler run.")
         return retval
 
-    def get_lead_delay(self, device_type, desktop_setup, hdawg_uses_2GHz):
-        if not isinstance(device_type, DeviceType):
-            raise Exception(f"Device type {device_type} is not of type DeviceType")
-        if device_type == DeviceType.HDAWG:
-            if not desktop_setup:
-                if hdawg_uses_2GHz:
-                    return self._settings.HDAWG_LEAD_PQSC_2GHz
-                else:
-                    return self._settings.HDAWG_LEAD_PQSC
+
+def get_lead_delay(
+    settings: compiler_settings.CompilerSettings,
+    device_type: DeviceType,
+    desktop_setup: bool,
+    hdawg_uses_2GHz: bool,
+):
+    if not isinstance(device_type, DeviceType):
+        raise RuntimeError(f"Device type {device_type} is not of type DeviceType")
+    if device_type == DeviceType.HDAWG:
+        if not desktop_setup:
+            if hdawg_uses_2GHz:
+                return settings.HDAWG_LEAD_PQSC_2GHz
             else:
-                if hdawg_uses_2GHz:
-                    return self._settings.HDAWG_LEAD_DESKTOP_SETUP_2GHz
-                else:
-                    return self._settings.HDAWG_LEAD_DESKTOP_SETUP
-        elif device_type == DeviceType.UHFQA:
-            return self._settings.UHFQA_LEAD_PQSC
-        elif device_type == DeviceType.SHFQA:
-            return self._settings.SHFQA_LEAD_PQSC
-        elif device_type == DeviceType.SHFSG:
-            return self._settings.SHFSG_LEAD_PQSC
+                return settings.HDAWG_LEAD_PQSC
         else:
-            raise Exception(f"Unsupported device type {device_type}")
+            if hdawg_uses_2GHz:
+                return settings.HDAWG_LEAD_DESKTOP_SETUP_2GHz
+            else:
+                return settings.HDAWG_LEAD_DESKTOP_SETUP
+    elif device_type == DeviceType.UHFQA:
+        return settings.UHFQA_LEAD_PQSC
+    elif device_type == DeviceType.SHFQA:
+        return settings.SHFQA_LEAD_PQSC
+    elif device_type == DeviceType.SHFSG:
+        return settings.SHFSG_LEAD_PQSC
+    else:
+        raise RuntimeError(f"Unsupported device type {device_type}")
 
 
 def find_obj_by_id(object_list, id):

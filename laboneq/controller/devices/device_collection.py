@@ -5,8 +5,21 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import defaultdict
 from copy import deepcopy
-from typing import TYPE_CHECKING, Callable, Dict, Iterator, List, Optional, Tuple, cast
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    cast,
+)
+
+from zhinst.utils.api_compatibility import check_dataserver_device_compatibility
 
 from laboneq.controller.communication import (
     CachingStrategy,
@@ -49,11 +62,11 @@ class DeviceCollection:
         self,
         device_setup: DeviceSetup,
         dry_run: bool,
-        ignore_lab_one_version_error: bool = False,
+        ignore_version_mismatch: bool = False,
     ):
         self._ds = DeviceSetupDAO(deepcopy(device_setup))
         self._dry_run = dry_run
-        self._ignore_lab_one_version_error = ignore_lab_one_version_error
+        self._ignore_version_mismatch = ignore_version_mismatch
         self._daqs: Dict[str, DaqWrapper] = {}
         self._devices: Dict[str, DeviceZI] = {}
 
@@ -82,7 +95,7 @@ class DeviceCollection:
             )
         return device
 
-    def find_by_path(self, path: str):
+    def find_by_node_path(self, path: str) -> DeviceZI:
         m = re.match(r"^/?(DEV\d+)/.+", path.upper())
         if m is None:
             raise LabOneQControllerException(
@@ -213,6 +226,44 @@ class DeviceCollection:
         self._devices = {}
         self._daqs = {}
 
+    def disable_outputs(
+        self,
+        device_uids: List[str] = None,
+        logical_signals: List[str] = None,
+        unused_only: bool = False,
+    ):
+        # Set of outputs to disable or skip (depending on the 'invert' param) per device.
+        # Rationale for the logic: the actual number of outputs is only known by the connected
+        # device object, here we can only determine the outputs mapped in the device setup.
+        outputs_per_device: Dict[str, Optional[Set[int]]] = {}
+
+        if logical_signals is None:
+            invert = True
+            known_device_uids = [uid for uid, _ in self.all]
+            if device_uids is None:
+                device_uids = known_device_uids
+            else:
+                device_uids = [uid for uid in device_uids if uid in known_device_uids]
+            for device_uid in device_uids:
+                outputs_per_device[device_uid] = (
+                    self._ds.get_device_used_outputs(device_uid)
+                    if unused_only
+                    else set()
+                )
+        else:
+            invert = False
+            assert device_uids is None and not unused_only
+            for ls_path in logical_signals:
+                device_uid, outputs = self._ds.resolve_ls_path_outputs(ls_path)
+                if device_uid is not None:
+                    outputs_per_device.setdefault(device_uid, set()).update(outputs)
+
+        all_actions: List[DaqNodeSetAction] = []
+        for device_uid, outputs in outputs_per_device.items():
+            device = self.find_by_uid(device_uid)
+            all_actions.extend(device.disable_outputs(outputs, invert))
+        batch_set(all_actions)
+
     def shut_down(self):
         for device in self._devices.values():
             device.shut_down()
@@ -238,7 +289,23 @@ class DeviceCollection:
         for daq in self._daqs.values():
             daq.node_monitor.reset()
 
+    def _validate_dataserver_device_fw_compatibility(self):
+        """Validate dataserver and device firmware compatibility."""
+        if not (self._dry_run or self._ignore_version_mismatch):
+            daq_dev_addrs = defaultdict(list)
+            for dev in self._ds.instruments:
+                daq_dev_addrs[dev.server_uid].append(dev.address)
+            for daq_uid, dev_addrs in daq_dev_addrs.items():
+                try:
+                    check_dataserver_device_compatibility(
+                        self._daqs.get(daq_uid)._zi_api_object, dev_addrs
+                    )
+                except Exception as error:
+                    raise LabOneQControllerException(str(error)) from error
+
     def _prepare_devices(self, is_using_standalone_compiler):
+        self._validate_dataserver_device_fw_compatibility()
+
         def make_device_qualifier(
             instrument: ZIStandardInstrument, daq: DaqWrapper, gen2: bool
         ) -> DeviceQualifier:
@@ -264,6 +331,7 @@ class DeviceCollection:
         for instrument in self._ds.instruments:
             daq = self._daqs.get(instrument.server_uid)
             device_qualifier = make_device_qualifier(instrument, daq, self._ds.has_shf)
+
             if device_qualifier.dry_run:
                 dry_run_daq: DaqWrapperDryRun = daq
                 dry_run_daq.map_device_type(device_qualifier)
@@ -309,7 +377,7 @@ class DeviceCollection:
                 host=server.host,
                 port=int(server.port),
                 api_level=int(server.api_level),
-                ignore_lab_one_version_error=self._ignore_lab_one_version_error,
+                ignore_version_mismatch=self._ignore_version_mismatch,
             )
 
         updated_daqs: Dict[str, DaqWrapper] = {}

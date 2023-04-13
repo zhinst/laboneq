@@ -26,7 +26,7 @@ class LoopSchedule(SectionSchedule):
 
     def _calculate_timing(
         self, schedule_data: ScheduleData, loop_start: int, start_may_change: bool  # type: ignore # noqa: F821
-    ):
+    ) -> int:
         adjusted_rep_time = (
             None
             if self.repetition_time is None
@@ -102,17 +102,19 @@ class LoopSchedule(SectionSchedule):
                     c.adjust_length(longest)
                 self.children_start = [longest * i for i in range(len(self.children))]
             self._calculate_length(schedule_data)
+        return loop_start
 
     def generate_event_list(
         self,
         start: int,
         max_events: int,
         id_tracker: Iterator[int],
-        expand_loops=False,
-        settings: Optional[CompilerSettings] = None,
+        expand_loops,
+        settings: CompilerSettings,
     ) -> List[Dict]:
         assert self.children_start is not None
         assert self.length is not None
+        assert self.absolute_start is not None
 
         # We'll later wrap the child events in some extra events, see below.
         max_events -= 3

@@ -191,7 +191,7 @@ class ServerQualifier:
     host: str = None
     port: int = None
     api_level: int = None
-    ignore_lab_one_version_error: bool = False
+    ignore_version_mismatch: bool = False
 
 
 class DaqWrapper(ZiApiWrapperBase):
@@ -227,7 +227,7 @@ class DaqWrapper(ZiApiWrapperBase):
             self._dataserver_version = LabOneVersion(version_str)
         except ValueError:
             err_msg = f"Version {version_str} is not supported by LabOne Q."
-            if server_qualifier.ignore_lab_one_version_error:
+            if server_qualifier.ignore_version_mismatch:
                 _logger.warning("Ignoring that %s", err_msg)
                 self._dataserver_version = LabOneVersion.LATEST
             else:
@@ -237,7 +237,7 @@ class DaqWrapper(ZiApiWrapperBase):
         zi_python_version = f"{major}.{minor}"
         if zi_python_version != version_str:
             err_msg = f"Version of dataserver ({version_str}) and zi python ({zi_python_version}) do not match."
-            if self.server_qualifier.ignore_lab_one_version_error:
+            if self.server_qualifier.ignore_version_mismatch:
                 _logger.warning("Ignoring that %s", err_msg)
             else:
                 raise LabOneQControllerException(err_msg)

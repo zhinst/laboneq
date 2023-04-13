@@ -1,7 +1,7 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Dict, Iterator, List, Optional
+from typing import Dict, Iterator, List
 
 from attrs import asdict, define
 
@@ -20,9 +20,12 @@ class CaseSchedule(SectionSchedule):
         start: int,
         max_events: int,
         id_tracker: Iterator[int],
-        expand_loops=False,
-        settings: Optional[CompilerSettings] = None,
+        expand_loops,
+        settings: CompilerSettings,
     ) -> List[Dict]:
+        assert self.length is not None
+        assert self.absolute_start is not None
+
         events = super().generate_event_list(
             start, max_events, id_tracker, expand_loops, settings
         )
@@ -43,13 +46,14 @@ class EmptyBranch(CaseSchedule):
         start: int,
         max_events: int,
         id_tracker: Iterator[int],
-        expand_loops=False,
-        settings: Optional[CompilerSettings] = None,
+        expand_loops,
+        settings: CompilerSettings,
     ) -> List[Dict]:
         section_start, *rest, section_end = super().generate_event_list(
             start, max_events, id_tracker, expand_loops, settings
         )
         assert self.length is not None
+        assert self.absolute_start is not None
         assert len(rest) == 0
         assert section_start["event_type"] == EventType.SECTION_START
         assert section_end["event_type"] == EventType.SECTION_END
@@ -91,5 +95,6 @@ class EmptyBranch(CaseSchedule):
 
         return [section_start, *delay_events, section_end]
 
-    def _calculate_timing(self, *_, **__):
+    def _calculate_timing(self, _schedule_data, start: int, *__, **___) -> int:
         self.length = self.grid
+        return start

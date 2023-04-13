@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Deque, Dict, List, Optional, Union
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import DSLVersion
 from laboneq.dsl.calibration.calibration import Calibration
-from laboneq.dsl.device.io_units.logical_signal import LogicalSignal
+from laboneq.dsl.device.io_units.logical_signal import LogicalSignalRef
 from laboneq.dsl.enums import (
     AcquisitionType,
     AveragingMode,
@@ -59,7 +59,7 @@ class Experiment:
             self.signals = signals_dict
 
     def add_signal(
-        self, uid: str = None, connect_to: Union[LogicalSignal, str] = None
+        self, uid: str = None, connect_to: LogicalSignalRef = None
     ) -> ExperimentSignal:
         """Add an experiment signal to the experiment.
 
@@ -106,9 +106,7 @@ class Experiment:
         """
         return uid in self.signals.keys()
 
-    def map_signal(
-        self, experiment_signal_uid: str, logical_signal: Union[LogicalSignal, str]
-    ):
+    def map_signal(self, experiment_signal_uid: str, logical_signal: LogicalSignalRef):
         """Connect an experiment signal to a logical signal.
 
         In order to relate an experiment signal to a logical signal defined in a
@@ -132,7 +130,7 @@ class Experiment:
 
         self.signals[experiment_signal_uid].map(logical_signal)
 
-    def reset_signal_map(self, signal_map: Dict[str, Union[LogicalSignal, str]] = None):
+    def reset_signal_map(self, signal_map: Dict[str, LogicalSignalRef] = None):
         """Reset i.e. disconnect all defined signal connections."""
 
         for signal in self.signals.values():
@@ -176,12 +174,12 @@ class Experiment:
             if signal.is_mapped()
         }
 
-    def set_signal_map(self, signal_map: Dict[str, Union[LogicalSignal, str]]):
-        for signal_uid, logical_signal_uid in signal_map.items():
+    def set_signal_map(self, signal_map: Dict[str, LogicalSignalRef]):
+        for signal_uid, logical_signal_ref in signal_map.items():
             if signal_uid not in self.signals.keys():
                 self._signal_not_found_error(signal_uid, "Cannot apply signal map.")
 
-            self.signals[signal_uid].map(to=logical_signal_uid)
+            self.signals[signal_uid].map(to=logical_signal_ref)
 
     # Calibration ....................................
 

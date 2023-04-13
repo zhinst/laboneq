@@ -7,6 +7,7 @@
 from laboneq.contrib.example_helpers.descriptors.hdawg_uhfqa_pqsc import (
     descriptor_hdawg_uhfqa_pqsc,
 )
+from laboneq.contrib.example_helpers.descriptors.shfqc import descriptor_shfqc
 from laboneq.contrib.example_helpers.descriptors.shfsg_shfqa_hdawg_pqsc import (
     descriptor_shfsg_shfqa_hdawg_pqsc,
 )
@@ -118,11 +119,12 @@ def create_device_setup(generation=2):
     """
     Function returning a calibrated device setup
     """
+    if generation == 3:
+        descriptor = descriptor_shfqc
     if generation == 2:
         descriptor = descriptor_shfsg_shfqa_hdawg_pqsc
     elif generation == 1:
         descriptor = descriptor_hdawg_uhfqa_pqsc
-
     else:
         raise ValueError("Invalid instrument generation given")
 

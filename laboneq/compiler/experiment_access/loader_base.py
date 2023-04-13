@@ -123,6 +123,7 @@ class LoaderBase:
         is_global_leader=None,
         reference_clock=None,
         reference_clock_source=None,
+        is_qc=None,
     ):
         self._devices[device_id] = {
             "id": device_id,
@@ -133,6 +134,7 @@ class LoaderBase:
             "is_global_leader": is_global_leader,
             "reference_clock": reference_clock,
             "reference_clock_source": reference_clock_source,
+            "is_qc": is_qc,
         }
 
     def add_oscillator(self, oscillator_id, frequency, frequency_param, is_hardware):

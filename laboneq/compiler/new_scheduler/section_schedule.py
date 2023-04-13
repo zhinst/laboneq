@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Dict, Iterator, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Dict, Iterator, List, Set, Tuple
 
 from attrs import define, field
 
@@ -106,8 +106,13 @@ class SectionSchedule(IntervalSchedule):
                         "found."
                     )
             start = ceil_to_grid(start, c.grid)
+            start = (
+                c.calculate_timing(
+                    schedule_data, absolute_start + start, start_may_change
+                )
+                - absolute_start
+            )
             self.children_start[i] = start
-            c.calculate_timing(schedule_data, absolute_start + start, start_may_change)
             for s in c.signals:
                 current_signal_start[s] = start + c.length
 
@@ -127,7 +132,10 @@ class SectionSchedule(IntervalSchedule):
                 for pa_name in pa_names:
                     play_before.setdefault(pa_name, []).append(pa_section)
         for i, c in reversed(list(enumerate(self.children))):
-            c.calculate_timing(schedule_data, absolute_start, True)
+            offset = (
+                c.calculate_timing(schedule_data, absolute_start, True) - absolute_start
+            )
+            assert offset == 0
             assert c.length is not None
             start = (
                 min((current_signal_end.setdefault(s, 0) for s in c.signals), default=0)
@@ -166,7 +174,7 @@ class SectionSchedule(IntervalSchedule):
 
     def _calculate_timing(
         self, schedule_data: ScheduleData, start: int, start_may_change
-    ):
+    ) -> int:
         children_index_by_name = {
             child.section: i
             for i, child in enumerate(self.children)
@@ -179,6 +187,7 @@ class SectionSchedule(IntervalSchedule):
         else:
             self._arrange_right_aligned(schedule_data, start, children_index_by_name)
         self._calculate_length(schedule_data)
+        return start
 
     def _calculate_length(self, schedule_data: ScheduleData):
         assert self.children_start is not None
@@ -215,10 +224,11 @@ class SectionSchedule(IntervalSchedule):
         start: int,
         max_events: int,
         id_tracker: Iterator[int],
-        expand_loops=False,
-        settings: Optional[CompilerSettings] = None,
+        expand_loops,
+        settings: CompilerSettings,
     ) -> List[Dict]:
         assert self.length is not None
+        assert self.absolute_start is not None
 
         # We'll wrap the child events in the section start and end events
         max_events -= 2
@@ -278,7 +288,7 @@ class SectionSchedule(IntervalSchedule):
         self,
         start: int,
         max_events: int,
-        settings: Optional[CompilerSettings],
+        settings: CompilerSettings,
         id_tracker: Iterator[int],
         expand_loops,
         subsection_events=True,

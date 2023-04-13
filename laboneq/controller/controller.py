@@ -73,7 +73,7 @@ class ControllerRunParameters:
     working_dir: str = "laboneq_output"
     setup_filename = None
     servers_filename = None
-    ignore_lab_one_version_error = False
+    ignore_version_mismatch = False
 
 
 # atexit hook
@@ -92,7 +92,7 @@ class Controller:
         self._devices = DeviceCollection(
             device_setup,
             self._run_parameters.dry_run,
-            self._run_parameters.ignore_lab_one_version_error,
+            self._run_parameters.ignore_version_mismatch,
         )
 
         self._last_connect_check_ts: float = None
@@ -446,6 +446,14 @@ class Controller:
             self._devices.connect(self._is_using_standalone_compiler)
         self._last_connect_check_ts = now
 
+    def disable_outputs(
+        self,
+        device_uids: List[str] = None,
+        logical_signals: List[str] = None,
+        unused_only: bool = False,
+    ):
+        self._devices.disable_outputs(device_uids, logical_signals, unused_only)
+
     def shut_down(self):
         _logger.info("Shutting down all devices...")
         self._devices.shut_down()
@@ -601,7 +609,7 @@ class Controller:
             self.nt_loop_indices: List[int] = []
 
         def set_handler(self, path: str, value):
-            dev = self.controller._devices.find_by_path(path)
+            dev = self.controller._devices.find_by_node_path(path)
             self.step_param_nodes.append(
                 DaqNodeSetAction(
                     dev._daq, path, value, caching_strategy=CachingStrategy.NO_CACHE

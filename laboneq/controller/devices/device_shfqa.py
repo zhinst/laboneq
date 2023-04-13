@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 from numpy import typing as npt
@@ -140,6 +140,22 @@ class DeviceSHFQA(DeviceZI):
 
     def _make_osc_path(self, channel: int, index: int) -> str:
         return f"/{self.serial}/qachannels/{channel}/oscs/{index}/freq"
+
+    def disable_outputs(
+        self, outputs: Set[int], invert: bool
+    ) -> List[DaqNodeSetAction]:
+        channels_to_disable: List[DaqNodeSetAction] = []
+        for ch in range(self._channels):
+            if (ch in outputs) != invert:
+                channels_to_disable.append(
+                    DaqNodeSetAction(
+                        self._daq,
+                        f"/{self.serial}/qachannels/{ch}/output/on",
+                        0,
+                        caching_strategy=CachingStrategy.NO_CACHE,
+                    )
+                )
+        return channels_to_disable
 
     def _nodes_to_monitor_impl(self) -> List[str]:
         nodes = []

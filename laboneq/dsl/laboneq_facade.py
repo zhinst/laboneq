@@ -22,9 +22,7 @@ class LabOneQFacade:
     def connect(session: Session):
         run_parameters = ctrl.ControllerRunParameters()
         run_parameters.dry_run = session._connection_state.emulated
-        run_parameters.ignore_lab_one_version_error = (
-            session._ignore_lab_one_version_error
-        )
+        run_parameters.ignore_version_mismatch = session._ignore_version_mismatch
 
         controller = ctrl.Controller(
             run_parameters=run_parameters,

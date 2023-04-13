@@ -35,7 +35,7 @@ def dump(experiment_dao: ExperimentDAO):
         device_info = experiment_dao.device_info(device)
 
         device_entry = {}
-        for key in ["id", "serial", "interface", "reference_clock_source"]:
+        for key in ["id", "serial", "interface", "reference_clock_source", "is_qc"]:
             if getattr(device_info, key) is not None:
                 device_entry[key] = getattr(device_info, key)
         device_entry["driver"] = device_info.device_type.lower()

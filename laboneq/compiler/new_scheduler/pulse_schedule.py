@@ -35,10 +35,11 @@ class PulseSchedule(IntervalSchedule):
         start: int,
         max_events: int,
         id_tracker: Iterator[int],
-        expand_loops=False,
-        settings: Optional[CompilerSettings] = None,
+        expand_loops,
+        settings: CompilerSettings,
     ) -> List[Dict]:
         assert self.length is not None
+        assert self.absolute_start is not None
         params_list = []
         for f in ("length_param", "amplitude_param", "phase_param", "offset_param"):
             if getattr(self.pulse, f) is not None:
@@ -156,9 +157,26 @@ class PulseSchedule(IntervalSchedule):
             },
         ]
 
-    def _calculate_timing(self, *_, **__):
+    def _calculate_timing(
+        self,
+        schedule_data: ScheduleData,  # type: ignore # noqa: F821
+        start: int,
+        start_may_change: bool,
+    ) -> int:
         # Length must be set via parameter, so nothing to do here
         assert self.length is not None
+
+        if (
+            self.is_acquire
+            and self.pulse is not None
+            and self.pulse.acquire_params is not None
+            and self.pulse.acquire_params.handle
+        ):
+            schedule_data.acquire_pulses.setdefault(
+                self.pulse.acquire_params.handle, []
+            ).append(self)
+
+        return start
 
     def __hash__(self):
         return super().__hash__()
@@ -173,10 +191,11 @@ class PrecompClearSchedule(IntervalSchedule):
         start: int,
         max_events: int,
         id_tracker: Iterator[int],
-        expand_loops=False,
-        settings: Optional[CompilerSettings] = None,
+        expand_loops,
+        settings: CompilerSettings,
     ) -> List[Dict]:
         assert self.length is not None
+        assert self.absolute_start is not None
         return [
             {
                 "event_type": EventType.RESET_PRECOMPENSATION_FILTERS,
@@ -187,8 +206,9 @@ class PrecompClearSchedule(IntervalSchedule):
             }
         ]
 
-    def _calculate_timing(self, *_, **__):
+    def _calculate_timing(self, _schedule_data, start: int, *__, **___) -> int:
         self.length = 0
+        return start
 
     def __hash__(self):
         super().__hash__()

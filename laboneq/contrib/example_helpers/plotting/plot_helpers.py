@@ -50,6 +50,7 @@ def plot_simulation(
     labels1 = []
     y2s = []
     labels2 = []
+    titles = []
     for signal in mapped_signals:
         mapped_path = compiled_experiment.experiment.signals[
             signal
@@ -75,6 +76,13 @@ def plot_simulation(
             get_frequency=True,
         )
 
+        physcial_channel = (
+            compiled_experiment.device_setup.logical_signal_groups[signal_group_name]
+            .logical_signals[signal_line_name]
+            .physical_channel.uid.replace("_", " ")
+            .replace("/", ": ")
+        )
+
         if "iq_channel" in str(
             physical_channel_path.type
         ).lower() and "input" not in str(physical_channel_path.name):
@@ -87,6 +95,8 @@ def plot_simulation(
 
                     y2s.append(my_snippet.wave.imag)
                     labels2.append(f"{signal} Q")
+
+                    titles.append(f"{physcial_channel} - {signal}".upper())
             except Exception:
                 pass
 
@@ -103,6 +113,8 @@ def plot_simulation(
                     y1s.append(my_snippet.wave.real)
                     labels1.append(f"{signal}")
 
+                    titles.append(f"{physcial_channel} - {signal}".upper())
+
                     empty_array = np.empty((1, time_length))
                     empty_array.fill(np.nan)
                     y2s.append(empty_array[0])
@@ -111,17 +123,17 @@ def plot_simulation(
             except Exception:
                 pass
 
-    colors = plt.rcParams["axes.prop_cycle"]()
-
     fig, axes = plt.subplots(
         nrows=len(y1s),
         sharex=False,
         figsize=(plot_width, len(mapped_signals) * plot_height),
     )
 
-    if len(mapped_signals) > 1:
-        for axs, x, y1, y2, label1, label2 in zip(
-            axes.flat, xs, y1s, y2s, labels1, labels2
+    colors = plt.rcParams["axes.prop_cycle"]()
+
+    if len(xs) > 1:
+        for axs, x, y1, y2, label1, label2, title in zip(
+            axes.flat, xs, y1s, y2s, labels1, labels2, titles
         ):
             # Get the next color from the cycler
             c = next(colors)["color"]
@@ -130,12 +142,15 @@ def plot_simulation(
             axs.plot(x, y2, label=label2, color=c)
             axs.set_ylabel(yaxis_label)
             axs.set_xlabel(xaxis_label)
+            axs.set_title(title)
             axs.legend(loc="upper right")
             axs.ticklabel_format(axis="both", style="sci", scilimits=(0, 0))
             axs.grid(True)
 
-    elif len(mapped_signals) == 1:
-        for x, y1, y2, label1, label2 in zip(xs, y1s, y2s, labels1, labels2):
+    elif len(xs) == 1:
+        for x, y1, y2, label1, label2, title in zip(
+            xs, y1s, y2s, labels1, labels2, titles
+        ):
             # Get the next color from the cycler
             c = next(colors)["color"]
             axes.plot(x, y1, label=label1, color=c)
@@ -143,6 +158,7 @@ def plot_simulation(
             axes.plot(x, y2, label=label2, color=c)
             axes.set_ylabel(yaxis_label)
             axes.set_xlabel(xaxis_label)
+            axes.set_title(title)
             axes.legend(loc="upper right")
             axes.ticklabel_format(axis="both", style="sci", scilimits=(0, 0))
             axes.grid(True)

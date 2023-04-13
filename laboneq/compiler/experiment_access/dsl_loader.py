@@ -70,6 +70,7 @@ class DSLLoader(LoaderBase):
             if global_leader_device_id == device.uid:
                 is_global_leader = 1
             reference_clock_source = getattr(device, "reference_clock_source", None)
+            is_qc = getattr(device, "is_qc", None)
 
             self.add_device(
                 device.uid,
@@ -82,6 +83,7 @@ class DSLLoader(LoaderBase):
                 reference_clock_source=None
                 if reference_clock_source is None
                 else reference_clock_source.value,
+                is_qc=is_qc,
             )
 
             for connection in device.connections:

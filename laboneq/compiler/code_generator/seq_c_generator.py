@@ -1,12 +1,17 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import functools
 import hashlib
 import logging
 import re
+import textwrap
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
+from laboneq.compiler.code_generator.compressor import Run, compressor_core
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.core.exceptions import LabOneQException
 
@@ -17,7 +22,6 @@ MAX_PLAY_ZERO_UHFQA = 131056
 MAX_PLAY_ZERO_HDAWG = 1048560
 
 MIN_PLAY_ZERO = 512 + 128
-PLAY_ZERO_COUNTER_VARIABLE = "play_zero_count"
 
 
 @functools.lru_cache()
@@ -44,11 +48,13 @@ def string_sanitize(input):
     return s
 
 
+SeqCStatement = Dict[str, Any]
+
+
 class SeqCGenerator:
     def __init__(self):
         self._seq_c_text = ""
-        self._statements = []
-        self._needs_play_zero_counter = False
+        self._statements: List[SeqCStatement] = []
 
     def num_statements(self):
         return len(self._statements)
@@ -60,12 +66,13 @@ class SeqCGenerator:
                 retval += 1
         return retval
 
-    def append_statements_from(self, seq_c_generator):
-        self._statements.extend(seq_c_generator._statements)
-        if seq_c_generator.needs_play_zero_counter():
-            self._needs_play_zero_counter = True
+    def clear(self):
+        self._statements.clear()
 
-    def add_statement(self, statement):
+    def append_statements_from(self, seq_c_generator: SeqCGenerator):
+        self._statements.extend(seq_c_generator._statements)
+
+    def add_statement(self, statement: SeqCStatement):
         self._statements.append(statement)
 
     def add_comment(self, comment_text):
@@ -101,22 +108,42 @@ class SeqCGenerator:
             }
         )
 
-    def add_countdown_loop(self, variable_name, num_repeats, body):
-        if body is None:
-            raise Exception(f"Empty body for variable_name {variable_name}")
+    def estimate_complexity(self):
+        """Calculate a rough estimate for the complexity (~nr of instructions)
+
+        The point here is not to be accurate about every statement, but to correctly
+        gauge the size of loops etc."""
+        score = 0
+        for s in self._statements:
+            default = 1
+            if s.get("type") in ["do_while", "repeat"]:
+                default = 10
+            score += s.get("complexity", default)
+        return score
+
+    def add_repeat(self, num_repeats, body: SeqCGenerator):
+        assert body is not None
+        complexity = body.estimate_complexity() + 2  # penalty for loop overhead
         self.add_statement(
             {
-                "type": "countdown_loop",
-                "variable_name": variable_name,
+                "type": "repeat",
                 "num_repeats": num_repeats,
                 "body": body,
+                "complexity": complexity,
             }
         )
 
-    def add_do_while(self, condition, body):
-        if body is None:
-            raise Exception("Empty body for while loop")
-        self.add_statement({"type": "do_while", "condition": condition, "body": body})
+    def add_do_while(self, condition, body: SeqCGenerator):
+        assert body is not None
+        complexity = body.estimate_complexity() + 5  # penalty for loop overhead
+        self.add_statement(
+            {
+                "type": "do_while",
+                "condition": condition,
+                "body": body,
+                "complexity": complexity,
+            }
+        )
 
     def add_function_def(self, text):
         self.add_statement({"type": "function_def", "text": text})
@@ -174,7 +201,12 @@ class SeqCGenerator:
             }
         )
 
-    def add_play_zero_statement(self, num_samples, device_type, deferred_calls=None):
+    def add_play_zero_statement(
+        self,
+        num_samples,
+        device_type,
+        deferred_calls: Optional[SeqCGenerator] = None,
+    ):
         """Add a playZero command
 
         If the requested number of samples exceeds the allowed number of samples for
@@ -184,9 +216,7 @@ class SeqCGenerator:
         context of the added playZero(s). The passed list will be drained.
         """
         if deferred_calls is None:
-            deferred_calls = []
-
-        assert isinstance(deferred_calls, list)
+            deferred_calls = SeqCGenerator()
 
         if isinstance(device_type, str):
             device_type = DeviceType(device_type)
@@ -194,7 +224,7 @@ class SeqCGenerator:
         sample_multiple = device_type.sample_multiple
         if num_samples % sample_multiple != 0:
             raise Exception(
-                f"Emitting playZero({num_samples}), which is not divisble by {sample_multiple}, which it should be for {device_type}"
+                f"Emitting playZero({num_samples}), which is not divisible by {sample_multiple}, which it should be for {device_type}"
             )
         if num_samples < device_type.min_play_wave:
             raise LabOneQException(
@@ -217,51 +247,47 @@ class SeqCGenerator:
                 }
             )
 
-        def clear_deferred_calls():
-            for call in deferred_calls:
-                self.add_function_call_statement(call["name"], call["args"])
-            del deferred_calls[:]
+        def flush_deferred_calls():
+            self.append_statements_from(deferred_calls)
+            deferred_calls.clear()
 
         if num_samples <= max_play_zero:
             statement_factory(num_samples)
-            clear_deferred_calls()
+            flush_deferred_calls()
         elif num_samples <= 2 * max_play_zero:
             # split in the middle
             half_samples = (num_samples // 2 // 16) * 16
             statement_factory(half_samples)
-            clear_deferred_calls()
+            flush_deferred_calls()
             statement_factory(num_samples - half_samples)
         else:  # non-unrolled loop
-            self._needs_play_zero_counter = True
             num_segments, rest = divmod(num_samples, max_play_zero)
             if 0 < rest < MIN_PLAY_ZERO:
                 chunk = (max_play_zero // 2 // 16) * 16
                 statement_factory(chunk)
-                clear_deferred_calls()
+                flush_deferred_calls()
                 num_samples -= chunk
                 num_segments, rest = divmod(num_samples, max_play_zero)
             if rest > 0:
                 statement_factory(rest)
-                clear_deferred_calls()
-            if deferred_calls:
+                flush_deferred_calls()
+            if deferred_calls.num_statements() > 0:
                 statement_factory(max_play_zero)
-                clear_deferred_calls()
+                flush_deferred_calls()
                 num_segments -= 1
             if num_segments == 1:
                 statement_factory(max_play_zero)
                 return
 
-            inner_loop = SeqCGenerator()
-            inner_loop.add_statement(
+            loop_body = SeqCGenerator()
+            loop_body.add_statement(
                 {
                     "type": "playZero",
                     "device_type": device_type,
                     "num_samples": max_play_zero,
                 }
             )
-            self.add_countdown_loop(
-                self.play_zero_counter_variable_name(), num_segments, inner_loop
-            )
+            self.add_repeat(num_segments, loop_body)
 
     def generate_seq_c(self):
         self._seq_c_text = ""
@@ -270,7 +296,7 @@ class SeqCGenerator:
             self.emit_statement(statement)
         return self._seq_c_text
 
-    def emit_statement(self, statement):
+    def emit_statement(self, statement: SeqCStatement):
         if statement["type"] == "generic_statement":
             if "assign_to" in statement:
                 self._seq_c_text += f"{statement['assign_to']} = "
@@ -303,21 +329,19 @@ class SeqCGenerator:
             self._seq_c_text += statement["variable_name"]
             self._seq_c_text += " += " + str(statement["value"]) + ";\n"
 
-        elif statement["type"] == "countdown_loop":
-            self._seq_c_text += (
-                f"{statement['variable_name']} = {statement['num_repeats']};\n"
-            )
-            self._seq_c_text += "do {\n"
-            for line in statement["body"].generate_seq_c().splitlines():
-                self._seq_c_text += "  " + line + "\n"
-            self._seq_c_text += "  " + statement["variable_name"] + " -= 1;\n"
-            self._seq_c_text += "}\nwhile(" + statement["variable_name"] + ");\n"
-
         elif statement["type"] == "do_while":
             self._seq_c_text += "do {\n"
-            for line in statement["body"].generate_seq_c().splitlines():
-                self._seq_c_text += "  " + line + "\n"
+            self._seq_c_text += textwrap.indent(
+                statement["body"].generate_seq_c(), "  "
+            )
             self._seq_c_text += "}\nwhile(" + statement["condition"] + ");\n"
+
+        elif statement["type"] == "repeat":
+            self._seq_c_text += f"repeat ({statement['num_repeats']}) {{\n"
+            self._seq_c_text += textwrap.indent(
+                statement["body"].generate_seq_c(), "  "
+            )
+            self._seq_c_text += "}\n"
 
         elif statement["type"] == "assignWaveIndex":
             wave_channels = self._build_wave_channel_assignment(statement)
@@ -341,7 +365,7 @@ class SeqCGenerator:
         elif statement["type"] == "playZero":
             self._seq_c_text += f"playZero({statement['num_samples']});\n"
 
-    def _gen_wave_declaration_placeholder(self, statement) -> str:
+    def _gen_wave_declaration_placeholder(self, statement: SeqCStatement) -> str:
         dual_channel = statement["signal_type"] in ["iq", "double", "multi"]
         sig_string = statement["wave_id"]
         length = statement["length"]
@@ -376,7 +400,7 @@ class SeqCGenerator:
         else:
             return f"w{sig_string}"
 
-    def __key(self):
+    def _key(self):
         tuple_list = []
         for statement in self._statements:
             single_items = []
@@ -393,34 +417,17 @@ class SeqCGenerator:
                         or isinstance(v, Enum)
                     ):
                         single_items.append((k, value))
-                    elif "type" in v and v["type"] == "comment":
-                        pass
                     else:
                         single_items.append((k, tuple(value)))
-            if statement["type"] != "comment":
-                tuple_list.append(tuple(single_items))
+            tuple_list.append(tuple(single_items))
         return tuple(tuple_list)
 
-    def needs_play_zero_counter(self):
-        if self._needs_play_zero_counter:
-            return True
-        else:
-            for statement in self._statements:
-                for child in statement.values():
-                    if isinstance(child, SeqCGenerator):
-                        if child.needs_play_zero_counter():
-                            return True
-        return False
-
-    def play_zero_counter_variable_name(self):
-        return PLAY_ZERO_COUNTER_VARIABLE
-
     def __hash__(self):
-        return hash(self.__key())
+        return hash(self._key())
 
     def __eq__(self, other):
         if isinstance(other, SeqCGenerator):
-            return self.__key() == other.__key()
+            return self._key() == other._key()
         return NotImplemented
 
     def __repr__(self):
@@ -430,3 +437,62 @@ class SeqCGenerator:
 
         retval += ")"
         return retval
+
+    def compressed(self):
+        statement_hashes = [hash(k) for k in self._key()]
+        statement_by_hash = {}
+        for h, s in zip(statement_hashes, self._statements):
+            if h in statement_by_hash and statement_by_hash[h] != s:
+                _logger.warning("hash collision detected, skipping code compression")
+                return self
+            statement_by_hash[h] = s
+
+        def cost_function(r: Run):
+            complexity = sum(statement_by_hash[h].get("complexity", 1) for h in r.word)
+            return -(r.count - 1) * complexity + 2
+
+        compressed_statements = compressor_core(statement_hashes, cost_function)
+        retval = SeqCGenerator()
+        for cs in compressed_statements:
+            if isinstance(cs, Run):
+                body = SeqCGenerator()
+                for statement_hash in cs.word:
+                    body.add_statement(statement_by_hash[statement_hash])
+                retval.add_repeat(cs.count, body)
+            else:
+                retval.add_statement(statement_by_hash[cs])
+
+        return retval
+
+
+def merge_generators(generators, compress=True) -> SeqCGenerator:
+    generator_hashes = [hash(g) for g in generators]
+    # todo: cannot check for hash collisions, SeqCGenerator.__eq__ also uses hash
+    generator_by_hash = {h: g for h, g in zip(generator_hashes, generators)}
+
+    retval = SeqCGenerator()
+    if compress:
+
+        def cost_function(r: Run):
+            complexity = sum(generator_by_hash[h].estimate_complexity() for h in r.word)
+            return -(r.count - 1) * complexity + 2
+
+        compressed_generators = compressor_core(generator_hashes, cost_function)
+
+        for cg in compressed_generators:
+            if isinstance(cg, Run):
+                if len(cg.word) == 1:
+                    body = generator_by_hash[cg.word[0]]
+                else:
+                    body = SeqCGenerator()
+                    for gen_hash in cg.word:
+                        body.append_statements_from(generator_by_hash[gen_hash])
+                retval.add_repeat(cg.count, body.compressed())
+            else:
+                retval.append_statements_from(generator_by_hash[cg])
+
+        # optional: we might add a 2nd pass here on the merged generator, finding patterns
+        # that partially span across multiple of the original parts.
+        # retval = retval.compressed()
+
+    return retval

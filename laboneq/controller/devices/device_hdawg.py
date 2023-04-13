@@ -5,11 +5,15 @@ from __future__ import annotations
 
 import logging
 from enum import IntEnum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
-from laboneq.controller.communication import DaqNodeAction, DaqNodeSetAction
+from laboneq.controller.communication import (
+    CachingStrategy,
+    DaqNodeAction,
+    DaqNodeSetAction,
+)
 from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.devices.zi_node_monitor import (
     Command,
@@ -97,6 +101,22 @@ class DeviceHDAWG(DeviceZI):
             return None
         osc_index_base = osc_group * max_per_group
         return osc_index_base + previously_allocated
+
+    def disable_outputs(
+        self, outputs: Set[int], invert: bool
+    ) -> List[DaqNodeSetAction]:
+        channels_to_disable: List[DaqNodeSetAction] = []
+        for ch in range(self._channels):
+            if (ch in outputs) != invert:
+                channels_to_disable.append(
+                    DaqNodeSetAction(
+                        self._daq,
+                        f"/{self.serial}/sigouts/{ch}/on",
+                        0,
+                        caching_strategy=CachingStrategy.NO_CACHE,
+                    )
+                )
+        return channels_to_disable
 
     def _nodes_to_monitor_impl(self) -> List[str]:
         nodes = []

@@ -22,6 +22,7 @@ from pycparser.c_ast import (
     Constant,
     Decl,
     DoWhile,
+    For,
     FuncCall,
     FuncDef,
     If,
@@ -247,7 +248,6 @@ def parse_item(item: Node, runtime: SimpleRuntime):
             for subitem in item.stmt.children():
                 parse_item(subitem[1], runtime)
             variable_value = 0
-            condition_variable_name = "UNKNOWN"
             try:
                 variables = runtime.variables
                 condition_variable_name = item.cond.name
@@ -260,6 +260,15 @@ def parse_item(item: Node, runtime: SimpleRuntime):
             endless_guard -= 1
             if endless_guard <= 0:
                 raise RuntimeError("Endless guard triggered")
+    elif isinstance(item, For):
+        if item.cond is not None or item.next is not None:
+            raise NotImplementedError("for loops not supported in the simulator")
+
+        # if cond and next are None, assume the for loop is just encoding a seqc repeat
+        n = int(parse_expression(item.init, runtime))
+        for i in range(n):
+            for subitem in item.stmt.children():
+                parse_item(subitem[1], runtime)
     if (
         runtime.max_time is not None
         and runtime._last_play_start_samples()[0] / runtime.descriptor.sampling_rate
@@ -445,6 +454,8 @@ class SimpleRuntime:
             "setTrigger": self.setTrigger,
             "setPrecompClear": self.setPrecompClear,
             "waitWave": self.waitWave,
+            "waitDIOTrigger": self.waitDIOTrigger,
+            "waitZSyncTrigger": self.waitZSyncTrigger,
         }
         self.variables = {}
         self.seqc_simulation = SeqCSimulation()
@@ -848,6 +859,26 @@ class SimpleRuntime:
             )
         )
 
+    def _start_trigger(self):
+        # Here the assumption is that before the start trigger event, only playZeros
+        # could potentially affect timings, so we only remove the effect of playZero
+        # events. Besides, only one start trigger event is assumed.
+        back_shift_samples = 0
+        filtered_events = []
+        for ev in self.seqc_simulation.events:
+            if ev.operation == Operation.PLAY_ZERO:
+                back_shift_samples += ev.length_samples
+            else:
+                ev.start_samples -= back_shift_samples
+                filtered_events.append(ev)
+        self.seqc_simulation.events = filtered_events
+
+    def waitDIOTrigger(self):
+        self._start_trigger()
+
+    def waitZSyncTrigger(self):
+        self._start_trigger()
+
 
 def find_device(recipe, device_uid):
     for device in recipe["devices"]:
@@ -1000,6 +1031,19 @@ def preprocess_source(text):
 
     user_functions = regex.sub(_replacer, user_functions)
     main = regex.sub(_replacer, main)
+
+    # repeat(n) {...} is not valid C, and topples the parser. Replace it with `for(n;;) {...}`.
+    # Note that the result does not correspond to the usual C for-loop semantics.
+    # This is fine though, as we do not emit 'regular' for loops from L1Q.
+    pattern = r"repeat\s*\((\d+)\)\s*{"
+    regex = re.compile(pattern, re.MULTILINE | re.DOTALL)
+
+    def replace_repeat(match_obj):
+        if match_obj.group(1) is not None:
+            n = match_obj.group(1)
+            return f"for({n};;) {{"
+
+    main = regex.sub(replace_repeat, main)
 
     # Define SeqC built-ins and wrap program into function
     # to make the program syntactically correct for C parser.

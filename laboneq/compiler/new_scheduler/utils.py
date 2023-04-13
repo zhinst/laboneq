@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import functools
 import math
+from typing import Optional, TypeVar
 
 import numpy as np
 
@@ -24,3 +25,15 @@ def ceil_to_grid(value, grid: int):
 
 def floor_to_grid(value, grid: int):
     return math.floor(value / grid) * grid
+
+
+def to_tinysample(t: Optional[float], tinysample: float) -> Optional[int]:
+    return None if t is None else round(t / tinysample)
+
+
+T = TypeVar("T")
+
+
+def assert_valid(obj: Optional[T]) -> T:
+    assert obj is not None
+    return obj

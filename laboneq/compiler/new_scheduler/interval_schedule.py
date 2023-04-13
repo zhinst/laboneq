@@ -27,16 +27,24 @@ class IntervalSchedule:
     represent a single pulse, or a section (with possible subsections). Loops also are
     similarly represented as nested schedules.
 
-    Notably, each `IntervalSchedule` does not store its start time. Instead, the parent
-    stores the start times of its children in `self.children_start`. These time stamps
-    are relative to the start time of the parent itself, which allows us to move an
-    entire sub-schedule (including its children) in time without touching any of its
-    attributes. This 'shifting' in time is valid as long as the start time of a sub-
+    Notably, each `IntervalSchedule` does initially not store its start time. Instead,
+    the parent stores the start times of its children in `self.children_start`. These
+    time stamps are relative to the start time of the parent itself, which allows us to
+    move an entire sub-schedule (including its children) in time without touching any of
+    its attributes. This 'shifting' in time is valid as long as the start time of a sub-
     schedule, in absolute terms, remains on the grid required by the sub-schedule
     (`IntervalSchedule.grid`). For example, if a section must be aligned to the _system
     grid_ of 4 ns, then we are free to move. One exception are match sections, which
     need a minimal distance to their acquire event; `_calculate_timing` thus has a
     parameter `start_may_change` to express that the given start time may not be final.
+
+    Gradually, as right-alignments and RepetitionMode.AUTO timings are resolved,
+    intervals are notified about the fact that their absolute start position (after the
+    trigger) is resolved and thus can, for example, create constraints for acquire/match
+    pairs. The absolute time (in case of loops for the first iteration) is stored in
+    `absolute_time`. While this property is somewhat redundant, it also serves as a flag
+    to indicate that the timing for this subtree has already be determined and thus
+    allows for an early stop.
     """
 
     #: The children of this interval.
@@ -62,6 +70,9 @@ class IntervalSchedule:
 
     #: The start points of the children *relative to the start of the interval itself*.
     children_start: Deferred[List[int]] = None
+
+    #: The absolute start time (since trigger) of the interval in tiny samples.
+    absolute_start: Deferred[int] = None
 
     #: Whether the schedule can be cached, for example, if no match statements are used
     #: in the section which may lead to timing differences.
@@ -92,8 +103,8 @@ class IntervalSchedule:
         start: int,
         max_events: int,
         id_tracker: Iterator[int],
-        expand_loops=False,
-        settings: Optional[CompilerSettings] = None,
+        expand_loops,
+        settings: CompilerSettings,
     ) -> List[Dict]:
         raise NotImplementedError
 
@@ -101,7 +112,7 @@ class IntervalSchedule:
         self,
         start: int,
         max_events: int,
-        settings: Optional[CompilerSettings],
+        settings: CompilerSettings,
         id_tracker: Iterator[int],
         expand_loops: bool,
     ) -> List[List[Dict]]:
@@ -130,15 +141,33 @@ class IntervalSchedule:
         schedule_data: ScheduleData,  # type: ignore # noqa: F821
         start: int,
         start_may_change: bool,
-    ):
+    ) -> int:
         if self.children_start is not None:
             # We have already calculated the timing.
-            return
+            return start
         self.children_start = [0] * len(self.children)
-        self._calculate_timing(schedule_data, start, start_may_change)
+        # Timing calculation may find that the suggested start is too early to fulfill
+        # constraints; give it a chance to return a better suiting start time
+        start = self._calculate_timing(schedule_data, start, start_may_change)
+        if not start_may_change:
+            self.on_absolute_start_time_fixed(start, schedule_data)
+        return start
 
-    def _calculate_timing(self, *_, **__):
+    def _calculate_timing(self, *_, **__) -> int:
         raise NotImplementedError()
+
+    def on_absolute_start_time_fixed(
+        self, start: int, schedule_data: ScheduleData  # type: ignore # noqa: F821
+    ):
+        """Notify schedule that its absolute start time has been determined, for
+        example for a child of a right-aligned section"""
+        if self.absolute_start is not None:
+            assert start == self.absolute_start
+            return
+        self.absolute_start = start
+        assert self.children_start is not None
+        for c, s in zip(self.children, self.children_start):
+            c.on_absolute_start_time_fixed(start + s, schedule_data)
 
     def __hash__(self):
         # Hashing an interval schedule is expensive! We need to recursively hash the

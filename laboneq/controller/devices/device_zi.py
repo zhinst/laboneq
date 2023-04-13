@@ -102,8 +102,8 @@ class DeviceZI(ABC):
         self._uplinks: Dict[str, ReferenceType[DeviceZI]] = {}
 
         self._daq: DaqWrapper = device_qualifier.server
-        self.dev_type = None
-        self.dev_opts = []
+        self.dev_type: str = None
+        self.dev_opts: List[str] = []
         self._connected = False
         self._allocated_oscs: List[AllocatedOscillator] = []
         self._allocated_awgs: Set[int] = set()
@@ -323,6 +323,22 @@ class DeviceZI(ABC):
 
         self._daq.disconnectDevice(self.serial)
         self._connected = False
+
+    def disable_outputs(
+        self, outputs: Set[int], invert: bool
+    ) -> List[DaqNodeSetAction]:
+        """Returns actions to disable the specified outputs for the device.
+
+        outputs: set(int)
+            - When 'invert' is False: set of outputs to disable.
+            - When 'invert' is True: set of used outputs to be skipped, remaining
+            outputs will be disabled.
+
+        invert: bool
+            Controls how 'outputs' argument is interpreted, see above. Special case: set
+            to True along with empty 'outputs' to disable all outputs.
+        """
+        return []
 
     def shut_down(self):
         _logger.debug(

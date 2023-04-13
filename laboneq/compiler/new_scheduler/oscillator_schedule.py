@@ -1,7 +1,7 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Dict, Iterator, List, Optional
+from typing import Dict, Iterator, List
 
 from attrs import define
 
@@ -30,10 +30,11 @@ class OscillatorFrequencyStepSchedule(IntervalSchedule):
         start: int,
         max_events: int,
         id_tracker: Iterator[int],
-        expand_loops=False,
-        settings: Optional[CompilerSettings] = None,
+        expand_loops,
+        settings: CompilerSettings,
     ) -> List[Dict]:
         assert self.length is not None
+        assert self.absolute_start is not None
         retval = []
         for param, osc, value in zip(self.params, self.oscillators, self.values):
             start_id = next(id_tracker)
@@ -61,9 +62,10 @@ class OscillatorFrequencyStepSchedule(IntervalSchedule):
             )
         return retval
 
-    def _calculate_timing(self, *_, **__):
+    def _calculate_timing(self, _schedule_data, start: int, *__, **___) -> int:
         # Length must be set via parameter, so nothing to do here
         assert self.length is not None
+        return start
 
     def __hash__(self):
         super().__hash__()

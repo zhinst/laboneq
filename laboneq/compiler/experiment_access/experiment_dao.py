@@ -106,7 +106,7 @@ class ExperimentDAO:
     def devices(self):
         return [d["id"] for d in self._data["devices"].values()]
 
-    def global_leader_device(self):
+    def global_leader_device(self) -> str:
         try:
             return next(
                 d for d in self._data["devices"].values() if d.get("is_global_leader")
@@ -123,15 +123,16 @@ class ExperimentDAO:
             "server",
             "interface",
             "reference_clock_source",
+            "is_qc",
         ]
 
-    def device_info(self, device_id):
+    def device_info(self, device_id) -> Optional[DeviceInfo]:
         device_info = self._data["devices"].get(device_id)
         if device_info is not None:
             return DeviceInfo(**{k: device_info[k] for k in self._device_info_keys()})
         return None
 
-    def device_infos(self):
+    def device_infos(self) -> List[DeviceInfo]:
         return [
             DeviceInfo(**{k: device_info[k] for k in self._device_info_keys()})
             for device_info in self._data["devices"].values()

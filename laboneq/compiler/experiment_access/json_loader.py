@@ -86,6 +86,8 @@ class JsonLoader(LoaderBase):
             else:
                 reference_clock_source = None
 
+            is_qc = device.get("is_qc")
+
             self.add_device(
                 device["id"],
                 driver,
@@ -93,6 +95,7 @@ class JsonLoader(LoaderBase):
                 server,
                 interface,
                 reference_clock_source=reference_clock_source,
+                is_qc=is_qc,
             )
 
             if "oscillators_list" in device:

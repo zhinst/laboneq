@@ -3,12 +3,23 @@
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import functools
 import itertools
 import logging
 from dataclasses import replace
-from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    FrozenSet,
+    Iterable,
+    List,
+    Optional,
+    Set,
+    Tuple,
+)
 
 import numpy as np
 
@@ -40,10 +51,19 @@ from laboneq.compiler.new_scheduler.reserve_schedule import ReserveSchedule
 from laboneq.compiler.new_scheduler.root_schedule import RootSchedule
 from laboneq.compiler.new_scheduler.schedule_data import ScheduleData
 from laboneq.compiler.new_scheduler.section_schedule import SectionSchedule
-from laboneq.compiler.new_scheduler.utils import ceil_to_grid, lcm, round_to_grid
+from laboneq.compiler.new_scheduler.utils import (
+    assert_valid,
+    ceil_to_grid,
+    lcm,
+    round_to_grid,
+    to_tinysample,
+)
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import RepetitionMode, SectionAlignment
+
+if TYPE_CHECKING:
+    from laboneq.compiler.common.signal_obj import SignalObj
 
 _logger = logging.getLogger(__name__)
 
@@ -55,11 +75,19 @@ class RepetitionInfo:
     time: Optional[float]
 
 
+# from more_itertools
+def pairwise(iterator):
+    a, b = itertools.tee(iterator)
+    next(b, None)
+    yield from zip(a, b)
+
+
 class Scheduler:
     def __init__(
         self,
         experiment_dao: ExperimentDAO,
         sampling_rate_tracker: SamplingRateTracker,
+        signal_objects: Dict[str, SignalObj],
         # For compatibility with old scheduler, remove once we remove that
         _clock_settings: Optional[Dict] = None,
         settings: Optional[CompilerSettings] = None,
@@ -67,12 +95,16 @@ class Scheduler:
         self._schedule_data = ScheduleData(
             experiment_dao=experiment_dao,
             settings=settings or CompilerSettings(),
+            sampling_rate_tracker=sampling_rate_tracker,
+            signal_objects=signal_objects,
         )
-
-        self._scheduled_sections = {}
+        self._experiment_dao = experiment_dao
         self._sampling_rate_tracker = sampling_rate_tracker
-        self._system_grid = self.grid(*self._schedule_data.experiment_dao.signals())[1]
+        self._TINYSAMPLE = self._schedule_data.TINYSAMPLE
+
+        self._system_grid = self.grid(*self._experiment_dao.signals())[1]
         self._root_schedule: Optional[IntervalSchedule] = None
+        self._scheduled_sections = {}
 
     @trace("scheduler.run()", {"version": "v2"})
     def run(self, nt_parameters=None):
@@ -80,9 +112,6 @@ class Scheduler:
             nt_parameters = {}
         self._root_schedule = self._schedule_root(nt_parameters)
         _logger.info("Schedule completed")
-
-    def round_to_tinysamples(self, t):
-        return None if t is None else round(t / self._schedule_data.TINYSAMPLE)
 
     def generate_event_list(self, expand_loops: bool, max_events: int):
         event_list = self._start_events()
@@ -106,9 +135,9 @@ class Scheduler:
 
         # convert time from units of tiny samples to seconds
         for event in event_list:
-            event["time"] = event["time"] * self._schedule_data.TINYSAMPLE
+            event["time"] = event["time"] * self._TINYSAMPLE
 
-        calculate_osc_phase(event_list, self._schedule_data.experiment_dao)
+        calculate_osc_phase(event_list, self._experiment_dao)
 
         return event_list
 
@@ -117,7 +146,7 @@ class Scheduler:
 
         # Add initial events to reset the NCOs.
         # Todo (PW): Drop once system tests have been migrated from legacy behaviour.
-        for device_info in self._schedule_data.experiment_dao.device_infos():
+        for device_info in self._experiment_dao.device_infos():
             try:
                 device_type = DeviceType(device_info.device_type)
             except ValueError:
@@ -142,7 +171,7 @@ class Scheduler:
         return self.generate_event_list(expand_loops, max_events)
 
     def _schedule_root(self, nt_parameters: Dict[str, float]) -> Optional[RootSchedule]:
-        root_sections = self._schedule_data.experiment_dao.root_rt_sections()
+        root_sections = self._experiment_dao.root_rt_sections()
         if len(root_sections) == 0:
             return None
 
@@ -159,6 +188,15 @@ class Scheduler:
 
         root_schedule = RootSchedule(grid=1, signals=signals, children=schedules)  # type: ignore
         root_schedule.calculate_timing(self._schedule_data, 0, False)
+
+        for handle, acquire_pulses in self._schedule_data.acquire_pulses.items():
+            for a, b in pairwise(acquire_pulses):
+                if assert_valid(a.absolute_start) > assert_valid(b.absolute_start):
+                    _logger.warn(
+                        "Topological order of the acquires for handle"
+                        f" {handle} does not match time order."
+                    )
+
         return root_schedule
 
     def _schedule_section(
@@ -174,16 +212,16 @@ class Scheduler:
         try:
             # todo: do not hash the entire current_parameters dict, but just the param values
             # todo: reduce key to those parameters actually required by the section
-            return self._scheduled_sections[
-                (section_id, frozenset(current_parameters.items()))
-            ]
+            return copy.deepcopy(
+                self._scheduled_sections[
+                    (section_id, frozenset(current_parameters.items()))
+                ]
+            )
         except KeyError:
             pass
 
-        section_info = self._schedule_data.experiment_dao.section_info(section_id)
-        sweep_parameters = self._schedule_data.experiment_dao.section_parameters(
-            section_id
-        )
+        section_info = self._experiment_dao.section_info(section_id)
+        sweep_parameters = self._experiment_dao.section_parameters(section_id)
         for param in sweep_parameters:
             if "values" not in param or param["values"] is None:
                 param["values"] = (
@@ -222,8 +260,8 @@ class Scheduler:
         returned dict are the parameter names."""
         oscillator_param_lookup = dict()
         for signal in signals:
-            signal_info = self._schedule_data.experiment_dao.signal_info(signal)
-            oscillator = self._schedule_data.experiment_dao.signal_oscillator(signal)
+            signal_info = self._experiment_dao.signal_info(signal)
+            oscillator = self._experiment_dao.signal_oscillator(signal)
 
             # Not every signal has an oscillator (e.g. flux lines), so check for None
             if oscillator is None:
@@ -284,9 +322,7 @@ class Scheduler:
             children_schedules.append(prototype)
         else:
             compressed = False
-            signals = self._schedule_data.experiment_dao.section_signals_with_children(
-                section_id
-            )
+            signals = self._experiment_dao.section_signals_with_children(section_id)
             swept_hw_oscillators = self._swept_hw_oscillators(
                 {p["id"] for p in sweep_parameters}, signals
             )
@@ -321,7 +357,7 @@ class Scheduler:
             sweep_parameters=sweep_parameters,
             iterations=section_info.count,
             repetition_mode=repetition_mode,
-            repetition_time=self.round_to_tinysamples(repetition_time),
+            repetition_time=to_tinysample(repetition_time, self._TINYSAMPLE),
         )
 
     def _schedule_oscillator_frequency_step(
@@ -351,13 +387,11 @@ class Scheduler:
             swept_oscs_list.append(osc)
             params.append(param["id"])
             device_id = osc.device
-            device_info = self._schedule_data.experiment_dao.device_info(device_id)
+            device_info = self._experiment_dao.device_info(device_id)
             device_type = DeviceType(device_info.device_type)
             length = max(
                 length,
-                int(
-                    device_type.oscillator_set_latency / self._schedule_data.TINYSAMPLE
-                ),
+                int(device_type.oscillator_set_latency / self._TINYSAMPLE),
             )
             signals.add(osc.signal)
 
@@ -382,9 +416,7 @@ class Scheduler:
     ) -> List[PhaseResetSchedule]:
         reset_sw_oscillators = (
             len(hw_signals) > 0
-            or self._schedule_data.experiment_dao.section_info(
-                section_id
-            ).averaging_type
+            or self._experiment_dao.section_info(section_id).averaging_type
             == "hardware"
         )
 
@@ -394,13 +426,13 @@ class Scheduler:
         length = 0
         hw_osc_devices = {}
         for signal in hw_signals:
-            device = self._schedule_data.experiment_dao.device_from_signal(signal)
+            device = self._experiment_dao.device_from_signal(signal)
             device_type = DeviceType(
-                self._schedule_data.experiment_dao.device_info(device).device_type
+                self._experiment_dao.device_info(device).device_type
             )
             if not device_type.supports_reset_osc_phase:
                 continue
-            duration = device_type.reset_osc_duration / self._schedule_data.TINYSAMPLE
+            duration = device_type.reset_osc_duration / self._TINYSAMPLE
             hw_osc_devices[device] = duration
             length = max(length, duration)
 
@@ -452,7 +484,7 @@ class Scheduler:
         for c in children_schedules:
             signals.update(c.signals)
 
-        section_info = self._schedule_data.experiment_dao.section_info(section_id)
+        section_info = self._experiment_dao.section_info(section_id)
         hw_osc_reset_signals = set()
         if section_info.reset_oscillator_phase:
             # todo: This behaves differently than the legacy scheduler.
@@ -462,12 +494,10 @@ class Scheduler:
             #  lead to problems when resetting an otherwise unused device that cannot
             #  align with the loop grid.
             #  The new scheduler does not reset devices with unused signals.
-            for (
-                signal
-            ) in self._schedule_data.experiment_dao.section_signals_with_children(
+            for signal in self._experiment_dao.section_signals_with_children(
                 section_id
             ):
-                osc_info = self._schedule_data.experiment_dao.signal_oscillator(signal)
+                osc_info = self._experiment_dao.signal_oscillator(signal)
                 if osc_info is not None and osc_info.hardware:
                     hw_osc_reset_signals.add(signal)
 
@@ -479,8 +509,11 @@ class Scheduler:
         #  relax in the future
         _, grid = self.grid(*signals)
 
-        osc_phase_reset = self._schedule_phase_reset(
-            section_id, grid, frozenset(signals), frozenset(hw_osc_reset_signals)
+        # Deepcopy here because of caching
+        osc_phase_reset = copy.deepcopy(
+            self._schedule_phase_reset(
+                section_id, grid, frozenset(signals), frozenset(hw_osc_reset_signals)
+            )
         )
 
         if len(swept_hw_oscillators):
@@ -526,7 +559,7 @@ class Scheduler:
         for c in children:
             signals.update(c.signals)
 
-        signals.update(self._schedule_data.experiment_dao.section_signals(section_id))
+        signals.update(self._experiment_dao.section_signals(section_id))
         play_after = section_info.play_after or []
         if isinstance(play_after, str):
             play_after = [play_after]
@@ -549,7 +582,7 @@ class Scheduler:
         schedule = SectionSchedule(
             grid=grid,
             sequencer_grid=sequencer_grid,
-            length=self.round_to_tinysamples(section_info.length),
+            length=to_tinysample(section_info.length, self._TINYSAMPLE),
             signals=signals,
             children=children,
             play_after=play_after,
@@ -589,7 +622,7 @@ class Scheduler:
         offset = resolve_value_or_parameter("offset", 0.0)
         length = resolve_value_or_parameter("length", None)
         if length is None:
-            pulse_def = self._schedule_data.experiment_dao.pulse(pulse.pulse_id)
+            pulse_def = self._experiment_dao.pulse(pulse.pulse_id)
             if pulse_def is not None:
                 assert pulse_def.length is None
                 if pulse_def.samples is None:
@@ -598,7 +631,7 @@ class Scheduler:
                         f"'{section}'. Either specify the length at the pulse definition, "
                         f"when playing the pulse, or by specifying the samples."
                     )
-                length = len(pulse_def.samples) * grid * self._schedule_data.TINYSAMPLE
+                length = len(pulse_def.samples) * grid * self._TINYSAMPLE
             else:
                 assert offset is not None
                 length = 0.0
@@ -640,12 +673,10 @@ class Scheduler:
 
         scheduled_length = length + offset
 
-        length_int = round_to_grid(
-            scheduled_length / self._schedule_data.TINYSAMPLE, grid
-        )
-        offset_int = round_to_grid(offset / self._schedule_data.TINYSAMPLE, grid)
+        length_int = round_to_grid(scheduled_length / self._TINYSAMPLE, grid)
+        offset_int = round_to_grid(offset / self._TINYSAMPLE, grid)
 
-        osc = self._schedule_data.experiment_dao.signal_oscillator(pulse.signal_id)
+        osc = self._experiment_dao.signal_oscillator(pulse.signal_id)
         if osc is None:
             freq = None
         elif not osc.hardware and osc.frequency_param is not None:
@@ -661,7 +692,7 @@ class Scheduler:
         else:
             freq = osc.frequency if osc is not None else None
 
-        signal_info = self._schedule_data.experiment_dao.signal_info(pulse.signal_id)
+        signal_info = self._experiment_dao.signal_info(pulse.signal_id)
         is_acquire = signal_info.signal_type == "integration"
         markers = pulse.markers
 
@@ -742,7 +773,7 @@ class Scheduler:
 
         return MatchSchedule(
             grid=grid,
-            length=self.round_to_tinysamples(section_info.length),
+            length=to_tinysample(section_info.length, self._schedule_data.TINYSAMPLE),
             sequencer_grid=grid,
             signals=signals,
             children=children_schedules,
@@ -757,9 +788,11 @@ class Scheduler:
         try:
             # todo: do not hash the entire current_parameters dict, but just the param values
             # todo: reduce key to those parameters actually required by the section
-            return self._scheduled_sections[
-                (section_id, frozenset(current_parameters.items()))
-            ]
+            return copy.deepcopy(
+                self._scheduled_sections[
+                    (section_id, frozenset(current_parameters.items()))
+                ]
+            )
         except KeyError:
             pass
 

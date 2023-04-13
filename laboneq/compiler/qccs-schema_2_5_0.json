@@ -557,6 +557,9 @@
         },
         "parameters": {
           "$ref": "#/definitions/reference-list-def"
+        },
+        "is_qc": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false,

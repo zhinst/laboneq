@@ -7,9 +7,9 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set
 
-from laboneq.compiler.code_generator.compressor import compress_generators
 from laboneq.compiler.code_generator.seq_c_generator import (
     SeqCGenerator,
+    merge_generators,
     string_sanitize,
 )
 from laboneq.compiler.code_generator.signatures import PlaybackSignature
@@ -193,7 +193,7 @@ class SampledEventHandler:
                     sig_string, signal_type_for_wave_index
                 )
                 if wave_index is not None:
-                    self.seqc_tracker.add_assign_wave_index_statement(
+                    self.declarations_generator.add_assign_wave_index_statement(
                         self.device_type,
                         self.awg.signal_type.value,
                         sig_string,
@@ -221,7 +221,7 @@ class SampledEventHandler:
                     sig_string,
                     play_wave_channel,
                 )
-            self.seqc_tracker.clear_deferred_function_calls()
+            self.seqc_tracker.flush_deferred_function_calls()
             self.seqc_tracker.current_time = sampled_event.end
         else:
             assert self.use_command_table
@@ -518,7 +518,7 @@ class SampledEventHandler:
             self.seqc_tracker.add_variable_assignment(
                 "current_seq_step", self.current_sequencer_step
             )
-        self.seqc_tracker.append_loop_stack_generator(outer=True)
+        self.seqc_tracker.push_loop_stack_generator()
 
         if self.emit_timing_comments:
             self.seqc_tracker.add_comment(
@@ -531,7 +531,7 @@ class SampledEventHandler:
         if (
             self.seqc_tracker.current_loop_stack_generator().num_noncomment_statements()
             > 0
-            or len(self.seqc_tracker.deferred_function_calls) > 0
+            or self.seqc_tracker.deferred_function_calls.num_statements() > 0
         ):
             _logger.debug(
                 "  Processing ITERATE EVENT %s, loop stack is %s",
@@ -545,13 +545,6 @@ class SampledEventHandler:
             self.seqc_tracker.add_required_playzeros(sampled_event)
             self._increment_sequencer_step()
 
-            variable_name = string_sanitize(
-                "repeat_count_" + str(sampled_event.params["loop_id"])
-            )
-            if variable_name not in self.declared_variables:
-                self.declarations_generator.add_variable_declaration(variable_name)
-                self.declared_variables.add(variable_name)
-
             loop_generator = SeqCGenerator()
             open_generators = self.seqc_tracker.pop_loop_stack_generators()
             _logger.debug(
@@ -559,12 +552,8 @@ class SampledEventHandler:
                 open_generators,
                 self.seqc_tracker.loop_stack_generators,
             )
-            loop_body = compress_generators(
-                open_generators, self.declarations_generator
-            )
-            loop_generator.add_countdown_loop(
-                variable_name, sampled_event.params["num_repeats"], loop_body
-            )
+            loop_body = merge_generators(open_generators)
+            loop_generator.add_repeat(sampled_event.params["num_repeats"], loop_body)
             if self.emit_timing_comments:
                 loop_generator.add_comment(f"Loop for {sampled_event.params}")
             start_loop_event = self.loop_stack.pop()
@@ -638,7 +627,7 @@ class SampledEventHandler:
                 comment="Match handle " + handle,
             )
             self.seqc_tracker.add_timing_comment(ev.end)
-            self.seqc_tracker.clear_deferred_function_calls()
+            self.seqc_tracker.flush_deferred_function_calls()
             self.seqc_tracker.current_time = self.match_parent_event.end
             self.match_parent_event = None
 

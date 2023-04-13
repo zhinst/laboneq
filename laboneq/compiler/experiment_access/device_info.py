@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
@@ -14,3 +15,4 @@ class DeviceInfo:
     server: str
     interface: str
     reference_clock_source: str
+    is_qc: Optional[bool]

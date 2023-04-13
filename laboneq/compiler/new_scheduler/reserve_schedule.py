@@ -11,8 +11,9 @@ class ReserveSchedule(IntervalSchedule):
     def create(cls, signal, grid):
         return cls(grid=grid, signals={signal})
 
-    def _calculate_timing(self, *_, **__):
+    def _calculate_timing(self, _schedule_data, start: int, *__, **___) -> int:
         self.length = 0
+        return start
 
     def generate_event_list(self, *_, **__) -> List[Dict]:
         assert self.length is not None

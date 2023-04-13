@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, Iterator, List, Optional
+from typing import Dict, Iterator, List
 
 from attrs import asdict, define, evolve
 
@@ -31,10 +31,11 @@ class LoopIterationSchedule(SectionSchedule):
         start: int,
         max_events: int,
         id_tracker: Iterator[int],
-        expand_loops=False,
-        settings: Optional[CompilerSettings] = None,
+        expand_loops,
+        settings: CompilerSettings,
     ) -> List[Dict]:
         assert self.length is not None
+        assert self.absolute_start is not None
         common = {
             "section_name": self.section,
             "iteration": self.iteration,

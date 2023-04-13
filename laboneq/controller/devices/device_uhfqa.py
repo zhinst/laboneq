@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import numpy as np
 
@@ -45,6 +45,7 @@ class DeviceUHFQA(DeviceZI):
         super().__init__(*args, **kwargs)
         self.dev_type = "UHFQA"
         self.dev_opts = ["AWG", "DIG", "QA"]
+        self._channels = 2
         self._use_internal_clock = True
 
     def _get_num_awgs(self):
@@ -59,6 +60,22 @@ class DeviceUHFQA(DeviceZI):
         if previously_allocated >= 1:
             return None
         return previously_allocated
+
+    def disable_outputs(
+        self, outputs: Set[int], invert: bool
+    ) -> List[DaqNodeSetAction]:
+        channels_to_disable: List[DaqNodeSetAction] = []
+        for ch in range(self._channels):
+            if (ch in outputs) != invert:
+                channels_to_disable.append(
+                    DaqNodeSetAction(
+                        self._daq,
+                        f"/{self.serial}/sigouts/{ch}/on",
+                        0,
+                        caching_strategy=CachingStrategy.NO_CACHE,
+                    )
+                )
+        return channels_to_disable
 
     def _nodes_to_monitor_impl(self) -> List[str]:
         nodes = [f"/{self.serial}/system/extclk"]

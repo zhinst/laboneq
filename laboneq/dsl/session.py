@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import functools
 import json
 import logging
 from copy import deepcopy
@@ -17,6 +16,10 @@ from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types import CompiledExperiment
 from laboneq.dsl.calibration import Calibration
 from laboneq.dsl.device import DeviceSetup
+from laboneq.dsl.device.io_units.logical_signal import (
+    LogicalSignalRef,
+    resolve_logical_signal_ref,
+)
 from laboneq.dsl.experiment import Experiment
 from laboneq.dsl.laboneq_facade import LabOneQFacade
 from laboneq.dsl.result import Results
@@ -45,7 +48,7 @@ class Session:
         * the compiled experiment
         * the result of the executed experiment
 
-    The Session is a statefull object that hold all of the above. The expected steps to interact with the session are:
+    The Session is a stateful object that hold all of the above. The expected steps to interact with the session are:
         * initial state (construction)
         * setting the device setup (optionally during construction)
         * (optional) setting the calibration of the devices
@@ -56,30 +59,6 @@ class Session:
 
     The session is serializable in every state.
     """
-
-    class _SessionDeco:
-        """Collection of decorators specific to the Session class"""
-
-        @staticmethod
-        def entrypoint(func):
-            """Decorator for Session public methods.
-
-            Add this decorator to every public method of the Session,
-            that may be directly called by the user. These methods
-            may also call each other, and the decorator ensures that
-            in case of an occasional error, the 1st method (directly
-            called by the user) is reported in the error message,
-            even if the error happens inside a nested method call.
-            """
-
-            @functools.wraps(func)
-            def wrapper(self, *args, **kwargs):
-                self._call_stack.append(func.__name__)
-                res = func(self, *args, **kwargs)
-                self._call_stack.pop()
-                return res
-
-            return wrapper
 
     def __init__(
         self,
@@ -113,8 +92,6 @@ class Session:
         self._connection_state: ConnectionState = ConnectionState()
         self._experiment_definition = experiment
         self._compiled_experiment = compiled_experiment
-        # Keeps call stack of public methods (when calling each other)
-        self._call_stack: List[str] = list()
         self._last_results = _last_results
         if configure_logging:
             LabOneQFacade.init_logging(
@@ -170,9 +147,9 @@ class Session:
         if self._connection_state.connected:
             return True
         default_message = (
-            f"Session not connected.\n"
-            f"{self._call_stack[0]}() requires an established connection to devices in order to execute the experiment.\n"
-            f"Call connect() first. Use connect(do_emulation=True) if you want to emulate the devices' behavior only."
+            "Session not connected.\n"
+            "The call requires an established connection to devices in order to execute the experiment.\n"
+            "Call connect() first. Use connect(do_emulation=True) if you want to emulate the devices' behavior only."
         )
         message = message or default_message
         if fail:
@@ -180,7 +157,6 @@ class Session:
         self.logger.error(message)
         return False
 
-    @_SessionDeco.entrypoint
     def register_user_function(self, func, name: str = None):
         """Registers a user function to be referred from the experiment's `call` operation.
 
@@ -194,10 +170,11 @@ class Session:
             name = func.__name__
         self._user_functions[name] = func
 
-    @_SessionDeco.entrypoint
     @trace("session.connect()")
     def connect(
-        self, do_emulation=False, ignore_lab_one_version_error=False
+        self,
+        do_emulation=False,
+        ignore_version_mismatch=False,
     ) -> ConnectionState:
         """Connects the session to the QCCS system.
 
@@ -205,9 +182,26 @@ class Session:
             do_emulation (bool): Specifies if the session should connect to a emulator
                                  (in the case of 'True') or the real system (in the case of 'False').
 
-            ignore_lab_one_version_error (bool): Ignore LabOne and LabOne Q version mismatch error.
+            ignore_version_mismatch (bool): Ignore version mismatches.
+                If set to `False` (default), the following checks are made for compatibility:
+
+                - Check LabOne and LabOne Q version compatibility.
+                - Check LabOne and Zurich Instruments' devices firmware version compatibility.
+
+                The following states raises an exception:
+
+                - Device firmware requires an update
+                - Device firmware requires an downgrade
+                - Device update is in progress
+
+                It is suggested to keep the versions aligned and up-to-date to avoid any unexpected behaviour.
+
+                .. versionchanged:: 2.4
+                    Renamed `ignore_lab_one_version_error` to `ignore_version_mismatch` and include
+                    LabOne and device firmware version compatibility check.
+
         """
-        self._ignore_lab_one_version_error = ignore_lab_one_version_error
+        self._ignore_version_mismatch = ignore_version_mismatch
         if (
             self._connection_state.connected
             and self._connection_state.emulated != do_emulation
@@ -218,19 +212,53 @@ class Session:
         self._connection_state.connected = True
         return self._connection_state
 
-    @_SessionDeco.entrypoint
     def disconnect(self) -> ConnectionState:
         """Disconnects the session from the devices."""
         self._connection_state.connected = False
         LabOneQFacade.disconnect(self)
         return self._connection_state
 
+    def disable_outputs(
+        self,
+        devices: Union[str, List[str]] = None,
+        signals: Union[LogicalSignalRef, List[LogicalSignalRef]] = None,
+        unused_only: bool = False,
+    ):
+        """Turns off / disables the device outputs.
+
+        Args:
+            devices (list): Optional. Device or list of devices, if not specified - all devices.
+                            All or unused (see 'unused_only') outputs of these devices will be
+                            disabled. Can't be used together with 'signals'.
+            signals (list): Optional. Logical signal or a list of logical signals. Outputs mapped
+                            by these logical signals will be disabled. Can't be used together
+                            with 'devices' or 'unused_only'.
+            unused_only (bool): Optional. If set to True, only outputs not mapped by any logical
+                            signals will be disabled. Can't be used together with 'signals'.
+        """
+        if devices is not None and signals is not None:
+            raise LabOneQException(
+                "Ambiguous outputs specification: disable_outputs() accepts either 'devices' or "
+                "'signals', but not both."
+            )
+        if unused_only and signals is not None:
+            raise LabOneQException(
+                "Ambiguous outputs specification: disable_outputs() accepts either 'signals' or "
+                "'unused_only=True', but not both."
+            )
+        if devices is not None and not isinstance(devices, list):
+            devices = [devices]
+        if signals is not None and not isinstance(signals, list):
+            signals = [signals]
+        if signals is not None:
+            signals = [resolve_logical_signal_ref(s) for s in signals]
+        self._controller.disable_outputs(devices, signals, unused_only)
+
     @property
     def connection_state(self) -> ConnectionState:
         """State of the connection."""
         return self._connection_state
 
-    @_SessionDeco.entrypoint
     @trace("session.compile()")
     def compile(
         self,
@@ -239,17 +267,21 @@ class Session:
     ) -> Optional[CompiledExperiment]:
         """Compiles the specified experiment and stores it in the compiled_experiment property.
 
+        Requires connected LabOneQ session (`session.connect()`) either with or without emulation mode.
+
         Args:
             experiment: Experiment instance that should be compiled.
             compiler_settings: Extra options passed to the compiler.
+
+        .. versionchanged:: 2.4
+
+            Raises error if `Session` is not connected.
 
         .. versionchanged:: 2.0
 
             Removed `do_simulation` argument. Use :class:`~.OutputSimulator` instead.
         """
-        if not self._assert_connected(fail=False):
-            return
-
+        self._assert_connected(fail=True)
         self._experiment_definition = experiment
         self._compiled_experiment = LabOneQFacade.compile(
             self, self.logger, compiler_settings=compiler_settings
@@ -265,13 +297,14 @@ class Session:
         """
         return self._compiled_experiment
 
-    @_SessionDeco.entrypoint
     @trace("session.run()")
     def run(
         self,
         experiment: Optional[Union[Experiment, CompiledExperiment]] = None,
     ) -> Optional[Results]:
         """Executes the compiled experiment.
+
+        Requires connected LabOneQ session (`session.connect()`) either with or without emulation mode.
 
         If no experiment is specified, the last compiled experiment is run.
         If an experiment is specified, the provided experiment is assigned to the
@@ -290,15 +323,17 @@ class Session:
         Returns:
             A `Results` object in case of success. `None` if the session is not
             connected.
+
+        .. versionchanged:: 2.4
+
+            Raises error if `Session` is not connected.
         """
+        self._assert_connected(fail=True)
         if experiment:
             if isinstance(experiment, CompiledExperiment):
                 self._compiled_experiment = experiment
             else:
                 self.compile(experiment)
-
-        if not self._assert_connected(fail=False):
-            return
 
         self._last_results = Results(
             experiment=self.experiment,
@@ -311,11 +346,10 @@ class Session:
         LabOneQFacade.run(self)
         return self.results
 
-    @_SessionDeco.entrypoint
     def submit(
         self,
         experiment: Optional[Union[Experiment, CompiledExperiment]] = None,
-        queue: Callable[[str, CompiledExperiment, DeviceSetup], Any] = None,
+        queue: Callable[[str, Optional[CompiledExperiment], DeviceSetup], Any] = None,
     ) -> Results:
         """Asynchronously submit experiment to the given queue.
 
@@ -330,7 +364,7 @@ class Session:
                 is used.
             queue: The name of connector to a queueing system which should do the actual
                 run on a setup. `queue` must be callable with the signature
-                ``(name: str, experiment: CompiledExperiment, device_setup: DeviceSetup)``
+                ``(name: str, experiment: Optional[CompiledExperiment], device_setup: DeviceSetup)``
                 which returns an object with which users can query results.
 
         Returns:
@@ -341,12 +375,20 @@ class Session:
         if experiment:
             if isinstance(experiment, CompiledExperiment):
                 self._compiled_experiment = experiment
+                return queue(
+                    experiment.experiment.uid,
+                    self.compiled_experiment,
+                    self.device_setup,
+                )
             else:
+                self._assert_connected(fail=True)
                 self.compile(experiment)
+                return queue(
+                    experiment.uid, self.compiled_experiment, self.device_setup
+                )
+        else:
+            return queue("", self.compiled_experiment, self.device_setup)
 
-        return queue(experiment.uid, self.compiled_experiment, self.device_setup)
-
-    @_SessionDeco.entrypoint
     def replace_pulse(
         self, pulse_uid: str | Pulse, pulse_or_array: npt.ArrayLike | Pulse
     ):
