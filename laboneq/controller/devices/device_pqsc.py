@@ -1,8 +1,10 @@
 # Copyright 2019 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from laboneq.controller.communication import (
     CachingStrategy,
@@ -34,15 +36,15 @@ class DevicePQSC(DeviceZI):
         self.dev_opts = []
         self._use_internal_clock = False
 
-    def _nodes_to_monitor_impl(self) -> List[str]:
-        nodes = [node.path for node in self.clock_source_control_nodes()]
+    def _nodes_to_monitor_impl(self) -> list[str]:
+        nodes = super()._nodes_to_monitor_impl()
         nodes.append(f"/{self.serial}/execution/enable")
         return nodes
 
-    def update_clock_source(self, force_internal: Optional[bool]):
+    def update_clock_source(self, force_internal: bool | None):
         self._use_internal_clock = force_internal is True
 
-    def clock_source_control_nodes(self) -> List[NodeControlBase]:
+    def clock_source_control_nodes(self) -> list[NodeControlBase]:
         source = (
             REFERENCE_CLOCK_SOURCE_INTERNAL
             if self._use_internal_clock
@@ -60,12 +62,12 @@ class DevicePQSC(DeviceZI):
             Response(f"/{self.serial}/system/clocks/referenceclock/in/status", 0),
         ]
 
-    def collect_output_initialization_nodes(
+    def collect_initialization_nodes(
         self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
-    ) -> List[DaqNodeAction]:
+    ) -> list[DaqNodeAction]:
         return []
 
-    def configure_feedback(self, recipe_data: RecipeData) -> List[DaqNodeAction]:
+    def configure_feedback(self, recipe_data: RecipeData) -> list[DaqNodeAction]:
         # TODO(2K): Code duplication with Controller._wait_execution_to_stop
         # Make this mandatory in the recipe instead.
         min_wait_time = recipe_data.recipe.experiment.total_execution_time
@@ -130,12 +132,12 @@ class DevicePQSC(DeviceZI):
 
     def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return {f"/{self.serial}/execution/enable": 0}
 
     def collect_trigger_configuration_nodes(
         self, initialization: Initialization.Data, recipe_data: RecipeData
-    ) -> List[DaqNodeAction]:
+    ) -> list[DaqNodeAction]:
         # Ensure ZSync links are established
         # TODO(2K): This is rather a hotfix, waiting to be done in parallel for all devices with
         # subscription / poll
@@ -183,7 +185,7 @@ class DevicePQSC(DeviceZI):
 
     def collect_follower_configuration_nodes(
         self, initialization: Initialization.Data
-    ) -> List[DaqNodeAction]:
+    ) -> list[DaqNodeAction]:
         raise LabOneQControllerException("PQSC cannot be configured as follower")
 
     def configure_as_leader(self, initialization: Initialization.Data):
@@ -215,6 +217,3 @@ class DevicePQSC(DeviceZI):
                 )
             ]
         )
-
-    def initialize_sweep_setting(self, setting):
-        raise LabOneQControllerException("PQSC doesn't support sweeping")

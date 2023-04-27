@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 import numpy as np
 from numpy import typing as npt
@@ -133,7 +133,7 @@ class DeviceSHFQA(DeviceZI):
 
     def _get_next_osc_index(
         self, osc_group: int, previously_allocated: int
-    ) -> Optional[int]:
+    ) -> int | None:
         if previously_allocated >= 1:
             return None
         return previously_allocated
@@ -142,9 +142,9 @@ class DeviceSHFQA(DeviceZI):
         return f"/{self.serial}/qachannels/{channel}/oscs/{index}/freq"
 
     def disable_outputs(
-        self, outputs: Set[int], invert: bool
-    ) -> List[DaqNodeSetAction]:
-        channels_to_disable: List[DaqNodeSetAction] = []
+        self, outputs: set[int], invert: bool
+    ) -> list[DaqNodeSetAction]:
+        channels_to_disable: list[DaqNodeSetAction] = []
         for ch in range(self._channels):
             if (ch in outputs) != invert:
                 channels_to_disable.append(
@@ -157,8 +157,8 @@ class DeviceSHFQA(DeviceZI):
                 )
         return channels_to_disable
 
-    def _nodes_to_monitor_impl(self) -> List[str]:
-        nodes = []
+    def _nodes_to_monitor_impl(self) -> list[str]:
+        nodes = super()._nodes_to_monitor_impl()
         for awg in range(self._get_num_awgs()):
             nodes.extend(
                 [
@@ -174,11 +174,11 @@ class DeviceSHFQA(DeviceZI):
         self,
         awg_key: AwgKey,
         awg_config: AwgConfig,
-        integrator_allocations: List[IntegratorAllocation.Data],
+        integrator_allocations: list[IntegratorAllocation.Data],
         averages: int,
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
-    ) -> List[DaqNodeAction]:
+    ) -> list[DaqNodeAction]:
 
         average_mode = 0 if averaging_mode == AveragingMode.CYCLIC else 1
         nodes = [
@@ -211,7 +211,7 @@ class DeviceSHFQA(DeviceZI):
         acquisition_type: AcquisitionType,
         awg_key: AwgKey,
         awg_config: AwgConfig,
-        integrator_allocations: List[IntegratorAllocation.Data],
+        integrator_allocations: list[IntegratorAllocation.Data],
         averages: int,
         average_mode: int,
     ):
@@ -415,11 +415,11 @@ class DeviceSHFQA(DeviceZI):
             ]
         return []
 
-    def conditions_for_execution_ready(self) -> Dict[str, Any]:
+    def conditions_for_execution_ready(self) -> dict[str, Any]:
         # TODO(janl): Not sure whether we need this condition this on the SHFQA (including SHFQC)
         # as well. The state of the generator enable wasn't always pickup up reliably, so we
         # only check in cases where we rely on external triggering mechanisms.
-        conditions: Dict[str, Any] = {}
+        conditions: dict[str, Any] = {}
         if self._wait_for_awgs:
             for awg_index in self._allocated_awgs:
                 conditions[
@@ -429,8 +429,8 @@ class DeviceSHFQA(DeviceZI):
 
     def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType
-    ) -> Dict[str, Any]:
-        conditions: Dict[str, Any] = {}
+    ) -> dict[str, Any]:
+        conditions: dict[str, Any] = {}
         for awg_index in self._allocated_awgs:
             conditions[f"/{self.serial}/qachannels/{awg_index}/generator/enable"] = 0
             if acquisition_type == AcquisitionType.SPECTROSCOPY:
@@ -446,12 +446,12 @@ class DeviceSHFQA(DeviceZI):
                 ] = 0
         return conditions
 
-    def collect_output_initialization_nodes(
+    def collect_initialization_nodes(
         self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
-    ) -> List[DaqNodeSetAction]:
+    ) -> list[DaqNodeSetAction]:
         _logger.debug("%s: Initializing device...", self.dev_repr)
 
-        nodes_to_initialize_output: List[DaqNodeSetAction] = []
+        nodes_to_initialize_output: list[DaqNodeSetAction] = []
 
         outputs = initialization.outputs or []
         for output in outputs:
@@ -539,10 +539,10 @@ class DeviceSHFQA(DeviceZI):
     def prepare_upload_all_binary_waves(
         self,
         awg_index,
-        waves: List[Tuple[str, npt.ArrayLike]],
+        waves: list[tuple[str, npt.ArrayLike]],
         acquisition_type: AcquisitionType,
     ):
-        waves_upload: List[DaqNodeSetAction] = []
+        waves_upload: list[DaqNodeSetAction] = []
         has_spectroscopy_envelope = False
         if acquisition_type == AcquisitionType.SPECTROSCOPY:
             if len(waves) > 1:
@@ -605,7 +605,7 @@ class DeviceSHFQA(DeviceZI):
         self,
         dev_input: IO.Data,
         dev_output: IO.Data,
-        measurement: Optional[Measurement.Data],
+        measurement: Measurement.Data | None,
         device_uid: str,
         recipe_data: RecipeData,
     ):
@@ -690,7 +690,7 @@ class DeviceSHFQA(DeviceZI):
         return nodes_to_set_for_readout_mode
 
     def _configure_spectroscopy_mode_nodes(
-        self, dev_input, measurement: Optional[Measurement.Data]
+        self, dev_input, measurement: Measurement.Data | None
     ):
         _logger.debug("%s: Setting measurement mode to 'Spectroscopy'.", self.dev_repr)
 
@@ -839,7 +839,7 @@ class DeviceSHFQA(DeviceZI):
 
     def collect_trigger_configuration_nodes(
         self, initialization: Initialization.Data, recipe_data: RecipeData
-    ) -> List[DaqNodeAction]:
+    ) -> list[DaqNodeAction]:
         _logger.debug("Configuring triggers...")
         self._wait_for_awgs = True
         self._emit_trigger = False
@@ -896,7 +896,7 @@ class DeviceSHFQA(DeviceZI):
 
     def collect_follower_configuration_nodes(
         self, initialization: Initialization.Data
-    ) -> List[DaqNodeAction]:
+    ) -> list[DaqNodeAction]:
         dio_mode = initialization.config.dio_mode
         _logger.debug("%s: Configuring as a follower...", self.dev_repr)
 
@@ -922,7 +922,7 @@ class DeviceSHFQA(DeviceZI):
         self,
         channel: int,
         acquisition_type: AcquisitionType,
-        result_indices: List[int],
+        result_indices: list[int],
         num_results: int,
         hw_averages: int,
     ):
@@ -991,7 +991,7 @@ class DeviceSHFQA(DeviceZI):
                 f"a loop is too short. Please contact Zurich Instruments."
             )
 
-    def collect_reset_nodes(self) -> List[DaqNodeAction]:
+    def collect_reset_nodes(self) -> list[DaqNodeAction]:
         reset_nodes = super().collect_reset_nodes()
         reset_nodes.append(
             DaqNodeSetAction(

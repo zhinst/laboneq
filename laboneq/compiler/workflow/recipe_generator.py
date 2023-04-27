@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from laboneq.compiler.code_generator.measurement_calculator import IntegrationTimes
 from laboneq.compiler.common.device_type import DeviceType
@@ -30,7 +30,7 @@ class RecipeGenerator:
         }
         self._recipe["experiment"] = {}
 
-    def add_oscillator_params(self, experiment_dao):
+    def add_oscillator_params(self, experiment_dao: ExperimentDAO):
         hw_oscillators = {}
         for oscillator in experiment_dao.hardware_oscillators():
             hw_oscillators[oscillator.id] = oscillator
@@ -115,7 +115,7 @@ class RecipeGenerator:
         self,
         experiment_dao: ExperimentDAO,
         leader_properties: LeaderProperties,
-        clock_settings,
+        clock_settings: Dict[str, Any],
     ):
         if leader_properties.global_leader is not None:
             initialization = self._find_initialization(leader_properties.global_leader)
@@ -151,6 +151,14 @@ class RecipeGenerator:
                 initialization["config"][
                     "sampling_rate"
                 ] = DeviceType.HDAWG.sampling_rate_2GHz
+
+            if device.device_type == "shfppc":
+                ppchannels = {}
+                for signal in experiment_dao.signals():
+                    amplifier_pump = experiment_dao.amplifier_pump(signal)
+                    if amplifier_pump is not None and amplifier_pump[0] == device_uid:
+                        ppchannels[amplifier_pump[1]] = amplifier_pump[2]
+                initialization["ppchannels"] = ppchannels
 
             for follower in experiment_dao.dio_followers():
                 initialization = self._find_initialization(follower)
@@ -274,7 +282,7 @@ class RecipeGenerator:
         self,
         experiment_dao: ExperimentDAO,
         leader_properties: LeaderProperties,
-        clock_settings,
+        clock_settings: Dict[str, Any],
     ):
         self.add_devices_from_experiment(experiment_dao)
         self.add_connectivity_from_experiment(

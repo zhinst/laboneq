@@ -17,7 +17,7 @@ from laboneq.compiler.code_generator.measurement_calculator import (
     SignalDelays,
 )
 from laboneq.compiler.common import compiler_settings
-from laboneq.compiler.common.awg_info import AWGInfo
+from laboneq.compiler.common.awg_info import AWGInfo, AwgKey
 from laboneq.compiler.common.awg_signal_type import AWGSignalType
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.signal_obj import SignalObj
@@ -66,7 +66,7 @@ class Compiler:
         self._scheduler: Compiler.Scheduler = None
 
         self._leader_properties = LeaderProperties()
-        self._clock_settings = {}
+        self._clock_settings: Dict[str, Any] = {}
         self._integration_unit_allocation = None
         self._awgs: _AWGMapping = {}
         self._precompensations: Dict[
@@ -489,6 +489,14 @@ class Compiler:
 
     def _generate_signal_objects(self):
         signal_objects = {}
+
+        @dataclass
+        class DelayInfo:
+            port_delay_gen: Optional[float] = None
+            delay_signal_gen: Optional[float] = None
+
+        delay_measure_acquire: Dict[AwgKey, DelayInfo] = {}
+
         for signal_id in self._experiment_dao.signals():
 
             signal_info = self._experiment_dao.signal_info(signal_id)
@@ -571,6 +579,12 @@ class Compiler:
             elif signal_type in ("single",):
                 mixer_type = None
 
+            port_delay = self._experiment_dao.port_delay(signal_id)
+            if signal_type != "integration":
+                delay_info = delay_measure_acquire.setdefault(awg.key, DelayInfo())
+                delay_info.port_delay_gen = port_delay
+                delay_info.delay_signal_gen = delay_signal
+
             signal_obj = SignalObj(
                 id=signal_id,
                 sampling_rate=sampling_rate,
@@ -582,12 +596,19 @@ class Compiler:
                 device_type=device_type,
                 oscillator_frequency=oscillator_frequency,
                 channels=channels,
-                port_delay=self._experiment_dao.port_delay(signal_id),
+                port_delay=port_delay,
                 mixer_type=mixer_type,
                 hw_oscillator=hw_oscillator,
                 is_qc=device_info.is_qc,
             )
             signal_objects[signal_id] = signal_obj
+        for s in signal_objects.values():
+            try:
+                delay_info = delay_measure_acquire[s.awg.key]
+                s.base_port_delay = delay_info.port_delay_gen
+                s.base_delay_signal = delay_info.delay_signal_gen
+            except KeyError:
+                _logger.debug("No measurement pulse signal for acquire signal %s", s.id)
         return signal_objects
 
     def calc_outputs(self, signal_delays: SignalDelays):

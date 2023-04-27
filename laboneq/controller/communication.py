@@ -198,7 +198,6 @@ class DaqWrapper(ZiApiWrapperBase):
     def __init__(self, name, server_qualifier: ServerQualifier):
         super().__init__(name)
         self._server_qualifier = server_qualifier
-        self._awg_module_wrappers: List[AwgModuleWrapper] = []
         self._is_valid = False
         self._dataserver_version = LabOneVersion.LATEST
         self._vector_counter = 0
@@ -277,16 +276,6 @@ class DaqWrapper(ZiApiWrapperBase):
     @property
     def server_qualifier(self):
         return self._server_qualifier
-
-    def create_awg_module(self, name):
-        _logger.info("Create AWG module %s", name)
-        self._awg_module_wrappers = [
-            wrapper for wrapper in self._awg_module_wrappers if wrapper.name != name
-        ]
-
-        module = AwgModuleWrapper(name, self._zi_api_object.awgModule())
-        self._awg_module_wrappers.append(module)
-        return module
 
     def is_valid(self):
         return self._is_valid
@@ -396,34 +385,6 @@ class DaqWrapperDryRun(DaqWrapper):
     def set_emulation_option(self, serial: str, option: str, value: Any):
         assert isinstance(self._zi_api_object, ziDAQServerEmulator)
         self._zi_api_object.set_option(serial, option, value)
-
-
-class AwgModuleWrapper(ZiApiWrapperBase):
-    def __init__(self, name, zi_awg_module):
-        super().__init__(name)
-        self._zi_api_object = zi_awg_module
-
-    def _api_wrapper(self, method_name, *args, **kwargs):
-        api_method = getattr(self._zi_api_object, method_name)
-        res = api_method(*args, **kwargs)
-        return res
-
-    @property
-    def progress(self):
-        return self._zi_api_object.progress()
-
-    @property
-    def elf_status(self):
-        return self._zi_api_object.getInt("elf/status")
-
-    def _api_reply_to_val_history_dict(self, daq_reply):
-        """Converts AWG module reply with flat=True to path-value_history dict
-        e.g. { path: [ val1, val2 ] } to { path: [ val1, val2 ] }
-        """
-        res = {}
-        for path in daq_reply:
-            res[path] = daq_reply[path]
-        return res
 
 
 def batch_set(all_actions: List[DaqNodeAction]):

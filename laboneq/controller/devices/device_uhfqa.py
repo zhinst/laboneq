@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 import numpy as np
 
@@ -56,15 +56,15 @@ class DeviceUHFQA(DeviceZI):
 
     def _get_next_osc_index(
         self, osc_group: int, previously_allocated: int
-    ) -> Optional[int]:
+    ) -> int | None:
         if previously_allocated >= 1:
             return None
         return previously_allocated
 
     def disable_outputs(
-        self, outputs: Set[int], invert: bool
-    ) -> List[DaqNodeSetAction]:
-        channels_to_disable: List[DaqNodeSetAction] = []
+        self, outputs: set[int], invert: bool
+    ) -> list[DaqNodeSetAction]:
+        channels_to_disable: list[DaqNodeSetAction] = []
         for ch in range(self._channels):
             if (ch in outputs) != invert:
                 channels_to_disable.append(
@@ -77,8 +77,8 @@ class DeviceUHFQA(DeviceZI):
                 )
         return channels_to_disable
 
-    def _nodes_to_monitor_impl(self) -> List[str]:
-        nodes = [f"/{self.serial}/system/extclk"]
+    def _nodes_to_monitor_impl(self) -> list[str]:
+        nodes = super()._nodes_to_monitor_impl()
         for awg in range(self._get_num_awgs()):
             nodes.append(f"/{self.serial}/awgs/{awg}/enable")
             nodes.append(f"/{self.serial}/awgs/{awg}/ready")
@@ -96,7 +96,7 @@ class DeviceUHFQA(DeviceZI):
             f"correct DIO connection in the device setup"
         )
 
-    def update_clock_source(self, force_internal: Optional[bool]):
+    def update_clock_source(self, force_internal: bool | None):
         if len(self._uplinks) == 0:
             self._error_as_leader()
         if len(self._uplinks) > 1:
@@ -112,7 +112,7 @@ class DeviceUHFQA(DeviceZI):
         # but allow override to external.
         self._use_internal_clock = is_desktop and (force_internal is not False)
 
-    def clock_source_control_nodes(self) -> List[NodeControlBase]:
+    def clock_source_control_nodes(self) -> list[NodeControlBase]:
         source = (
             REFERENCE_CLOCK_SOURCE_INTERNAL
             if self._use_internal_clock
@@ -126,11 +126,11 @@ class DeviceUHFQA(DeviceZI):
         self,
         awg_key: AwgKey,
         awg_config: AwgConfig,
-        integrator_allocations: List[IntegratorAllocation.Data],
+        integrator_allocations: list[IntegratorAllocation.Data],
         averages: int,
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
-    ) -> List[DaqNodeAction]:
+    ) -> list[DaqNodeAction]:
         nodes = [
             *self._configure_result_logger(
                 awg_key,
@@ -152,7 +152,7 @@ class DeviceUHFQA(DeviceZI):
         self,
         awg_key: AwgKey,
         awg_config: AwgConfig,
-        integrator_allocations: List[IntegratorAllocation.Data],
+        integrator_allocations: list[IntegratorAllocation.Data],
         averages: int,
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
@@ -240,16 +240,16 @@ class DeviceUHFQA(DeviceZI):
 
         return nodes_to_initialize_input_monitor
 
-    def conditions_for_execution_ready(self) -> Dict[str, Any]:
-        conditions: Dict[str, Any] = {}
+    def conditions_for_execution_ready(self) -> dict[str, Any]:
+        conditions: dict[str, Any] = {}
         for awg_index in self._allocated_awgs:
             conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = 1
         return conditions
 
     def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType
-    ) -> Dict[str, Any]:
-        conditions: Dict[str, Any] = {}
+    ) -> dict[str, Any]:
+        conditions: dict[str, Any] = {}
         for awg_index in self._allocated_awgs:
             conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = 0
         return conditions
@@ -282,12 +282,12 @@ class DeviceUHFQA(DeviceZI):
                 range_list,
             )
 
-    def collect_output_initialization_nodes(
+    def collect_initialization_nodes(
         self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
-    ) -> List[DaqNodeAction]:
+    ) -> list[DaqNodeAction]:
         _logger.debug("%s: Initializing device...", self.dev_repr)
 
-        nodes_to_initialize_output: List[DaqNodeAction] = []
+        nodes_to_initialize_output: list[DaqNodeAction] = []
 
         outputs = initialization.outputs or []
         for output in outputs:
@@ -573,7 +573,7 @@ class DeviceUHFQA(DeviceZI):
 
     def collect_trigger_configuration_nodes(
         self, initialization: Initialization.Data, recipe_data: RecipeData
-    ) -> List[DaqNodeAction]:
+    ) -> list[DaqNodeAction]:
         _logger.debug("Configuring triggers...")
         _logger.debug("Configuring strobe index: 16.")
         _logger.debug("Configuring strobe slope: 0.")
@@ -644,11 +644,6 @@ class DeviceUHFQA(DeviceZI):
     def configure_as_leader(self, initialization: Initialization.Data):
         self._error_as_leader()
 
-    def collect_follower_configuration_nodes(
-        self, initialization: Initialization.Data
-    ) -> List[DaqNodeAction]:
-        return []
-
     def _get_integrator_measurement_data(
         self, result_index, num_results, averages_divider: int
     ):
@@ -667,7 +662,7 @@ class DeviceUHFQA(DeviceZI):
         self,
         channel: int,
         acquisition_type: AcquisitionType,
-        result_indices: List[int],
+        result_indices: list[int],
         num_results: int,
         hw_averages: int,
     ):

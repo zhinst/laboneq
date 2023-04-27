@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import partial
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union, overload
+from typing import Any, Callable, overload
 
 import numpy as np
 from numpy import typing as npt
@@ -95,7 +95,7 @@ class NodeType(Enum):
 class NodeInfo:
     "Node descriptor to use in node definitions."
     type: NodeType = NodeType.FLOAT
-    default: Optional[Any] = None
+    default: Any | None = None
     read_only: bool = False
     handler: Callable[[NodeBase], None] = None
     # For DYNAMIC nodes
@@ -139,11 +139,11 @@ class PollEvent:
 class DevEmu(ABC):
     "Base class emulating a device, specialized per device type."
 
-    def __init__(self, scheduler: sched.scheduler, dev_opts: Dict[str, Any]):
+    def __init__(self, scheduler: sched.scheduler, dev_opts: dict[str, Any]):
         self._scheduler = scheduler
         self._dev_opts = dev_opts
-        self._node_tree: Dict[str, NodeBase] = {}
-        self._poll_queue: List[PollEvent] = []
+        self._node_tree: dict[str, NodeBase] = {}
+        self._poll_queue: list[PollEvent] = []
         self._total_subscribed: int = 0
         self._cached_node_def = functools.lru_cache(maxsize=None)(self._node_def)
 
@@ -152,7 +152,7 @@ class DevEmu(ABC):
         ...
 
     @abstractmethod
-    def _node_def(self) -> Dict[str, NodeInfo]:
+    def _node_def(self) -> dict[str, NodeInfo]:
         ...
 
     def _full_path(self, dev_path: str) -> str:
@@ -209,7 +209,7 @@ class DevEmu(ABC):
             PollEvent(path=self._full_path(dev_path), value=node.value)
         )
 
-    def poll(self) -> List[PollEvent]:
+    def poll(self) -> list[PollEvent]:
         output = self._poll_queue[:]
         self._poll_queue.clear()
         return output
@@ -229,7 +229,7 @@ class DevEmuZI(DevEmu):
         ]
         return ",".join(devices)
 
-    def _node_def(self) -> Dict[str, NodeInfo]:
+    def _node_def(self) -> dict[str, NodeInfo]:
         return {
             "about/version": NodeInfo(
                 type=NodeType.STR, default="23.02", read_only=True
@@ -248,7 +248,7 @@ class DevEmuZI(DevEmu):
 
 class DevEmuHW(DevEmu):
     def __init__(
-        self, serial: str, scheduler: sched.scheduler, dev_opts: Dict[str, Any]
+        self, serial: str, scheduler: sched.scheduler, dev_opts: dict[str, Any]
     ):
         super().__init__(scheduler, dev_opts)
         self._serial = serial
@@ -258,7 +258,7 @@ class DevEmuHW(DevEmu):
 
 
 class DevEmuDummy(DevEmuHW):
-    def _node_def(self) -> Dict[str, NodeInfo]:
+    def _node_def(self) -> dict[str, NodeInfo]:
         return {}
 
 
@@ -300,7 +300,7 @@ class DevEmuHDAWG(DevEmuHW):
             argument=(node.value,),
         )
 
-    def _node_def(self) -> Dict[str, NodeInfo]:
+    def _node_def(self) -> dict[str, NodeInfo]:
         nd = {
             "features/devtype": NodeInfo(
                 type=NodeType.STR,
@@ -341,7 +341,7 @@ class DevEmuUHFQA(DevEmuHW):
             user_readout_data(
                 result_index: int,
                 length: int,
-                averages: int) -> ArrayLike | List[float]
+                averages: int) -> ArrayLike | list[float]
             The function is called after every AWG execution, once for every integrator with the
             corresponding 'result_index'. It must return the vector of values of size 'length',
             that will be set to the corresponding '<devN>/qas/0/result/data/<result_index>/wave'
@@ -382,7 +382,7 @@ class DevEmuUHFQA(DevEmuHW):
         self._set_val("awgs/0/ready", 0)
         self._scheduler.enter(delay=0.001, priority=0, action=self._awg_ready)
 
-    def _node_def(self) -> Dict[str, NodeInfo]:
+    def _node_def(self) -> dict[str, NodeInfo]:
         nd = {
             "features/devtype": NodeInfo(
                 type=NodeType.STR,
@@ -430,7 +430,7 @@ class DevEmuPQSC(DevEmuHW):
             argument=(node_int.value,),
         )
 
-    def _node_def(self) -> Dict[str, NodeInfo]:
+    def _node_def(self) -> dict[str, NodeInfo]:
         return {
             "execution/enable": NodeInfo(
                 type=NodeType.INT, default=0, handler=DevEmuPQSC._trig_execute
@@ -507,7 +507,7 @@ class DevEmuSHFQABase(DevEmuHW):
             delay=0.001, priority=0, action=self._awg_stop_qa, argument=(channel,)
         )
 
-    def _node_def_qa(self) -> Dict[str, NodeInfo]:
+    def _node_def_qa(self) -> dict[str, NodeInfo]:
         nd = {}
         for channel in range(4):
             nd[f"qachannels/{channel}/generator/enable"] = NodeInfo(
@@ -536,7 +536,7 @@ class DevEmuSHFQABase(DevEmuHW):
 
 
 class DevEmuSHFQA(DevEmuSHFQABase):
-    def _node_def(self) -> Dict[str, NodeInfo]:
+    def _node_def(self) -> dict[str, NodeInfo]:
         nd = {
             "features/devtype": NodeInfo(
                 type=NodeType.STR,
@@ -560,7 +560,7 @@ class DevEmuSHFSGBase(DevEmuHW):
             delay=0.001, priority=0, action=self._awg_stop_sg, argument=(channel,)
         )
 
-    def _node_def_sg(self) -> Dict[str, NodeInfo]:
+    def _node_def_sg(self) -> dict[str, NodeInfo]:
         nd = {}
         for channel in range(8):
             nd[f"sgchannels/{channel}/awg/enable"] = NodeInfo(
@@ -572,7 +572,7 @@ class DevEmuSHFSGBase(DevEmuHW):
 
 
 class DevEmuSHFSG(DevEmuSHFSGBase):
-    def _node_def(self) -> Dict[str, NodeInfo]:
+    def _node_def(self) -> dict[str, NodeInfo]:
         nd = {
             "features/devtype": NodeInfo(
                 type=NodeType.STR,
@@ -588,7 +588,7 @@ class DevEmuSHFSG(DevEmuSHFSGBase):
 
 
 class DevEmuSHFQC(DevEmuSHFQABase, DevEmuSHFSGBase):
-    def _node_def(self) -> Dict[str, NodeInfo]:
+    def _node_def(self) -> dict[str, NodeInfo]:
         nd = {
             "features/devtype": NodeInfo(
                 type=NodeType.STR,
@@ -605,7 +605,7 @@ class DevEmuSHFQC(DevEmuSHFQABase, DevEmuSHFSGBase):
 
 
 class DevEmuNONQC(DevEmuHW):
-    def _node_def(self) -> Dict[str, NodeInfo]:
+    def _node_def(self) -> dict[str, NodeInfo]:
         return {}
 
 
@@ -629,7 +629,7 @@ def _serial_to_device_type(serial: str):
         return DevEmuDummy
 
 
-def _canonical_path_list(path: Union[str, List[str]]) -> List[str]:
+def _canonical_path_list(path: str | list[str]) -> list[str]:
     if isinstance(path, list):
         paths = path
     else:
@@ -648,12 +648,12 @@ class ziDAQServerEmulator:
         assert api_level == 6
         super().__init__()
         self._scheduler = sched.scheduler()
-        self._device_type_map: Dict[str, str] = {}
+        self._device_type_map: dict[str, str] = {}
         # TODO(2K): Defer "ZI" device initialization to allow passing options
-        self._devices: Dict[str, DevEmu] = {
+        self._devices: dict[str, DevEmu] = {
             "ZI": DevEmuZI(self._scheduler, {"emu_server": self})
         }
-        self._options: Dict[str, Dict[str, Any]] = {}
+        self._options: dict[str, dict[str, Any]] = {}
 
     def map_device_type(self, serial: str, type: str):
         self._device_type_map[serial.upper()] = type.upper()
@@ -691,7 +691,7 @@ class ziDAQServerEmulator:
             self._devices[serial] = device
         return device
 
-    def _resolve_dev(self, path: str) -> Tuple[List[DevEmu], str]:
+    def _resolve_dev(self, path: str) -> tuple[list[DevEmu], str]:
         if path.startswith("/"):
             path = path[1:]
         path_parts = path.split("/")
@@ -712,9 +712,9 @@ class ziDAQServerEmulator:
         return devices, dev_path
 
     def _resolve_paths_and_perform(
-        self, path: Union[str, List[str]], handler: Callable
-    ) -> Dict[str, NodeBase]:
-        results: Dict[str, NodeBase] = {}
+        self, path: str | list[str], handler: Callable
+    ) -> dict[str, NodeBase]:
+        results: dict[str, NodeBase] = {}
         for p in _canonical_path_list(path):
             devices, dev_path = self._resolve_dev(p)
             dev_path_suffix = "" if len(dev_path) == 0 else f"/{dev_path}"
@@ -755,7 +755,7 @@ class ziDAQServerEmulator:
         # TODO(2K): emulate timestamp
         return raw_results
 
-    def _set(self, device: DevEmu, dev_path: str, value_dict: Dict[str, Any]):
+    def _set(self, device: DevEmu, dev_path: str, value_dict: dict[str, Any]):
         full_path = device._full_path(dev_path)
         value = value_dict[full_path]
         device.set(dev_path, value)
@@ -765,12 +765,10 @@ class ziDAQServerEmulator:
         ...
 
     @overload
-    def set(self, items: List[List[Any]]):
+    def set(self, items: list[list[Any]]):
         ...
 
-    def set(
-        self, path_or_items: Union[str, List[List[Any]]], value: Optional[Any] = None
-    ):
+    def set(self, path_or_items: str | list[list[Any]], value: Any | None = None):
         self._progress_scheduler()
         if isinstance(path_or_items, str):
             pass
@@ -804,14 +802,14 @@ class ziDAQServerEmulator:
     def _subscribe(self, device: DevEmu, dev_path: str):
         device.subscribe(dev_path)
 
-    def subscribe(self, path: Union[str, List[str]]):
+    def subscribe(self, path: str | list[str]):
         self._progress_scheduler()
         self._resolve_paths_and_perform(path, self._subscribe)
 
     def _unsubscribe(self, device: DevEmu, dev_path: str):
         device.unsubscribe(dev_path)
 
-    def unsubscribe(self, path: Union[str, List[str]]):
+    def unsubscribe(self, path: str | list[str]):
         self._progress_scheduler()
         self._resolve_paths_and_perform(path, self._unsubscribe)
 
@@ -834,7 +832,7 @@ class ziDAQServerEmulator:
         flat: bool = False,
     ) -> Any:
         self._progress_scheduler(wait_time=recording_time_s)
-        events: List[PollEvent] = []
+        events: list[PollEvent] = []
         for dev in self._devices.values():
             events.extend(dev.poll())
         result = {}
@@ -844,10 +842,6 @@ class ziDAQServerEmulator:
             path_res = result.setdefault(event.path, {"value": []})
             path_res["value"].append(event.value)
         return result
-
-    def awgModule(self) -> AWGModuleEmulator:
-        self._progress_scheduler()
-        return AWGModuleEmulator(self)
 
     def _progress_scheduler(self, wait_time: float = 0.0):
         def _delay(delay: float):
@@ -864,47 +858,3 @@ class ziDAQServerEmulator:
                 _delay(remaining)
                 break
             _delay(delay_till_next_event)
-
-
-class AWGModuleEmulator:
-    def __init__(self, parent_conn: ziDAQServerEmulator):
-        self._parent_conn = parent_conn
-
-    @overload
-    def set(self, path: str, value: Any):
-        ...
-
-    @overload
-    def set(self, items: List[List[Any]]):
-        ...
-
-    def set(
-        self, path_or_items: Union[str, List[List[Any]]], value: Optional[Any] = None
-    ):
-        if isinstance(path_or_items, str):
-            _ = path_or_items
-        else:
-            _ = path_or_items
-        # TODO(2K): stub
-
-    def get(self, path: str, flat: bool = False):
-        # TODO(2K): stub
-        results = {}
-        for p in _canonical_path_list(path):
-            if p == "/directory":
-                val = "/"
-            else:
-                val = 0
-            results[p] = [val]
-        # TODO(2K): reshape results
-        assert flat is True
-        return results
-
-    def getInt(self, path: str) -> int:
-        return 0  # TODO(2K): stub
-
-    def execute(self):
-        pass  # TODO(2K): stub
-
-    def progress(self) -> float:
-        return 1.0  # TODO(2K): stub

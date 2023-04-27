@@ -4,8 +4,9 @@
 from .hdawg import HDAWG
 from .nonqc import NonQC
 from .pqsc import PQSC
+from .shfppc import SHFPPC
 from .shfqa import SHFQA
 from .shfsg import SHFSG
 from .uhfqa import UHFQA
 
-__all__ = ["HDAWG", "PQSC", "SHFQA", "SHFSG", "UHFQA", "NonQC"]
+__all__ = ["HDAWG", "PQSC", "SHFQA", "SHFSG", "UHFQA", "NonQC", "SHFPPC"]

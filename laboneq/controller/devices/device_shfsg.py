@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 import numpy
 from numpy import typing as npt
@@ -123,7 +123,7 @@ class DeviceSHFSG(DeviceZI):
 
     def _get_next_osc_index(
         self, osc_group: int, previously_allocated: int
-    ) -> Optional[int]:
+    ) -> int | None:
         if previously_allocated >= 8:
             return None
         return previously_allocated
@@ -132,9 +132,9 @@ class DeviceSHFSG(DeviceZI):
         return f"/{self.serial}/sgchannels/{channel}/oscs/{index}/freq"
 
     def disable_outputs(
-        self, outputs: Set[int], invert: bool
-    ) -> List[DaqNodeSetAction]:
-        channels_to_disable: List[DaqNodeSetAction] = []
+        self, outputs: set[int], invert: bool
+    ) -> list[DaqNodeSetAction]:
+        channels_to_disable: list[DaqNodeSetAction] = []
         for ch in range(self._channels):
             if (ch in outputs) != invert:
                 channels_to_disable.append(
@@ -147,8 +147,8 @@ class DeviceSHFSG(DeviceZI):
                 )
         return channels_to_disable
 
-    def _nodes_to_monitor_impl(self) -> List[str]:
-        nodes = []
+    def _nodes_to_monitor_impl(self) -> list[str]:
+        nodes = super()._nodes_to_monitor_impl()
         for awg in range(self._get_num_awgs()):
             nodes.append(f"/{self.serial}/sgchannels/{awg}/awg/enable")
             nodes.append(f"/{self.serial}/sgchannels/{awg}/awg/ready")
@@ -178,8 +178,8 @@ class DeviceSHFSG(DeviceZI):
             ]
         return []
 
-    def conditions_for_execution_ready(self) -> Dict[str, Any]:
-        conditions: Dict[str, Any] = {}
+    def conditions_for_execution_ready(self) -> dict[str, Any]:
+        conditions: dict[str, Any] = {}
         if self._wait_for_awgs:
             for awg_index in self._allocated_awgs:
                 conditions[f"/{self.serial}/sgchannels/{awg_index}/awg/enable"] = 1
@@ -187,18 +187,18 @@ class DeviceSHFSG(DeviceZI):
 
     def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType
-    ) -> Dict[str, Any]:
-        conditions: Dict[str, Any] = {}
+    ) -> dict[str, Any]:
+        conditions: dict[str, Any] = {}
         for awg_index in self._allocated_awgs:
             conditions[f"/{self.serial}/sgchannels/{awg_index}/awg/enable"] = 0
         return conditions
 
-    def collect_output_initialization_nodes(
+    def collect_initialization_nodes(
         self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
-    ) -> List[DaqNodeSetAction]:
+    ) -> list[DaqNodeSetAction]:
         _logger.debug("%s: Initializing device...", self.dev_repr)
 
-        nodes_to_initialize_output: List[DaqNodeSetAction] = []
+        nodes_to_initialize_output: list[DaqNodeSetAction] = []
 
         outputs = initialization.outputs or []
 
@@ -333,7 +333,7 @@ class DeviceSHFSG(DeviceZI):
     ):
         nodes_to_initialize_measurement = []
 
-        center_frequencies: Dict[int, IO.Data] = {}
+        center_frequencies: dict[int, IO.Data] = {}
 
         def get_synth_idx(io: IO.Data):
             if io.channel >= self._channels:
@@ -395,7 +395,7 @@ class DeviceSHFSG(DeviceZI):
 
     def collect_trigger_configuration_nodes(
         self, initialization: Initialization.Data, recipe_data: RecipeData
-    ) -> List[DaqNodeAction]:
+    ) -> list[DaqNodeAction]:
         _logger.debug("Configuring triggers...")
         self._wait_for_awgs = True
         self._emit_trigger = False
@@ -489,7 +489,7 @@ class DeviceSHFSG(DeviceZI):
         ]
         return nodes_to_configure_triggers
 
-    def add_command_table_header(self, body: dict) -> Dict:
+    def add_command_table_header(self, body: dict) -> dict:
         return {
             "$schema": "https://docs.zhinst.com/shfsg/commandtable/v1_1/schema",
             "header": {"version": "1.1.0"},
@@ -504,7 +504,7 @@ class DeviceSHFSG(DeviceZI):
 
     def collect_follower_configuration_nodes(
         self, initialization: Initialization.Data
-    ) -> List[DaqNodeAction]:
+    ) -> list[DaqNodeAction]:
         if self.options.qc_with_qa:
             return []  # QC follower config is done over it's QA part
 
@@ -532,7 +532,7 @@ class DeviceSHFSG(DeviceZI):
 
         return nodes_to_configure_as_follower
 
-    def collect_reset_nodes(self) -> List[DaqNodeAction]:
+    def collect_reset_nodes(self) -> list[DaqNodeAction]:
         reset_nodes = super().collect_reset_nodes()
         reset_nodes.append(
             DaqNodeSetAction(

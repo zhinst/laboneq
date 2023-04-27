@@ -25,18 +25,10 @@ from .operation import Operation
 from .play_pulse import PlayPulse
 from .reserve import Reserve
 from .set import Set
+from .utils import id_generator
 
 if TYPE_CHECKING:
     from .. import Parameter
-
-section_id = 0
-
-
-def section_id_generator():
-    global section_id
-    retval = f"s_{section_id}"
-    section_id += 1
-    return retval
 
 
 @dataclass(init=True, repr=True, order=True)
@@ -51,7 +43,7 @@ class Section:
     """
 
     #: Unique identifier of the section.
-    uid: str = field(default_factory=section_id_generator)
+    uid: str = field(default=None)
 
     #: Alignment of operations and subsections within this section.
     alignment: SectionAlignment = field(default=SectionAlignment.LEFT)
@@ -78,7 +70,7 @@ class Section:
 
     def __post_init__(self):
         if self.uid is None:
-            self.uid = section_id_generator()
+            self.uid = id_generator("s")
 
     def add(self, section: Section):
         """Add a subsection, a sweep or a loop to the section.
@@ -250,6 +242,7 @@ class AcquireLoopRt(Section):
     reset_oscillator_phase: bool = field(default=False)
 
     def __post_init__(self):
+        super().__post_init__()
         if self.repetition_mode == RepetitionMode.CONSTANT:
             if self.repetition_time is None:
                 raise LabOneQException(
@@ -316,3 +309,8 @@ class Case(Section):
         raise LabOneQException(
             f"Trying to add object to section {self.uid}. Only ``play`` and ``delay`` are allowed."
         )
+
+    @classmethod
+    def from_section(cls, section, state):
+        """Down-cast from Section."""
+        return cls(**section.__dict__, state=state)  # type: ignore

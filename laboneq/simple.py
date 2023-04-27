@@ -10,6 +10,7 @@ from laboneq.controller import laboneq_logging
 from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.dsl import LinearSweepParameter, SweepParameter
 from laboneq.dsl.calibration import (
+    AmplifierPump,
     BounceCompensation,
     Calibratable,
     Calibration,

@@ -1,11 +1,14 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import logging
+import math
 import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Iterable
 
 from laboneq._observability.tracing import trace
 
@@ -15,30 +18,46 @@ _logger = logging.getLogger(__name__)
 @dataclass
 class Node:
     path: str
-    values: List[Any] = field(default_factory=list)
-    last: Optional[Any] = None
+    values: list[Any] = field(default_factory=list)
+    last: Any | None = None
 
     def flush(self):
         self.values.clear()
 
-    def peek(self) -> Optional[Any]:
+    def peek(self) -> Any | None:
         return None if len(self.values) == 0 else self.values[0]
 
-    def pop(self) -> Optional[Any]:
+    def pop(self) -> Any | None:
         return None if len(self.values) == 0 else self.values.pop(0)
 
-    def get_last(self) -> Optional[Any]:
+    def get_last(self) -> Any | None:
         return self.last
 
-    def append(self, val: Dict[str, Any]):
+    def append(self, val: dict[str, Any]):
         self.values.extend(val["value"])
         self.last = self.values[-1]
+
+
+def _is_expected(val: Any, expected: list[Any | None]) -> bool:
+    for e in expected:
+        if e is None:
+            # No specific value expected, any update matches
+            return True
+        if isinstance(e, FloatWithTolerance) and math.isclose(
+            val, e.val, abs_tol=e.abs_tol
+        ):
+            # Float with given tolerance
+            return True
+        if val == e:
+            # Otherwise exact match
+            return True
+    return False
 
 
 class NodeMonitor:
     def __init__(self, daq):
         self._daq = daq
-        self._nodes: Dict[str, Node] = {}
+        self._nodes: dict[str, Node] = {}
 
     def _log_missing_node(self, path: str):
         _logger.warning(
@@ -56,7 +75,7 @@ class NodeMonitor:
         self.stop()
         self._nodes.clear()
 
-    def add_nodes(self, paths: List[str]):
+    def add_nodes(self, paths: list[str]):
         for path in paths:
             if path not in self._nodes:
                 self._nodes[path] = Node(path)
@@ -66,7 +85,7 @@ class NodeMonitor:
         if len(all_paths) > 0:
             self._daq.subscribe(all_paths)
 
-    def fetch(self, paths: List[str]):
+    def fetch(self, paths: list[str]):
         for path in paths:
             self._daq.getAsEvent(path)
 
@@ -87,16 +106,16 @@ class NodeMonitor:
         for node in self._nodes.values():
             node.flush()
 
-    def peek(self, path: str) -> Optional[Any]:
+    def peek(self, path: str) -> Any | None:
         return self._get_node(path).peek()
 
-    def pop(self, path: str) -> Optional[Any]:
+    def pop(self, path: str) -> Any | None:
         return self._get_node(path).pop()
 
-    def get_last(self, path: str) -> Optional[Any]:
+    def get_last(self, path: str) -> Any | None:
         return self._get_node(path).get_last()
 
-    def check_last_for_conditions(self, conditions: Dict[str, Any]) -> str:
+    def check_last_for_conditions(self, conditions: dict[str, Any]) -> str:
         for path, expected in conditions.items():
             if path not in self._nodes:
                 self._log_missing_node(path)
@@ -106,11 +125,11 @@ class NodeMonitor:
             val = self.get_last(path)
             if val is None:
                 return path
-            if expected is not None and val not in all_expected:
+            if not _is_expected(val, all_expected):
                 return path
         return None
 
-    def poll_and_check_conditions(self, conditions: Dict[str, Any]) -> Dict[str, Any]:
+    def poll_and_check_conditions(self, conditions: dict[str, Any]) -> dict[str, Any]:
         self.poll()
         remaining = {}
         for path, expected in conditions.items():
@@ -126,19 +145,17 @@ class NodeMonitor:
                     # keep condition as is for the next check iteration
                     remaining[path] = expected
                     break
-                if expected is None or val in all_expected:
-                    # No specific value expected (any update matches) or
-                    # received value matches expected -> condition fulfilled
+                if _is_expected(val, all_expected):
                     break
         return remaining
 
 
 class MultiDeviceHandlerBase:
     def __init__(self):
-        self._conditions: Dict[NodeMonitor, Dict[str, Any]] = {}
+        self._conditions: dict[NodeMonitor, dict[str, Any]] = {}
 
-    def add(self, target: NodeMonitor, conditions: Dict[str, Any]):
-        daq_conditions: Dict[str, Any] = self._conditions.setdefault(target, {})
+    def add(self, target: NodeMonitor, conditions: dict[str, Any]):
+        daq_conditions: dict[str, Any] = self._conditions.setdefault(target, {})
         daq_conditions.update(conditions)
 
 
@@ -151,7 +168,7 @@ class ConditionsChecker(MultiDeviceHandlerBase):
     see AllRepliesWaiter for details.
     """
 
-    def check_all(self) -> Tuple[str, Any]:
+    def check_all(self) -> tuple[str, Any]:
         for node_monitor, daq_conditions in self._conditions.items():
             failed_path = node_monitor.check_last_for_conditions(daq_conditions)
             if failed_path is not None:
@@ -216,7 +233,7 @@ class ResponseWaiter(MultiDeviceHandlerBase):
     def wait_all(self, timeout: float) -> bool:
         start = self._timer()
         while True:
-            remaining: Dict[NodeMonitor, Dict[str, Any]] = {}
+            remaining: dict[NodeMonitor, dict[str, Any]] = {}
             for node_monitor, daq_conditions in self._conditions.items():
                 daq_remaining = node_monitor.poll_and_check_conditions(daq_conditions)
                 if len(daq_remaining) > 0:
@@ -227,8 +244,8 @@ class ResponseWaiter(MultiDeviceHandlerBase):
                 return False
             self._conditions = remaining
 
-    def remaining(self) -> Dict[str, Any]:
-        all_conditions: Dict[str, Any] = {}
+    def remaining(self) -> dict[str, Any]:
+        all_conditions: dict[str, Any] = {}
         for daq_conditions in self._conditions.values():
             all_conditions.update(daq_conditions)
         return all_conditions
@@ -245,10 +262,22 @@ class NodeControlKind(Enum):
 
 
 @dataclass
+class FloatWithTolerance:
+    val: float
+    abs_tol: float
+
+
+@dataclass
 class NodeControlBase:
     path: str
     value: Any
     kind: NodeControlKind = None
+
+    @property
+    def raw_value(self):
+        return (
+            self.value.val if isinstance(self.value, FloatWithTolerance) else self.value
+        )
 
 
 @dataclass
@@ -290,30 +319,22 @@ class Prepare(NodeControlBase):
         self.kind = NodeControlKind.Prepare
 
 
-def filter_commands(nodes: List[NodeControlBase]) -> Dict[str, Any]:
-    return {
-        n.path: n.value
-        for n in nodes
-        if n.kind in [NodeControlKind.Prepare, NodeControlKind.Command]
-    }
+def _filter_nodes(
+    nodes: list[NodeControlBase], filter: list[NodeControlKind]
+) -> list[NodeControlBase]:
+    return [n for n in nodes if n.kind in filter]
 
 
-def filter_responses(nodes: List[NodeControlBase]) -> Dict[str, Any]:
-    return {
-        n.path: n.value
-        for n in nodes
-        if n.kind in [NodeControlKind.Command, NodeControlKind.Response]
-    }
+def filter_commands(nodes: list[NodeControlBase]) -> list[NodeControlBase]:
+    return _filter_nodes(nodes, [NodeControlKind.Prepare, NodeControlKind.Command])
 
 
-def filter_conditions(nodes: List[NodeControlBase]) -> Dict[str, Any]:
-    return {
-        n.path: n.value
-        for n in nodes
-        if n.kind
-        in [
-            NodeControlKind.Condition,
-            NodeControlKind.Command,
-            NodeControlKind.Response,
-        ]
-    }
+def filter_responses(nodes: list[NodeControlBase]) -> list[NodeControlBase]:
+    return _filter_nodes(nodes, [NodeControlKind.Command, NodeControlKind.Response])
+
+
+def filter_conditions(nodes: list[NodeControlBase]) -> list[NodeControlBase]:
+    return _filter_nodes(
+        nodes,
+        [NodeControlKind.Condition, NodeControlKind.Command, NodeControlKind.Response],
+    )

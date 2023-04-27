@@ -12,6 +12,7 @@ from laboneq.core.serialization.simple_serialization import (
     module_classes,
     serialize_to_dict_with_ref,
 )
+from laboneq.dsl.calibration.amplifier_pump import AmplifierPump
 from laboneq.dsl.calibration.mixer_calibration import MixerCalibration
 from laboneq.dsl.calibration.oscillator import Oscillator
 from laboneq.dsl.calibration.precompensation import Precompensation
@@ -36,6 +37,7 @@ class Serializer:
                 Oscillator,
                 MixerCalibration,
                 Precompensation,
+                AmplifierPump,
                 Instrument,
                 LogicalSignalGroup,
                 PhysicalChannelGroup,

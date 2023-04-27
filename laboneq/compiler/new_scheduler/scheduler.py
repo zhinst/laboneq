@@ -435,6 +435,18 @@ class Scheduler:
             duration = device_type.reset_osc_duration / self._TINYSAMPLE
             hw_osc_devices[device] = duration
             length = max(length, duration)
+            if device_type.lo_frequency_granularity is not None:
+                # The frequency of Grimsel's LO in RF mode is a multiple of 100 MHz.
+                # By aligning the grid with this (10 ns) we make sure the LO's phase is
+                # consistent after the reset of the NCO.
+                df = device_type.lo_frequency_granularity
+                lo_granularity_tinysamples = round(1 / df / self._TINYSAMPLE)
+                grid = lcm(grid, lo_granularity_tinysamples)
+                _logger.info(
+                    f"Phase reset in section '{section_id}' has extended the section's "
+                    f"timing grid to {grid*self._TINYSAMPLE*1e9:.2f} ns, so to be "
+                    f"commensurate with the local oscillator."
+                )
 
         hw_osc_devices = [(k, v) for k, v in hw_osc_devices.items()]
         length = ceil_to_grid(length, grid)
@@ -448,7 +460,7 @@ class Scheduler:
             PhaseResetSchedule(
                 grid=grid,
                 length=length,
-                signals=set((*hw_signals, *sw_signals)),
+                signals={*hw_signals, *sw_signals},
                 section=section_id,
                 hw_osc_devices=hw_osc_devices,
                 reset_sw_oscillators=reset_sw_oscillators,
@@ -529,6 +541,10 @@ class Scheduler:
             ]
         else:
             osc_sweep = []
+
+        if osc_phase_reset and osc_phase_reset[0].grid != grid:
+            # On SHFxx, we align the phase reset with the LO granularity (100 MHz)
+            grid = osc_phase_reset[0].grid
 
         children_schedules = [*osc_phase_reset, *osc_sweep, *children_schedules]
         schedule = self._schedule_children(
@@ -771,6 +787,14 @@ class Scheduler:
         if isinstance(play_after, str):
             play_after = [play_after]
 
+        compressed_loop_grid = round(
+            (
+                (8 if local else 200)
+                / self._sampling_rate_tracker.sampling_rate_for_device(acquire_device)
+                / self._TINYSAMPLE
+            )
+        )
+
         return MatchSchedule(
             grid=grid,
             length=to_tinysample(section_info.length, self._schedule_data.TINYSAMPLE),
@@ -782,6 +806,7 @@ class Scheduler:
             play_after=play_after,
             handle=handle,
             local=local,
+            compressed_loop_grid=compressed_loop_grid,
         )
 
     def _schedule_case(self, section_id, current_parameters) -> CaseSchedule:

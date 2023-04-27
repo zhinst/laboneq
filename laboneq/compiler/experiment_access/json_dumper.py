@@ -181,6 +181,10 @@ def dump(experiment_dao: ExperimentDAO):
         if threshold is not None:
             signal_connection["threshold"] = threshold
 
+        amplifier_pump = experiment_dao.amplifier_pump(signal_info.signal_id)
+        if amplifier_pump is not None:
+            signal_connection["amplifier_pump"] = amplifier_pump
+
         delay_signal = signal_info.delay_signal
         if delay_signal is not None:
             signal_connection["delay_signal"] = delay_signal

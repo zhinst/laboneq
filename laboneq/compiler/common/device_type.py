@@ -3,6 +3,7 @@
 
 from dataclasses import asdict, dataclass
 from enum import Enum
+from typing import Optional
 
 
 @dataclass(eq=True, frozen=True)
@@ -23,6 +24,7 @@ class DeviceTraits:
     oscillator_set_latency: float = 0.0
     reset_osc_duration: float = 0.0
     supports_oscillator_switching: bool = False
+    lo_frequency_granularity: Optional[float] = None
 
 
 class DeviceType(DeviceTraits, Enum):
@@ -96,6 +98,7 @@ class DeviceType(DeviceTraits, Enum):
         oscillator_set_latency=88e-9,
         # Verified by PW (2022-10-13) on dev12093, rev 68689. Observed ~50 ns.
         reset_osc_duration=56e-9,
+        lo_frequency_granularity=100e6,
         supports_oscillator_switching=False,
     )
     SHFSG = DeviceTraits(
@@ -114,6 +117,7 @@ class DeviceType(DeviceTraits, Enum):
         # todo (PW): exact worst-case runtime unknown.
         # Verified by PW (2022-10-13) on dev12117, rev 68689. Observed ~35 ns.
         reset_osc_duration=56e-9,
+        lo_frequency_granularity=100e6,
         supports_oscillator_switching=True,
     )
 

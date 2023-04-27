@@ -4,6 +4,7 @@
 from laboneq.controller.devices.device_hdawg import DeviceHDAWG
 from laboneq.controller.devices.device_nonqc import DeviceNonQC
 from laboneq.controller.devices.device_pqsc import DevicePQSC
+from laboneq.controller.devices.device_shfppc import DeviceSHFPPC
 from laboneq.controller.devices.device_shfqa import DeviceSHFQA
 from laboneq.controller.devices.device_shfsg import DeviceSHFSG
 from laboneq.controller.devices.device_uhfqa import DeviceUHFQA
@@ -19,6 +20,7 @@ class DeviceFactory:
             "UHFQA": DeviceUHFQA,
             "SHFQA": DeviceSHFQA,
             "SHFSG": DeviceSHFSG,
+            "SHFPPC": DeviceSHFPPC,
             "PQSC": DevicePQSC,
             "NONQC": DeviceNonQC,
         }.get(device_qualifier.driver.upper())

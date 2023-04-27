@@ -8,7 +8,7 @@ import logging
 import typing
 import uuid
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, Tuple
+from typing import Any, Callable, Dict, Tuple, Union
 
 from laboneq.compiler.experiment_access.acquire_info import AcquireInfo
 from laboneq.compiler.experiment_access.loader_base import LoaderBase
@@ -52,13 +52,13 @@ class DSLLoader(LoaderBase):
             self.add_server(server.uid, server.host, server.port, server.api_level)
 
         dest_path_devices = {}
+        ppc_connections = {}
 
         reference_clock = None
         for device in device_setup.instruments:
             if hasattr(device, "reference_clock"):
                 reference_clock = device.reference_clock
 
-        multiplexed_signals = {}
         for device in sorted(device_setup.instruments, key=lambda x: x.uid):
 
             server = device.server_uid
@@ -87,6 +87,16 @@ class DSLLoader(LoaderBase):
             )
 
             for connection in device.connections:
+                if connection.signal_type == IOSignalType.PPC:
+                    port = next(
+                        p for p in device.ports if p.uid == connection.local_port
+                    )
+                    ppc_connections[connection.remote_path] = (
+                        device.uid,
+                        int(port.physical_port_ids[0]),
+                    )
+                    continue
+
                 multiplex_key = (
                     device.uid,
                     connection.local_port,
@@ -119,10 +129,6 @@ class DSLLoader(LoaderBase):
                         "multiplex_keys": [multiplex_key],
                     }
 
-                if multiplex_key not in multiplexed_signals:
-                    multiplexed_signals[multiplex_key] = []
-                multiplexed_signals[multiplex_key].append(connection.remote_path)
-
         ls_map = {}
         modulated_paths = {}
         ls_voltage_offsets = {}
@@ -135,6 +141,8 @@ class DSLLoader(LoaderBase):
         ls_delays_signal = {}
         ls_port_modes = {}
         ls_thresholds = {}
+        ls_amplifier_pumps = {}
+        self._nt_only_params = []
 
         all_logical_signals = [
             ls
@@ -327,6 +335,42 @@ class DSLLoader(LoaderBase):
 
                 ls_thresholds[ls.path] = getattr(calibration, "threshold", None)
 
+                def amplifier_pump_to_dict(amplifier_pump) -> Dict[str, Any]:
+                    def opt_param(val) -> Union[str, float]:
+                        if val is None or isinstance(val, float):
+                            return val
+                        self._nt_only_params.append(val.uid)
+                        return val.uid
+
+                    return {
+                        "pump_freq": opt_param(amplifier_pump.pump_freq),
+                        "pump_power": opt_param(amplifier_pump.pump_power),
+                        "cancellation": amplifier_pump.cancellation,
+                        "alc_engaged": amplifier_pump.alc_engaged,
+                        "use_probe": amplifier_pump.use_probe,
+                        "probe_frequency": opt_param(amplifier_pump.probe_frequency),
+                        "probe_power": opt_param(amplifier_pump.probe_power),
+                    }
+
+                if calibration.amplifier_pump is not None:
+                    if ls.direction != IODirection.IN:
+                        _logger.warning(
+                            "'amplifier_pump' calibration for logical signal %s will be ignored - "
+                            "only applicable to acquire lines",
+                            ls.path,
+                        )
+                    elif ls.path not in ppc_connections:
+                        _logger.warning(
+                            "'amplifier_pump' calibration for logical signal %s will be ignored - "
+                            "no PPC is connected to it",
+                            ls.path,
+                        )
+                    else:
+                        ls_amplifier_pumps[ls.path] = (
+                            *ppc_connections[ls.path],
+                            amplifier_pump_to_dict(calibration.amplifier_pump),
+                        )
+
         for signal in sorted(experiment.signals.values(), key=lambda x: x.uid):
             dev_sig_types = []
             if signal.mapped_logical_signal_path is not None:
@@ -421,6 +465,7 @@ class DSLLoader(LoaderBase):
                     "delay_signal": ls_delays_signal.get(lsuid),
                     "port_mode": ls_port_modes.get(lsuid),
                     "threshold": ls_thresholds.get(lsuid),
+                    "amplifier_pump": ls_amplifier_pumps.get(lsuid),
                 },
             )
 
@@ -601,6 +646,15 @@ class DSLLoader(LoaderBase):
                 if count < 1:
                     raise Exception(
                         f"Repeat count must be at least 1, but section {section.uid} has count={count}"
+                    )
+                if (
+                    section.execution_type is not None
+                    and section.execution_type.value == "hardware"
+                    and parameter.uid in self._nt_only_params
+                ):
+                    raise Exception(
+                        f"Parameter {parameter.uid} can't be swept in real-time, it is bound to a value "
+                        f"that can only be set in near-time"
                     )
 
         execution_type = None

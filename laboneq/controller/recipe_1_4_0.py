@@ -302,7 +302,7 @@ class SectionOperation(QCCSSchema):
 
     op_type = OperationTypeField(required=True)
     operation = fields.Str(required=True)
-    args = fields.Dict(None, required=False)
+    args = fields.Dict(required=False, allow_none=True)
 
 
 class Execution(QCCSSchema):
@@ -416,6 +416,7 @@ class Initialization(QCCSSchema):
             "outputs",
             "inputs",
             "measurements",
+            "ppchannels",
         )
         ordered = True
 
@@ -428,6 +429,7 @@ class Initialization(QCCSSchema):
         outputs: List[IO.Data] = None
         inputs: List[IO.Data] = None
         measurements: List[Measurement.Data] = field(default_factory=list)
+        ppchannels: Dict[int, Any] = None
 
     device_uid = fields.Str()
     config = fields.Nested(Config)
@@ -436,6 +438,7 @@ class Initialization(QCCSSchema):
     outputs = fields.List(fields.Nested(IO), required=False)
     inputs = fields.List(fields.Nested(IO), required=False)
     measurements = fields.List(fields.Nested(Measurement), required=False)
+    ppchannels = fields.Dict(required=False, allow_none=True)
 
 
 class OscillatorParam(QCCSSchema):

@@ -13,7 +13,15 @@ from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import ReferenceClockSource
 from laboneq.dsl.device import Instrument
 from laboneq.dsl.device.connection import Connection
-from laboneq.dsl.device.instruments import HDAWG, PQSC, SHFQA, SHFSG, UHFQA, NonQC
+from laboneq.dsl.device.instruments import (
+    HDAWG,
+    PQSC,
+    SHFPPC,
+    SHFQA,
+    SHFSG,
+    UHFQA,
+    NonQC,
+)
 from laboneq.dsl.device.io_units import (
     LogicalSignal,
     PhysicalChannel,
@@ -33,6 +41,7 @@ T_UHFQA_DEVICE = "UHFQA"
 T_SHFQA_DEVICE = "SHFQA"
 T_SHFSG_DEVICE = "SHFSG"
 T_SHFQC_DEVICE = "SHFQC"
+T_SHFPPC_DEVICE = "SHFPPC"
 T_PQSC_DEVICE = "PQSC"
 T_ALL_DEVICE_TYPES = [
     T_HDAWG_DEVICE,
@@ -40,6 +49,7 @@ T_ALL_DEVICE_TYPES = [
     T_SHFQA_DEVICE,
     T_SHFSG_DEVICE,
     T_SHFQC_DEVICE,
+    T_SHFPPC_DEVICE,
     T_PQSC_DEVICE,
 ]
 T_UID = "uid"
@@ -450,9 +460,7 @@ class _SHFQAProcessor(_ProcessorBase):
                     continue  # Skip over SG ports for QA part of QC
                 _SHFQAProcessor._validate_local_ports(local_ports, remote_path)
                 ls_candidate = _path_to_signal(remote_path)
-                is_output = True
-                if signal_type_keyword == T_ACQUIRE_SIGNAL:
-                    is_output = False
+                is_output = signal_type_keyword != T_ACQUIRE_SIGNAL
 
                 if ls_candidate is not None:
                     logical_signals_candidates.append(
@@ -712,6 +720,87 @@ class _SHFQCProcessor(_ProcessorBase):
                 yield qa_dev
 
 
+class _SHFPPCProcessor(_ProcessorBase):
+    @classmethod
+    def process(
+        cls,
+        instruments: InstrumentsType,
+        connections: ConnectionsType,
+        server_finder: Callable[[str], str],
+        logical_signals_candidates,
+        physical_signals,
+    ) -> Iterator[Instrument]:
+        for uid, address, interface in _iterate_over_descriptors_of_type(
+            instruments, T_SHFPPC_DEVICE
+        ):
+            yield cls.make_device(
+                uid,
+                address,
+                interface,
+                connections,
+                server_finder,
+                logical_signals_candidates,
+                physical_signals,
+            )
+
+    @staticmethod
+    def make_device(
+        uid,
+        address,
+        interface,
+        connections: ConnectionsType,
+        server_finder: Callable[[str], str],
+        logical_signals_candidates,
+        physical_signals,
+    ) -> Instrument:
+        device_connections = []
+        external_clock_signal = None
+        if uid in connections:
+            for port_desc in connections[uid]:
+                signal_type_keyword, remote_path, local_ports = _port_decoder(
+                    port_desc, [T_EXTCLK], to_ls=True
+                )
+
+                if signal_type_keyword == T_EXTCLK:
+                    external_clock_signal = ReferenceClockSource.EXTERNAL
+                    continue
+                _SHFPPCProcessor._validate_local_ports(local_ports, remote_path)
+                device_connections.append(
+                    Connection(
+                        local_port=local_ports[0],
+                        remote_path=remote_path,
+                        remote_port=None,
+                        signal_type=IOSignalType.PPC,
+                    )
+                )
+
+        return SHFPPC(
+            **_skip_nones(
+                server_uid=server_finder(uid),
+                uid=uid,
+                address=address,
+                interface=interface,
+                connections=device_connections,
+                reference_clock_source=external_clock_signal,
+            )
+        )
+
+    @staticmethod
+    def _validate_local_ports(local_ports: List[str], remote_path):
+        if len(local_ports) != 1:
+            raise LabOneQException(
+                f"{T_SHFPPC_DEVICE} signals require exactly one port, but got {local_ports} for {remote_path}"
+            )
+        dummy_device = SHFPPC()
+        available_ports = [port.uid for port in dummy_device.ports]
+        for local_port in local_ports:
+            if local_port not in available_ports:
+                raise LabOneQException(
+                    f"Device {T_SHFPPC_DEVICE} has no port with uid {local_port}. Available port uids are: {available_ports}.",
+                    _logger,
+                )
+
+
 class _PQSCProcessor:
     @classmethod
     def process(
@@ -824,7 +913,9 @@ class _NonQCProcessor(_ProcessorBase):
                     )
 
 
-def _port_decoder(port_desc, additional_switch_keys=None) -> Tuple[str, str, List[str]]:
+def _port_decoder(
+    port_desc, additional_switch_keys=None, to_ls=False
+) -> Tuple[str, str, List[str]]:
     if additional_switch_keys is None:
         additional_switch_keys = []
     if isinstance(port_desc, dict):
@@ -849,7 +940,8 @@ def _port_decoder(port_desc, additional_switch_keys=None) -> Tuple[str, str, Lis
         local_ports = ports
 
     signal_keys = [T_IQ_SIGNAL, T_ACQUIRE_SIGNAL, T_RF_SIGNAL]
-    trigger_keys = [T_TO]
+    trigger_keys = []
+    (signal_keys if to_ls else trigger_keys).append(T_TO)
     path_keys = signal_keys + trigger_keys
     all_keys = path_keys + additional_switch_keys
 
@@ -868,12 +960,19 @@ def _port_decoder(port_desc, additional_switch_keys=None) -> Tuple[str, str, Lis
         )
     if signal_type_keyword in path_keys and not remote_path:
         raise LabOneQException(
-            f"Missing path: specify '{signal_type_keyword}: <group>/<line>'"
+            f"Missing path: specify '{signal_type_keyword}: <group>{qct_path.Separator}<line>'"
         )
-
     if signal_type_keyword in signal_keys:
+        if len(remote_path.split(qct_path.Separator)) != 2:
+            raise LabOneQException(
+                f"Invalid path: specify '{signal_type_keyword}: <group>{qct_path.Separator}<line>'"
+            )
+        if not all(remote_path.split(qct_path.Separator)):
+            raise LabOneQException(
+                f"Invalid path: specify '{signal_type_keyword}: <group>{qct_path.Separator}<line>'"
+            )
         remote_path = qct_path.Separator.join(
-            ["", "logical_signal_groups", remote_path]
+            ["", qct_path.LogicalSignalGroups_Path, remote_path]
         )
 
     if port_desc:
@@ -1028,7 +1127,6 @@ class _DeviceSetupGenerator:
 
         if connections is None:
             connections = {}
-
         if setup_name is None:
             setup_name = "unknown"
 
@@ -1097,6 +1195,7 @@ class _DeviceSetupGenerator:
             _SHFQAProcessor,
             _SHFSGProcessor,
             _SHFQCProcessor,
+            _SHFPPCProcessor,
             _NonQCProcessor,
         ]
 

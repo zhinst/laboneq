@@ -1,6 +1,8 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import typing
 from dataclasses import dataclass, field
 from typing import List
@@ -24,13 +26,13 @@ class Instrument:
     #: Connections of this instrument.
     connections: typing.List[Connection] = field(default_factory=list)
 
-    def output_by_uid(self, uid):
+    def output_by_uid(self, uid) -> Port | None:
         for o in self.ports:
             if o.uid == uid and o.direction == IODirection.OUT:
                 return o
         return None
 
-    def input_by_uid(self, uid):
+    def input_by_uid(self, uid) -> Port | None:
         for i in self.ports:
             if i.uid == uid and i.direction == IODirection.IN:
                 return i

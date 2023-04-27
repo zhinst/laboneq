@@ -24,7 +24,7 @@ from laboneq.executor.executor import (
 
 from .recipe_1_4_0 import IO
 from .recipe_1_4_0 import Experiment as RecipeExperiment
-from .recipe_1_4_0 import Initialization, OscillatorParam, Recipe
+from .recipe_1_4_0 import Initialization, Recipe
 from .recipe_enums import SignalType
 
 if TYPE_CHECKING:
@@ -465,13 +465,21 @@ def _calculate_awg_configs(
     return awg_configs
 
 
-def _pre_process_oscillator_params(
-    oscillator_params: List[OscillatorParam.Data],
-) -> Dict[str, List[str]]:
-    param_to_device_map: Dict[str, List[str]] = {}
+def _pre_process_params(
+    experiment: RecipeExperiment.Data,
+) -> Dict[str, Set[str]]:
+    param_to_device_map: Dict[str, Set[str]] = defaultdict(set)
+
+    oscillator_params = experiment.oscillator_params
     for oscillator_param in oscillator_params:
-        param_bindings = param_to_device_map.setdefault(oscillator_param.param, [])
-        param_bindings.append(oscillator_param.device_id)
+        param_to_device_map[oscillator_param.param].add(oscillator_param.device_id)
+
+    for initialization in experiment.initializations:
+        ppchannels = initialization.ppchannels or {}
+        for settings in ppchannels.values():
+            for key in ["pump_freq", "pump_power", "probe_frequency", "probe_power"]:
+                if isinstance(settings[key], str):
+                    param_to_device_map[settings[key]].add(initialization.device_uid)
     return param_to_device_map
 
 
@@ -487,9 +495,7 @@ def pre_process_compiled(compiled_experiment: CompiledExperiment) -> RecipeData:
     execution = ExecutionFactoryFromExperiment().make(compiled_experiment.experiment)
     result_shapes, rt_execution_infos = _calculate_result_shapes(execution)
     awg_configs = _calculate_awg_configs(rt_execution_infos, recipe.experiment)
-    param_to_device_map = _pre_process_oscillator_params(
-        recipe.experiment.oscillator_params
-    )
+    param_to_device_map = _pre_process_params(recipe.experiment)
 
     recipe_data = RecipeData(
         compiled=compiled_experiment,

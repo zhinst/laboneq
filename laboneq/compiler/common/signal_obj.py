@@ -19,16 +19,22 @@ class SignalObj:
     fields are in seconds and their meaning is as follows:
     - start_delay: the delay from the trigger to the start of the sequence (lead time),
       realized as initial playZeros; includes lead time and precompensation
-    - delay_signal: user-defined additional delay, realized by adding to the initial
+    - delay_signal: user-defined additional delays, realized by adding to the initial
       playZeros; rounded to the sequencer grid (sample_multiple)
+    - base_delay_signal: in case of an acquisition pulse, the delay_signal of the
+      corresponding measure pulse on the same AWG
     - total_delay: the sum of the above two fields, plus delays generated during code
       generation, e.g., relative delay between a play and acquire pulse
     - on_device_delay: delay on the device, realized by delay nodes and independent
       from the sequencer, generated during code generation, e.g., relative delay between
       a play and acquire pulse; in addition to potential port delays specified via the
-      calibration
+      calibration; a list which can contain multiple values due to the way we handle
+      acquisition delays (the delay of the measure pulse channel is added to the delay
+      of the acquire pulse channel)
     - port_delay: port delay specified via the calibration; realized via the device node
-      in addition to potential on-device delays
+      in addition to potential on-device delays.
+    - base_port_delay: in case of an acquisition pulse, the port_delay of the
+      corresponding measure pulse on the same AWG
     """
 
     id: str
@@ -38,6 +44,7 @@ class SignalObj:
     signal_type: str
     device_id: str
     device_type: DeviceType
+    base_delay_signal: Optional[float] = None
     oscillator_frequency: float = None  # for software modulation only
     pulses: List = field(default_factory=list)
     channels: List = field(default_factory=list)
@@ -45,6 +52,7 @@ class SignalObj:
     total_delay: float = None
     on_device_delay: float = 0
     port_delay: float = 0
+    base_port_delay: Optional[float] = None
     mixer_type: Optional[MixerType] = None
     hw_oscillator: Optional[str] = None
     is_qc: Optional[bool] = None

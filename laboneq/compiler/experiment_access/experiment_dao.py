@@ -68,6 +68,7 @@ class ExperimentDAO:
             "delay_signal": None,
             "port_mode": None,
             "threshold": None,
+            "amplifier_pump": None,
         }
 
     def _load_experiment(self, experiment):
@@ -103,7 +104,7 @@ class ExperimentDAO:
     def signals(self):
         return sorted([s["signal_id"] for s in self._data["signals"].values()])
 
-    def devices(self):
+    def devices(self) -> List[str]:
         return [d["id"] for d in self._data["devices"].values()]
 
     def global_leader_device(self) -> str:
@@ -324,7 +325,7 @@ class ExperimentDAO:
     def _oscillator_info_fields(cls):
         return ["id", "frequency", "frequency_param", "hardware"]
 
-    def oscillator_info(self, oscillator_id):
+    def oscillator_info(self, oscillator_id) -> OscillatorInfo:
         oscillator = self._data["oscillators"].get(oscillator_id)
         if oscillator is None:
             return None
@@ -332,8 +333,8 @@ class ExperimentDAO:
             **{k: oscillator[k] for k in self._oscillator_info_fields()}
         )
 
-    def hardware_oscillators(self):
-        oscillator_infos = []
+    def hardware_oscillators(self) -> List[OscillatorInfo]:
+        oscillator_infos: List[OscillatorInfo] = []
         for device in self.devices():
             device_oscillators = self.device_oscillators(device)
             for oscillator_id in device_oscillators:
@@ -383,6 +384,9 @@ class ExperimentDAO:
 
     def threshold(self, signal_id):
         return self._data["signal_connections"][signal_id]["threshold"]
+
+    def amplifier_pump(self, signal_id):
+        return self._data["signal_connections"][signal_id]["amplifier_pump"]
 
     def section_pulses(self, section_id, signal_id):
         retval = self._section_pulses_raw(section_id, signal_id)

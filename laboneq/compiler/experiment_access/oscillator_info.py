@@ -12,3 +12,4 @@ class OscillatorInfo:
     frequency: float
     frequency_param: str
     hardware: bool
+    device_id: str = None

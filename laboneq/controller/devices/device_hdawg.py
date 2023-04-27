@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 from enum import IntEnum
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -18,6 +18,7 @@ from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.devices.zi_node_monitor import (
     Command,
     Condition,
+    FloatWithTolerance,
     NodeControlBase,
     Prepare,
     Response,
@@ -93,7 +94,7 @@ class DeviceHDAWG(DeviceZI):
 
     def _get_next_osc_index(
         self, osc_group: int, previously_allocated: int
-    ) -> Optional[int]:
+    ) -> int | None:
         # With MF option 4 oscillators per channel pair are available,
         # and only 1 oscillator per channel pair without MF option.
         max_per_group = 4 if self._multi_freq else 1
@@ -103,9 +104,9 @@ class DeviceHDAWG(DeviceZI):
         return osc_index_base + previously_allocated
 
     def disable_outputs(
-        self, outputs: Set[int], invert: bool
-    ) -> List[DaqNodeSetAction]:
-        channels_to_disable: List[DaqNodeSetAction] = []
+        self, outputs: set[int], invert: bool
+    ) -> list[DaqNodeSetAction]:
+        channels_to_disable: list[DaqNodeSetAction] = []
         for ch in range(self._channels):
             if (ch in outputs) != invert:
                 channels_to_disable.append(
@@ -118,16 +119,14 @@ class DeviceHDAWG(DeviceZI):
                 )
         return channels_to_disable
 
-    def _nodes_to_monitor_impl(self) -> List[str]:
-        nodes = []
-        nodes.extend([node.path for node in self.clock_source_control_nodes()])
-        nodes.extend([node.path for node in self.system_freq_control_nodes()])
+    def _nodes_to_monitor_impl(self) -> list[str]:
+        nodes = super()._nodes_to_monitor_impl()
         for awg in range(self._get_num_awgs()):
             nodes.append(f"/{self.serial}/awgs/{awg}/enable")
             nodes.append(f"/{self.serial}/awgs/{awg}/ready")
         return nodes
 
-    def update_clock_source(self, force_internal: Optional[bool]):
+    def update_clock_source(self, force_internal: bool | None):
         if force_internal or force_internal is None and self.is_standalone():
             # Internal specified explicitly or
             # the source is not specified, but HDAWG is a standalone device
@@ -141,7 +140,7 @@ class DeviceHDAWG(DeviceZI):
             # ZSync is the default (explicit external is also treated as ZSync in this case)
             self._reference_clock_source = ReferenceClockSourceHDAWG.ZSYNC
 
-    def clock_source_control_nodes(self) -> List[NodeControlBase]:
+    def clock_source_control_nodes(self) -> list[NodeControlBase]:
         expected_freq = {
             ReferenceClockSourceHDAWG.INTERNAL: None,
             ReferenceClockSourceHDAWG.EXTERNAL: 10e6,
@@ -157,7 +156,7 @@ class DeviceHDAWG(DeviceZI):
             Response(f"/{self.serial}/system/clocks/referenceclock/status", 0),
         ]
 
-    def system_freq_control_nodes(self) -> List[NodeControlBase]:
+    def system_freq_control_nodes(self) -> list[NodeControlBase]:
         nodes = []
         # If we do not turn all channels off, we get the following error message from
         # the server/device: 'An error happened on device dev8330 during the execution
@@ -175,6 +174,20 @@ class DeviceHDAWG(DeviceZI):
                 Response(f"/{self.serial}/system/clocks/sampleclock/status", 0),
             ]
         )
+        return nodes
+
+    def rf_offset_control_nodes(self) -> list[NodeControlBase]:
+        nodes = []
+        for channel, offset in self._rf_offsets.items():
+            nodes.extend(
+                [
+                    Command(f"/{self.serial}/sigouts/{channel}/on", 1),
+                    Command(
+                        f"/{self.serial}/sigouts/{channel}/offset",
+                        FloatWithTolerance(offset, 0.0001),
+                    ),
+                ]
+            )
         return nodes
 
     def collect_awg_after_upload_nodes(self, initialization: Initialization.Data):
@@ -202,26 +215,26 @@ class DeviceHDAWG(DeviceZI):
 
         return nodes_to_configure_phase
 
-    def conditions_for_execution_ready(self) -> Dict[str, Any]:
-        conditions: Dict[str, Any] = {}
+    def conditions_for_execution_ready(self) -> dict[str, Any]:
+        conditions: dict[str, Any] = {}
         for awg_index in self._allocated_awgs:
             conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = 1
         return conditions
 
     def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType
-    ) -> Dict[str, Any]:
-        conditions: Dict[str, Any] = {}
+    ) -> dict[str, Any]:
+        conditions: dict[str, Any] = {}
         for awg_index in self._allocated_awgs:
             conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = 0
         return conditions
 
-    def collect_output_initialization_nodes(
+    def collect_initialization_nodes(
         self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
-    ) -> List[DaqNodeAction]:
+    ) -> list[DaqNodeAction]:
         _logger.debug("%s: Initializing device...", self.dev_repr)
 
-        nodes: List[Tuple[str, Any]] = []
+        nodes: list[tuple[str, Any]] = []
 
         outputs = initialization.outputs or []
         for output in outputs:
@@ -422,7 +435,7 @@ class DeviceHDAWG(DeviceZI):
 
         return device_specific_initialization_nodes
 
-    def add_command_table_header(self, body: dict) -> Dict:
+    def add_command_table_header(self, body: dict) -> dict:
         return {
             "$schema": "https://docs.zhinst.com/hdawg/commandtable/v1_0/schema",
             "header": {"version": "1.0.0"},
@@ -434,7 +447,7 @@ class DeviceHDAWG(DeviceZI):
 
     def collect_trigger_configuration_nodes(
         self, initialization: Initialization.Data, recipe_data: RecipeData
-    ) -> List[DaqNodeAction]:
+    ) -> list[DaqNodeAction]:
         _logger.debug("%s: Configuring trigger configuration nodes.", self.dev_repr)
         nodes_to_configure_triggers = []
 
@@ -580,14 +593,3 @@ class DeviceHDAWG(DeviceZI):
                 )
 
         return nodes_to_configure_triggers
-
-    def configure_as_leader(self, initialization: Initialization.Data):
-        pass
-
-    def collect_follower_configuration_nodes(
-        self, initialization: Initialization.Data
-    ) -> List[DaqNodeAction]:
-        return []
-
-    def initialize_sweep_setting(self, setting):
-        raise LabOneQControllerException("HDAWG doesn't support sweeping")

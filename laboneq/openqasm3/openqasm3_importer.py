@@ -3,26 +3,40 @@
 
 from __future__ import annotations
 
-import sys
-from dataclasses import dataclass, field
-from typing import Dict, Optional, TextIO, Tuple, Union
+from collections import deque
+from typing import Optional, TextIO, Union
 
 import openpulse
 import openpulse.ast as ast
 
 import openqasm3.visitor
 from laboneq.dsl.experiment import Section
+from laboneq.dsl.experiment.utils import id_generator
+from laboneq.openqasm3.expression import eval_expression
+from laboneq.openqasm3.gate_store import GateStore
+from laboneq.openqasm3.openqasm_error import OpenQasmException
+from laboneq.openqasm3.variable_store import VariableStore
 
 ALLOWED_NODE_TYPES = {
     ast.Program,
     ast.QuantumGate,
+    ast.Box,
     ast.Identifier,
+    ast.IntegerLiteral,
+    ast.FloatLiteral,
+    ast.DurationLiteral,
+    ast.BitstringLiteral,
+    ast.BooleanLiteral,
+    ast.ImaginaryLiteral,
+    ast.BinaryExpression,
+    ast.BinaryOperator,
+    ast.UnaryExpression,
+    ast.UnaryOperator,
     ast.Span,
     ast.QubitDeclaration,
     ast.AliasStatement,
     ast.IndexExpression,
     ast.Include,
-    ast.IntegerLiteral,
     ast.RangeDefinition,
     ast.IndexedIdentifier,
     ast.QuantumReset,
@@ -32,89 +46,10 @@ ALLOWED_NODE_TYPES = {
 class AllowedNodeTypesVisitor(openqasm3.visitor.QASMVisitor):
     def generic_visit(self, node: ast.QASMNode, context=None):
         if type(node) not in ALLOWED_NODE_TYPES:
-            raise TypeError(f"Node type {type(node)} not yet supported")
+            raise OpenQasmException(
+                f"Node type {type(node)} not yet supported", mark=node.span
+            )
         super().generic_visit(node, context)
-
-
-@dataclass
-class ArrayVariable:
-    size: int
-    qubit_start_index: int
-
-
-@dataclass
-class Variable:
-    qubit_index: int
-
-
-@dataclass
-class VariableInArray:
-    array: ArrayVariable
-    array_index: int
-
-
-@dataclass
-class VariableStore:
-    qubit_map: Dict[int, int] = field(default_factory=dict)
-    variables: Dict[str, Union[ArrayVariable, Variable, VariableInArray]] = field(
-        default_factory=dict
-    )
-    current_index = 0
-
-    def add_array_variable(self, name, size):
-        if name in self.variables:
-            raise ValueError(f"Variable '{name}' already exists.")
-        self.variables[name] = ArrayVariable(size, self.current_index)
-        self.current_index += size
-
-    def add_variable(self, name):
-        if name in self.variables:
-            raise ValueError(f"Variable '{name}' already exists.")
-        self.variables[name] = Variable(self.current_index)
-        self.current_index += 1
-
-    def add_alias(self, name, target, index=None):
-        # todo: Alias multiple qubits of an array to a new array
-        if name in self.variables:
-            raise ValueError(f"Variable '{name}' already exists.")
-        try:
-            if index is None:
-                self.variables[name] = self.variables[target]
-            else:
-                target_var = self.variables[target]
-                if not isinstance(target_var, ArrayVariable):
-                    if index == 0:
-                        self.variables[name] = self.variables[target]
-                        return
-                    else:
-                        raise ValueError(f"Variable '{target}' is not an array.")
-                if index >= target_var.size:
-                    raise ValueError(f"Index {index} out of range for array {target}.")
-                self.variables[name] = VariableInArray(target_var, index)
-        except KeyError:
-            raise ValueError(f"Alias target '{target}' not found.")
-
-    def get_qubit_number(self, name, index=None):
-        try:
-            variable = self.variables[name]
-        except KeyError as e:
-            raise KeyError(f"Variable '{name}' not found.") from e
-        if isinstance(variable, Variable):
-            if index is not None and index > 0:
-                raise ValueError(f"Variable '{name}' is not an array.")
-            qubit = variable.qubit_index
-        elif isinstance(variable, VariableInArray):
-            if index is not None:
-                raise ValueError(f"Variable '{name}' is not an array.")
-            qubit = variable.array.qubit_start_index + variable.array_index
-        else:
-            assert isinstance(variable, ArrayVariable)
-            if index is None:
-                raise ValueError(f"Index required for array variable {name}.")
-            if index >= variable.size:
-                raise ValueError(f"Index {index} out of range for array {name}.")
-            qubit = variable.qubit_start_index + index
-        return self.qubit_map.get(qubit, qubit)
 
 
 def get_collection_and_single_index(
@@ -153,14 +88,10 @@ def get_collection_and_single_index(
 class OpenQasm3Importer:
     def __init__(
         self,
-        gate_store: Dict[Tuple[str, Tuple[int, ...]], Section],
-        *,
-        gate_map: Optional[Dict[str, str]] = None,
-        qubit_map: Optional[Dict[int, int]] = None,
+        gate_store: GateStore,
     ):
         self.gate_store = gate_store
-        self.gate_map = gate_map or {}
-        self.variables = VariableStore(qubit_map or {})
+        self.scoped_variables = deque([VariableStore({})])
 
     def __call__(
         self,
@@ -169,7 +100,7 @@ class OpenQasm3Importer:
         filename: Optional[str] = None,
         stream: Optional[TextIO] = None,
     ) -> Section:
-        if [bool(arg) for arg in [text, file, filename, stream]].count(True) != 1:
+        if [arg is not None for arg in [text, file, filename, stream]].count(True) != 1:
             raise ValueError(
                 "Must specify exactly one of text, file, filename, or stream"
             )
@@ -183,104 +114,169 @@ class OpenQasm3Importer:
         else:
             return self._import_text(text)
 
+    def _merge_scoped_variables(self):
+        result = VariableStore()
+        for vars in self.scoped_variables:
+            result.variables.update(vars.variables)
+            result.current_index += vars.current_index
+        return result
+
     def _import_text(self, text) -> Section:
         tree = openpulse.parse(text)
         assert isinstance(tree, ast.Program)
         AllowedNodeTypesVisitor().visit(tree, None)
-
-        root = Section()
         try:
-            for statement in tree.statements:
-                if isinstance(statement, ast.QubitDeclaration):
-                    self._handle_qubit_declaration(statement)
-                elif isinstance(statement, ast.AliasStatement):
-                    self._handle_alias_statement(statement)
-                elif isinstance(statement, ast.Include):
-                    self._handle_include(statement)
-                elif isinstance(statement, ast.QuantumGate):
-                    self._handle_quantum_gate(statement, root)
-                elif isinstance(statement, ast.QuantumReset):
-                    self._handle_quantum_reset(statement, root)
-                else:
-                    raise ValueError(f"Statement type {type(statement)} not supported")
-
-            return root
-        except Exception as e:
-            if sys.version_info >= (3, 11):
-                e.add_note(
-                    "See line(s) {statement.span.start_line}--{statement.span.end_line}."
-                )
+            return self.transpile(tree, uid_hint="root")
+        except OpenQasmException as e:
+            e.source = text
             raise
+
+    def transpile(self, parent: Union[ast.Program, ast.Box], uid_hint="") -> Section:
+        sect = Section(uid=id_generator(uid_hint))
+        self.scoped_variables.append(VariableStore({}))
+
+        try:
+            body = parent.statements
+        except AttributeError:
+            body = parent.body
+
+        for child in body:
+            try:
+                if isinstance(child, ast.QubitDeclaration):
+                    self._handle_qubit_declaration(child)
+                elif isinstance(child, ast.AliasStatement):
+                    self._handle_alias_statement(child)
+                elif isinstance(child, ast.Include):
+                    self._handle_include(child)
+                elif isinstance(child, ast.QuantumGate):
+                    self._handle_quantum_gate(child, sect)
+                elif isinstance(child, ast.Box):
+                    self._handle_box(child, sect)
+                elif isinstance(child, ast.QuantumReset):
+                    self._handle_quantum_reset(child, sect)
+                else:
+                    raise OpenQasmException(
+                        f"Statement type {type(child)} not supported",
+                        mark=child.span,
+                    )
+            except OpenQasmException:
+                raise
+            except Exception as e:
+                mark = child.span
+                raise OpenQasmException("Failed to process statement", mark) from e
+        return sect
 
     def _handle_qubit_declaration(self, statement: ast.QubitDeclaration):
         name = statement.qubit.name
-        if statement.size is not None:
-            if not isinstance(statement.size, ast.IntegerLiteral):
-                raise ValueError("Qubit declaration size must be an integer.")
-            self.variables.add_array_variable(name, statement.size.value)
-        else:
-            self.variables.add_variable(name)
+        try:
+            if statement.size is not None:
+                if not isinstance(statement.size, ast.IntegerLiteral):
+                    raise OpenQasmException(
+                        "Qubit declaration size must be an integer.",
+                        mark=statement.span,
+                    )
+                self.scoped_variables[-1].add_array_variable(name, statement.size.value)
+            else:
+                self.scoped_variables[-1].add_variable(name)
+        except ValueError as e:
+            raise OpenQasmException(str(e), mark=statement.span) from e
 
     def _handle_alias_statement(self, statement: ast.AliasStatement):
         if not isinstance(statement.target, ast.Identifier):
-            raise ValueError("Alias target must be an identifier.")
+            raise OpenQasmException(
+                "Alias target must be an identifier.", mark=statement.span
+            )
         name = statement.target.name
         if isinstance(statement.value, ast.IndexExpression):
             collection, idx = get_collection_and_single_index(statement.value)
             if collection is None:
-                raise ValueError("Array name must be an identifier.")
+                raise OpenQasmException(
+                    "Array name must be an identifier.", statement.span
+                )
             if idx is None:
-                raise ValueError("Alias index must be a single integer.")
-            self.variables.add_alias(name, collection, idx)
+                raise OpenQasmException(
+                    "Alias index must be a single integer.", mark=statement.span
+                )
+            try:
+                self.scoped_variables[-1].add_alias(name, collection, idx)
+            except ValueError as e:
+                raise OpenQasmException(str(e), mark=statement.span) from e
         elif isinstance(statement.value, ast.Identifier):
-            self.variables.add_alias(name, statement.value.name)
+            try:
+                self.scoped_variables[-1].add_alias(name, statement.value.name)
+            except ValueError as e:
+                raise OpenQasmException(str(e), mark=statement.span) from e
         else:
-            raise ValueError("Alias value must be an identifier or index expression.")
+            raise OpenQasmException(
+                "Alias value must be an identifier or index expression.",
+                mark=statement.span,
+            )
 
-    def _handle_quantum_gate(self, statement: ast.QuantumGate, root: Section):
-        # todo: phase
-        if statement.modifiers or statement.arguments or statement.duration:
-            raise ValueError(
-                "Gate modifiers, arguments, and duration not yet supported."
+    def _handle_quantum_gate(self, statement: ast.QuantumGate, parent: Section):
+        args = tuple(eval_expression(arg) for arg in statement.arguments)
+        if statement.modifiers or statement.duration:
+            raise OpenQasmException(
+                "Gate modifiers and duration not yet supported.",
+                mark=statement.span,
             )
         if not isinstance(statement.name, ast.Identifier):
-            raise ValueError("Gate name must be an identifier.")
+            raise OpenQasmException(
+                "Gate name must be an identifier.", mark=statement.span
+            )
         name = statement.name.name
         qubit_indices = tuple(self._get_qubit_index(q) for q in statement.qubits)
         try:
-            root.add(
-                self.gate_store[self.gate_map.get(name, name), tuple(qubit_indices)]
-            )
+            parent.add(self.gate_store.lookup_gate(name, qubit_indices, args=args))
+        except KeyError as e:
+            raise OpenQasmException(
+                f"Gate '{name}' for qubit indices {qubit_indices} not found.",
+                mark=statement.span,
+            ) from e
+
+    def _handle_box(self, statement: ast.Box, parent: Section):
+        if statement.duration:
+            raise ValueError("Box duration not yet supported.")
+        try:
+            parent.add(self.transpile(statement, uid_hint="box"))
         except KeyError:
-            raise ValueError(
-                f"Gate '{name}' for qubit indices {qubit_indices} not found."
-            )
+            raise ValueError(f"Unable to add box for {parent}.")
 
     def _handle_include(self, statement: ast.Include):
         if statement.filename != "stdgates.inc":
-            raise ValueError(
-                f"Only 'stdgates.inc' is supported for include, found '{statement.filename}'."
+            raise OpenQasmException(
+                f"Only 'stdgates.inc' is supported for include, found '{statement.filename}'.",
+                mark=statement.span,
             )
 
-    def _handle_quantum_reset(self, statement: ast.QuantumReset, root: Section):
+    def _handle_quantum_reset(self, statement: ast.QuantumReset, parent: Section):
         # Although ``qubits`` is plural, only a single qubit is allowed.
         qubit_index = self._get_qubit_index(statement.qubits)
         try:
-            root.add(
-                self.gate_store[self.gate_map.get("reset", "reset"), (qubit_index,)]
-            )
-        except KeyError:
-            raise ValueError(f"Reset gate for qubit index {qubit_index} not found.")
+            parent.add(self.gate_store.lookup_gate("reset", (qubit_index,)))
+        except KeyError as e:
+            raise OpenQasmException(
+                f"Reset gate for qubit index {qubit_index} not found.",
+                mark=statement.span,
+            ) from e
 
     def _get_qubit_index(self, q: Union[ast.IndexedIdentifier, ast.Identifier]):
         if isinstance(q, ast.Identifier):
-            return self.variables.get_qubit_number(q.name)
+            try:
+                return self._merge_scoped_variables().get_qubit_number(q.name)
+            except (KeyError, ValueError) as e:
+                raise OpenQasmException(str(e), mark=q.span) from e
         elif isinstance(q, ast.IndexedIdentifier):
             collection, idx = get_collection_and_single_index(q)
             if collection is None:
-                raise ValueError("Qubit name must be an identifier.")
+                raise OpenQasmException(
+                    "Qubit name must be an identifier.", mark=q.span
+                )
             if idx is None:
-                raise ValueError("Qubit index must be a single integer.")
-            return self.variables.get_qubit_number(collection, idx)
+                raise OpenQasmException(
+                    "Qubit index must be a single integer.", mark=q.span
+                )
+            return self._merge_scoped_variables().get_qubit_number(collection, idx)
         else:
-            raise ValueError("Qubit names must be identifiers or index expressions.")
+            raise OpenQasmException(
+                "Qubit names must be identifiers or index expressions.", mark=q.span
+            )

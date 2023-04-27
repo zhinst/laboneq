@@ -43,9 +43,10 @@ def split(path: str):
     Returns:
         A list of path elements.
     """
-    if is_abs(Separator):
-        path = path[1:]
-    return path.split(Separator)
+    parts = path.split(Separator)
+    if parts[0] == "":
+        parts = parts[1:]
+    return parts
 
 
 def starts_with(path: str, prefix: str, ignore_abs_path: bool = False):

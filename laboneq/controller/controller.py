@@ -110,16 +110,15 @@ class Controller:
 
         _logger.info("VERSION: laboneq %s", __version__)
 
-        # TODO: Remove this option and support of AWG module.
-        self._is_using_standalone_compiler = os.environ.get(
-            "LABONEQ_STANDALONE_AWG", "1"
-        ).lower() in ("1", "true")
-
     def _allocate_resources(self):
         self._devices.free_allocations()
         osc_params = self._recipe_data.recipe.experiment.oscillator_params
         for osc_param in sorted(osc_params, key=lambda p: p.id):
             self._devices.find_by_uid(osc_param.device_id).allocate_osc(osc_param)
+
+        for initialization in self._recipe_data.recipe.experiment.initializations:
+            device = self._devices.find_by_uid(initialization.device_uid)
+            device.allocate_params(initialization)
 
     def _reset_to_idle_state(self):
         reset_nodes = []
@@ -132,12 +131,12 @@ class Controller:
             device = self._devices.find_by_uid(initialization.device_uid)
             device.wait_for_conditions_to_start()
 
-    def _initialize_device_outputs(self):
+    def _apply_recipe_initializations(self):
         nodes_to_initialize: List[DaqNodeAction] = []
         for initialization in self._recipe_data.initializations:
             device = self._devices.find_by_uid(initialization.device_uid)
             nodes_to_initialize.extend(
-                device.collect_output_initialization_nodes(
+                device.collect_initialization_nodes(
                     self._recipe_data.device_settings[initialization.device_uid],
                     initialization,
                 )
@@ -158,7 +157,7 @@ class Controller:
         batch_set(nodes_to_initialize)
 
     @tracing.trace("awg-program-handler")
-    def _upload_awg_programs_standalone(self):
+    def _upload_awg_programs(self):
         @dataclass
         class UploadItem:
             awg_index: int
@@ -281,14 +280,6 @@ class Controller:
                         daq.batch_set(nodes)
         _logger.debug("Finished upload.")
 
-    def _upload_awg_programs(self):
-        if self._is_using_standalone_compiler:
-            return self._upload_awg_programs_standalone()
-
-        for initialization in self._recipe_data.initializations:
-            device = self._devices.find_by_uid(initialization.device_uid)
-            device.upload_awg_program(initialization, self._recipe_data)
-
     def _set_nodes_after_awg_program_upload(self):
         nodes_to_initialize = []
         for initialization in self._recipe_data.initializations:
@@ -350,7 +341,7 @@ class Controller:
     def _initialize_devices(self):
         self._reset_to_idle_state()
         self._allocate_resources()
-        self._initialize_device_outputs()
+        self._apply_recipe_initializations()
         self._initialize_awgs()
         self._configure_leaders()
         self._configure_followers()
@@ -443,7 +434,7 @@ class Controller:
             self._last_connect_check_ts is None
             or now - self._last_connect_check_ts > CONNECT_CHECK_HOLDOFF
         ):
-            self._devices.connect(self._is_using_standalone_compiler)
+            self._devices.connect()
         self._last_connect_check_ts = now
 
     def disable_outputs(

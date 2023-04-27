@@ -8,6 +8,7 @@ from typing import Optional, Union
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.core.types.enums import IODirection
 from laboneq.dsl.calibration import MixerCalibration, SignalCalibration
+from laboneq.dsl.calibration.amplifier_pump import AmplifierPump
 from laboneq.dsl.calibration.calibratable import Calibratable
 from laboneq.dsl.device.io_units.physical_channel import (
     PHYSICAL_CHANNEL_CALIBRATION_FIELDS,
@@ -217,6 +218,17 @@ class LogicalSignal(Calibratable):
             self.calibration = SignalCalibration(threshold=value)
         else:
             self.calibration.threshold = value
+
+    @property
+    def amplifier_pump(self) -> AmplifierPump:
+        return self.calibration.amplifier_pump if self.is_calibrated() else None
+
+    @amplifier_pump.setter
+    def amplifier_pump(self, value: AmplifierPump):
+        if not self.is_calibrated():
+            self.calibration = SignalCalibration(amplifier_pump=value)
+        else:
+            self.calibration.amplifier_pump = value
 
     @property
     def calibration(self) -> SignalCalibration:

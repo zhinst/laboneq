@@ -10,12 +10,12 @@ import os
 import os.path
 import re
 import time
-from abc import ABC, abstractmethod
+from abc import ABC
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
 from math import floor
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Union
+from typing import TYPE_CHECKING, Any
 from weakref import ReferenceType, ref
 
 import numpy as np
@@ -25,7 +25,6 @@ from numpy import typing as npt
 from zhinst.core.errors import CoreError as LabOneCoreError  # pylint: disable=E0401
 
 from laboneq.controller.communication import (
-    AwgModuleWrapper,
     CachingStrategy,
     DaqNodeAction,
     DaqNodeGetAction,
@@ -43,7 +42,6 @@ from laboneq.controller.recipe_processor import (
     AwgKey,
     DeviceRecipeData,
     RecipeData,
-    RtExecutionInfo,
 )
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
@@ -69,7 +67,7 @@ class AwgCompilerStatus(Enum):
 @dataclass
 class AllocatedOscillator:
     group: int
-    channels: Set[int]
+    channels: set[int]
     index: int
     id: str
     frequency: float
@@ -80,10 +78,9 @@ class AllocatedOscillator:
 class DeviceOptions:
     serial: str
     interface: str
-    dev_type: Optional[str] = None
+    dev_type: str | None = None
     is_qc: bool = False
     qc_with_qa: bool = False
-    is_using_standalone_compiler: bool = True
     gen2: bool = False
 
 
@@ -98,26 +95,21 @@ class DeviceQualifier:
 class DeviceZI(ABC):
     def __init__(self, device_qualifier: DeviceQualifier):
         self._device_qualifier: DeviceQualifier = device_qualifier
-        self._downlinks: Dict[str, Tuple[str, ReferenceType[DeviceZI]]] = {}
-        self._uplinks: Dict[str, ReferenceType[DeviceZI]] = {}
+        self._downlinks: dict[str, tuple[str, ReferenceType[DeviceZI]]] = {}
+        self._uplinks: dict[str, ReferenceType[DeviceZI]] = {}
+        self._rf_offsets: dict[int, float] = []
 
         self._daq: DaqWrapper = device_qualifier.server
         self.dev_type: str = None
-        self.dev_opts: List[str] = []
+        self.dev_opts: list[str] = []
         self._connected = False
-        self._allocated_oscs: List[AllocatedOscillator] = []
-        self._allocated_awgs: Set[int] = set()
+        self._allocated_oscs: list[AllocatedOscillator] = []
+        self._allocated_awgs: set[int] = set()
         self._nodes_to_monitor = None
         self._sampling_rate = None
 
-        self._is_using_standalone_compiler = (
-            device_qualifier.options.is_using_standalone_compiler
-        )
-
         if self._daq is None:
             raise LabOneQControllerException("ZI devices need daq")
-
-        self._awg_modules: List[AwgModuleWrapper] = []
 
         if self.serial is None:
             raise LabOneQControllerException(
@@ -161,7 +153,7 @@ class DeviceZI(ABC):
     def daq(self):
         return self._daq
 
-    def add_command_table_header(self, body: Dict) -> Dict:
+    def add_command_table_header(self, body: dict) -> dict:
         # Stub, implement in sub-class
         _logger.debug("Command table unavailable on device %s", self.dev_repr)
         return {}
@@ -189,7 +181,7 @@ class DeviceZI(ABC):
     def _get_sequencer_type(self) -> str:
         return "auto-detect"
 
-    def _get_sequencer_path_patterns(self) -> Dict[str, str]:
+    def _get_sequencer_path_patterns(self) -> dict[str, str]:
         return {
             "elf": "/{serial}/awgs/{index}/elf/data",
             "progress": "/{serial}/awgs/{index}/elf/progress",
@@ -197,7 +189,7 @@ class DeviceZI(ABC):
             "ready": "/{serial}/awgs/{index}/ready",
         }
 
-    def get_sequencer_paths(self, index: int) -> Dict[str, str]:
+    def get_sequencer_paths(self, index: int) -> dict[str, str]:
         props = {
             "serial": self.serial,
             "index": index,
@@ -226,27 +218,23 @@ class DeviceZI(ABC):
     def is_standalone(self):
         return len(self._uplinks) == 0 and len(self._downlinks) == 0
 
-    @abstractmethod
-    def collect_output_initialization_nodes(
+    def collect_initialization_nodes(
         self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
-    ) -> List[DaqNodeAction]:
-        ...
+    ) -> list[DaqNodeAction]:
+        return []
 
-    @abstractmethod
     def collect_trigger_configuration_nodes(
         self, initialization: Initialization.Data, recipe_data: RecipeData
-    ) -> List[DaqNodeAction]:
-        ...
+    ) -> list[DaqNodeAction]:
+        return []
 
-    @abstractmethod
     def configure_as_leader(self, initialization: Initialization.Data):
-        ...
+        pass
 
-    @abstractmethod
     def collect_follower_configuration_nodes(
         self, initialization: Initialization.Data
-    ) -> List[DaqNodeAction]:
-        ...
+    ) -> list[DaqNodeAction]:
+        return []
 
     def _connect_to_data_server(self):
         if self._connected:
@@ -278,26 +266,6 @@ class DeviceZI(ABC):
             self.dev_opts = dev_opts.split("\n")
         self._process_dev_opts()
 
-        if not self._is_using_standalone_compiler:
-            for i in range(self._get_num_awgs()):
-                awg_module = self._daq.create_awg_module(
-                    f"{self.serial}:awg_module{str(i)}"
-                )
-                self._awg_modules.append(awg_module)
-                awg_config = [
-                    DaqNodeSetAction(awg_module, "/index", i),
-                    DaqNodeSetAction(awg_module, "/device", self.serial),
-                ]
-                if self.options.is_qc:
-                    awg_config.append(
-                        DaqNodeSetAction(
-                            awg_module, "/sequencertype", self._get_sequencer_type()
-                        )
-                    )
-                awg_module.batch_set(awg_config)
-                awg_module.execute()
-                _logger.debug("%s: Creating AWG Module #%d", self.dev_repr, i)
-
         self._connected = True
 
     def connect(self):
@@ -308,25 +276,12 @@ class DeviceZI(ABC):
         if not self._connected:
             return
 
-        if not self._is_using_standalone_compiler:
-            for awg_module in self._awg_modules:
-                # Hack, but soon awg modules will be removed entirely,
-                # making proper interface is not feasible
-                self._daq._awg_module_wrappers = [
-                    wrapper
-                    for wrapper in self._daq._awg_module_wrappers
-                    if wrapper.name != awg_module.name
-                ]
-                awg_module._api_wrapper("finish")
-                awg_module._api_wrapper("clear")
-            self._awg_modules = []
-
         self._daq.disconnectDevice(self.serial)
         self._connected = False
 
     def disable_outputs(
-        self, outputs: Set[int], invert: bool
-    ) -> List[DaqNodeSetAction]:
+        self, outputs: set[int], invert: bool
+    ) -> list[DaqNodeSetAction]:
         """Returns actions to disable the specified outputs for the device.
 
         outputs: set(int)
@@ -350,18 +305,28 @@ class DeviceZI(ABC):
         self._allocated_awgs.clear()
 
     def _nodes_to_monitor_impl(self):
-        return []
+        nodes = []
+        nodes.extend([node.path for node in self.clock_source_control_nodes()])
+        nodes.extend([node.path for node in self.system_freq_control_nodes()])
+        nodes.extend([node.path for node in self.rf_offset_control_nodes()])
+        return nodes
 
-    def update_clock_source(self, force_internal: Optional[bool]):
+    def update_clock_source(self, force_internal: bool | None):
         pass
 
-    def clock_source_control_nodes(self) -> List[NodeControlBase]:
+    def update_rf_offsets(self, rf_offsets: dict[int, float]):
+        self._rf_offsets = rf_offsets
+
+    def clock_source_control_nodes(self) -> list[NodeControlBase]:
         return []
 
-    def system_freq_control_nodes(self) -> List[NodeControlBase]:
+    def system_freq_control_nodes(self) -> list[NodeControlBase]:
         return []
 
-    def nodes_to_monitor(self) -> List[str]:
+    def rf_offset_control_nodes(self) -> list[NodeControlBase]:
+        return []
+
+    def nodes_to_monitor(self) -> list[str]:
         if self._nodes_to_monitor is None:
             self._nodes_to_monitor = self._nodes_to_monitor_impl()
         return self._nodes_to_monitor
@@ -371,7 +336,7 @@ class DeviceZI(ABC):
 
     def _get_next_osc_index(
         self, osc_group: int, previously_allocated: int
-    ) -> Optional[int]:
+    ) -> int | None:
         return None
 
     def _make_osc_path(self, channel: int, index: int) -> str:
@@ -407,25 +372,28 @@ class DeviceZI(ABC):
                 )
             same_id_osc.channels.add(osc_param.channel)
 
-    def configure_feedback(self, recipe_data: RecipeData) -> List[DaqNodeAction]:
+    def allocate_params(self, initialization: Initialization.Data):
+        pass
+
+    def configure_feedback(self, recipe_data: RecipeData) -> list[DaqNodeAction]:
         return []
 
     def configure_acquisition(
         self,
         awg_key: AwgKey,
         awg_config: AwgConfig,
-        integrator_allocations: List[IntegratorAllocation.Data],
+        integrator_allocations: list[IntegratorAllocation.Data],
         averages: int,
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
-    ) -> List[DaqNodeAction]:
+    ) -> list[DaqNodeAction]:
         return []
 
     def get_measurement_data(
         self,
         channel: int,
         acquisition_type: AcquisitionType,
-        result_indices: List[int],
+        result_indices: list[int],
         num_results: int,
         hw_averages: int,
     ):
@@ -437,12 +405,12 @@ class DeviceZI(ABC):
     def wait_for_conditions_to_start(self):
         pass
 
-    def conditions_for_execution_ready(self) -> Dict[str, Any]:
+    def conditions_for_execution_ready(self) -> dict[str, Any]:
         return {}
 
     def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return {}
 
     def check_results_acquired_status(
@@ -608,8 +576,10 @@ class DeviceZI(ABC):
     def _adjust_frequency(self, freq):
         return freq
 
-    def collect_prepare_sweep_step_nodes_for_param(self, param: str, value: float):
-        nodes_to_set: List[DaqNodeAction] = []
+    def collect_prepare_sweep_step_nodes_for_param(
+        self, param: str, value: float
+    ) -> list[DaqNodeAction]:
+        nodes_to_set: list[DaqNodeAction] = []
         for osc in self._allocated_oscs:
             if osc.param == param:
                 freq_value = self._adjust_frequency(value)
@@ -622,75 +592,13 @@ class DeviceZI(ABC):
                 )
         return nodes_to_set
 
-    def _wait_for_elf_upload(self, awg_index):
-        awg_module = self._awg_modules[awg_index]
-
-        # this cannot use batch_get because these two nodes are 'special'
-        while awg_module.progress < 1.0 and (awg_module.elf_status != 1):
-            pass
-
-        if awg_module.elf_status != 0:
-            status_string = awg_module.get(
-                DaqNodeGetAction(
-                    awg_module,
-                    "/compiler/statusstring",
-                    caching_strategy=CachingStrategy.NO_CACHE,
-                )
-            )
-            _logger.error("ELF upload error:\n%s", status_string)
-            raise LabOneQControllerException(
-                "ELF file upload to the instrument failed."
-            )
-
-    def _check_awg_compiler_status(self, awg_index):
-        _logger.debug(
-            "%s: Checking the status of compilation for AWG #%d...",
-            self.dev_repr,
-            awg_index,
-        )
-        while True:
-            awg_module = self._awg_modules[awg_index]
-            compiler_status = awg_module.get(
-                DaqNodeGetAction(
-                    awg_module,
-                    "/compiler/status",
-                    caching_strategy=CachingStrategy.NO_CACHE,
-                )
-            )
-
-            if compiler_status == AwgCompilerStatus.SUCCESS.value:
-                _logger.debug(
-                    "%s: Compilation successful on AWG #%d with no warnings, will upload the "
-                    "program to the instrument.",
-                    self.dev_repr,
-                    awg_index,
-                )
-                break
-
-            status_string = awg_module.get(
-                DaqNodeGetAction(
-                    awg_module,
-                    "/compiler/statusstring",
-                    caching_strategy=CachingStrategy.NO_CACHE,
-                )
-            )
-
-            if compiler_status in (
-                AwgCompilerStatus.ERROR.value,
-                AwgCompilerStatus.WARNING.value,
-            ):
-                raise LabOneQControllerException(
-                    f"{self.dev_repr}: AWG compilation failed, compiler output:\n{status_string}"
-                )
-            time.sleep(0.1)
-
     @staticmethod
     def _contains_only_zero_or_one(a):
         if a is None:
             return True
         return not np.any(a * (1 - a))
 
-    def _prepare_wave_iq(self, waves, sig: str) -> Tuple[str, npt.ArrayLike]:
+    def _prepare_wave_iq(self, waves, sig: str) -> tuple[str, npt.ArrayLike]:
         wave_i = next((w for w in waves if w["filename"] == f"{sig}_i.wave"), None)
         if not wave_i:
             raise LabOneQControllerException(
@@ -753,7 +661,7 @@ class DeviceZI(ABC):
             ),
         )
 
-    def _prepare_wave_single(self, waves, sig: str) -> Tuple[str, npt.ArrayLike]:
+    def _prepare_wave_single(self, waves, sig: str) -> tuple[str, npt.ArrayLike]:
         wave = next((w for w in waves if w["filename"] == f"{sig}.wave"), None)
         marker_samples = None
         try:
@@ -775,7 +683,7 @@ class DeviceZI(ABC):
             np.clip(wave["samples"], -1, 1), markers=marker_samples
         )
 
-    def _prepare_wave_complex(self, waves, sig: str) -> Tuple[str, npt.ArrayLike]:
+    def _prepare_wave_complex(self, waves, sig: str) -> tuple[str, npt.ArrayLike]:
         filename_to_find = f"{sig}.wave"
         wave = next((w for w in waves if w["filename"] == filename_to_find), None)
 
@@ -788,9 +696,9 @@ class DeviceZI(ABC):
 
     def _prepare_waves(
         self, compiled: CompiledExperiment, seqc_filename: str
-    ) -> List[Tuple[str, npt.ArrayLike]]:
+    ) -> list[tuple[str, npt.ArrayLike]]:
         wave_indices_filename = os.path.splitext(seqc_filename)[0] + "_waveindices.csv"
-        wave_indices: Dict[str, List[Union[int, str]]] = next(
+        wave_indices: dict[str, list[int | str]] = next(
             (
                 i
                 for i in compiled.wave_indices
@@ -814,7 +722,7 @@ class DeviceZI(ABC):
                     f"'{sig_type}', should be one of [iq, double, multi, single, complex]"
                 )
 
-        bin_waves: List[Tuple[str, npt.ArrayLike]] = []
+        bin_waves: list[tuple[str, npt.ArrayLike]] = []
         idx = 0
         while idx in waves_by_index:
             bin_waves.append(waves_by_index[idx])
@@ -823,7 +731,7 @@ class DeviceZI(ABC):
 
     def _prepare_command_table(
         self, compiled: CompiledExperiment, seqc_filename: str
-    ) -> Optional[Dict]:
+    ) -> dict | None:
         command_table_body = next(
             (ct["ct"] for ct in compiled.command_tables if ct["seqc"] == seqc_filename),
             None,
@@ -844,13 +752,13 @@ class DeviceZI(ABC):
 
     def prepare_seqc(
         self, seqc_filename: str, compiled: CompiledExperiment
-    ) -> Tuple[str, List[Tuple[str, npt.ArrayLike]], Dict[Any]]:
+    ) -> tuple[str, list[tuple[str, npt.ArrayLike]], dict[Any]]:
         """
         `compiled` expected to have the following members:
-         - `src`   -> List[Dict[str, str]]
+         - `src`   -> list[dict[str, str]]
                         `filename` -> `<seqc_filename>`
                         `text`     -> `<seqc_content>`
-         - `waves` -> List[Dict[str, str]]
+         - `waves` -> list[dict[str, str]]
                         `filename` -> `<wave_filename_csv>`
                         `text`     -> `<wave_content_csv>`
 
@@ -912,7 +820,7 @@ class DeviceZI(ABC):
     def prepare_upload_all_binary_waves(
         self,
         awg_index,
-        waves: List[Tuple[str, npt.ArrayLike]],
+        waves: list[tuple[str, npt.ArrayLike]],
         acquisition_type: AcquisitionType,
     ):
         # Default implementation for "old" devices, override for newer devices
@@ -930,7 +838,7 @@ class DeviceZI(ABC):
     def _upload_all_binary_waves(
         self,
         awg_index,
-        waves: List[Tuple[str, npt.ArrayLike]],
+        waves: list[tuple[str, npt.ArrayLike]],
         acquisition_type: AcquisitionType,
     ):
         waves_upload = self.prepare_upload_all_binary_waves(
@@ -938,7 +846,7 @@ class DeviceZI(ABC):
         )
         self._daq.batch_set(waves_upload)
 
-    def prepare_upload_command_table(self, awg_index, command_table: Dict):
+    def prepare_upload_command_table(self, awg_index, command_table: dict):
         command_table_path = self.command_table_path(awg_index)
         return DaqNodeSetAction(
             self._daq,
@@ -947,7 +855,7 @@ class DeviceZI(ABC):
             caching_strategy=CachingStrategy.NO_CACHE,
         )
 
-    def upload_command_table(self, awg_index, command_table: Dict):
+    def upload_command_table(self, awg_index, command_table: dict):
         command_table_path = self.command_table_path(awg_index)
         self._daq.batch_set(
             [self.prepare_upload_command_table(awg_index, command_table)]
@@ -971,38 +879,6 @@ class DeviceZI(ABC):
         if not self.dry_run:
             if status & 0b0001 == 0:
                 raise LabOneQControllerException("Failed to upload command table")
-
-    def _compile_and_upload_seqc(
-        self, code: str, awg_index: int, filename_hint: str = None
-    ):
-        try:
-            _logger.debug(
-                "%s: Running AWG compiler on AWG #%d...",
-                self.dev_repr,
-                awg_index,
-            )
-            awg_module = self._awg_modules[awg_index]
-            awg_module.batch_set(
-                [
-                    DaqNodeSetAction(
-                        awg_module,
-                        "/compiler/sourcestring",
-                        code,
-                        filename=filename_hint,
-                        caching_strategy=CachingStrategy.NO_CACHE,  # if only external waves changed
-                    )
-                ]
-            )
-        except LabOneQControllerException as exc:
-            raise LabOneQControllerException(
-                f"Exception raised while uploading program from file {filename_hint} "
-                f"to AWG #{awg_index}\nSeqC code:\n{code}"
-            ) from exc
-
-        # TODO(2K): handle timeout, emit:
-        # f"{str(exp)}\nAWG compiler timed out while trying to compile:\n{data}\n"
-        self._check_awg_compiler_status(awg_index)
-        self._wait_for_elf_upload(awg_index)
 
     def compile_seqc(self, code: str, awg_index: int, filename_hint: str = None):
         _logger.debug(
@@ -1043,42 +919,10 @@ class DeviceZI(ABC):
 
         return elf
 
-    def upload_awg_program(
-        self, initialization: Initialization.Data, recipe_data: RecipeData
-    ):
-        assert not self._is_using_standalone_compiler
-
-        if initialization.awgs is None:
-            return
-
-        acquisition_type = RtExecutionInfo.get_acquisition_type(
-            recipe_data.rt_execution_infos
-        )
-
-        for awg_obj in initialization.awgs:
-            awg_index = awg_obj.awg
-
-            _logger.debug(
-                "%s: Starting to compile and upload AWG program '%s' to AWG #%d",
-                self.dev_repr,
-                awg_obj.seqc,
-                awg_index,
-            )
-
-            data, waves, command_table = self.prepare_seqc(
-                awg_obj.seqc, recipe_data.compiled
-            )
-
-            self._compile_and_upload_seqc(data, awg_index, filename_hint=awg_obj.seqc)
-
-            self._upload_all_binary_waves(awg_index, waves, acquisition_type)
-            if command_table is not None:
-                self.upload_command_table(awg_index, command_table)
-
     def _get_num_awgs(self):
         return 0
 
-    def collect_osc_initialization_nodes(self) -> List[DaqNodeAction]:
+    def collect_osc_initialization_nodes(self) -> list[DaqNodeAction]:
         nodes_to_initialize_oscs = []
         osc_inits = {
             self._make_osc_path(ch, osc.index): osc.frequency
@@ -1130,7 +974,7 @@ class DeviceZI(ABC):
             # Currently is returns 0 for all nodes...
             check_errors(all_errors[error_node], self.dev_repr)
 
-    def collect_reset_nodes(self) -> List[DaqNodeAction]:
+    def collect_reset_nodes(self) -> list[DaqNodeAction]:
         return [DaqNodeSetAction(self._daq, f"/{self.serial}/raw/error/clear", 1)]
 
     def _get_total_rounded_delay_samples(

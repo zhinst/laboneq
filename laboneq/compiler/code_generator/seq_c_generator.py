@@ -494,5 +494,8 @@ def merge_generators(generators, compress=True) -> SeqCGenerator:
         # optional: we might add a 2nd pass here on the merged generator, finding patterns
         # that partially span across multiple of the original parts.
         # retval = retval.compressed()
+    else:
+        for g in generators:
+            retval.append_statements_from(g)
 
     return retval

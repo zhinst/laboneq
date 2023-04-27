@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Optional, Union
 
 from laboneq.core.types.enums import PortMode
+from laboneq.dsl.calibration.amplifier_pump import AmplifierPump
 from laboneq.dsl.calibration.mixer_calibration import MixerCalibration
 from laboneq.dsl.calibration.observable import Observable
 from laboneq.dsl.calibration.oscillator import Oscillator
@@ -49,6 +50,8 @@ class SignalCalibration(Observable):
     threshold: Optional[float]
     #: (Not Implemented) Amplitude multiplying all waveforms played on a signal line
     amplitude: Optional[float]
+    #: (Not Implemented) Parametric Pump Controller settings
+    amplifier_pump: Optional[AmplifierPump]
 
     def __init__(
         self,
@@ -63,6 +66,7 @@ class SignalCalibration(Observable):
         port_mode=None,
         range=None,
         threshold=None,
+        amplifier_pump=None,
     ):
         super().__init__()
         self.amplitude = amplitude
@@ -76,6 +80,7 @@ class SignalCalibration(Observable):
         self.port_mode = port_mode
         self.range = range
         self.threshold = threshold
+        self.amplifier_pump = amplifier_pump
         super().__post_init__()
         if self._mixer_calibration is not None:
             self._mixer_calibration.has_changed().connect(

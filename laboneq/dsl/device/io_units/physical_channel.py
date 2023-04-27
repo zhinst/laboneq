@@ -29,17 +29,21 @@ PHYSICAL_CHANNEL_CALIBRATION_FIELDS = (
 
 @dataclass(init=False, repr=False, order=True)
 class PhysicalChannel(Calibratable):
-    #: Unique identifier.
+    #: Unique identifier. Typically of the form
+    # ``<device uid>/<channel name>``.
     uid: str
 
-    #: The name of the channel.
+    #: The name of the channel, == <channel name>.
+    # Computed from the HW channel ids like:
+    # [SIGOUTS/0, SIGOUTS/1] -> "sigouts_0_1"
+    # [SIGOUTS/2] -> "sigouts_2"
     name: Optional[str]
 
     #: The type of the channel.
     type: Optional[PhysicalChannelType]
 
     #: Logical path to the channel. Typically of the form
-    # ``/<device name>/<channel name>``.
+    # ``/<device uid>/<channel name>``.
     path: Optional[str]
     _calibration: Optional[SignalCalibration]
 

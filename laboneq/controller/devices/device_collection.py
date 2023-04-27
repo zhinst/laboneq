@@ -7,17 +7,7 @@ import logging
 import re
 from collections import defaultdict
 from copy import deepcopy
-from typing import (
-    TYPE_CHECKING,
-    Callable,
-    Dict,
-    Iterator,
-    List,
-    Optional,
-    Set,
-    Tuple,
-    cast,
-)
+from typing import TYPE_CHECKING, Callable, Iterator, cast
 
 from zhinst.utils.api_compatibility import check_dataserver_device_compatibility
 
@@ -67,22 +57,22 @@ class DeviceCollection:
         self._ds = DeviceSetupDAO(deepcopy(device_setup))
         self._dry_run = dry_run
         self._ignore_version_mismatch = ignore_version_mismatch
-        self._daqs: Dict[str, DaqWrapper] = {}
-        self._devices: Dict[str, DeviceZI] = {}
+        self._daqs: dict[str, DaqWrapper] = {}
+        self._devices: dict[str, DeviceZI] = {}
 
     @property
-    def all(self) -> Iterator[Tuple[str, DeviceZI]]:
+    def all(self) -> Iterator[tuple[str, DeviceZI]]:
         for uid, device in self._devices.items():
             yield uid, device
 
     @property
-    def leaders(self) -> Iterator[Tuple[str, DeviceZI]]:
+    def leaders(self) -> Iterator[tuple[str, DeviceZI]]:
         for uid, device in self._devices.items():
             if device.is_leader():
                 yield uid, device
 
     @property
-    def followers(self) -> Iterator[Tuple[str, DeviceZI]]:
+    def followers(self) -> Iterator[tuple[str, DeviceZI]]:
         for uid, device in self._devices.items():
             if device.is_follower():
                 yield uid, device
@@ -107,30 +97,30 @@ class DeviceCollection:
                 return dev
         raise LabOneQControllerException(f"Could not find device for the path '{path}'")
 
-    def connect(self, is_using_standalone_compiler: bool = True):
+    def connect(self):
         self._prepare_daqs()
-        self._prepare_devices(is_using_standalone_compiler)
+        self._prepare_devices()
         for device in self._devices.values():
             device.connect()
         self.start_monitor()
-        self.init_device_setup()
+        self.configure_device_setup()
         self.stop_monitor()
 
     def _configure_parallel(
         self,
-        devices: List[DeviceZI],
-        control_nodes_getter: Callable([DeviceZI], List[NodeControlBase]),
+        devices: list[DeviceZI],
+        control_nodes_getter: Callable([DeviceZI], list[NodeControlBase]),
         config_name: str,
     ):
         response_waiter = ResponseWaiter()
-        set_nodes: List[DaqNodeSetAction] = []
+        set_nodes: list[DaqNodeSetAction] = []
         for device in devices:
             dev_nodes = control_nodes_getter(device)
 
             conditions_checker = ConditionsChecker()
             conditions_checker.add(
                 target=device.daq.node_monitor,
-                conditions=filter_conditions(dev_nodes),
+                conditions={n.path: n.value for n in filter_conditions(dev_nodes)},
             )
             failed_path, _ = conditions_checker.check_all()
             if failed_path is None:
@@ -140,23 +130,23 @@ class DeviceCollection:
                 [
                     DaqNodeSetAction(
                         daq=device.daq,
-                        path=path,
-                        value=val,
+                        path=node.path,
+                        value=node.raw_value,
                         caching_strategy=CachingStrategy.NO_CACHE,
                     )
-                    for path, val in filter_commands(dev_nodes).items()
+                    for node in filter_commands(dev_nodes)
                 ]
             )
             response_waiter.add(
                 target=device.daq.node_monitor,
-                conditions=filter_responses(dev_nodes),
+                conditions={n.path: n.value for n in filter_responses(dev_nodes)},
             )
 
         if len(set_nodes) is None:
             return
 
         batch_set(set_nodes)
-        timeout = 5
+        timeout = 10
         if not response_waiter.wait_all(timeout=timeout):
             raise LabOneQControllerException(
                 f"Internal error: {config_name} for devices "
@@ -171,8 +161,8 @@ class DeviceCollection:
                 f"{[d.dev_repr for d in devices]} failed at {failed_path} != {expected}."
             )
 
-    def init_device_setup(self):
-        _logger.info("Configuring device setup")
+    def configure_device_setup(self):
+        _logger.info("Configuring the device setup")
         configs = {
             "Reference clock switching": lambda d: cast(
                 DeviceZI, d
@@ -180,6 +170,9 @@ class DeviceCollection:
             "System frequency switching": lambda d: cast(
                 DeviceZI, d
             ).system_freq_control_nodes(),
+            "Setting RF channel offsets": lambda d: cast(
+                DeviceZI, d
+            ).rf_offset_control_nodes(),
         }
         # Wait until clock status is available for all devices
         response_waiter = ResponseWaiter()
@@ -217,7 +210,7 @@ class DeviceCollection:
                     if dev is not None:
                         children.append(dev)
             parents = children
-        _logger.info("Device setup configured")
+        _logger.info("The device setup is configured")
 
     def disconnect(self):
         self.reset_monitor()
@@ -228,14 +221,14 @@ class DeviceCollection:
 
     def disable_outputs(
         self,
-        device_uids: List[str] = None,
-        logical_signals: List[str] = None,
+        device_uids: list[str] = None,
+        logical_signals: list[str] = None,
         unused_only: bool = False,
     ):
         # Set of outputs to disable or skip (depending on the 'invert' param) per device.
         # Rationale for the logic: the actual number of outputs is only known by the connected
         # device object, here we can only determine the outputs mapped in the device setup.
-        outputs_per_device: Dict[str, Optional[Set[int]]] = {}
+        outputs_per_device: dict[str, set[int] | None] = {}
 
         if logical_signals is None:
             invert = True
@@ -258,7 +251,7 @@ class DeviceCollection:
                 if device_uid is not None:
                     outputs_per_device.setdefault(device_uid, set()).update(outputs)
 
-        all_actions: List[DaqNodeSetAction] = []
+        all_actions: list[DaqNodeSetAction] = []
         for device_uid, outputs in outputs_per_device.items():
             device = self.find_by_uid(device_uid)
             all_actions.extend(device.disable_outputs(outputs, invert))
@@ -303,7 +296,7 @@ class DeviceCollection:
                 except Exception as error:
                     raise LabOneQControllerException(str(error)) from error
 
-    def _prepare_devices(self, is_using_standalone_compiler):
+    def _prepare_devices(self):
         self._validate_dataserver_device_fw_compatibility()
 
         def make_device_qualifier(
@@ -312,7 +305,6 @@ class DeviceCollection:
             driver = instrument.calc_driver()
             options = DeviceOptions(
                 **instrument.calc_options(),
-                is_using_standalone_compiler=is_using_standalone_compiler,
                 gen2=gen2,
             )
             if len(instrument.connections) == 0:
@@ -327,7 +319,7 @@ class DeviceCollection:
                 dry_run=self._dry_run, driver=driver, server=daq, options=options
             )
 
-        updated_devices: Dict[str, DeviceZI] = {}
+        updated_devices: dict[str, DeviceZI] = {}
         for instrument in self._ds.instruments:
             daq = self._daqs.get(instrument.server_uid)
             device_qualifier = make_device_qualifier(instrument, daq, self._ds.has_shf)
@@ -360,15 +352,22 @@ class DeviceCollection:
                     from_dev.add_downlink(from_port, to_dev_uid, to_dev)
                     to_dev.add_uplink(to_port, from_dev)
 
-        # Set clock source (external by default)
+        # Move various device settings from device setup
         for instrument in self._ds.instruments:
             dev = self._devices[instrument.uid]
-            force_internal: Optional[bool] = None
+
+            # Set clock source (external by default)
+            force_internal: bool | None = None
             if instrument.reference_clock_source is not None:
                 force_internal = (
                     instrument.reference_clock_source == ReferenceClockSource.INTERNAL
                 )
             dev.update_clock_source(force_internal)
+
+            # Set RF channel offsets
+            dev.update_rf_offsets(
+                self._ds.get_device_rf_voltage_offsets(instrument.uid)
+            )
 
     def _prepare_daqs(self):
         def make_server_qualifier(server: DataServer):
@@ -380,7 +379,7 @@ class DeviceCollection:
                 ignore_version_mismatch=self._ignore_version_mismatch,
             )
 
-        updated_daqs: Dict[str, DaqWrapper] = {}
+        updated_daqs: dict[str, DaqWrapper] = {}
         for server_uid, server in self._ds.servers:
             server_qualifier = make_server_qualifier(server)
             existing = self._daqs.get(server_uid)

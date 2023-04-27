@@ -13,3 +13,4 @@ class IOSignalType(Enum):
     LO = "LO"
     DIO = "DIO"
     ZSYNC = "ZSYNC"
+    PPC = "PPC"

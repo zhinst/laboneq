@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from laboneq.dsl.calibration import MixerCalibration, SignalCalibration
+from laboneq.dsl.calibration.amplifier_pump import AmplifierPump
 from laboneq.dsl.device.io_units.logical_signal import (
     LogicalSignalRef,
     resolve_logical_signal_ref,
@@ -237,6 +238,17 @@ class ExperimentSignal:
             self.calibration = SignalCalibration(threshold=value)
         else:
             self.calibration.threshold = value
+
+    @property
+    def amplifier_pump(self) -> AmplifierPump:
+        return self.calibration.amplifier_pump if self.is_calibrated() else None
+
+    @amplifier_pump.setter
+    def amplifier_pump(self, value: AmplifierPump):
+        if not self.is_calibrated():
+            self.calibration = SignalCalibration(amplifier_pump=value)
+        else:
+            self.calibration.amplifier_pump = value
 
     def is_calibrated(self):
         return self.calibration is not None

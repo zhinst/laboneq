@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from laboneq.core import path as qct_path
 from laboneq.core.exceptions import LabOneQException
@@ -21,6 +21,7 @@ from ._device_setup_generator import (
 )
 
 if TYPE_CHECKING:
+    from laboneq.dsl.device.logical_signal_group import LogicalSignal
     from laboneq.dsl.device.servers import DataServer
 
     from .instrument import Instrument
@@ -48,8 +49,26 @@ class DeviceSetup:
     #: Logical signal groups of this device setup, by name of the group.
     logical_signal_groups: Dict[str, LogicalSignalGroup] = field(default_factory=dict)
 
-    def instrument_by_uid(self, uid: str) -> Instrument:
-        return next(i for i in self.instruments if i.uid == uid)
+    def instrument_by_uid(self, uid: str) -> Instrument | None:
+        return next((i for i in self.instruments if i.uid == uid), None)
+
+    def logical_signal_by_uid(self, uid: str) -> LogicalSignal:
+        """Get logical signal by uid.
+
+        Args:
+            uid: UID of the signal.
+        Returns:
+            Logical signal with the UID.
+        Raises:
+            KeyError: Logical signal UID was not found.
+
+        .. versionadded:: 2.5.0
+        """
+        for grp in self.logical_signal_groups.values():
+            for sig in grp.logical_signals.values():
+                if uid == sig.uid:
+                    return sig
+        raise KeyError(f"Logical signal UID '{uid}' not found.")
 
     def _set_calibration(
         self,
@@ -286,6 +305,36 @@ class DeviceSetup:
         return DeviceSetup(
             **_DeviceSetupGenerator.from_yaml(
                 filepath, server_host, server_port, setup_name
+            )
+        )
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: Dict[str, Any],
+        server_host: Optional[str] = None,
+        server_port: Optional[Union[str, int]] = None,
+        setup_name: Optional[str] = None,
+    ) -> "DeviceSetup":
+        """Construct the device setup from a Python dictionary.
+
+        Args:
+            data: Device setup data.
+            server_host: Server host of the setup that should be created.
+            server_port: Port of the server that should be created.
+            setup_name: Name of the setup that should be created.
+
+        .. versionadded:: 2.5.0
+        """
+        return cls(
+            **_DeviceSetupGenerator.from_dicts(
+                instrument_list=data.get("instrument_list"),
+                instruments=data.get("instruments"),
+                connections=data.get("connections"),
+                dataservers=data.get("dataservers"),
+                server_host=server_host,
+                server_port=server_port,
+                setup_name=setup_name,
             )
         )
 

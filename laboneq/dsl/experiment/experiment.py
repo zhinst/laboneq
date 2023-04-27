@@ -671,48 +671,6 @@ class Experiment:
         def __exit__(self, exc_type, exc_val, exc_tb):
             self.exp._pop_and_add_section()
 
-    def for_(self, timing, parameters=None, count=0, uid=None):
-        return Experiment._ForSectionContext(
-            self, timing=timing, parameters=parameters, count=count, uid=uid
-        )
-
-    class _ForSectionContext:
-        def __init__(self, experiment, timing, uid, parameters=None, count=0):
-            if parameters is None:
-                parameters = []
-            self.exp = experiment
-
-            if parameters and not count:
-                self.average = None
-                if uid is None:
-                    self.sweep = Sweep(
-                        parameters=parameters, reset_oscillator_phase=False
-                    )
-                else:
-                    self.sweep = Sweep(
-                        uid=uid, parameters=parameters, reset_oscillator_phase=False
-                    )
-                self.sweep.execution_type = timing
-            elif count and not parameters:
-                self.sweep = None
-                args = {"count": count}
-                if uid is not None:
-                    args["uid"] = uid
-                if timing == ExecutionType.NEAR_TIME:
-                    self.average = AcquireLoopNt(**args)
-                else:
-                    self.average = AcquireLoopRt(**args)
-            else:
-                raise LabOneQException(
-                    "Invalid parameters: Either use kwarg 'count' or 'parameters', but not both and not none."
-                )
-
-        def __enter__(self):
-            self.exp._push_section(self.sweep if self.sweep else self.average)
-
-        def __exit__(self, exc_type, exc_val, exc_tb):
-            self.exp._pop_and_add_section()
-
     def section(
         self,
         length=None,

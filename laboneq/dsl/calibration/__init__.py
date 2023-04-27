@@ -1,6 +1,7 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from .amplifier_pump import AmplifierPump
 from .calibratable import Calibratable
 from .calibration import Calibration
 from .calibration_item import CalibrationItem

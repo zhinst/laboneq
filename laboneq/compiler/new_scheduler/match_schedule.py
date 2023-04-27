@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Dict, Iterable, Iterator, List
 
 from attrs import define
@@ -24,6 +25,13 @@ from laboneq.core.exceptions.laboneq_exception import LabOneQException
 
 if TYPE_CHECKING:
     from laboneq.compiler.new_scheduler.schedule_data import ScheduleData
+
+# Copy from device_zi.py (without checks)
+def _get_total_rounded_delay_samples(
+    port_delays, sample_frequency_hz, granularity_samples
+):
+    delay = sum(round((d or 0) * sample_frequency_hz) for d in port_delays)
+    return (math.ceil(delay / granularity_samples + 0.5) - 1) * granularity_samples
 
 
 def _compute_start_with_latency(
@@ -58,8 +66,10 @@ def _compute_start_with_latency(
     # - The start time (in samples from trigger) of the acquisition
     # - The length of the integration kernel
     # - The lead time of the acquisition AWG
-    # - The setting of the delay_signal parameter for the acquisition AWG
-    # - The setting of the port_delay parameter for the acquisition device
+    # - The sum of the settings of the delay_signal parameter for the acquisition AWG
+    #   for measure and acquire pulse
+    # - The sum of the settings of the port_delay parameter for the acquisition device
+    #   for measure and acquire pulse
 
     qa_signal_obj = schedule_data.signal_objects[acquire_pulse.pulse.signal_id]
 
@@ -80,10 +90,26 @@ def _compute_start_with_latency(
     qa_lead_time = qa_signal_obj.start_delay or 0.0
     qa_delay_signal = qa_signal_obj.delay_signal or 0.0
     qa_port_delay = qa_signal_obj.port_delay or 0.0
+    qa_base_delay_signal = qa_signal_obj.base_delay_signal or 0.0
+    qa_base_port_delay = qa_signal_obj.base_port_delay or 0.0
+    qa_total_port_delay = _get_total_rounded_delay_samples(
+        (qa_base_port_delay, qa_port_delay),
+        qa_sampling_rate,
+        qa_device_type.sample_multiple,
+    )
 
-    acquire_end_in_samples = round(
-        (acq_start + acq_length + qa_lead_time + qa_delay_signal + qa_port_delay)
-        * qa_sampling_rate
+    acquire_end_in_samples = (
+        round(
+            (
+                acq_start
+                + acq_length
+                + qa_lead_time
+                + qa_delay_signal
+                + qa_base_delay_signal
+            )
+            * qa_sampling_rate
+        )
+        + qa_total_port_delay
     )
 
     for signal in signals:

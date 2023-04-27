@@ -1,16 +1,20 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+import uuid
 from abc import ABC
 from copy import copy
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any, Dict, Union
+
+from laboneq.dsl.serialization import Serializer
 
 from .io_units import LogicalSignal
 from .logical_signal_group import LogicalSignalGroup
 
 
-@dataclass(init=False, repr=True, order=True)
+@dataclass(init=False, repr=True)
 class QuantumElement(ABC):
     """An abstract base class for quantum elements."""
 
@@ -34,7 +38,10 @@ class QuantumElement(ABC):
             logical_signal_group: A logical signal group associated with the quantum element.
             parameters: A dictionary of parameters associated with the quantum element.
         """
-        self.uid = uid
+        if uid is None:
+            self.uid = uuid.uuid4().hex
+        else:
+            self.uid = uid
         self.signals = {} if signals is None else signals
 
         self._parameters = {} if parameters is None else parameters
@@ -44,6 +51,32 @@ class QuantumElement(ABC):
                 raise ValueError("Cannot have both signals and logical signal_group")
             else:
                 self.signals = self._parse_signals(logical_signal_group)
+
+    def __hash__(self):
+        return hash(self.uid)
+
+    @property
+    def parameters(self):
+        return copy(self._parameters)
+
+    @classmethod
+    def load(cls, filename: Union[str, bytes, os.PathLike]) -> "QuantumElement":
+        """
+        Loads a QuantumElement object from a JSON file.
+
+        Args:
+            filename: The name of the JSON file to load the QuantumElement object from.
+        """
+        return cls.from_json(filename)
+
+    @classmethod
+    def from_json(cls, filename: Union[str, bytes, os.PathLike]) -> "QuantumElement":
+        """Loads a QuantumElement object from a JSON file.
+
+        Args:
+            filename: The name of the JSON file to load the QuantumElement object from.
+        """
+        return Serializer.from_json_file(filename, cls)
 
     def _parse_signals(
         self, logical_signal_group: LogicalSignalGroup
@@ -59,22 +92,6 @@ class QuantumElement(ABC):
         """
         self.signals.update({k: v.uid for (k, v) in signals.items()})
 
-    def get_signal(self, signal_name: str, device_setup) -> LogicalSignal:
-        """
-        Retrieves a logical signal from the quantum element.
-
-        Args:
-            signal_name: The name of the logical signal to retrieve.
-            device_setup: The device setup object containing the logical signal.
-
-        Returns:
-            The logical signal object associated with the specified name.
-        """
-        signal = self.signals.get(signal_name)
-        group, signal = signal.split("/", 1)
-        ls = device_setup.logical_signal_groups.get(group).logical_signals[signal]
-        return ls
-
     def set_signal_group(self, logical_signal_group: LogicalSignalGroup):
         """
         Sets the logical signal group for the quantum element.
@@ -83,10 +100,6 @@ class QuantumElement(ABC):
             logical_signal_group: The logical signal group to set for the quantum element.
         """
         self.signals.update(self._parse_signal(logical_signal_group))
-
-    @property
-    def parameters(self):
-        return copy(self._parameters)
 
     def set_parameters(self, parameters: Dict[str, Any]):
         """
@@ -99,31 +112,26 @@ class QuantumElement(ABC):
         """
         self._parameters.update(parameters)
 
-    @staticmethod
-    def load(filename):
-        """
-        Loads a QuantumElement object from a JSON file.
-
-        Args:
-            filename: The name of the JSON file to load the QuantumElement object from.
-        """
-        from laboneq.dsl.serialization import Serializer
-
-        return Serializer.from_json_file(filename, QuantumElement)
-
-    def save(self, filename):
+    def save(self, filename: Union[str, bytes, os.PathLike]):
         """
         Save a QuantumElement object to a JSON file.
 
         Args:
             filename: The name of the JSON file to save the QuantumElement object.
         """
-        from laboneq.dsl.serialization import Serializer
+        self.to_json(filename)
 
+    def to_json(self, filename: Union[str, bytes, os.PathLike]):
+        """
+        Save a QuantumElement object to a JSON file.
+
+        Args:
+            filename: The name of the JSON file to save the QuantumElement object.
+        """
         Serializer.to_json_file(self, filename)
 
 
-@dataclass(init=False, repr=True, order=True)
+@dataclass(init=False, repr=True, eq=False)
 class Qubit(QuantumElement):
     """A class for generic qubits."""
 
