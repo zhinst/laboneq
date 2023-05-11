@@ -34,6 +34,8 @@ connections:
       ports: SIGOUTS/3
     - rf_signal: q4/flux_line
       ports: SIGOUTS/4
+    - rf_signal: q5/flux_line
+      ports: SIGOUTS/5
 
   device_shfsg:
     - iq_signal: q0/drive_line
@@ -76,9 +78,18 @@ connections:
       ports: SGCHANNELS/0/OUTPUT
     - iq_signal: q4/drive_line_ef
       ports: SGCHANNELS/0/OUTPUT
+    - iq_signal: q5/drive_line
+      ports: SGCHANNELS/1/OUTPUT
+    - iq_signal: q5/drive_line_ef
+      ports: SGCHANNELS/1/OUTPUT
+
     - iq_signal: q4/measure_line
       ports: [QACHANNELS/0/OUTPUT]
     - acquire_signal: q4/acquire_line
+      ports: [QACHANNELS/0/INPUT]
+    - iq_signal: q5/measure_line
+      ports: [QACHANNELS/0/OUTPUT]
+    - acquire_signal: q5/acquire_line
       ports: [QACHANNELS/0/INPUT]
 
   device_pqsc:

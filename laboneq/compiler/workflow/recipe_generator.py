@@ -198,6 +198,7 @@ class RecipeGenerator:
         output_range=None,
         output_range_unit=None,
         port_delay=None,
+        scheduler_port_delay=0.0,
         marker_mode=None,
     ):
         output = {"channel": channel, "enable": True}
@@ -224,6 +225,7 @@ class RecipeGenerator:
             output["oscillator_frequency"] = oscillator_frequency
         if port_delay is not None:
             output["port_delay"] = port_delay
+        output["scheduler_port_delay"] = scheduler_port_delay
         if marker_mode is not None:
             output["marker_mode"] = marker_mode
 
@@ -239,6 +241,7 @@ class RecipeGenerator:
         input_range=None,
         input_range_unit=None,
         port_delay=None,
+        scheduler_port_delay=0.0,
     ):
         input = {"channel": channel, "enable": True}
         if lo_frequency is not None:
@@ -249,6 +252,7 @@ class RecipeGenerator:
             input["range_unit"] = input_range_unit
         if port_delay is not None:
             input["port_delay"] = port_delay
+        input["scheduler_port_delay"] = scheduler_port_delay
 
         initialization: dict = self._find_initialization(device_id)
         inputs: list = initialization.setdefault("inputs", [])

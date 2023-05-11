@@ -5,9 +5,9 @@ from typing import Dict
 
 import intervaltree
 
-from laboneq.compiler.new_scheduler.interval_schedule import IntervalSchedule
-from laboneq.compiler.new_scheduler.loop_schedule import LoopSchedule
-from laboneq.compiler.new_scheduler.section_schedule import SectionSchedule
+from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
+from laboneq.compiler.scheduler.loop_schedule import LoopSchedule
+from laboneq.compiler.scheduler.section_schedule import SectionSchedule
 
 
 def calculate_preorder_map(

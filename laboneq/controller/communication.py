@@ -7,7 +7,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from functools import lru_cache
+from functools import cached_property
 from typing import TYPE_CHECKING, Any, Dict, List
 
 import zhinst.core as zi
@@ -128,10 +128,12 @@ class ZiApiWrapperBase(ABC):
         daq_reply = self._api_wrapper("get", daq_action.path, flat=True)
         return self._api_reply_to_val_history_dict(daq_reply)[daq_action.path][-1]
 
-    def _actions_to_set_api_input(self, daq_actions):
+    def _actions_to_set_api_input(
+        self, daq_actions: list[DaqNodeSetAction]
+    ) -> list[list[Any]]:
         return [[action.path, action.value] for action in daq_actions]
 
-    def batch_set(self, daq_actions: List[DaqNodeAction]):
+    def batch_set(self, daq_actions: list[DaqNodeAction]):
         """Set the list of nodes in one call to API
 
         Parameters:
@@ -148,7 +150,7 @@ class ZiApiWrapperBase(ABC):
         _logger.debug("Batch set node list: %s", node_list)
 
         api_input = []
-        daq_actions_to_execute = []
+        daq_actions_to_execute: list[DaqNodeSetAction] = []
 
         for action in daq_actions:
             if not isinstance(action, DaqNodeSetAction):
@@ -263,8 +265,7 @@ class DaqWrapper(ZiApiWrapperBase):
                 f"Exception {ex} when calling method {method_name} with {args} and {kwargs}"
             )
 
-    @property
-    @lru_cache(maxsize=1)
+    @cached_property
     def toolkit_session(self) -> TKSession:
         """Toolkit session from the initialized DAQ session."""
         return TKSession(

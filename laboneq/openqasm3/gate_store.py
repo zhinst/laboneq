@@ -10,11 +10,10 @@ from laboneq.dsl.experiment.utils import id_generator
 
 class GateStore:
     def __init__(self):
-        self.gates: Dict[Tuple[str, Tuple[int, ...]], Callable[..., Section]] = {}
+        self.gates: Dict[Tuple[str, Tuple[str, ...]], Callable[..., Section]] = {}
         self.gate_map: Dict[str, str] = {}
-        self.qubit_lsg_map: Dict[int, str] = {}
 
-    def lookup_gate(self, name: str, qubits: Tuple[int, ...], args=()) -> Section:
+    def lookup_gate(self, name: str, qubits: Tuple[str, ...], args=()) -> Section:
         return self.gates[(self.gate_map.get(name, name), qubits)](*args)
 
     def map_gate(self, qasm_name: str, l1q_name: str):
@@ -38,19 +37,10 @@ class GateStore:
 
         return impl
 
-    def map_qubits(self, map: Dict[int, str]):
-        """Define mapping from qasm qubit names to LabOne Q logical signal groups.
-
-        Required by `GateStore.register_gate()`.
-        """
-        self.qubit_lsg_map.update(map)
-
     def register_gate(
-        self, name: str, qubit: int, pulse: Optional[Pulse], phase=None, id=None
+        self, name: str, qubit: str, pulse: Optional[Pulse], phase=None, id=None
     ):
         """Register a pulse as a single-qubit gate."""
         self.register_gate_section(
-            name,
-            (qubit,),
-            self._gate_pulse(self.qubit_lsg_map[qubit], pulse, phase, id),
+            name, (qubit,), self._gate_pulse(qubit, pulse, phase, id)
         )

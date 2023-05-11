@@ -12,7 +12,7 @@ from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.common.play_wave_type import PlayWaveType
 from laboneq.compiler.common.pulse_parameters import encode_pulse_parameters
 from laboneq.compiler.experiment_access.section_signal_pulse import SectionSignalPulse
-from laboneq.compiler.new_scheduler.interval_schedule import IntervalSchedule
+from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
 
 
 @define(kw_only=True, slots=True)

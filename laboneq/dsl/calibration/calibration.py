@@ -2,9 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass, field
-from typing import Dict
+from typing import Any, Dict
 
 from laboneq.dsl.calibration.calibration_item import CalibrationItem
+
+
+def _sanitize_key(key: Any) -> str:
+    try:
+        return key.path
+    except AttributeError as error:
+        if not isinstance(key, str):
+            raise TypeError("Key must be a string.") from error
+        return key
 
 
 @dataclass(init=True, repr=True, order=True)
@@ -17,14 +26,19 @@ class Calibration:
 
     calibration_items: Dict[str, CalibrationItem] = field(default_factory=dict)
 
+    def __post_init__(self):
+        self.calibration_items = {
+            _sanitize_key(k): v for k, v in self.calibration_items.items()
+        }
+
     def __getitem__(self, key):
-        return self.calibration_items[key]
+        return self.calibration_items[_sanitize_key(key)]
 
     def __setitem__(self, key, value):
-        self.calibration_items[key] = value
+        self.calibration_items[_sanitize_key(key)] = value
 
     def __delitem__(self, key):
-        del self.calibration_items[key]
+        del self.calibration_items[_sanitize_key(key)]
 
     def __iter__(self):
         return iter(self.calibration_items)

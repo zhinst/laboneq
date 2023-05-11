@@ -3,7 +3,7 @@
 
 from typing import Dict, List
 
-from laboneq.compiler.new_scheduler.interval_schedule import IntervalSchedule
+from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
 
 
 class ReserveSchedule(IntervalSchedule):

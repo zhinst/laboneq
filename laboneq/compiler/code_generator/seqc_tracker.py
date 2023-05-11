@@ -115,6 +115,11 @@ class SeqCTracker:
             num_samples, self.device_type, self.deferred_function_calls
         )
 
+    def add_play_hold_statement(self, num_samples):
+        self.current_loop_stack_generator().add_play_hold_statement(
+            num_samples, self.device_type, self.deferred_function_calls
+        )
+
     def add_play_wave_statement(
         self, device_type: DeviceType, signal_type, wave_id, channel
     ):

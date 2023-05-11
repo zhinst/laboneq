@@ -57,12 +57,14 @@ DEFAULT_CONFIG_YML = """
             level: NOTSET
             formatter: file_formatter
             filename: \"controller.log\"
+            encoding: utf-8
 
         node_log_handler:
             class: logging.FileHandler
             level: NOTSET
             formatter: node_log_formatter
             filename: \"node.log\"
+            encoding: utf-8
 
     root:
         level: NOTSET
@@ -121,7 +123,9 @@ def initialize_logging(performance_log=False, logging_config_dict=None, log_leve
         performance_log_file = os.path.abspath(
             os.path.join(get_log_dir(), "controller_perf.log")
         )
-        performance_handler = logging.FileHandler(performance_log_file, mode="a")
+        performance_handler = logging.FileHandler(
+            performance_log_file, mode="a", encoding="utf-8"
+        )
         performance_handler.setLevel(logging.DEBUG)
         formatter = logging.Formatter(
             fmt="%(asctime)s.%(msecs)03d\t%(levelname)s\t%(name)-30s\t%(message)s",

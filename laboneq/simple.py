@@ -25,6 +25,8 @@ from laboneq.dsl.calibration import (
 )
 from laboneq.dsl.device import DeviceSetup
 from laboneq.dsl.device.device_setup_helper import DeviceSetupHelper
+from laboneq.dsl.device.qubits import QuantumElement, Qubit
+from laboneq.dsl.device.quops import QuantumOperation
 from laboneq.dsl.enums import (
     AcquisitionType,
     AveragingMode,

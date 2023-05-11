@@ -14,7 +14,7 @@ from laboneq.controller.communication import (
     DaqNodeAction,
     DaqNodeSetAction,
 )
-from laboneq.controller.devices.device_zi import DeviceZI
+from laboneq.controller.devices.device_zi import DeviceZI, delay_to_rounded_samples
 from laboneq.controller.devices.zi_node_monitor import (
     Command,
     Condition,
@@ -266,18 +266,22 @@ class DeviceHDAWG(DeviceZI):
             nodes.append((f"sigouts/{output.channel}/offset", output.offset))
             nodes.append((f"awgs/{awg_idx}/single", 1))
 
-            measurement_delay_rounded = (
-                self._get_total_rounded_delay_samples(
-                    output,
-                    self._sampling_rate,
-                    DELAY_NODE_GRANULARITY_SAMPLES,
-                    DELAY_NODE_MAX_SAMPLES,
-                    0,
+            output_delay = output.scheduler_port_delay
+            output_delay += output.port_delay or 0.0
+
+            output_delay_rounded = (
+                delay_to_rounded_samples(
+                    channel=output.channel,
+                    dev_repr=self.dev_repr,
+                    delay=output_delay,
+                    sample_frequency_hz=self._sampling_rate,
+                    granularity_samples=DELAY_NODE_GRANULARITY_SAMPLES,
+                    max_node_delay_samples=DELAY_NODE_MAX_SAMPLES,
                 )
                 / self._sampling_rate
             )
 
-            nodes.append((f"sigouts/{output.channel}/delay", measurement_delay_rounded))
+            nodes.append((f"sigouts/{output.channel}/delay", output_delay_rounded))
 
             awg_ch = output.channel % 2
             iq_idx = output.channel // 2

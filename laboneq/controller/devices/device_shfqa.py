@@ -16,7 +16,7 @@ from laboneq.controller.communication import (
     DaqNodeGetAction,
     DaqNodeSetAction,
 )
-from laboneq.controller.devices.device_zi import DeviceZI
+from laboneq.controller.devices.device_zi import DeviceZI, delay_to_rounded_samples
 from laboneq.controller.recipe_1_4_0 import (
     IO,
     Initialization,
@@ -489,13 +489,17 @@ class DeviceSHFQA(DeviceZI):
                 )
             )
 
+            measurement_delay = output.scheduler_port_delay
+            measurement_delay += output.port_delay or 0.0
+
             measurement_delay_rounded = (
-                self._get_total_rounded_delay_samples(
-                    output,
-                    SAMPLE_FREQUENCY_HZ,
-                    DELAY_NODE_GRANULARITY_SAMPLES,
-                    DELAY_NODE_MAX_SAMPLES,
-                    0,
+                delay_to_rounded_samples(
+                    channel=output.channel,
+                    dev_repr=self.dev_repr,
+                    delay=measurement_delay,
+                    sample_frequency_hz=SAMPLE_FREQUENCY_HZ,
+                    granularity_samples=DELAY_NODE_GRANULARITY_SAMPLES,
+                    max_node_delay_samples=DELAY_NODE_MAX_SAMPLES,
                 )
                 / SAMPLE_FREQUENCY_HZ
             )
@@ -611,18 +615,19 @@ class DeviceSHFQA(DeviceZI):
     ):
         _logger.debug("%s: Setting measurement mode to 'Readout'.", self.dev_repr)
 
-        measurement_delay_output = 0
-        if dev_output is not None:
-            if dev_output.port_delay is not None:
-                measurement_delay_output += dev_output.port_delay * SAMPLE_FREQUENCY_HZ
+        measurement_delay = dev_output.scheduler_port_delay
+        measurement_delay += dev_output.port_delay or 0.0
+        measurement_delay += dev_input.scheduler_port_delay
+        measurement_delay += dev_input.port_delay or 0.0
 
         measurement_delay_rounded = (
-            self._get_total_rounded_delay_samples(
-                dev_input,
-                SAMPLE_FREQUENCY_HZ,
-                DELAY_NODE_GRANULARITY_SAMPLES,
-                DELAY_NODE_MAX_SAMPLES,
-                measurement.delay + measurement_delay_output,
+            delay_to_rounded_samples(
+                channel=dev_output.channel,
+                dev_repr=self.dev_repr,
+                delay=measurement_delay,
+                sample_frequency_hz=SAMPLE_FREQUENCY_HZ,
+                granularity_samples=DELAY_NODE_GRANULARITY_SAMPLES,
+                max_node_delay_samples=DELAY_NODE_MAX_SAMPLES,
             )
             / SAMPLE_FREQUENCY_HZ
         )
@@ -690,17 +695,21 @@ class DeviceSHFQA(DeviceZI):
         return nodes_to_set_for_readout_mode
 
     def _configure_spectroscopy_mode_nodes(
-        self, dev_input, measurement: Measurement.Data | None
+        self, dev_input: IO.Data, measurement: Measurement.Data | None
     ):
         _logger.debug("%s: Setting measurement mode to 'Spectroscopy'.", self.dev_repr)
 
+        measurement_delay = dev_input.scheduler_port_delay
+        measurement_delay += dev_input.port_delay or 0.0
+
         measurement_delay_rounded = (
-            self._get_total_rounded_delay_samples(
-                dev_input,
-                SAMPLE_FREQUENCY_HZ,
-                DELAY_NODE_GRANULARITY_SAMPLES,
-                DELAY_NODE_MAX_SAMPLES,
-                measurement.delay,
+            delay_to_rounded_samples(
+                channel=dev_input.channel,
+                dev_repr=self.dev_repr,
+                delay=measurement_delay,
+                sample_frequency_hz=SAMPLE_FREQUENCY_HZ,
+                granularity_samples=DELAY_NODE_GRANULARITY_SAMPLES,
+                max_node_delay_samples=DELAY_NODE_MAX_SAMPLES,
             )
             / SAMPLE_FREQUENCY_HZ
         )

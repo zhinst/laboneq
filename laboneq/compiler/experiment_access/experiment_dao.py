@@ -10,8 +10,8 @@ from typing import List, Optional
 
 from jsonschema import ValidationError
 
+from laboneq._utils import cached_method
 from laboneq.compiler.experiment_access import json_dumper
-from laboneq.compiler.experiment_access.cache import memoize_method
 from laboneq.compiler.experiment_access.device_info import DeviceInfo
 from laboneq.compiler.experiment_access.dsl_loader import DSLLoader
 from laboneq.compiler.experiment_access.json_loader import JsonLoader
@@ -184,7 +184,7 @@ class ExperimentDAO:
             "offset",
         ]
 
-    @memoize_method
+    @cached_method()
     def signal_info(self, signal_id):
         signal_info = self._data["signals"].get(signal_id)
         if signal_info is not None:
@@ -217,7 +217,7 @@ class ExperimentDAO:
     def root_sections(self):
         return self._data["root_sections"]
 
-    @memoize_method
+    @cached_method()
     def _has_near_time_child(self, section_id) -> Optional[str]:
         children = self.direct_section_children(section_id)
         for child in children:
@@ -229,7 +229,7 @@ class ExperimentDAO:
                 return child_contains_nt
         return None
 
-    @memoize_method
+    @cached_method()
     def root_rt_sections(self):
         retval = []
         queue = deque(self.root_sections())
@@ -248,11 +248,11 @@ class ExperimentDAO:
                 queue.extend(self.direct_section_children(candidate))
         return tuple(retval)  # tuple is immutable, so no one can break memoization
 
-    @memoize_method
+    @cached_method()
     def direct_section_children(self, section_id) -> List[str]:
         return self._data["section_tree"].get(section_id, [])
 
-    @memoize_method
+    @cached_method()
     def all_section_children(self, section_id):
         retval = []
 
@@ -263,7 +263,7 @@ class ExperimentDAO:
 
         return set(retval)
 
-    @memoize_method
+    @cached_method()
     def section_parent(self, section_id):
         try:
             return next(
@@ -305,7 +305,7 @@ class ExperimentDAO:
     def section_signals(self, section_id):
         return self._data["section_signals"].get(section_id, set())
 
-    @memoize_method
+    @cached_method()
     def section_signals_with_children(self, section_id):
         retval = set()
         section_with_children = self.all_section_children(section_id)

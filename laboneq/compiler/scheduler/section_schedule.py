@@ -9,13 +9,13 @@ from attrs import define, field
 
 from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.event_type import EventType
-from laboneq.compiler.new_scheduler.interval_schedule import IntervalSchedule
-from laboneq.compiler.new_scheduler.pulse_schedule import PrecompClearSchedule
-from laboneq.compiler.new_scheduler.utils import ceil_to_grid, floor_to_grid
+from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
+from laboneq.compiler.scheduler.pulse_schedule import PrecompClearSchedule
+from laboneq.compiler.scheduler.utils import ceil_to_grid, floor_to_grid
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 
 if TYPE_CHECKING:
-    from laboneq.compiler.new_scheduler.schedule_data import ScheduleData
+    from laboneq.compiler.scheduler.schedule_data import ScheduleData
 
 
 @define(kw_only=True, slots=True)

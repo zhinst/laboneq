@@ -22,3 +22,22 @@ class SimpleProxy:
         if attr in self.__dict__:
             return getattr(self, attr)
         return getattr(self._wrapped_object, attr)
+
+
+class SweepParamsTracker:
+    def __init__(self):
+        self.sweep_param_values: dict[str, float] = {}
+        self.sweep_param_updates: set[str] = set()
+
+    def set_param(self, param: str, value: float):
+        self.sweep_param_values[param] = value
+        self.sweep_param_updates.add(param)
+
+    def updated_params(self) -> set[str]:
+        return self.sweep_param_updates
+
+    def clear_for_next_step(self):
+        self.sweep_param_updates.clear()
+
+    def get_param(self, param: str) -> float:
+        return self.sweep_param_values[param]

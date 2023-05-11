@@ -33,7 +33,6 @@ from laboneq.compiler.common.awg_sampled_event import (
 )
 from laboneq.compiler.common.awg_signal_type import AWGSignalType
 from laboneq.compiler.common.device_type import DeviceType
-from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.common.play_wave_type import PlayWaveType
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.core.exceptions import LabOneQException
@@ -49,6 +48,7 @@ _logger = logging.getLogger(__name__)
 @dataclass
 class _IntervalStartEvent:
     event_type: str
+    signal_id: str
     time: float
     play_wave_id: str
     amplitude: float
@@ -76,6 +76,7 @@ class _IntervalEndEvent:
 class _PlayIntervalData:
     pulse: str
     index: int
+    signal_id: str
     amplitude: float
     channel: int
     oscillator_phase: float
@@ -88,89 +89,6 @@ class _PlayIntervalData:
     state: int
     start_rounding_error: float
     markers: Any
-
-
-def _analyze_oscillator_switch_events(
-    signals: Dict[str, SignalObj],
-    events: List[Dict],
-    sampling_rate: float,
-    granularity: int,
-    delay: float,
-) -> AWGSampledEventSequence:
-    osc_switch_events = AWGSampledEventSequence()
-    hw_oscillators = {
-        signal_id: signals[signal_id].hw_oscillator for signal_id in signals
-    }
-    hw_oscs_values = set(hw_oscillators.values())
-    awg = next(iter(signals.values())).awg
-    device_type = awg.device_type
-    if device_type == DeviceType.HDAWG:
-        if awg.signal_type == AWGSignalType.DOUBLE:
-            # Skip for now. In double mode, 2 oscillators may (?) be active.
-            # todo (PW): Do we support dual HW modulated RF signals?
-            return osc_switch_events
-    if not device_type.supports_oscillator_switching:
-        if len(hw_oscs_values) > 1:
-            raise LabOneQException(
-                f"Attempting to multiplex several HW-modulated signals "
-                f"({', '.join(signals)}) on {device_type.value}, which does not "
-                f"support oscillator switching."
-            )
-    if len(hw_oscs_values) <= 1:
-        return osc_switch_events
-
-    if None in hw_oscs_values:
-        missing_oscillator_signal = next(
-            signal_id for signal_id, osc in hw_oscillators.items() if osc is None
-        )
-        del hw_oscillators[missing_oscillator_signal]
-        other_signals = set(hw_oscillators.keys())
-        raise LabOneQException(
-            f"Attempting to multiplex HW-modulated signal(s) "
-            f"({', '.join(other_signals)}) "
-            f"with signal that is not HW modulated ({missing_oscillator_signal})."
-        )
-
-    active_osc = None
-    active_play_segments = set()
-    current_osc = None
-
-    for event in events:
-        if event.get("signal") not in signals:
-            continue
-        signal_id = event["signal"]
-        event_time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
-        if event["event_type"] == EventType.PLAY_START:
-            if active_osc is not None:
-                raise LabOneQException(
-                    f"Conflicting HW oscillators on signals {', '.join(signals)}"
-                )
-            active_osc = hw_oscillators.get(signal_id)
-            active_play_segments.add(event["chain_element_id"])
-
-            if active_osc != current_osc:
-                current_osc = active_osc
-
-                # Round down to sequencer grid. Collisions with other playback will be
-                # detected downstream when calculating waveform intervals.
-                osc_switch_time = event_time_in_samples // granularity * granularity
-
-                osc_switch_event = AWGEvent(
-                    type=AWGEventType.SWITCH_OSCILLATOR,
-                    start=osc_switch_time,
-                    params={
-                        "oscillator": active_osc,
-                        "signal": signal_id,
-                        "section_name": event["section_name"],
-                        "play_wave_id": event["play_wave_id"],
-                    },
-                )
-                osc_switch_events.add(osc_switch_time, osc_switch_event)
-        elif event["event_type"] == EventType.PLAY_END:
-            active_play_segments.remove(event["chain_element_id"])
-            if len(active_play_segments) == 0:
-                active_osc = None
-    return osc_switch_events
 
 
 def _analyze_branches(events, delay, sampling_rate, playwave_max_hint):
@@ -226,6 +144,7 @@ def _interval_list(events, states, signal_ids, delay, sub_channel):
                     [
                         _IntervalStartEvent(
                             event_type=event["event_type"],
+                            signal_id=cur_signal_id,
                             time=event["time"] + delay,
                             play_wave_id=event["play_wave_id"],
                             amplitude=event["amplitude"],
@@ -264,6 +183,7 @@ def _interval_list(events, states, signal_ids, delay, sub_channel):
                     [
                         _IntervalStartEvent(
                             event_type="DELAY_START",
+                            signal_id=cur_signal_id,
                             time=event["time"] + delay,
                             play_wave_id=None,
                             amplitude=None,
@@ -325,6 +245,7 @@ def _make_interval_tree(
     interval_zip = _interval_list(events, states, signal_ids, delay, sub_channel)
 
     interval_tree = IntervalTree()
+
     for index, (interval_start, interval_end) in enumerate(interval_zip):
         oscillator_phase = interval_start.oscillator_phase
 
@@ -344,10 +265,12 @@ def _make_interval_tree(
                 end_samples,
                 _PlayIntervalData(
                     pulse=interval_start.play_wave_id,
+                    signal_id=interval_start.signal_id,
                     index=index,
                     amplitude=interval_start.amplitude,
                     channel=interval_start.index,
                     oscillator_phase=oscillator_phase,
+                    oscillator_frequency=interval_start.oscillator_frequency,
                     baseband_phase=baseband_phase,
                     phase=interval_start.phase,
                     sub_channel=interval_start.sub_channel,
@@ -355,7 +278,6 @@ def _make_interval_tree(
                     pulse_pulse_parameters=interval_start.pulse_pulse_parameters,
                     state=interval_start.state,
                     start_rounding_error=start_rounding_error,
-                    oscillator_frequency=interval_start.oscillator_frequency,
                     markers=interval_start.markers,
                 ),
             )
@@ -377,48 +299,80 @@ def _make_interval_tree(
 def _oscillator_switch_cut_points(
     interval_tree: IntervalTree,
     signals: Dict[str, SignalObj],
-    events,
-    sampling_rate,
     sample_multiple,
-    delay,
-    other_events: AWGSampledEventSequence,
-) -> AWGSampledEventSequence:
+) -> Tuple[AWGSampledEventSequence, Set]:
     cut_points = set()
-    oscillator_switch_events = _analyze_oscillator_switch_events(
-        signals, events, sampling_rate, sample_multiple, delay
-    )
 
-    other_events.merge(oscillator_switch_events)
-
-    for event_time, other_event_list in other_events.sequence.items():
-        intervals: List[Interval] = [
-            interval
-            for interval in interval_tree.at(event_time)
-            if interval.begin < event_time
-        ]
-
-        if len(intervals) > 0:
-            try:
-                other_event = next(
-                    e
-                    for e in other_event_list
-                    if e.type == AWGEventType.SWITCH_OSCILLATOR
-                )
-                section = other_event.params["section_name"]
-                pulse = other_event.params["play_wave_id"]
-                signal_name = other_event.params["signal"]
-                raise LabOneQException(
-                    f"In section {section}, pulse {pulse}, on signal {signal_name}: "
-                    f"cannot switch oscillator because the event intersects with "
-                    f"other playback."
-                )
-            except StopIteration:
-                pass
-            raise RuntimeError(
-                f"Events {other_event_list} intersect playWave intervals {intervals}"
+    osc_switch_events = AWGSampledEventSequence()
+    hw_oscillators = {
+        signal_id: signals[signal_id].hw_oscillator for signal_id in signals
+    }
+    hw_oscs_values = set(hw_oscillators.values())
+    awg = next(iter(signals.values())).awg
+    device_type = awg.device_type
+    if device_type == DeviceType.HDAWG:
+        if awg.signal_type == AWGSignalType.DOUBLE:
+            # Skip for now. In double mode, 2 oscillators may (?) be active.
+            # todo (PW): Do we support dual HW modulated RF signals?
+            return osc_switch_events, cut_points
+    if not device_type.supports_oscillator_switching:
+        if len(hw_oscs_values) > 1:
+            raise LabOneQException(
+                f"Attempting to multiplex several HW-modulated signals "
+                f"({', '.join(signals)}) on {device_type.value}, which does not "
+                f"support oscillator switching."
             )
-        else:
-            cut_points.add(event_time)
+    if len(hw_oscs_values) <= 1:
+        return osc_switch_events, cut_points
+
+    if None in hw_oscs_values:
+        missing_oscillator_signal = next(
+            signal_id for signal_id, osc in hw_oscillators.items() if osc is None
+        )
+        del hw_oscillators[missing_oscillator_signal]
+        other_signals = set(hw_oscillators.keys())
+        raise LabOneQException(
+            f"Attempting to multiplex HW-modulated signal(s) "
+            f"({', '.join(other_signals)}) "
+            f"with signal that is not HW modulated ({missing_oscillator_signal})."
+        )
+
+    osc_intervals = IntervalTree()
+    for pulse_iv in interval_tree:
+        oscillator = signals[pulse_iv.data.signal_id].hw_oscillator
+        # if there were any pulses w/o HW modulator, we should have returned already
+        assert oscillator is not None
+
+        osc_intervals.addi(
+            # Round down to sequencer grid
+            pulse_iv.begin // sample_multiple * sample_multiple,
+            pulse_iv.end,
+            {
+                "oscillator": oscillator,
+                "signal": pulse_iv.data.signal_id,
+            },
+        )
+
+    def reducer(a, b):
+        if a["oscillator"] != b["oscillator"]:
+            raise LabOneQException(
+                f"Overlapping HW oscillators: "
+                f"'{a['oscillator']}' on signal '{a['signal']}' and "
+                f"'{b['oscillator']}' on signal '{b['signal']}'"
+            )
+        return a
+
+    osc_intervals.merge_overlaps(reducer)
+
+    oscillator_switch_events = AWGSampledEventSequence()
+    for iv in osc_intervals:
+        osc_switch_event = AWGEvent(
+            type=AWGEventType.SWITCH_OSCILLATOR,
+            start=iv.begin,
+            params={"oscillator": iv.data["oscillator"], "signal": iv.data["signal"]},
+        )
+        oscillator_switch_events.add(iv.begin, osc_switch_event)
+        cut_points.add(iv.begin)
 
     return oscillator_switch_events, cut_points
 
@@ -571,19 +525,13 @@ def analyze_play_wave_times(
         events, sampling_rate, sample_multiple, delay, waveform_size_hints
     )
     cut_points.add(sequence_end)
+    cut_points.update(other_events.sequence)
 
     (
         oscillator_switch_events,
         oscillator_switch_cut_points,
-    ) = _oscillator_switch_cut_points(
-        interval_tree,
-        signals,
-        events,
-        sampling_rate,
-        sample_multiple,
-        delay,
-        other_events,
-    )
+    ) = _oscillator_switch_cut_points(interval_tree, signals, sample_multiple)
+
     cut_points.update(oscillator_switch_cut_points)
     oscillator_intervals = _oscillator_intervals(
         signals.values(), oscillator_switch_events, sequence_end

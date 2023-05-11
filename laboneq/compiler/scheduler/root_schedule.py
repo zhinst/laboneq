@@ -4,8 +4,8 @@
 from typing import Dict, Iterator, List
 
 from laboneq.compiler import CompilerSettings
-from laboneq.compiler.new_scheduler.interval_schedule import IntervalSchedule
-from laboneq.compiler.new_scheduler.utils import ceil_to_grid
+from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
+from laboneq.compiler.scheduler.utils import ceil_to_grid
 
 
 class RootSchedule(IntervalSchedule):

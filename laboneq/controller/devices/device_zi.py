@@ -43,7 +43,7 @@ from laboneq.controller.recipe_processor import (
     DeviceRecipeData,
     RecipeData,
 )
-from laboneq.controller.util import LabOneQControllerException
+from laboneq.controller.util import LabOneQControllerException, SweepParamsTracker
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 
@@ -90,6 +90,45 @@ class DeviceQualifier:
     driver: str = None
     server: DaqWrapper = None
     options: DeviceOptions = None
+
+
+def delay_to_rounded_samples(
+    channel: int,
+    dev_repr: str,
+    delay: float,
+    sample_frequency_hz,
+    granularity_samples,
+    max_node_delay_samples,
+) -> int:
+    if delay < 0:
+        raise LabOneQControllerException(
+            f"Negative node delay for device {dev_repr} and channel {channel} specified."
+        )
+
+    delay_samples = delay * sample_frequency_hz
+    # Quantize to granularity and round ties towards zero
+    delay_rounded = (
+        math.ceil(delay_samples / granularity_samples + 0.5) - 1
+    ) * granularity_samples
+
+    if delay_rounded > max_node_delay_samples:
+        raise LabOneQControllerException(
+            f"Maximum delay via {dev_repr}'s node is "
+            + f"{max_node_delay_samples / sample_frequency_hz * 1e9:.2f} ns - for larger "
+            + "values, use the delay_signal property."
+        )
+    if abs(delay_samples - delay_rounded) > 1:
+        _logger.debug(
+            "Node delay %.2f ns of %s, channel %d will be rounded to "
+            "%.2f ns, a multiple of %.0f samples.",
+            delay_samples / sample_frequency_hz * 1e9,
+            dev_repr,
+            channel,
+            delay_rounded / sample_frequency_hz * 1e9,
+            granularity_samples,
+        )
+
+    return delay_rounded
 
 
 class DeviceZI(ABC):
@@ -577,12 +616,14 @@ class DeviceZI(ABC):
         return freq
 
     def collect_prepare_sweep_step_nodes_for_param(
-        self, param: str, value: float
+        self, sweep_params_tracker: SweepParamsTracker
     ) -> list[DaqNodeAction]:
         nodes_to_set: list[DaqNodeAction] = []
         for osc in self._allocated_oscs:
-            if osc.param == param:
-                freq_value = self._adjust_frequency(value)
+            if osc.param in sweep_params_tracker.updated_params():
+                freq_value = self._adjust_frequency(
+                    sweep_params_tracker.get_param(osc.param)
+                )
                 nodes_to_set.append(
                     DaqNodeSetAction(
                         self._daq,
@@ -976,51 +1017,6 @@ class DeviceZI(ABC):
 
     def collect_reset_nodes(self) -> list[DaqNodeAction]:
         return [DaqNodeSetAction(self._daq, f"/{self.serial}/raw/error/clear", 1)]
-
-    def _get_total_rounded_delay_samples(
-        self,
-        port,
-        sample_frequency_hz,
-        granularity_samples,
-        max_node_delay_samples,
-        measurement_delay_samples=0,
-    ):
-        channel = 0
-        if port is not None:
-            if port.port_delay is not None:
-                measurement_delay_samples += port.port_delay * sample_frequency_hz
-                channel = port.channel
-        else:
-            _logger.debug(
-                "Port argument of %s is None, please check whether port delays are as specified.",
-                self.dev_repr,
-            )
-
-        if measurement_delay_samples < 0:
-            raise LabOneQControllerException(
-                f"Negative node delay for device {self.dev_repr} and channel {channel} specified."
-            )
-        # Quantize to granularity and round ties towards zero
-        measurement_delay_rounded = (
-            math.ceil(measurement_delay_samples / granularity_samples + 0.5) - 1
-        ) * granularity_samples
-        if measurement_delay_rounded > max_node_delay_samples:
-            raise LabOneQControllerException(
-                f"Maximum delay via {self.dev_repr}'s node is "
-                + f"{max_node_delay_samples / sample_frequency_hz * 1e9:.2f} ns - for larger "
-                + "values, use the delay_signal property."
-            )
-        if abs(measurement_delay_samples - measurement_delay_rounded) > 1:
-            _logger.debug(
-                "Node delay %.2f ns of %s, channel %d will be rounded to "
-                "%.2f ns, a multiple of %.0f samples.",
-                measurement_delay_samples / sample_frequency_hz * 1e9,
-                self.dev_repr,
-                channel,
-                measurement_delay_rounded / sample_frequency_hz * 1e9,
-                granularity_samples,
-            )
-        return measurement_delay_rounded
 
 
 class ErrorLevels(Enum):

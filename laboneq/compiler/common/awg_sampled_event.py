@@ -26,6 +26,7 @@ class AWGEventType(Enum):
     SWITCH_OSCILLATOR = auto()
     MATCH = auto()
     PLAY_WAVE = auto()
+    PLAY_HOLD = auto()
 
 
 @dataclass

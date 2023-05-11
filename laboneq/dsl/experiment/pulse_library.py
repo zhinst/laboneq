@@ -69,6 +69,7 @@ def register_pulse_functional(sampler: Callable, name: str = None):
         uid: str = None,
         length: float = 100e-9,
         amplitude: float = 1.0,
+        can_compress=False,
         **pulse_parameters: Dict[str, Any],
     ):
         if pulse_parameters == {}:
@@ -79,6 +80,7 @@ def register_pulse_functional(sampler: Callable, name: str = None):
                 length=length,
                 amplitude=amplitude,
                 pulse_parameters=pulse_parameters,
+                can_compress=can_compress,
             )
         else:
             return PulseFunctional(
@@ -87,6 +89,7 @@ def register_pulse_functional(sampler: Callable, name: str = None):
                 length=length,
                 amplitude=amplitude,
                 pulse_parameters=pulse_parameters,
+                can_compress=can_compress,
             )
 
     factory.__name__ = function_name
@@ -244,7 +247,7 @@ def cos2(x, **_):
     return np.cos(x * np.pi / 2) ** 2
 
 
-def sampled_pulse_real(samples, uid=None):
+def sampled_pulse_real(samples, uid=None, can_compress=False):
     """Create a pulse based on a array of real values.
 
     Args:
@@ -255,12 +258,12 @@ def sampled_pulse_real(samples, uid=None):
         Pulse based on the provided sample values.
     """
     if uid is None:
-        return PulseSampledReal(samples=samples)
+        return PulseSampledReal(samples=samples, can_compress=can_compress)
     else:
-        return PulseSampledReal(uid=uid, samples=samples)
+        return PulseSampledReal(uid=uid, samples=samples, can_compress=can_compress)
 
 
-def sampled_pulse_complex(samples, uid=None):
+def sampled_pulse_complex(samples, uid=None, can_compress=False):
     """Create a pulse based on a array of complex values.
 
     Args:
@@ -271,6 +274,6 @@ def sampled_pulse_complex(samples, uid=None):
         Pulse based on the provided sample values.
     """
     if uid is None:
-        return PulseSampledComplex(samples=samples)
+        return PulseSampledComplex(samples=samples, can_compress=can_compress)
     else:
-        return PulseSampledComplex(uid=uid, samples=samples)
+        return PulseSampledComplex(uid=uid, samples=samples, can_compress=can_compress)

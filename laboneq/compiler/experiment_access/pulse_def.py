@@ -18,7 +18,8 @@ class PulseDef:
     amplitude: float
     amplitude_param: str
     play_mode: str
-    samples: Optional[ArrayLike]
+    can_compress: Optional[bool] = False
+    samples: Optional[ArrayLike] = None
 
     @property
     def effective_amplitude(self) -> float:

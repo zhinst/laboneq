@@ -54,6 +54,7 @@ class WaveScroller:
 
         self.processors = {
             Operation.PLAY_WAVE: self._process_play_wave,
+            Operation.PLAY_HOLD: self._process_play_hold,
             Operation.START_QA: self._process_start_qa,
             Operation.SET_TRIGGER: self._process_set_trigger,
             Operation.SET_OSC_FREQ: self._process_set_osc_freq,
@@ -89,6 +90,7 @@ class WaveScroller:
             target_events.add(Operation.START_QA)
         if SimTarget.PLAY in self.sim_targets and not self.is_shfqa:
             target_events.add(Operation.PLAY_WAVE)
+            target_events.add(Operation.PLAY_HOLD)
         if SimTarget.TRIGGER in self.sim_targets:
             target_events.add(Operation.SET_TRIGGER)
         if SimTarget.FREQUENCY in self.sim_targets:
@@ -121,6 +123,12 @@ class WaveScroller:
             wave = wave * ct_abs_amplitude
         wave_start_samples = event.start_samples - snippet_start_samples
         self.wave_snippet[wave_start_samples : wave_start_samples + len(wave)] = wave
+
+    def _process_play_hold(self, event: SeqCEvent, snippet_start_samples: int):
+        wave_start_samples = event.start_samples - snippet_start_samples
+        self.wave_snippet[
+            wave_start_samples : wave_start_samples + event.length_samples
+        ] = self.wave_snippet[wave_start_samples - 1]
 
     def _process_start_qa(self, event: SeqCEvent, snippet_start_samples: int):
         if SimTarget.PLAY in self.sim_targets and self.is_shfqa:

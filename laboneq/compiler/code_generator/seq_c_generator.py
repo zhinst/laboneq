@@ -18,10 +18,10 @@ from laboneq.core.exceptions import LabOneQException
 _logger = logging.getLogger(__name__)
 
 
-MAX_PLAY_ZERO_UHFQA = 131056
-MAX_PLAY_ZERO_HDAWG = 1048560
+MAX_PLAY_ZERO_HOLD_UHFQA = 131056
+MAX_PLAY_ZERO_HOLD_HDAWG = 1048560
 
-MIN_PLAY_ZERO = 512 + 128
+MIN_PLAY_ZERO_HOLD = 512 + 128
 
 
 @functools.lru_cache()
@@ -201,6 +201,87 @@ class SeqCGenerator:
             }
         )
 
+    def _add_play_zero_or_hold(
+        self,
+        num_samples,
+        device_type,
+        fname: str,
+        deferred_calls: Optional[SeqCGenerator] = None,
+    ):
+        if deferred_calls is None:
+            deferred_calls = SeqCGenerator()
+
+        if isinstance(device_type, str):
+            device_type = DeviceType(device_type)
+
+        sample_multiple = device_type.sample_multiple
+        if num_samples % sample_multiple != 0:
+            raise Exception(
+                f"Emitting {fname}({num_samples}), which is not divisible by {sample_multiple}, which it should be for {device_type}"
+            )
+        if num_samples < device_type.min_play_wave:
+            raise LabOneQException(
+                f"Attempting to emit {fname}({num_samples}), which is below the "
+                f"minimum waveform length {device_type.min_play_wave} of device "
+                f"'{device_type.value}' (sample multiple is {device_type.sample_multiple})"
+            )
+        max_play_fun = (
+            MAX_PLAY_ZERO_HOLD_HDAWG
+            if device_type == DeviceType.HDAWG
+            else MAX_PLAY_ZERO_HOLD_UHFQA
+        )
+
+        def statement_factory(samples):
+            self.add_statement(
+                {
+                    "type": f"{fname}",
+                    "device_type": device_type,
+                    "num_samples": samples,
+                }
+            )
+
+        def flush_deferred_calls():
+            self.append_statements_from(deferred_calls)
+            deferred_calls.clear()
+
+        if num_samples <= max_play_fun:
+            statement_factory(num_samples)
+            flush_deferred_calls()
+        elif num_samples <= 2 * max_play_fun:
+            # split in the middle
+            half_samples = (num_samples // 2 // 16) * 16
+            statement_factory(half_samples)
+            flush_deferred_calls()
+            statement_factory(num_samples - half_samples)
+        else:  # non-unrolled loop
+            num_segments, rest = divmod(num_samples, max_play_fun)
+            if 0 < rest < MIN_PLAY_ZERO_HOLD:
+                chunk = (max_play_fun // 2 // 16) * 16
+                statement_factory(chunk)
+                flush_deferred_calls()
+                num_samples -= chunk
+                num_segments, rest = divmod(num_samples, max_play_fun)
+            if rest > 0:
+                statement_factory(rest)
+                flush_deferred_calls()
+            if deferred_calls.num_statements() > 0:
+                statement_factory(max_play_fun)
+                flush_deferred_calls()
+                num_segments -= 1
+            if num_segments == 1:
+                statement_factory(max_play_fun)
+                return
+
+            loop_body = SeqCGenerator()
+            loop_body.add_statement(
+                {
+                    "type": f"{fname}",
+                    "device_type": device_type,
+                    "num_samples": max_play_fun,
+                }
+            )
+            self.add_repeat(num_segments, loop_body)
+
     def add_play_zero_statement(
         self,
         num_samples,
@@ -215,79 +296,27 @@ class SeqCGenerator:
         If deferred_calls is passed, the deferred function calls are cleared in the
         context of the added playZero(s). The passed list will be drained.
         """
-        if deferred_calls is None:
-            deferred_calls = SeqCGenerator()
-
-        if isinstance(device_type, str):
-            device_type = DeviceType(device_type)
-
-        sample_multiple = device_type.sample_multiple
-        if num_samples % sample_multiple != 0:
-            raise Exception(
-                f"Emitting playZero({num_samples}), which is not divisible by {sample_multiple}, which it should be for {device_type}"
-            )
-        if num_samples < device_type.min_play_wave:
-            raise LabOneQException(
-                f"Attempting to emit playZero({num_samples}), which is below the "
-                f"minimum waveform length {device_type.min_play_wave} of device "
-                f"'{device_type.value}' (sample multiple is {device_type.sample_multiple})"
-            )
-        max_play_zero = (
-            MAX_PLAY_ZERO_HDAWG
-            if device_type == DeviceType.HDAWG
-            else MAX_PLAY_ZERO_UHFQA
+        self._add_play_zero_or_hold(
+            num_samples, device_type, "playZero", deferred_calls
         )
 
-        def statement_factory(samples):
-            self.add_statement(
-                {
-                    "type": "playZero",
-                    "device_type": device_type,
-                    "num_samples": samples,
-                }
-            )
+    def add_play_hold_statement(
+        self,
+        num_samples,
+        device_type,
+        deferred_calls: Optional[SeqCGenerator] = None,
+    ):
+        """Add a playHold command
 
-        def flush_deferred_calls():
-            self.append_statements_from(deferred_calls)
-            deferred_calls.clear()
+        If the requested number of samples exceeds the allowed number of samples for
+        a single playHold, a tight loop of playZeros will be emitted.
 
-        if num_samples <= max_play_zero:
-            statement_factory(num_samples)
-            flush_deferred_calls()
-        elif num_samples <= 2 * max_play_zero:
-            # split in the middle
-            half_samples = (num_samples // 2 // 16) * 16
-            statement_factory(half_samples)
-            flush_deferred_calls()
-            statement_factory(num_samples - half_samples)
-        else:  # non-unrolled loop
-            num_segments, rest = divmod(num_samples, max_play_zero)
-            if 0 < rest < MIN_PLAY_ZERO:
-                chunk = (max_play_zero // 2 // 16) * 16
-                statement_factory(chunk)
-                flush_deferred_calls()
-                num_samples -= chunk
-                num_segments, rest = divmod(num_samples, max_play_zero)
-            if rest > 0:
-                statement_factory(rest)
-                flush_deferred_calls()
-            if deferred_calls.num_statements() > 0:
-                statement_factory(max_play_zero)
-                flush_deferred_calls()
-                num_segments -= 1
-            if num_segments == 1:
-                statement_factory(max_play_zero)
-                return
-
-            loop_body = SeqCGenerator()
-            loop_body.add_statement(
-                {
-                    "type": "playZero",
-                    "device_type": device_type,
-                    "num_samples": max_play_zero,
-                }
-            )
-            self.add_repeat(num_segments, loop_body)
+        If deferred_calls is passed, the deferred function calls are cleared in the
+        context of the added playHold(s). The passed list will be drained.
+        """
+        self._add_play_zero_or_hold(
+            num_samples, device_type, "playHold", deferred_calls
+        )
 
     def generate_seq_c(self):
         self._seq_c_text = ""
@@ -364,6 +393,8 @@ class SeqCGenerator:
             self._seq_c_text += "/* " + statement["text"] + " */\n"
         elif statement["type"] == "playZero":
             self._seq_c_text += f"playZero({statement['num_samples']});\n"
+        elif statement["type"] == "playHold":
+            self._seq_c_text += f"playHold({statement['num_samples']});\n"
 
     def _gen_wave_declaration_placeholder(self, statement: SeqCStatement) -> str:
         dual_channel = statement["signal_type"] in ["iq", "double", "multi"]

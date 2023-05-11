@@ -9,6 +9,7 @@ from laboneq.controller.communication import DaqNodeAction, DaqNodeSetAction
 from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.recipe_1_4_0 import Initialization
 from laboneq.controller.recipe_processor import DeviceRecipeData
+from laboneq.controller.util import SweepParamsTracker
 
 
 class DeviceSHFPPC(DeviceZI):
@@ -85,9 +86,14 @@ class DeviceSHFPPC(DeviceZI):
         return nodes_to_set
 
     def collect_prepare_sweep_step_nodes_for_param(
-        self, param: str, value: float
+        self, sweep_params_tracker: SweepParamsTracker
     ) -> list[DaqNodeAction]:
         nodes_to_set: list[DaqNodeAction] = []
-        for path in self._param_to_paths.get(param, []):
-            nodes_to_set.append(DaqNodeSetAction(self._daq, path, value))
+        for param in sweep_params_tracker.updated_params():
+            for path in self._param_to_paths.get(param, []):
+                nodes_to_set.append(
+                    DaqNodeSetAction(
+                        self._daq, path, sweep_params_tracker.get_param(param)
+                    )
+                )
         return nodes_to_set

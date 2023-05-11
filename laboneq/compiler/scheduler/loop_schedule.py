@@ -9,9 +9,9 @@ from attrs import asdict, define
 
 from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.event_type import EventType
-from laboneq.compiler.new_scheduler.loop_iteration_schedule import LoopIterationSchedule
-from laboneq.compiler.new_scheduler.section_schedule import SectionSchedule
-from laboneq.compiler.new_scheduler.utils import ceil_to_grid, lcm
+from laboneq.compiler.scheduler.loop_iteration_schedule import LoopIterationSchedule
+from laboneq.compiler.scheduler.section_schedule import SectionSchedule
+from laboneq.compiler.scheduler.utils import ceil_to_grid, lcm
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.core.types.enums.repetition_mode import RepetitionMode
 

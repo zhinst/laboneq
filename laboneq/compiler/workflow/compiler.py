@@ -19,12 +19,14 @@ from laboneq.compiler.code_generator.measurement_calculator import (
 from laboneq.compiler.common import compiler_settings
 from laboneq.compiler.common.awg_info import AWGInfo, AwgKey
 from laboneq.compiler.common.awg_signal_type import AWGSignalType
-from laboneq.compiler.common.device_type import DeviceType
+from laboneq.compiler.common.device_type import (
+    DeviceType,
+    validate_local_oscillator_frequency,
+)
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.common.trigger_mode import TriggerMode
 from laboneq.compiler.experiment_access.device_info import DeviceInfo
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
-from laboneq.compiler.new_scheduler.scheduler import Scheduler as NewScheduler
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.scheduler.scheduler import Scheduler
 from laboneq.compiler.workflow.precompensation_helpers import (
@@ -34,6 +36,7 @@ from laboneq.compiler.workflow.precompensation_helpers import (
     verify_precompensation_parameters,
 )
 from laboneq.compiler.workflow.recipe_generator import RecipeGenerator
+from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.mixer_type import MixerType
@@ -52,18 +55,13 @@ _AWGMapping = Dict[str, Dict[int, AWGInfo]]
 
 
 class Compiler:
-    Scheduler = Scheduler
-
     def __init__(self, settings: Optional[Dict] = None):
         self._osc_numbering = None
         self._section_grids = {}
         self._experiment_dao: ExperimentDAO = None
         self._settings = compiler_settings.from_dict(settings)
         self._sampling_rate_tracker: SamplingRateTracker = None
-        self.Scheduler = Scheduler
-        if self._settings.USE_EXPERIMENTAL_SCHEDULER:
-            self.Scheduler = NewScheduler
-        self._scheduler: Compiler.Scheduler = None
+        self._scheduler: Scheduler = None
 
         self._leader_properties = LeaderProperties()
         self._clock_settings: Dict[str, Any] = {}
@@ -226,7 +224,13 @@ class Compiler:
         self._signal_objects = self._generate_signal_objects()
         _logger.debug("Processing Sections:::::::")
 
-        self._scheduler = self.Scheduler(
+        if not self._settings.USE_EXPERIMENTAL_SCHEDULER:
+            _logger.warning(
+                "The legacy scheduler has been removed; "
+                "the 'USE_EXPERIMENTAL_SCHEDULER' compiler flag is ignored."
+            )
+
+        self._scheduler = Scheduler(
             self._experiment_dao,
             self._sampling_rate_tracker,
             self._signal_objects,
@@ -641,20 +645,27 @@ class Compiler:
             )
             device_type = DeviceType(signal_info.device_type)
             port_delay = self._experiment_dao.port_delay(signal_id)
+
+            scheduler_port_delay: float = 0.0
             if signal_id in signal_delays:
-                port_delay = (port_delay or 0) + signal_delays[signal_id].on_device
-                if abs(port_delay) < 1e-12:
-                    port_delay = None
+                scheduler_port_delay += signal_delays[signal_id].on_device
             precompensation = self._precompensations[signal_id]
             pc_port_delay = precompensation["computed_port_delay"]
             if pc_port_delay:
-                port_delay = (port_delay or 0) + pc_port_delay
+                scheduler_port_delay += pc_port_delay
 
             base_channel = min(signal_info.channels)
 
             markers = self._experiment_dao.markers_on_signal(signal_id)
 
             triggers = self._experiment_dao.triggers_on_signal(signal_id)
+            if lo_frequency is not None:
+                try:
+                    validate_local_oscillator_frequency(lo_frequency, device_type)
+                except ValueError as error:
+                    raise LabOneQException(
+                        f"Error on signal line '{signal_id}': {error}"
+                    ) from error
 
             for channel in signal_info.channels:
                 output = {
@@ -665,6 +676,7 @@ class Compiler:
                     "range": signal_range,
                     "range_unit": signal_range_unit,
                     "port_delay": port_delay,
+                    "scheduler_port_delay": scheduler_port_delay,
                 }
                 signal_is_modulated = signal_info.modulation
                 output_modulation_logic = {
@@ -777,7 +789,7 @@ class Compiler:
         )
         return retval
 
-    def calc_inputs(self):
+    def calc_inputs(self, signal_delays: SignalDelays):
         all_channels = {}
         for signal_id in self._experiment_dao.signals():
             signal_info = self._experiment_dao.signal_info(signal_id)
@@ -788,7 +800,13 @@ class Compiler:
             signal_range, signal_range_unit = self._experiment_dao.signal_range(
                 signal_id
             )
+
             port_delay = self._experiment_dao.port_delay(signal_id)
+
+            scheduler_port_delay: float = 0.0
+            if signal_id in signal_delays:
+                scheduler_port_delay += signal_delays[signal_id].on_device
+
             for channel in signal_info.channels:
                 input = {
                     "device_id": signal_info.device_id,
@@ -797,6 +815,7 @@ class Compiler:
                     "range": signal_range,
                     "range_unit": signal_range_unit,
                     "port_delay": port_delay,
+                    "scheduler_port_delay": scheduler_port_delay,
                 }
                 channel_key = (signal_info.device_id, channel)
                 # TODO(2K): check for conflicts if 'channel_key' already present in 'all_channels'
@@ -873,7 +892,7 @@ class Compiler:
                     )
                     measurement = measurements[(device_id, awg_nr)]
                 else:
-                    measurement = {"length": None, "delay": 0}
+                    measurement = {"length": None}
 
                     integration_time_info = integration_times.section_info(
                         info["section_name"]
@@ -892,9 +911,6 @@ class Compiler:
                         measurement[
                             "length"
                         ] = signal_info_for_section_and_device_awg.length_in_samples
-                        measurement[
-                            "delay"
-                        ] = signal_info_for_section_and_device_awg.delay_in_samples
                     else:
                         del measurement["length"]
                     _logger.debug(
@@ -939,10 +955,11 @@ class Compiler:
                 output_range=output["range"],
                 output_range_unit=output["range_unit"],
                 port_delay=output["port_delay"],
+                scheduler_port_delay=output["scheduler_port_delay"],
                 marker_mode=output.get("marker_mode"),
             )
 
-        for input in self.calc_inputs():
+        for input in self.calc_inputs(self._code_generator.signal_delays()):
             _logger.debug("Adding input %s", input)
             recipe_generator.add_input(
                 input["device_id"],
@@ -951,6 +968,7 @@ class Compiler:
                 input_range=input["range"],
                 input_range_unit=input["range_unit"],
                 port_delay=input["port_delay"],
+                scheduler_port_delay=input["scheduler_port_delay"],
             )
 
         for device_id, awgs in self._awgs.items():

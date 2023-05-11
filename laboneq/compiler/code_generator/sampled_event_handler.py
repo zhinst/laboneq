@@ -18,6 +18,7 @@ from laboneq.compiler.common.awg_sampled_event import (
     AWGEventType,
     AWGSampledEventSequence,
 )
+from laboneq.compiler.common.compiler_settings import EXECUTETABLEENTRY_LATENCY
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.core.exceptions import LabOneQException
 
@@ -245,6 +246,16 @@ class SampledEventHandler:
                 self.match_parent_event.params["handle"], FeedbackConnection(None)
             ).drive.add(signal_id)
         return True
+
+    def handle_playhold(
+        self,
+        sampled_event: AWGEvent,
+    ):
+        assert self.seqc_tracker.current_time == sampled_event.start
+        self.seqc_tracker.add_play_hold_statement(
+            sampled_event.end - sampled_event.start
+        )
+        self.seqc_tracker.current_time = sampled_event.end
 
     def handle_acquire(self, sampled_event: AWGEvent):
         _logger.debug("  Processing ACQUIRE EVENT %s", sampled_event)
@@ -618,12 +629,18 @@ class SampledEventHandler:
             assert start >= self.seqc_tracker.current_time
             assert start % self.sequencer_step == 0
             self.seqc_tracker.add_required_playzeros(ev)
-            latency = start // self.sequencer_step - self.current_sequencer_step
+            # Subtract the 3 cycles that we added (see match_schedule.py for details)
+            latency = (
+                start // self.sequencer_step
+                - self.current_sequencer_step
+                - EXECUTETABLEENTRY_LATENCY
+            )
             self.seqc_tracker.add_command_table_execution(
                 "QA_DATA_PROCESSED"
                 if ev.params["local"]
                 else "ZSYNC_DATA_PQSC_REGISTER",
-                latency=f"current_seq_step + {latency}",
+                latency="current_seq_step "
+                + (f"+ {latency}" if latency >= 0 else f"- {-latency}"),
                 comment="Match handle " + handle,
             )
             self.seqc_tracker.add_timing_comment(ev.end)
@@ -636,6 +653,8 @@ class SampledEventHandler:
         if signature == AWGEventType.PLAY_WAVE:
             if not self.handle_playwave(sampled_event):
                 return
+        if signature == AWGEventType.PLAY_HOLD:
+            self.handle_playhold(sampled_event)
         elif signature == AWGEventType.ACQUIRE:
             self.handle_acquire(sampled_event)
         elif signature == AWGEventType.QA_EVENT:

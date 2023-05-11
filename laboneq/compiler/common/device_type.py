@@ -25,6 +25,8 @@ class DeviceTraits:
     reset_osc_duration: float = 0.0
     supports_oscillator_switching: bool = False
     lo_frequency_granularity: Optional[float] = None
+    min_lo_frequency: Optional[float] = None
+    max_lo_frequency: Optional[float] = None
 
 
 class DeviceType(DeviceTraits, Enum):
@@ -100,6 +102,8 @@ class DeviceType(DeviceTraits, Enum):
         reset_osc_duration=56e-9,
         lo_frequency_granularity=100e6,
         supports_oscillator_switching=False,
+        min_lo_frequency=1e9,
+        max_lo_frequency=8.5e9,
     )
     SHFSG = DeviceTraits(
         str_value="shfsg",
@@ -119,8 +123,38 @@ class DeviceType(DeviceTraits, Enum):
         reset_osc_duration=56e-9,
         lo_frequency_granularity=100e6,
         supports_oscillator_switching=True,
+        min_lo_frequency=1e9,
+        max_lo_frequency=8.5e9,
     )
 
     def __repr__(self):
         cls_name = self.__class__.__name__
         return f"{cls_name}.{self.name}"
+
+
+def validate_local_oscillator_frequency(value: float, device_type: DeviceType):
+    """Validate correct local oscillator frequencies.
+
+    Raises:
+        ValueError: The value is invalid for given device type.
+    """
+    if device_type.min_lo_frequency is not None:
+        if value < device_type.min_lo_frequency:
+            raise ValueError(
+                f"({device_type}) Local oscillator frequency {value} Hz is smaller than minimum "
+                f"{device_type.min_lo_frequency} Hz."
+            )
+
+    if device_type.max_lo_frequency:
+        if value > device_type.max_lo_frequency:
+            raise ValueError(
+                f"({device_type}) Local oscillator frequency {value} Hz is larger than maximum "
+                f"{device_type.max_lo_frequency} Hz."
+            )
+
+    if device_type.lo_frequency_granularity is not None:
+        if value % device_type.lo_frequency_granularity != 0:
+            raise ValueError(
+                f"({device_type}) Local oscillator frequency {value} "
+                f"(device {device_type}) is not multiple of {device_type.lo_frequency_granularity} Hz."
+            )

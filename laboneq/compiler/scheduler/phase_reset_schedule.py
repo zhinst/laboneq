@@ -8,7 +8,7 @@ from attrs import define
 
 from laboneq.compiler import CompilerSettings
 from laboneq.compiler.common.event_type import EventType
-from laboneq.compiler.new_scheduler.interval_schedule import IntervalSchedule
+from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
 
 
 @define(kw_only=True, slots=True)

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Dict, Iterable, Iterator, List
 
 from attrs import define
@@ -17,14 +18,28 @@ from zhinst.utils.feedback_model import (
 )
 
 from laboneq.compiler import CompilerSettings
+from laboneq.compiler.common.compiler_settings import EXECUTETABLEENTRY_LATENCY
 from laboneq.compiler.common.event_type import EventType
-from laboneq.compiler.new_scheduler.case_schedule import CaseSchedule
-from laboneq.compiler.new_scheduler.section_schedule import SectionSchedule
-from laboneq.compiler.new_scheduler.utils import ceil_to_grid
+from laboneq.compiler.scheduler.case_schedule import CaseSchedule
+from laboneq.compiler.scheduler.section_schedule import SectionSchedule
+from laboneq.compiler.scheduler.utils import ceil_to_grid
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 
 if TYPE_CHECKING:
-    from laboneq.compiler.new_scheduler.schedule_data import ScheduleData
+    from laboneq.compiler.scheduler.schedule_data import ScheduleData
+
+# Temporary corrected timing model
+@dataclass
+class QCCSFeedbackModelPlus(QCCSFeedbackModel):
+    additional_latency: int = 6
+
+    def get_latency(self, length: int) -> int:
+        return super().get_latency(length) + self.additional_latency
+
+
+FeedbackTimingModel = lambda *args, **kwargs: QCCSFeedbackModelPlus(
+    kwargs["description"]
+)
 
 # Copy from device_zi.py (without checks)
 def _get_total_rounded_delay_samples(
@@ -124,7 +139,8 @@ def _compute_start_with_latency(
                 "shfqc": SGType.SHFQC,
             }[sg_device_type.str_value]
 
-        time_of_arrival_at_register = QCCSFeedbackModel(
+        model = FeedbackTimingModel if not local else QCCSFeedbackModel
+        time_of_arrival_at_register = model(
             description=get_feedback_system_description(
                 generator_type=toolkit_sgtype,
                 analyzer_type=toolkit_qatype,
@@ -133,13 +149,24 @@ def _compute_start_with_latency(
             )
         ).get_latency(acquire_end_in_samples)
 
+        # We also add three latency cycles here, which then, in the code generator, will
+        # be subtracted again for the latency argument of executeTableEntry. The reason
+        # is that there is an additional latency of three cycles from the execution
+        # of the command in the sequencer until the arrival of the chosen waveform in
+        # the wave player queue. For now, we look at the time the pulse is played
+        # (arrival time of data in register + 3), which also simplifies phase
+        # calculation for software modulated signals, and take care of subtracting it
+        # later
+
+        time_of_pulse_played = time_of_arrival_at_register + EXECUTETABLEENTRY_LATENCY
+
         sg_seq_rate = schedule_data.sampling_rate_tracker.sequencer_rate_for_device(
             sg_signal_obj.device_id
         )
         sg_seq_dt_for_latency_in_ts = round(
             1 / (2 * sg_seq_rate * schedule_data.TINYSAMPLE)
         )
-        latency_in_ts = time_of_arrival_at_register * sg_seq_dt_for_latency_in_ts
+        latency_in_ts = time_of_pulse_played * sg_seq_dt_for_latency_in_ts
 
         # Calculate the shift of compiler zero time for the SG; we may subtract this
         # from the time of arrival (which is measured since the trigger) to get the

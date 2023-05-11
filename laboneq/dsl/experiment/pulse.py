@@ -45,6 +45,8 @@ class PulseSampledReal(Pulse):
     samples: ArrayLike
     #: Unique identifier of the pulse.
     uid: str = field(default_factory=pulse_id_generator)
+    #: Flag indicating whether the compiler should attempt to compress this pulse
+    can_compress: bool = field(default=False)
 
     def __post_init__(self):
         if not isinstance(self.uid, str):
@@ -71,6 +73,8 @@ class PulseSampledComplex(Pulse):
     samples: ArrayLike
     #: Unique identifier of the pulse.
     uid: str = field(default_factory=pulse_id_generator)
+    #: Flag indicating whether the compiler should attempt to compress this pulse
+    can_compress: bool = field(default=False)
 
     def __post_init__(self):
         if not isinstance(self.uid, str):
@@ -106,6 +110,9 @@ class PulseFunctional(Pulse):
 
     #: Length of the pulse in seconds.
     length: float = field(default=None)
+
+    #: Flag indicating whether the compiler should attempt to compress this pulse
+    can_compress: bool = field(default=False)
 
     #: Optional (re)binding of user pulse parameters
     pulse_parameters: Optional[Dict[str, Any]] = field(default=None)

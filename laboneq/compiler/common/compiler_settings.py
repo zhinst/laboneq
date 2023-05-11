@@ -128,3 +128,6 @@ def from_dict(settings: Optional[Dict] = None) -> CompilerSettings:
         _logger.debug("Setting %s=%s", k, v)
 
     return compiler_settings
+
+
+EXECUTETABLEENTRY_LATENCY = 3

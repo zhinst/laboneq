@@ -9,7 +9,7 @@ from attrs import asdict, define, evolve
 
 from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.event_type import EventType
-from laboneq.compiler.new_scheduler.section_schedule import SectionSchedule
+from laboneq.compiler.scheduler.section_schedule import SectionSchedule
 
 
 @define(kw_only=True, slots=True)

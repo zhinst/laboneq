@@ -20,7 +20,7 @@ pyvisa-py==0.5.3
 black==22.12.0
 pre-commit
 isort>=5.12.0
-flake8==6.0.0
+ruff==0.0.264
 
 # packaging/deployment
 wheel

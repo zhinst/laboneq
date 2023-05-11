@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from laboneq.compiler.common.compiler_settings import CompilerSettings
     from laboneq.compiler.common.signal_obj import SignalObj
     from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
-    from laboneq.compiler.new_scheduler.pulse_schedule import PulseSchedule
+    from laboneq.compiler.scheduler.pulse_schedule import PulseSchedule
     from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 
 

@@ -49,6 +49,11 @@ from laboneq.compiler.code_generator.signatures import (
     WaveformSignature,
 )
 from laboneq.compiler.code_generator.utils import normalize_phase
+from laboneq.compiler.code_generator.wave_compressor import (
+    PlayHold,
+    PlaySamples,
+    WaveCompressor,
+)
 from laboneq.compiler.code_generator.wave_index_tracker import WaveIndexTracker
 from laboneq.compiler.common.awg_info import AWGInfo, AwgKey
 from laboneq.compiler.common.awg_sampled_event import (
@@ -278,6 +283,7 @@ class CodeGenerator:
         self._feedback_connections: Dict[str, FeedbackConnection] = {}
         self._feedback_register_allocator: FeedbackRegisterAllocator = None
         self._total_execution_time = None
+        self._wave_compressor = WaveCompressor()
 
         self.EMIT_TIMING_COMMENTS = self._settings.EMIT_TIMING_COMMENTS
         self.PHASE_RESOLUTION_BITS = self._settings.PHASE_RESOLUTION_BITS
@@ -689,6 +695,143 @@ class CodeGenerator:
 
         return global_sampling_rate, global_delay
 
+    def _emit_new_awg_events(self, old_event, new_events):
+        new_awg_events = []
+        time = old_event.start
+        for new_event in new_events:
+            if isinstance(new_event, PlayHold):
+                new_awg_events.append(
+                    AWGEvent(
+                        type=AWGEventType.PLAY_HOLD,
+                        start=time,
+                        end=time + new_event.num_samples,
+                    )
+                )
+                time += new_event.num_samples
+            if isinstance(new_event, PlaySamples):
+                new_params = copy.deepcopy(old_event.params)
+                new_length = len(next(iter(new_event.samples.values())))
+
+                new_params["playback_signature"].waveform.length = new_length
+
+                assert len(new_params["playback_signature"].waveform.pulses) == 1
+                new_params["playback_signature"].waveform.pulses[0].length = new_length
+                new_params["playback_signature"].waveform.pulses[
+                    0
+                ].pulse += f"_compr_{new_event.label}"
+
+                new_awg_events.append(
+                    AWGEvent(
+                        type=AWGEventType.PLAY_WAVE,
+                        start=time,
+                        end=time + new_length,
+                        params=new_params,
+                    )
+                )
+
+                time += new_length
+        return new_awg_events
+
+    def _compress_waves(
+        self, sampled_events, sampled_signatures, signal_obj, pulse_defs
+    ):
+        compressed_waveform_signatures = set()
+        for event_group in sampled_events.sequence.values():
+            event_replacement = {}
+            for i, event in enumerate(event_group):
+                if event.type == AWGEventType.PLAY_WAVE:
+                    wave_form = event.params["playback_signature"].waveform
+                    if wave_form.pulses[0].pulse not in pulse_defs:
+                        assert (
+                            wave_form.pulses[0].pulse is None
+                            or wave_form.pulses[0].pulse == "dummy_precomp_reset"
+                        )
+                        continue
+                    if not pulse_defs[wave_form.pulses[0].pulse].can_compress:
+                        continue
+                    if len(wave_form.pulses) > 1:
+                        _logger.info(
+                            "Requested to compress wave which features more than one pulse. Skipping compression."
+                        )
+                        continue
+                    sampled_signature = sampled_signatures[wave_form]
+                    sample_dict = {
+                        k: sampled_signature[k]
+                        for k in (
+                            "samples_i",
+                            "samples_q",
+                            "samples_marker1",
+                            "samples_marker2",
+                        )
+                        if k in sampled_signature
+                    }
+                    new_events = self._wave_compressor.compress_wave(
+                        sample_dict, signal_obj.device_type.min_play_wave
+                    )
+                    if new_events is None:
+                        _logger.info(
+                            "Requested to compress pulse %s which has either no, or too short, constant sections. Skipping compression",
+                            wave_form.pulses[0].pulse,
+                        )
+                        continue
+                    event_replacement[i] = new_events
+                    _logger.info(
+                        "Compressing pulse %s using %d PlayWave and %d PlayHold events",
+                        wave_form.pulses[0].pulse,
+                        sum(
+                            1 for event in new_events if isinstance(event, PlaySamples)
+                        ),
+                        sum(1 for event in new_events if isinstance(event, PlayHold)),
+                    )
+            for idx, new_events in event_replacement.items():
+                new_awg_events = self._emit_new_awg_events(event_group[idx], new_events)
+
+                old_event = event_group[idx]
+                event_group[idx : idx + 1] = new_awg_events
+
+                old_waveform = old_event.params["playback_signature"].waveform
+                for new_event, new_awg_event in zip(new_events, new_awg_events):
+                    if new_awg_event.type == AWGEventType.PLAY_WAVE:
+                        new_waveform = new_awg_event.params[
+                            "playback_signature"
+                        ].waveform
+                        new_length = len(next(iter(new_event.samples.values())))
+
+                        old_sampled_signature = self._sampled_signatures[signal_obj.id][
+                            old_waveform
+                        ]
+                        compressed_waveform_signatures.add(old_waveform)
+                        new_sampled_signature = copy.deepcopy(old_sampled_signature)
+
+                        new_sampled_signature = (
+                            new_sampled_signature | new_event.samples
+                        )
+                        new_signature_pulse_map = new_sampled_signature[
+                            "signature_pulse_map"
+                        ]
+
+                        old_pulse_name = old_waveform.pulses[0].pulse
+                        new_pulse_name = new_waveform.pulses[0].pulse
+
+                        new_signature_pulse_map[
+                            new_pulse_name
+                        ] = new_signature_pulse_map.pop(old_pulse_name)
+                        new_signature_pulse_map[
+                            new_pulse_name
+                        ].length_samples = new_length
+
+                        new_signature_pulse_map[new_pulse_name].instances[
+                            0
+                        ].length = new_length
+
+                        self._sampled_signatures[signal_obj.id][
+                            new_waveform
+                        ] = new_sampled_signature
+
+        # evict waveforms that have been compressed, and thus replaced with one or more, shorter, waves
+        for waveform_signature in compressed_waveform_signatures:
+            self._sampled_signatures[signal_obj.id].pop(waveform_signature)
+
     def _gen_seq_c_per_awg(
         self,
         awg: AWGInfo,
@@ -876,6 +1019,14 @@ class CodeGenerator:
 
             self._sampled_signatures[virtual_signal_id] = sampled_signatures
             sampled_events.merge(interval_events)
+
+            self._compress_waves(
+                sampled_events=sampled_events,
+                sampled_signatures=sampled_signatures,
+                signal_obj=signal_obj,
+                pulse_defs=pulse_defs,
+            )
+
             if virtual_signal_id in self._sampled_signatures:
                 for sig, sampled in self._sampled_signatures[virtual_signal_id].items():
                     if not sampled:
@@ -926,6 +1077,13 @@ class CodeGenerator:
 
                 self._sampled_signatures[signal_obj.id] = sampled_signatures
                 sampled_events.merge(interval_events)
+
+                self._compress_waves(
+                    sampled_events=sampled_events,
+                    sampled_signatures=sampled_signatures,
+                    signal_obj=signal_obj,
+                    pulse_defs=pulse_defs,
+                )
 
                 if signal_obj.id in self._sampled_signatures:
                     signature_infos = []
@@ -981,6 +1139,14 @@ class CodeGenerator:
 
             self._sampled_signatures[virtual_signal_id] = sampled_signatures
             sampled_events.merge(interval_events)
+
+            self._compress_waves(
+                sampled_events=sampled_events,
+                sampled_signatures=sampled_signatures,
+                signal_obj=signal_obj,
+                pulse_defs=pulse_defs,
+            )
+
             if virtual_signal_id in self._sampled_signatures:
                 for sig, sampled in self._sampled_signatures[virtual_signal_id].items():
                     if not sampled:
@@ -1370,6 +1536,7 @@ class CodeGenerator:
                         else {k: v for k, v in pulse_pulse_parameters},
                         has_marker1=has_marker1,
                         has_marker2=has_marker2,
+                        can_compress=pulse_def.can_compress,
                     )
                 )
 

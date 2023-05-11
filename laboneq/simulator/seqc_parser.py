@@ -31,6 +31,8 @@ from pycparser.c_ast import (
 )
 from pycparser.c_parser import CParser
 
+from laboneq.compiler.common.compiler_settings import EXECUTETABLEENTRY_LATENCY
+
 if TYPE_CHECKING:
     from laboneq.core.types.compiled_experiment import CompiledExperiment
 
@@ -53,10 +55,9 @@ def precompensation_delay_samples(precompensation):
     if not precompensation_is_nonzero(precompensation):
         return 0
     delay = 72
-    try:
-        delay += 88 * len(precompensation["exponential"])
-    except KeyError:
-        pass
+    exponential = precompensation.get("exponential")
+    if exponential is not None:
+        delay += 88 * len(exponential)
     if precompensation.get("high_pass") is not None:
         delay += 96
     if precompensation.get("bounce") is not None:
@@ -306,6 +307,7 @@ class Operation(Enum):
     SET_TRIGGER = auto()
     SET_PRECOMP_CLEAR = auto()
     WAIT_WAVE = auto()
+    PLAY_HOLD = auto()
 
 
 @dataclass
@@ -440,11 +442,15 @@ class SimpleRuntime:
             "QA_DATA_PROCESSED": 0b1000000000100
             if descriptor.device_type == "SHFSG"
             else 0b10000000100,
+            "ZSYNC_DATA_PQSC_REGISTER": 0b1000000000001
+            if descriptor.device_type == "SHFSG"
+            else 0b10000000001,
         }
         self.exposedFunctions = {
             "assignWaveIndex": self.assignWaveIndex,
             "playWave": self.playWave,
             "playZero": self.playZero,
+            "playHold": self.playHold,
             "executeTableEntry": self.executeTableEntry,
             "startQA": self.startQA,
             "startQAResult": self.startQAResult,
@@ -486,6 +492,7 @@ class SimpleRuntime:
         if ev[-1].operation in [
             Operation.PLAY_WAVE,
             Operation.PLAY_ZERO,
+            Operation.PLAY_HOLD,  # ?
             Operation.WAIT_WAVE,
         ]:
             return ev[-1].start_samples, -1
@@ -639,10 +646,28 @@ class SimpleRuntime:
                 )
             )
 
+    def playHold(self, length):
+        if length > 0:
+            time_samples = self._last_played_sample()
+            self.seqc_simulation.events.append(
+                SeqCEvent(
+                    start_samples=time_samples,
+                    length_samples=length,
+                    operation=Operation.PLAY_HOLD,
+                    args=[],
+                )
+            )
+
     def executeTableEntry(self, ct_index, latency=None):
         QA_DATA_PROCESSED_SG = 0b1000000000100
-        if ct_index == QA_DATA_PROCESSED_SG:
+        ZSYNC_DATA_PQSC_REGISTER_SG = 0b1000000000001
+        ZSYNC_DATA_PQSC_REGISTER_HD = 0b10000000001
+        if ct_index == QA_DATA_PROCESSED_SG or ct_index == ZSYNC_DATA_PQSC_REGISTER_SG:
             assert self.descriptor.device_type == "SHFSG"
+            # todo(JL): Find a better index via the command table offset; take last for now
+            ct_index = self.descriptor.command_table[-1]["index"]
+        elif ct_index == ZSYNC_DATA_PQSC_REGISTER_HD:
+            assert self.descriptor.device_type == "HDAWG"
             # todo(JL): Find a better index via the command table offset; take last for now
             ct_index = self.descriptor.command_table[-1]["index"]
 
@@ -673,11 +698,12 @@ class SimpleRuntime:
 
         if latency is not None:
             time_samples = self._last_played_sample()
-            if latency * 8 < time_samples:
+            corrected_latency = latency + EXECUTETABLEENTRY_LATENCY
+            if corrected_latency * 8 < time_samples:
                 raise RuntimeError(
                     f"ExecuteTableEntry scheduled with latency {latency} before current time {time_samples}"
                 )
-            elif latency * 8 > time_samples:
+            elif corrected_latency * 8 > time_samples:
                 raise RuntimeError(
                     f"Play queue starved at current time {time_samples} for ExecuteTableEntry scheduled with latency {latency}"
                 )
@@ -893,11 +919,6 @@ def analyze_recipe(
     outputs: Dict[str, List[int]] = {}
     seqc_descriptors_from_recipe: Dict[str, SeqCDescriptor] = {}
     for init in recipe["experiment"]["initializations"]:
-        delay = 0
-        if "measurements" in init and len(init["measurements"]) > 0:
-            if "delay" in init["measurements"][0]:
-                delay = init["measurements"][0]["delay"]
-
         device_uid = init["device_uid"]
         device = find_device(recipe, device_uid)
         device_type = device["driver"]
@@ -918,8 +939,16 @@ def analyze_recipe(
                     else:
                         startup_delay = -20e-9
 
+        # TODO(2K): input port_delay previously was not taken into account by the simulator
+        # - keeping it as is for not breaking the tests. To be cleaned up.
+        input_channel_delays: Dict[int, float] = {
+            i["channel"]: i["scheduler_port_delay"]  # + i.get("port_delay", 0.0)
+            for i in init.get("inputs", [])
+        }
+
         output_channel_delays: Dict[int, float] = {
-            o["channel"]: o.get("port_delay", 0.0) for o in init.get("outputs", [])
+            o["channel"]: o["scheduler_port_delay"] + o.get("port_delay", 0.0)
+            for o in init.get("outputs", [])
         }
 
         output_channel_precompensation = {
@@ -932,8 +961,10 @@ def analyze_recipe(
                 seqc = awg["seqc"]
                 awg_nr = awg["awg"]
                 if device_type == "SHFSG" or device_type == "SHFQA":
+                    input_channel = awg_nr
                     output_channels = [awg_nr]
                 else:
+                    input_channel = 2 * awg_nr
                     output_channels = [2 * awg_nr, 2 * awg_nr + 1]
 
                 seqc_descriptors_from_recipe[seqc] = SeqCDescriptor(
@@ -941,7 +972,9 @@ def analyze_recipe(
                     device_uid=device_uid,
                     device_type=device_type,
                     awg_index=awg_index,
-                    measurement_delay_samples=delay,
+                    measurement_delay_samples=round(
+                        input_channel_delays.get(input_channel, 0.0) * sampling_rate
+                    ),
                     startup_delay=startup_delay,
                     sample_multiple=sample_multiple,
                     sampling_rate=sampling_rate,

@@ -123,6 +123,7 @@ class IO(QCCSSchema):
             "lo_frequency",
             "port_mode",
             "port_delay",
+            "scheduler_port_delay",
             "delay_signal",
             "marker_mode",
         )
@@ -143,6 +144,7 @@ class IO(QCCSSchema):
         lo_frequency: Optional[float] = None
         port_mode: Optional[str] = None
         port_delay: Optional[float] = None
+        scheduler_port_delay: float = 0.0
         delay_signal: Optional[float] = None
         marker_mode: Optional[str] = None
 
@@ -159,6 +161,7 @@ class IO(QCCSSchema):
     lo_frequency = fields.Float(required=False)
     port_mode = fields.Str(required=False)
     port_delay = fields.Float(required=False)
+    scheduler_port_delay = fields.Float(required=False)
     delay_signal = fields.Float(required=False)
     marker_mode = fields.Str(required=False)
 
@@ -325,16 +328,14 @@ class Execution(QCCSSchema):
 
 class Measurement(QCCSSchema):
     class Meta:
-        fields = ("length", "delay", "channel")
+        fields = ("length", "channel")
 
     @dataclass
     class Data:
         length: int
-        delay: int
         channel: int = 0
 
     length = fields.Integer()
-    delay = fields.Integer()
     channel = fields.Integer()
 
 

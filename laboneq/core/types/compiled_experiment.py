@@ -34,6 +34,7 @@ class PulseInstance:
     overlaps: List[str] = None
     has_marker1: bool = False
     has_marker2: bool = False
+    can_compress: bool = False
 
 
 @dataclass

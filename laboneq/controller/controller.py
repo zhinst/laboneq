@@ -43,7 +43,7 @@ from laboneq.controller.results import (
     make_acquired_result,
     make_empty_results,
 )
-from laboneq.controller.util import LabOneQControllerException
+from laboneq.controller.util import LabOneQControllerException, SweepParamsTracker
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.core.utilities.replace_pulse import ReplacementType, calc_wave_replacements
@@ -517,6 +517,24 @@ class Controller:
             pulse_or_array: replacement pulse, can be Pulse object or value array
             (see sampled_pulse_* from the pulse library)
         """
+        if isinstance(pulse_uid, str):
+            for waveform in self._recipe_data.compiled.pulse_map[
+                pulse_uid
+            ].waveforms.values():
+                if any([instance.can_compress for instance in waveform.instances]):
+                    _logger.error(
+                        "Pulse replacement on pulses that allow compression not allowed. Pulse %s",
+                        pulse_uid,
+                    )
+                    return
+
+        if hasattr(pulse_uid, "can_compress") and pulse_uid.can_compress:
+            _logger.error(
+                "Pulse replacement on pulses that allow compression not allowed. Pulse %s",
+                pulse_uid.uid,
+            )
+            return
+
         acquisition_type = RtExecutionInfo.get_acquisition_type(
             self._recipe_data.rt_execution_infos
         )
@@ -560,9 +578,7 @@ class Controller:
                     )
                 )
 
-    def _prepare_rt_execution(
-        self, rt_section_uid: str
-    ) -> Tuple[List[DaqNodeAction], AcquisitionType]:
+    def _prepare_rt_execution(self, rt_section_uid: str) -> list[DaqNodeAction]:
         if rt_section_uid is None:
             return [], []  # Old recipe-based execution - skip RT preparation
         rt_execution_info = self._recipe_data.rt_execution_infos[rt_section_uid]
@@ -596,12 +612,13 @@ class Controller:
         def __init__(self, controller: Controller):
             super().__init__(looping_mode=LoopingMode.EXECUTE)
             self.controller = controller
-            self.step_param_nodes = []
-            self.nt_loop_indices: List[int] = []
+            self.user_set_nodes = []
+            self.nt_loop_indices: list[int] = []
+            self.sweep_params_tracker = SweepParamsTracker()
 
         def set_handler(self, path: str, value):
             dev = self.controller._devices.find_by_node_path(path)
-            self.step_param_nodes.append(
+            self.user_set_nodes.append(
                 DaqNodeSetAction(
                     dev._daq, path, value, caching_strategy=CachingStrategy.NO_CACHE
                 )
@@ -627,12 +644,7 @@ class Controller:
             axis_name: str,
             values: npt.ArrayLike,
         ):
-            device_ids = self.controller._recipe_data.param_to_device_map.get(name, [])
-            for device_id in device_ids:
-                device = self.controller._devices.find_by_uid(device_id)
-                self.step_param_nodes.extend(
-                    device.collect_prepare_sweep_step_nodes_for_param(name, value)
-                )
+            self.sweep_params_tracker.set_param(name, value)
 
         def for_loop_handler(
             self, count: int, index: int, loop_type: LoopType, enter: bool
@@ -651,11 +663,28 @@ class Controller:
             enter: bool,
         ):
             if enter:
+                affected_devices: set[str] = set()
+                for param in self.sweep_params_tracker.updated_params():
+                    affected_devices.update(
+                        self.controller._recipe_data.param_to_device_map.get(param, [])
+                    )
+                nt_sweep_nodes: list[DaqNodeAction] = []
+                for device_id in affected_devices:
+                    device = self.controller._devices.find_by_uid(device_id)
+                    nt_sweep_nodes.extend(
+                        device.collect_prepare_sweep_step_nodes_for_param(
+                            self.sweep_params_tracker
+                        )
+                    )
+                self.sweep_params_tracker.clear_for_next_step()
+
                 step_prepare_nodes = self.controller._prepare_rt_execution(
                     rt_section_uid=uid
                 )
-                batch_set([*self.step_param_nodes, *step_prepare_nodes])
-                self.step_param_nodes.clear()
+
+                batch_set([*self.user_set_nodes, *nt_sweep_nodes, *step_prepare_nodes])
+                self.user_set_nodes.clear()
+
                 for retry in range(3):  # Up to 3 retries
                     if retry > 0:
                         _logger.info("Step retry %s of 3...", retry + 1)

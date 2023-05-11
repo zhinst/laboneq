@@ -34,7 +34,6 @@ class SignalIntegrationInfo:
     device_type: Any = field(default=None)
     delay_signal: Any = field(default=None)
     length_in_samples: int = None
-    delay_in_samples: int = None
 
 
 @dataclass(init=True, repr=True, order=True)
@@ -206,11 +205,8 @@ class MeasurementCalculator:
                 )
                 _dlogger.debug("signal_integration_info=%s", signal_integration_info)
                 _dlogger.debug("section_info=%s", section_info)
-                delay_time = signal_integration_info.start - section_info.section_start
 
-                signal_integration_info.delay = delay_time
-                delay_in_samples = round(signal_integration_info.delay * sampling_rate)
-                signal_integration_info.delay_in_samples = delay_in_samples
+                delay_time = signal_integration_info.start - section_info.section_start
 
                 awg_key = (
                     signal_info["device_id"],
@@ -223,9 +219,7 @@ class MeasurementCalculator:
                         "signals": [],
                         "sections": [],
                     }
-                delays_per_awg[awg_key]["delays"].add(
-                    signal_integration_info.delay_in_samples
-                )
+                delays_per_awg[awg_key]["delays"].add(round(delay_time * sampling_rate))
                 delays_per_awg[awg_key]["signals"].append(signal)
                 delays_per_awg[awg_key]["sections"].append(section_name)
                 delays_per_awg[awg_key]["device_type"] = DeviceType(
@@ -371,15 +365,6 @@ class MeasurementCalculator:
 
             except StopIteration:
                 pass
-
-        for k, v in integration_times.items():
-            for signal, section_signal_info in v.items():
-                if signal in signal_delays and section_signal_info.delay is not None:
-                    section_signal_info.delay = signal_delays[signal].on_device
-                    sampling_rate = signal_info["sampling_rate"]
-                    section_signal_info.delay_in_samples = round(
-                        section_signal_info.delay * sampling_rate
-                    )
 
         for k, v in integration_times.items():
             _dlogger.debug("%s:", k)

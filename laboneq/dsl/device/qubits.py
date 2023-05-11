@@ -34,18 +34,20 @@ class QuantumElement(ABC):
 
         Args:
             uid: A unique identifier for the quantum element.
-            logical_signals: A dictionary of logical signals associated with the quantum element.
+            signals: A dictionary of logical signals associated with the quantum element.
             logical_signal_group: A logical signal group associated with the quantum element.
             parameters: A dictionary of parameters associated with the quantum element.
         """
-        if uid is None:
-            self.uid = uuid.uuid4().hex
-        else:
-            self.uid = uid
-        self.signals = {} if signals is None else signals
-
+        self.uid = uuid.uuid4().hex if uid is None else uid
+        self.signals = (
+            {
+                k: (v.uid if isinstance(v, LogicalSignal) else v)
+                for k, v in signals.items()
+            }
+            if signals
+            else {}
+        )
         self._parameters = {} if parameters is None else parameters
-
         if logical_signal_group is not None:
             if signals:
                 raise ValueError("Cannot have both signals and logical signal_group")
@@ -99,7 +101,7 @@ class QuantumElement(ABC):
         Args:
             logical_signal_group: The logical signal group to set for the quantum element.
         """
-        self.signals.update(self._parse_signal(logical_signal_group))
+        self.signals.update(self._parse_signals(logical_signal_group))
 
     def set_parameters(self, parameters: Dict[str, Any]):
         """

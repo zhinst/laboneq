@@ -168,6 +168,106 @@ def plot_simulation(
     plt.show()
 
 
+# general result plotting
+def plot_results(
+    results,
+    phase=False,
+    plot_width=6,
+    plot_height=2,
+):
+    handles = results.acquired_results.keys()
+
+    for handle in handles:
+        axis_name_list = [k for k in results.get_axis_name(handle)]
+        acquired_data = results.get_data(handle)
+        if len(axis_name_list) == 1 and phase is False:
+            axis_grid = results.get_axis(handle)[0]
+            axis_name = results.get_axis_name(handle)[0]
+            plt.figure(figsize=(plot_width, plot_height))
+            plt.plot(axis_grid, np.absolute(acquired_data))
+            plt.xlabel(axis_name)
+            plt.ylabel("Amplitude (a.u.)")
+            plt.title(f"Handle: {handle}")
+            plt.show()
+
+        elif len(axis_name_list) == 1 and phase is True:
+            axis_grid = results.get_axis(handle)[0]
+            axis_name = results.get_axis_name(handle)[0]
+
+            fig, [ax1, ax2] = plt.subplots(2, 1, figsize=(plot_width, plot_height))
+
+            ax1.set_title(f"Handle: {handle}")
+            ax1.plot(axis_grid, abs(acquired_data), ".k")
+            ax2.plot(axis_grid, np.unwrap(np.angle(acquired_data)))
+            ax1.set_ylabel("Amplitude (a.u)")
+            ax2.set_ylabel("$\\phi$ (rad)")
+            ax2.set_xlabel(axis_name)
+            fig.tight_layout()
+            plt.show()
+
+        elif len(axis_name_list) == 2 and phase is False:
+            axis_1 = results.get_axis(handle)[1]
+            axis_1_name = results.get_axis_name(handle)[1]
+            axis_0 = results.get_axis(handle)[0]
+            axis_0_name = results.get_axis_name(handle)[0]
+            data = results.get_data(handle)
+
+            X, Y = np.meshgrid(axis_1, axis_0)
+            fig, ax = plt.subplots(nrows=1, ncols=1, constrained_layout=True)
+
+            CS = ax.contourf(X, Y, np.abs(data), levels=100, cmap="magma")
+            ax.set_title(f"{handle}")
+            ax.set_xlabel(axis_1_name)
+            ax.set_ylabel(axis_0_name)
+            cbar = fig.colorbar(CS)
+            cbar.set_label("Amplitude (a.u.)")
+
+        elif len(axis_name_list) == 2 and phase is True:
+            axis_1 = results.get_axis(handle)[1]
+            axis_1_name = results.get_axis_name(handle)[1]
+            axis_0 = results.get_axis(handle)[0]
+            axis_0_name = results.get_axis_name(handle)[0]
+            data = results.get_data(handle)
+
+            X, Y = np.meshgrid(axis_1, axis_0)
+            fig, ax = plt.subplots(nrows=1, ncols=2, constrained_layout=True)
+
+            CS = ax[0].contourf(X, Y, np.abs(data), levels=100, cmap="magma")
+            plt.suptitle(f"Handle: {handle}")
+            ax[0].set_xlabel(axis_1_name)
+            ax[0].set_ylabel(axis_0_name)
+            cbar = fig.colorbar(CS)
+            cbar.set_label("Amplitude (a.u.)")
+
+            cs2_max_value = (
+                max(
+                    int(np.abs(np.min(np.unwrap(np.angle(data, deg=True))))),
+                    int(np.abs(np.max(np.unwrap(np.angle(data, deg=True))))),
+                )
+                + 1
+            )
+
+            cs2_levels = np.linspace(
+                -cs2_max_value, cs2_max_value, 2 * (cs2_max_value) + 1
+            )
+
+            CS2 = ax[1].contourf(
+                X,
+                Y,
+                np.unwrap(np.angle(data, deg=True)),
+                levels=cs2_levels,
+                cmap="twilight_shifted",
+            )
+            # ax[1].set_title("Phase")
+            ax[1].set_xlabel(axis_1_name)
+            ax[1].set_ylabel(axis_0_name)
+            cbar2 = fig.colorbar(CS2)
+            cbar2.set_label("$\\phi$ (deg)")
+
+        elif len(axis_name_list) > 2:
+            print("Too many dimensions. I don't know how to plot your data!")
+
+
 # 2D plot
 def plot_result_2d(results, handle, mult_axis=None):
     plt.figure()

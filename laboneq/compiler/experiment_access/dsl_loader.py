@@ -818,6 +818,10 @@ class DSLLoader(LoaderBase):
                                 pulse, "amplitude", (float, int, complex)
                             )
 
+                            can_compress = False
+                            if hasattr(pulse, "can_compress"):
+                                can_compress = pulse.can_compress
+
                             self.add_pulse(
                                 pulse.uid,
                                 PulseDef(
@@ -827,6 +831,7 @@ class DSLLoader(LoaderBase):
                                     amplitude=amplitude,
                                     amplitude_param=amplitude_param,
                                     play_mode=None,
+                                    can_compress=can_compress,
                                     samples=samples,
                                 ),
                             )

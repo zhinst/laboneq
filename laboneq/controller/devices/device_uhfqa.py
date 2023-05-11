@@ -14,7 +14,7 @@ from laboneq.controller.communication import (
     DaqNodeGetAction,
     DaqNodeSetAction,
 )
-from laboneq.controller.devices.device_zi import DeviceZI
+from laboneq.controller.devices.device_zi import DeviceZI, delay_to_rounded_samples
 from laboneq.controller.devices.zi_node_monitor import Command, NodeControlBase
 from laboneq.controller.recipe_1_4_0 import IO, Initialization, IntegratorAllocation
 from laboneq.controller.recipe_enums import DIOConfigType
@@ -536,13 +536,20 @@ class DeviceUHFQA(DeviceZI):
                 )
             )
 
-            dev_input = None if inputs is None or len(inputs) == 0 else inputs[0]
-            measurement_delay_rounded = self._get_total_rounded_delay_samples(
-                dev_input,
-                SAMPLE_FREQUENCY_HZ,
-                DELAY_NODE_GRANULARITY_SAMPLES,
-                DELAY_NODE_MAX_SAMPLES,
-                measurement.delay,
+            if inputs is None or len(inputs) == 0:
+                measurement_delay = 0.0
+            else:
+                dev_input = inputs[0]
+                measurement_delay = dev_input.scheduler_port_delay
+                measurement_delay += dev_input.port_delay or 0.0
+
+            measurement_delay_rounded = delay_to_rounded_samples(
+                channel=dev_input.channel,
+                dev_repr=self.dev_repr,
+                delay=measurement_delay,
+                sample_frequency_hz=SAMPLE_FREQUENCY_HZ,
+                granularity_samples=DELAY_NODE_GRANULARITY_SAMPLES,
+                max_node_delay_samples=DELAY_NODE_MAX_SAMPLES,
             )
 
             nodes_to_initialize_measurement.append(

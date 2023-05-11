@@ -8,7 +8,7 @@ from attrs import asdict, define
 from laboneq.compiler import CompilerSettings
 from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.common.play_wave_type import PlayWaveType
-from laboneq.compiler.new_scheduler.section_schedule import SectionSchedule
+from laboneq.compiler.scheduler.section_schedule import SectionSchedule
 
 
 @define(kw_only=True, slots=True)

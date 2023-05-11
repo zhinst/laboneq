@@ -8,7 +8,7 @@ from typing import Dict, Iterator, List, Optional, Set
 from attrs import define, field
 
 from laboneq.compiler.common.compiler_settings import CompilerSettings
-from laboneq.compiler.new_scheduler.utils import lcm
+from laboneq.compiler.scheduler.utils import lcm
 
 # A deferred value is not really optional, but will initialized later; using this alias,
 # we can still use None as sentinel, but express that this property shall not be seen
