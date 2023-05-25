@@ -103,7 +103,7 @@ class Serializer:
             "laboneq.dsl.calibration",
             "laboneq.dsl.device",
             "laboneq.dsl.device.qubits",
-            "laboneq.dsl.device.quops",
+            "laboneq.dsl.device.quantum_operations",
             "laboneq.dsl.device.server",
             "laboneq.dsl.device.servers.data_server",
             "laboneq.core.types.enums",

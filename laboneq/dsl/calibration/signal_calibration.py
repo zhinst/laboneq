@@ -1,8 +1,9 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Optional, Union
 
 from laboneq.core.types.enums import PortMode
 from laboneq.dsl.calibration.amplifier_pump import AmplifierPump
@@ -10,6 +11,7 @@ from laboneq.dsl.calibration.mixer_calibration import MixerCalibration
 from laboneq.dsl.calibration.observable import Observable
 from laboneq.dsl.calibration.oscillator import Oscillator
 from laboneq.dsl.calibration.precompensation import Precompensation
+from laboneq.dsl.parameter import Parameter
 
 
 @dataclass(init=False, order=True)
@@ -20,38 +22,38 @@ class SignalCalibration(Observable):
 
     #: The oscillator assigned to the :class:`~.LogicalSignal`
     #: - determines the frequency and type of modulation for any pulses played back on this line.
-    oscillator: Optional[Oscillator]
+    oscillator: Oscillator | None
     #: The local oscillator assigned to the :class:`~.LogicalSignal`
     #: - sets the center frequency of the playback - only relevant on SHFSG, SHFQA and SHFQC
-    local_oscillator: Optional[Oscillator]
+    local_oscillator: Oscillator | None
     #: Settings to enable the optional mixer calibration correction
     #: - only applies to IQ signals on HDAWG
-    mixer_calibration: Optional[MixerCalibration]
+    mixer_calibration: MixerCalibration | None
     #: Settings to enable signal distortion precomensation
     #: - only applies to HDAWG instruments
-    precompensation: Optional[Precompensation]
+    precompensation: Precompensation | None
     #: An optional delay of all output on this signal.
     #: Works by setting delay nodes on the instruments, and will not be visible in the pulse sheet.
     #: Not currently available on SHFSG output channels.
-    port_delay: Optional[float]
+    port_delay: float | Parameter | None
     #: Allows to switch between amplified high-frequency mode (PortMode.RF)
     #: and direct low_frequency mode (PortMode.LF) on SHFSG output channels.
-    port_mode: Optional[PortMode]
+    port_mode: PortMode | None
     #: Defines an additional global delay on this signal line.
     #: Will be mapped to the waveforms and sequencer code emitted for this logical signal,
     #: and thus visible in the pulse sheet viewer.
-    delay_signal: Optional[float]
+    delay_signal: float | None
     #: Allows to set a constant voltage offset on individual rf lines on the HDAWG.
-    voltage_offset: Optional[float]
+    voltage_offset: float | None
     #: The output or input range setting for the logical signal
-    range: Union[int, float, None]
+    range: int | float | None
     #: The state discrimination threshold
     #: - only relevant for acquisition type signals on UHFQA and SHFQA/SHFQC
-    threshold: Optional[float]
+    threshold: float | None
     #: (Not Implemented) Amplitude multiplying all waveforms played on a signal line
-    amplitude: Optional[float]
-    #: (Not Implemented) Parametric Pump Controller settings
-    amplifier_pump: Optional[AmplifierPump]
+    amplitude: float | Parameter | None
+    #: Parametric Pump Controller settings
+    amplifier_pump: AmplifierPump | None
 
     def __init__(
         self,
@@ -96,7 +98,7 @@ class SignalCalibration(Observable):
         return self._mixer_calibration
 
     @mixer_calibration.setter
-    def mixer_calibration(self, value: Optional[MixerCalibration]):
+    def mixer_calibration(self, value: MixerCalibration | None):
         if value is self._mixer_calibration:
             return
 
@@ -120,7 +122,7 @@ class SignalCalibration(Observable):
         return self._precompensation
 
     @precompensation.setter
-    def precompensation(self, value: Optional[Precompensation]):
+    def precompensation(self, value: Precompensation | None):
         if value is self._precompensation:
             return
 

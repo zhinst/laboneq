@@ -9,6 +9,10 @@ from typing import Any
 
 import numpy as np
 
+from laboneq.controller.attribute_value_tracker import (
+    AttributeName,
+    DeviceAttributesView,
+)
 from laboneq.controller.communication import (
     CachingStrategy,
     DaqNodeAction,
@@ -266,23 +270,6 @@ class DeviceHDAWG(DeviceZI):
             nodes.append((f"sigouts/{output.channel}/offset", output.offset))
             nodes.append((f"awgs/{awg_idx}/single", 1))
 
-            output_delay = output.scheduler_port_delay
-            output_delay += output.port_delay or 0.0
-
-            output_delay_rounded = (
-                delay_to_rounded_samples(
-                    channel=output.channel,
-                    dev_repr=self.dev_repr,
-                    delay=output_delay,
-                    sample_frequency_hz=self._sampling_rate,
-                    granularity_samples=DELAY_NODE_GRANULARITY_SAMPLES,
-                    max_node_delay_samples=DELAY_NODE_MAX_SAMPLES,
-                )
-                / self._sampling_rate
-            )
-
-            nodes.append((f"sigouts/{output.channel}/delay", output_delay_rounded))
-
             awg_ch = output.channel % 2
             iq_idx = output.channel // 2
             iq_gains_mx = device_recipe_data.iq_settings.get(iq_idx, None)
@@ -420,6 +407,44 @@ class DeviceHDAWG(DeviceZI):
 
         return [DaqNodeSetAction(self._daq, f"/{self.serial}/{k}", v) for k, v in nodes]
 
+    def collect_prepare_nt_step_nodes(
+        self, attributes: DeviceAttributesView, recipe_data: RecipeData
+    ) -> list[DaqNodeAction]:
+        nodes_to_set = super().collect_prepare_nt_step_nodes(attributes, recipe_data)
+
+        for ch in range(self._channels):
+            [scheduler_port_delay, port_delay], updated = attributes.resolve(
+                keys=[
+                    (AttributeName.OUTPUT_SCHEDULER_PORT_DELAY, ch),
+                    (AttributeName.OUTPUT_PORT_DELAY, ch),
+                ]
+            )
+            if not updated or scheduler_port_delay is None:
+                continue
+
+            output_delay = scheduler_port_delay + (port_delay or 0.0)
+            output_delay_rounded = (
+                delay_to_rounded_samples(
+                    channel=ch,
+                    dev_repr=self.dev_repr,
+                    delay=output_delay,
+                    sample_frequency_hz=self._sampling_rate,
+                    granularity_samples=DELAY_NODE_GRANULARITY_SAMPLES,
+                    max_node_delay_samples=DELAY_NODE_MAX_SAMPLES,
+                )
+                / self._sampling_rate
+            )
+
+            nodes_to_set.append(
+                DaqNodeSetAction(
+                    daq=self.daq,
+                    path=f"/{self.serial}/sigouts/{ch}/delay",
+                    value=output_delay_rounded,
+                )
+            )
+
+        return nodes_to_set
+
     def wait_for_conditions_to_start(self):
         self._wait_for_node(
             f"/{self.serial}/system/clocks/sampleclock/status", 0, timeout=5
@@ -431,9 +456,6 @@ class DeviceHDAWG(DeviceZI):
         device_specific_initialization_nodes = [
             DaqNodeSetAction(
                 self._daq, f"/{self.serial}/system/awg/oscillatorcontrol", 1
-            ),
-            DaqNodeSetAction(
-                self._daq, f"/{self.serial}/raw/system/awg/runtimechecks/enable", 1
             ),
         ]
 

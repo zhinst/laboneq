@@ -15,15 +15,20 @@ from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
 from math import floor
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Iterator
 from weakref import ReferenceType, ref
 
 import numpy as np
 import zhinst.core
 import zhinst.utils
 from numpy import typing as npt
-from zhinst.core.errors import CoreError as LabOneCoreError  # pylint: disable=E0401
+from zhinst.core.errors import CoreError as LabOneCoreError
 
+from laboneq.controller.attribute_value_tracker import (  # pylint: disable=E0401
+    AttributeName,
+    DeviceAttribute,
+    DeviceAttributesView,
+)
 from laboneq.controller.communication import (
     CachingStrategy,
     DaqNodeAction,
@@ -43,7 +48,7 @@ from laboneq.controller.recipe_processor import (
     DeviceRecipeData,
     RecipeData,
 )
-from laboneq.controller.util import LabOneQControllerException, SweepParamsTracker
+from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 
@@ -257,6 +262,40 @@ class DeviceZI(ABC):
     def is_standalone(self):
         return len(self._uplinks) == 0 and len(self._downlinks) == 0
 
+    def _validate_initialization(self, initialization: Initialization.Data):
+        pass
+
+    def pre_process_attributes(
+        self,
+        initialization: Initialization.Data,
+    ) -> Iterator[DeviceAttribute]:
+        self._validate_initialization(initialization)
+        outputs = initialization.outputs or []
+        for output in outputs:
+            yield DeviceAttribute(
+                name=AttributeName.OUTPUT_SCHEDULER_PORT_DELAY,
+                index=output.channel,
+                value_or_param=output.scheduler_port_delay,
+            )
+            yield DeviceAttribute(
+                name=AttributeName.OUTPUT_PORT_DELAY,
+                index=output.channel,
+                value_or_param=output.port_delay,
+            )
+
+        inputs = initialization.inputs or []
+        for input in inputs:
+            yield DeviceAttribute(
+                name=AttributeName.INPUT_SCHEDULER_PORT_DELAY,
+                index=input.channel,
+                value_or_param=input.scheduler_port_delay,
+            )
+            yield DeviceAttribute(
+                name=AttributeName.INPUT_PORT_DELAY,
+                index=input.channel,
+                value_or_param=input.port_delay,
+            )
+
     def collect_initialization_nodes(
         self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
     ) -> list[DaqNodeAction]:
@@ -410,9 +449,6 @@ class DeviceZI(ABC):
                     f"'{osc_param.id}': {same_id_osc.frequency} != {osc_param.frequency}"
                 )
             same_id_osc.channels.add(osc_param.channel)
-
-    def allocate_params(self, initialization: Initialization.Data):
-        pass
 
     def configure_feedback(self, recipe_data: RecipeData) -> list[DaqNodeAction]:
         return []
@@ -615,22 +651,25 @@ class DeviceZI(ABC):
     def _adjust_frequency(self, freq):
         return freq
 
-    def collect_prepare_sweep_step_nodes_for_param(
-        self, sweep_params_tracker: SweepParamsTracker
+    def collect_prepare_nt_step_nodes(
+        self, attributes: DeviceAttributesView, recipe_data: RecipeData
     ) -> list[DaqNodeAction]:
         nodes_to_set: list[DaqNodeAction] = []
         for osc in self._allocated_oscs:
-            if osc.param in sweep_params_tracker.updated_params():
-                freq_value = self._adjust_frequency(
-                    sweep_params_tracker.get_param(osc.param)
-                )
-                nodes_to_set.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        self._make_osc_path(next(iter(osc.channels)), osc.index),
-                        freq_value,
+            osc_index = recipe_data.oscillator_ids.index(osc.id)
+            [osc_freq], updated = attributes.resolve(
+                keys=[(AttributeName.OSCILLATOR_FREQ, osc_index)]
+            )
+            if updated:
+                osc_freq_adjusted = self._adjust_frequency(osc_freq)
+                for ch in osc.channels:
+                    nodes_to_set.append(
+                        DaqNodeSetAction(
+                            self._daq,
+                            self._make_osc_path(ch, osc.index),
+                            osc_freq_adjusted,
+                        )
                     )
-                )
         return nodes_to_set
 
     @staticmethod
@@ -1019,7 +1058,7 @@ class DeviceZI(ABC):
         return [DaqNodeSetAction(self._daq, f"/{self.serial}/raw/error/clear", 1)]
 
 
-class ErrorLevels(Enum):
+class DeviceErrorSeverity(Enum):
     info = 0
     warning = 1
     error = 2
@@ -1038,7 +1077,7 @@ def check_errors(errors, serial):
                 collected_messages.append(
                     f"Gap detected on AWG core {awg_core}, program counter {program_counter}"
                 )
-            if message["severity"] >= ErrorLevels.error.value:
+            if message["severity"] >= DeviceErrorSeverity.error.value:
                 collected_messages.append(message["message"])
     if len(collected_messages) > 0:
         all_messages = "\n".join(collected_messages)

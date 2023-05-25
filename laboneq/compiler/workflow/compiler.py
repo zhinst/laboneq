@@ -1,6 +1,8 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import copy
 import logging
 import math
@@ -492,12 +494,12 @@ class Compiler:
         return precompensations
 
     def _generate_signal_objects(self):
-        signal_objects = {}
+        signal_objects: dict[str, SignalObj] = {}
 
         @dataclass
         class DelayInfo:
-            port_delay_gen: Optional[float] = None
-            delay_signal_gen: Optional[float] = None
+            port_delay_gen: float | None = None
+            delay_signal_gen: float | None = None
 
         delay_measure_acquire: Dict[AwgKey, DelayInfo] = {}
 
@@ -584,6 +586,9 @@ class Compiler:
                 mixer_type = None
 
             port_delay = self._experiment_dao.port_delay(signal_id)
+            if isinstance(port_delay, str):  # NT sweep param
+                port_delay = math.nan
+
             if signal_type != "integration":
                 delay_info = delay_measure_acquire.setdefault(awg.key, DelayInfo())
                 delay_info.port_delay_gen = port_delay
@@ -659,7 +664,13 @@ class Compiler:
             markers = self._experiment_dao.markers_on_signal(signal_id)
 
             triggers = self._experiment_dao.triggers_on_signal(signal_id)
-            if lo_frequency is not None:
+            if (
+                lo_frequency is not None
+                and not isinstance(lo_frequency, str)
+                and port_mode != "LF"
+            ):
+                # TODO(2K): This validation had to be implemented in the controller
+                # to support swept lo_frequency
                 try:
                     validate_local_oscillator_frequency(lo_frequency, device_type)
                 except ValueError as error:
@@ -677,6 +688,7 @@ class Compiler:
                     "range_unit": signal_range_unit,
                     "port_delay": port_delay,
                     "scheduler_port_delay": scheduler_port_delay,
+                    "amplitude": self._experiment_dao.amplitude(signal_id),
                 }
                 signal_is_modulated = signal_info.modulation
                 output_modulation_logic = {
@@ -957,6 +969,7 @@ class Compiler:
                 port_delay=output["port_delay"],
                 scheduler_port_delay=output["scheduler_port_delay"],
                 marker_mode=output.get("marker_mode"),
+                amplitude=output["amplitude"],
             )
 
         for input in self.calc_inputs(self._code_generator.signal_delays()):

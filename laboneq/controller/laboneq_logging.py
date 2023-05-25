@@ -1,11 +1,14 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+import functools
 import logging
 import logging.config
 import os
 
 import yaml
+
+from laboneq.core.utilities.compressed_formatter import CompressedFormatter
 
 _logger = logging.getLogger(__name__)
 _log_dir = os.path.join("laboneq_output", "log")
@@ -115,6 +118,10 @@ def initialize_logging(performance_log=False, logging_config_dict=None, log_leve
                     if not os.path.isabs(default_filename):
                         handler["filename"] = os.path.join(logdir, default_filename)
         config_source = f"Default inline config in {__name__}"
+        for name, formatter in config["formatters"].items():
+            formatter["()"] = functools.partial(
+                CompressedFormatter, compress=name == "console_formatter"
+            )
 
     logging.config.dictConfig(config)
 

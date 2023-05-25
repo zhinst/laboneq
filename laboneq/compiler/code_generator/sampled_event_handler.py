@@ -182,7 +182,8 @@ class SampledEventHandler:
         )
         sig_string = signature.waveform.signature_string()
         if (
-            all(p.pulse is None for p in signature.waveform.pulses)
+            not signature.waveform.samples
+            and all(p.pulse is None for p in signature.waveform.pulses)
             and self.use_command_table
         ):
             # all-zero pulse is played via play-zero command table entry

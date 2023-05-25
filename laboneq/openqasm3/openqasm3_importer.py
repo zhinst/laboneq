@@ -1,24 +1,23 @@
 # Copyright 2023 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
 import operator
-from collections import deque
 from contextlib import contextmanager
-from typing import Optional, TextIO, Union
+from typing import Any, Optional, TextIO, Union
 
 import openpulse
-import openpulse.ast as ast
+from openpulse import ast
 
 import openqasm3.visitor
 from laboneq.dsl.experiment import Section
 from laboneq.dsl.experiment.utils import id_generator
 from laboneq.openqasm3.expression import eval_expression, eval_lvalue
 from laboneq.openqasm3.gate_store import GateStore
-from laboneq.openqasm3.namespace import Namespace, QubitRef
+from laboneq.openqasm3.namespace import ClassicalRef, NamespaceNest, QubitRef
 from laboneq.openqasm3.openqasm_error import OpenQasmException
-from laboneq.openqasm3.signal_store import SignalStore
+from laboneq.openqasm3.signal_store import SignalLineType, SignalStore
 
 ALLOWED_NODE_TYPES = {
     # quantum logic
@@ -28,6 +27,8 @@ ALLOWED_NODE_TYPES = {
     ast.QuantumGate,
     ast.QuantumReset,
     ast.QubitDeclaration,
+    ast.QuantumMeasurementStatement,
+    ast.QuantumMeasurement,
     # auxiliary
     ast.AliasStatement,
     ast.ClassicalDeclaration,
@@ -63,12 +64,15 @@ ALLOWED_NODE_TYPES = {
 }
 
 
-class AllowedNodeTypesVisitor(openqasm3.visitor.QASMVisitor):
-    def generic_visit(self, node: ast.QASMNode, context=None):
+class MeasurementResult:
+    pass
+
+
+class _AllowedNodeTypesVisitor(openqasm3.visitor.QASMVisitor):
+    def generic_visit(self, node: ast.QASMNode, context: Optional[Any] = None) -> None:
         if type(node) not in ALLOWED_NODE_TYPES:
-            raise OpenQasmException(
-                f"Node type {type(node)} not yet supported", mark=node.span
-            )
+            msg = f"Node type {type(node)} not yet supported"
+            raise OpenQasmException(msg, mark=node.span)
         super().generic_visit(node, context)
 
 
@@ -80,7 +84,7 @@ class OpenQasm3Importer:
         self.signal_store = (
             signal_store if signal_store is not None else SignalStore({})
         )
-        self.scoped_variables = deque([Namespace()])
+        self.scope = NamespaceNest()
 
     def __call__(
         self,
@@ -90,9 +94,8 @@ class OpenQasm3Importer:
         stream: Optional[TextIO] = None,
     ) -> Section:
         if [arg is not None for arg in [text, file, filename, stream]].count(True) != 1:
-            raise ValueError(
-                "Must specify exactly one of text, file, filename, or stream"
-            )
+            msg = "Must specify exactly one of text, file, filename, or stream"
+            raise ValueError(msg)
         if filename:
             with open(filename, "r") as f:
                 return self._import_text(f.read())
@@ -106,7 +109,7 @@ class OpenQasm3Importer:
     def _import_text(self, text) -> Section:
         tree = openpulse.parse(text)
         assert isinstance(tree, ast.Program)
-        AllowedNodeTypesVisitor().visit(tree, None)
+        _AllowedNodeTypesVisitor().visit(tree, None)
         try:
             root = self.transpile(tree, uid_hint="root")
         except OpenQasmException as e:
@@ -117,10 +120,9 @@ class OpenQasm3Importer:
 
     @contextmanager
     def _new_scope(self):
-        parent_namespace = self.scoped_variables[-1]
-        self.scoped_variables.append(Namespace(parent=parent_namespace))
+        self.scope.open()
         yield
-        self.scoped_variables.pop()
+        self.scope.close()
 
     def transpile(self, parent: Union[ast.Program, ast.Box], uid_hint="") -> Section:
         sect = Section(uid=id_generator(uid_hint))
@@ -153,18 +155,19 @@ class OpenQasm3Importer:
                     subsect = self._handle_delay_instruction(child)
                 elif isinstance(child, ast.ClassicalAssignment):
                     self._handle_assignment(child)
+                elif isinstance(child, ast.QuantumMeasurementStatement):
+                    subsect = self._handle_measurement(child)
                 else:
-                    raise OpenQasmException(
-                        f"Statement type {type(child)} not supported",
-                        mark=child.span,
-                    )
-                if subsect is not None:
-                    sect.add(subsect)
+                    msg = f"Statement type {type(child)} not supported"
+                    raise OpenQasmException(msg, mark=child.span)
             except OpenQasmException:
                 raise
             except Exception as e:
+                msg = "Failed to process statement"
                 mark = child.span
-                raise OpenQasmException("Failed to process statement", mark) from e
+                raise OpenQasmException(msg, mark) from e
+            if subsect is not None:
+                sect.add(subsect)
 
         return sect
 
@@ -174,23 +177,21 @@ class OpenQasm3Importer:
             if statement.size is not None:
                 try:
                     size = eval_expression(
-                        statement.size, namespace=self.scoped_variables[-1], type=int
+                        statement.size, namespace=self.scope, type=int
                     )
                 except Exception:
-                    raise OpenQasmException(
-                        "Qubit declaration size must evaluate to an integer.",
-                        mark=statement.span,
-                    )
+                    msg = "Qubit declaration size must evaluate to an integer."
+                    raise OpenQasmException(msg, mark=statement.span)
 
                 # declare the individual qubits...
                 qubits = [
-                    self.scoped_variables[-1].declare_qubit(f"{name}[{i}]")
+                    self.scope.current.declare_qubit(f"{name}[{i}]")
                     for i in range(size)
                 ]
                 # ... as well as a list aliasing them
-                self.scoped_variables[-1].declare_reference(name, qubits)
+                self.scope.current.declare_reference(name, qubits)
             else:
-                self.scoped_variables[-1].declare_qubit(name)
+                self.scope.current.declare_qubit(name)
         except ValueError as e:
             raise OpenQasmException(str(e), mark=statement.span) from e
         except OpenQasmException as e:
@@ -200,49 +201,49 @@ class OpenQasm3Importer:
     def _handle_classical_declaration(self, statement: ast.ClassicalDeclaration):
         name = statement.identifier.name
         if isinstance(statement.type, ast.BitType):
-            value = eval_expression(
-                statement.init_expression, namespace=self.scoped_variables[-1], type=int
-            )
+            if statement.init_expression is not None:
+                value = eval_expression(
+                    statement.init_expression,
+                    namespace=self.scope,
+                    type=int,
+                )
+            else:
+                value = None
             size = statement.type.size
             if size is not None:
-                size = eval_expression(
-                    size, namespace=self.scoped_variables[-1], type=int
-                )
+                size = eval_expression(size, namespace=self.scope, type=int)
 
                 # declare the individual bits...
                 bits = [
-                    self.scoped_variables[-1].declare_classical_value(
-                        f"{name}[{i}]", value=bool((value >> i) & 1)
+                    self.scope.current.declare_classical_value(
+                        f"{name}[{i}]",
+                        value=bool((value >> i) & 1) if value is not None else None,
                     )
                     for i in range(size)
                 ]
                 # ... as well as a list aliasing them
-                self.scoped_variables[-1].declare_reference(name, bits)
+                self.scope.current.declare_reference(name, bits)
             else:
-                self.scoped_variables[-1].declare_classical_value(name, value)
+                self.scope.current.declare_classical_value(name, value)
         else:
-            value = eval_expression(
-                statement.init_expression, namespace=self.scoped_variables[-1]
-            )
-            self.scoped_variables[-1].declare_classical_value(name, value)
+            value = eval_expression(statement.init_expression, namespace=self.scope)
+            self.scope.current.declare_classical_value(name, value)
 
     def _handle_alias_statement(self, statement: ast.AliasStatement):
         if not isinstance(statement.target, ast.Identifier):
-            raise OpenQasmException(
-                "Alias target must be an identifier.", mark=statement.span
-            )
+            msg = "Alias target must be an identifier."
+            raise OpenQasmException(msg, mark=statement.span)
         name = statement.target.name
 
         try:
-            value = eval_lvalue(statement.value, namespace=self.scoped_variables[-1])
+            value = eval_lvalue(statement.value, namespace=self.scope)
         except OpenQasmException:
             raise
         except Exception as e:
-            raise OpenQasmException(
-                "Invalid alias value", mark=statement.value.span
-            ) from e
+            msg = "Invalid alias value"
+            raise OpenQasmException(msg, mark=statement.value.span) from e
         try:
-            self.scoped_variables[-1].declare_reference(name, value)
+            self.scope.current.declare_reference(name, value)
         except OpenQasmException as e:
             e.mark = statement.span
             raise
@@ -250,32 +251,26 @@ class OpenQasm3Importer:
     def _handle_quantum_gate(self, statement: ast.QuantumGate):
         args = tuple(eval_expression(arg) for arg in statement.arguments)
         if statement.modifiers or statement.duration:
-            raise OpenQasmException(
-                "Gate modifiers and duration not yet supported.",
-                mark=statement.span,
-            )
+            msg = "Gate modifiers and duration not yet supported."
+            raise OpenQasmException(msg, mark=statement.span)
         if not isinstance(statement.name, ast.Identifier):
-            raise OpenQasmException(
-                "Gate name must be an identifier.", mark=statement.span
-            )
+            msg = "Gate name must be an identifier."
+            raise OpenQasmException(msg, mark=statement.span)
         name = statement.name.name
         qubit_names = []
         for q in statement.qubits:
-            qubit = eval_expression(q, namespace=self.scoped_variables[-1])
+            qubit = eval_expression(q, namespace=self.scope)
             try:
                 qubit_names.append(qubit.canonical_name)
             except AttributeError as e:
-                raise OpenQasmException(
-                    f"Qubit expected, got '{type(qubit).__name__}'", mark=q.span
-                ) from e
+                msg = f"Qubit expected, got '{type(qubit).__name__}'"
+                raise OpenQasmException(msg, mark=q.span) from e
         qubit_names = tuple(qubit_names)
         try:
             return self.gate_store.lookup_gate(name, qubit_names, args=args)
         except KeyError as e:
-            raise OpenQasmException(
-                f"Gate '{name}' for qubit(s) {qubit_names} not found.",
-                mark=statement.span,
-            ) from e
+            msg = f"Gate '{name}' for qubit(s) {qubit_names} not found."
+            raise OpenQasmException(msg, mark=statement.span) from e
 
     def _handle_box(self, statement: ast.Box):
         if statement.duration:
@@ -286,7 +281,7 @@ class OpenQasm3Importer:
     def _handle_barrier(self, statement: ast.QuantumBarrier):
         sect = Section(uid=id_generator("barrier"), length=0)
         reserved_qubits = [
-            eval_expression(qubit, namespace=self.scoped_variables[-1]).canonical_name
+            eval_expression(qubit, namespace=self.scope).canonical_name
             for qubit in statement.qubits
         ]
         reserved_signals = set()
@@ -301,33 +296,27 @@ class OpenQasm3Importer:
             sect.reserve(exp_signal)
         return sect
 
-    def _handle_include(self, statement: ast.Include):
+    def _handle_include(self, statement: ast.Include) -> None:
         if statement.filename != "stdgates.inc":
-            raise OpenQasmException(
-                f"Only 'stdgates.inc' is supported for include, found '{statement.filename}'.",
-                mark=statement.span,
-            )
+            msg = f"Only 'stdgates.inc' is supported for include, found '{statement.filename}'."
+            raise OpenQasmException(msg, mark=statement.span)
 
     def _handle_quantum_reset(self, statement: ast.QuantumReset):
         # Although ``qubits`` is plural, only a single qubit is allowed.
         qubit_name = eval_expression(
-            statement.qubits, namespace=self.scoped_variables[-1]
+            statement.qubits, namespace=self.scope
         ).canonical_name
         try:
             return self.gate_store.lookup_gate("reset", (qubit_name,))
         except KeyError as e:
-            raise OpenQasmException(
-                f"Reset gate for qubit '{qubit_name}' not found.",
-                mark=statement.span,
-            ) from e
+            msg = f"Reset gate for qubit '{qubit_name}' not found."
+            raise OpenQasmException(msg, mark=statement.span) from e
 
     def _handle_delay_instruction(self, statement: ast.DelayInstruction):
         qubits = statement.qubits
-        duration = eval_expression(
-            statement.duration, namespace=self.scoped_variables[-1], type=float
-        )
+        duration = eval_expression(statement.duration, namespace=self.scope, type=float)
         qubit_names = [
-            eval_expression(qubit, namespace=self.scoped_variables[-1]).canonical_name
+            eval_expression(qubit, namespace=self.scope).canonical_name
             for qubit in qubits
         ]
         qubits_str = "_".join(qubit_names)
@@ -335,14 +324,17 @@ class OpenQasm3Importer:
             uid=id_generator(f"{qubits_str}_delay_{duration * 1e9:.0f}ns")
         )
         for qubit in qubit_names:
-            # todo: TBD only delaying drive signal?
-            delay_section.delay(signal=f"{qubit}_drive", time=duration)
+            for signal in self.signal_store.user_map[qubit]:
+                if signal.signal_type != SignalLineType.DRIVE:
+                    continue
+                delay_section.delay(signal.exp_signal, time=duration)
         return delay_section
 
     def _handle_assignment(self, statement: ast.ClassicalAssignment):
-        lvalue = eval_lvalue(statement.lvalue, self.scoped_variables[-1])
+        lvalue = eval_lvalue(statement.lvalue, namespace=self.scope)
         if isinstance(lvalue, QubitRef):
-            raise OpenQasmException(f"Cannot assign to qubit '{lvalue.canonical_name}'")
+            msg = f"Cannot assign to qubit '{lvalue.canonical_name}'"
+            raise OpenQasmException(msg)
         if isinstance(lvalue, list):
             raise OpenQasmException("Cannot assign to arrays")
         ops = {
@@ -355,8 +347,50 @@ class OpenQasm3Importer:
         try:
             op = ops[statement.op.name]
         except KeyError as e:
-            raise OpenQasmException(
-                "Unsupported assignment operator", mark=statement.span
-            ) from e
-        rvalue = eval_expression(statement.rvalue, namespace=self.scoped_variables[-1])
+            msg = "Unsupported assignment operator"
+            raise OpenQasmException(msg, mark=statement.span) from e
+        rvalue = eval_expression(statement.rvalue, namespace=self.scope)
         lvalue.value = op(lvalue.value, rvalue)
+
+    def _handle_measurement(self, statement: ast.QuantumMeasurementStatement):
+        qubits = eval_expression(statement.measure.qubit, namespace=self.scope)
+        bits = statement.target
+        if bits is None:
+            raise OpenQasmException(
+                "Measurement must be assigned to a classical bit", mark=statement.span
+            )
+        bits = eval_lvalue(statement.target, namespace=self.scope)
+        if isinstance(qubits, list):
+            err_msg = None
+            if not isinstance(bits, list):
+                err_msg = "Both bits and qubits must be either scalar or registers."
+            if not len(bits) == len(qubits):
+                err_msg = "Bit and qubit registers must be same length"
+            if err_msg is not None:
+                raise OpenQasmException(err_msg, statement.span)
+        else:
+            bits = [bits]
+            qubits = [qubits]
+
+        assert all(isinstance(q, QubitRef) for q in qubits)
+        assert all(isinstance(b, ClassicalRef) for b in bits)
+
+        # Build the section
+        s = Section(uid=id_generator("measurement"))
+        for q, b in zip(qubits, bits):
+            handle_name = b.canonical_name
+            qubit_name = q.canonical_name
+            try:
+                gate_section = self.gate_store.lookup_gate(
+                    "measure", (qubit_name,), kwargs={"handle": handle_name}
+                )
+            except KeyError as e:
+                raise OpenQasmException(
+                    f"No measurement operation defined for qubit '{qubit_name}'",
+                    mark=statement.span,
+                ) from e
+            s.add(gate_section)
+
+            # Set the bit to a special value to disallow compile time arithmetic
+            b.value = MeasurementResult()
+        return s

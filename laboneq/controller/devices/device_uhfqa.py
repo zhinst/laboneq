@@ -8,6 +8,10 @@ from typing import Any
 
 import numpy as np
 
+from laboneq.controller.attribute_value_tracker import (
+    AttributeName,
+    DeviceAttributesView,
+)
 from laboneq.controller.communication import (
     CachingStrategy,
     DaqNodeAction,
@@ -282,6 +286,19 @@ class DeviceUHFQA(DeviceZI):
                 range_list,
             )
 
+    def _validate_initialization(self, initialization: Initialization.Data):
+        super()._validate_initialization(initialization)
+        outputs = initialization.outputs or []
+        for output in outputs:
+            if output.port_delay is not None:
+                if output.port_delay != 0:
+                    raise LabOneQControllerException(
+                        f"{self.dev_repr}'s output does not support port delay"
+                    )
+                _logger.debug(
+                    "%s's output port delay should be set to None, not 0", self.dev_repr
+                )
+
     def collect_initialization_nodes(
         self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
     ) -> list[DaqNodeAction]:
@@ -341,15 +358,6 @@ class DeviceUHFQA(DeviceZI):
                 )
             )
 
-            if output.port_delay is not None:
-                if output.port_delay != 0:
-                    raise LabOneQControllerException(
-                        f"{self.dev_repr}'s output does not support port delay"
-                    )
-                _logger.debug(
-                    "%s's output port delay should be set to None, not 0", self.dev_repr
-                )
-
             if output.range is not None:
                 self._validate_range(output, is_out=True)
                 nodes_to_initialize_output.append(
@@ -361,6 +369,41 @@ class DeviceUHFQA(DeviceZI):
                 )
 
         return nodes_to_initialize_output
+
+    def collect_prepare_nt_step_nodes(
+        self, attributes: DeviceAttributesView, recipe_data: RecipeData
+    ) -> list[DaqNodeAction]:
+        nodes_to_set = super().collect_prepare_nt_step_nodes(attributes, recipe_data)
+
+        for ch in range(self._channels):
+            [scheduler_port_delay, port_delay], updated = attributes.resolve(
+                keys=[
+                    (AttributeName.INPUT_SCHEDULER_PORT_DELAY, ch),
+                    (AttributeName.INPUT_PORT_DELAY, ch),
+                ]
+            )
+            if not updated or scheduler_port_delay is None:
+                continue
+
+            measurement_delay = scheduler_port_delay + (port_delay or 0.0)
+            measurement_delay_rounded = delay_to_rounded_samples(
+                channel=ch,
+                dev_repr=self.dev_repr,
+                delay=measurement_delay,
+                sample_frequency_hz=SAMPLE_FREQUENCY_HZ,
+                granularity_samples=DELAY_NODE_GRANULARITY_SAMPLES,
+                max_node_delay_samples=DELAY_NODE_MAX_SAMPLES,
+            )
+
+            nodes_to_set.append(
+                DaqNodeSetAction(
+                    self._daq,
+                    f"/{self.serial}/qas/0/delay",
+                    measurement_delay_rounded,
+                )
+            )
+
+        return nodes_to_set
 
     def _adjust_frequency(self, freq):
         # To make the phase correct on the UHFQA (q leading i channel by 90 degrees)
@@ -533,28 +576,6 @@ class DeviceUHFQA(DeviceZI):
                     self._daq,
                     f"/{self.serial}/qas/0/integration/length",
                     measurement.length,
-                )
-            )
-
-            if inputs is None or len(inputs) == 0:
-                measurement_delay = 0.0
-            else:
-                dev_input = inputs[0]
-                measurement_delay = dev_input.scheduler_port_delay
-                measurement_delay += dev_input.port_delay or 0.0
-
-            measurement_delay_rounded = delay_to_rounded_samples(
-                channel=dev_input.channel,
-                dev_repr=self.dev_repr,
-                delay=measurement_delay,
-                sample_frequency_hz=SAMPLE_FREQUENCY_HZ,
-                granularity_samples=DELAY_NODE_GRANULARITY_SAMPLES,
-                max_node_delay_samples=DELAY_NODE_MAX_SAMPLES,
-            )
-
-            nodes_to_initialize_measurement.append(
-                DaqNodeSetAction(
-                    self._daq, f"/{self.serial}/qas/0/delay", measurement_delay_rounded
                 )
             )
 

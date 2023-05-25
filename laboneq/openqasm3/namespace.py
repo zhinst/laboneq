@@ -23,12 +23,12 @@ class ClassicalRef:
 
 
 class Namespace:
-    def __init__(self, parent: Optional = None):
-        self.parent = parent
-        self.local_scope = {}
+    def __init__(self, toplevel: Optional[bool] = True):
+        self.toplevel = toplevel
+        self.local_scope: dict[str, Any] = {}
 
     def declare_qubit(self, name: str) -> QubitRef:
-        if self.parent is not None:
+        if self.toplevel is False:
             raise OpenQasmException("Qubit declaration is illegal in this scope")
 
         if name not in self.local_scope:
@@ -37,7 +37,9 @@ class Namespace:
             raise OpenQasmException(f"Name '{name}' already exists")
         return self.local_scope[name]
 
-    def declare_classical_value(self, name: str, value: Any) -> ClassicalRef:
+    def declare_classical_value(
+        self, name: str, value: Any
+    ) -> ClassicalRef | list[ClassicalRef]:
         # For now, classical values are not resources which we 'allocate'.
         # Instead we treat them as references (to Python objects).
         return self.declare_reference(name, value)
@@ -55,12 +57,31 @@ class Namespace:
             raise OpenQasmException(f"Name '{name}' already exists")
         return self.local_scope[name]
 
+
+class NamespaceNest:
+    """A stack of namespaces, with the the current namespace on top.
+
+    The attribute `current` can be used to add variables to the deepest nesting.
+    """
+
+    def __init__(self):
+        self._nesting = [Namespace(toplevel=True)]
+
+    def open(self) -> None:
+        self._nesting.append(Namespace(toplevel=False))
+
+    def close(self) -> None:
+        self._nesting.pop()
+
+    @property
+    def current(self) -> Namespace:
+        return self._nesting[-1]
+
     def lookup(
         self, name: str
-    ) -> QubitRef | ClassicalRef | list[ClassicalRef] | list[QubitRef]:
-        if name in self.local_scope:
-            return self.local_scope[name]
-        elif self.parent is not None:
-            return self.parent.lookup(name)
+    ) -> QubitRef | ClassicalRef | list[QubitRef] | list[ClassicalRef]:
+        for namespace in reversed(self._nesting):
+            if name in namespace.local_scope:
+                return namespace.local_scope[name]
         else:
             raise KeyError(name)

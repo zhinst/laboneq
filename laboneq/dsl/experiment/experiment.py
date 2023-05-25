@@ -838,7 +838,7 @@ class Experiment:
         self,
         handle: str,
         uid: str = None,
-        play_after: str | List[str] | type(None) = None,
+        play_after: str | list[str] | None = None,
     ):
         """Define a section which switches between different child sections based
         on a QA measurement on an SHFQC.
@@ -866,7 +866,7 @@ class Experiment:
         self,
         handle: str,
         uid: str = None,
-        play_after: str | List[str] | type(None) = None,
+        play_after: str | list[str] | None = None,
     ):
         """Define a section which switches between different child sections based
         on a QA measurement via the PQSC.
@@ -920,7 +920,7 @@ class Experiment:
         self,
         handle: str,
         uid: str = None,
-        play_after: str | List[str] | type(None) = None,
+        play_after: str | list[str] | None = None,
     ):
         """Define a section which switches between different child sections based
         on a QA measurement.

@@ -142,7 +142,7 @@ class DeviceCollection:
                 conditions={n.path: n.value for n in filter_responses(dev_nodes)},
             )
 
-        if len(set_nodes) is None:
+        if not set_nodes:
             return
 
         batch_set(set_nodes)

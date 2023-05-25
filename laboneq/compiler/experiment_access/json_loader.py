@@ -198,6 +198,7 @@ class JsonLoader(LoaderBase):
                     "delay_signal": delay_signal,
                     "port_mode": None,
                     "threshold": None,
+                    "amplitude": None,
                     "amplifier_pump": None,
                 },
             )

@@ -10,6 +10,11 @@ from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Set, Tupl
 import numpy as np
 from numpy import typing as npt
 
+from laboneq.controller.attribute_value_tracker import (
+    AttributeName,
+    AttributeValueTracker,
+    DeviceAttribute,
+)
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
@@ -28,6 +33,7 @@ from .recipe_1_4_0 import Initialization, Recipe
 from .recipe_enums import SignalType
 
 if TYPE_CHECKING:
+    from laboneq.controller.devices.device_collection import DeviceCollection
     from laboneq.core.types import CompiledExperiment
 
 
@@ -127,7 +133,8 @@ class RecipeData:
     rt_execution_infos: RtExecutionInfos
     device_settings: DeviceSettings
     awg_configs: AwgConfigs
-    param_to_device_map: Dict[str, List[str]]
+    attribute_value_tracker: AttributeValueTracker
+    oscillator_ids: list[str]
 
     @property
     def initializations(self) -> Iterator[Initialization.Data]:
@@ -465,25 +472,49 @@ def _calculate_awg_configs(
     return awg_configs
 
 
-def _pre_process_params(
-    experiment: RecipeExperiment.Data,
-) -> Dict[str, Set[str]]:
-    param_to_device_map: Dict[str, Set[str]] = defaultdict(set)
+def _pre_process_attributes(
+    experiment: RecipeExperiment.Data, devices: DeviceCollection
+) -> tuple[AttributeValueTracker, list[str]]:
+    attribute_value_tracker = AttributeValueTracker()
+    oscillator_ids: list[str] = []
+    oscillators_check: dict[str, str | float] = {}
 
-    oscillator_params = experiment.oscillator_params
-    for oscillator_param in oscillator_params:
-        param_to_device_map[oscillator_param.param].add(oscillator_param.device_id)
+    for oscillator_param in experiment.oscillator_params:
+        value_or_param = oscillator_param.param or oscillator_param.frequency
+        if oscillator_param.id in oscillator_ids:
+            osc_index = oscillator_ids.index(oscillator_param.id)
+            if oscillators_check[oscillator_param.id] != value_or_param:
+                raise LabOneQControllerException(
+                    f"Conflicting specifications for the same oscillator id '{oscillator_param.id}' "
+                    f"in the recipe: '{oscillators_check[oscillator_param.id]}' != '{value_or_param}'"
+                )
+        else:
+            osc_index = len(oscillator_ids)
+            oscillator_ids.append(oscillator_param.id)
+            oscillators_check[oscillator_param.id] = value_or_param
+        attribute_value_tracker.add_attribute(
+            device_uid=oscillator_param.device_id,
+            attribute=DeviceAttribute(
+                name=AttributeName.OSCILLATOR_FREQ,
+                index=osc_index,
+                value_or_param=value_or_param,
+            ),
+        )
 
     for initialization in experiment.initializations:
-        ppchannels = initialization.ppchannels or {}
-        for settings in ppchannels.values():
-            for key in ["pump_freq", "pump_power", "probe_frequency", "probe_power"]:
-                if isinstance(settings[key], str):
-                    param_to_device_map[settings[key]].add(initialization.device_uid)
-    return param_to_device_map
+        device = devices.find_by_uid(initialization.device_uid)
+        for attribute in device.pre_process_attributes(initialization):
+            attribute_value_tracker.add_attribute(
+                device_uid=initialization.device_uid,
+                attribute=attribute,
+            )
+
+    return attribute_value_tracker, oscillator_ids
 
 
-def pre_process_compiled(compiled_experiment: CompiledExperiment) -> RecipeData:
+def pre_process_compiled(
+    compiled_experiment: CompiledExperiment, devices: DeviceCollection
+) -> RecipeData:
     recipe: Recipe.Data = Recipe().load(compiled_experiment.recipe)
 
     device_settings: DeviceSettings = defaultdict(DeviceRecipeData)
@@ -495,7 +526,9 @@ def pre_process_compiled(compiled_experiment: CompiledExperiment) -> RecipeData:
     execution = ExecutionFactoryFromExperiment().make(compiled_experiment.experiment)
     result_shapes, rt_execution_infos = _calculate_result_shapes(execution)
     awg_configs = _calculate_awg_configs(rt_execution_infos, recipe.experiment)
-    param_to_device_map = _pre_process_params(recipe.experiment)
+    attribute_value_tracker, oscillator_ids = _pre_process_attributes(
+        recipe.experiment, devices
+    )
 
     recipe_data = RecipeData(
         compiled=compiled_experiment,
@@ -505,7 +538,8 @@ def pre_process_compiled(compiled_experiment: CompiledExperiment) -> RecipeData:
         rt_execution_infos=rt_execution_infos,
         device_settings=device_settings,
         awg_configs=awg_configs,
-        param_to_device_map=param_to_device_map,
+        attribute_value_tracker=attribute_value_tracker,
+        oscillator_ids=oscillator_ids,
     )
 
     return recipe_data

@@ -3,9 +3,10 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Dict, Iterable, Iterator, List
+from typing import TYPE_CHECKING, Dict, Iterable, Iterator, List, Tuple
 
 from attrs import define
 from zhinst.utils.feedback_model import (
@@ -24,9 +25,12 @@ from laboneq.compiler.scheduler.case_schedule import CaseSchedule
 from laboneq.compiler.scheduler.section_schedule import SectionSchedule
 from laboneq.compiler.scheduler.utils import ceil_to_grid
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
+from laboneq.core.utilities.compressed_formatter import CompressableLogEntry
 
 if TYPE_CHECKING:
     from laboneq.compiler.scheduler.schedule_data import ScheduleData
+
+_logger = logging.getLogger(__name__)
 
 # Temporary corrected timing model
 @dataclass
@@ -47,6 +51,18 @@ def _get_total_rounded_delay_samples(
 ):
     delay = sum(round((d or 0) * sample_frequency_hz) for d in port_delays)
     return (math.ceil(delay / granularity_samples + 0.5) - 1) * granularity_samples
+
+
+def _generate_warning(warnings: List[Tuple[str, str, float]]):
+    if not warnings:
+        return
+    n = len(warnings)
+    header = f"Due to feedback latency constraints, the timing of the following match section{'s'[:n^1]} with corresponding handle{'s'[:n^1]} were changed:"
+    messages = [
+        f"  - '{section}' with handle '{handle}', delayed by {1e9*delay:.2f} ns"
+        for section, handle, delay in warnings
+    ]
+    _logger.info(CompressableLogEntry(header, messages, max_messages=3))
 
 
 def _compute_start_with_latency(
@@ -107,6 +123,12 @@ def _compute_start_with_latency(
     qa_port_delay = qa_signal_obj.port_delay or 0.0
     qa_base_delay_signal = qa_signal_obj.base_delay_signal or 0.0
     qa_base_port_delay = qa_signal_obj.base_port_delay or 0.0
+
+    if math.isnan(qa_port_delay) or math.isnan(qa_base_port_delay):
+        raise LabOneQException(
+            "Feedback requires constant 'port_delay', but it is a sweep parameter."
+        )
+
     qa_total_port_delay = _get_total_rounded_delay_samples(
         (qa_base_port_delay, qa_port_delay),
         qa_sampling_rate,
@@ -188,6 +210,16 @@ def _compute_start_with_latency(
             ),
         )
 
+    if earliest_execute_table_entry > start:
+        schedule_data.combined_warnings.setdefault(
+            "match_start_shifted", (_generate_warning, [])
+        )[1].append(
+            (
+                section,
+                handle,
+                (earliest_execute_table_entry - start) * schedule_data.TINYSAMPLE,
+            )
+        )
     return max(earliest_execute_table_entry, start)
 
 

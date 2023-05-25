@@ -13,8 +13,11 @@ class GateStore:
         self.gates: Dict[Tuple[str, Tuple[str, ...]], Callable[..., Section]] = {}
         self.gate_map: Dict[str, str] = {}
 
-    def lookup_gate(self, name: str, qubits: Tuple[str, ...], args=()) -> Section:
-        return self.gates[(self.gate_map.get(name, name), qubits)](*args)
+    def lookup_gate(
+        self, name: str, qubits: Tuple[str, ...], args=(), kwargs=None
+    ) -> Section:
+        kwargs = kwargs or {}
+        return self.gates[(self.gate_map.get(name, name), qubits)](*args, **kwargs)
 
     def map_gate(self, qasm_name: str, l1q_name: str):
         """Define mapping from qasm gate name to L1Q gate name."""

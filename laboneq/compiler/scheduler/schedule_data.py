@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List
+from typing import TYPE_CHECKING, Callable, Dict, List, Tuple
 
 if TYPE_CHECKING:
     from laboneq.compiler.common.compiler_settings import CompilerSettings
@@ -21,6 +21,7 @@ class ScheduleData:
     settings: CompilerSettings
     acquire_pulses: Dict[str, List[PulseSchedule]] = field(default_factory=dict)
     signal_objects: Dict[str, SignalObj] = field(default_factory=dict)
+    combined_warnings: Dict[str, Tuple[Callable, List]] = field(default_factory=dict)
     TINYSAMPLE: float = field(init=False)
 
     def __post_init__(self):

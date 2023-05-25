@@ -116,10 +116,6 @@ class Controller:
         for osc_param in sorted(osc_params, key=lambda p: p.id):
             self._devices.find_by_uid(osc_param.device_id).allocate_osc(osc_param)
 
-        for initialization in self._recipe_data.recipe.experiment.initializations:
-            device = self._devices.find_by_uid(initialization.device_uid)
-            device.allocate_params(initialization)
-
     def _reset_to_idle_state(self):
         reset_nodes = []
         for _, device in self._devices.all:
@@ -459,7 +455,7 @@ class Controller:
     def execute_compiled(
         self, compiled_experiment: CompiledExperiment, session: Session = None
     ):
-        self._recipe_data = pre_process_compiled(compiled_experiment)
+        self._recipe_data = pre_process_compiled(compiled_experiment, self._devices)
 
         self._session = session
         if session is None:
@@ -663,20 +659,23 @@ class Controller:
             enter: bool,
         ):
             if enter:
-                affected_devices: set[str] = set()
+                attribute_value_tracker = (
+                    self.controller._recipe_data.attribute_value_tracker
+                )
                 for param in self.sweep_params_tracker.updated_params():
-                    affected_devices.update(
-                        self.controller._recipe_data.param_to_device_map.get(param, [])
-                    )
-                nt_sweep_nodes: list[DaqNodeAction] = []
-                for device_id in affected_devices:
-                    device = self.controller._devices.find_by_uid(device_id)
-                    nt_sweep_nodes.extend(
-                        device.collect_prepare_sweep_step_nodes_for_param(
-                            self.sweep_params_tracker
-                        )
+                    attribute_value_tracker.update(
+                        param, self.sweep_params_tracker.get_param(param)
                     )
                 self.sweep_params_tracker.clear_for_next_step()
+
+                nt_sweep_nodes: list[DaqNodeAction] = []
+                for device_uid, device in self.controller._devices.all:
+                    nt_sweep_nodes.extend(
+                        device.collect_prepare_nt_step_nodes(
+                            attribute_value_tracker.device_view(device_uid),
+                            self.controller._recipe_data,
+                        )
+                    )
 
                 step_prepare_nodes = self.controller._prepare_rt_execution(
                     rt_section_uid=uid

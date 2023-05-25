@@ -7,8 +7,9 @@ import copy
 import logging
 import typing
 import uuid
+from numbers import Number
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, Tuple, Union
+from typing import Any, Callable, Dict, Tuple
 
 from laboneq.compiler.experiment_access.acquire_info import AcquireInfo
 from laboneq.compiler.experiment_access.loader_base import LoaderBase
@@ -29,6 +30,7 @@ if typing.TYPE_CHECKING:
     from laboneq.dsl.device import DeviceSetup
     from laboneq.dsl.device.io_units import LogicalSignal
     from laboneq.dsl.experiment import Experiment, ExperimentSignal
+    from laboneq.dsl.parameter import Parameter
 
 _logger = logging.getLogger(__name__)
 
@@ -141,6 +143,7 @@ class DSLLoader(LoaderBase):
         ls_delays_signal = {}
         ls_port_modes = {}
         ls_thresholds = {}
+        ls_amplitudes = {}
         ls_amplifier_pumps = {}
         self._nt_only_params = []
 
@@ -152,12 +155,18 @@ class DSLLoader(LoaderBase):
         for ls in all_logical_signals:
             ls_map[ls.path] = ls
 
-        mapped_logical_signals: Dict["LogicalSignal", "ExperimentSignal"] = {
+        mapped_logical_signals: Dict["LogicalSignal", "ExperimentSignal"] = {}
+        for signal in experiment.signals.values():
             # Need to create copy here as we'll possibly patch those ExperimentSignals
             # that touch the same PhysicalChannel
-            ls_map[signal.mapped_logical_signal_path]: copy.deepcopy(signal)
-            for signal in experiment.signals.values()
-        }
+            try:
+                mapped_logical_signals[
+                    ls_map[signal.mapped_logical_signal_path]
+                ] = copy.deepcopy(signal)
+            except KeyError:
+                raise LabOneQException(
+                    f"Experiment signal '{signal.uid}' has no mapping to a logical signal."
+                )
 
         experiment_signals_by_physical_channel = {}
         for ls, exp_signal in mapped_logical_signals.items():
@@ -217,8 +226,15 @@ class DSLLoader(LoaderBase):
                     )
 
             if calibration is not None:
+
+                def opt_param(val: float | Parameter | None) -> float | str | None:
+                    if val is None or isinstance(val, Number):
+                        return val
+                    self._nt_only_params.append(val.uid)
+                    return val.uid
+
                 if hasattr(calibration, "port_delay"):
-                    ls_port_delays[ls.path] = calibration.port_delay
+                    ls_port_delays[ls.path] = opt_param(calibration.port_delay)
 
                 if hasattr(calibration, "delay_signal"):
                     ls_delays_signal[ls.path] = calibration.delay_signal
@@ -313,11 +329,10 @@ class DSLLoader(LoaderBase):
                     if precomp_dict:
                         ls_precompensations[ls.path] = precomp_dict
 
-                ls_local_oscillator = getattr(calibration, "local_oscillator")
-                if ls_local_oscillator is not None:
-                    ls_lo_frequencies[ls.path] = getattr(
-                        ls_local_oscillator, "frequency"
-                    )
+                local_oscillator = calibration.local_oscillator
+                if local_oscillator is not None:
+                    ls_lo_frequencies[ls.path] = opt_param(local_oscillator.frequency)
+
                 signal_range = getattr(calibration, "range")
                 if signal_range is not None:
                     if hasattr(signal_range, "unit"):
@@ -335,24 +350,10 @@ class DSLLoader(LoaderBase):
 
                 ls_thresholds[ls.path] = getattr(calibration, "threshold", None)
 
-                def amplifier_pump_to_dict(amplifier_pump) -> Dict[str, Any]:
-                    def opt_param(val) -> Union[str, float]:
-                        if val is None or isinstance(val, float):
-                            return val
-                        self._nt_only_params.append(val.uid)
-                        return val.uid
+                ls_amplitudes[ls.path] = opt_param(calibration.amplitude)
 
-                    return {
-                        "pump_freq": opt_param(amplifier_pump.pump_freq),
-                        "pump_power": opt_param(amplifier_pump.pump_power),
-                        "cancellation": amplifier_pump.cancellation,
-                        "alc_engaged": amplifier_pump.alc_engaged,
-                        "use_probe": amplifier_pump.use_probe,
-                        "probe_frequency": opt_param(amplifier_pump.probe_frequency),
-                        "probe_power": opt_param(amplifier_pump.probe_power),
-                    }
-
-                if calibration.amplifier_pump is not None:
+                amp_pump = calibration.amplifier_pump
+                if amp_pump is not None:
                     if ls.direction != IODirection.IN:
                         _logger.warning(
                             "'amplifier_pump' calibration for logical signal %s will be ignored - "
@@ -368,7 +369,15 @@ class DSLLoader(LoaderBase):
                     else:
                         ls_amplifier_pumps[ls.path] = (
                             *ppc_connections[ls.path],
-                            amplifier_pump_to_dict(calibration.amplifier_pump),
+                            {
+                                "pump_freq": opt_param(amp_pump.pump_freq),
+                                "pump_power": opt_param(amp_pump.pump_power),
+                                "cancellation": amp_pump.cancellation,
+                                "alc_engaged": amp_pump.alc_engaged,
+                                "use_probe": amp_pump.use_probe,
+                                "probe_frequency": opt_param(amp_pump.probe_frequency),
+                                "probe_power": opt_param(amp_pump.probe_power),
+                            },
                         )
 
         for signal in sorted(experiment.signals.values(), key=lambda x: x.uid):
@@ -465,6 +474,7 @@ class DSLLoader(LoaderBase):
                     "delay_signal": ls_delays_signal.get(lsuid),
                     "port_mode": ls_port_modes.get(lsuid),
                     "threshold": ls_thresholds.get(lsuid),
+                    "amplitude": ls_amplitudes.get(lsuid),
                     "amplifier_pump": ls_amplifier_pumps.get(lsuid),
                 },
             )

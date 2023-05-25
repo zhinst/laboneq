@@ -3,7 +3,7 @@
 
 from dataclasses import dataclass
 from itertools import groupby
-from typing import Dict, List, Union
+from typing import Dict, List, Tuple, Union
 
 import numpy as np
 
@@ -28,6 +28,14 @@ class WaveCompressor:
 
     def _sample_dict_constant(self, sample_dict: Dict[str, np.array]) -> bool:
         return all(self._samples_constant(sample) for sample in sample_dict.values())
+
+    def _stacked_samples_constant(self, stacked_samples: np.ndarray, lo: int, hi: int):
+        return np.all(
+            np.all(
+                stacked_samples[:, lo + 1 : hi] == stacked_samples[:, lo : hi - 1],
+                axis=0,
+            )
+        )
 
     def _frames_compatible(
         self, last_vals_frame: Dict[str, np.array], sample_dict: Dict[str, np.array]
@@ -54,25 +62,107 @@ class WaveCompressor:
             return {k: sample_dict[k][i * size :] for k in sample_dict}
         return {k: v[i * size : (i + 1) * size] for k, v in sample_dict.items()}
 
-    def compress_wave(
-        self, samples: Dict[str, np.array], sample_multiple: int
-    ) -> Union[List, None]:
-        ref_length = len(list(samples.values())[0])
-        if not all(len(v) == ref_length for v in samples.values()):
-            raise ValueError("All sample arrays must have the same length")
-        num_frames = int(ref_length / sample_multiple)
+    def _get_frame_idx(
+        self, sample_dict: Dict[str, np.array], size: int, i: int, num_frames: int
+    ) -> Tuple[int, int]:
+        if i == num_frames - 1:
+            return (i * size, len(list(sample_dict.values())[0]))
+        return (i * size, (i + 1) * size)
 
-        last_vals = []
+    def _runs_longer_than_threshold(self, stacked_samples: np.ndarray, threshold: int):
+        runs = []
+
+        # Calculate differences between consecutive columns
+        diffs = np.diff(stacked_samples, axis=1)
+
+        # Find the indices where consecutive columns change
+        changes = np.nonzero(diffs != 0)[1] + 1
+
+        # Add the first and last indices for runs longer than the threshold
+        if stacked_samples.shape[1] > threshold:
+            changes = np.concatenate(([0], changes, [stacked_samples.shape[1]]))
+
+        # Compute the lengths of each run
+        run_lengths = np.diff(changes)
+
+        # Find indices of runs longer than the threshold
+        long_runs_indices = np.where(run_lengths > threshold)[0]
+
+        # Compute the start and end indices of long runs
+        start_indices = changes[long_runs_indices]
+        end_indices = start_indices + run_lengths[long_runs_indices] - 1
+
+        # Create a list of tuples (start, end) for each long run
+        runs = list(zip(start_indices, end_indices))
+
+        return runs
+
+    def _compress_wave_simple(
+        self,
+        samples: Dict[str, np.array],
+        sample_multiple: int,
+        ref_length: int,
+        run: Tuple[int, int],
+    ) -> Union[List[Union[PlayHold, PlaySamples]], None]:
+        start_run, end_run = run
+
+        start_run_on_grid = (start_run // sample_multiple + 1) * sample_multiple
+        end_run_on_grid = (end_run // sample_multiple - 1) * sample_multiple
+
+        compression_length = (
+            end_run - start_run_on_grid
+            if end_run == ref_length
+            else end_run_on_grid - start_run_on_grid
+        )
+
+        if compression_length < sample_multiple:
+            return None
+
+        events = []
+        events.append(
+            PlaySamples(
+                samples={k: v[0:start_run_on_grid] for k, v in samples.items()},
+                label=self.wave_number,
+            )
+        )
+        self.wave_number += 1
+        if end_run == ref_length - 1:
+            events.append(PlayHold(num_samples=int(ref_length - start_run_on_grid)))
+            return events
+        else:
+            events.append(
+                PlayHold(num_samples=int(end_run_on_grid - start_run_on_grid))
+            )
+            events.append(
+                PlaySamples(
+                    samples={
+                        k: v[end_run_on_grid:ref_length] for k, v in samples.items()
+                    },
+                    label=self.wave_number,
+                )
+            )
+            self.wave_number += 1
+            return events
+
+    def _compress_wave_general(
+        self,
+        samples: Dict[str, np.array],
+        stacked_samples: np.ndarray,
+        num_sample_channles: int,
+        num_frames: int,
+        sample_multiple: int,
+    ) -> Union[List[Union[PlayHold, PlaySamples]], None]:
+        last_vals = np.zeros((num_sample_channles, num_frames))
         for i in range(0, num_frames):
-            sample_frame = self._get_frame(samples, sample_multiple, i, num_frames)
-            last_vals.append({k: sample_frame[k][-1] for k in sample_frame})
+            _, hi = self._get_frame_idx(samples, sample_multiple, i, num_frames)
+            last_vals[:, i] = stacked_samples[:, hi - 1]
 
         can_compress = [False] * num_frames
         for i in range(1, num_frames):
-            sample_frame = self._get_frame(samples, sample_multiple, i, num_frames)
-            can_compress[i] = self._sample_dict_constant(
-                sample_frame
-            ) and self._frames_compatible(last_vals[i - 1], sample_frame)
+            lo, hi = self._get_frame_idx(samples, sample_multiple, i, num_frames)
+            can_compress[i] = self._stacked_samples_constant(
+                stacked_samples, lo, hi
+            ) and np.all(last_vals[:, i - 1] == stacked_samples[:, lo])
 
         if not any(can_compress):
             return None
@@ -89,10 +179,10 @@ class WaveCompressor:
             if can_compress:
                 num_samples = 0
                 for frame_idx in sequence:
-                    frame = self._get_frame(
+                    lo, hi = self._get_frame_idx(
                         samples, sample_multiple, frame_idx, num_frames
                     )
-                    num_samples += len(frame[next(iter(frame.keys()))])
+                    num_samples += hi - lo
                 events.append(PlayHold(num_samples=num_samples))
             else:
                 play_samples = []
@@ -109,3 +199,25 @@ class WaveCompressor:
                 self.wave_number += 1
 
         return events
+
+    def compress_wave(
+        self, samples: Dict[str, np.array], sample_multiple: int
+    ) -> Union[List[Union[PlayHold, PlaySamples]], None]:
+        ref_length = len(list(samples.values())[0])
+        num_sample_channles = len(list(samples.values()))
+        if not all(len(v) == ref_length for v in samples.values()):
+            raise ValueError("All sample arrays must have the same length")
+        num_frames = int(ref_length / sample_multiple)
+
+        stacked_samples = np.array(list(samples.values()))
+
+        runs = self._runs_longer_than_threshold(stacked_samples, 32)
+        if len(runs) == 0:
+            return None
+        if len(runs) == 1:
+            return self._compress_wave_simple(
+                samples, sample_multiple, ref_length, runs[0]
+            )
+        return self._compress_wave_general(
+            samples, stacked_samples, num_sample_channles, num_frames, sample_multiple
+        )

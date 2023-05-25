@@ -17,20 +17,31 @@ class QuantumOperation:
     """A class for quantum operations."""
 
     def __init__(
-        self, uid: Optional[str] = None, lookup: Optional[Dict[str, Section]] = None
+        self,
+        uid: Optional[str] = None,
+        operation_map: Optional[
+            Dict[Union[QuantumElement, QuantumElementTuple], Section]
+        ] = None,
     ) -> None:
         """
-        Initializes a new QuantumOperation object.
+        Initialize a new QuantumOperation object.
 
         Args:
             uid: A unique identifier for the quantum operation.
-            lookup: A dictionary of sections associated with the uids of quantum elements.
+            lookup: A dictionary of sections associated with quantum elements.
         """
         if uid is None:
             self.uid = uuid.uuid4().hex
         else:
             self.uid = uid
-        self.lookup = {} if lookup is None else lookup
+        self.operation_map = (
+            {}
+            if operation_map is None
+            else {
+                k if isinstance(k, str) else self._get_uids(k): v
+                for k, v in operation_map.items()
+            }
+        )
 
     def _get_uids(self, elements: Union[QuantumElement, QuantumElementTuple]) -> str:
         if isinstance(elements, QuantumElement):
@@ -49,11 +60,11 @@ class QuantumOperation:
             elements: The quantum element(s) to which the section is associated.
             section: The section to add to the quantum operation.
         """
-        self.lookup[self._get_uids(elements)] = section
+        self.operation_map[self._get_uids(elements)] = section
 
     def __call__(self, elements: QuantumElementTuple):
         try:
-            section = self.lookup[self._get_uids(elements)]
+            section = self.operation_map[self._get_uids(elements)]
         except KeyError:
             raise ValueError("No section defined for the given quantum elements")
         return section
@@ -80,7 +91,7 @@ class QuantumOperation:
 
     @staticmethod
     def from_dict(tuneup: Dict[Union[QuantumElement, QuantumElementTuple], Section]):
-        """Creates a QuantumOperation object from a dictionary.
+        """Create a QuantumOperation object from a dictionary.
 
         Args:
             tuneup: A dictionary of quantum elements and sections.
@@ -92,5 +103,7 @@ class QuantumOperation:
 
     def __eq__(self, __value: object) -> bool:
         if isinstance(__value, QuantumOperation):
-            return self.lookup == __value.lookup and self.uid == __value.uid
+            return (
+                self.operation_map == __value.operation_map and self.uid == __value.uid
+            )
         return False

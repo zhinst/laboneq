@@ -9,7 +9,7 @@ from typing import Iterable, Optional, Type
 
 from openqasm3 import ast
 
-from .namespace import ClassicalRef, Namespace, QubitRef
+from .namespace import ClassicalRef, NamespaceNest, QubitRef
 from .openqasm_error import OpenQasmException
 
 binary_ops = {
@@ -50,7 +50,7 @@ def duration_to_seconds(duration: ast.DurationLiteral):
 
 
 def _eval_expression(
-    expression: ast.Expression | ast.DiscreteSet | None, namespace: Namespace
+    expression: ast.Expression | ast.DiscreteSet | None, namespace: NamespaceNest
 ):
     if expression is None:
         return None
@@ -155,12 +155,17 @@ def _eval_expression(
 def eval_expression(
     expression: Optional[ast.Expression],
     *,
-    namespace: Namespace = None,
+    namespace: NamespaceNest = None,
     type: Type = None,
 ):
     if namespace is None:
-        namespace = Namespace()
-    retval = _eval_expression(expression, namespace)
+        namespace = NamespaceNest()
+    try:
+        retval = _eval_expression(expression, namespace)
+    except OpenQasmException:
+        raise
+    except Exception as e:
+        raise OpenQasmException(str(e), mark=expression.span) from e
 
     if type is not None and not isinstance(retval, type):
         raise OpenQasmException(
@@ -170,7 +175,7 @@ def eval_expression(
 
 
 def eval_lvalue(
-    node, namespace: Namespace
+    node, namespace: NamespaceNest
 ) -> ClassicalRef | QubitRef | list[ClassicalRef] | list[QubitRef]:
     if isinstance(node, ast.Identifier):
         if node.name in constants:

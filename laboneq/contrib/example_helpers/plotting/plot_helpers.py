@@ -123,10 +123,34 @@ def plot_simulation(
             except Exception:
                 pass
 
+        if (
+            "qa" not in str(physical_channel_path.name)
+            and np.sum(my_snippet.trigger) != 0
+            and f"{physcial_channel} - Trigger".upper() not in titles
+        ):
+            try:
+                if my_snippet.time is not None:
+                    time_length = len(my_snippet.time)
+
+                    xs.append(my_snippet.time)
+
+                    y1s.append(my_snippet.trigger)
+                    labels1.append(f"{signal} Trigger")
+
+                    titles.append(f"{physcial_channel} - Trigger".upper())
+
+                    empty_array = np.empty((1, time_length))
+                    empty_array.fill(np.nan)
+                    y2s.append(empty_array[0])
+                    labels2.append(None)
+
+            except Exception:
+                pass
+
     fig, axes = plt.subplots(
         nrows=len(y1s),
         sharex=False,
-        figsize=(plot_width, len(mapped_signals) * plot_height),
+        figsize=(plot_width, len(y1s) * plot_height),
     )
 
     colors = plt.rcParams["axes.prop_cycle"]()

@@ -3,26 +3,33 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
+from typing import Iterator
 
+from laboneq.controller.attribute_value_tracker import (
+    AttributeName,
+    DeviceAttribute,
+    DeviceAttributesView,
+)
 from laboneq.controller.communication import DaqNodeAction, DaqNodeSetAction
 from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.recipe_1_4_0 import Initialization
-from laboneq.controller.recipe_processor import DeviceRecipeData
-from laboneq.controller.util import SweepParamsTracker
+from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 
 
 class DeviceSHFPPC(DeviceZI):
-    param_keys = ["pump_freq", "pump_power", "probe_frequency", "probe_power"]
+    attribute_keys = {
+        "pump_freq": AttributeName.PPC_PUMP_FREQ,
+        "pump_power": AttributeName.PPC_PUMP_POWER,
+        "probe_frequency": AttributeName.PPC_PROBE_FREQUENCY,
+        "probe_power": AttributeName.PPC_PROBE_POWER,
+    }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.dev_type = "SHFPPC"
         self.dev_opts = []
         self._use_internal_clock = False
-        self._param_to_paths: dict[str, list[str]] = defaultdict(
-            list
-        )  # TODO(2K): Move to DeviceZI
+        self._channels = 4  # TODO(2K): Update from device
 
     def _key_to_path(self, key: str, ch: int):
         keys_to_paths = {
@@ -40,13 +47,18 @@ class DeviceSHFPPC(DeviceZI):
     def update_clock_source(self, force_internal: bool | None):
         self._use_internal_clock = force_internal is True
 
-    def allocate_params(self, initialization: Initialization.Data):
+    def pre_process_attributes(
+        self,
+        initialization: Initialization.Data,
+    ) -> Iterator[DeviceAttribute]:
+        yield from super().pre_process_attributes(initialization)
         ppchannels = initialization.ppchannels or {}
-        for ch, settings in ppchannels.items():
-            for key in DeviceSHFPPC.param_keys:
-                setting = settings.get(key)
-                if isinstance(setting, str):
-                    self._param_to_paths[setting].append(self._key_to_path(key, ch))
+        for channel, settings in ppchannels.items():
+            for key, attribute_name in DeviceSHFPPC.attribute_keys.items():
+                if key in settings:
+                    yield DeviceAttribute(
+                        name=attribute_name, index=channel, value_or_param=settings[key]
+                    )
 
     def check_errors(self):
         pass
@@ -70,11 +82,7 @@ class DeviceSHFPPC(DeviceZI):
                 DaqNodeSetAction(self._daq, self._key_to_path("_on", ch), 1)
             )
             for key, value in settings.items():
-                if (
-                    value is None
-                    or key in DeviceSHFPPC.param_keys
-                    and isinstance(value, str)
-                ):
+                if value is None or key in DeviceSHFPPC.attribute_keys:
                     # Skip not set values, or values that are bound to sweep params and will
                     # be set during the NT execution.
                     continue
@@ -85,15 +93,14 @@ class DeviceSHFPPC(DeviceZI):
                 )
         return nodes_to_set
 
-    def collect_prepare_sweep_step_nodes_for_param(
-        self, sweep_params_tracker: SweepParamsTracker
+    def collect_prepare_nt_step_nodes(
+        self, attributes: DeviceAttributesView, recipe_data: RecipeData
     ) -> list[DaqNodeAction]:
-        nodes_to_set: list[DaqNodeAction] = []
-        for param in sweep_params_tracker.updated_params():
-            for path in self._param_to_paths.get(param, []):
-                nodes_to_set.append(
-                    DaqNodeSetAction(
-                        self._daq, path, sweep_params_tracker.get_param(param)
-                    )
-                )
+        nodes_to_set = super().collect_prepare_nt_step_nodes(attributes, recipe_data)
+        for ch in range(self._channels):
+            for key, attr_name in DeviceSHFPPC.attribute_keys.items():
+                [value], updated = attributes.resolve(keys=[(attr_name, ch)])
+                if updated:
+                    path = self._key_to_path(key, ch)
+                    nodes_to_set.append(DaqNodeSetAction(self._daq, path, value))
         return nodes_to_set

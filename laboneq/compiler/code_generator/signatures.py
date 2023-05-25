@@ -6,8 +6,8 @@ from __future__ import annotations
 import hashlib
 import math
 from copy import deepcopy
-from dataclasses import dataclass
-from typing import Any, FrozenSet, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Any, Dict, FrozenSet, Optional, Tuple
 
 import numpy as np
 from orjson import orjson
@@ -36,45 +36,97 @@ class PulseSignature:
     markers: Any  #: markers played during this pulse
 
 
+@dataclass(frozen=True)
+class SamplesSignature:
+    """A collection of samples. Defines a WaveformSignature after compression. See also docstring of WaveformSignature"""
+
+    label: str
+    samples_map: Dict[str, np.ndarray]
+
+    def __hash__(self):
+        samples_tup = tuple(
+            str(sample) for sample in self.samples_map.values()
+        ) + tuple(self.label)
+        return hash(samples_tup)
+
+    def __eq__(self, other: SamplesSignature):
+        return (
+            self.label == other.label
+            and self.samples_map.keys() == other.samples_map.keys()
+            and all(
+                np.array_equal(self.samples_map[key], other.samples_map[key])
+                for key in self.samples_map
+            )
+        )
+
+
 @dataclass(unsafe_hash=True)
 class WaveformSignature:
     """Signature of a waveform as stored in waveform memory.
 
     The underlying promise is that two waveforms with the same signature are
     guaranteed to resolve to the same samples, so we need only store one of them and
-    can use them interchangeably."""
+    can use them interchangeably.
+
+    Alternatively, after compression it makes no sense to associate a WaveformSignature to
+    PulseSignatures anymore, since compression can cause a single pulse to be replaced with
+    any number of PlayWave and PlayHold statements. In this case, a WaveformSignature is best
+    understood as a collection of samples, with the implied promise that equal samples are only
+    uploaded to the device once.
+    """
 
     length: int
-    pulses: Tuple[PulseSignature, ...]
+    pulses: Optional[Tuple[PulseSignature, ...]]
+    samples: Optional[SamplesSignature] = field(default=None)
 
     def signature_string(self):
         retval = "p_" + str(self.length).zfill(4)
-        for pulse_entry in self.pulses:
-            retval += "_"
-            retval += pulse_entry.pulse or ""
-            for key, separator, scale, fill in (
-                ("start", "_", 1, 2),
-                ("amplitude", "_a", 1e9, 10),
-                ("length", "_l", 1, 3),
-                ("baseband_phase", "_bb", 1, 7),
-                ("channel", "_c", 1, 0),
-                ("sub_channel", "_sc", 1, 0),
-                ("phase", "_ap", 1, 0),
-            ):
-                value = getattr(pulse_entry, key)
-                if value is not None:
-                    sign = ""
-                    if value < 0:
-                        sign = "m"
-                    new_part = (
-                        separator + sign + str(abs(round(scale * value))).zfill(fill)
-                    )
-                    if len(retval + new_part) > 56:
-                        break
-                    retval += new_part
-            else:  # allow inner break to exit outer loop
-                continue
-            break
+        if self.pulses is not None:
+            for pulse_entry in self.pulses:
+                retval += "_"
+                retval += pulse_entry.pulse or ""
+                for key, separator, scale, fill in (
+                    ("start", "_", 1, 2),
+                    ("amplitude", "_a", 1e9, 10),
+                    ("length", "_l", 1, 3),
+                    ("baseband_phase", "_bb", 1, 7),
+                    ("channel", "_c", 1, 0),
+                    ("sub_channel", "_sc", 1, 0),
+                    ("phase", "_ap", 1, 0),
+                ):
+                    value = getattr(pulse_entry, key)
+                    if value is not None:
+                        sign = ""
+                        if value < 0:
+                            sign = "m"
+                        new_part = (
+                            separator
+                            + sign
+                            + str(abs(round(scale * value))).zfill(fill)
+                        )
+                        if len(retval + new_part) > 56:
+                            break
+                        retval += new_part
+                else:  # allow inner break to exit outer loop
+                    continue
+                break
+        if self.samples is not None:
+            sample_to_shorthand = {
+                "samples_i": "si",
+                "samples_q": "sq",
+                "samples_marker1": "m1",
+                "samples_marker2": "m2",
+            }
+            for sample_name in self.samples.samples_map.keys():
+                new_part = (
+                    sample_to_shorthand[sample_name]
+                    if sample_name in sample_to_shorthand
+                    else sample_name
+                )
+                if len(retval + new_part) > 56:
+                    break
+                retval += new_part
+            retval += f"_{self.samples.label}_"
 
         retval = string_sanitize(retval)
         hashed_signature = self.stable_hash().hexdigest()[:7]
@@ -121,8 +173,11 @@ class PlaybackSignature:
 
         For the phase that is baked into the samples, we can quantize to the precision
         given by `phase_resolution_range`. For the phase specified by registers on the
-        device (e.g. command table) we quantize to a fixed precision of 48 bits. This
+        device (e.g. command table) we quantize to a fixed precision of 32 bits. This
         serves to avoid rounding errors leading to multiple command table entries."""
+
+        PHASE_RESOLUTION_CT = 1 << 32
+
         for pulse in self.waveform.pulses:
             if pulse.phase is not None:
                 pulse.phase = normalize_phase(
@@ -133,15 +188,15 @@ class PlaybackSignature:
                 )
         if self.set_phase is not None:
             self.set_phase = normalize_phase(
-                round(self.set_phase / 2 / math.pi * (1 << 48))
-                / (1 << 48)
+                round(self.set_phase / 2 / math.pi * PHASE_RESOLUTION_CT)
+                / PHASE_RESOLUTION_CT
                 * 2
                 * math.pi
             )
         if self.increment_phase is not None:
             self.increment_phase = normalize_phase(
-                round(self.increment_phase / 2 / math.pi * (1 << 48))
-                / (1 << 48)
+                round(self.increment_phase / 2 / math.pi * PHASE_RESOLUTION_CT)
+                / PHASE_RESOLUTION_CT
                 * 2
                 * math.pi
             )

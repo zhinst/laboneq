@@ -5,11 +5,16 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from typing import Any, Iterator
 
 import numpy as np
 from numpy import typing as npt
 
+from laboneq.controller.attribute_value_tracker import (
+    AttributeName,
+    DeviceAttribute,
+    DeviceAttributesView,
+)
 from laboneq.controller.communication import (
     CachingStrategy,
     DaqNodeAction,
@@ -446,6 +451,40 @@ class DeviceSHFQA(DeviceZI):
                 ] = 0
         return conditions
 
+    def pre_process_attributes(
+        self,
+        initialization: Initialization.Data,
+    ) -> Iterator[DeviceAttribute]:
+        yield from super().pre_process_attributes(initialization)
+
+        for output in initialization.outputs or []:
+            if output.amplitude is not None:
+                yield DeviceAttribute(
+                    name=AttributeName.QA_OUT_AMPLITUDE,
+                    index=output.channel,
+                    value_or_param=output.amplitude,
+                )
+
+        center_frequencies = {}
+        ios = (initialization.outputs or []) + (initialization.inputs or [])
+        for idx, io in enumerate(ios):
+            if io.lo_frequency is not None:
+                if io.channel in center_frequencies:
+                    prev_io_idx = center_frequencies[io.channel]
+                    if ios[prev_io_idx].lo_frequency != io.lo_frequency:
+                        raise LabOneQControllerException(
+                            f"{self.dev_repr}: Local oscillator frequency mismatch between IOs "
+                            f"sharing channel {io.channel}: "
+                            f"{ios[prev_io_idx].lo_frequency} != {io.lo_frequency}"
+                        )
+                    continue
+                center_frequencies[io.channel] = idx
+                yield DeviceAttribute(
+                    name=AttributeName.QA_CENTER_FREQ,
+                    index=io.channel,
+                    value_or_param=io.lo_frequency,
+                )
+
     def collect_initialization_nodes(
         self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
     ) -> list[DaqNodeSetAction]:
@@ -489,37 +528,119 @@ class DeviceSHFQA(DeviceZI):
                 )
             )
 
-            measurement_delay = output.scheduler_port_delay
-            measurement_delay += output.port_delay or 0.0
-
-            measurement_delay_rounded = (
-                delay_to_rounded_samples(
-                    channel=output.channel,
-                    dev_repr=self.dev_repr,
-                    delay=measurement_delay,
-                    sample_frequency_hz=SAMPLE_FREQUENCY_HZ,
-                    granularity_samples=DELAY_NODE_GRANULARITY_SAMPLES,
-                    max_node_delay_samples=DELAY_NODE_MAX_SAMPLES,
-                )
-                / SAMPLE_FREQUENCY_HZ
-            )
-
-            nodes_to_initialize_output.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/qachannels/{output.channel}/generator/delay",
-                    measurement_delay_rounded,
-                )
-            )
-            nodes_to_initialize_output.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/qachannels/{output.channel}/spectroscopy/envelope/delay",
-                    measurement_delay_rounded,
-                )
-            )
-
         return nodes_to_initialize_output
+
+    def collect_prepare_nt_step_nodes(
+        self, attributes: DeviceAttributesView, recipe_data: RecipeData
+    ) -> list[DaqNodeAction]:
+        nodes_to_set = super().collect_prepare_nt_step_nodes(attributes, recipe_data)
+
+        acquisition_type = RtExecutionInfo.get_acquisition_type(
+            recipe_data.rt_execution_infos
+        )
+
+        for ch in range(self._channels):
+            [synth_cf], synth_cf_updated = attributes.resolve(
+                keys=[(AttributeName.QA_CENTER_FREQ, ch)]
+            )
+            if synth_cf_updated:
+                nodes_to_set.append(
+                    DaqNodeSetAction(
+                        self._daq,
+                        f"/{self.serial}/qachannels/{ch}/centerfreq",
+                        synth_cf,
+                    )
+                )
+
+            [out_amp], out_amp_updated = attributes.resolve(
+                keys=[(AttributeName.QA_OUT_AMPLITUDE, ch)]
+            )
+            if out_amp_updated:
+                nodes_to_set.append(
+                    DaqNodeSetAction(
+                        self._daq,
+                        f"/{self.serial}/qachannels/{ch}/oscs/0/gain",
+                        out_amp,
+                    )
+                )
+
+            [
+                output_scheduler_port_delay,
+                output_port_delay,
+            ], output_updated = attributes.resolve(
+                keys=[
+                    (AttributeName.OUTPUT_SCHEDULER_PORT_DELAY, ch),
+                    (AttributeName.OUTPUT_PORT_DELAY, ch),
+                ]
+            )
+            output_delay = (
+                0.0
+                if output_scheduler_port_delay is None
+                else output_scheduler_port_delay + (output_port_delay or 0.0)
+            )
+            set_output = output_updated and output_scheduler_port_delay is not None
+
+            [
+                input_scheduler_port_delay,
+                input_port_delay,
+            ], input_updated = attributes.resolve(
+                keys=[
+                    (AttributeName.INPUT_SCHEDULER_PORT_DELAY, ch),
+                    (AttributeName.INPUT_PORT_DELAY, ch),
+                ]
+            )
+            measurement_delay = (
+                0.0
+                if input_scheduler_port_delay is None
+                else input_scheduler_port_delay + (input_port_delay or 0.0)
+            )
+            set_input = input_updated and input_scheduler_port_delay is not None
+
+            base_channel_path = f"/{self.serial}/qachannels/{ch}"
+            if acquisition_type == AcquisitionType.SPECTROSCOPY:
+                output_delay_path = f"{base_channel_path}/spectroscopy/envelope/delay"
+                meas_delay_path = f"{base_channel_path}/spectroscopy/delay"
+            else:
+                output_delay_path = f"{base_channel_path}/generator/delay"
+                meas_delay_path = f"{base_channel_path}/readout/integration/delay"
+                measurement_delay += output_delay
+                set_input = set_input or set_output
+
+            if set_output:
+                output_delay_rounded = (
+                    delay_to_rounded_samples(
+                        channel=ch,
+                        dev_repr=self.dev_repr,
+                        delay=output_delay,
+                        sample_frequency_hz=SAMPLE_FREQUENCY_HZ,
+                        granularity_samples=DELAY_NODE_GRANULARITY_SAMPLES,
+                        max_node_delay_samples=DELAY_NODE_MAX_SAMPLES,
+                    )
+                    / SAMPLE_FREQUENCY_HZ
+                )
+                nodes_to_set.append(
+                    DaqNodeSetAction(self._daq, output_delay_path, output_delay_rounded)
+                )
+
+            if set_input:
+                measurement_delay_rounded = (
+                    delay_to_rounded_samples(
+                        channel=ch,
+                        dev_repr=self.dev_repr,
+                        delay=measurement_delay,
+                        sample_frequency_hz=SAMPLE_FREQUENCY_HZ,
+                        granularity_samples=DELAY_NODE_GRANULARITY_SAMPLES,
+                        max_node_delay_samples=DELAY_NODE_MAX_SAMPLES,
+                    )
+                    / SAMPLE_FREQUENCY_HZ
+                )
+                nodes_to_set.append(
+                    DaqNodeSetAction(
+                        self._daq, meas_delay_path, measurement_delay_rounded
+                    )
+                )
+
+        return nodes_to_set
 
     def prepare_upload_binary_wave(
         self,
@@ -615,33 +736,11 @@ class DeviceSHFQA(DeviceZI):
     ):
         _logger.debug("%s: Setting measurement mode to 'Readout'.", self.dev_repr)
 
-        measurement_delay = dev_output.scheduler_port_delay
-        measurement_delay += dev_output.port_delay or 0.0
-        measurement_delay += dev_input.scheduler_port_delay
-        measurement_delay += dev_input.port_delay or 0.0
-
-        measurement_delay_rounded = (
-            delay_to_rounded_samples(
-                channel=dev_output.channel,
-                dev_repr=self.dev_repr,
-                delay=measurement_delay,
-                sample_frequency_hz=SAMPLE_FREQUENCY_HZ,
-                granularity_samples=DELAY_NODE_GRANULARITY_SAMPLES,
-                max_node_delay_samples=DELAY_NODE_MAX_SAMPLES,
-            )
-            / SAMPLE_FREQUENCY_HZ
-        )
-
         nodes_to_set_for_readout_mode = [
             DaqNodeSetAction(
                 self._daq,
                 f"/{self.serial}/qachannels/{measurement.channel}/readout/integration/length",
                 measurement.length,
-            ),
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/qachannels/{measurement.channel}/readout/integration/delay",
-                measurement_delay_rounded,
             ),
         ]
 
@@ -699,31 +798,11 @@ class DeviceSHFQA(DeviceZI):
     ):
         _logger.debug("%s: Setting measurement mode to 'Spectroscopy'.", self.dev_repr)
 
-        measurement_delay = dev_input.scheduler_port_delay
-        measurement_delay += dev_input.port_delay or 0.0
-
-        measurement_delay_rounded = (
-            delay_to_rounded_samples(
-                channel=dev_input.channel,
-                dev_repr=self.dev_repr,
-                delay=measurement_delay,
-                sample_frequency_hz=SAMPLE_FREQUENCY_HZ,
-                granularity_samples=DELAY_NODE_GRANULARITY_SAMPLES,
-                max_node_delay_samples=DELAY_NODE_MAX_SAMPLES,
-            )
-            / SAMPLE_FREQUENCY_HZ
-        )
-
         nodes_to_set_for_spectroscopy_mode = [
             DaqNodeSetAction(
                 self._daq,
                 f"/{self.serial}/qachannels/{measurement.channel}/spectroscopy/trigger/channel",
                 32 + measurement.channel,
-            ),
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/qachannels/{measurement.channel}/spectroscopy/delay",
-                measurement_delay_rounded,
             ),
             DaqNodeSetAction(
                 self._daq,
@@ -742,27 +821,6 @@ class DeviceSHFQA(DeviceZI):
         acquisition_type = RtExecutionInfo.get_acquisition_type(
             recipe_data.rt_execution_infos
         )
-        center_frequencies = {}
-        ios = (initialization.outputs or []) + (initialization.inputs or [])
-        for idx, io in enumerate(ios):
-            if io.lo_frequency is not None:
-                if io.channel in center_frequencies:
-                    prev_io_idx = center_frequencies[io.channel]
-                    if ios[prev_io_idx].lo_frequency != io.lo_frequency:
-                        raise LabOneQControllerException(
-                            f"{self.dev_repr}: Local oscillator frequency mismatch between IOs "
-                            f"sharing channel {io.channel}: "
-                            f"{ios[prev_io_idx].lo_frequency} != {io.lo_frequency}"
-                        )
-                else:
-                    center_frequencies[io.channel] = idx
-                    nodes_to_initialize_measurement.append(
-                        DaqNodeSetAction(
-                            self._daq,
-                            f"/{self.serial}/qachannels/{io.channel}/centerfreq",
-                            io.lo_frequency,
-                        )
-                    )
 
         for measurement in initialization.measurements:
             nodes_to_initialize_measurement.append(

@@ -24,6 +24,7 @@ PHYSICAL_CHANNEL_CALIBRATION_FIELDS = (
     "voltage_offset",
     "mixer_calibration",
     "precompensation",
+    "amplitude",
 )
 
 

@@ -126,6 +126,7 @@ class IO(QCCSSchema):
             "scheduler_port_delay",
             "delay_signal",
             "marker_mode",
+            "amplitude",
         )
         ordered = True
 
@@ -141,12 +142,13 @@ class IO(QCCSSchema):
         range: Optional[float] = None
         range_unit: Optional[str] = None
         precompensation: Optional[Dict[str, Dict]] = None
-        lo_frequency: Optional[float] = None
+        lo_frequency: Optional[Any] = None
         port_mode: Optional[str] = None
-        port_delay: Optional[float] = None
+        port_delay: Optional[Any] = None
         scheduler_port_delay: float = 0.0
         delay_signal: Optional[float] = None
         marker_mode: Optional[str] = None
+        amplitude: Optional[Any] = None
 
     channel = fields.Integer()
     enable = fields.Boolean(required=False)
@@ -158,12 +160,13 @@ class IO(QCCSSchema):
     range = fields.Float(required=False)
     range_unit = fields.Str(required=False)
     precompensation = fields.Dict(required=False)
-    lo_frequency = fields.Float(required=False)
+    lo_frequency = fields.Raw(required=False)
     port_mode = fields.Str(required=False)
-    port_delay = fields.Float(required=False)
+    port_delay = fields.Raw(required=False)
     scheduler_port_delay = fields.Float(required=False)
     delay_signal = fields.Float(required=False)
     marker_mode = fields.Str(required=False)
+    amplitude = fields.Raw(required=False)
 
 
 class SignalTypeField(fields.Field):

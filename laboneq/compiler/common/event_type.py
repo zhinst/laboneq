@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from typing import Any
+
+
 class EventType:
     SECTION_START = "SECTION_START"
     SECTION_END = "SECTION_END"
@@ -34,3 +37,7 @@ class EventType:
     SECTION_SKELETON = "SECTION_SKELETON"
     RELATIVE_TIMING = "RELATIVE_TIMING"
     DIGITAL_SIGNAL_STATE_CHANGE = "DIGITAL_SIGNAL_STATE_CHANGE"
+
+
+SchedulerEvent = dict[str, Any]
+EventList = list[SchedulerEvent]

@@ -112,6 +112,11 @@ class Scheduler:
             nt_parameters = {}
         self._root_schedule = self._schedule_root(nt_parameters)
         _logger.info("Schedule completed")
+        for _, (
+            warning_generator,
+            warning_data,
+        ) in self._schedule_data.combined_warnings.items():
+            warning_generator(warning_data)
 
     def generate_event_list(self, expand_loops: bool, max_events: int):
         event_list = self._start_events()

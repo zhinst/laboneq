@@ -4,11 +4,16 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Iterator
 
 import numpy
 from numpy import typing as npt
 
+from laboneq.controller.attribute_value_tracker import (
+    AttributeName,
+    DeviceAttribute,
+    DeviceAttributesView,
+)
 from laboneq.controller.communication import (
     CachingStrategy,
     DaqNodeAction,
@@ -193,6 +198,65 @@ class DeviceSHFSG(DeviceZI):
             conditions[f"/{self.serial}/sgchannels/{awg_index}/awg/enable"] = 0
         return conditions
 
+    def _validate_initialization(self, initialization: Initialization.Data):
+        super()._validate_initialization(initialization)
+        outputs = initialization.outputs or []
+        for output in outputs:
+            if output.port_delay is not None:
+                if output.port_delay != 0:
+                    raise LabOneQControllerException(
+                        f"{self.dev_repr}'s output does not support port delay"
+                    )
+                _logger.info(
+                    "%s's output port delay should be set to None, not 0", self.dev_repr
+                )
+
+    def pre_process_attributes(
+        self,
+        initialization: Initialization.Data,
+    ) -> Iterator[DeviceAttribute]:
+        yield from super().pre_process_attributes(initialization)
+
+        center_frequencies: dict[int, IO.Data] = {}
+
+        def get_synth_idx(io: IO.Data):
+            if io.channel >= self._channels:
+                raise LabOneQControllerException(
+                    f"{self.dev_repr}: Attempt to configure channel {io.channel + 1} on a device "
+                    f"with {self._channels} channels. Verify your device setup."
+                )
+            synth_idx = self._output_to_synth_map[io.channel]
+            prev_io = center_frequencies.get(synth_idx)
+            if prev_io is None:
+                center_frequencies[synth_idx] = io
+            elif prev_io.lo_frequency != io.lo_frequency:
+                raise LabOneQControllerException(
+                    f"{self.dev_repr}: Local oscillator frequency mismatch between outputs "
+                    f"{prev_io.channel} and {io.channel} sharing synthesizer {synth_idx}: "
+                    f"{prev_io.lo_frequency} != {io.lo_frequency}"
+                )
+            return synth_idx
+
+        ios = initialization.outputs or []
+        for io in ios:
+            if io.lo_frequency is None:
+                raise LabOneQControllerException(
+                    f"{self.dev_repr}: Local oscillator for channel {io.channel} is required, "
+                    f"but is not provided."
+                )
+            if io.port_mode is None or io.port_mode == "RF":
+                yield DeviceAttribute(
+                    name=AttributeName.SG_SYNTH_CENTER_FREQ,
+                    index=get_synth_idx(io),
+                    value_or_param=io.lo_frequency,
+                )
+            else:
+                yield DeviceAttribute(
+                    name=AttributeName.SG_DIG_MIXER_CENTER_FREQ,
+                    index=io.channel,
+                    value_or_param=io.lo_frequency,
+                )
+
     def collect_initialization_nodes(
         self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
     ) -> list[DaqNodeSetAction]:
@@ -201,7 +265,6 @@ class DeviceSHFSG(DeviceZI):
         nodes_to_initialize_output: list[DaqNodeSetAction] = []
 
         outputs = initialization.outputs or []
-
         for output in outputs:
             self._warn_for_unsupported_param(
                 output.offset is None or output.offset == 0,
@@ -246,15 +309,6 @@ class DeviceSHFSG(DeviceZI):
                 )
             )
 
-            if output.port_delay is not None:
-                if output.port_delay != 0:
-                    raise LabOneQControllerException(
-                        f"{self.dev_repr}'s output does not support port delay"
-                    )
-                _logger.info(
-                    "%s's output port delay should be set to None, not 0", self.dev_repr
-                )
-
             if output.marker_mode is None or output.marker_mode == "TRIGGER":
                 nodes_to_initialize_output.append(
                     DaqNodeSetAction(
@@ -285,6 +339,16 @@ class DeviceSHFSG(DeviceZI):
                 )
             )
 
+            nodes_to_initialize_output.append(
+                DaqNodeSetAction(
+                    self._daq,
+                    f"/{self.serial}/sgchannels/{output.channel}/output/rflfpath",
+                    1  # RF
+                    if output.port_mode is None or output.port_mode == "RF"
+                    else 0,  # LF
+                )
+            )
+
         osc_selects = {
             ch: osc.index for osc in self._allocated_oscs for ch in osc.channels
         }
@@ -312,6 +376,39 @@ class DeviceSHFSG(DeviceZI):
             )
         return nodes_to_initialize_output
 
+    def collect_prepare_nt_step_nodes(
+        self, attributes: DeviceAttributesView, recipe_data: RecipeData
+    ) -> list[DaqNodeAction]:
+        nodes_to_set = super().collect_prepare_nt_step_nodes(attributes, recipe_data)
+
+        for synth_idx in set(self._output_to_synth_map):
+            [synth_cf], synth_cf_updated = attributes.resolve(
+                keys=[(AttributeName.SG_SYNTH_CENTER_FREQ, synth_idx)]
+            )
+            if synth_cf_updated:
+                nodes_to_set.append(
+                    DaqNodeSetAction(
+                        self._daq,
+                        f"/{self.serial}/synthesizers/{synth_idx}/centerfreq",
+                        synth_cf,
+                    )
+                )
+
+        for ch in range(self._channels):
+            [dig_mixer_cf], dig_mixer_cf_updated = attributes.resolve(
+                keys=[(AttributeName.SG_DIG_MIXER_CENTER_FREQ, ch)]
+            )
+            if dig_mixer_cf_updated:
+                nodes_to_set.append(
+                    DaqNodeSetAction(
+                        self._daq,
+                        f"/{self.serial}/sgchannels/{ch}/digitalmixer/centerfreq",
+                        dig_mixer_cf,
+                    )
+                )
+
+        return nodes_to_set
+
     def prepare_upload_binary_wave(
         self,
         filename: str,
@@ -327,71 +424,6 @@ class DeviceSHFSG(DeviceZI):
             filename=filename,
             caching_strategy=CachingStrategy.NO_CACHE,
         )
-
-    def collect_awg_before_upload_nodes(
-        self, initialization: Initialization.Data, recipe_data: RecipeData
-    ):
-        nodes_to_initialize_measurement = []
-
-        center_frequencies: dict[int, IO.Data] = {}
-
-        def get_synth_idx(io: IO.Data):
-            if io.channel >= self._channels:
-                raise LabOneQControllerException(
-                    f"{self.dev_repr}: Attempt to configure channel {io.channel + 1} on a device "
-                    f"with {self._channels} channels. Verify your device setup."
-                )
-            synth_idx = self._output_to_synth_map[io.channel]
-            prev_io = center_frequencies.get(synth_idx)
-            if prev_io is None:
-                center_frequencies[synth_idx] = io
-            elif prev_io.lo_frequency != io.lo_frequency:
-                raise LabOneQControllerException(
-                    f"{self.dev_repr}: Local oscillator frequency mismatch between outputs "
-                    f"{prev_io.channel} and {io.channel} sharing synthesizer {synth_idx}: "
-                    f"{prev_io.lo_frequency} != {io.lo_frequency}"
-                )
-            return synth_idx
-
-        ios = initialization.outputs or []
-        for io in ios:
-            if io.lo_frequency is None:
-                raise LabOneQControllerException(
-                    f"{self.dev_repr}: Local oscillator for channel {io.channel} is required, "
-                    f"but is not provided."
-                )
-            if io.port_mode is None or io.port_mode == "RF":
-                nodes_to_initialize_measurement.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/sgchannels/{io.channel}/output/rflfpath",
-                        1,  # RF
-                    )
-                )
-                nodes_to_initialize_measurement.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/synthesizers/{get_synth_idx(io)}/centerfreq",
-                        io.lo_frequency,
-                    )
-                )
-            else:
-                nodes_to_initialize_measurement.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/sgchannels/{io.channel}/output/rflfpath",
-                        0,  # LF
-                    )
-                )
-                nodes_to_initialize_measurement.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/sgchannels/{io.channel}/digitalmixer/centerfreq",
-                        io.lo_frequency,
-                    )
-                )
-
-        return nodes_to_initialize_measurement
 
     def collect_trigger_configuration_nodes(
         self, initialization: Initialization.Data, recipe_data: RecipeData

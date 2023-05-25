@@ -200,6 +200,7 @@ class RecipeGenerator:
         port_delay=None,
         scheduler_port_delay=0.0,
         marker_mode=None,
+        amplitude=None,
     ):
         output = {"channel": channel, "enable": True}
         if offset is not None:
@@ -228,6 +229,8 @@ class RecipeGenerator:
         output["scheduler_port_delay"] = scheduler_port_delay
         if marker_mode is not None:
             output["marker_mode"] = marker_mode
+        if amplitude is not None:
+            output["amplitude"] = amplitude
 
         initialization: dict = self._find_initialization(device_id)
         outputs: list = initialization.setdefault("outputs", [])

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, Union
 
 from laboneq.dsl.parameter import Parameter
 
@@ -25,10 +24,10 @@ class AmplifierPump:
     #: Unique identifier. If left blank, a new unique ID will be generated.
     uid: str = field(default_factory=amplifier_pump_id_generator)
 
-    pump_freq: Optional[Union[float, Parameter]] = None
-    pump_power: Optional[Union[float, Parameter]] = None
+    pump_freq: float | Parameter | None = None
+    pump_power: float | Parameter | None = None
     cancellation: bool = True
     alc_engaged: bool = True
     use_probe: bool = False
-    probe_frequency: Optional[Union[float, Parameter]] = None
-    probe_power: Optional[Union[float, Parameter]] = None
+    probe_frequency: float | Parameter | None = None
+    probe_power: float | Parameter | None = None

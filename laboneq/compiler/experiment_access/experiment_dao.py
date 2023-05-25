@@ -6,7 +6,7 @@ from __future__ import annotations
 import copy
 import logging
 from collections import deque
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from jsonschema import ValidationError
 
@@ -68,6 +68,7 @@ class ExperimentDAO:
             "delay_signal": None,
             "port_mode": None,
             "threshold": None,
+            "amplitude": None,
             "amplifier_pump": None,
         }
 
@@ -101,7 +102,7 @@ class ExperimentDAO:
     def server_infos(self):
         return copy.deepcopy(list(self._data["servers"].values()))
 
-    def signals(self):
+    def signals(self) -> list[str]:
         return sorted([s["signal_id"] for s in self._data["signals"].values()])
 
     def devices(self) -> List[str]:
@@ -185,7 +186,7 @@ class ExperimentDAO:
         ]
 
     @cached_method()
-    def signal_info(self, signal_id):
+    def signal_info(self, signal_id) -> SignalInfo:
         signal_info = self._data["signals"].get(signal_id)
         if signal_info is not None:
             signal_info_copy = copy.deepcopy(signal_info)
@@ -376,7 +377,7 @@ class ExperimentDAO:
         sc = self._data["signal_connections"][signal_id]
         return sc["range"], sc["range_unit"]
 
-    def port_delay(self, signal_id):
+    def port_delay(self, signal_id) -> float | str | None:
         return self._data["signal_connections"][signal_id]["port_delay"]
 
     def port_mode(self, signal_id):
@@ -385,7 +386,10 @@ class ExperimentDAO:
     def threshold(self, signal_id):
         return self._data["signal_connections"][signal_id]["threshold"]
 
-    def amplifier_pump(self, signal_id):
+    def amplitude(self, signal_id) -> float | str | None:
+        return self._data["signal_connections"][signal_id]["amplitude"]
+
+    def amplifier_pump(self, signal_id) -> tuple[str, int, dict[str, Any]] | None:
         return self._data["signal_connections"][signal_id]["amplifier_pump"]
 
     def section_pulses(self, section_id, signal_id):
