@@ -7,7 +7,7 @@ import logging
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Dict, List, Optional, Union
+from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -40,11 +40,11 @@ class Component(Enum):
 def _replace_pulse_in_wave(
     compiled_experiment: CompiledExperiment,
     wave_name: str,
-    pulse_or_array: Union[ArrayLike, Pulse],
+    pulse_or_array: ArrayLike | Pulse,
     pwm: PulseWaveformMap,
     component: Component = Component.COMPLEX,
     is_complex: bool = True,
-    current_waves: Optional[List] = None,
+    current_waves: list | None = None,
 ):
     current_wave = None
     if current_waves is not None:
@@ -152,15 +152,15 @@ class WaveReplacement:
     awg_id: str
     sig_string: str
     replacement_type: ReplacementType
-    samples: List[ArrayLike]
+    samples: list[ArrayLike]
 
 
 def calc_wave_replacements(
     compiled_experiment: CompiledExperiment,
-    pulse_uid: Union[str, Pulse],
-    pulse_or_array: Union[ArrayLike, Pulse],
-    current_waves: Optional[List] = None,
-) -> List[WaveReplacement]:
+    pulse_uid: str | Pulse,
+    pulse_or_array: ArrayLike | Pulse,
+    current_waves: list | None = None,
+) -> list[WaveReplacement]:
     if not isinstance(pulse_uid, str):
         pulse_uid = pulse_uid.uid
     pm = compiled_experiment.pulse_map.get(pulse_uid)
@@ -168,10 +168,10 @@ def calc_wave_replacements(
         _logger.warning("No mapping found for pulse '%s' - ignoring", pulse_uid)
         return []
 
-    replacements: List[WaveReplacement] = []
+    replacements: list[WaveReplacement] = []
     for sig_string, pwm in pm.waveforms.items():
         for awgs in compiled_experiment.wave_indices:
-            awg_wave_map: Dict[str, List[Union[int, str]]] = awgs["value"]
+            awg_wave_map: dict[str, list[int | str]] = awgs["value"]
             target_wave = awg_wave_map.get(sig_string)
             if target_wave is None:
                 continue
@@ -222,16 +222,21 @@ def calc_wave_replacements(
                     current_waves=current_waves,
                 )
             replacements.append(
-                WaveReplacement(awgs["filename"], sig_string, replacement_type, samples)
+                WaveReplacement(
+                    awg_id=awgs["filename"],
+                    sig_string=sig_string,
+                    replacement_type=replacement_type,
+                    samples=samples,
+                )
             )
 
     return replacements
 
 
 def replace_pulse(
-    target: Union[CompiledExperiment, Session],
-    pulse_uid: Union[str, Pulse],
-    pulse_or_array: Union[ArrayLike, Pulse],
+    target: CompiledExperiment | Session,
+    pulse_uid: str | Pulse,
+    pulse_or_array: ArrayLike | Pulse,
 ):
     """Replaces specific pulse with the new sample data.
 

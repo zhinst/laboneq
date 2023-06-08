@@ -58,16 +58,16 @@ class AwgKey:
 @dataclass
 class AwgConfig:
     # QA
-    raw_acquire_length: int = None
-    result_length: int = None
+    raw_acquire_length: int | None = None
+    result_length: int | None = None
     acquire_signals: Set[str] = field(default_factory=set)
-    target_feedback_register: int = None
+    target_feedback_register: int | None = None
     # SG
-    qa_signal_id: str = None
-    command_table_match_offset: int = None
-    source_feedback_register: int = None
-    zsync_bit: int = None
-    feedback_register_bit: int = None
+    qa_signal_id: str | None = None
+    command_table_match_offset: int | None = None
+    source_feedback_register: int | None = None
+    zsync_bit: int | None = None
+    feedback_register_bit: int | None = None
 
 
 AwgConfigs = Dict[AwgKey, AwgConfig]
@@ -523,7 +523,12 @@ def pre_process_compiled(
             iq_settings=_pre_process_iq_settings_hdawg(initialization)
         )
 
-    execution = ExecutionFactoryFromExperiment().make(compiled_experiment.experiment)
+    if hasattr(compiled_experiment, "execution"):
+        execution = compiled_experiment.execution
+    else:
+        execution = ExecutionFactoryFromExperiment().make(
+            compiled_experiment.experiment
+        )
     result_shapes, rt_execution_infos = _calculate_result_shapes(execution)
     awg_configs = _calculate_awg_configs(rt_execution_infos, recipe.experiment)
     attribute_value_tracker, oscillator_ids = _pre_process_attributes(

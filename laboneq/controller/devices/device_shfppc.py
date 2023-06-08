@@ -52,8 +52,9 @@ class DeviceSHFPPC(DeviceZI):
         initialization: Initialization.Data,
     ) -> Iterator[DeviceAttribute]:
         yield from super().pre_process_attributes(initialization)
-        ppchannels = initialization.ppchannels or {}
-        for channel, settings in ppchannels.items():
+        ppchannels = initialization.ppchannels or []
+        for settings in ppchannels:
+            channel = settings["channel"]
             for key, attribute_name in DeviceSHFPPC.attribute_keys.items():
                 if key in settings:
                     yield DeviceAttribute(
@@ -70,19 +71,20 @@ class DeviceSHFPPC(DeviceZI):
         self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
     ) -> list[DaqNodeAction]:
         nodes_to_set: list[DaqNodeAction] = []
-        ppchannels = initialization.ppchannels or {}
+        ppchannels = initialization.ppchannels or []
 
         def _convert(value):
             if isinstance(value, bool):
                 return 1 if value else 0
             return value
 
-        for ch, settings in ppchannels.items():
+        for settings in ppchannels:
+            ch = settings["channel"]
             nodes_to_set.append(
                 DaqNodeSetAction(self._daq, self._key_to_path("_on", ch), 1)
             )
             for key, value in settings.items():
-                if value is None or key in DeviceSHFPPC.attribute_keys:
+                if value is None or key in [*DeviceSHFPPC.attribute_keys, "channel"]:
                     # Skip not set values, or values that are bound to sweep params and will
                     # be set during the NT execution.
                     continue

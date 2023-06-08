@@ -21,7 +21,7 @@ from laboneq.controller.communication import (
 from laboneq.controller.devices.device_zi import DeviceZI, delay_to_rounded_samples
 from laboneq.controller.devices.zi_node_monitor import Command, NodeControlBase
 from laboneq.controller.recipe_1_4_0 import IO, Initialization, IntegratorAllocation
-from laboneq.controller.recipe_enums import DIOConfigType
+from laboneq.controller.recipe_enums import TriggeringMode
 from laboneq.controller.recipe_processor import (
     AwgConfig,
     AwgKey,
@@ -88,12 +88,6 @@ class DeviceUHFQA(DeviceZI):
             nodes.append(f"/{self.serial}/awgs/{awg}/ready")
         return nodes
 
-    def _error_as_leader(self):
-        raise LabOneQControllerException(
-            f"{self.dev_repr}: UHFQA cannot be configured as leader, ensure correct DIO "
-            f"connection in the device setup"
-        )
-
     def _error_ambiguous_upstream(self):
         raise LabOneQControllerException(
             f"{self.dev_repr}: Can't determine unambiguously upstream device for UHFQA, ensure "
@@ -102,7 +96,10 @@ class DeviceUHFQA(DeviceZI):
 
     def update_clock_source(self, force_internal: bool | None):
         if len(self._uplinks) == 0:
-            self._error_as_leader()
+            raise LabOneQControllerException(
+                f"{self.dev_repr}: UHFQA cannot be configured as leader, ensure correct DIO "
+                f"connection in the device setup"
+            )
         if len(self._uplinks) > 1:
             self._error_ambiguous_upstream()
         upstream = next(iter(self._uplinks.values()))()
@@ -629,9 +626,9 @@ class DeviceUHFQA(DeviceZI):
                 ]
             )
 
-        dio_mode = initialization.config.dio_mode
+        triggering_mode = initialization.config.triggering_mode
 
-        if dio_mode == DIOConfigType.HDAWG or dio_mode is None:
+        if triggering_mode == TriggeringMode.DIO_FOLLOWER or triggering_mode is None:
             nodes_to_configure_triggers.extend(
                 [
                     DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/mode", 2),
@@ -639,7 +636,7 @@ class DeviceUHFQA(DeviceZI):
                     DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/extclk", 0x2),
                 ]
             )
-        elif dio_mode == DIOConfigType.DIO_FOLLOWER_OF_HDAWG_LEADER:
+        elif triggering_mode == TriggeringMode.DESKTOP_DIO_FOLLOWER:
             nodes_to_configure_triggers.extend(
                 [
                     DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/mode", 0),
@@ -668,9 +665,6 @@ class DeviceUHFQA(DeviceZI):
             )
 
         return nodes_to_configure_triggers
-
-    def configure_as_leader(self, initialization: Initialization.Data):
-        self._error_as_leader()
 
     def _get_integrator_measurement_data(
         self, result_index, num_results, averages_divider: int

@@ -104,8 +104,8 @@ def _compute_start_with_latency(
 
     qa_signal_obj = schedule_data.signal_objects[acquire_pulse.pulse.signal_id]
 
-    qa_device_type = qa_signal_obj.device_type
-    qa_sampling_rate = qa_signal_obj.sampling_rate
+    qa_device_type = qa_signal_obj.awg.device_type
+    qa_sampling_rate = qa_signal_obj.awg.sampling_rate
 
     if qa_signal_obj.is_qc:
         toolkit_qatype = QAType.SHFQC
@@ -151,7 +151,7 @@ def _compute_start_with_latency(
 
     for signal in signals:
         sg_signal_obj = schedule_data.signal_objects[signal]
-        sg_device_type = sg_signal_obj.device_type
+        sg_device_type = sg_signal_obj.awg.device_type
         if sg_signal_obj.is_qc:
             toolkit_sgtype = SGType.SHFQC
         else:
@@ -183,7 +183,7 @@ def _compute_start_with_latency(
         time_of_pulse_played = time_of_arrival_at_register + EXECUTETABLEENTRY_LATENCY
 
         sg_seq_rate = schedule_data.sampling_rate_tracker.sequencer_rate_for_device(
-            sg_signal_obj.device_id
+            sg_signal_obj.awg.device_id
         )
         sg_seq_dt_for_latency_in_ts = round(
             1 / (2 * sg_seq_rate * schedule_data.TINYSAMPLE)

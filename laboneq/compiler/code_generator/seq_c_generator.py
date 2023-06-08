@@ -53,7 +53,6 @@ SeqCStatement = Dict[str, Any]
 
 class SeqCGenerator:
     def __init__(self):
-        self._seq_c_text = ""
         self._statements: List[SeqCStatement] = []
 
     def num_statements(self):
@@ -319,82 +318,82 @@ class SeqCGenerator:
         )
 
     def generate_seq_c(self):
-        self._seq_c_text = ""
+        seq_c_statements = []
         for statement in self._statements:
             _logger.debug("processing statement %s", statement)
-            self.emit_statement(statement)
-        return self._seq_c_text
+            seq_c_statements.append(self.emit_statement(statement))
+        return "".join(seq_c_statements)
 
     def emit_statement(self, statement: SeqCStatement):
         if statement["type"] == "generic_statement":
             if "assign_to" in statement:
-                self._seq_c_text += f"{statement['assign_to']} = "
-            self._seq_c_text += statement["function"] + "("
+                assign_to = f"{statement['assign_to']} = "
+            else:
+                assign_to = ""
             if "args" in statement:
-                is_first = True
-                for arg in statement["args"]:
-                    if not is_first:
-                        self._seq_c_text += ","
-                    else:
-                        is_first = False
-                    self._seq_c_text += str(arg)
-            self._seq_c_text += ");\n"
+                args = ",".join(str(s) for s in statement["args"])
+            else:
+                args = ""
+            return f"{assign_to}{statement['function']}({args});\n"
 
         elif statement["type"] == "wave_declaration":
             if statement["device_type"].supports_binary_waves:
-                self._seq_c_text += self._gen_wave_declaration_placeholder(statement)
-        elif statement["type"] == "function_def":
-            self._seq_c_text += statement["text"]
-        elif statement["type"] == "variable_declaration":
-            self._seq_c_text += "var " + statement["variable_name"]
-            if "initial_value" in statement:
-                self._seq_c_text += " = " + str(statement["initial_value"]) + ";\n"
+                return self._gen_wave_declaration_placeholder(statement)
             else:
-                self._seq_c_text += ";\n"
+                return ""
+
+        elif statement["type"] == "function_def":
+            return statement["text"]
+
+        elif statement["type"] == "variable_declaration":
+            if "initial_value" in statement:
+                initial_value = f" = {statement['initial_value']}"
+            else:
+                initial_value = ""
+            return f"var {statement['variable_name']}{initial_value};\n"
+
         elif statement["type"] == "variable_assignment":
-            self._seq_c_text += statement["variable_name"]
-            self._seq_c_text += " = " + str(statement["value"]) + ";\n"
+            return f"{statement['variable_name']} = {statement['value']};\n"
+
         elif statement["type"] == "variable_increment":
-            self._seq_c_text += statement["variable_name"]
-            self._seq_c_text += " += " + str(statement["value"]) + ";\n"
+            return f"{statement['variable_name']} += {statement['value']};\n"
 
         elif statement["type"] == "do_while":
-            self._seq_c_text += "do {\n"
-            self._seq_c_text += textwrap.indent(
-                statement["body"].generate_seq_c(), "  "
-            )
-            self._seq_c_text += "}\nwhile(" + statement["condition"] + ");\n"
+            body = textwrap.indent(statement["body"].generate_seq_c(), "  ")
+            return f"do {{\n{body}}}\nwhile({statement['condition']});\n"
 
         elif statement["type"] == "repeat":
-            self._seq_c_text += f"repeat ({statement['num_repeats']}) {{\n"
-            self._seq_c_text += textwrap.indent(
-                statement["body"].generate_seq_c(), "  "
-            )
-            self._seq_c_text += "}\n"
+            body = textwrap.indent(statement["body"].generate_seq_c(), "  ")
+            return f"repeat ({statement['num_repeats']}) {{\n{body}}}\n"
 
         elif statement["type"] == "assignWaveIndex":
             wave_channels = self._build_wave_channel_assignment(statement)
-            self._seq_c_text += (
-                f'assignWaveIndex({wave_channels},{statement["wave_index"]});\n'
-            )
+            return f'assignWaveIndex({wave_channels},{statement["wave_index"]});\n'
+
         elif statement["type"] == "playWave":
             wave_channels = self._build_wave_channel_assignment(statement)
-            self._seq_c_text += f"playWave({wave_channels});\n"
+            return f"playWave({wave_channels});\n"
+
         elif statement["type"] == "executeTableEntry":
-            self._seq_c_text += f"executeTableEntry({statement['table_index']}"
             latency = statement.get("latency", None)
             if latency is not None:
-                self._seq_c_text += f", {latency}"
-            self._seq_c_text += ");"
+                latency = f", {latency}"
+            else:
+                latency = ""
             if statement["comment"] != "":
-                self._seq_c_text += f"  // {statement['comment']}"
-            self._seq_c_text += "\n"
+                comment = f"  // {statement['comment']}"
+            else:
+                comment = ""
+            return f"executeTableEntry({statement['table_index']}{latency});{comment}\n"
+
         elif statement["type"] == "comment":
-            self._seq_c_text += "/* " + statement["text"] + " */\n"
+            return "/* " + statement["text"] + " */\n"
+
         elif statement["type"] == "playZero":
-            self._seq_c_text += f"playZero({statement['num_samples']});\n"
+            return f"playZero({statement['num_samples']});\n"
+
         elif statement["type"] == "playHold":
-            self._seq_c_text += f"playHold({statement['num_samples']});\n"
+            return f"playHold({statement['num_samples']});\n"
 
     def _gen_wave_declaration_placeholder(self, statement: SeqCStatement) -> str:
         dual_channel = statement["signal_type"] in ["iq", "double", "multi"]
@@ -410,10 +409,9 @@ class SeqCGenerator:
             makers_declaration2 = ",true"
 
         if dual_channel:
-
             return (
                 f"wave w{sig_string}_i = placeholder({length}{makers_declaration1});\n"
-                + f"wave w{sig_string}_q = placeholder({length}{makers_declaration2});\n"
+                f"wave w{sig_string}_q = placeholder({length}{makers_declaration2});\n"
             )
         else:
             return f"wave w{sig_string} = placeholder({length}{makers_declaration1});\n"

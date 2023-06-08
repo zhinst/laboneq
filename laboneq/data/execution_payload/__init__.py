@@ -1,4 +1,4 @@
-# Copyright 2020 Zurich Instruments AG
+# Copyright 2023 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -79,9 +79,8 @@ class TargetServer:
 
 @dataclass
 class InitializationConfiguration:
-    reference_clock_source: str = None
     reference_clock: float = None
-    dio_mode: str = None
+    triggering_mode: str = None
 
 
 @dataclass
@@ -89,6 +88,11 @@ class JobParameter:
     uid: str = None
     values: List[Any] = field(default_factory=list)
     axis_name: str = None
+
+
+@dataclass
+class NtStepKey:
+    indices: List[int] = field(default_factory=list)
 
 
 @dataclass
@@ -125,6 +129,15 @@ class NearTimeOperation:
 
 
 @dataclass
+class RealTimeExecutionInit:
+    device: TargetDevice = None
+    awg_id: int = None
+    seqc: SourceCode = None
+    wave_indices_ref: str = None
+    nt_step: NtStepKey = None
+
+
+@dataclass
 class WaveForm:
     uid: str = None
     sampling_rate: float = None
@@ -142,6 +155,7 @@ class NearTimeProgram:
 class Recipe:
     uid: str = None
     initializations: List[Initialization] = field(default_factory=list)
+    realtime_execution_init: List[RealTimeExecutionInit] = field(default_factory=list)
     waveforms: List[WaveForm] = field(default_factory=list)
     measurement_map: Dict[str, str] = field(default_factory=dict)
 

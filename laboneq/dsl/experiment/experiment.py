@@ -37,6 +37,16 @@ def experiment_id_generator():
 
 @dataclass(init=True, repr=True, order=True)
 class Experiment:
+    """LabOne Q Experiment.
+
+    Args:
+        uid: UID of the experiment.
+        signals: Experiment signals.
+        version: Used DSL version.
+        epsilon: Epsilon. Not used.
+        sections: Sections in the experiment.
+    """
+
     uid: str = field(default_factory=experiment_id_generator)
     signals: Union[Dict[str, ExperimentSignal], List[ExperimentSignal]] = field(
         default_factory=dict
@@ -45,7 +55,7 @@ class Experiment:
     epsilon: float = field(default=0.0)
     sections: List[Section] = field(default_factory=list)
     _section_stack: Deque[Section] = field(
-        default_factory=deque, repr=False, compare=False
+        default_factory=deque, repr=False, compare=False, init=False
     )
 
     def __post_init__(self):

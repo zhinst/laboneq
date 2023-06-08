@@ -8,11 +8,10 @@ import itertools
 import logging
 import os
 import time
-import traceback
 from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 import zhinst.utils
@@ -21,7 +20,6 @@ from numpy import typing as npt
 from laboneq import __version__
 from laboneq._observability import tracing
 from laboneq.controller.communication import (
-    CachingStrategy,
     DaqNodeAction,
     DaqNodeSetAction,
     DaqWrapper,
@@ -31,7 +29,7 @@ from laboneq.controller.devices.device_collection import DeviceCollection
 from laboneq.controller.devices.device_uhfqa import DeviceUHFQA
 from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.devices.zi_node_monitor import ResponseWaiter
-from laboneq.controller.protected_session import ProtectedSession
+from laboneq.controller.near_time_runner import NearTimeRunner
 from laboneq.controller.recipe_1_4_0 import *  # noqa: F401, F403
 from laboneq.controller.recipe_processor import (
     RecipeData,
@@ -43,11 +41,10 @@ from laboneq.controller.results import (
     make_acquired_result,
     make_empty_results,
 )
-from laboneq.controller.util import LabOneQControllerException, SweepParamsTracker
+from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.core.utilities.replace_pulse import ReplacementType, calc_wave_replacements
-from laboneq.executor.executor import ExecutorBase, LoopingMode, LoopType
 
 if TYPE_CHECKING:
     from laboneq.core.types import CompiledExperiment
@@ -81,12 +78,27 @@ def _stop_controller(controller: "Controller"):
     controller.shut_down()
 
 
+@dataclass
+class _SeqCCompileItem:
+    awg_index: int
+    seqc_code: str | None = None
+    seqc_filename: str | None = None
+    elf: bytes | None = None
+
+
+@dataclass
+class _UploadItem:
+    seqc_item: _SeqCCompileItem | None
+    waves: list[Any] | None
+    command_table: dict[Any] | None
+
+
 class Controller:
     def __init__(
         self,
         run_parameters: ControllerRunParameters = None,
         device_setup: DeviceSetup = None,
-        user_functions: Dict[str, Callable] = None,
+        user_functions: dict[str, Callable] = None,
     ):
         self._run_parameters = run_parameters or ControllerRunParameters()
         self._devices = DeviceCollection(
@@ -99,8 +111,8 @@ class Controller:
 
         # Waves which are uploaded to the devices via pulse replacements
         self._current_waves = []
-        self._user_functions: Dict[str, Callable] = user_functions
-        self._nodes_from_user_functions: List[DaqNodeAction] = []
+        self._user_functions: dict[str, Callable] = user_functions
+        self._nodes_from_user_functions: list[DaqNodeAction] = []
         self._recipe_data: RecipeData = None
         self._session = None
         self._results: Results = None
@@ -122,13 +134,8 @@ class Controller:
             reset_nodes.extend(device.collect_reset_nodes())
         batch_set(reset_nodes)
 
-    def _wait_for_conditions_to_start(self):
-        for initialization in self._recipe_data.initializations:
-            device = self._devices.find_by_uid(initialization.device_uid)
-            device.wait_for_conditions_to_start()
-
     def _apply_recipe_initializations(self):
-        nodes_to_initialize: List[DaqNodeAction] = []
+        nodes_to_initialize: list[DaqNodeAction] = []
         for initialization in self._recipe_data.initializations:
             device = self._devices.find_by_uid(initialization.device_uid)
             nodes_to_initialize.extend(
@@ -153,18 +160,16 @@ class Controller:
         batch_set(nodes_to_initialize)
 
     @tracing.trace("awg-program-handler")
-    def _upload_awg_programs(self):
-        @dataclass
-        class UploadItem:
-            awg_index: int
-            seqc_code: str
-            seqc_filename: str
-            waves: List[Any]
-            command_table: Dict[Any]
-            elf: Optional[bytes]
-
+    def _upload_awg_programs(self, nt_step: NtStepKey):
+        if any(i != 0 for i in nt_step.indices):
+            # Only execute for the 1st NT step
+            # TODO(2K): remove, once NT steps are properly passed in the recipe.
+            # See also commented out condition on selection of realtime_execution_init
+            # element below
+            return
         # Mise en place:
-        awg_data: Dict[DeviceZI, List[UploadItem]] = defaultdict(list)
+        awg_data: dict[DeviceZI, list[_UploadItem]] = defaultdict(list)
+        compile_data: dict[DeviceZI, list[_SeqCCompileItem]] = defaultdict(list)
         recipe_data = self._recipe_data
         acquisition_type = RtExecutionInfo.get_acquisition_type(
             recipe_data.rt_execution_infos
@@ -177,17 +182,121 @@ class Controller:
 
             for awg_obj in initialization.awgs:
                 awg_index = awg_obj.awg
-                seqc_code, waves, command_table = device.prepare_seqc(
-                    awg_obj.seqc, recipe_data.compiled
+                rt_exec_step = next(
+                    (
+                        r
+                        for r in recipe_data.recipe.experiment.realtime_execution_init
+                        if r.device_id == initialization.device_uid
+                        and r.awg_id == awg_obj.awg
+                        # and r.nt_step == nt_step # TODO(2K): Enable once ready in recipe
+                    ),
+                    None,
                 )
+                if rt_exec_step is None:
+                    continue
+
+                seqc_code = device.prepare_seqc(
+                    recipe_data.compiled, rt_exec_step.seqc_ref
+                )
+                # TODO(2K): rt_exec_step.wave_indices_ref instead of seqc_ref
+                waves = device.prepare_waves(
+                    recipe_data.compiled, rt_exec_step.seqc_ref
+                )
+                # TODO(2K): rt_exec_step.ct_ref instead of seqc_ref
+                command_table = device.prepare_command_table(
+                    recipe_data.compiled, rt_exec_step.seqc_ref
+                )
+
+                seqc_item = _SeqCCompileItem(
+                    awg_index=awg_index,
+                )
+
+                if seqc_code is not None:
+                    seqc_item.seqc_code = seqc_code
+                    seqc_item.seqc_filename = rt_exec_step.seqc_ref
+                    compile_data[device].append(seqc_item)
+
                 awg_data[device].append(
-                    UploadItem(
-                        awg_index, seqc_code, awg_obj.seqc, waves, command_table, None
+                    _UploadItem(
+                        seqc_item=seqc_item,
+                        waves=waves,
+                        command_table=command_table,
                     )
                 )
 
+        self._awg_compile(compile_data)
+
+        # Upload AWG programs, waveforms, and command tables:
+        elf_node_settings: dict[DaqWrapper, list[DaqNodeSetAction]] = defaultdict(list)
+        elf_upload_conditions: dict[DaqWrapper, dict[str, Any]] = defaultdict(dict)
+        wf_node_settings: dict[DaqWrapper, list[DaqNodeSetAction]] = defaultdict(list)
+        for device, items in awg_data.items():
+            for item in items:
+                seqc_item = item.seqc_item
+                if seqc_item.elf is not None:
+                    set_action = device.prepare_upload_elf(
+                        seqc_item.elf, seqc_item.awg_index, seqc_item.seqc_filename
+                    )
+                    node_settings = elf_node_settings[device.daq]
+                    node_settings.append(set_action)
+
+                    if isinstance(device, DeviceUHFQA):
+                        # UHFQA does not yet support upload of ELF and waveforms in
+                        # a single transaction.
+                        ready_node = device.get_sequencer_paths(
+                            seqc_item.awg_index
+                        ).ready
+                        elf_upload_conditions[device.daq][ready_node] = 1
+
+                if isinstance(device, DeviceUHFQA):
+                    wf_dev_nodes = wf_node_settings[device.daq]
+                else:
+                    wf_dev_nodes = elf_node_settings[device.daq]
+
+                if item.waves is not None:
+                    wf_dev_nodes += device.prepare_upload_all_binary_waves(
+                        seqc_item.awg_index, item.waves, acquisition_type
+                    )
+
+                if item.command_table is not None:
+                    set_action = device.prepare_upload_command_table(
+                        seqc_item.awg_index, item.command_table
+                    )
+                    wf_dev_nodes.append(set_action)
+
+        if len(elf_upload_conditions) > 0:
+            for daq in elf_upload_conditions.keys():
+                daq.node_monitor.flush()
+
+        _logger.debug("Started upload of AWG programs...")
+        with tracing.get_tracer().start_span("upload-awg-programs") as _:
+            for daq, nodes in elf_node_settings.items():
+                daq.batch_set(nodes)
+
+            if len(elf_upload_conditions) > 0:
+                _logger.debug("Waiting for devices...")
+                response_waiter = ResponseWaiter()
+                for daq, conditions in elf_upload_conditions.items():
+                    response_waiter.add(
+                        target=daq.node_monitor,
+                        conditions=conditions,
+                    )
+                timeout_s = 10
+                if not response_waiter.wait_all(timeout=timeout_s):
+                    raise LabOneQControllerException(
+                        f"AWGs not in ready state within timeout ({timeout_s} s)."
+                    )
+            if len(wf_node_settings) > 0:
+                _logger.debug("Started upload of waveforms...")
+                with tracing.get_tracer().start_span("upload-waveforms") as _:
+                    for daq, nodes in wf_node_settings.items():
+                        daq.batch_set(nodes)
+        _logger.debug("Finished upload.")
+
+    @classmethod
+    def _awg_compile(cls, awg_data: dict[DeviceZI, list[_SeqCCompileItem]]):
         # Compile in parallel:
-        def worker(device: DeviceZI, item: UploadItem, span: tracing.Span):
+        def worker(device: DeviceZI, item: _SeqCCompileItem, span: tracing.Span):
             with tracing.get_tracer().start_span("compile-awg-thread", span) as _:
                 item.elf = device.compile_seqc(
                     item.seqc_code, item.awg_index, item.seqc_filename
@@ -217,65 +326,6 @@ class Controller:
                     )
         _logger.debug("Finished compilation.")
 
-        # Upload AWG programs, waveforms, and command tables:
-        elf_node_settings: Dict[DaqWrapper, List[DaqNodeSetAction]] = defaultdict(list)
-        elf_upload_conditions: Dict[DaqWrapper, Dict[str, Any]] = defaultdict(dict)
-        wf_node_settings: Dict[DaqWrapper, List[DaqNodeSetAction]] = defaultdict(list)
-        for device, items in awg_data.items():
-            for item in items:
-                elf_filename = item.seqc_filename.rsplit(".seqc", 1)[0] + ".elf"
-                set_action = device.prepare_upload_elf(
-                    item.elf, item.awg_index, elf_filename
-                )
-                node_settings = elf_node_settings[device.daq]
-                node_settings.append(set_action)
-
-                if isinstance(device, DeviceUHFQA):
-                    # UHFQA does not yet support upload of ELF and waveforms in
-                    # a single transaction.
-                    ready_node = device.get_sequencer_paths(item.awg_index)["ready"]
-                    elf_upload_conditions[device.daq][ready_node] = 1
-                    node_settings = wf_node_settings[device.daq]
-
-                node_settings += device.prepare_upload_all_binary_waves(
-                    item.awg_index, item.waves, acquisition_type
-                )
-
-                if item.command_table is not None:
-                    set_action = device.prepare_upload_command_table(
-                        item.awg_index, item.command_table
-                    )
-                    node_settings.append(set_action)
-
-        if len(elf_upload_conditions) > 0:
-            for daq in elf_upload_conditions.keys():
-                daq.node_monitor.flush()
-
-        _logger.debug("Started upload of AWG programs...")
-        with tracing.get_tracer().start_span("upload-awg-programs") as _:
-            for daq, nodes in elf_node_settings.items():
-                daq.batch_set(nodes)
-
-            if len(elf_upload_conditions) > 0:
-                _logger.debug("Waiting for devices...")
-                response_waiter = ResponseWaiter()
-                for daq, conditions in elf_upload_conditions.items():
-                    response_waiter.add(
-                        target=daq.node_monitor,
-                        conditions=conditions,
-                    )
-                timeout_s = 10
-                if not response_waiter.wait_all(timeout=timeout_s):
-                    raise LabOneQControllerException(
-                        f"AWGs not in ready state within timeout ({timeout_s} s)."
-                    )
-
-                _logger.debug("Started upload of waveforms...")
-                with tracing.get_tracer().start_span("upload-waveforms") as _:
-                    for daq, nodes in wf_node_settings.items():
-                        daq.batch_set(nodes)
-        _logger.debug("Finished upload.")
-
     def _set_nodes_after_awg_program_upload(self):
         nodes_to_initialize = []
         for initialization in self._recipe_data.initializations:
@@ -286,38 +336,10 @@ class Controller:
 
         batch_set(nodes_to_initialize)
 
-    def _initialize_awgs(self):
+    def _initialize_awgs(self, nt_step: NtStepKey):
         self._set_nodes_before_awg_program_upload()
-        self._upload_awg_programs()
+        self._upload_awg_programs(nt_step=nt_step)
         self._set_nodes_after_awg_program_upload()
-
-    def _configure_leaders(self):
-        _logger.debug(
-            "Using %s as leaders.",
-            [d.dev_repr for _, d in self._devices.leaders],
-        )
-        for uid, device in self._devices.leaders:
-            init = self._recipe_data.get_initialization_by_device_uid(uid)
-            if init is None:
-                continue
-            device.configure_as_leader(init)
-
-    def _configure_followers(self):
-        _logger.debug(
-            "Using %s as followers.",
-            [d.dev_repr for _, d in self._devices.followers],
-        )
-        nodes_to_configure_followers = []
-
-        for uid, device in self._devices.followers:
-            init = self._recipe_data.get_initialization_by_device_uid(uid)
-            if init is None:
-                continue
-            nodes_to_configure_followers.extend(
-                device.collect_follower_configuration_nodes(init)
-            )
-
-        batch_set(nodes_to_configure_followers)
 
     def _configure_triggers(self):
         nodes_to_configure_triggers = []
@@ -338,11 +360,6 @@ class Controller:
         self._reset_to_idle_state()
         self._allocate_resources()
         self._apply_recipe_initializations()
-        self._initialize_awgs()
-        self._configure_leaders()
-        self._configure_followers()
-        self._configure_triggers()
-        self._wait_for_conditions_to_start()
 
     def _execute_one_step_followers(self):
         _logger.debug("Settings nodes to start on followers")
@@ -361,8 +378,8 @@ class Controller:
             )
         if not response_waiter.wait_all(timeout=2):
             _logger.warning(
-                "Conditions to start RT on followers still not fulfilled after 2 seconds, "
-                "nonetheless trying to continue..."
+                "Conditions to start RT on followers still not fulfilled after 2"
+                " seconds, nonetheless trying to continue..."
             )
 
         # Standalone workaround: The device is triggering itself,
@@ -402,8 +419,10 @@ class Controller:
             )
         if not response_waiter.wait_all(timeout=guarded_wait_time):
             _logger.warning(
-                "Stop conditions still not fulfilled after %f s, estimated execution time "
-                "was %.2f s. Continuing to the next step.",
+                (
+                    "Stop conditions still not fulfilled after %f s, estimated"
+                    " execution time was %.2f s. Continuing to the next step."
+                ),
                 guarded_wait_time,
                 min_wait_time,
             )
@@ -435,8 +454,8 @@ class Controller:
 
     def disable_outputs(
         self,
-        device_uids: List[str] = None,
-        logical_signals: List[str] = None,
+        device_uids: list[str] = None,
+        logical_signals: list[str] = None,
         unused_only: bool = False,
     ):
         self._devices.disable_outputs(device_uids, logical_signals, unused_only)
@@ -474,9 +493,7 @@ class Controller:
             self._nodes_from_user_functions = []
             _logger.info("Starting near-time execution...")
             with tracing.get_tracer().start_span("near-time-execution"):
-                Controller.NearTimeExecutor(controller=self).run(
-                    self._recipe_data.execution
-                )
+                NearTimeRunner(controller=self).run(self._recipe_data.execution)
             _logger.info("Finished near-time execution.")
             for _, device in self._devices.all:
                 device.check_errors()
@@ -489,19 +506,16 @@ class Controller:
         if self._run_parameters.disconnect is True:
             self.disconnect()
 
-    def _find_awg(self, seqc_name: str) -> Tuple[str, int]:
+    def _find_awg(self, seqc_name: str) -> tuple[str, int]:
         # TODO(2K): Do this in the recipe preprocessor, or even modify the compiled experiment
-        # data model
-        for init in self._recipe_data.initializations:
-            if init.awgs is None:
-                continue
-            for awg in init.awgs:
-                if awg.seqc == seqc_name:
-                    return init.device_uid, awg.awg
+        #  data model
+        for rt_exec_step in self._recipe_data.recipe.experiment.realtime_execution_init:
+            if rt_exec_step.seqc_ref == seqc_name:
+                return rt_exec_step.device_id, rt_exec_step.awg_id
         return None, None
 
     def replace_pulse(
-        self, pulse_uid: Union[str, Pulse], pulse_or_array: Union[npt.ArrayLike, Pulse]
+        self, pulse_uid: str | Pulse, pulse_or_array: npt.ArrayLike | Pulse
     ):
         """Replaces specific pulse with the new sample data on the device.
 
@@ -519,14 +533,20 @@ class Controller:
             ].waveforms.values():
                 if any([instance.can_compress for instance in waveform.instances]):
                     _logger.error(
-                        "Pulse replacement on pulses that allow compression not allowed. Pulse %s",
+                        (
+                            "Pulse replacement on pulses that allow compression not"
+                            " allowed. Pulse %s"
+                        ),
                         pulse_uid,
                     )
                     return
 
         if hasattr(pulse_uid, "can_compress") and pulse_uid.can_compress:
             _logger.error(
-                "Pulse replacement on pulses that allow compression not allowed. Pulse %s",
+                (
+                    "Pulse replacement on pulses that allow compression not allowed."
+                    " Pulse %s"
+                ),
                 pulse_uid.uid,
             )
             return
@@ -543,9 +563,9 @@ class Controller:
                 for a in self._recipe_data.compiled.wave_indices
                 if a["filename"] == repl.awg_id
             )
-            awg_wave_map: Dict[str, List[Union[int, str]]] = awg_indices["value"]
+            awg_wave_map: dict[str, list[int | str]] = awg_indices["value"]
             target_wave = awg_wave_map.get(repl.sig_string)
-            seqc_name = repl.awg_id[: -len("_waveindices.csv")] + ".seqc"
+            seqc_name = repl.awg_id
             awg = self._find_awg(seqc_name)
             device = self._devices.find_by_uid(awg[0])
 
@@ -604,103 +624,6 @@ class Controller:
             )
         return nodes_to_prepare_rt
 
-    class NearTimeExecutor(ExecutorBase):
-        def __init__(self, controller: Controller):
-            super().__init__(looping_mode=LoopingMode.EXECUTE)
-            self.controller = controller
-            self.user_set_nodes = []
-            self.nt_loop_indices: list[int] = []
-            self.sweep_params_tracker = SweepParamsTracker()
-
-        def set_handler(self, path: str, value):
-            dev = self.controller._devices.find_by_node_path(path)
-            self.user_set_nodes.append(
-                DaqNodeSetAction(
-                    dev._daq, path, value, caching_strategy=CachingStrategy.NO_CACHE
-                )
-            )
-
-        def user_func_handler(self, func_name: str, args: Dict[str, Any]):
-            func = self.controller._user_functions.get(func_name)
-            if func is None:
-                raise LabOneQControllerException(
-                    f"User function '{func_name}' is not registered."
-                )
-            res = func(ProtectedSession(self.controller._session), **args)
-            user_func_results = self.controller._results.user_func_results.setdefault(
-                func_name, []
-            )
-            user_func_results.append(res)
-
-        def set_sw_param_handler(
-            self,
-            name: str,
-            index: int,
-            value: float,
-            axis_name: str,
-            values: npt.ArrayLike,
-        ):
-            self.sweep_params_tracker.set_param(name, value)
-
-        def for_loop_handler(
-            self, count: int, index: int, loop_type: LoopType, enter: bool
-        ):
-            if enter:
-                self.nt_loop_indices.append(index)
-            else:
-                self.nt_loop_indices.pop()
-
-        def rt_handler(
-            self,
-            count: int,
-            uid: str,
-            averaging_mode: AveragingMode,
-            acquisition_type: AcquisitionType,
-            enter: bool,
-        ):
-            if enter:
-                attribute_value_tracker = (
-                    self.controller._recipe_data.attribute_value_tracker
-                )
-                for param in self.sweep_params_tracker.updated_params():
-                    attribute_value_tracker.update(
-                        param, self.sweep_params_tracker.get_param(param)
-                    )
-                self.sweep_params_tracker.clear_for_next_step()
-
-                nt_sweep_nodes: list[DaqNodeAction] = []
-                for device_uid, device in self.controller._devices.all:
-                    nt_sweep_nodes.extend(
-                        device.collect_prepare_nt_step_nodes(
-                            attribute_value_tracker.device_view(device_uid),
-                            self.controller._recipe_data,
-                        )
-                    )
-
-                step_prepare_nodes = self.controller._prepare_rt_execution(
-                    rt_section_uid=uid
-                )
-
-                batch_set([*self.user_set_nodes, *nt_sweep_nodes, *step_prepare_nodes])
-                self.user_set_nodes.clear()
-
-                for retry in range(3):  # Up to 3 retries
-                    if retry > 0:
-                        _logger.info("Step retry %s of 3...", retry + 1)
-                        batch_set(step_prepare_nodes)
-                    try:
-                        self.controller._execute_one_step(acquisition_type)
-                        self.controller._read_one_step_results(
-                            nt_loop_indices=self.nt_loop_indices, rt_section_uid=uid
-                        )
-                        break
-                    except LabOneQControllerException:  # TODO(2K): introduce "hard" controller exceptions
-                        self.controller._report_step_error(
-                            nt_loop_indices=self.nt_loop_indices,
-                            rt_section_uid=uid,
-                            message=traceback.format_exc(),
-                        )
-
     def _prepare_result_shapes(self):
         if self._results is None:
             self._results = make_empty_results()
@@ -715,9 +638,9 @@ class Controller:
             if rt_info.acquisition_type == AcquisitionType.RAW:
                 if len(self._recipe_data.result_shapes) > 1:
                     raise LabOneQControllerException(
-                        f"Multiple raw acquire events with handles "
+                        "Multiple raw acquire events with handles "
                         f"{list(self._recipe_data.result_shapes.keys())}. "
-                        f"Only single raw acquire per experiment allowed."
+                        "Only single raw acquire per experiment allowed."
                     )
                 signal_id = rt_info.signal_by_handle(handle)
                 awg_config = self._recipe_data.awg_config_by_acquire_signal(signal_id)
@@ -755,7 +678,7 @@ class Controller:
                 empty_res.data[:] = np.nan
             self._results.acquired_results[handle] = empty_res
 
-    def _read_one_step_results(self, nt_loop_indices: List[int], rt_section_uid: str):
+    def _read_one_step_results(self, nt_step: NtStepKey, rt_section_uid: str):
         if rt_section_uid is None:
             return  # Old recipe-based execution - skip partial result processing
         rt_execution_info = self._recipe_data.rt_execution_infos[rt_section_uid]
@@ -807,12 +730,10 @@ class Controller:
                             continue  # unused entries in sparse result vector map to None handle
                         result = self._results.acquired_results[handle]
                         build_partial_result(
-                            result, nt_loop_indices, raw_results, mapping, handle
+                            result, nt_step, raw_results, mapping, handle
                         )
 
-    def _report_step_error(
-        self, nt_loop_indices: List[int], rt_section_uid: str, message: str
-    ):
+    def _report_step_error(self, nt_step: NtStepKey, rt_section_uid: str, message: str):
         self._results.execution_errors.append(
-            (deepcopy(nt_loop_indices), rt_section_uid, message)
+            (list(nt_step.indices), rt_section_uid, message)
         )

@@ -6,11 +6,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, List, Optional
 
+from laboneq.compiler.common.awg_signal_type import AWGSignalType
 from laboneq.core.types.enums.mixer_type import MixerType
 
 if TYPE_CHECKING:
     from laboneq.compiler.common.awg_info import AWGInfo
-    from laboneq.compiler.common.device_type import DeviceType
 
 
 @dataclass(init=True, repr=True, order=True)
@@ -38,12 +38,9 @@ class SignalObj:
     """
 
     id: str
-    sampling_rate: float
     start_delay: float
     delay_signal: float
-    signal_type: str
-    device_id: str
-    device_type: DeviceType
+    signal_type: AWGSignalType | str
     base_delay_signal: Optional[float] = None
     oscillator_frequency: float = None  # for software modulation only
     pulses: List = field(default_factory=list)

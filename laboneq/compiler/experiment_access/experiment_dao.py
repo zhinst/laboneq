@@ -27,12 +27,16 @@ _logger = logging.getLogger(__name__)
 
 class ExperimentDAO:
     def __init__(self, experiment, core_device_setup=None, core_experiment=None):
-        self._data = {}
+        self._data: dict[str, Any] = {}
         self._acquisition_type: AcquisitionType = None  # type: ignore
+
         if core_device_setup is not None and core_experiment is not None:
-            self._load_from_core(core_device_setup, core_experiment)
+            self._loader = self._load_from_core(core_device_setup, core_experiment)
         else:
-            self._load_experiment(experiment)
+            self._loader = self._load_experiment(experiment)
+        self._data = self._loader.data()
+        self._acquisition_type = self._loader.acquisition_type
+
         self.validate_experiment()
 
     def __eq__(self, other):
@@ -72,7 +76,7 @@ class ExperimentDAO:
             "amplifier_pump": None,
         }
 
-    def _load_experiment(self, experiment):
+    def _load_experiment(self, experiment) -> JsonLoader:
         loader = JsonLoader()
         try:
             validator = loader.schema_validator()
@@ -82,14 +86,12 @@ class ExperimentDAO:
             for line in str(exception).splitlines():
                 _logger.warning("validation error: %s", line)
         loader.load(experiment)
-        self._data = loader.data()
-        self._acquisition_type = loader.acquisition_type
+        return loader
 
-    def _load_from_core(self, device_setup, experiment):
+    def _load_from_core(self, device_setup, experiment) -> DSLLoader:
         loader = DSLLoader()
         loader.load(experiment, device_setup)
-        self._data = loader.data()
-        self._acquisition_type = loader.acquisition_type
+        return loader
 
     @staticmethod
     def dump(experiment_dao: "ExperimentDAO"):
@@ -278,30 +280,27 @@ class ExperimentDAO:
     def is_branch(self, section_id):
         return self._data["sections"][section_id].state is not None
 
-    def pqscs(self):
-        return [p[0] for p in self._data["pqsc_ports"]]
+    def pqscs(self) -> list[str]:
+        return list({p[0] for p in self._loader.pqsc_ports})
 
-    def pqsc_ports(self, pqsc_device_id):
+    def pqsc_ports(self, pqsc_device_uid: str):
         return [
             {"device": p[1], "port": p[2]}
-            for p in self._data["pqsc_ports"]
-            if p[0] == pqsc_device_id
+            for p in self._loader.pqsc_ports
+            if p[0] == pqsc_device_uid
         ]
 
-    def dio_followers(self):
-        return [d[1] for d in self._data["dios"]]
+    def dio_followers(self) -> list[str]:
+        return [d[1] for d in self._loader.dios]
 
-    def dio_leader(self, device_id):
+    def dio_leader(self, device_id) -> str | None:
         try:
-            return next(d[0] for d in self._data["dios"] if d[1] == device_id)
+            return next(d[0] for d in self._loader.dios if d[1] == device_id)
         except StopIteration:
             return None
 
-    def dio_connections(self):
-        return [(dio[0], dio[1]) for dio in self._data["dios"]]
-
-    def is_dio_leader(self, device_id):
-        return bool({d[1] for d in self._data["dios"] if d[0] == device_id})
+    def dio_connections(self) -> list[tuple[str, str]]:
+        return self._loader.dios
 
     def section_signals(self, section_id):
         return self._data["section_signals"].get(section_id, set())
@@ -389,7 +388,7 @@ class ExperimentDAO:
     def amplitude(self, signal_id) -> float | str | None:
         return self._data["signal_connections"][signal_id]["amplitude"]
 
-    def amplifier_pump(self, signal_id) -> tuple[str, int, dict[str, Any]] | None:
+    def amplifier_pump(self, signal_id) -> tuple[str, dict[str, Any]] | None:
         return self._data["signal_connections"][signal_id]["amplifier_pump"]
 
     def section_pulses(self, section_id, signal_id):

@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 from laboneq.core.types.enums.mixer_type import MixerType
 from laboneq.core.validators import dicts_equal
@@ -27,11 +27,11 @@ class PulseInstance:
     modulation_phase: float = None
     channel: int = None  # The AWG channel for rf_signals
     needs_conjugate: bool = False  # SHF devices need that for now
-    play_pulse_parameters: Optional[Dict[str, Any]] = field(default_factory=dict)
-    pulse_pulse_parameters: Optional[Dict[str, Any]] = field(default_factory=dict)
+    play_pulse_parameters: dict[str, Any] = field(default_factory=dict)
+    pulse_pulse_parameters: dict[str, Any] = field(default_factory=dict)
 
     # uid of pulses that this instance overlaps with
-    overlaps: List[str] = None
+    overlaps: list[str] = None
     has_marker1: bool = False
     has_marker2: bool = False
     can_compress: bool = False
@@ -45,8 +45,8 @@ class PulseWaveformMap:
     length_samples: int
     signal_type: str
     # UHFQA's HW modulation is not an IQ mixer. None for flux pulses etc.
-    mixer_type: Optional[MixerType] = field(default=None)
-    instances: List[PulseInstance] = field(default_factory=list)
+    mixer_type: MixerType | None = None
+    instances: list[PulseInstance] = field(default_factory=list)
 
 
 @dataclass
@@ -55,7 +55,7 @@ class PulseMapEntry:
 
     # key: waveform signature string
     #: A mapping of signals to :py:class:`PulseWaveformMap`
-    waveforms: Dict[str, PulseWaveformMap] = field(default_factory=dict)
+    waveforms: dict[str, PulseWaveformMap] = field(default_factory=dict)
 
 
 @dataclass(init=True, repr=True, order=True)
@@ -69,31 +69,31 @@ class CompiledExperiment:
     experiment: Experiment = field(default=None)
 
     #: Instructions to the controller for running the experiment.
-    recipe: Dict[str, Any] = field(default=None)
+    recipe: dict[str, Any] = field(default=None)
 
     #: The seqC source code, per device.
-    src: List[Dict[str, str]] = field(default=None)
+    src: list[dict[str, str]] = field(default=None)
 
     #: The waveforms that will be uploaded to the devices.
-    waves: List[Dict[str, Any]] = field(default=None)
+    waves: list[dict[str, Any]] = field(default=None)
 
     #: Data structure for storing the indices or filenames by which the waveforms are
     #: referred to during and after upload.
-    wave_indices: List[Dict[str, Any]] = field(default=None)
+    wave_indices: list[dict[str, Any]] = field(default=None)
 
-    #: Datastructure for storing the command table data
-    command_tables: List[Dict[str, Any]] = field(default_factory=list)
+    #: Data structure for storing the command table data
+    command_tables: list[dict[str, Any]] = field(default_factory=list)
 
-    #: List of events as scheduled by the compiler.
-    schedule: Dict[str, Any] = field(default=None)
+    #: list of events as scheduled by the compiler.
+    schedule: dict[str, Any] = field(default=None)
 
     #: A representation of the source experiment, using primitive Python datatypes only
     #: (dicts, lists, etc.)
-    experiment_dict: Dict[str, Any] = field(default=None)
+    experiment_dict: dict[str, Any] = field(default=None)
 
     #: Data structure for mapping pulses (in the experiment) to waveforms (on the
     #: device).
-    pulse_map: Dict[str, PulseMapEntry] = field(default=None)
+    pulse_map: dict[str, PulseMapEntry] = field(default=None)
 
     def __eq__(self, other: CompiledExperiment):
         if self is other:
@@ -113,9 +113,7 @@ class CompiledExperiment:
             and self.pulse_map == other.pulse_map
         )
 
-    def replace_pulse(
-        self, pulse_uid: Union[str, Pulse], pulse_or_array: "Union[ArrayLike, Pulse]"
-    ):
+    def replace_pulse(self, pulse_uid: str | Pulse, pulse_or_array: ArrayLike | Pulse):
         """Permanently replaces specific pulse with the new sample data in the compiled
         experiment. Previous pulse data is lost.
 

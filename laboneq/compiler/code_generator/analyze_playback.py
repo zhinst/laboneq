@@ -458,7 +458,7 @@ def _make_pulse_signature(pulse_iv: Interval, wave_iv: Interval, signal_ids: Lis
 def _interval_start_after_oscillator_reset(
     events, signals, compacted_intervals: IntervalTree, delay, sampling_rate
 ):
-    device_id = next(iter(signals.values())).device_id
+    device_id = next(iter(signals.values())).awg.device_id
 
     osc_reset_event_time = [
         length_to_samples(event["time"] + delay, sampling_rate)

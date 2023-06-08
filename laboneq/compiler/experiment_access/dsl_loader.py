@@ -7,6 +7,7 @@ import copy
 import logging
 import typing
 import uuid
+from dataclasses import dataclass
 from numbers import Number
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, Tuple
@@ -29,6 +30,7 @@ from laboneq.core.types.enums import (
 if typing.TYPE_CHECKING:
     from laboneq.dsl.device import DeviceSetup
     from laboneq.dsl.device.io_units import LogicalSignal
+    from laboneq.dsl.device.ports import Port
     from laboneq.dsl.experiment import Experiment, ExperimentSignal
     from laboneq.dsl.parameter import Parameter
 
@@ -54,7 +56,9 @@ class DSLLoader(LoaderBase):
             self.add_server(server.uid, server.host, server.port, server.api_level)
 
         dest_path_devices = {}
-        ppc_connections = {}
+
+        # signal -> (device_uid, channel)
+        ppc_connections: dict[str, tuple[str, int]] = {}
 
         reference_clock = None
         for device in device_setup.instruments:
@@ -156,23 +160,24 @@ class DSLLoader(LoaderBase):
             ls_map[ls.path] = ls
 
         mapped_logical_signals: Dict["LogicalSignal", "ExperimentSignal"] = {}
+        experiment_signals_by_physical_channel = {}
         for signal in experiment.signals.values():
             # Need to create copy here as we'll possibly patch those ExperimentSignals
             # that touch the same PhysicalChannel
             try:
-                mapped_logical_signals[
-                    ls_map[signal.mapped_logical_signal_path]
-                ] = copy.deepcopy(signal)
+                mapped_ls = ls_map[signal.mapped_logical_signal_path]
             except KeyError:
                 raise LabOneQException(
                     f"Experiment signal '{signal.uid}' has no mapping to a logical signal."
                 )
-
-        experiment_signals_by_physical_channel = {}
-        for ls, exp_signal in mapped_logical_signals.items():
+            sig_copy = copy.deepcopy(signal)
+            mapped_logical_signals[mapped_ls] = sig_copy
             experiment_signals_by_physical_channel.setdefault(
-                ls.physical_channel, []
-            ).append(exp_signal)
+                mapped_ls.physical_channel, []
+            )
+            experiment_signals_by_physical_channel[mapped_ls.physical_channel].append(
+                sig_copy
+            )
 
         from laboneq.dsl.device.io_units.physical_channel import (
             PHYSICAL_CHANNEL_CALIBRATION_FIELDS,
@@ -184,14 +189,19 @@ class DSLLoader(LoaderBase):
             for field_ in PHYSICAL_CHANNEL_CALIBRATION_FIELDS:
                 if field_ in ["mixer_calibration", "precompensation"]:
                     continue
-                values = set()
+                unique_value = None
+                conflicting = False
                 for exp_signal in exp_signals:
                     if not exp_signal.is_calibrated():
                         continue
                     value = getattr(exp_signal, field_)
                     if value is not None:
-                        values.add(value)
-                if len(values) > 1:
+                        if unique_value is None:
+                            unique_value = value
+                        elif unique_value != value:
+                            conflicting = True
+                            break
+                if conflicting:
                     conflicting_signals = [
                         exp_signal.uid
                         for exp_signal in exp_signals
@@ -203,12 +213,11 @@ class DSLLoader(LoaderBase):
                         f"touch physical channel '{pc.uid}', but provide conflicting "
                         f"settings for calibration field '{field_}'."
                     )
-                if len(values) > 0:
+                if unique_value is not None:
                     # Make sure all the experiment signals agree.
-                    value = values.pop()
                     for exp_signal in exp_signals:
                         if exp_signal.is_calibrated():
-                            setattr(exp_signal.calibration, field_, value)
+                            setattr(exp_signal.calibration, field_, unique_value)
 
         for ls in all_logical_signals:
             calibration = ls.calibration
@@ -368,8 +377,9 @@ class DSLLoader(LoaderBase):
                         )
                     else:
                         ls_amplifier_pumps[ls.path] = (
-                            *ppc_connections[ls.path],
+                            ppc_connections[ls.path][0],
                             {
+                                "channel": ppc_connections[ls.path][1],
                                 "pump_freq": opt_param(amp_pump.pump_freq),
                                 "pump_power": opt_param(amp_pump.pump_power),
                                 "cancellation": amp_pump.cancellation,
@@ -479,46 +489,40 @@ class DSLLoader(LoaderBase):
                 },
             )
 
-        open_inputs = {}
-        for instrument in device_setup.instruments:
-            for input_obj in instrument.ports:
-                if input_obj.direction == IODirection.IN:
-                    open_inputs[
-                        (instrument.uid, input_obj.signal_type)
-                    ] = input_obj.connector_labels
+        available_inputs = {
+            (instrument.uid, input_obj.signal_type)
+            for instrument in device_setup.instruments
+            for input_obj in instrument.ports
+            if input_obj.direction == IODirection.IN
+        }
 
-        syncing_connections = []
-        for instrument in device_setup.instruments:
-            for connection in instrument.connections:
-                open_input_found = open_inputs.get(
-                    (connection.remote_path, connection.signal_type)
+        @dataclass
+        class _SyncingConnection:
+            leader_device_uid: str
+            follower_device_uid: str
+            signal_type: IOSignalType
+            output: Port | None
+
+        syncing_connections: list[_SyncingConnection] = [
+            _SyncingConnection(
+                leader_device_uid=instrument.uid,
+                follower_device_uid=connection.remote_path,
+                signal_type=connection.signal_type,
+                output=instrument.output_by_uid(connection.local_port),
+            )
+            for instrument in device_setup.instruments
+            for connection in instrument.connections
+            if (connection.remote_path, connection.signal_type) in available_inputs
+        ]
+
+        for sc in syncing_connections:
+            if sc.signal_type == IOSignalType.DIO:
+                self.dios.append((sc.leader_device_uid, sc.follower_device_uid))
+            elif sc.signal_type == IOSignalType.ZSYNC:
+                port = int(sc.output.physical_port_ids[0])
+                self.pqsc_ports.append(
+                    (sc.leader_device_uid, sc.follower_device_uid, port)
                 )
-                output = instrument.output_by_uid(connection.local_port)
-
-                if open_input_found is not None:
-                    syncing_connections.append(
-                        (
-                            instrument.uid,
-                            connection.remote_path,
-                            connection.signal_type,
-                            open_input_found,
-                            output,
-                        )
-                    )
-
-        for syncing_connection in syncing_connections:
-            signal_type = syncing_connection[2]
-            assert isinstance(syncing_connection[2], type(IOSignalType.DIO))
-            if signal_type == IOSignalType.DIO:
-                dio_leader = syncing_connection[0]
-                dio_follower = syncing_connection[1]
-                self._dios.append((dio_leader, dio_follower))
-
-            elif signal_type == IOSignalType.ZSYNC:
-                zsync_leader = syncing_connection[0]
-                zsync_follower = syncing_connection[1]
-                port = syncing_connection[4].physical_port_ids[0]
-                self._pqsc_ports.append((zsync_leader, zsync_follower, int(port)))
 
         seq_avg_section, sweep_sections = find_sequential_averaging(experiment)
         if seq_avg_section is not None and len(sweep_sections) > 0:
@@ -628,13 +632,9 @@ class DSLLoader(LoaderBase):
         has_repeat = False
         count = 1
 
-        averaging_type = None
         if hasattr(section, "count"):
             has_repeat = True
             count = section.count
-            if hasattr(section, "averaging_mode"):
-                if section.averaging_mode.value in ["cyclic", "sequential"]:
-                    averaging_type = "hardware"
 
         if hasattr(section, "parameters"):
             for parameter in section.parameters:
@@ -730,7 +730,6 @@ class DSLLoader(LoaderBase):
                 execution_type=execution_type,
                 count=count,
                 acquisition_types=acquisition_types,
-                averaging_type=averaging_type,
                 align=align,
                 on_system_grid=on_system_grid,
                 length=length,

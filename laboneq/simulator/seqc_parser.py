@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 # Note: The simulator may be used as a testing tool, so it must be independent of the production code
 # Do not add dependencies to the code being tested here (such as compiler, DSL asf.)
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy import typing as npt
@@ -294,9 +294,9 @@ class SeqCDescriptor:
     sampling_rate: float
     output_port_delay: float
     source: str = None
-    channels: List[int] = None
-    wave_index: Dict[Any, Any] = None
-    command_table: List[Any] = None
+    channels: list[int] = None
+    wave_index: dict[Any, Any] = None
+    command_table: list[Any] = None
 
 
 class Operation(Enum):
@@ -315,24 +315,24 @@ class SeqCEvent:
     start_samples: int
     length_samples: int
     operation: Operation
-    args: List[Any]
+    args: list[Any]
 
 
 @dataclass
 class WaveRefInfo:
     assigned_index: int = -1
-    wave_data_idx: List[int] = field(default_factory=list)
+    wave_data_idx: list[int] = field(default_factory=list)
     length_samples: int = None
 
 
 @dataclass
 class CommandTableEntryInfo:
-    abs_phase: Optional[float] = None
-    rel_phase: Optional[float] = None
-    abs_amplitude: Optional[float] = None
+    abs_phase: float | None = None
+    rel_phase: float | None = None
+    abs_amplitude: float | None = None
 
     @classmethod
-    def from_ct_entry(cls, ct_entry: Dict):
+    def from_ct_entry(cls, ct_entry: dict):
         d = {}
         if "phase" in ct_entry:
             # SHFSG
@@ -387,9 +387,9 @@ class CommandTableEntryInfo:
 
 @dataclass
 class SeqCSimulation:
-    events: List[SeqCEvent] = field(default_factory=list)
+    events: list[SeqCEvent] = field(default_factory=list)
     device_type: str = ""
-    waves: List[Any] = field(default_factory=list)
+    waves: list[Any] = field(default_factory=list)
     sampling_rate: float = field(default=2.0e9)
     startup_delay: float = field(default=0.0)
     output_port_delay: float = field(default=0.0)
@@ -400,7 +400,7 @@ class SimpleRuntime:
         self,
         descriptor: SeqCDescriptor,
         waves,
-        max_time: Optional[float],
+        max_time: float | None,
     ):
         self.predefined_consts = {
             "QA_INT_0": 0b1,
@@ -470,18 +470,21 @@ class SimpleRuntime:
         self.descriptor = descriptor
         self.waves = waves
         self.source = preprocess_source(descriptor.source)
-        self.wave_lookup_by_args: Dict[Any, WaveRefInfo] = {}
-        self.wave_names_by_index: Dict[int, List[str]] = {}
-        self.wave_data: List[Any] = []
-        self.max_time: Optional[float] = max_time
+        self.wave_lookup_by_args: dict[Any, WaveRefInfo] = {}
+        self.wave_names_by_index: dict[int, list[str]] = {}
+        self.wave_data: list[Any] = []
+        self.max_time: float | None = max_time
         self._oscillator_sweep_config = {}
-        self._oscillator_sweep_params: Dict[str, Dict[int, float]] = {}
+        self._oscillator_sweep_params: dict[str, dict[int, float]] = {}
+        self._command_table_by_index = {
+            ct["index"]: ct for ct in self.descriptor.command_table
+        }
 
     def _last_played_sample(self) -> int:
         ev = self.seqc_simulation.events
         return ev[-1].start_samples + ev[-1].length_samples if len(ev) > 0 else 0
 
-    def _last_play_start_samples(self) -> Tuple[int, int]:
+    def _last_play_start_samples(self) -> tuple[int, int]:
         # Returns a time in samples and an index where the next point-in-time event
         # has to be positioned relative to the last time-span event. This is to support
         # the SeqC rule of point-in-time events (like startQA) be aligned with the start
@@ -519,7 +522,7 @@ class SimpleRuntime:
     def _args2key(self, args):
         return tuple(tuple(a.items()) if isinstance(a, dict) else a for a in args)
 
-    def _update_wave_refs(self, wave_names: List[str], known_wave: WaveRefInfo):
+    def _update_wave_refs(self, wave_names: list[str], known_wave: WaveRefInfo):
         known_length = known_wave.length_samples  # make VSCode's code parser happy
         if known_length is not None:
             return
@@ -578,11 +581,18 @@ class SimpleRuntime:
 
     def _append_wave_event(
         self,
-        wave_names: List[str],
+        wave_names: list[str],
         known_wave: WaveRefInfo,
-        ct_info: Optional[CommandTableEntryInfo],
+        ct_info: CommandTableEntryInfo | None,
     ):
         self._update_wave_refs(wave_names, known_wave)
+
+        uses_marker_1 = any(
+            ["marker1" in wave for wave in wave_names if wave is not None]
+        )
+        uses_marker_2 = any(
+            ["marker2" in wave for wave in wave_names if wave is not None]
+        )
 
         time_samples = self._last_played_sample()
         self.seqc_simulation.events.append(
@@ -590,7 +600,11 @@ class SimpleRuntime:
                 start_samples=time_samples,
                 length_samples=known_wave.length_samples,
                 operation=Operation.PLAY_WAVE,
-                args=[known_wave.wave_data_idx, ct_info],
+                args=[
+                    known_wave.wave_data_idx,
+                    ct_info,
+                    {"marker1": uses_marker_1, "marker2": uses_marker_2},
+                ],
             )
         )
 
@@ -671,9 +685,7 @@ class SimpleRuntime:
             # todo(JL): Find a better index via the command table offset; take last for now
             ct_index = self.descriptor.command_table[-1]["index"]
 
-        ct_entry = next(
-            iter(i for i in self.descriptor.command_table if i["index"] == ct_index)
-        )
+        ct_entry = self._command_table_by_index[ct_index]
         if "waveform" not in ct_entry:
             return  # todo: simulator does not yet support playZero via command table
 
@@ -693,6 +705,10 @@ class SimpleRuntime:
             ]
         else:
             assert False, f"Unknown signal type: {wave['type']}"
+
+        for candidate_wave in self.waves.keys():
+            if wave["wave_name"] in candidate_wave and "marker" in candidate_wave:
+                wave_names.append(candidate_wave)
 
         ct_info = CommandTableEntryInfo.from_ct_entry(ct_entry)
 
@@ -915,9 +931,9 @@ def find_device(recipe, device_uid):
 
 def analyze_recipe(
     recipe, sources, wave_indices, command_tables
-) -> List[SeqCDescriptor]:
-    outputs: Dict[str, List[int]] = {}
-    seqc_descriptors_from_recipe: Dict[str, SeqCDescriptor] = {}
+) -> list[SeqCDescriptor]:
+    outputs: dict[str, list[int]] = {}
+    seqc_descriptors_from_recipe: dict[str, SeqCDescriptor] = {}
     for init in recipe["experiment"]["initializations"]:
         device_uid = init["device_uid"]
         device = find_device(recipe, device_uid)
@@ -931,22 +947,21 @@ def analyze_recipe(
             sampling_rate = get_frequency(device_type)
         startup_delay = -80e-9
         if device_type == "HDAWG" and "config" in init:
-            if "dio_mode" in init["config"]:
-                dio_mode = init["config"]["dio_mode"]
-                if dio_mode == "hdawg_leader":
-                    if sampling_rate == 2e9:
-                        startup_delay = -24e-9
-                    else:
-                        startup_delay = -20e-9
+            triggering_mode = init["config"].get("triggering_mode")
+            if triggering_mode == "desktop_leader":
+                if sampling_rate == 2e9:
+                    startup_delay = -24e-9
+                else:
+                    startup_delay = -20e-9
 
         # TODO(2K): input port_delay previously was not taken into account by the simulator
         # - keeping it as is for not breaking the tests. To be cleaned up.
-        input_channel_delays: Dict[int, float] = {
+        input_channel_delays: dict[int, float] = {
             i["channel"]: i["scheduler_port_delay"]  # + i.get("port_delay", 0.0)
             for i in init.get("inputs", [])
         }
 
-        output_channel_delays: Dict[int, float] = {
+        output_channel_delays: dict[int, float] = {
             o["channel"]: o["scheduler_port_delay"] + o.get("port_delay", 0.0)
             for o in init.get("outputs", [])
         }
@@ -958,8 +973,15 @@ def analyze_recipe(
         awg_index = 0
         if "awgs" in init:
             for awg in init["awgs"]:
-                seqc = awg["seqc"]
                 awg_nr = awg["awg"]
+                rt_exec_step = next(
+                    iter(
+                        r
+                        for r in recipe["experiment"]["realtime_execution_init"]
+                        if r["device_id"] == device_uid and r["awg_id"] == awg_nr
+                    )
+                )
+                seqc = rt_exec_step["seqc_ref"]
                 if device_type == "SHFSG" or device_type == "SHFQA":
                     input_channel = awg_nr
                     output_channels = [awg_nr]
@@ -995,7 +1017,7 @@ def analyze_recipe(
                         seqc
                     ].output_port_delay += precompensation_delay
 
-                channels: List[int] = [
+                channels: list[int] = [
                     output["channel"]
                     for output in init["outputs"]
                     if output["channel"] in output_channels
@@ -1008,9 +1030,7 @@ def analyze_recipe(
 
     seq_c_wave_indices = {}
     for wave_index in wave_indices:
-        wave_seq_c_filename = (
-            wave_index["filename"][: -len("_waveindices.csv")] + ".seqc"
-        )
+        wave_seq_c_filename = wave_index["filename"]
         if len(wave_index["value"]) > 0:
             seq_c_wave_indices[wave_seq_c_filename] = {}
             for wave_name, index_value in wave_index["value"].items():
@@ -1094,7 +1114,7 @@ def preprocess_source(text):
 
 def _analyze_compiled(
     compiled: CompiledExperiment,
-) -> Tuple[List[SeqCDescriptor], Dict[str, npt.ArrayLike]]:
+) -> tuple[list[SeqCDescriptor], dict[str, npt.ArrayLike]]:
     if isinstance(compiled, dict):
         compiled = SimpleNamespace(
             recipe=compiled["recipe"],
@@ -1103,7 +1123,10 @@ def _analyze_compiled(
             wave_indices=compiled["wave_indices"],
         )
     seqc_descriptors = analyze_recipe(
-        compiled.recipe, compiled.src, compiled.wave_indices, compiled.command_tables
+        compiled.recipe,
+        compiled.src,
+        compiled.wave_indices,
+        compiled.command_tables,
     )
 
     read_wave_bin = lambda w: w if w.ndim == 1 else np.array([[s] for s in w])
@@ -1111,9 +1134,9 @@ def _analyze_compiled(
     return seqc_descriptors, waves
 
 
-def simulate(compiled: CompiledExperiment, max_time=None) -> Dict[str, SeqCSimulation]:
+def simulate(compiled: CompiledExperiment, max_time=None) -> dict[str, SeqCSimulation]:
     seqc_descriptors, waves = _analyze_compiled(compiled)
-    results: Dict[str, SeqCSimulation] = {}
+    results: dict[str, SeqCSimulation] = {}
     for descriptor in seqc_descriptors:
         results[descriptor.name] = run_single_source(descriptor, waves, max_time)
     return results

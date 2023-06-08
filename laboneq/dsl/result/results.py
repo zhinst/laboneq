@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any
 
 from laboneq.core.exceptions import LabOneQException
 
@@ -32,10 +32,10 @@ class Results:
     compiled_experiment: CompiledExperiment = field(default=None)
 
     #: The acquired results, organized by handle.
-    acquired_results: Dict[str, AcquiredResult] = field(default=None)
+    acquired_results: dict[str, AcquiredResult] = field(default=None)
 
     #: List of the results of each user user function, by name of the function.
-    user_func_results: Dict[str, List[Any]] = field(default=None)
+    user_func_results: dict[str, list[Any]] = field(default=None)
 
     #: Any exceptions that occurred during the execution of the experiment. Entries are
     #: tuples of
@@ -43,7 +43,7 @@ class Results:
     #: * the indices of the loops where the error occurred,
     #: * the section uid,
     #: * the error message.
-    execution_errors: List[Tuple[List[int], str, str]] = field(default=None)
+    execution_errors: list[tuple[list[int], str, str]] = field(default=None)
 
     def __eq__(self, other):
         if self is other:
@@ -99,7 +99,7 @@ class Results:
         self._check_handle(handle)
         return self.acquired_results[handle].data
 
-    def get_axis_name(self, handle: str) -> List[Union[str, List[str]]]:
+    def get_axis_name(self, handle: str) -> list[str | list[str]]:
         """Returns the names of axes.
 
         Returns the list of axis names, that correspond to the dimensions of the result returned by
@@ -121,7 +121,7 @@ class Results:
         self._check_handle(handle)
         return self.acquired_results[handle].axis_name
 
-    def get_axis(self, handle: str) -> List[Union[ArrayLike, List[ArrayLike]]]:
+    def get_axis(self, handle: str) -> list[ArrayLike | list[ArrayLike]]:
         """Returns the axes grids.
 
         Returns the list, where each element represents an axis of the corresponding dimension of
@@ -144,7 +144,7 @@ class Results:
         self._check_handle(handle)
         return self.acquired_results[handle].axis
 
-    def get_last_nt_step(self, handle: str) -> List[int]:
+    def get_last_nt_step(self, handle: str) -> list[int]:
         """Returns the list of axis indices of the last measured near-time point.
 
         Returns the list of axis indices that represent the last measured near-time point. Use this
@@ -167,7 +167,7 @@ class Results:
         return self.acquired_results[handle].last_nt_step
 
     @property
-    def device_calibration(self) -> Optional[Calibration]:
+    def device_calibration(self) -> Calibration | None:
         """Get the device setup's calibration.
 
         See Also:

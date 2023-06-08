@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Dict
 from numpy import typing as npt
 
 from laboneq import controller as ctrl
-from laboneq.compiler import Compiler
+from laboneq.compiler.workflow.compiler import Compiler
 from laboneq.core.types import CompiledExperiment
 
 if TYPE_CHECKING:

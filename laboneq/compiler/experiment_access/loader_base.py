@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from laboneq.compiler.experiment_access.pulse_def import PulseDef
 from laboneq.compiler.experiment_access.section_info import SectionInfo
@@ -17,11 +17,15 @@ class LoaderBase:
     def __init__(self):
         self.acquisition_type: Optional[AcquisitionType] = None
 
+        # leader_uid, follower_uid, port
+        self.pqsc_ports: list[tuple[str, str, int]] = []
+
+        # leader_uid, follower_uid
+        self.dios: list[tuple[str, str]] = []
+
         self._devices = {}
         self._device_oscillators = {}
-        self._dios = []
         self._oscillators = {}
-        self._pqsc_ports = []
         self._pulses = {}
         self._sections = {}
         self._section_parameters = {}
@@ -37,13 +41,11 @@ class LoaderBase:
         self._root_sections = set()
         self._handle_acquires = {}
 
-    def data(self):
+    def data(self) -> dict[str, Any]:
         return {
             "devices": self._devices,
             "device_oscillators": self._device_oscillators,
-            "dios": self._dios,
             "oscillators": self._oscillators,
-            "pqsc_ports": self._pqsc_ports,
             "pulses": self._pulses,
             "root_sections": self._root_sections,
             "sections": self._sections,

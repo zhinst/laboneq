@@ -1,4 +1,4 @@
-# Copyright 2020 Zurich Instruments AG
+# Copyright 2023 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -20,6 +20,14 @@ class DeviceInfoType(Enum):
     SHFSG = auto()
     SHFQC = auto()
     PQSC = auto()
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}.{self.name}"
+
+
+class ReferenceClockSourceInfo(Enum):
+    INTERNAL = auto()
+    EXTERNAL = auto()
 
     def __repr__(self):
         return f"{self.__class__.__name__}.{self.name}"
@@ -51,6 +59,7 @@ class SignalInfoType(Enum):
 class DeviceInfo:
     uid: str = None
     device_type: DeviceInfoType = None
+    reference_clock_source: ReferenceClockSourceInfo = None
 
 
 @dataclass

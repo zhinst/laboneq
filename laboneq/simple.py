@@ -25,8 +25,6 @@ from laboneq.dsl.calibration import (
 )
 from laboneq.dsl.device import DeviceSetup
 from laboneq.dsl.device.device_setup_helper import DeviceSetupHelper
-from laboneq.dsl.device.quantum_operations import QuantumOperation
-from laboneq.dsl.device.qubits import QuantumElement, Qubit
 from laboneq.dsl.enums import (
     AcquisitionType,
     AveragingMode,
@@ -49,8 +47,10 @@ from laboneq.dsl.experiment import (
     Sweep,
     pulse_library,
 )
+from laboneq.dsl.quantum import QuantumOperation, Qubit, QubitParameters
 from laboneq.dsl.result import Results
 from laboneq.dsl.session import Session
 from laboneq.dsl.utils import has_onboard_lo
+from laboneq.implementation.data_storage.l1q_database_wrapper import L1QDatabase
 from laboneq.pulse_sheet_viewer.pulse_sheet_viewer import show_pulse_sheet
 from laboneq.simulator.output_simulator import OutputSimulator

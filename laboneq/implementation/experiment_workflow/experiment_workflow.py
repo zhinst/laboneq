@@ -91,8 +91,8 @@ class ExperimentWorkflow(ExperimentAPI):
         """
         Run an experiment job.
         """
-        job_id = self._experiment_job_queue.submit_execution_payload(execution_payload)
-        return self._experiment_job_queue.run_job_result(job_id)
+        job_id = self._runner.submit_execution_payload(execution_payload)
+        return self._runner.run_job_result(job_id)
 
     def build_payload_for_current_experiment(self) -> ExecutionPayload:
         """

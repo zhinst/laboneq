@@ -13,7 +13,6 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from sortedcollections import SortedDict
 
 from laboneq._observability.tracing import trace
-from laboneq.compiler.code_generator import CodeGenerator
 from laboneq.compiler.code_generator.measurement_calculator import (
     IntegrationTimes,
     SignalDelays,
@@ -37,6 +36,10 @@ from laboneq.compiler.workflow.precompensation_helpers import (
     precompensation_is_nonzero,
     verify_precompensation_parameters,
 )
+from laboneq.compiler.workflow.realtime_compiler import (
+    RealtimeCompiler,
+    RealtimeCompilerOutput,
+)
 from laboneq.compiler.workflow.recipe_generator import RecipeGenerator
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.compiled_experiment import CompiledExperiment
@@ -48,7 +51,7 @@ _logger = logging.getLogger(__name__)
 
 @dataclass
 class LeaderProperties:
-    global_leader: str = None
+    global_leader: str | None = None
     is_desktop_setup: bool = False
     internal_followers: List[str] = field(default_factory=list)
 
@@ -64,6 +67,7 @@ class Compiler:
         self._settings = compiler_settings.from_dict(settings)
         self._sampling_rate_tracker: SamplingRateTracker = None
         self._scheduler: Scheduler = None
+        self._rt_compiler_output: RealtimeCompilerOutput = None
 
         self._leader_properties = LeaderProperties()
         self._clock_settings: Dict[str, Any] = {}
@@ -213,7 +217,7 @@ class Compiler:
         self._clock_settings["use_2GHz_for_HDAWG"] = has_shf
         self._leader_properties.global_leader = leader
 
-    def _process_experiment(self, experiment):
+    def _process_experiment(self):
         self._calc_osc_numbering()
         self._calc_awgs()
         self._calc_shfqa_generator_allocation()
@@ -224,22 +228,15 @@ class Compiler:
         self._calc_integration_unit_allocation()
         self._precompensations = self._calc_precompensations()
         self._signal_objects = self._generate_signal_objects()
-        _logger.debug("Processing Sections:::::::")
 
-        if not self._settings.USE_EXPERIMENTAL_SCHEDULER:
-            _logger.warning(
-                "The legacy scheduler has been removed; "
-                "the 'USE_EXPERIMENTAL_SCHEDULER' compiler flag is ignored."
-            )
-
-        self._scheduler = Scheduler(
+        rt_compiler = RealtimeCompiler(
             self._experiment_dao,
             self._sampling_rate_tracker,
             self._signal_objects,
-            self._clock_settings,
             self._settings,
         )
-        self._scheduler.run()
+
+        self._rt_compiler_output = rt_compiler.run()
 
     @staticmethod
     def _get_total_rounded_delay(delay, signal_id, device_type, sampling_rate):
@@ -264,29 +261,6 @@ class Compiler:
                 device_type.sample_multiple,
             )
         return delay_rounded
-
-    @trace("compiler.generate-code()")
-    def _generate_code(self):
-        code_generator = CodeGenerator(self._settings)
-        self._code_generator = code_generator
-
-        for signal_obj in self._signal_objects.values():
-            code_generator.add_signal(signal_obj)
-
-        _logger.debug("Preparing events for code generator")
-        events = self._scheduler.event_timing(expand_loops=False)
-
-        code_generator.gen_acquire_map(events, self._experiment_dao)
-        code_generator.gen_seq_c(
-            events,
-            {k: self._experiment_dao.pulse(k) for k in self._experiment_dao.pulses()},
-        )
-        self._command_table_match_offsets = code_generator.command_table_match_offsets()
-        self._feedback_connections = code_generator.feedback_connections()
-        self._feedback_registers = code_generator.feedback_registers()
-        code_generator.gen_waves()
-
-        _logger.debug("Code generation completed")
 
     def _calc_osc_numbering(self):
         self._osc_numbering = {}
@@ -596,13 +570,10 @@ class Compiler:
 
             signal_obj = SignalObj(
                 id=signal_id,
-                sampling_rate=sampling_rate,
                 start_delay=start_delay,
                 delay_signal=delay_signal,
                 signal_type=signal_type,
-                device_id=device_id,
                 awg=awg,
-                device_type=device_type,
                 oscillator_frequency=oscillator_frequency,
                 channels=channels,
                 port_delay=port_delay,
@@ -950,7 +921,7 @@ class Compiler:
             self._experiment_dao, self._leader_properties, self._clock_settings
         )
 
-        for output in self.calc_outputs(self._code_generator.signal_delays()):
+        for output in self.calc_outputs(self._rt_compiler_output.signal_delays):
             _logger.debug("Adding output %s", output)
             recipe_generator.add_output(
                 output["device_id"],
@@ -972,7 +943,7 @@ class Compiler:
                 amplitude=output["amplitude"],
             )
 
-        for input in self.calc_inputs(self._code_generator.signal_delays()):
+        for input in self.calc_inputs(self._rt_compiler_output.signal_delays):
             _logger.debug("Adding input %s", input)
             recipe_generator.add_input(
                 input["device_id"],
@@ -1000,7 +971,7 @@ class Compiler:
                 # is used via a match/state construct for the drive signals of this awg
                 qa_signal_ids = {
                     h.acquire
-                    for h in self._feedback_connections.values()
+                    for h in self._rt_compiler_output.feedback_connections.values()
                     if h.drive.intersection(awg_signals)
                 }
                 if len(qa_signal_ids) > 1:
@@ -1012,39 +983,46 @@ class Compiler:
                     device_id=device_id,
                     awg_number=awg.awg_number,
                     signal_type=signal_type.value,
-                    seqc=awg.seqc,
                     qa_signal_id=next(iter(qa_signal_ids), None),
-                    command_table_match_offset=self._command_table_match_offsets.get(
+                    command_table_match_offset=self._rt_compiler_output.command_table_match_offsets.get(
                         awg.key
                     ),
-                    feedback_register=self._feedback_registers.get(awg.key),
+                    feedback_register=self._rt_compiler_output.feedback_registers.get(
+                        awg.key
+                    ),
+                )
+                recipe_generator.add_realtime_step(
+                    device_id=device_id,
+                    awg_id=awg.awg_number,
+                    seqc_filename=awg.seqc,
+                    wave_indices_name="",  # todo
+                    nt_loop_indices=[],  # todo
                 )
 
-        if self._code_generator is None:
-            raise Exception("Code generator not initialized")
+        assert self._rt_compiler_output is not None
         recipe_generator.add_oscillator_params(self._experiment_dao)
         recipe_generator.add_integrator_allocations(
             self._integration_unit_allocation,
             self._experiment_dao,
-            self._code_generator.integration_weights(),
+            self._rt_compiler_output.integration_weights,
         )
 
         recipe_generator.add_acquire_lengths(
-            integration_times=self._code_generator.integration_times()
+            integration_times=self._rt_compiler_output.integration_times
         )
 
         recipe_generator.add_measurements(
             self.calc_measurement_map(
-                integration_times=self._code_generator.integration_times()
+                integration_times=self._rt_compiler_output.integration_times
             )
         )
 
         recipe_generator.add_simultaneous_acquires(
-            self._code_generator.simultaneous_acquires()
+            self._rt_compiler_output.simultaneous_acquires
         )
 
         recipe_generator.add_total_execution_time(
-            self._code_generator.total_execution_time()
+            self._rt_compiler_output.total_execution_time
         )
 
         self._recipe = recipe_generator.recipe()
@@ -1053,86 +1031,14 @@ class Compiler:
     def compiler_output(self) -> CompiledExperiment:
         return CompiledExperiment(
             recipe=self._recipe,
-            src=self._code_generator.src(),
-            waves=self._code_generator.waves(),
-            wave_indices=self._code_generator.wave_indices(),
-            command_tables=self._code_generator.command_tables(),
-            schedule=self._prepare_schedule(),
+            src=self._rt_compiler_output.src,
+            waves=self._rt_compiler_output.waves,
+            wave_indices=self._rt_compiler_output.wave_indices,
+            command_tables=self._rt_compiler_output.command_tables,
+            schedule=self._rt_compiler_output.schedule,
             experiment_dict=ExperimentDAO.dump(self._experiment_dao),
-            pulse_map=self._code_generator.pulse_map(),
+            pulse_map=self._rt_compiler_output.pulse_map,
         )
-
-    def _prepare_schedule(self):
-        event_list = self._scheduler.event_timing(
-            expand_loops=self._settings.EXPAND_LOOPS_FOR_SCHEDULE,
-            max_events=self._settings.MAX_EVENTS_TO_PUBLISH,
-        )
-
-        event_list = [
-            {k: v for k, v in event.items() if v is not None} for event in event_list
-        ]
-
-        try:
-            root_section = self._experiment_dao.root_rt_sections()[0]
-        except IndexError:
-            return {
-                "event_list": [],
-                "section_graph": {},
-                "section_info": {},
-                "subsection_map": {},
-                "section_signals_with_children": {},
-                "sampling_rates": [],
-            }
-
-        preorder_map = self._scheduler.preorder_map()
-
-        section_info_out = {}
-
-        section_signals_with_children = {}
-
-        for section in [
-            root_section,
-            *self._experiment_dao.all_section_children(root_section),
-        ]:
-            section_info = self._experiment_dao.section_info(section)
-            section_display_name = section_info.section_display_name
-            section_signals_with_children[section] = list(
-                self._experiment_dao.section_signals_with_children(section)
-            )
-            section_info_out[section] = {
-                "section_display_name": section_display_name,
-                "preorder": preorder_map[section],
-            }
-
-        sampling_rate_tuples = []
-        for signal_id in self._experiment_dao.signals():
-            signal_info = self._experiment_dao.signal_info(signal_id)
-            device_id = signal_info.device_id
-            device_type = signal_info.device_type
-            sampling_rate_tuples.append(
-                (
-                    device_type,
-                    int(
-                        self._sampling_rate_tracker.sampling_rate_for_device(device_id)
-                    ),
-                )
-            )
-
-        sampling_rates = [
-            [list(set([d[0] for d in sampling_rate_tuples if d[1] == r])), r]
-            for r in set([t[1] for t in sampling_rate_tuples])
-        ]
-
-        _logger.debug("Pulse sheet generation completed")
-
-        return {
-            "event_list": event_list,
-            "section_graph": [],  # deprecated: not needed by PSV
-            "section_info": section_info_out,
-            "subsection_map": {},  # deprecated: not needed by PSV
-            "section_signals_with_children": section_signals_with_children,
-            "sampling_rates": sampling_rates,
-        }
 
     def dump_src(self, info=False):
         for src in self.compiler_output().src:
@@ -1156,9 +1062,7 @@ class Compiler:
 
         self.use_experiment(data)
         self._analyze_setup()
-        self._process_experiment(data)
-
-        self._generate_code()
+        self._process_experiment()
         self._generate_recipe()
 
         retval = self.compiler_output()

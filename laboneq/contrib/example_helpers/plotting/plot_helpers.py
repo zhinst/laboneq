@@ -38,6 +38,9 @@ def plot_simulation(
     yaxis_label="Amplitude",
     plot_width=6,
     plot_height=2,
+    save=False,
+    filename="filename",
+    filetype="svg",
 ):
     simulation = OutputSimulator(compiled_experiment)
 
@@ -73,6 +76,7 @@ def plot_simulation(
             start=start_time,
             output_length=length,
             get_trigger=True,
+            get_marker=True,
             get_frequency=True,
         )
 
@@ -135,7 +139,7 @@ def plot_simulation(
                     xs.append(my_snippet.time)
 
                     y1s.append(my_snippet.trigger)
-                    labels1.append(f"{signal} Trigger")
+                    labels1.append(f"{signal} - Trigger")
 
                     titles.append(f"{physcial_channel} - Trigger".upper())
 
@@ -143,6 +147,30 @@ def plot_simulation(
                     empty_array.fill(np.nan)
                     y2s.append(empty_array[0])
                     labels2.append(None)
+
+            except Exception:
+                pass
+
+        if np.any(my_snippet.marker):
+            try:
+                if my_snippet.time is not None:
+                    time_length = len(my_snippet.time)
+
+                    xs.append(my_snippet.time)
+
+                    y1s.append(my_snippet.marker.real)
+                    labels1.append(f"{signal} - Marker 1")
+
+                    if np.any(my_snippet.marker.imag):
+                        y2s.append(my_snippet.marker.imag)
+                        labels2.append(f"{signal} - Marker 2")
+                    else:
+                        empty_array = np.empty((1, time_length))
+                        empty_array.fill(np.nan)
+                        y2s.append(empty_array[0])
+                        labels2.append(None)
+
+                    titles.append(f"{physcial_channel} - {signal} - Marker".upper())
 
             except Exception:
                 pass
@@ -188,6 +216,8 @@ def plot_simulation(
             axes.grid(True)
 
     fig.tight_layout()
+    if save is True:
+        fig.savefig(f"{filename}.{filetype}", format=f"{filetype}")
     # fig.legend(loc="upper left")
     plt.show()
 

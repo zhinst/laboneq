@@ -1,4 +1,4 @@
-# Copyright 2020 Zurich Instruments AG
+# Copyright 2023 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -63,6 +63,22 @@ class SectionAlignment(Enum):
 #
 # Data Classes
 #
+
+
+@dataclass
+class SignalCalibration:
+    uid: str = None
+    oscillator: Optional[Any] = None
+    local_oscillator: Optional[Any] = None
+    mixer_calibration: Optional[Any] = None
+    precompensation: Optional[Any] = None
+    port_delay: Optional[Any] = None
+    port_mode: Optional[Any] = None
+    delay_signal: Optional[Any] = None
+    voltage_offset: Optional[Any] = None
+    range: Any = None
+    threshold: Optional[Any] = None
+    amplitude: Optional[Any] = None
 
 
 @dataclass
@@ -149,7 +165,7 @@ class Delay(Operation):
 @dataclass
 class Experiment:
     uid: str = None
-    signals: List[ExperimentSignal] = field(default_factory=list)
+    signals: Union[Dict[str, ExperimentSignal], List[ExperimentSignal]] = None
     epsilon: float = None
     sections: List[Section] = field(default_factory=list)
     pulses: List[Pulse] = field(default_factory=list)
@@ -217,22 +233,6 @@ class Set(Operation):
     path: str = None
     key: str = None
     value: Any = None
-
-
-@dataclass
-class SignalCalibration:
-    uid: str = None
-    oscillator: Optional[Any] = None
-    local_oscillator: Optional[Any] = None
-    mixer_calibration: Optional[Any] = None
-    precompensation: Optional[Any] = None
-    port_delay: Optional[Any] = None
-    port_mode: Optional[Any] = None
-    delay_signal: Optional[Any] = None
-    voltage_offset: Optional[Any] = None
-    range: Any = None
-    threshold: Optional[Any] = None
-    amplitude: Optional[Any] = None
 
 
 @dataclass

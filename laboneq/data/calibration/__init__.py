@@ -1,4 +1,4 @@
-# Copyright 2020 Zurich Instruments AG
+# Copyright 2023 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -32,19 +32,26 @@ class ModulationType(Enum):
         return f"{self.__class__.__name__}.{self.name}"
 
 
-class HighPassCompensationClearing(Enum):
-    BOTH = auto()
-    FALL = auto()
-    LEVEL = auto()
-    RISE = auto()
-
-    def __repr__(self):
-        return f"{self.__class__.__name__}.{self.name}"
-
-
 #
 # Data Classes
 #
+
+
+@dataclass
+class Calibration:
+    calibration_items: Dict = field(default_factory=dict)
+
+
+@dataclass
+class MixerCalibration:
+    uid: str = None
+    voltage_offsets: Optional[List[float]] = None
+    correction_matrix: Optional[List[List[float]]] = None
+
+
+@dataclass
+class Signal:
+    uid: str = None
 
 
 @dataclass
@@ -67,19 +74,6 @@ class FIRCompensation:
 @dataclass
 class HighPassCompensation:
     timeconstant: float = None
-    clearing: HighPassCompensationClearing = None
-
-
-@dataclass
-class Calibration:
-    calibration_items: Dict = field(default_factory=dict)
-
-
-@dataclass
-class MixerCalibration:
-    uid: str = None
-    voltage_offsets: Optional[List[float]] = None
-    correction_matrix: Optional[List[List[float]]] = None
 
 
 @dataclass
@@ -97,8 +91,3 @@ class Precompensation:
     high_pass: Optional[HighPassCompensation] = None
     bounce: Optional[BounceCompensation] = None
     FIR: Optional[FIRCompensation] = None
-
-
-@dataclass
-class Signal:
-    uid: str = None

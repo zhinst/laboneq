@@ -38,4 +38,8 @@ class CompilationService(CompilationServiceAPI):
         Get the result of a compilation job. Blocks until the result is available.
         """
 
-        return ScheduledExperiment(recipe={"experiment": {"initializations": []}})
+        return ScheduledExperiment(
+            recipe={
+                "experiment": {"initializations": [], "realtime_execution_init": []}
+            }
+        )

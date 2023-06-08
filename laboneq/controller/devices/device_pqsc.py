@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+from enum import IntEnum
 from typing import Any
 
 from laboneq.controller.communication import (
@@ -20,13 +21,14 @@ from laboneq.controller.devices.zi_node_monitor import (
 )
 from laboneq.controller.recipe_1_4_0 import Initialization
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
-from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 
 _logger = logging.getLogger(__name__)
 
-REFERENCE_CLOCK_SOURCE_INTERNAL = 0
-REFERENCE_CLOCK_SOURCE_EXTERNAL = 1
+
+class ReferenceClockSourcePQSC(IntEnum):
+    INTERNAL = 0
+    EXTERNAL = 1
 
 
 class DevicePQSC(DeviceZI):
@@ -46,9 +48,9 @@ class DevicePQSC(DeviceZI):
 
     def clock_source_control_nodes(self) -> list[NodeControlBase]:
         source = (
-            REFERENCE_CLOCK_SOURCE_INTERNAL
+            ReferenceClockSourcePQSC.INTERNAL
             if self._use_internal_clock
-            else REFERENCE_CLOCK_SOURCE_EXTERNAL
+            else ReferenceClockSourcePQSC.EXTERNAL
         )
         expected_freq = None if self._use_internal_clock else 10e6
         return [
@@ -138,6 +140,35 @@ class DevicePQSC(DeviceZI):
     def collect_trigger_configuration_nodes(
         self, initialization: Initialization.Data, recipe_data: RecipeData
     ) -> list[DaqNodeAction]:
+        # TODO(2K): This was moved as is from no more existing "configure_as_leader".
+        # Verify, if separate `batch_set` per node is truly necessary here, or the corresponding
+        # nodes can be set in one batch with others.
+        _logger.debug(
+            "%s: Setting reference clock frequency to %d MHz...",
+            self.dev_repr,
+            initialization.config.reference_clock,
+        )
+
+        self._daq.batch_set(
+            [
+                DaqNodeSetAction(
+                    self._daq,
+                    f"/{self.serial}/system/clocks/referenceclock/out/enable",
+                    1,
+                )
+            ]
+        )
+
+        self._daq.batch_set(
+            [
+                DaqNodeSetAction(
+                    self._daq,
+                    f"/{self.serial}/system/clocks/referenceclock/out/freq",
+                    initialization.config.reference_clock,
+                )
+            ]
+        )
+
         # Ensure ZSync links are established
         # TODO(2K): This is rather a hotfix, waiting to be done in parallel for all devices with
         # subscription / poll
@@ -182,38 +213,3 @@ class DevicePQSC(DeviceZI):
         )
 
         return nodes_to_configure_triggers
-
-    def collect_follower_configuration_nodes(
-        self, initialization: Initialization.Data
-    ) -> list[DaqNodeAction]:
-        raise LabOneQControllerException("PQSC cannot be configured as follower")
-
-    def configure_as_leader(self, initialization: Initialization.Data):
-        _logger.debug("%s: Configuring as leader...", self.dev_repr)
-        _logger.debug("%s: Enabling reference clock...", self.dev_repr)
-
-        _logger.debug(
-            "%s: Setting reference clock frequency to %d MHz...",
-            self.dev_repr,
-            initialization.config.reference_clock,
-        )
-
-        self._daq.batch_set(
-            [
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/system/clocks/referenceclock/out/enable",
-                    1,
-                )
-            ]
-        )
-
-        self._daq.batch_set(
-            [
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/system/clocks/referenceclock/out/freq",
-                    initialization.config.reference_clock,
-                )
-            ]
-        )

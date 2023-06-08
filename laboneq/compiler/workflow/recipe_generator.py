@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from laboneq.compiler.code_generator.measurement_calculator import IntegrationTimes
 from laboneq.compiler.common.device_type import DeviceType
@@ -28,7 +28,7 @@ class RecipeGenerator:
             "unit": {"time": "s", "frequency": "Hz", "phase": "rad"},
             "epsilon": {"time": 1e-12},
         }
-        self._recipe["experiment"] = {}
+        self._recipe["experiment"] = {"realtime_execution_init": []}
 
     def add_oscillator_params(self, experiment_dao: ExperimentDAO):
         hw_oscillators = {}
@@ -122,14 +122,14 @@ class RecipeGenerator:
             initialization["config"]["repetitions"] = 1
             initialization["config"]["holdoff"] = 0
             if leader_properties.is_desktop_setup:
-                initialization["config"]["dio_mode"] = "hdawg_leader"
+                initialization["config"]["triggering_mode"] = "desktop_leader"
         if leader_properties.is_desktop_setup:
             # Internal followers are followers on the same device as the leader. This
             # is necessary for the standalone SHFQC, where the SHFSG part does neither
             # appear in the PQSC device connections nor the DIO connections.
             for f in leader_properties.internal_followers:
                 initialization = self._find_initialization(f)
-                initialization["config"]["dio_mode"] = "hdawg"
+                initialization["config"]["triggering_mode"] = "internal_follower"
 
         for device in experiment_dao.device_infos():
             device_uid = device.id
@@ -138,49 +138,31 @@ class RecipeGenerator:
             if reference_clock is not None:
                 initialization["config"]["reference_clock"] = reference_clock
 
-            try:
-                initialization["config"]["reference_clock_source"] = clock_settings[
-                    device_uid
-                ]
-            except KeyError:
-                initialization["config"][
-                    "reference_clock_source"
-                ] = device.reference_clock_source
-
             if device.device_type == "hdawg" and clock_settings["use_2GHz_for_HDAWG"]:
                 initialization["config"][
                     "sampling_rate"
                 ] = DeviceType.HDAWG.sampling_rate_2GHz
 
             if device.device_type == "shfppc":
-                ppchannels = {}
+                ppchannels = []
                 for signal in experiment_dao.signals():
                     amplifier_pump = experiment_dao.amplifier_pump(signal)
                     if amplifier_pump is not None and amplifier_pump[0] == device_uid:
-                        ppchannels[amplifier_pump[1]] = amplifier_pump[2]
+                        ppchannels.append(amplifier_pump[1])
                 initialization["ppchannels"] = ppchannels
 
             for follower in experiment_dao.dio_followers():
                 initialization = self._find_initialization(follower)
-                if not leader_properties.is_desktop_setup:
-                    initialization["config"]["dio_mode"] = "hdawg"
+                if leader_properties.is_desktop_setup:
+                    initialization["config"]["triggering_mode"] = "desktop_dio_follower"
                 else:
-                    initialization["config"][
-                        "dio_mode"
-                    ] = "dio_follower_of_hdawg_leader"
+                    initialization["config"]["triggering_mode"] = "dio_follower"
 
         for pqsc_device_id in experiment_dao.pqscs():
-            pqsc_device = self._find_initialization(pqsc_device_id)
-            out_ports = []
             for port in experiment_dao.pqsc_ports(pqsc_device_id):
                 follower_device_id = port["device"]
-                out_ports.append(
-                    {"port": port["port"], "device_uid": follower_device_id}
-                )
                 follower_device_init = self._find_initialization(follower_device_id)
-                follower_device_init["config"]["dio_mode"] = "zsync_dio"
-
-            pqsc_device["ports"] = out_ports
+                follower_device_init["config"]["triggering_mode"] = "zsync_follower"
 
     def add_output(
         self,
@@ -266,7 +248,6 @@ class RecipeGenerator:
         device_id: str,
         awg_number: int,
         signal_type: str,
-        seqc: str,
         qa_signal_id: Optional[str],
         command_table_match_offset: Optional[int],
         feedback_register: Optional[int],
@@ -277,13 +258,30 @@ class RecipeGenerator:
             initialization["awgs"] = []
         awg = {
             "awg": awg_number,
-            "seqc": seqc,
             "signal_type": signal_type,
             "qa_signal_id": qa_signal_id,
             "command_table_match_offset": command_table_match_offset,
             "feedback_register": feedback_register,
         }
         initialization["awgs"].append(awg)
+
+    def add_realtime_step(
+        self,
+        device_id: str,
+        awg_id: int,
+        seqc_filename: str,
+        wave_indices_name: str,
+        nt_loop_indices: List[int],
+    ):
+        self._recipe["experiment"]["realtime_execution_init"].append(
+            {
+                "device_id": device_id,
+                "awg_id": awg_id,
+                "seqc_ref": seqc_filename,
+                "wave_indices_ref": wave_indices_name,
+                "nt_step": {"indices": nt_loop_indices},
+            }
+        )
 
     def from_experiment(
         self,

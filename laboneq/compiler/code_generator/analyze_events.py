@@ -293,9 +293,9 @@ def analyze_set_oscillator_times(
     signal_obj: SignalObj,
 ) -> AWGSampledEventSequence:
     signal_id = signal_obj.id
-    device_id = signal_obj.device_id
-    device_type = signal_obj.device_type
-    sampling_rate = signal_obj.sampling_rate
+    device_id = signal_obj.awg.device_id
+    device_type = signal_obj.awg.device_type
+    sampling_rate = signal_obj.awg.sampling_rate
     delay = signal_obj.total_delay
     set_oscillator_events = [
         event
@@ -356,9 +356,9 @@ def analyze_acquire_times(
 ) -> AWGSampledEventSequence:
 
     signal_id = signal_obj.id
-    sampling_rate = signal_obj.sampling_rate
+    sampling_rate = signal_obj.awg.sampling_rate
     delay = signal_obj.total_delay
-    sample_multiple = signal_obj.device_type.sample_multiple
+    sample_multiple = signal_obj.awg.device_type.sample_multiple
     channels = signal_obj.channels
 
     _logger.debug(
@@ -465,7 +465,7 @@ def analyze_trigger_events(
         and signal.id == event["signal"]
     ]
     delay = signal.total_delay
-    sampling_rate = signal.sampling_rate
+    sampling_rate = signal.awg.sampling_rate
     device_type = signal.awg.device_type
 
     sampled_digital_signal_change_events = AWGSampledEventSequence()

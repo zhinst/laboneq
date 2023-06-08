@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -34,12 +35,27 @@ class ExponentialCompensation(Observable):
 
 @dataclass
 class HighPassCompensation(Observable):
-    """Data object containing highpass filter parameters for the signal precompensation"""
+    """Data object containing highpass filter parameters for the signal precompensation.
+
+    .. versionchanged:: 2.8
+
+        Deprecated `clearing` argument: It has no functionality.
+    """
 
     #: high-pass filter time constant
     timeconstant: float = 1e-6
-    #: choose the clearing mode of the high-pass filter
-    clearing: HighPassCompensationClearing = HighPassCompensationClearing.RISE
+    #: Deprecated. Choose the clearing mode of the high-pass filter
+    clearing: HighPassCompensationClearing = field(default=None)
+
+    def __post_init__(self):
+        if self.clearing is not None:
+            warnings.warn(
+                "`HighPassCompensation` argument `clearing` will be removed in the future versions. It has no functionality.",
+                FutureWarning,
+            )
+        else:
+            self.clearing = HighPassCompensationClearing.RISE
+        super().__post_init__()
 
 
 @dataclass

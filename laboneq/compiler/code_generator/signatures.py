@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import hashlib
 import math
-from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Dict, FrozenSet, Optional, Tuple
 
@@ -207,8 +206,10 @@ def reduce_signature_phase(
     use_ct_phase: bool,
     prev_hw_oscillator_phase: Optional[float],
 ) -> PlaybackSignature:
-    signature = deepcopy(signature)
+    """Reduces the phase of the signature.
 
+    Modifies the passed in `signature` object in-place.
+    """
     if use_ct_phase:
         this_hw_oscillator_phase = signature.waveform.pulses[-1].baseband_phase or 0.0
         if prev_hw_oscillator_phase is not None:
@@ -239,11 +240,13 @@ def reduce_signature_phase(
 
 
 def reduce_signature_amplitude(signature: PlaybackSignature) -> PlaybackSignature:
-    # Absorb the pulse amplitude into the command table. Whenever possible, the
-    # waveforms will be sampled at unit amplitude, making waveform reuse more likely.
+    """Reduces the amplitude of the signature.
 
-    signature = deepcopy(signature)
+    Modifies the passed in `signature` object in-place.
 
+    Absorb the pulse amplitude into the command table. Whenever possible, the
+    waveforms will be sampled at unit amplitude, making waveform reuse more likely.
+    """
     if len(signature.waveform.pulses) == 0:
         return signature
     signature.set_amplitude = 1.0

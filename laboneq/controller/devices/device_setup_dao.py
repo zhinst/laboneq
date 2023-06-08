@@ -37,6 +37,15 @@ class DeviceSetupDAO:
         for instrument in self._device_setup.instruments:
             if isinstance(instrument, ZIStandardInstrument):
                 yield instrument
+            if hasattr(instrument, "device_type"):
+                if instrument.device_type.name in {
+                    "HDAWG",
+                    "UHFQA",
+                    "SHFQA",
+                    "SHFQC",
+                    "SHFSG",
+                }:
+                    yield instrument
 
     @property
     def servers(self) -> Iterator[tuple[str, DataServer]]:

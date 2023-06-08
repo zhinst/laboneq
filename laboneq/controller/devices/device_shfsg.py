@@ -19,21 +19,19 @@ from laboneq.controller.communication import (
     DaqNodeAction,
     DaqNodeSetAction,
 )
-from laboneq.controller.devices.device_zi import DeviceZI
+from laboneq.controller.devices.device_shf_base import DeviceSHFBase
+from laboneq.controller.devices.device_zi import SequencerPaths
+from laboneq.controller.devices.zi_node_monitor import NodeControlBase
 from laboneq.controller.recipe_1_4_0 import IO, Initialization
-from laboneq.controller.recipe_enums import DIOConfigType, ReferenceClockSource
+from laboneq.controller.recipe_enums import TriggeringMode
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 
 _logger = logging.getLogger(__name__)
 
-REFERENCE_CLOCK_SOURCE_INTERNAL = 0
-REFERENCE_CLOCK_SOURCE_EXTERNAL = 1
-REFERENCE_CLOCK_SOURCE_ZSYNC = 2
 
-
-class DeviceSHFSG(DeviceZI):
+class DeviceSHFSG(DeviceSHFBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.dev_type = "SHFSG8"
@@ -48,6 +46,10 @@ class DeviceSHFSG(DeviceZI):
         if self.options.is_qc:
             return f"SHFQC/SG:{self.serial}"
         return f"SHFSG:{self.serial}"
+
+    @property
+    def is_secondary(self) -> bool:
+        return self.options.qc_with_qa
 
     def _process_dev_opts(self):
         if self.dev_type == "SHFSG8":
@@ -88,13 +90,13 @@ class DeviceSHFSG(DeviceZI):
     def _get_sequencer_type(self) -> str:
         return "sg"
 
-    def _get_sequencer_path_patterns(self) -> dict:
-        return {
-            "elf": "/{serial}/sgchannels/{index}/awg/elf/data",
-            "progress": "/{serial}/sgchannels/{index}/awg/elf/progress",
-            "enable": "/{serial}/sgchannels/{index}/awg/enable",
-            "ready": "/{serial}/sgchannels/{index}/awg/ready",
-        }
+    def get_sequencer_paths(self, index: int) -> SequencerPaths:
+        return SequencerPaths(
+            elf=f"/{self.serial}/sgchannels/{index}/awg/elf/data",
+            progress=f"/{self.serial}/sgchannels/{index}/awg/elf/progress",
+            enable=f"/{self.serial}/sgchannels/{index}/awg/enable",
+            ready=f"/{self.serial}/sgchannels/{index}/awg/ready",
+        )
 
     def _get_num_awgs(self):
         return self._channels
@@ -158,6 +160,12 @@ class DeviceSHFSG(DeviceZI):
             nodes.append(f"/{self.serial}/sgchannels/{awg}/awg/enable")
             nodes.append(f"/{self.serial}/sgchannels/{awg}/awg/ready")
         return nodes
+
+    def clock_source_control_nodes(self) -> list[NodeControlBase]:
+        if self.is_secondary:
+            return []  # QA will initialize the nodes
+        else:
+            return super().clock_source_control_nodes()
 
     def collect_execution_nodes(self):
         _logger.debug("Starting execution...")
@@ -440,7 +448,7 @@ class DeviceSHFSG(DeviceZI):
                 or awg_config.qa_signal_id is None
             ):
                 continue
-            if awg_config.source_feedback_register is None and self.options.qc_with_qa:
+            if awg_config.source_feedback_register is None and self.is_secondary:
                 # local feedback
                 ntc.extend(
                     [
@@ -480,25 +488,20 @@ class DeviceSHFSG(DeviceZI):
                         ),
                     ]
                 )
-        dio_mode = initialization.config.dio_mode
+        triggering_mode = initialization.config.triggering_mode
 
-        if dio_mode == DIOConfigType.ZSYNC_DIO:
+        if triggering_mode == TriggeringMode.ZSYNC_FOLLOWER:
             pass
-        elif dio_mode in (DIOConfigType.HDAWG_LEADER, DIOConfigType.HDAWG):
+        elif triggering_mode in (
+            TriggeringMode.DESKTOP_LEADER,
+            TriggeringMode.INTERNAL_FOLLOWER,
+        ):
             # standalone SHFSG or SHFQC
             self._wait_for_awgs = False
-            if not self.options.qc_with_qa:
+            if not self.is_secondary:
                 # otherwise, the QA will initialize the nodes
                 self._emit_trigger = True
-                clock_source = initialization.config.reference_clock_source
                 ntc += [
-                    (
-                        "system/clocks/referenceclock/in/source",
-                        REFERENCE_CLOCK_SOURCE_INTERNAL
-                        if clock_source
-                        and clock_source.value == ReferenceClockSource.INTERNAL.value
-                        else REFERENCE_CLOCK_SOURCE_EXTERNAL,
-                    ),
                     ("system/internaltrigger/enable", 0),
                     ("system/internaltrigger/repetitions", 1),
                 ]
@@ -513,7 +516,7 @@ class DeviceSHFSG(DeviceZI):
                 ]
         else:
             raise LabOneQControllerException(
-                f"Unsupported DIO mode: {dio_mode} for device type SHFSG."
+                f"Unsupported triggering mode: {triggering_mode} for device type SHFSG."
             )
 
         nodes_to_configure_triggers = [
@@ -530,39 +533,6 @@ class DeviceSHFSG(DeviceZI):
 
     def command_table_path(self, awg_index: int) -> str:
         return f"/{self.serial}/sgchannels/{awg_index}/awg/commandtable/"
-
-    def configure_as_leader(self, initialization: Initialization.Data):
-        raise LabOneQControllerException("SHFSG cannot be configured as leader")
-
-    def collect_follower_configuration_nodes(
-        self, initialization: Initialization.Data
-    ) -> list[DaqNodeAction]:
-        if self.options.qc_with_qa:
-            return []  # QC follower config is done over it's QA part
-
-        dio_mode = initialization.config.dio_mode
-        _logger.debug("%s: Configuring as a follower...", self.dev_repr)
-
-        nodes_to_configure_as_follower = []
-
-        if dio_mode == DIOConfigType.ZSYNC_DIO:
-            _logger.debug(
-                "%s: Configuring reference clock to use ZSYNC as a reference...",
-                self.dev_repr,
-            )
-            self._switch_reference_clock(source=2, expected_freqs=100e6)
-        elif dio_mode == DIOConfigType.HDAWG_LEADER:
-            # standalone
-            pass
-        elif dio_mode == DIOConfigType.HDAWG:
-            # standalone as part of an SHFQC with active QA part
-            pass
-        else:
-            raise LabOneQControllerException(
-                f"Unsupported DIO mode: {dio_mode} for device type SHFSG."
-            )
-
-        return nodes_to_configure_as_follower
 
     def collect_reset_nodes(self) -> list[DaqNodeAction]:
         reset_nodes = super().collect_reset_nodes()

@@ -237,8 +237,6 @@ def dump(experiment_dao: ExperimentDAO):
                 "execution_type": section_info.execution_type,
                 "count": section_info.count,
             }
-            if section_info.averaging_type is not None:
-                out_section["repeat"]["averaging_type"] = section_info.averaging_type
 
             section_parameters = experiment_dao.section_parameters(section_id)
             if len(section_parameters) > 0:

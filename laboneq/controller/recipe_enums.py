@@ -1,6 +1,7 @@
 # Copyright 2019 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
 from enum import Enum
 
 
@@ -11,29 +12,19 @@ class SignalType(Enum):
     MARKER = "marker"
 
 
-class ExecutionType(Enum):
-    SINGLE = 1
-    SWEEP = 2
-
-
 class RefClkType(Enum):
     _10MHZ = 10
     _100MHZ = 100
 
 
-class DIOConfigType(Enum):
-    ZSYNC_DIO = 1
-    HDAWG = 2
-    HDAWG_LEADER = 3
-    DIO_FOLLOWER_OF_HDAWG_LEADER = 4
+class TriggeringMode(Enum):
+    ZSYNC_FOLLOWER = 1
+    DIO_FOLLOWER = 2
+    DESKTOP_LEADER = 3
+    DESKTOP_DIO_FOLLOWER = 4
+    INTERNAL_FOLLOWER = 5
 
 
-class OperationType(Enum):
-    ACQUIRE = "acquire"
-    USER_FUNC = "user_func"
-    SET = "set"
-
-
-class ReferenceClockSource(Enum):
-    INTERNAL = "internal"
-    EXTERNAL = "external"
+@dataclass(frozen=True)
+class NtStepKey:
+    indices: tuple[int]

@@ -20,6 +20,7 @@ class OutputData:
     time: ArrayLike
     wave: ArrayLike = None
     trigger: ArrayLike = None
+    marker: ArrayLike = None
     frequency: ArrayLike = None
 
 
@@ -145,6 +146,7 @@ class OutputSimulator:
         output_length: float,
         get_wave: bool = True,
         get_trigger: bool = False,
+        get_marker: bool = False,
         get_frequency: bool = False,
     ) -> OutputData:
         channel = (
@@ -162,6 +164,8 @@ class OutputSimulator:
             sim_targets |= SimTarget.ACQUIRE
         if get_trigger and awg_id.is_out:
             sim_targets |= SimTarget.TRIGGER
+        if get_marker and awg_id.is_out:
+            sim_targets |= SimTarget.MARKER
         if get_frequency and awg_id.is_out:
             sim_targets |= SimTarget.FREQUENCY
         ws = WaveScroller(
@@ -173,6 +177,7 @@ class OutputSimulator:
         return OutputData(
             time=ws.time_axis,
             wave=ws.wave_snippet if awg_id.is_out else ws.acquire_snippet,
+            marker=ws.marker_snippet,
             trigger=ws.trigger_snippet,
             frequency=ws.frequency_snippet,
         )

@@ -28,7 +28,7 @@ from laboneq.controller.devices.zi_node_monitor import (
     Response,
 )
 from laboneq.controller.recipe_1_4_0 import Initialization
-from laboneq.controller.recipe_enums import DIOConfigType, SignalType
+from laboneq.controller.recipe_enums import SignalType, TriggeringMode
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
@@ -445,11 +445,6 @@ class DeviceHDAWG(DeviceZI):
 
         return nodes_to_set
 
-    def wait_for_conditions_to_start(self):
-        self._wait_for_node(
-            f"/{self.serial}/system/clocks/sampleclock/status", 0, timeout=5
-        )
-
     def collect_awg_before_upload_nodes(
         self, initialization: Initialization.Data, recipe_data: RecipeData
     ):
@@ -477,8 +472,8 @@ class DeviceHDAWG(DeviceZI):
         _logger.debug("%s: Configuring trigger configuration nodes.", self.dev_repr)
         nodes_to_configure_triggers = []
 
-        dio_mode = initialization.config.dio_mode
-        if dio_mode == DIOConfigType.ZSYNC_DIO:
+        triggering_mode = initialization.config.triggering_mode
+        if triggering_mode == TriggeringMode.ZSYNC_FOLLOWER:
             _logger.debug(
                 "%s: Configuring DIO mode: ZSync pass-through.", self.dev_repr
             )
@@ -538,7 +533,7 @@ class DeviceHDAWG(DeviceZI):
                             ),
                         ]
                     )
-        elif dio_mode == DIOConfigType.HDAWG_LEADER:
+        elif triggering_mode == TriggeringMode.DESKTOP_LEADER:
 
             nodes_to_configure_triggers.append(
                 DaqNodeSetAction(

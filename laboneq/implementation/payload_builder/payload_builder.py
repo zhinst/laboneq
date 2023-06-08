@@ -1,9 +1,12 @@
 # Copyright 2023 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
 import logging
 import uuid
-from typing import Dict, List, Union
+from collections import Counter
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Union
 
 from laboneq.data.compilation_job import (
     CompilationJob,
@@ -24,6 +27,8 @@ from laboneq.data.execution_payload import (
     NearTimeOperation,
     NearTimeOperationType,
     NearTimeProgram,
+    NtStepKey,
+    RealTimeExecutionInit,
     Recipe,
     ServerType,
     TargetDevice,
@@ -59,6 +64,14 @@ from laboneq.interfaces.compilation_service.compilation_service_api import (
 from laboneq.interfaces.payload_builder.payload_builder_api import PayloadBuilderAPI
 
 _logger = logging.getLogger(__name__)
+
+
+@dataclass
+class GlobalSetupProperties:
+    global_leader: str = None
+    is_desktop_setup: bool = False
+    internal_followers: List[str] = field(default_factory=list)
+    clock_settings: Dict[str, Any] = field(default_factory=dict)
 
 
 class PayloadBuilder(PayloadBuilderAPI):
@@ -110,6 +123,10 @@ class PayloadBuilder(PayloadBuilderAPI):
         Compose an experiment from a setup descriptor and an experiment descriptor.
         """
 
+        experiment = copy.deepcopy(experiment)
+        if experiment.signals is None:
+            experiment.signals = []
+
         experiment_info = self.extract_experiment_info(
             experiment, device_setup, signal_mappings
         )
@@ -126,22 +143,65 @@ class PayloadBuilder(PayloadBuilderAPI):
 
         target_recipe = Recipe()
 
+        global_setup_properties = self._analyze_setup(device_setup, experiment_info)
+
+        config_dict = self._calc_config(global_setup_properties)
+
+        for k, v in self._analyze_dio(device_setup, global_setup_properties).items():
+            if k not in config_dict:
+                config_dict[k] = {}
+            config_dict[k]["triggering_mode"] = v
+
         def build_config(init):
-            config = init["config"]
+            device_uid = init["device_uid"]
+            if device_uid in config_dict:
+                config = config_dict[device_uid]
+                return InitializationConfiguration(
+                    reference_clock=10e6,  # FIXME: hardcoded
+                    triggering_mode=config.get("triggering_mode"),
+                )
+
             return InitializationConfiguration(
                 reference_clock=10e6,  # FIXME: hardcoded
-                reference_clock_source=config.get("reference_clock_source"),
-                dio_mode=config.get("dio_mode"),
             )
+
+        def _find_initialization(recipe, instrument_uid):
+            for init in recipe["experiment"]["initializations"]:
+                if init["device_uid"] == instrument_uid:
+                    return init
+            return None
+
+        for srv in device_setup.servers.values():
+            if srv.leader_uid is not None:
+                init = _find_initialization(compiled_experiment.recipe, srv.leader_uid)
+                if init is not None:
+                    init["config"]["repetitions"] = 1
+                    init["config"]["holdoff"] = 0
+
+        # adapt initializations to consider setup internal connections
 
         _logger.info(
             f"initializations: {compiled_experiment.recipe['experiment']['initializations']}"
         )
         target_recipe.initializations = [
-            Initialization(device=device_dict[i["device_uid"]], config=build_config(i))
+            Initialization(
+                device=device_dict[i["device_uid"]],
+                config=build_config(i),
+            )
             for i in compiled_experiment.recipe["experiment"]["initializations"]
         ]
         _logger.info(f"Built initializations: {target_recipe.initializations}")
+
+        target_recipe.realtime_execution_init = [
+            RealTimeExecutionInit(
+                device=next(d for d in target_setup.devices if d.uid == i["device_id"]),
+                awg_id=i["awg_id"],
+                seqc=i["seqc_ref"],  # todo: create SourceCode object
+                wave_indices_ref=i["wave_indices_ref"],
+                nt_step=NtStepKey(**i["nt_step"]),
+            )
+            for i in compiled_experiment.recipe["experiment"]["realtime_execution_init"]
+        ]
 
         ntp = NearTimeProgramFactory().make(experiment)
         _logger.info(f"Built NearTimeProgram: {ntp}")
@@ -152,9 +212,161 @@ class PayloadBuilder(PayloadBuilderAPI):
             compiled_experiment_hash=compiled_experiment.uid,
             recipe=target_recipe,
             near_time_program=ntp,
-            src=compiled_experiment.src,
+            src=compiled_experiment.src,  # todo: create SourceCode object
         )
         return run_job
+
+    def _calc_config(
+        self, global_setup_properties: GlobalSetupProperties
+    ) -> Dict[str, Any]:
+        retval = {}
+        if global_setup_properties.global_leader is not None:
+            retval[global_setup_properties.global_leader.uid] = {
+                "config": {
+                    "repetitions": 1,
+                    "holdoff": 0,
+                }
+            }
+            if global_setup_properties.is_desktop_setup:
+                retval[global_setup_properties.global_leader.uid]["config"][
+                    "triggering_mode"
+                ] = "desktop_leader"
+
+        if global_setup_properties.is_desktop_setup:
+            # Internal followers are followers on the same device as the leader. This
+            # is necessary for the standalone SHFQC, where the SHFSG part does neither
+            # appear in the PQSC device connections nor the DIO connections.
+            for f in global_setup_properties.internal_followers:
+                if f.uid not in retval:
+                    retval[f.uid] = {"config": {}}
+                retval[f.uid]["config"]["triggering_mode"] = "dio_follower"
+
+        return retval
+
+    def _analyze_dio(
+        self, device_setup: Setup, global_setup_properties: GlobalSetupProperties
+    ):
+        retval = {}
+        for sic in device_setup.setup_internal_connections:
+            if sic.from_port.path.startswith("DIOS"):
+                if global_setup_properties.is_desktop_setup:
+                    retval[sic.to_instrument.uid] = "desktop_dio_follower"
+                else:
+                    retval[sic.to_instrument.uid] = "dio_follower"
+
+            if sic.from_port.path.startswith("ZSYNCS"):
+                retval[sic.from_instrument.uid] = "zsync_follower"
+
+        return retval
+
+    def _analyze_setup(
+        self, device_setup: Setup, experiment_info: ExperimentInfo
+    ) -> GlobalSetupProperties:
+        retval = GlobalSetupProperties()
+
+        def get_first_instr_of(device_infos: List[DeviceInfo], type) -> DeviceInfo:
+            return next((instr for instr in device_infos if instr.device_type == type))
+
+        device_info_dict: Dict[str, DeviceInfo] = {}
+        for signal in experiment_info.signals:
+            device_info_dict[signal.device.uid] = signal.device
+
+        device_type_list = [i.device_type for i in device_info_dict.values()]
+        type_counter = Counter(device_type_list)
+        has_pqsc = type_counter[DeviceInfoType.PQSC] > 0
+        has_hdawg = type_counter[DeviceInfoType.HDAWG] > 0
+        has_shfsg = type_counter[DeviceInfoType.SHFSG] > 0
+        has_shfqa = type_counter[DeviceInfoType.SHFQA] > 0
+        shf_types = {DeviceInfoType.SHFQA, DeviceInfoType.SHFQC, DeviceInfoType.SHFSG}
+        has_shf = bool(shf_types.intersection(set(device_type_list)))
+
+        # Basic validity checks
+        signal_infos = experiment_info.signals
+
+        used_devices = set(info.device.device_type for info in signal_infos)
+
+        def get_instrument_by_uid(uid) -> Instrument:
+            return next((i for i in device_setup.instruments if i.uid == uid), None)
+
+        used_device_serials = set(
+            get_instrument_by_uid(info.device.uid).address for info in signal_infos
+        )
+        if (
+            DeviceInfoType.HDAWG in used_devices
+            and DeviceInfoType.UHFQA in used_devices
+            and bool(shf_types.intersection(used_devices))
+        ):
+            raise RuntimeError(
+                "Setups with signals on each of HDAWG, UHFQA and SHF type "
+                + "instruments are not supported"
+            )
+
+        retval.is_desktop_setup = not has_pqsc and (
+            used_devices == {DeviceInfoType.HDAWG}
+            or used_devices == {DeviceInfoType.SHFSG}
+            or used_devices == {DeviceInfoType.SHFQA}
+            or used_devices == {DeviceInfoType.SHFQA, DeviceInfoType.SHFSG}
+            and len(used_device_serials) == 1  # SHFQC
+            or used_devices == {DeviceInfoType.HDAWG, DeviceInfoType.UHFQA}
+            or (
+                used_devices == {DeviceInfoType.UHFQA} and has_hdawg
+            )  # No signal on leader
+        )
+        if (
+            not has_pqsc
+            and not retval.is_desktop_setup
+            and used_devices != {DeviceInfoType.UHFQA}
+            and bool(used_devices)  # Allow empty experiment (used in tests)
+        ):
+            raise RuntimeError(
+                f"Unsupported device combination {used_devices} for small setup"
+            )
+
+        leader = experiment_info.global_leader_device
+        device_infos = list(device_info_dict.values())
+        if retval.is_desktop_setup:
+            if leader is None:
+                if has_hdawg:
+                    leader = get_first_instr_of(device_infos, DeviceInfoType.HDAWG)
+                elif has_shfqa:
+                    leader = get_first_instr_of(device_infos, DeviceInfoType.SHFQA)
+                    if has_shfsg:  # SHFQC
+                        retval.internal_followers = [
+                            get_first_instr_of(device_infos, DeviceInfoType.SHFSG)
+                        ]
+                elif has_shfsg:
+                    leader = get_first_instr_of(device_infos, DeviceInfoType.SHFSG)
+
+            _logger.debug("Using desktop setup configuration with leader %s", leader)
+
+            if has_hdawg or has_shfsg and not has_shfqa:
+                _logger.warning(
+                    "Not analyzing if awg 0 of leader is used. Triggering may fail."
+                )
+                # TODO: Check if awg 0 of leader is used, and add dummy signal if not
+
+            has_qa = type_counter[DeviceInfoType.SHFQA] > 0 or type_counter["uhfqa"] > 0
+            is_hdawg_solo = (
+                type_counter[DeviceInfoType.HDAWG] == 1 and not has_shf and not has_qa
+            )
+            if is_hdawg_solo:
+                first_hdawg = get_first_instr_of(device_infos, DeviceInfoType.HDAWG)
+                if first_hdawg.reference_clock_source is None:
+                    retval.clock_settings[first_hdawg.uid] = "internal"
+            else:
+                if not has_hdawg and has_shfsg:  # SHFSG or SHFQC solo
+                    first_shfsg = get_first_instr_of(device_infos, DeviceInfoType.SHFSG)
+                    if first_shfsg.reference_clock_source is None:
+                        retval.clock_settings[first_shfsg.uid] = "internal"
+                if not has_hdawg and has_shfqa:  # SHFQA or SHFQC solo
+                    first_shfqa = get_first_instr_of(device_infos, DeviceInfoType.SHFQA)
+                    if first_shfqa.reference_clock_source is None:
+                        retval.clock_settings[first_shfqa.uid] = "internal"
+
+        retval.use_2GHz_for_HDAWG = has_shf
+        retval.global_leader = leader
+
+        return retval
 
     @classmethod
     def extract_experiment_info(
@@ -359,10 +571,10 @@ class NearTimeProgramFactory:
                 self._append_statement(
                     NearTimeOperation(
                         operation_type=NearTimeOperationType.FOR_LOOP,
+                        children=[loop_body],
                         args={
                             "count": child.count,
-                            "body": loop_body,
-                            "loop_type": LoopType.AVERAGE,
+                            "loop_type": LoopType.SWEEP,
                         },
                     )
                 )
@@ -373,9 +585,9 @@ class NearTimeProgramFactory:
                 self._append_statement(
                     NearTimeOperation(
                         operation_type=NearTimeOperationType.ACQUIRE_LOOP_RT,
+                        children=[loop_body],
                         args={
                             "count": child.count,
-                            "body": loop_body,
                             "uid": child.uid,
                             "averaging_mode": str(child.averaging_mode),
                             "acquisition_type": str(child.acquisition_type),
@@ -394,9 +606,9 @@ class NearTimeProgramFactory:
                 self._append_statement(
                     NearTimeOperation(
                         operation_type=NearTimeOperationType.FOR_LOOP,
+                        children=[loop_body],
                         args={
                             "count": count,
-                            "body": loop_body,
                             "loop_type": loop_type,
                         },
                     )

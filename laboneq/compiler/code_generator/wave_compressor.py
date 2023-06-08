@@ -3,7 +3,7 @@
 
 from dataclasses import dataclass
 from itertools import groupby
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -148,8 +148,10 @@ class WaveCompressor:
         self,
         samples: Dict[str, np.array],
         stacked_samples: np.ndarray,
+        compressable_segments: List[Tuple[int, int]],
         num_sample_channles: int,
         num_frames: int,
+        num_samples: int,
         sample_multiple: int,
     ) -> Union[List[Union[PlayHold, PlaySamples]], None]:
         last_vals = np.zeros((num_sample_channles, num_frames))
@@ -157,12 +159,21 @@ class WaveCompressor:
             _, hi = self._get_frame_idx(samples, sample_multiple, i, num_frames)
             last_vals[:, i] = stacked_samples[:, hi - 1]
 
+        compressable_frames = []
+        for seg_lo, seg_hi in compressable_segments:
+            frame_lo = seg_lo // sample_multiple + 1
+            frame_hi = (
+                num_frames if seg_hi == num_samples else seg_hi // sample_multiple - 1
+            )
+            compressable_frames.append((frame_lo, frame_hi))
+
         can_compress = [False] * num_frames
-        for i in range(1, num_frames):
-            lo, hi = self._get_frame_idx(samples, sample_multiple, i, num_frames)
-            can_compress[i] = self._stacked_samples_constant(
-                stacked_samples, lo, hi
-            ) and np.all(last_vals[:, i - 1] == stacked_samples[:, lo])
+        for frame_lo, frame_hi in compressable_frames:
+            for i in range(frame_lo, frame_hi):
+                lo, hi = self._get_frame_idx(samples, sample_multiple, i, num_frames)
+                can_compress[i] = self._stacked_samples_constant(
+                    stacked_samples, lo, hi
+                ) and np.all(last_vals[:, i - 1] == stacked_samples[:, lo])
 
         if not any(can_compress):
             return None
@@ -201,23 +212,54 @@ class WaveCompressor:
         return events
 
     def compress_wave(
-        self, samples: Dict[str, np.array], sample_multiple: int
+        self,
+        samples: Dict[str, np.array],
+        sample_multiple: int,
+        compressible_segments: Optional[List[Tuple[int, int]]] = None,
     ) -> Union[List[Union[PlayHold, PlaySamples]], None]:
         ref_length = len(list(samples.values())[0])
         num_sample_channles = len(list(samples.values()))
         if not all(len(v) == ref_length for v in samples.values()):
             raise ValueError("All sample arrays must have the same length")
         num_frames = int(ref_length / sample_multiple)
+        num_samples = ref_length
+
+        compressible_segments = (
+            [(0, num_samples)]
+            if compressible_segments is None
+            else compressible_segments
+        )
 
         stacked_samples = np.array(list(samples.values()))
 
-        runs = self._runs_longer_than_threshold(stacked_samples, 32)
+        if len(compressible_segments) > 1:
+            return self._compress_wave_general(
+                samples,
+                stacked_samples,
+                compressible_segments,
+                num_sample_channles,
+                num_frames,
+                num_samples,
+                sample_multiple,
+            )
+
+        compr_start, compr_end = compressible_segments[0]
+        runs = self._runs_longer_than_threshold(
+            stacked_samples[:, compr_start:compr_end], 32
+        )
         if len(runs) == 0:
             return None
         if len(runs) == 1:
+            runs = [(run[0] + compr_start, run[1] + compr_start) for run in runs]
             return self._compress_wave_simple(
                 samples, sample_multiple, ref_length, runs[0]
             )
         return self._compress_wave_general(
-            samples, stacked_samples, num_sample_channles, num_frames, sample_multiple
+            samples,
+            stacked_samples,
+            compressible_segments,
+            num_sample_channles,
+            num_frames,
+            num_samples,
+            sample_multiple,
         )

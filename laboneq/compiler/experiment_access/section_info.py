@@ -13,7 +13,6 @@ class SectionInfo:
     has_repeat: bool
     execution_type: Optional[str]
     acquisition_types: Optional[List[str]]
-    averaging_type: Optional[str]
     count: int
     align: Optional[str]
     on_system_grid: bool

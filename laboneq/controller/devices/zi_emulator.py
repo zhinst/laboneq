@@ -409,17 +409,15 @@ class DevEmuUHFQA(DevEmuHW):
         return nd
 
 
-class DevEmuPQSC(DevEmuHW):
-    def _trig_stop(self):
-        self._set_val("execution/enable", 0)
-
-    def _trig_execute(self, node: NodeBase):
-        self._scheduler.enter(delay=0.001, priority=0, action=self._trig_stop)
-
+class Gen2Base(DevEmuHW):
     def _ref_clock_switched(self, requested_source: int):
+        # 0 - INTERNAL
+        # 1 - EXTERNAL
+        # 2 - ZSYNC
+        freq = 10e6 if requested_source == 1 else 100e6
         self._set_val("system/clocks/referenceclock/in/sourceactual", requested_source)
         self._set_val("system/clocks/referenceclock/in/status", 0)
-        self._set_val("system/clocks/referenceclock/in/freq", 10e6)
+        self._set_val("system/clocks/referenceclock/in/freq", freq)
 
     def _ref_clock(self, node: NodeBase):
         node_int: NodeInt = node
@@ -430,11 +428,8 @@ class DevEmuPQSC(DevEmuHW):
             argument=(node_int.value,),
         )
 
-    def _node_def(self) -> dict[str, NodeInfo]:
+    def _node_def_gen2(self) -> dict[str, NodeInfo]:
         return {
-            "execution/enable": NodeInfo(
-                type=NodeType.INT, default=0, handler=DevEmuPQSC._trig_execute
-            ),
             "system/clocks/referenceclock/in/source": NodeInfo(
                 type=NodeType.INT, default=0, handler=DevEmuPQSC._ref_clock
             ),
@@ -450,7 +445,23 @@ class DevEmuPQSC(DevEmuHW):
         }
 
 
-class DevEmuSHFQABase(DevEmuHW):
+class DevEmuPQSC(Gen2Base):
+    def _trig_stop(self):
+        self._set_val("execution/enable", 0)
+
+    def _trig_execute(self, node: NodeBase):
+        self._scheduler.enter(delay=0.001, priority=0, action=self._trig_stop)
+
+    def _node_def(self) -> dict[str, NodeInfo]:
+        return {
+            **self._node_def_gen2(),
+            "execution/enable": NodeInfo(
+                type=NodeType.INT, default=0, handler=DevEmuPQSC._trig_execute
+            ),
+        }
+
+
+class DevEmuSHFQABase(Gen2Base):
     def _awg_stop_qa(self, channel: int):
         readout_enable = self._get_node(
             f"qachannels/{channel}/readout/result/enable"
@@ -547,11 +558,12 @@ class DevEmuSHFQA(DevEmuSHFQABase):
                 default=self._dev_opts.get("features/options", ""),
             ),
         }
+        nd.update(self._node_def_gen2())
         nd.update(self._node_def_qa())
         return nd
 
 
-class DevEmuSHFSGBase(DevEmuHW):
+class DevEmuSHFSGBase(Gen2Base):
     def _awg_stop_sg(self, channel: int):
         self._set_val(f"sgchannels/{channel}/awg/enable", 0)
 
@@ -583,6 +595,7 @@ class DevEmuSHFSG(DevEmuSHFSGBase):
                 default=self._dev_opts.get("features/options", ""),
             ),
         }
+        nd.update(self._node_def_gen2())
         nd.update(self._node_def_sg())
         return nd
 
@@ -599,6 +612,7 @@ class DevEmuSHFQC(DevEmuSHFQABase, DevEmuSHFSGBase):
                 default=self._dev_opts.get("features/options", "QC6CH"),
             ),
         }
+        nd.update(self._node_def_gen2())
         nd.update(self._node_def_qa())
         nd.update(self._node_def_sg())
         return nd

@@ -48,9 +48,12 @@ dependencies = [
     "python-box",
     "pyyaml",
     "requests",
+    "rich",
     "rustworkx",
     "scipy",
+    "sqlitedict",
     "sortedcollections",
+    "lagom",
     "zhinst-core==23.2.42414",
     "zhinst-toolkit~=0.5.0",
     "zhinst-utils~=0.3.0",
@@ -116,7 +119,6 @@ fixable = ["A", "B", "C", "D", "E", "F", "G", "I", "N", "Q", "S", "T", "W", "ANN
 unfixable = []
 
 exclude = [
-    "tests/integration/dsl_v3",
     ".eggs",
     ".git",
     ".ruff_cache",

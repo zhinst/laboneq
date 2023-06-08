@@ -86,7 +86,7 @@ class DeviceCollection:
         return device
 
     def find_by_node_path(self, path: str) -> DeviceZI:
-        m = re.match(r"^/?(DEV\d+)/.+", path.upper())
+        m = re.match(r"^/?(DEV[^/]+)/.+", path.upper())
         if m is None:
             raise LabOneQControllerException(
                 f"Path '{path}' is not referring to any device"
@@ -349,14 +349,18 @@ class DeviceCollection:
                             f"device '{instrument.uid}'"
                         )
                     to_port = f"{connection.signal_type.name}/{connection.remote_port}"
-                    from_dev.add_downlink(from_port, to_dev_uid, to_dev)
+                    if not to_dev.is_secondary:
+                        from_dev.add_downlink(from_port, to_dev_uid, to_dev)
                     to_dev.add_uplink(to_port, from_dev)
 
         # Move various device settings from device setup
         for instrument in self._ds.instruments:
             dev = self._devices[instrument.uid]
 
-            # Set clock source (external by default)
+            # Set the clock source (external by default)
+            # TODO(2K): Simplify the logic in this code snippet and the one in 'update_clock_source'.
+            # Currently, it adheres to the previously existing logic in the compiler, but it appears
+            # unnecessarily convoluted.
             force_internal: bool | None = None
             if instrument.reference_clock_source is not None:
                 force_internal = (

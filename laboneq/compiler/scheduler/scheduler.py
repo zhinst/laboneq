@@ -88,8 +88,6 @@ class Scheduler:
         experiment_dao: ExperimentDAO,
         sampling_rate_tracker: SamplingRateTracker,
         signal_objects: Dict[str, SignalObj],
-        # For compatibility with old scheduler, remove once we remove that
-        _clock_settings: Optional[Dict] = None,
         settings: Optional[CompilerSettings] = None,
     ):
         self._schedule_data = ScheduleData(
@@ -419,10 +417,10 @@ class Scheduler:
         signals: FrozenSet[str],
         hw_signals: FrozenSet[str],
     ) -> List[PhaseResetSchedule]:
-        reset_sw_oscillators = (
-            len(hw_signals) > 0
-            or self._experiment_dao.section_info(section_id).averaging_type
-            == "hardware"
+        section_info = self._experiment_dao.section_info(section_id)
+        reset_sw_oscillators = len(hw_signals) > 0 or (
+            section_info.execution_type == "hardware"
+            and section_info.averaging_mode is not None
         )
 
         if not reset_sw_oscillators and len(hw_signals) == 0:

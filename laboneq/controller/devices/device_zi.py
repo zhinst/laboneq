@@ -6,8 +6,6 @@ from __future__ import annotations
 import json
 import logging
 import math
-import os
-import os.path
 import re
 import time
 from abc import ABC
@@ -95,6 +93,14 @@ class DeviceQualifier:
     driver: str = None
     server: DaqWrapper = None
     options: DeviceOptions = None
+
+
+@dataclass
+class SequencerPaths:
+    elf: str
+    progress: str
+    enable: str
+    ready: str
 
 
 def delay_to_rounded_samples(
@@ -197,6 +203,10 @@ class DeviceZI(ABC):
     def daq(self):
         return self._daq
 
+    @property
+    def is_secondary(self) -> bool:
+        return False
+
     def add_command_table_header(self, body: dict) -> dict:
         # Stub, implement in sub-class
         _logger.debug("Command table unavailable on device %s", self.dev_repr)
@@ -225,21 +235,13 @@ class DeviceZI(ABC):
     def _get_sequencer_type(self) -> str:
         return "auto-detect"
 
-    def _get_sequencer_path_patterns(self) -> dict[str, str]:
-        return {
-            "elf": "/{serial}/awgs/{index}/elf/data",
-            "progress": "/{serial}/awgs/{index}/elf/progress",
-            "enable": "/{serial}/awgs/{index}/enable",
-            "ready": "/{serial}/awgs/{index}/ready",
-        }
-
-    def get_sequencer_paths(self, index: int) -> dict[str, str]:
-        props = {
-            "serial": self.serial,
-            "index": index,
-        }
-        patterns = self._get_sequencer_path_patterns()
-        return {k: v.format(**props) for k, v in patterns.items()}
+    def get_sequencer_paths(self, index: int) -> SequencerPaths:
+        return SequencerPaths(
+            elf=f"/{self.serial}/awgs/{index}/elf/data",
+            progress=f"/{self.serial}/awgs/{index}/elf/progress",
+            enable=f"/{self.serial}/awgs/{index}/enable",
+            ready=f"/{self.serial}/awgs/{index}/ready",
+        )
 
     def add_downlink(self, port: str, linked_device_uid: str, linked_device: DeviceZI):
         self._downlinks[port] = (linked_device_uid, ref(linked_device))
@@ -303,14 +305,6 @@ class DeviceZI(ABC):
 
     def collect_trigger_configuration_nodes(
         self, initialization: Initialization.Data, recipe_data: RecipeData
-    ) -> list[DaqNodeAction]:
-        return []
-
-    def configure_as_leader(self, initialization: Initialization.Data):
-        pass
-
-    def collect_follower_configuration_nodes(
-        self, initialization: Initialization.Data
     ) -> list[DaqNodeAction]:
         return []
 
@@ -477,9 +471,6 @@ class DeviceZI(ABC):
     def get_input_monitor_data(self, channel: int, num_results: int):
         return None  # default -> no results available from the device
 
-    def wait_for_conditions_to_start(self):
-        pass
-
     def conditions_for_execution_ready(self) -> dict[str, Any]:
         return {}
 
@@ -544,109 +535,6 @@ class DeviceZI(ABC):
                 guard_start = time.time()
             if time.time() - guard_start >= guard_time:
                 break
-
-    def _switch_reference_clock(self, source, expected_freqs):
-        if expected_freqs is not None and not isinstance(expected_freqs, list):
-            expected_freqs = [expected_freqs]
-
-        source_path = f"/{self.serial}/system/clocks/referenceclock/in/source"
-        status_path = f"/{self.serial}/system/clocks/referenceclock/in/status"
-        sourceactual_path = (
-            f"/{self.serial}/system/clocks/referenceclock/in/sourceactual"
-        )
-        freq_path = f"/{self.serial}/system/clocks/referenceclock/in/freq"
-
-        self._daq.batch_set(
-            [
-                DaqNodeSetAction(
-                    self._daq,
-                    source_path,
-                    source,
-                    caching_strategy=CachingStrategy.NO_CACHE,
-                )
-            ]
-        )
-
-        retries = 0
-        timeout = 60  # s
-        start_time = time.time()
-        last_report = start_time
-        sourceactual = None
-        status = None
-        freq = None
-
-        while True:
-            if retries > 0:
-                now = time.time()
-                elapsed = floor(now - start_time)
-                if now - start_time > timeout:
-                    raise LabOneQControllerException(
-                        f"Unable to switch reference clock within {timeout}s. "
-                        f"Requested source: {source}, actual: {sourceactual}, status: {status}, "
-                        f"expected frequencies: {expected_freqs}, actual: {freq}"
-                    )
-                if now - last_report > 5:
-                    _logger.debug(
-                        "Waiting for reference clock switching, %f s remaining "
-                        "until %f s timeout...",
-                        timeout - elapsed,
-                        timeout,
-                    )
-                    last_report = now
-                time.sleep(0.1)
-            retries += 1
-
-            daq_reply = self._daq.batch_get(
-                [
-                    DaqNodeGetAction(
-                        self._daq,
-                        sourceactual_path,
-                        caching_strategy=CachingStrategy.NO_CACHE,
-                    )
-                ]
-            )
-            sourceactual = daq_reply[sourceactual_path]
-            if sourceactual != source and not self.dry_run:
-                continue
-
-            daq_reply = self._daq.batch_get(
-                [
-                    DaqNodeGetAction(
-                        self._daq,
-                        status_path,
-                        caching_strategy=CachingStrategy.NO_CACHE,
-                    )
-                ]
-            )
-            status = daq_reply[status_path]
-            if not self.dry_run:
-                if status == 2:  # still locking
-                    continue
-                if status == 1:  # error while locking
-                    raise LabOneQControllerException(
-                        f"Unable to switch reference clock, device returned error "
-                        f"after {elapsed}s. Requested source: {source}, actual: {sourceactual}, "
-                        f"status: {status}, expected frequency: {expected_freqs}, actual: {freq}"
-                    )
-
-            if expected_freqs is None:
-                break
-            daq_reply = self._daq.batch_get(
-                [
-                    DaqNodeGetAction(
-                        self._daq, freq_path, caching_strategy=CachingStrategy.NO_CACHE
-                    )
-                ]
-            )
-            freq = daq_reply[freq_path]
-            if freq in expected_freqs or self.dry_run:
-                break
-            else:
-                raise LabOneQControllerException(
-                    f"Unexpected frequency after switching the reference clock. "
-                    f"Requested source: {source}, actual: {sourceactual}, status: {status}, "
-                    f"expected frequency: {expected_freqs}, actual: {freq}"
-                )
 
     def _adjust_frequency(self, freq):
         return freq
@@ -774,16 +662,13 @@ class DeviceZI(ABC):
 
         return sig, np.array(wave["samples"], dtype=np.complex128)
 
-    def _prepare_waves(
-        self, compiled: CompiledExperiment, seqc_filename: str
+    def prepare_waves(
+        self, compiled: CompiledExperiment, wave_indices_ref: str
     ) -> list[tuple[str, npt.ArrayLike]]:
-        wave_indices_filename = os.path.splitext(seqc_filename)[0] + "_waveindices.csv"
+        if wave_indices_ref is None:
+            return None
         wave_indices: dict[str, list[int | str]] = next(
-            (
-                i
-                for i in compiled.wave_indices
-                if i["filename"] == wave_indices_filename
-            ),
+            (i for i in compiled.wave_indices if i["filename"] == wave_indices_ref),
             {"value": {}},
         )["value"]
 
@@ -798,7 +683,7 @@ class DeviceZI(ABC):
                 waves_by_index[idx] = self._prepare_wave_complex(waves, sig)
             else:
                 raise LabOneQControllerException(
-                    f"Unexpected signal type for binary wave for '{sig}' in '{seqc_filename}' - "
+                    f"Unexpected signal type for binary wave for '{sig}' in '{wave_indices_ref}' - "
                     f"'{sig_type}', should be one of [iq, double, multi, single, complex]"
                 )
 
@@ -809,11 +694,13 @@ class DeviceZI(ABC):
             idx += 1
         return bin_waves
 
-    def _prepare_command_table(
-        self, compiled: CompiledExperiment, seqc_filename: str
+    def prepare_command_table(
+        self, compiled: CompiledExperiment, ct_ref: str
     ) -> dict | None:
+        if ct_ref is None:
+            return None
         command_table_body = next(
-            (ct["ct"] for ct in compiled.command_tables if ct["seqc"] == seqc_filename),
+            (ct["ct"] for ct in compiled.command_tables if ct["seqc"] == ct_ref),
             None,
         )
 
@@ -830,28 +717,13 @@ class DeviceZI(ABC):
 
         return self.add_command_table_header(command_table_body)
 
-    def prepare_seqc(
-        self, seqc_filename: str, compiled: CompiledExperiment
-    ) -> tuple[str, list[tuple[str, npt.ArrayLike]], dict[Any]]:
-        """
-        `compiled` expected to have the following members:
-         - `src`   -> list[dict[str, str]]
-                        `filename` -> `<seqc_filename>`
-                        `text`     -> `<seqc_content>`
-         - `waves` -> list[dict[str, str]]
-                        `filename` -> `<wave_filename_csv>`
-                        `text`     -> `<wave_content_csv>`
+    def prepare_seqc(self, compiled: CompiledExperiment, seqc_ref: str) -> str:
+        if seqc_ref is None:
+            return None
 
-        Returns a tuple of
-         1. str: seqc text to pass to the awg compiler
-         2. list[(str, array)]: waves(id, samples) to upload to the instrument (ordered by index)
-         3. dict: command table
-        """
-        seqc = next((s for s in compiled.src if s["filename"] == seqc_filename), None)
+        seqc = next((s for s in compiled.src if s["filename"] == seqc_ref), None)
         if seqc is None:
-            raise LabOneQControllerException(
-                f"SeqC program '{seqc_filename}' not found"
-            )
+            raise LabOneQControllerException(f"SeqC program '{seqc_ref}' not found")
 
         # Substitute oscillator nodes by actual assignment
         seqc_lines = seqc["text"].split("\n")
@@ -866,16 +738,13 @@ class DeviceZI(ABC):
                         ] = f"{m.group(1)}{m.group(2)}{m.group(3)}{osc.index}{m.group(4)}"
         seqc_text = "\n".join(seqc_lines)
 
-        bin_waves = self._prepare_waves(compiled, seqc_filename)
-        command_table = self._prepare_command_table(compiled, seqc_filename)
-
-        return seqc_text, bin_waves, command_table
+        return seqc_text
 
     def prepare_upload_elf(self, elf: bytes, awg_index: int, filename: str):
         sequencer_paths = self.get_sequencer_paths(awg_index)
         return DaqNodeSetAction(
             self._daq,
-            sequencer_paths["elf"],
+            sequencer_paths.elf,
             elf,
             filename=filename,
             caching_strategy=CachingStrategy.NO_CACHE,

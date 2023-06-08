@@ -3,11 +3,12 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
-from typing import TYPE_CHECKING, Any, List, Union
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy.typing import ArrayLike
+
+from laboneq.controller.recipe_enums import NtStepKey
 
 if TYPE_CHECKING:
     from laboneq.dsl.result.acquired_result import AcquiredResult
@@ -22,8 +23,8 @@ def make_empty_results() -> Results:
 
 def make_acquired_result(
     data: ArrayLike,
-    axis_name: List[Union[str, List[str]]],
-    axis: List[Union[ArrayLike, List[ArrayLike]]],
+    axis_name: list[str | list[str]],
+    axis: list[ArrayLike | list[ArrayLike]],
 ) -> AcquiredResult:
     from laboneq.dsl.result.acquired_result import AcquiredResult
 
@@ -32,24 +33,24 @@ def make_acquired_result(
 
 def build_partial_result(
     result: AcquiredResult,
-    nt_loop_indices: List[int],
+    nt_step: NtStepKey,
     raw_result: Any,
-    mapping: List[str],
+    mapping: list[str],
     handle: str,
 ):
-    result.last_nt_step = deepcopy(nt_loop_indices)
-    if len(np.shape(result.data)) == len(nt_loop_indices):
+    result.last_nt_step = list(nt_step.indices)
+    if len(np.shape(result.data)) == len(nt_step.indices):
         # No loops in RT, just a single value produced
         for raw_result_idx in range(len(raw_result)):
             if mapping[raw_result_idx % len(mapping)] == handle:
-                if len(nt_loop_indices) == 0:
+                if len(nt_step.indices) == 0:
                     result.data = raw_result[raw_result_idx]
                 else:
-                    result.data[tuple(nt_loop_indices)] = raw_result[raw_result_idx]
+                    result.data[nt_step.indices] = raw_result[raw_result_idx]
                 break
     else:
         inner_res = result.data
-        for index in nt_loop_indices:
+        for index in nt_step.indices:
             inner_res = inner_res[index]
         res_flat = np.ravel(inner_res)
         res_flat_idx = 0

@@ -149,14 +149,14 @@ class OpenQasm3Importer:
                     subsect = self._handle_box(child)
                 elif isinstance(child, ast.QuantumBarrier):
                     subsect = self._handle_barrier(child)
-                elif isinstance(child, ast.QuantumReset):
-                    subsect = self._handle_quantum_reset(child)
                 elif isinstance(child, ast.DelayInstruction):
                     subsect = self._handle_delay_instruction(child)
                 elif isinstance(child, ast.ClassicalAssignment):
                     self._handle_assignment(child)
                 elif isinstance(child, ast.QuantumMeasurementStatement):
                     subsect = self._handle_measurement(child)
+                elif isinstance(child, ast.QuantumReset):
+                    subsect = self._handle_quantum_reset(child)
                 else:
                     msg = f"Statement type {type(child)} not supported"
                     raise OpenQasmException(msg, mark=child.span)
@@ -301,17 +301,6 @@ class OpenQasm3Importer:
             msg = f"Only 'stdgates.inc' is supported for include, found '{statement.filename}'."
             raise OpenQasmException(msg, mark=statement.span)
 
-    def _handle_quantum_reset(self, statement: ast.QuantumReset):
-        # Although ``qubits`` is plural, only a single qubit is allowed.
-        qubit_name = eval_expression(
-            statement.qubits, namespace=self.scope
-        ).canonical_name
-        try:
-            return self.gate_store.lookup_gate("reset", (qubit_name,))
-        except KeyError as e:
-            msg = f"Reset gate for qubit '{qubit_name}' not found."
-            raise OpenQasmException(msg, mark=statement.span) from e
-
     def _handle_delay_instruction(self, statement: ast.DelayInstruction):
         qubits = statement.qubits
         duration = eval_expression(statement.duration, namespace=self.scope, type=float)
@@ -394,3 +383,14 @@ class OpenQasm3Importer:
             # Set the bit to a special value to disallow compile time arithmetic
             b.value = MeasurementResult()
         return s
+
+    def _handle_quantum_reset(self, statement: ast.QuantumReset):
+        # Although ``qubits`` is plural, only a single qubit is allowed.
+        qubit_name = eval_expression(
+            statement.qubits, namespace=self.scope
+        ).canonical_name
+        try:
+            return self.gate_store.lookup_gate("reset", (qubit_name,))
+        except KeyError as e:
+            msg = f"Reset gate for qubit '{qubit_name}' not found."
+            raise OpenQasmException(msg, mark=statement.span) from e

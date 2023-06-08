@@ -127,7 +127,7 @@ class JsonLoader(LoaderBase):
         if "connectivity" in experiment:
             if "dios" in experiment["connectivity"]:
                 for dio in experiment["connectivity"]["dios"]:
-                    self._dios.append((dio["leader"]["$ref"], dio["follower"]["$ref"]))
+                    self.dios.append((dio["leader"]["$ref"], dio["follower"]["$ref"]))
             if "leader" in experiment["connectivity"]:
 
                 leader_device_id = experiment["connectivity"]["leader"]["$ref"]
@@ -145,7 +145,7 @@ class JsonLoader(LoaderBase):
                     pqsc_device_id = pqsc["device"]["$ref"]
                     if "ports" in pqsc:
                         for port in pqsc["ports"]:
-                            self._pqsc_ports.append(
+                            self.pqsc_ports.append(
                                 (pqsc_device_id, port["device"]["$ref"], port["port"])
                             )
 
@@ -274,13 +274,10 @@ class JsonLoader(LoaderBase):
             execution_type = None
             length = None
             count: int = 1
-            averaging_type = None
 
             if "repeat" in section:
                 has_repeat = True
                 execution_type = section["repeat"]["execution_type"]
-                if "averaging_type" in section["repeat"]:
-                    averaging_type = section["repeat"]["averaging_type"]
 
                 count = int(section["repeat"]["count"])
                 if "parameters" in section["repeat"]:
@@ -361,7 +358,6 @@ class JsonLoader(LoaderBase):
                     execution_type=execution_type,
                     count=count,
                     acquisition_types=acquisition_types,
-                    averaging_type=averaging_type,
                     align=align,
                     on_system_grid=on_system_grid,
                     length=length,

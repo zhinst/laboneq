@@ -1,19 +1,14 @@
 # Copyright 2019 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import Any, AnyStr, Dict, List, Optional
+from typing import Any
 
 from marshmallow import EXCLUDE, Schema, fields, post_load
 
-from .recipe_enums import (
-    DIOConfigType,
-    ExecutionType,
-    OperationType,
-    RefClkType,
-    ReferenceClockSource,
-    SignalType,
-)
+from .recipe_enums import NtStepKey, RefClkType, SignalType, TriggeringMode
 from .util import LabOneQControllerException
 
 
@@ -30,8 +25,8 @@ class Server(QCCSSchema):
 
     @dataclass
     class Data:
-        server_uid: AnyStr
-        host: AnyStr
+        server_uid: str
+        host: str
         port: int
         api_level: int
 
@@ -48,8 +43,8 @@ class DriverOption(fields.Field):
 
     @dataclass
     class Data:
-        key: AnyStr
-        value: AnyStr
+        key: str
+        value: str
 
     key = fields.Str(required=True)
     value = fields.Str(required=True)
@@ -63,9 +58,9 @@ class Device(QCCSSchema):
 
     @dataclass
     class Data:
-        device_uid: AnyStr
-        driver: AnyStr
-        options: Optional[List[DriverOption]] = None
+        device_uid: str
+        driver: str
+        options: list[DriverOption] | None = None
 
         def _get_option(self, key):
             for option in self.options:
@@ -133,22 +128,22 @@ class IO(QCCSSchema):
     @dataclass
     class Data:
         channel: int
-        enable: Optional[bool] = None
-        modulation: Optional[bool] = None
-        oscillator: Optional[int] = None
-        oscillator_frequency: Optional[int] = None
-        offset: Optional[float] = None
-        gains: Optional[Gains] = None
-        range: Optional[float] = None
-        range_unit: Optional[str] = None
-        precompensation: Optional[Dict[str, Dict]] = None
-        lo_frequency: Optional[Any] = None
-        port_mode: Optional[str] = None
-        port_delay: Optional[Any] = None
+        enable: bool | None = None
+        modulation: bool | None = None
+        oscillator: int | None = None
+        oscillator_frequency: int | None = None
+        offset: float | None = None
+        gains: Gains | None = None
+        range: float | None = None
+        range_unit: str | None = None
+        precompensation: dict[str, dict] | None = None
+        lo_frequency: Any | None = None
+        port_mode: str | None = None
+        port_delay: Any | None = None
         scheduler_port_delay: float = 0.0
-        delay_signal: Optional[float] = None
-        marker_mode: Optional[str] = None
-        amplitude: Optional[Any] = None
+        delay_signal: float | None = None
+        marker_mode: str | None = None
+        amplitude: Any | None = None
 
     channel = fields.Integer()
     enable = fields.Boolean(required=False)
@@ -181,7 +176,6 @@ class AWG(QCCSSchema):
     class Meta:
         fields = (
             "awg",
-            "seqc",
             "signal_type",
             "qa_signal_id",
             "command_table_match_offset",
@@ -192,14 +186,12 @@ class AWG(QCCSSchema):
     @dataclass
     class Data:
         awg: int
-        seqc: str
         signal_type: SignalType = SignalType.SINGLE
-        qa_signal_id: Optional[str] = None
-        command_table_match_offset: Optional[int] = None
-        feedback_register: Optional[int] = None
+        qa_signal_id: str | None = None
+        command_table_match_offset: int | None = None
+        feedback_register: int | None = None
 
     awg = fields.Integer()
-    seqc = fields.Str()
     signal_type = SignalTypeField()
     qa_signal_id = fields.Str(required=False, allow_none=True)
     command_table_match_offset = fields.Integer(required=False, allow_none=True)
@@ -218,115 +210,6 @@ class Port(QCCSSchema):
 
     port = fields.Integer()
     device_uid = fields.Str()
-
-
-class ExecutionTypeField(fields.Field):
-    def _serialize(self, value, attr, obj, **kwargs):
-        return value.name
-
-    def _deserialize(self, value, attr, data, **kwargs):
-        return ExecutionType[value.upper()]
-
-
-class listElement(QCCSSchema):
-    class Meta:
-        # TODO(MG) data_type is deprecated and should be removed
-        fields = ("source", "data_type")
-        ordered = True
-
-    @dataclass
-    class Data:
-        source: AnyStr
-        # TODO(MG) data_type is deprecated and should be removed
-        data_type: AnyStr
-
-    source = fields.Str()
-    # TODO(MG) data_type is deprecated and should be removed
-    data_type = fields.Str()
-
-
-class Location(QCCSSchema):
-    @dataclass
-    class Data:
-        type: AnyStr
-        index: int
-
-    type = fields.Str()
-    index = fields.Integer()
-
-
-class Parameter(QCCSSchema):
-    class Meta:
-        fields = (
-            "device_uid",
-            "location",
-            "parameter_uid",
-            "index",
-            "list",
-            "start",
-            "step",
-        )
-        ordered = True
-
-    @dataclass
-    class Data:
-        device_uid: AnyStr = None
-        location: Optional[Location] = None
-        parameter_uid: Optional[AnyStr] = None
-        index: Optional[int] = None
-        list: Optional[listElement] = None
-        start: Optional[float] = None
-        step: Optional[float] = None
-
-    device_uid = fields.Str()
-    location = fields.Nested(Location)
-    parameter_uid = fields.Str(required=False)
-    index = fields.Integer(required=False)
-    list = fields.Nested(listElement, required=False)
-    start = fields.Float(required=False)
-    step: fields.Float(required=False)
-
-
-class OperationTypeField(fields.Field):
-    def _serialize(self, value, attr, obj, **kwargs):
-        return value.name
-
-    def _deserialize(self, value, attr, data, **kwargs):
-        return OperationType[value.upper()]
-
-
-class SectionOperation(QCCSSchema):
-    class Meta:
-        fields = ("op_type", "operation", "args")
-        ordered = True
-
-    @dataclass
-    class Data:
-        op_type: OperationType = None
-        operation: str = None
-        args: Dict[str, Any] = None
-
-    op_type = OperationTypeField(required=True)
-    operation = fields.Str(required=True)
-    args = fields.Dict(required=False, allow_none=True)
-
-
-class Execution(QCCSSchema):
-    class Meta:
-        fields = ("type", "count", "parameters", "children")
-        ordered = True
-
-    @dataclass
-    class Data:
-        type: ExecutionType
-        count: int = None
-        parameters: List[Parameter.Data] = None
-        children: List[Any] = None
-
-    type = ExecutionTypeField(required=False)
-    count = fields.Integer(required=False)
-    parameters = fields.List(fields.Nested(Parameter), required=False)
-    children = fields.List(fields.Nested(lambda: Execution()), required=False)
 
 
 class Measurement(QCCSSchema):
@@ -357,28 +240,12 @@ class RefClkTypeField(fields.Field):
             )
 
 
-class DIOConfigTypeField(fields.Field):
+class TriggeringModeField(fields.Field):
     def _serialize(self, value, attr, obj, **kwargs):
         return value.name
 
     def _deserialize(self, value, attr, data, **kwargs):
-        return DIOConfigType[value.upper()]
-
-
-class ReferenceClockSourceField(fields.Field):
-    def __init__(self, *args, **kwargs) -> None:
-        kwargs["allow_none"] = True
-        super().__init__(*args, **kwargs)
-
-    def _serialize(self, value, attr, obj, **kwargs):
-        if value is None:
-            return None
-        return value.name
-
-    def _deserialize(self, value, attr, data, **kwargs):
-        if value is None:
-            return None
-        return ReferenceClockSource[value.upper()]
+        return TriggeringMode[value.upper()]
 
 
 class Config(QCCSSchema):
@@ -387,9 +254,8 @@ class Config(QCCSSchema):
             "repetitions",
             "reference_clock",
             "holdoff",
-            "dio_mode",
+            "triggering_mode",
             "sampling_rate",
-            "reference_clock_source",
         )
         ordered = True
 
@@ -398,16 +264,14 @@ class Config(QCCSSchema):
         repetitions: int = 1
         reference_clock: RefClkType = None
         holdoff: float = 0
-        dio_mode: DIOConfigType = DIOConfigType.HDAWG
-        sampling_rate: Optional[float] = None
-        reference_clock_source: Optional[ReferenceClockSource] = None
+        triggering_mode: TriggeringMode = TriggeringMode.DIO_FOLLOWER
+        sampling_rate: float | None = None
 
     repetitions = fields.Int()
     reference_clock = RefClkTypeField()
     holdoff = fields.Float()
-    dio_mode = DIOConfigTypeField()
+    triggering_mode = TriggeringModeField()
     sampling_rate = fields.Float()
-    reference_clock_source = ReferenceClockSourceField()
 
 
 class Initialization(QCCSSchema):
@@ -416,7 +280,6 @@ class Initialization(QCCSSchema):
             "device_uid",
             "config",
             "awgs",
-            "ports",
             "outputs",
             "inputs",
             "measurements",
@@ -426,23 +289,21 @@ class Initialization(QCCSSchema):
 
     @dataclass
     class Data:
-        device_uid: AnyStr
+        device_uid: str
         config: Config.Data
-        awgs: List[AWG.Data] = None
-        ports: List[Port.Data] = None
-        outputs: List[IO.Data] = None
-        inputs: List[IO.Data] = None
-        measurements: List[Measurement.Data] = field(default_factory=list)
-        ppchannels: Dict[int, Any] = None
+        awgs: list[AWG.Data] = None
+        outputs: list[IO.Data] = None
+        inputs: list[IO.Data] = None
+        measurements: list[Measurement.Data] = field(default_factory=list)
+        ppchannels: list[dict[str, Any]] | None = None
 
     device_uid = fields.Str()
     config = fields.Nested(Config)
     awgs = fields.List(fields.Nested(AWG), required=False)
-    ports = fields.List(fields.Nested(Port), required=False)
     outputs = fields.List(fields.Nested(IO), required=False)
     inputs = fields.List(fields.Nested(IO), required=False)
     measurements = fields.List(fields.Nested(Measurement), required=False)
-    ppchannels = fields.Dict(required=False, allow_none=True)
+    ppchannels = fields.List(fields.Raw, required=False, allow_none=True)
 
 
 class OscillatorParam(QCCSSchema):
@@ -475,7 +336,7 @@ class IntegratorAllocation(QCCSSchema):
         signal_id: str
         device_id: str
         awg: int
-        channels: List[int]
+        channels: list[int]
         weights: str = None
         threshold: float = 0.0
 
@@ -503,10 +364,42 @@ class AcquireLength(QCCSSchema):
     acquire_length = fields.Int()
 
 
+class NtStepKeyField(fields.Field):
+    def _deserialize(self, value, attr, data, **kwargs):
+        return NtStepKey(indices=tuple(value["indices"]))
+
+
+class RealtimeExecutionInit(QCCSSchema):
+    class Meta:
+        fields = (
+            "device_id",
+            "awg_id",
+            "seqc_ref",
+            "wave_indices_ref",
+            "nt_step",
+        )
+        ordered = True
+
+    @dataclass
+    class Data:
+        device_id: str
+        awg_id: int
+        seqc_ref: str
+        wave_indices_ref: str
+        nt_step: NtStepKey
+
+    device_id = fields.Str()
+    awg_id = fields.Int()
+    seqc_ref = fields.Str()
+    wave_indices_ref = fields.Str()
+    nt_step = NtStepKeyField()
+
+
 class Experiment(QCCSSchema):
     class Meta:
         fields = (
             "initializations",
+            "realtime_execution_init",
             "oscillator_params",
             "integrator_allocations",
             "acquire_lengths",
@@ -517,16 +410,18 @@ class Experiment(QCCSSchema):
 
     @dataclass
     class Data:
-        initializations: List[Initialization.Data]
-        oscillator_params: List[OscillatorParam.Data] = field(default_factory=list)
-        integrator_allocations: List[IntegratorAllocation.Data] = field(
+        initializations: list[Initialization.Data]
+        realtime_execution_init: list[RealtimeExecutionInit.Data]
+        oscillator_params: list[OscillatorParam.Data] = field(default_factory=list)
+        integrator_allocations: list[IntegratorAllocation.Data] = field(
             default_factory=list
         )
-        acquire_lengths: List[AcquireLength.Data] = field(default_factory=list)
-        simultaneous_acquires: List[Dict[str, str]] = field(default_factory=list)
+        acquire_lengths: list[AcquireLength.Data] = field(default_factory=list)
+        simultaneous_acquires: list[dict[str, str]] = field(default_factory=list)
         total_execution_time: float = None
 
     initializations = fields.List(fields.Nested(Initialization))
+    realtime_execution_init = fields.List(fields.Nested(RealtimeExecutionInit))
     oscillator_params = fields.List(fields.Nested(OscillatorParam), required=False)
     integrator_allocations = fields.List(
         fields.Nested(IntegratorAllocation), required=False
@@ -546,10 +441,10 @@ class Recipe(QCCSSchema):
 
     @dataclass
     class Data:
-        line_endings: AnyStr
+        line_endings: str
         experiment: Experiment.Data
-        servers: Optional[List[Server.Data]] = None
-        devices: Optional[List[Device.Data]] = None
+        servers: list[Server.Data] | None = None
+        devices: list[Device.Data] | None = None
 
     line_endings = fields.Str()
     experiment = fields.Nested(Experiment)

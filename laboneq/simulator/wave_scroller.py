@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import math
 from enum import Flag
-from typing import List, Optional, Set, Tuple
+from typing import List, Optional, Set
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -18,12 +18,123 @@ from laboneq.simulator.seqc_parser import (
 )
 
 
+def _overlaps(a_start: int, a_length: int, b_start: int, b_length: int):
+    """Return True if the first and second sample intervals overlap.
+
+    Intervals that touch are considered to overlap.
+
+    Args:
+        a_start: The starting sample of the first interval.
+        a_length: The number of samples in the first interval.
+        b_start: The starting sample of the second interval.
+        b_length: The number of samples in the second interval.
+
+    Returns:
+        True if the intervals overlap. False otherwise.
+    """
+    a_end = a_start + a_length
+    b_end = b_start + b_length
+    return a_start <= b_end and b_start <= a_end
+
+
+def _slice_copy(
+    a: ArrayLike,
+    a_start: int,
+    b: ArrayLike,
+    b_start: int,
+    b_len: int,
+):
+    """Copy up to ``b_len`` samples from array ``b`` to array ``a`` without exceeding
+    the end of ``a`` and aligning the two arrays according to their starting samples.
+
+    Args:
+        a: An array-like to copy values to.
+        a_start: The starting sample of the destination array.
+        b: An array-like to copy values from.
+        b_start: The starting sample of the source array.
+        b_len: The maximum number of samples to copy from the source array.
+
+    Returns:
+        Nothing is returned. The destination array is modified inplace.
+    """
+    a_end = a_start + len(a)
+    b_end = b_start + b_len
+    if not (a_start < b_end and b_start < a_end):
+        # handle the case of intervals that don't overlap or only touch
+        return
+
+    left = max(a_start, b_start)
+    right = min(a_end, b_end)
+
+    a[left - a_start : right - a_start] = b[left - b_start : right - b_start]
+
+
+def _slice_add(
+    a: ArrayLike,
+    a_start: int,
+    b: ArrayLike,
+    b_start: int,
+    b_len: int,
+):
+    """Add up to ``b_len`` samples from array ``b`` to the corresponding entries from
+    array ``a`` without exceeding the end of ``a`` and aligning the two arrays according
+    to their starting samples.
+
+    Args:
+        a: An array-like to add values to.
+        a_start: The starting sample of the destination array.
+        b: An array-like to add values from.
+        b_start: The starting sample of the source array.
+        b_len: The maximum number of samples to copy from the source array.
+
+    Returns:
+        Nothing is returned. The destination array is modified inplace.
+    """
+    a_end = a_start + len(a)
+    b_end = b_start + b_len
+    if not (a_start < b_end and b_start < a_end):
+        # handle the case of intervals that don't overlap or only touch
+        return
+
+    left = max(a_start, b_start)
+    right = min(a_end, b_end)
+
+    a[left - a_start : right - a_start] += b[left - b_start : right - b_start]
+
+
+def _slice_set(a: ArrayLike, a_start: int, b, b_start: int, b_len: int):
+    """Set up to ``b_len`` samples in array ``a`` to value ``b`` without exceeding
+    the end of ``a`` and aligning the intervals according to their starting samples.
+
+    Args:
+        a: An array like to copy values to.
+        a_start: The starting sample of the destination array.
+        b: The value to set.
+        b_start: The starting sample of the source event.
+        b_len: The length of the source event.
+
+    Returns:
+        Nothing is returned. The destination array is modified inplace.
+    """
+    a_end = a_start + len(a)
+    b_end = b_start + b_len
+    if not (a_start < b_end and b_start < a_end):
+        # handle the case of intervals that don't overlap or only touch
+        return
+
+    left = max(a_start, b_start)
+    right = min(a_end, b_end)
+
+    a[left - a_start : right - a_start] = b
+
+
 class SimTarget(Flag):
     NONE = 0
     PLAY = 1
     ACQUIRE = 2
     TRIGGER = 4
     FREQUENCY = 8
+    MARKER = 16
 
 
 class WaveScroller:
@@ -35,12 +146,14 @@ class WaveScroller:
         sim: SeqCSimulation,
     ):
         self.ch = ch
-        self.sim_targets = sim_targets
         self.sim = sim
 
         self.is_shfqa = sim.device_type == "SHFQA"
 
+        self.sim_targets = sim_targets
+
         self.wave_snippet = None
+        self.marker_snippet = None
         self.acquire_snippet = None
         self.trigger_snippet = None
         self.frequency_snippet = None
@@ -50,11 +163,13 @@ class WaveScroller:
         self.last_trig = 0
         self.last_freq_set_samples = 0
         self.last_freq = np.nan
+        self.last_played_value = 0
         self.oscillator_phase: Optional[float] = None
 
         self.processors = {
             Operation.PLAY_WAVE: self._process_play_wave,
             Operation.PLAY_HOLD: self._process_play_hold,
+            Operation.PLAY_ZERO: self._process_play_zero,
             Operation.START_QA: self._process_start_qa,
             Operation.SET_TRIGGER: self._process_set_trigger,
             Operation.SET_OSC_FREQ: self._process_set_osc_freq,
@@ -63,10 +178,15 @@ class WaveScroller:
     def is_output(self) -> bool:
         return any(
             t in self.sim_targets
-            for t in [SimTarget.PLAY, SimTarget.TRIGGER, SimTarget.FREQUENCY]
+            for t in [
+                SimTarget.PLAY,
+                SimTarget.TRIGGER,
+                SimTarget.FREQUENCY,
+                SimTarget.MARKER,
+            ]
         )
 
-    def prepare(self, snippet_length: int):
+    def prepare(self, snippet_start_samples: int, snippet_length: int):
         if SimTarget.PLAY in self.sim_targets:
             if len(self.ch) > 1 or self.is_shfqa:
                 self.wave_snippet = np.zeros(snippet_length, dtype=np.complex128)
@@ -76,31 +196,39 @@ class WaveScroller:
             self.acquire_snippet = np.zeros(snippet_length, dtype=np.uint8)
         if SimTarget.TRIGGER in self.sim_targets:
             self.trigger_snippet = np.zeros(snippet_length, dtype=np.uint8)
+        if SimTarget.MARKER in self.sim_targets:
+            self.marker_snippet = np.zeros(snippet_length, dtype=np.complex128)
         if SimTarget.FREQUENCY in self.sim_targets:
             self.frequency_snippet = np.full(snippet_length, np.nan, dtype=np.float64)
 
-    def target_events(self) -> Set[Operation]:
-        target_events: Set[Operation] = set()
+    def target_ops(self) -> Set[Operation]:
+        target_ops: Set[Operation] = set()
         if (
             SimTarget.ACQUIRE in self.sim_targets
             or SimTarget.TRIGGER in self.sim_targets
             or SimTarget.PLAY in self.sim_targets
             and self.is_shfqa
         ):
-            target_events.add(Operation.START_QA)
+            target_ops.add(Operation.START_QA)
         if SimTarget.PLAY in self.sim_targets and not self.is_shfqa:
-            target_events.add(Operation.PLAY_WAVE)
-            target_events.add(Operation.PLAY_HOLD)
+            target_ops.add(Operation.PLAY_WAVE)
+            target_ops.add(Operation.PLAY_HOLD)
+            target_ops.add(Operation.PLAY_ZERO)
         if SimTarget.TRIGGER in self.sim_targets:
-            target_events.add(Operation.SET_TRIGGER)
+            target_ops.add(Operation.SET_TRIGGER)
         if SimTarget.FREQUENCY in self.sim_targets:
-            target_events.add(Operation.SET_OSC_FREQ)
-        return target_events
+            target_ops.add(Operation.SET_OSC_FREQ)
+        return target_ops
 
     def _process_play_wave(self, event: SeqCEvent, snippet_start_samples: int):
+        channels = event.args[0]
         ct_info: CommandTableEntryInfo = event.args[1]
-        if len(self.ch) > 1:
+        if channels[self.ch[0] % 2] is None:
+            # A None for the first channel represents a FUNCTIONAL pulse
+            # which is not yet supported by the simulator
+            return
 
+        if len(self.ch) > 1:
             ct_abs_phase = ct_info.abs_phase if ct_info is not None else None
             ct_rel_phase = ct_info.rel_phase if ct_info is not None else None
             if ct_abs_phase is not None:
@@ -109,26 +237,71 @@ class WaveScroller:
                 self.oscillator_phase = (
                     self.oscillator_phase or 0.0
                 ) + ct_rel_phase / (180 / math.pi)
-            wave = 1j * self.sim.waves[event.args[0][self.ch[1] % 2]]
-            wave += self.sim.waves[event.args[0][self.ch[0] % 2]]
 
-            # If the command table phase is set, assume that the signal is complex (rather than 2x real)
+            wave = 1j * self.sim.waves[channels[self.ch[1] % 2]]
+            wave += self.sim.waves[channels[self.ch[0] % 2]]
+
+            # If the command table phase is set, assume that the signal is complex
+            # (rather than 2x real)
             if self.oscillator_phase is not None:
                 wave *= np.exp(-1j * self.oscillator_phase)
+
         else:
-            wave = self.sim.waves[event.args[0][self.ch[0] % 2]]
+            wave = self.sim.waves[channels[self.ch[0] % 2]]
             # Note: CT phase not implemented on RF signals
+
         ct_abs_amplitude = ct_info.abs_amplitude if ct_info is not None else None
         if ct_abs_amplitude is not None:
             wave = wave * ct_abs_amplitude
-        wave_start_samples = event.start_samples - snippet_start_samples
-        self.wave_snippet[wave_start_samples : wave_start_samples + len(wave)] = wave
+
+        _slice_copy(
+            self.wave_snippet,
+            snippet_start_samples,
+            wave,
+            event.start_samples,
+            event.length_samples,
+        )
+        self.last_played_value = wave[event.length_samples - 1]
+
+        markers = event.args[2] if len(event.args) > 2 else {}
+
+        if markers.get("marker1"):
+            _slice_copy(
+                self.marker_snippet,
+                snippet_start_samples,
+                self.sim.waves[event.args[0][2]],
+                event.start_samples,
+                event.length_samples,
+            )
+
+        if markers.get("marker2"):
+            wave_arg_pos = 3 if event.args[2]["marker1"] else 2
+            _slice_add(
+                self.marker_snippet,
+                snippet_start_samples,
+                1j * self.sim.waves[event.args[0][wave_arg_pos]],
+                event.start_samples,
+                event.length_samples,
+            )
 
     def _process_play_hold(self, event: SeqCEvent, snippet_start_samples: int):
-        wave_start_samples = event.start_samples - snippet_start_samples
-        self.wave_snippet[
-            wave_start_samples : wave_start_samples + event.length_samples
-        ] = self.wave_snippet[wave_start_samples - 1]
+        _slice_set(
+            self.wave_snippet,
+            snippet_start_samples,
+            self.last_played_value,
+            event.start_samples,
+            event.length_samples,
+        )
+
+    def _process_play_zero(self, event: SeqCEvent, snippet_start_samples: int):
+        _slice_set(
+            self.wave_snippet,
+            snippet_start_samples,
+            0.0,
+            event.start_samples,
+            event.length_samples,
+        )
+        self.last_played_value = 0.0
 
     def _process_start_qa(self, event: SeqCEvent, snippet_start_samples: int):
         if SimTarget.PLAY in self.sim_targets and self.is_shfqa:
@@ -141,15 +314,21 @@ class WaveScroller:
 
     def _process_shfqa_gen(self, event: SeqCEvent, snippet_start_samples: int):
         generator_mask: int = event.args[0]
+        if self.ch[0] < 0:
+            # The old_output_simulator sets ChannelInfo("QAResult", -1, SimTarget.ACQUIRE) to
+            # skip producing the SHFQA acquire play pulse, so we support that here too.
+            return
         if (generator_mask & (1 << self.ch[0])) != 0:
-            wave_start_samples = event.start_samples - snippet_start_samples
             wave = 1j * self.sim.waves[event.args[4][1]]
             wave += self.sim.waves[event.args[4][0]]
-            # TODO(2K): ensure wave doesn't exceed snippet boundary,
-            # as the wave length is not included in the event length
-            self.wave_snippet[
-                wave_start_samples : wave_start_samples + len(wave)
-            ] = wave
+            _slice_copy(
+                self.wave_snippet,
+                snippet_start_samples,
+                wave,
+                event.start_samples,
+                event.length_samples,
+            )
+            self.last_played_value = wave[event.length_samples - 1]
 
     def _process_acquire(self, event: SeqCEvent, snippet_start_samples: int):
         if SimTarget.ACQUIRE in self.sim_targets:
@@ -162,8 +341,8 @@ class WaveScroller:
                     - snippet_start_samples
                     + measurement_delay_samples
                 )
-                if wave_start_samples < len(self.acquire_snippet):
-                    self.acquire_snippet[wave_start_samples] = 1.0
+                if 0 <= wave_start_samples < len(self.acquire_snippet):
+                    self.acquire_snippet[wave_start_samples] = 1
         if SimTarget.TRIGGER in self.sim_targets:
             trigger_index = 5 if self.is_shfqa else 4
             if event.args[trigger_index] is None:
@@ -185,27 +364,25 @@ class WaveScroller:
     def _process_set_trigger(self, event: SeqCEvent, snippet_start_samples: int):
         value: int = int(event.args[0])
         wave_start_samples = event.start_samples - snippet_start_samples
-        if (
-            wave_start_samples <= len(self.trigger_snippet)
-            and self.last_trig is not None
-        ):
+        if 0 <= wave_start_samples <= len(self.trigger_snippet):
             self.trigger_snippet[
                 self.last_trig_set_samples : wave_start_samples
             ] = self.last_trig
-        self.last_trig_set_samples = wave_start_samples
+        self.last_trig_set_samples = max(0, wave_start_samples)
         self.last_trig = value
 
     def _process_set_osc_freq(self, event: SeqCEvent, snippet_start_samples: int):
         oscillator: int = event.args[0]
-        # TODO(2K): Track oscillator switching, currently osc 0 is hard-coded for Hw sweeps
+        # TODO(2K): Track oscillator switching, currently osc 0 is hard-coded for
+        #           Hw sweeps
         if oscillator == 0:
             frequency: float = event.args[1]
             wave_start_samples = event.start_samples - snippet_start_samples
-            if wave_start_samples <= len(self.frequency_snippet):
+            if 0 <= wave_start_samples <= len(self.frequency_snippet):
                 self.frequency_snippet[
                     self.last_freq_set_samples : wave_start_samples
                 ] = self.last_freq
-            self.last_freq_set_samples = wave_start_samples
+            self.last_freq_set_samples = max(0, wave_start_samples)
             self.last_freq = frequency
 
     def process(self, event: SeqCEvent, snippet_start_samples: int):
@@ -213,94 +390,75 @@ class WaveScroller:
         if processor is not None:
             processor(event, snippet_start_samples)
 
-    def trim(self, offset: int, length: int):
-        if self.wave_snippet is not None:
-            self.wave_snippet = self.wave_snippet[offset : offset + length]
-        if self.acquire_snippet is not None:
-            self.acquire_snippet = self.acquire_snippet[offset : offset + length]
+    def finalize(self):
         if self.trigger_snippet is not None:
             if self.last_trig_set_samples < len(self.trigger_snippet):
                 self.trigger_snippet[self.last_trig_set_samples :] = self.last_trig
-            self.trigger_snippet = self.trigger_snippet[offset : offset + length]
+
         if self.frequency_snippet is not None:
             if self.last_freq_set_samples < len(self.frequency_snippet):
                 self.frequency_snippet[self.last_freq_set_samples :] = self.last_freq
-            self.frequency_snippet = self.frequency_snippet[offset : offset + length]
 
     def calc_snippet(
         self,
         start_secs: float,
         length_secs: float,
-    ) -> Tuple[ArrayLike, ArrayLike]:
+    ):
         time_delay_secs = self.sim.output_port_delay if self.is_output() else 0.0
         time_delay_secs += self.sim.startup_delay
-        target_events = self.target_events()
         start_samples = int(
             np.round((start_secs - time_delay_secs) * self.sim.sampling_rate)
         )
         length_samples = int(np.round(length_secs * self.sim.sampling_rate))
+        if start_samples < 0:
+            # truncate any part of the interval that extends into negative
+            # sample counts (there are no events with negative samples)
+            length_samples = max(0, length_samples + start_samples)
+            start_samples = 0
         end_samples = start_samples + length_samples
 
-        def overlaps(a_start, a_length, b_start, b_length):
-            return (
-                min(a_start + a_length, b_start + b_length) - max(a_length, b_length)
-                != 0
-            )
+        # filter relevant events into events pre-interval and events that
+        # overlap the interval, keeping only the last of each kind of
+        # operation
+        pre_events = {}
+        interval_events = []
+        target_ops = self.target_ops()
+        for ev in self.sim.events:
+            if ev.start_samples > end_samples:
+                break
+            if ev.operation not in target_ops:
+                continue
+            if _overlaps(
+                start_samples,
+                length_samples,
+                ev.start_samples,
+                ev.length_samples,
+            ):
+                interval_events.append(ev)
+            else:
+                pre_events[ev.operation] = ev
+        pre_events = sorted(pre_events.values(), key=lambda ev: ev.start_samples)
 
-        max_event_idx = next(
-            (
-                i
-                for i, e in enumerate(self.sim.events)
-                if e.start_samples > start_samples + length_samples
-            ),
-            None,
-        )
-
-        events_in_window = [
-            ev
-            for ev in self.sim.events[:max_event_idx]
-            if overlaps(
-                start_samples, length_samples, ev.start_samples, ev.length_samples
+        # truncate sample length to the end of the last contained event
+        if interval_events:
+            ev_end = max(
+                ev.start_samples + (ev.length_samples or 1) for ev in interval_events
             )
-        ]
-        if len(events_in_window):
-            snippet_start_samples = min(ev.start_samples for ev in events_in_window)
-            snippet_length = (
-                max(
-                    # in case the last event had zero length, add one sample so that
-                    # for example a final setTrigger(0) can take effect and set the
-                    # last sample to 0
-                    ev.start_samples + (ev.length_samples or 1)
-                    for ev in events_in_window
-                )
-                - snippet_start_samples
-            )
+            end_samples = min(ev_end, end_samples)
+            length_samples = end_samples - start_samples
         else:
-            snippet_start_samples = start_samples
-            snippet_length = length_samples
+            end_samples = start_samples
+            length_samples = 0
 
-        op_events = [ev for ev in events_in_window if ev.operation in target_events]
-        self.prepare(snippet_length)
-
-        for ev in op_events:
-            self.process(ev, snippet_start_samples)
-
-        # clip to actually available samples, even if wider range requested
-        end_samples = min(end_samples, snippet_start_samples + snippet_length)
-        start_samples = max(0, start_samples)
-        length_samples = end_samples - start_samples
-        if length_samples <= 0:
-            return np.array([]), np.array([])
+        # prepare and populate the snippets
+        self.prepare(start_samples, length_samples)
+        for ev in pre_events:
+            self.process(ev, start_samples)
+        for ev in interval_events:
+            self.process(ev, start_samples)
+        self.finalize()
 
         exact_start_secs = start_samples / self.sim.sampling_rate + time_delay_secs
-        ofs = start_samples - snippet_start_samples
-
-        if ofs > 0:
-            self.trim(ofs, length_samples)
-        else:
-            self.trim(0, length_samples)
-            exact_start_secs -= ofs / self.sim.sampling_rate
-
         exact_length_secs = (length_samples - 1) / self.sim.sampling_rate
         self.time_axis = np.linspace(
             exact_start_secs, exact_start_secs + exact_length_secs, length_samples
