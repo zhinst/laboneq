@@ -38,7 +38,7 @@ class LoaderBase:
         self._signal_markers = {}
         self._signal_oscillator = {}
         self._signal_trigger = {}
-        self._root_sections = set()
+        self._root_sections = []
         self._handle_acquires = {}
 
     def data(self) -> dict[str, Any]:

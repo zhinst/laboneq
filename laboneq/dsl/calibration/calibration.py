@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict
 
 from laboneq.dsl.calibration.calibration_item import CalibrationItem
+from laboneq.dsl.dsl_dataclass_decorator import classformatter
 
 
 def _sanitize_key(key: Any) -> str:
@@ -16,6 +17,7 @@ def _sanitize_key(key: Any) -> str:
         return key
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class Calibration:
     """Calibration object containing a dict of :class:`~.CalibrationItem`.

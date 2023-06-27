@@ -6,12 +6,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional, Union
 
+from laboneq.dsl.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.experiment.operation import Operation
 
 if TYPE_CHECKING:
     from laboneq.dsl import Parameter
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class Delay(Operation):
     """Class representing a delay operation for a specific signal."""

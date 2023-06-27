@@ -5,6 +5,8 @@
 import dataclasses
 from enum import Enum
 
+from laboneq.dsl.dsl_dataclass_decorator import classformatter
+
 
 def Volt(val):
     return Quantity(val, Unit.volt)
@@ -26,6 +28,7 @@ class Unit(StrEnum):
     dBm = "dBm"
 
 
+@classformatter
 @dataclasses.dataclass(frozen=True)
 class Quantity:
     value: float

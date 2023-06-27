@@ -3,12 +3,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from enum import Enum
 from typing import Optional
 
 from laboneq.dsl.calibration import Calibratable, SignalCalibration
 from laboneq.dsl.calibration.observable import Signal
+from laboneq.dsl.dsl_dataclass_decorator import classformatter
 
 
 class PhysicalChannelType(Enum):
@@ -28,6 +29,7 @@ PHYSICAL_CHANNEL_CALIBRATION_FIELDS = (
 )
 
 
+@classformatter
 @dataclass(init=False, repr=False, order=True)
 class PhysicalChannel(Calibratable):
     #: Unique identifier. Typically of the form
@@ -66,10 +68,14 @@ class PhysicalChannel(Calibratable):
         self._signal_calibration_changed = Signal(self)
 
     def __repr__(self):
-        return (
-            f"{self.__class__.__name__}(uid={self.uid}, type={self.type}, "
-            f"name={self.name}, path={self.path}, calibration={self.calibration})"
-        )
+        field_values = []
+        for field in fields(self):
+            value = getattr(self, field.name)
+            if field.name == "_calibration":
+                field_values.append(f"calibration={value!r}")
+            else:
+                field_values.append(f"{field.name}={value!r}")
+        return f"{self.__class__.__name__}({', '.join(field_values)})"
 
     def __hash__(self):
         # By default, dataclass does not generate a __hash__() method for

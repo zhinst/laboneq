@@ -10,6 +10,7 @@ from laboneq.dsl.device.io_units.logical_signal import (
     LogicalSignalRef,
     resolve_logical_signal_ref,
 )
+from laboneq.dsl.dsl_dataclass_decorator import classformatter
 
 experiment_signal_id = 0
 
@@ -21,6 +22,7 @@ def experiment_signal_id_generator():
     return retval
 
 
+@classformatter
 @dataclass(init=False, repr=True, order=True)
 class ExperimentSignal:
     """Class representing a signal within an experiment. Experiment signals are connected to logical signals."""

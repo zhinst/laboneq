@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Union
+from typing import Any, Dict, List, Optional
 
 from numpy.typing import ArrayLike
 
@@ -23,7 +23,7 @@ from numpy.typing import ArrayLike
 class AcquiredResult:
     data: ArrayLike = None
     axis_name: List = field(default_factory=list)
-    axis: List[Union[ArrayLike, List[ArrayLike]]] = field(default_factory=list)
+    axis: Optional[Any] = None
     last_nt_step: List[int] = field(default_factory=list)
 
 

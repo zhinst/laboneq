@@ -4,9 +4,11 @@
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..dsl_dataclass_decorator import classformatter
 from .operation import Operation
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class Set(Operation):
 

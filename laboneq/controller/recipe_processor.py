@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Set, Tuple, Union
 
@@ -21,8 +22,8 @@ from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.executor.execution_from_experiment import ExecutionFactoryFromExperiment
 from laboneq.executor.executor import (
     ExecutorBase,
+    LoopFlags,
     LoopingMode,
-    LoopType,
     Sequence,
     Statement,
 )
@@ -248,6 +249,7 @@ class _ResultShapeCalculator(ExecutorBase):
         self._loop_stack: List[_LoopStackEntry] = []
         self._current_rt_uid: str = None
         self._current_rt_info: RtExecutionInfo = None
+        self._pipeline_index: int | None = None
 
     def _single_shot_axis(self) -> npt.ArrayLike:
         return np.linspace(
@@ -266,8 +268,6 @@ class _ResultShapeCalculator(ExecutorBase):
             for loop in self._loop_stack
             if not loop.is_averaging or single_shot_cyclic
         ]
-        # if single_shot_sequential:
-        #     shape.append(self.current_rt_info.averages)
         known_shape = self.result_shapes.get(handle)
         if known_shape is None:
             axis_name = [
@@ -280,9 +280,6 @@ class _ResultShapeCalculator(ExecutorBase):
                 for loop in self._loop_stack
                 if not loop.is_averaging or single_shot_cyclic
             ]
-            # if single_shot_sequential:
-            #     axis_name.append(self.current_rt_uid)
-            #     axis.append(self._single_shot_axis())
             self.result_shapes[handle] = HandleResultShape(
                 base_shape=shape, base_axis_name=axis_name, base_axis=axis
             )
@@ -296,64 +293,69 @@ class _ResultShapeCalculator(ExecutorBase):
     def set_sw_param_handler(
         self, name: str, index: int, value: float, axis_name: str, values: npt.ArrayLike
     ):
+        if name == "__pipeline_index":
+            self._pipeline_index = value
+            return
         self._loop_stack[-1].axis_names.append(name if axis_name is None else axis_name)
         self._loop_stack[-1].axis_points.append(values)
 
-    def for_loop_handler(
-        self, count: int, index: int, loop_type: LoopType, enter: bool
-    ):
-        if enter:
-            is_averaging = loop_type in [LoopType.RT_AVERAGE, LoopType.AVERAGE]
-            self._loop_stack.append(
-                _LoopStackEntry(count=count, is_averaging=is_averaging)
-            )
-            if is_averaging:
-                single_shot_cyclic = (
-                    self._current_rt_info.averaging_mode == AveragingMode.SINGLE_SHOT
-                )
-                # TODO(2K): single_shot_sequential
-                if single_shot_cyclic:
-                    self._loop_stack[-1].axis_names.append(self._current_rt_uid)
-                    self._loop_stack[-1].axis_points.append(self._single_shot_axis())
-        else:
-            self._loop_stack.pop()
+    @contextmanager
+    def for_loop_handler(self, count: int, index: int, loop_flags: LoopFlags):
+        if loop_flags & LoopFlags.PIPELINE:
+            yield
+            self._pipeline_index = None
+            return
 
+        is_averaging = bool(loop_flags & LoopFlags.AVERAGE)
+        self._loop_stack.append(_LoopStackEntry(count=count, is_averaging=is_averaging))
+        if is_averaging:
+            single_shot_cyclic = (
+                self._current_rt_info.averaging_mode == AveragingMode.SINGLE_SHOT
+            )
+            if single_shot_cyclic:
+                self._loop_stack[-1].axis_names.append(self._current_rt_uid)
+                self._loop_stack[-1].axis_points.append(self._single_shot_axis())
+
+        yield
+
+        self._loop_stack.pop()
+
+    @contextmanager
     def rt_handler(
         self,
         count: int,
         uid: str,
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
-        enter: bool,
     ):
-        if enter:
-            if averaging_mode != AveragingMode.SINGLE_SHOT:
-                max_hw_averages = (
-                    pow(2, 15)
-                    if acquisition_type == AcquisitionType.RAW
-                    else pow(2, 17)
-                )
-                if count > max_hw_averages:
-                    raise LabOneQControllerException(
-                        f"Maximum number of hardware averages is {max_hw_averages}, but {count} was given"
-                    )
 
-            self._current_rt_uid = uid
-            self._current_rt_info = self.rt_execution_infos.setdefault(
-                uid,
-                RtExecutionInfo(
-                    averages=count,
-                    averaging_mode=averaging_mode,
-                    acquisition_type=acquisition_type,
-                ),
+        if averaging_mode != AveragingMode.SINGLE_SHOT:
+            max_hw_averages = (
+                pow(2, 15) if acquisition_type == AcquisitionType.RAW else pow(2, 17)
             )
-        else:
-            if self._current_rt_info is None:
+            if count > max_hw_averages:
                 raise LabOneQControllerException(
-                    "Nested 'acquire_loop_rt' are not allowed."
+                    f"Maximum number of hardware averages is {max_hw_averages}, but {count} was given"
                 )
-            self._current_rt_uid = None
-            self._current_rt_info = None
+
+        self._current_rt_uid = uid
+        self._current_rt_info = self.rt_execution_infos.setdefault(
+            uid,
+            RtExecutionInfo(
+                averages=count,
+                averaging_mode=averaging_mode,
+                acquisition_type=acquisition_type,
+            ),
+        )
+
+        yield
+
+        if self._current_rt_info is None:
+            raise LabOneQControllerException(
+                "Nested 'acquire_loop_rt' are not allowed."
+            )
+        self._current_rt_uid = None
+        self._current_rt_info = None
 
 
 def _calculate_result_shapes(
@@ -523,12 +525,14 @@ def pre_process_compiled(
             iq_settings=_pre_process_iq_settings_hdawg(initialization)
         )
 
+    # todo: remove legacy code
     if hasattr(compiled_experiment, "execution"):
         execution = compiled_experiment.execution
     else:
         execution = ExecutionFactoryFromExperiment().make(
             compiled_experiment.experiment
         )
+
     result_shapes, rt_execution_infos = _calculate_result_shapes(execution)
     awg_configs = _calculate_awg_configs(rt_execution_infos, recipe.experiment)
     attribute_value_tracker, oscillator_ids = _pre_process_attributes(

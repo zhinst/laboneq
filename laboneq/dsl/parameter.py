@@ -10,6 +10,8 @@ from numbers import Number
 import numpy as np
 from numpy.typing import ArrayLike
 
+from laboneq.dsl.dsl_dataclass_decorator import classformatter
+
 parameter_id = 0
 
 
@@ -30,6 +32,7 @@ def _compare_nested(a, b):
     return a == b
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class Parameter(ABC):
     """Parent class for sweep parameters in a LabOne Q Experiment."""
@@ -37,6 +40,7 @@ class Parameter(ABC):
     uid: str = field(default_factory=parameter_id_generator)
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class SweepParameter(Parameter):
     """An arbitrary sweep parameter."""
@@ -44,8 +48,9 @@ class SweepParameter(Parameter):
     #: An arbitrary numpy array whose values are used as the sweep parameter.
     values: ArrayLike = field(default_factory=lambda x: np.array([]))
 
-    #: The name of the sweep axis for this parameter used in the results. If this
-    #: argument is not defined, the uid of the object will be used instead.
+    #: The name of the sweep axis for this parameter used in the results.
+    #:
+    #: If this argument is not defined, the uid of the object will be used instead.
     axis_name: str = field(default=None)
 
     def __eq__(self, other):
@@ -55,7 +60,11 @@ class SweepParameter(Parameter):
             self.values, other.values
         )
 
+    def __len__(self) -> int:
+        return len(self.values)
 
+
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class LinearSweepParameter(Parameter):
     """A linear sweep parameter"""
@@ -74,11 +83,21 @@ class LinearSweepParameter(Parameter):
     #: If this argument is not defined, the uid of the object will be used instead.
     axis_name: str = field(default=None)
 
+    def __eq__(self, other):
+        if self is other:
+            return True
+        return self.axis_name == other.axis_name and _compare_nested(
+            self.values, other.values
+        )
+
     def __post_init__(self):
         if self.count is None or self.start is None or self.stop is None:
             raise RuntimeError(
                 f"LinearSweepParameter {self.uid}: one of start, stop, count is None"
             )
+
+    def __len__(self) -> int:
+        return self.count
 
     @property
     def values(self):

@@ -10,9 +10,11 @@ from typing import List
 from laboneq.core.types.enums.io_direction import IODirection
 from laboneq.dsl.device.ports import Port
 
+from ..dsl_dataclass_decorator import classformatter
 from .connection import Connection
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class Instrument:
     """Class representing an instrument."""

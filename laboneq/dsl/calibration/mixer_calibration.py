@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 from laboneq.dsl.calibration.observable import Observable
+from laboneq.dsl.dsl_dataclass_decorator import classformatter
 
 mixer_calib_id = 0
 
@@ -18,6 +19,7 @@ def mixer_calib_id_generator():
     return retval
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class MixerCalibration(Observable):
     """Data object containing mixer calibration correction settings."""

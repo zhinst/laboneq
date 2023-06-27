@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import traceback
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 from numpy import typing as npt
@@ -20,7 +21,7 @@ from laboneq.controller.recipe_enums import NtStepKey
 from laboneq.controller.util import LabOneQControllerException, SweepParamsTracker
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
-from laboneq.executor.executor import ExecutorBase, LoopingMode, LoopType
+from laboneq.executor.executor import ExecutorBase, LoopFlags, LoopingMode
 
 if TYPE_CHECKING:
     from laboneq.controller.controller import Controller
@@ -69,63 +70,57 @@ class NearTimeRunner(ExecutorBase):
     ):
         self.sweep_params_tracker.set_param(name, value)
 
-    def for_loop_handler(
-        self, count: int, index: int, loop_type: LoopType, enter: bool
-    ):
-        if enter:
-            self.nt_loop_indices.append(index)
-        else:
-            self.nt_loop_indices.pop()
+    @contextmanager
+    def for_loop_handler(self, count: int, index: int, loop_flags: LoopFlags):
+        self.nt_loop_indices.append(index)
+        yield
+        self.nt_loop_indices.pop()
 
+    @contextmanager
     def rt_handler(
         self,
         count: int,
         uid: str,
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
-        enter: bool,
     ):
-        if enter:
-            self.controller._initialize_awgs(nt_step=self.nt_step())
-            self.controller._configure_triggers()
-            attribute_value_tracker = (
-                self.controller._recipe_data.attribute_value_tracker
+        self.controller._initialize_awgs(nt_step=self.nt_step())
+        self.controller._configure_triggers()
+        attribute_value_tracker = self.controller._recipe_data.attribute_value_tracker
+        for param in self.sweep_params_tracker.updated_params():
+            attribute_value_tracker.update(
+                param, self.sweep_params_tracker.get_param(param)
             )
-            for param in self.sweep_params_tracker.updated_params():
-                attribute_value_tracker.update(
-                    param, self.sweep_params_tracker.get_param(param)
-                )
-            self.sweep_params_tracker.clear_for_next_step()
+        self.sweep_params_tracker.clear_for_next_step()
 
-            nt_sweep_nodes: list[DaqNodeAction] = []
-            for device_uid, device in self.controller._devices.all:
-                nt_sweep_nodes.extend(
-                    device.collect_prepare_nt_step_nodes(
-                        attribute_value_tracker.device_view(device_uid),
-                        self.controller._recipe_data,
-                    )
+        nt_sweep_nodes: list[DaqNodeAction] = []
+        for device_uid, device in self.controller._devices.all:
+            nt_sweep_nodes.extend(
+                device.collect_prepare_nt_step_nodes(
+                    attribute_value_tracker.device_view(device_uid),
+                    self.controller._recipe_data,
                 )
-
-            step_prepare_nodes = self.controller._prepare_rt_execution(
-                rt_section_uid=uid
             )
 
-            batch_set([*self.user_set_nodes, *nt_sweep_nodes, *step_prepare_nodes])
-            self.user_set_nodes.clear()
+        step_prepare_nodes = self.controller._prepare_rt_execution(rt_section_uid=uid)
 
-            for retry in range(3):  # Up to 3 retries
-                if retry > 0:
-                    _logger.info("Step retry %s of 3...", retry + 1)
-                    batch_set(step_prepare_nodes)
-                try:
-                    self.controller._execute_one_step(acquisition_type)
-                    self.controller._read_one_step_results(
-                        nt_step=self.nt_step(), rt_section_uid=uid
-                    )
-                    break
-                except LabOneQControllerException:  # TODO(2K): introduce "hard" controller exceptions
-                    self.controller._report_step_error(
-                        nt_step=self.nt_step(),
-                        rt_section_uid=uid,
-                        message=traceback.format_exc(),
-                    )
+        batch_set([*self.user_set_nodes, *nt_sweep_nodes, *step_prepare_nodes])
+        self.user_set_nodes.clear()
+
+        for retry in range(3):  # Up to 3 retries
+            if retry > 0:
+                _logger.info("Step retry %s of 3...", retry + 1)
+                batch_set(step_prepare_nodes)
+            try:
+                self.controller._execute_one_step(acquisition_type)
+                self.controller._read_one_step_results(
+                    nt_step=self.nt_step(), rt_section_uid=uid
+                )
+                break
+            except LabOneQControllerException:  # TODO(2K): introduce "hard" controller exceptions
+                self.controller._report_step_error(
+                    nt_step=self.nt_step(),
+                    rt_section_uid=uid,
+                    message=traceback.format_exc(),
+                )
+        yield

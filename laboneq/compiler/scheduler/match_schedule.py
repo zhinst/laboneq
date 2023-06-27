@@ -113,8 +113,6 @@ def _compute_start_with_latency(
         toolkit_qatype = {"shfqa": QAType.SHFQA, "shfqc": QAType.SHFQC}.get(
             qa_device_type.str_value
         )
-    if toolkit_qatype is None:
-        raise LabOneQException("Feedback not supported for an aquisition on a UHFQA.")
 
     acq_start = acquire_pulse.absolute_start * schedule_data.TINYSAMPLE
     acq_length = acquire_pulse.length * schedule_data.TINYSAMPLE
@@ -162,33 +160,53 @@ def _compute_start_with_latency(
             }[sg_device_type.str_value]
 
         model = FeedbackTimingModel if not local else QCCSFeedbackModel
-        time_of_arrival_at_register = model(
-            description=get_feedback_system_description(
-                generator_type=toolkit_sgtype,
-                analyzer_type=toolkit_qatype,
-                pqsc_mode=None if local else PQSCMode.REGISTER_FORWARD,
-                feedback_path=FeedbackPath.INTERNAL if local else FeedbackPath.ZSYNC,
+        if toolkit_qatype is not None:
+            time_of_arrival_at_register = model(
+                description=get_feedback_system_description(
+                    generator_type=toolkit_sgtype,
+                    analyzer_type=toolkit_qatype,
+                    pqsc_mode=None if local else PQSCMode.REGISTER_FORWARD,
+                    feedback_path=FeedbackPath.INTERNAL
+                    if local
+                    else FeedbackPath.ZSYNC,
+                )
+            ).get_latency(acquire_end_in_samples)
+
+            # We also add three latency cycles here, which then, in the code generator, will
+            # be subtracted again for the latency argument of executeTableEntry. The reason
+            # is that there is an additional latency of three cycles from the execution
+            # of the command in the sequencer until the arrival of the chosen waveform in
+            # the wave player queue. For now, we look at the time the pulse is played
+            # (arrival time of data in register + 3), which also simplifies phase
+            # calculation for software modulated signals, and take care of subtracting it
+            # later
+
+            time_of_pulse_played = (
+                time_of_arrival_at_register + EXECUTETABLEENTRY_LATENCY
             )
-        ).get_latency(acquire_end_in_samples)
 
-        # We also add three latency cycles here, which then, in the code generator, will
-        # be subtracted again for the latency argument of executeTableEntry. The reason
-        # is that there is an additional latency of three cycles from the execution
-        # of the command in the sequencer until the arrival of the chosen waveform in
-        # the wave player queue. For now, we look at the time the pulse is played
-        # (arrival time of data in register + 3), which also simplifies phase
-        # calculation for software modulated signals, and take care of subtracting it
-        # later
-
-        time_of_pulse_played = time_of_arrival_at_register + EXECUTETABLEENTRY_LATENCY
-
-        sg_seq_rate = schedule_data.sampling_rate_tracker.sequencer_rate_for_device(
-            sg_signal_obj.awg.device_id
-        )
-        sg_seq_dt_for_latency_in_ts = round(
-            1 / (2 * sg_seq_rate * schedule_data.TINYSAMPLE)
-        )
-        latency_in_ts = time_of_pulse_played * sg_seq_dt_for_latency_in_ts
+            sg_seq_rate = schedule_data.sampling_rate_tracker.sequencer_rate_for_device(
+                sg_signal_obj.awg.device_id
+            )
+            sg_seq_dt_for_latency_in_ts = round(
+                1 / (2 * sg_seq_rate * schedule_data.TINYSAMPLE)
+            )
+            latency_in_ts = time_of_pulse_played * sg_seq_dt_for_latency_in_ts
+        else:
+            # gen 1 system
+            latency = 750e-9  # https://www.zhinst.com/ch/en/blogs/practical-active-qubit-reset
+            latency_in_ts = int(
+                (
+                    latency
+                    + acq_start
+                    + acq_length
+                    + qa_lead_time
+                    + qa_delay_signal
+                    + qa_base_delay_signal
+                    + qa_total_port_delay / qa_sampling_rate
+                )
+                / schedule_data.TINYSAMPLE
+            )
 
         # Calculate the shift of compiler zero time for the SG; we may subtract this
         # from the time of arrival (which is measured since the trigger) to get the

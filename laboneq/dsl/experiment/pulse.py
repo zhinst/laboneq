@@ -10,6 +10,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from laboneq.core.exceptions import LabOneQException
+from laboneq.dsl.dsl_dataclass_decorator import classformatter
 
 pulse_id = 0
 
@@ -37,6 +38,7 @@ class Pulse:
         return False
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class PulseSampledReal(Pulse):
     """Pulse based on a list of real-valued samples."""
@@ -65,6 +67,7 @@ class PulseSampledReal(Pulse):
 
 
 # TODO: PulseSampledReal and PulseSampledComplex should be the same function taking a single dimensional np.ndarray.
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class PulseSampledComplex(Pulse):
     """Pulse base on a list of complex-valued samples."""
@@ -95,6 +98,7 @@ class PulseSampledComplex(Pulse):
         return self.uid == other.uid and _compare_nested(self.samples, other.samples)
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class PulseFunctional(Pulse):
     """Pulse based on a function."""

@@ -7,6 +7,7 @@ import warnings
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from laboneq.dsl.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.enums import CarrierType, ModulationType
 
 if TYPE_CHECKING:
@@ -22,6 +23,7 @@ def oscillator_uid_generator():
     return retval
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class Oscillator:
     """

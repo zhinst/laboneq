@@ -76,7 +76,7 @@ class SignalCalibration:
     port_mode: Optional[Any] = None
     delay_signal: Optional[Any] = None
     voltage_offset: Optional[Any] = None
-    range: Any = None
+    range: Optional[Any] = None
     threshold: Optional[Any] = None
     amplitude: Optional[Any] = None
 

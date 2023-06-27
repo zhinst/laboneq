@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from laboneq.dsl.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.parameter import Parameter
 
 amplifier_pump_id = 0
@@ -17,6 +18,7 @@ def amplifier_pump_id_generator():
     return retval
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class AmplifierPump:
     """Data object containing settings for the Parametric Pump Controller."""

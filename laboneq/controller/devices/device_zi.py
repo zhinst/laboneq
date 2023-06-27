@@ -372,6 +372,10 @@ class DeviceZI(ABC):
             "%s: Turning off signal output (stub, not implemented).", self.dev_repr
         )
 
+    def on_experiment_end(self):
+        nodes = []
+        return nodes
+
     def free_allocations(self):
         self._allocated_oscs.clear()
         self._allocated_awgs.clear()

@@ -38,6 +38,12 @@ class ModulationType(Enum):
 
 
 @dataclass
+class BounceCompensation:
+    delay: float = None
+    amplitude: float = None
+
+
+@dataclass
 class Calibration:
     calibration_items: Dict = field(default_factory=dict)
 
@@ -52,12 +58,6 @@ class MixerCalibration:
 @dataclass
 class Signal:
     uid: str = None
-
-
-@dataclass
-class BounceCompensation:
-    delay: float = None
-    amplitude: float = None
 
 
 @dataclass
@@ -79,7 +79,7 @@ class HighPassCompensation:
 @dataclass
 class Oscillator:
     uid: str = None
-    frequency: Any = None
+    frequency: Optional[Any] = None
     modulation_type: ModulationType = None
     carrier_type: CarrierType = None
 

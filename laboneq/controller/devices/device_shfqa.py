@@ -42,7 +42,7 @@ from laboneq.controller.recipe_processor import (
     get_wave,
 )
 from laboneq.controller.util import LabOneQControllerException
-from laboneq.core.types.enums.acquisition_type import AcquisitionType
+from laboneq.core.types.enums.acquisition_type import AcquisitionType, is_spectroscopy
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 
 _logger = logging.getLogger(__name__)
@@ -161,6 +161,18 @@ class DeviceSHFQA(DeviceSHFBase):
                 )
         return channels_to_disable
 
+    def on_experiment_end(self):
+        nodes = super().on_experiment_end()
+        return [
+            *nodes,
+            # in CW spectroscopy mode, turn off the tone
+            DaqNodeSetAction(
+                self._daq,
+                f"/{self.serial}/qachannels/*/spectroscopy/envelope/enable",
+                1,
+            ),
+        ]
+
     def _nodes_to_monitor_impl(self) -> list[str]:
         nodes = super()._nodes_to_monitor_impl()
         for awg in range(self._get_num_awgs()):
@@ -168,6 +180,7 @@ class DeviceSHFQA(DeviceSHFBase):
                 [
                     f"/{self.serial}/qachannels/{awg}/generator/enable",
                     f"/{self.serial}/qachannels/{awg}/generator/ready",
+                    f"/{self.serial}/qachannels/{awg}/spectroscopy/psd/enable",
                     f"/{self.serial}/qachannels/{awg}/spectroscopy/result/enable",
                     f"/{self.serial}/qachannels/{awg}/readout/result/enable",
                 ]
@@ -195,7 +208,7 @@ class DeviceSHFQA(DeviceSHFBase):
                 average_mode,
             ),
             *self._configure_spectroscopy(
-                acquisition_type == AcquisitionType.SPECTROSCOPY,
+                acquisition_type,
                 awg_key.awg_index,
                 awg_config.result_length,
                 averages,
@@ -257,7 +270,10 @@ class DeviceSHFQA(DeviceSHFBase):
                     ),
                 ]
             )
-            if acquisition_type == AcquisitionType.DISCRIMINATION:
+            if acquisition_type in [
+                AcquisitionType.INTEGRATION,
+                AcquisitionType.DISCRIMINATION,
+            ]:
                 for integrator in integrator_allocations:
                     if (
                         integrator.device_id != awg_key.device_uid
@@ -285,14 +301,14 @@ class DeviceSHFQA(DeviceSHFBase):
 
     def _configure_spectroscopy(
         self,
-        enable: bool,
+        acq_type: AcquisitionType,
         channel: int,
         result_length: int,
         averages: int,
         average_mode: int,
     ):
         nodes_to_initialize_spectroscopy = []
-        if enable:
+        if is_spectroscopy(acq_type):
             nodes_to_initialize_spectroscopy.extend(
                 [
                     DaqNodeSetAction(
@@ -312,16 +328,31 @@ class DeviceSHFQA(DeviceSHFBase):
                     ),
                     DaqNodeSetAction(
                         self._daq,
+                        f"/{self.serial}/qachannels/{channel}/spectroscopy/psd/enable",
+                        0,
+                    ),
+                    DaqNodeSetAction(
+                        self._daq,
                         f"/{self.serial}/qachannels/{channel}/spectroscopy/result/enable",
                         0,
                     ),
                 ]
             )
+
+        if acq_type == AcquisitionType.SPECTROSCOPY_PSD:
+            nodes_to_initialize_spectroscopy.append(
+                DaqNodeSetAction(
+                    self._daq,
+                    f"/{self.serial}/qachannels/{channel}/spectroscopy/psd/enable",
+                    1,
+                ),
+            )
+
         nodes_to_initialize_spectroscopy.append(
             DaqNodeSetAction(
                 self._daq,
                 f"/{self.serial}/qachannels/{channel}/spectroscopy/result/enable",
-                1 if enable else 0,
+                1 if is_spectroscopy(acq_type) else 0,
             )
         )
         return nodes_to_initialize_spectroscopy
@@ -437,7 +468,7 @@ class DeviceSHFQA(DeviceSHFBase):
         conditions: dict[str, Any] = {}
         for awg_index in self._allocated_awgs:
             conditions[f"/{self.serial}/qachannels/{awg_index}/generator/enable"] = 0
-            if acquisition_type == AcquisitionType.SPECTROSCOPY:
+            if is_spectroscopy(acquisition_type):
                 conditions[
                     f"/{self.serial}/qachannels/{awg_index}/spectroscopy/result/enable"
                 ] = 0
@@ -596,7 +627,7 @@ class DeviceSHFQA(DeviceSHFBase):
             set_input = input_updated and input_scheduler_port_delay is not None
 
             base_channel_path = f"/{self.serial}/qachannels/{ch}"
-            if acquisition_type == AcquisitionType.SPECTROSCOPY:
+            if is_spectroscopy(acquisition_type):
                 output_delay_path = f"{base_channel_path}/spectroscopy/envelope/delay"
                 meas_delay_path = f"{base_channel_path}/spectroscopy/delay"
             else:
@@ -649,11 +680,11 @@ class DeviceSHFQA(DeviceSHFBase):
         wave_index: int,
         acquisition_type: AcquisitionType,
     ):
-        assert acquisition_type != AcquisitionType.SPECTROSCOPY or wave_index == 0
+        assert not is_spectroscopy(acquisition_type) or wave_index == 0
         return DaqNodeSetAction(
             self._daq,
             f"/{self.serial}/qachannels/{awg_index}/spectroscopy/envelope/wave"
-            if acquisition_type == AcquisitionType.SPECTROSCOPY
+            if is_spectroscopy(acquisition_type)
             else f"/{self.serial}/qachannels/{awg_index}/generator/waveforms/{wave_index}/wave",
             waveform,
             filename=filename,
@@ -668,7 +699,7 @@ class DeviceSHFQA(DeviceSHFBase):
     ):
         waves_upload: list[DaqNodeSetAction] = []
         has_spectroscopy_envelope = False
-        if acquisition_type == AcquisitionType.SPECTROSCOPY:
+        if is_spectroscopy(acquisition_type):
             if len(waves) > 1:
                 raise LabOneQControllerException(
                     f"{self.dev_repr}: Only one envelope waveform per channel is possible in "
@@ -826,7 +857,7 @@ class DeviceSHFQA(DeviceSHFBase):
                 DaqNodeSetAction(
                     self._daq,
                     f"/{self.serial}/qachannels/{measurement.channel}/mode",
-                    0 if acquisition_type == AcquisitionType.SPECTROSCOPY else 1,
+                    0 if is_spectroscopy(acquisition_type) else 1,
                 )
             )
 
@@ -846,7 +877,7 @@ class DeviceSHFQA(DeviceSHFBase):
                 ),
                 None,
             )
-            if acquisition_type == AcquisitionType.SPECTROSCOPY:
+            if is_spectroscopy(acquisition_type):
                 nodes_to_initialize_measurement.extend(
                     self._configure_spectroscopy_mode_nodes(dev_input, measurement)
                 )
@@ -956,7 +987,7 @@ class DeviceSHFQA(DeviceSHFBase):
         assert len(result_indices) == 1
         result_path = f"/{self.serial}/qachannels/{channel}/" + (
             "spectroscopy/result/data/wave"
-            if acquisition_type == AcquisitionType.SPECTROSCOPY
+            if is_spectroscopy(acquisition_type)
             else f"readout/result/data/{result_indices[0]}/wave"
         )
         attempts = 3  # Hotfix HBAR-949
@@ -991,11 +1022,7 @@ class DeviceSHFQA(DeviceSHFBase):
     def check_results_acquired_status(
         self, channel, acquisition_type: AcquisitionType, result_length, hw_averages
     ):
-        unit = (
-            "spectroscopy"
-            if acquisition_type == AcquisitionType.SPECTROSCOPY
-            else "readout"
-        )
+        unit = "spectroscopy" if is_spectroscopy(acquisition_type) else "readout"
         results_acquired_path = (
             f"/{self.serial}/qachannels/{channel}/{unit}/result/acquired"
         )
@@ -1032,6 +1059,14 @@ class DeviceSHFQA(DeviceSHFBase):
             DaqNodeSetAction(
                 self._daq,
                 f"/{self.serial}/qachannels/*/readout/result/enable",
+                0,
+                caching_strategy=CachingStrategy.NO_CACHE,
+            )
+        )
+        reset_nodes.append(
+            DaqNodeSetAction(
+                self._daq,
+                f"/{self.serial}/qachannels/*/spectroscopy/psd/enable",
                 0,
                 caching_strategy=CachingStrategy.NO_CACHE,
             )

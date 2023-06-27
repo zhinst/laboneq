@@ -8,7 +8,13 @@ from typing import Any
 
 from marshmallow import EXCLUDE, Schema, fields, post_load
 
-from .recipe_enums import NtStepKey, RefClkType, SignalType, TriggeringMode
+from .recipe_enums import (
+    AcquisitionType,
+    NtStepKey,
+    RefClkType,
+    SignalType,
+    TriggeringMode,
+)
 from .util import LabOneQControllerException
 
 
@@ -248,6 +254,22 @@ class TriggeringModeField(fields.Field):
         return TriggeringMode[value.upper()]
 
 
+class AcquisitionTypeField(fields.Field):
+    def __init__(self, *args, **kwargs) -> None:
+        kwargs["allow_none"] = True
+        super().__init__(*args, **kwargs)
+
+    def _serialize(self, value, attr, obj, **kwargs):
+        if value is None:
+            return None
+        return value.name
+
+    def _deserialize(self, value, attr, data, **kwargs):
+        if value is None:
+            return None
+        return AcquisitionType[value.upper()]
+
+
 class Config(QCCSSchema):
     class Meta:
         fields = (
@@ -405,6 +427,8 @@ class Experiment(QCCSSchema):
             "acquire_lengths",
             "simultaneous_acquires",
             "total_execution_time",
+            "max_step_execution_time",
+            "acquisition_type",
         )
         ordered = True
 
@@ -419,6 +443,8 @@ class Experiment(QCCSSchema):
         acquire_lengths: list[AcquireLength.Data] = field(default_factory=list)
         simultaneous_acquires: list[dict[str, str]] = field(default_factory=list)
         total_execution_time: float = None
+        max_step_execution_time: float = None
+        acquisition_type: AcquisitionType = AcquisitionTypeField()
 
     initializations = fields.List(fields.Nested(Initialization))
     realtime_execution_init = fields.List(fields.Nested(RealtimeExecutionInit))
@@ -431,6 +457,8 @@ class Experiment(QCCSSchema):
         fields.Dict(fields.Str(), fields.Str()), required=False, allow_none=True
     )
     total_execution_time = fields.Float(required=False, allow_none=True)
+    max_step_execution_time = fields.Float(required=False, allow_none=True)
+    acquisition_type = AcquisitionTypeField()
 
 
 class Recipe(QCCSSchema):

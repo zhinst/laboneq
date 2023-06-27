@@ -16,6 +16,7 @@ RsInstrument
 flaky==3.7.0
 pyvisa-py==0.5.3
 qcodes
+qiskit
 
 # Formatting (must match version in CI)
 black[jupyter]==22.10

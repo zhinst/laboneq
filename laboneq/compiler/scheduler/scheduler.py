@@ -8,6 +8,7 @@ import dataclasses
 import itertools
 import logging
 from dataclasses import replace
+from math import ceil
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -40,6 +41,7 @@ from laboneq.compiler.scheduler.oscillator_schedule import (
     OscillatorFrequencyStepSchedule,
     SweptHardwareOscillator,
 )
+from laboneq.compiler.scheduler.parameter_store import ParameterStore
 from laboneq.compiler.scheduler.phase_reset_schedule import PhaseResetSchedule
 from laboneq.compiler.scheduler.preorder_map import calculate_preorder_map
 from laboneq.compiler.scheduler.pulse_phase import calculate_osc_phase
@@ -105,9 +107,9 @@ class Scheduler:
         self._scheduled_sections = {}
 
     @trace("scheduler.run()", {"version": "v2"})
-    def run(self, nt_parameters=None):
+    def run(self, nt_parameters: Optional[ParameterStore] = None):
         if nt_parameters is None:
-            nt_parameters = {}
+            nt_parameters = ParameterStore()
         self._root_schedule = self._schedule_root(nt_parameters)
         _logger.info("Schedule completed")
         for _, (
@@ -173,7 +175,9 @@ class Scheduler:
             max_events = float("inf")
         return self.generate_event_list(expand_loops, max_events)
 
-    def _schedule_root(self, nt_parameters: Dict[str, float]) -> Optional[RootSchedule]:
+    def _schedule_root(
+        self, nt_parameters: ParameterStore[str, float]
+    ) -> Optional[RootSchedule]:
         root_sections = self._experiment_dao.root_rt_sections()
         if len(root_sections) == 0:
             return None
@@ -195,9 +199,9 @@ class Scheduler:
         for handle, acquire_pulses in self._schedule_data.acquire_pulses.items():
             for a, b in pairwise(acquire_pulses):
                 if assert_valid(a.absolute_start) > assert_valid(b.absolute_start):
-                    _logger.warn(
-                        "Topological order of the acquires for handle"
-                        f" {handle} does not match time order."
+                    _logger.warning(
+                        f"Topological order of the acquires for handle {handle} does"
+                        " not match time order."
                     )
 
         return root_schedule
@@ -205,7 +209,7 @@ class Scheduler:
     def _schedule_section(
         self,
         section_id: str,
-        current_parameters: Dict[str, float],
+        current_parameters: ParameterStore[str, float],
     ) -> SectionSchedule:
         """Schedule the given section as the top level.
 
@@ -216,9 +220,7 @@ class Scheduler:
             # todo: do not hash the entire current_parameters dict, but just the param values
             # todo: reduce key to those parameters actually required by the section
             return copy.deepcopy(
-                self._scheduled_sections[
-                    (section_id, frozenset(current_parameters.items()))
-                ]
+                self._scheduled_sections[(section_id, current_parameters.frozen())]
             )
         except KeyError:
             pass
@@ -250,7 +252,7 @@ class Scheduler:
 
         if schedule.cacheable:
             self._scheduled_sections[
-                (section_id, frozenset(current_parameters.items()))
+                (section_id, current_parameters.frozen())
             ] = schedule
 
         return schedule
@@ -288,7 +290,7 @@ class Scheduler:
         self,
         section_id,
         section_info: SectionInfo,
-        current_parameters: Dict[str, float],
+        current_parameters: ParameterStore[str, float],
         sweep_parameters: List[Dict],
     ) -> LoopSchedule:
         """Schedule the individual iterations of the loop ``section_id``.
@@ -307,6 +309,8 @@ class Scheduler:
             else (None, None)
         )
 
+        this_chunk_size = section_info.count
+
         children_schedules = []
         for param in sweep_parameters:
             if param["values"] is not None:
@@ -316,7 +320,8 @@ class Scheduler:
             compressed = section_info.count > 1
             prototype = self._schedule_loop_iteration(
                 section_id,
-                iteration=0,
+                local_iteration=0,
+                global_iteration=0,
                 num_repeats=section_info.count,
                 all_parameters=current_parameters,
                 sweep_parameters=[],
@@ -330,27 +335,38 @@ class Scheduler:
                 {p["id"] for p in sweep_parameters}, signals
             )
 
-            for iteration in range(section_info.count):
+            if section_info.chunk_count > 1:
+                max_chunk_size = ceil(section_info.count / section_info.chunk_count)
+                chunk_index = current_parameters["__pipeline_index"]
+                global_iterations = range(
+                    chunk_index * max_chunk_size,
+                    min((chunk_index + 1) * max_chunk_size, section_info.count),
+                )
+            else:
+                global_iterations = range(section_info.count)
+            this_chunk_size = len(global_iterations)
+
+            for local_iteration, global_iteration in enumerate(global_iterations):
                 new_parameters = {
                     param["id"]: (
-                        param["values"][iteration]
+                        param["values"][global_iteration]
                         if param["values"] is not None
-                        else param["start"] + param["step"] * iteration
+                        else param["start"] + param["step"] * global_iteration
                     )
                     for param in sweep_parameters
                 }
-                all_parameters = {**current_parameters, **new_parameters}
-
-                children_schedules.append(
-                    self._schedule_loop_iteration(
-                        section_id,
-                        iteration,
-                        section_info.count,
-                        all_parameters,
-                        sweep_parameters,
-                        swept_hw_oscillators,
+                with current_parameters.extend(new_parameters):
+                    children_schedules.append(
+                        self._schedule_loop_iteration(
+                            section_id,
+                            local_iteration,
+                            global_iteration,
+                            this_chunk_size,
+                            current_parameters,
+                            sweep_parameters,
+                            swept_hw_oscillators,
+                        )
                     )
-                )
 
         schedule = self._schedule_children(section_id, section_info, children_schedules)
 
@@ -358,7 +374,7 @@ class Scheduler:
             schedule,
             compressed=compressed,
             sweep_parameters=sweep_parameters,
-            iterations=section_info.count,
+            iterations=this_chunk_size,
             repetition_mode=repetition_mode,
             repetition_time=to_tinysample(repetition_time, self._TINYSAMPLE),
         )
@@ -473,9 +489,10 @@ class Scheduler:
     def _schedule_loop_iteration(
         self,
         section_id: str,
-        iteration: int,
+        local_iteration: int,
+        global_iteration: int,
         num_repeats: int,
-        all_parameters: Dict[str, float],
+        all_parameters: ParameterStore[str, float],
         sweep_parameters: List[Dict],
         swept_hw_oscillators: Dict[str, SweptHardwareOscillator],
     ) -> LoopIterationSchedule:
@@ -483,7 +500,8 @@ class Scheduler:
 
         Args:
             section_id: The loop section.
-            iteration: The iteration to be scheduled
+            local_iteration: The iteration index in the current chunk
+            global_iteration: The global iteration index across all chunks
             num_repeats: The total number of iterations
             all_parameters: The parameter context. Includes the parameter swept in the loop.
             sweep_parameters: The parameters swept in this loop.
@@ -502,13 +520,6 @@ class Scheduler:
         section_info = self._experiment_dao.section_info(section_id)
         hw_osc_reset_signals = set()
         if section_info.reset_oscillator_phase:
-            # todo: This behaves differently than the legacy scheduler.
-            #  The old scheduler would reset ALL devices in the setup.
-            #  Unfortunately, the section grid of the loop (and hence of the phase
-            #  reset) was still defined by the *section signals*. This would potentially
-            #  lead to problems when resetting an otherwise unused device that cannot
-            #  align with the loop grid.
-            #  The new scheduler does not reset devices with unused signals.
             for signal in self._experiment_dao.section_signals_with_children(
                 section_id
             ):
@@ -535,7 +546,7 @@ class Scheduler:
             osc_sweep = [
                 self._schedule_oscillator_frequency_step(
                     swept_hw_oscillators,
-                    iteration,
+                    global_iteration,
                     sweep_parameters,
                     signals,
                     grid,
@@ -555,8 +566,8 @@ class Scheduler:
         )
         return LoopIterationSchedule.from_section_schedule(
             schedule,
-            iteration=iteration,
-            shadow=iteration > 0,
+            iteration=local_iteration,
+            shadow=local_iteration > 0,
             num_repeats=num_repeats,
             sweep_parameters=sweep_parameters,
         )
@@ -616,7 +627,7 @@ class Scheduler:
         self,
         pulse: SectionSignalPulse,
         section: str,
-        current_parameters: Dict[str, float],
+        current_parameters: ParameterStore[str, float],
     ) -> PulseSchedule:
 
         # todo: add memoization
@@ -737,7 +748,7 @@ class Scheduler:
         self,
         section_id: str,
         section_info: SectionInfo,
-        current_parameters: Dict[str, float],
+        current_parameters: ParameterStore[str, float],
     ) -> MatchSchedule:
 
         dao = self._schedule_data.experiment_dao
@@ -812,14 +823,14 @@ class Scheduler:
             compressed_loop_grid=compressed_loop_grid,
         )
 
-    def _schedule_case(self, section_id, current_parameters) -> CaseSchedule:
+    def _schedule_case(
+        self, section_id: str, current_parameters: ParameterStore
+    ) -> CaseSchedule:
         try:
             # todo: do not hash the entire current_parameters dict, but just the param values
             # todo: reduce key to those parameters actually required by the section
             return copy.deepcopy(
-                self._scheduled_sections[
-                    (section_id, frozenset(current_parameters.items()))
-                ]
+                self._scheduled_sections[(section_id, current_parameters.frozen())]
             )
         except KeyError:
             pass
@@ -846,7 +857,7 @@ class Scheduler:
         schedule = CaseSchedule.from_section_schedule(schedule, state)
         if schedule.cacheable:
             self._scheduled_sections[
-                (section_id, frozenset(current_parameters.items()))
+                (section_id, current_parameters.frozen())
             ] = schedule
 
         return schedule
@@ -864,7 +875,7 @@ class Scheduler:
         )
 
     def _collect_children_schedules(
-        self, section_id: str, parameters: Dict[str, float]
+        self, section_id: str, parameters: ParameterStore[str, float]
     ):
         """Return a list of the schedules of the children"""
         subsection_schedules = []

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from laboneq.core.exceptions import LabOneQException
 
 from ..calibration import Calibration
+from ..dsl_dataclass_decorator import classformatter
 from ..serialization import Serializer
 from .acquired_result import AcquiredResult
 
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
     from laboneq.dsl.experiment import Experiment
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class Results:
     #: The source experiment

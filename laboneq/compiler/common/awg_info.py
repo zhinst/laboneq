@@ -25,7 +25,6 @@ class AWGInfo:
     device_id: str
     signal_type: AWGSignalType
     awg_number: int
-    seqc: str
     device_type: DeviceType
     sampling_rate: float
     trigger_mode: TriggerMode = TriggerMode.NONE

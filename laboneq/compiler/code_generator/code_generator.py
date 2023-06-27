@@ -265,10 +265,10 @@ class CodeGenerator:
 
         self._signals: dict[str, SignalObj] = {}
         self._code = {}
-        self._src = []
-        self._wave_indices_all = []
-        self._waves = []
-        self._command_tables: List[Dict[str, Any]] = []
+        self._src: dict[AwgKey, dict[str, str]] = {}
+        self._wave_indices_all: dict[AwgKey, dict] = {}
+        self._waves: dict[str, Any] = {}
+        self._command_tables: dict[AwgKey, dict[str, Any]] = {}
         self._pulse_map: Dict[str, PulseMapEntry] = {}
         self._sampled_signatures: Dict[str, Dict[WaveformSignature, Dict]] = {}
         self._awgs: Dict[AwgKey, AWGInfo] = {}
@@ -326,7 +326,10 @@ class CodeGenerator:
     ):
         filename = sig_string + suffix + ".wave"
         wave = {"filename": filename, "samples": samples}
-        self._waves.append(wave)
+        assert filename not in self._waves or np.allclose(
+            self._waves[filename]["samples"], wave["samples"]
+        )
+        self._waves[filename] = wave
         self._append_to_pulse_map(signature_pulse_map, sig_string)
 
     def gen_waves(self):
@@ -478,7 +481,7 @@ class CodeGenerator:
 
         # check that there are no duplicate filenames in the wave pool (QCSW-1079)
         waves = sorted(
-            [(wave["filename"], wave["samples"]) for wave in self._waves],
+            [(filename, wave["samples"]) for filename, wave in self._waves.items()],
             key=lambda w: w[0],
         )
         for _, group in groupby(waves, key=lambda w: w[0]):
@@ -520,7 +523,6 @@ class CodeGenerator:
         for signal_id, signal_obj in self._signals.items():
             code_generation_delay = self._signal_delays.get(signal_id)
             if code_generation_delay is not None:
-
                 signal_obj.total_delay = (
                     signal_obj.start_delay
                     + signal_obj.delay_signal
@@ -545,32 +547,15 @@ class CodeGenerator:
         self.sort_signals()
         self._integration_weights = {}
 
-        ignore_pulses = set()
-        for pulse_id, pulse_def in pulse_defs.items():
-            if (
-                abs(pulse_def.effective_amplitude) < 1e-12
-            ):  # ignore zero amplitude pulses
-                ignore_pulses.add(pulse_id)
-        if len(ignore_pulses) > 0:
-            _logger.debug(
-                "Ignoring pulses because of zero amplitude: %s", ignore_pulses
-            )
-
-        filtered_events: List[Any] = [
-            event
-            for event in events
-            if "play_wave_id" not in event or event["play_wave_id"] not in ignore_pulses
-        ]
-
         self._feedback_register_allocator = FeedbackRegisterAllocator(
-            self._signals, filtered_events
+            self._signals, events
         )
 
         for _, awg in sorted(
             self._awgs.items(),
             key=lambda item: item[0].device_id + str(item[0].awg_number),
         ):
-            self._gen_seq_c_per_awg(awg, filtered_events, pulse_defs)
+            self._gen_seq_c_per_awg(awg, events, pulse_defs)
 
         return self._signal_delays
 
@@ -581,7 +566,6 @@ class CodeGenerator:
         signals_so_far = set()
         all_relevant_delays = {}
         for signal_obj in awg.signals:
-
             _logger.debug(f"considering signal {signal_obj.id}")
             if awg.device_type == DeviceType.UHFQA:
                 # on the UHFQA, we allow an individual delay_signal on the measure (play) line, even though we can't
@@ -603,7 +587,6 @@ class CodeGenerator:
             all_relevant_delays[signal_obj.id] = relevant_delay
 
             if signal_obj.signal_type != "integration":
-
                 if awg.signal_type != AWGSignalType.IQ and global_delay is not None:
                     if global_delay != relevant_delay:
                         raise RuntimeError(
@@ -612,7 +595,6 @@ class CodeGenerator:
                             f"({global_delay * 1e9:.2f} ns) on the same AWG, on signals {signals_so_far}"
                         )
                 if global_delay is not None:
-
                     if relevant_delay < global_delay:
                         # use minimum delay as global delay
                         # this makes sure that loop start events happen first and are not shifted beyond loop body events
@@ -698,12 +680,24 @@ class CodeGenerator:
         return True
 
     def _compress_waves(
-        self, sampled_events, sampled_signatures, signal_id, min_play_wave, pulse_defs
+        self,
+        sampled_events,
+        sampled_signatures,
+        signal_id,
+        min_play_wave,
+        pulse_defs,
+        device_type,
     ):
         compressed_waveform_signatures = set()
         for event_group in sampled_events.sequence.values():
             event_replacement = {}
             for i, event in enumerate(event_group):
+                if event.type == AWGEventType.ACQUIRE:
+                    if pulse_defs[event.params["play_wave_id"]].can_compress:
+                        _logger.warn(
+                            "Compression for integration pulses is not supported. %s, for which compression has been requested, will not be compressed.",
+                            event.params["play_wave_id"],
+                        )
                 if event.type == AWGEventType.PLAY_WAVE:
                     wave_form = event.params["playback_signature"].waveform
                     pulses_not_in_pulsedef = [
@@ -717,7 +711,20 @@ class CodeGenerator:
                     )
                     if len(pulses_not_in_pulsedef) > 0:
                         continue
-
+                    if any(
+                        pulse_defs[pulse.pulse].can_compress
+                        for pulse in wave_form.pulses
+                    ) and device_type in [DeviceType.UHFQA, DeviceType.SHFQA]:
+                        pulse_names = [
+                            pulse.pulse
+                            for pulse in wave_form.pulses
+                            if pulse_defs[pulse.pulse].can_compress
+                        ]
+                        _logger.warn(
+                            "Requested to compress pulse(s) %s which are to be played on a QA device, which does not support playHold",
+                            ",".join(pulse_names),
+                        )
+                        continue
                     if all(
                         not pulse_defs[pulse.pulse].can_compress
                         for pulse in wave_form.pulses
@@ -842,12 +849,11 @@ class CodeGenerator:
         _logger.debug("Generating seqc for awg %d of %s", awg.awg_number, awg.device_id)
         _logger.debug("AWG Object = \n%s", awg)
         sampled_events = AWGSampledEventSequence()
-        filename = awg.seqc
 
         global_sampling_rate, global_delay = self._calc_global_awg_params(awg)
         if self.EMIT_TIMING_COMMENTS:
             declarations_generator.add_comment(
-                f"{awg.seqc} global delay {EngNumber(global_delay)} sampling_rate: {EngNumber(global_sampling_rate)}Sa/s "
+                f"{awg.device_type}/{awg.awg_number} global delay {EngNumber(global_delay)} sampling_rate: {EngNumber(global_sampling_rate)}Sa/s "
             )
 
         use_command_table = (
@@ -935,7 +941,6 @@ class CodeGenerator:
         sampled_events.merge(loop_events)
 
         for signal_obj in awg.signals:
-
             set_oscillator_events = analyze_set_oscillator_times(
                 events,
                 signal_obj,
@@ -1031,6 +1036,7 @@ class CodeGenerator:
                 signal_id=virtual_signal_id,
                 min_play_wave=min_play_waves[0],
                 pulse_defs=pulse_defs,
+                device_type=device_type,
             )
 
             if virtual_signal_id in self._sampled_signatures:
@@ -1051,7 +1057,6 @@ class CodeGenerator:
 
         elif awg.signal_type != AWGSignalType.DOUBLE:
             for signal_obj in awg.signals:
-
                 if signal_obj.awg.device_type == DeviceType.SHFQA:
                     sub_channel = signal_obj.channels[0]
                 else:
@@ -1090,6 +1095,7 @@ class CodeGenerator:
                     signal_id=signal_obj.id,
                     min_play_wave=signal_obj.awg.device_type.min_play_wave,
                     pulse_defs=pulse_defs,
+                    device_type=signal_obj.awg.device_type,
                 )
 
                 if signal_obj.id in self._sampled_signatures:
@@ -1158,6 +1164,7 @@ class CodeGenerator:
                 signal_id=virtual_signal_id,
                 min_play_wave=signal_a.awg.device_type.min_play_wave,
                 pulse_defs=pulse_defs,
+                device_type=awg.device_type,
             )
 
             if virtual_signal_id in self._sampled_signatures:
@@ -1248,17 +1255,14 @@ class CodeGenerator:
         for line in seq_c_text.splitlines():
             _logger.debug(line)
 
-        self._src.append({"filename": filename, "text": seq_c_text})
-        self._wave_indices_all.append(
-            {
-                "filename": filename,
-                "value": handler.wave_indices.wave_indices(),
-            }
-        )
+        awg_key = AwgKey(awg.device_id, awg.awg_number)
+
+        self._src[awg_key] = {"text": seq_c_text}
+        self._wave_indices_all[awg_key] = {"value": handler.wave_indices.wave_indices()}
         if use_command_table:
-            self._command_tables.append(
-                {"seqc": filename, "ct": handler.command_table_tracker.command_table()}
-            )
+            self._command_tables[awg_key] = {
+                "ct": handler.command_table_tracker.command_table()
+            }
 
     def waveform_size_hints(self, device: DeviceType):
         settings = self._settings
@@ -1526,7 +1530,11 @@ class CodeGenerator:
                         mixer_type=mixer_type,
                     )
                     signature_pulse_map[pulse_def.id] = pm
-                amplitude_multiplier = amplitude / pulse_def.effective_amplitude
+                amplitude_multiplier = (
+                    amplitude / pulse_def.effective_amplitude
+                    if pulse_def.effective_amplitude
+                    else 0.0
+                )
                 pm.instances.append(
                     PulseInstance(
                         offset_samples=pulse_part.start,

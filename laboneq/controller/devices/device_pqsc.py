@@ -72,7 +72,7 @@ class DevicePQSC(DeviceZI):
     def configure_feedback(self, recipe_data: RecipeData) -> list[DaqNodeAction]:
         # TODO(2K): Code duplication with Controller._wait_execution_to_stop
         # Make this mandatory in the recipe instead.
-        min_wait_time = recipe_data.recipe.experiment.total_execution_time
+        min_wait_time = recipe_data.recipe.experiment.max_step_execution_time
         if min_wait_time is None:
             min_wait_time = 10.0
         # This is required because PQSC is only receiving the feedback events

@@ -7,9 +7,11 @@ from laboneq.core.types.enums.io_direction import IODirection
 from laboneq.dsl.device import Port
 from laboneq.dsl.enums import IOSignalType
 
+from ...dsl_dataclass_decorator import classformatter
 from .zi_standard_instrument import ZIStandardInstrument
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class HDAWG(ZIStandardInstrument):
     """Class representing a ZI HDAWG instrument."""

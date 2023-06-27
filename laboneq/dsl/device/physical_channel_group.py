@@ -7,8 +7,10 @@ from typing import Dict
 import laboneq.core.path as qct_path
 from laboneq.dsl.calibration import Calibratable
 from laboneq.dsl.device.io_units.physical_channel import PhysicalChannel
+from laboneq.dsl.dsl_dataclass_decorator import classformatter
 
 
+@classformatter
 @dataclass
 class PhysicalChannelGroup:
     #: Unique identifier.

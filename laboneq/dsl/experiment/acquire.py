@@ -4,10 +4,12 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
+from ..dsl_dataclass_decorator import classformatter
 from .operation import Operation
 from .pulse import Pulse
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class Acquire(Operation):
     """Class representing an acquire operation that is used to acquire results."""

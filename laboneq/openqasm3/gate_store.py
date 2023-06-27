@@ -23,16 +23,16 @@ class GateStore:
         """Define mapping from qasm gate name to L1Q gate name."""
         self.gate_map[qasm_name] = l1q_name
 
-    def register_gate_section(self, name, qubits, section_factory):
+    def register_gate_section(self, name: str, qubit_names: list[str], section_factory):
         """Register a LabOne Q section factory as a gate."""
-        self.gates[(name, qubits)] = section_factory
+        self.gates[(name, qubit_names)] = section_factory
 
     @staticmethod
-    def _gate_pulse(qubit: str, pulse, phase, gate_id):
+    def _gate_pulse(qubit_uid, signal, pulse, phase, gate_id):
         def impl():
-            gate = Section(uid=id_generator(f"{qubit}_{gate_id}_pulse"))
+            gate = Section(uid=id_generator(f"{qubit_uid}_{gate_id}_pulse"))
             gate.play(
-                signal=f"{qubit}_drive",
+                signal=signal,
                 pulse=pulse,
                 increment_oscillator_phase=phase,
             )
@@ -40,10 +40,19 @@ class GateStore:
 
         return impl
 
+    # TODO: cleaner interface & rename to register_drive_gate?
     def register_gate(
-        self, name: str, qubit: str, pulse: Optional[Pulse], phase=None, id=None
+        self,
+        name: str,
+        qubit_name: str,
+        pulse: Optional[Pulse],
+        signal: str,
+        phase=None,
+        id=None,
     ):
         """Register a pulse as a single-qubit gate."""
         self.register_gate_section(
-            name, (qubit,), self._gate_pulse(qubit, pulse, phase, id)
+            name,
+            (qubit_name,),
+            self._gate_pulse(qubit_name, signal, pulse, phase, id),
         )

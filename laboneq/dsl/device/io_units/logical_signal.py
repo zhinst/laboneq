@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Optional, Union
 
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
@@ -14,8 +14,10 @@ from laboneq.dsl.device.io_units.physical_channel import (
     PHYSICAL_CHANNEL_CALIBRATION_FIELDS,
     PhysicalChannel,
 )
+from laboneq.dsl.dsl_dataclass_decorator import classformatter
 
 
+@classformatter
 @dataclass(init=False, repr=False, order=True)
 class LogicalSignal(Calibratable):
     uid: str
@@ -57,16 +59,16 @@ class LogicalSignal(Calibratable):
         return hash((self.uid, self.path))
 
     def __repr__(self):
-        return (
-            f"{self.__class__.__name__}("
-            f"uid={repr(self.uid)}, "
-            f"direction={repr(self.direction)}, "
-            f"name={repr(self.name)}, "
-            f"calibration={repr(self.calibration)}, "
-            f"path={repr(self.path)}, "
-            f"physical_channel={repr(self.physical_channel)}"
-            f")"
-        )
+        field_values = []
+        for field in fields(self):
+            value = getattr(self, field.name)
+            if field.name == "_calibration":
+                field_values.append(f"calibration={value!r}")
+            elif field.name == "_physical_channel":
+                field_values.append(f"physical_channel={value!r}")
+            else:
+                field_values.append(f"{field.name}={value!r}")
+        return f"{self.__class__.__name__}({', '.join(field_values)})"
 
     @property
     def mixer_calibration(self):

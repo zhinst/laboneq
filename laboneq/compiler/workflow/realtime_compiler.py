@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from laboneq._observability.tracing import trace
 from laboneq.compiler import CodeGenerator, CompilerSettings
@@ -16,6 +16,7 @@ from laboneq.compiler.code_generator.sampled_event_handler import FeedbackConnec
 from laboneq.compiler.common.awg_info import AwgKey
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.experiment_access import ExperimentDAO
+from laboneq.compiler.scheduler.parameter_store import ParameterStore
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.scheduler.scheduler import Scheduler
 from laboneq.core.types.compiled_experiment import PulseMapEntry
@@ -29,14 +30,14 @@ class RealtimeCompilerOutput:
     feedback_connections: Dict[str, FeedbackConnection]
     feedback_registers: Dict[AwgKey, int]
     signal_delays: SignalDelays
-    integration_weights: Any
+    integration_weights: Dict
     integration_times: IntegrationTimes
     simultaneous_acquires: Dict[float, Dict[str, str]]
     total_execution_time: float
-    src: List[Dict[str, Any]]
-    waves: List[Dict[str, Any]]
-    wave_indices: List[Dict[str, Any]]
-    command_tables: List[Dict[str, Any]]
+    src: Dict[AwgKey, Dict[str, Any]]
+    waves: Dict[str, Dict[str, Any]]
+    wave_indices: Dict[AwgKey, Dict[str, Any]]
+    command_tables: Dict[AwgKey, Dict[str, Any]]
     pulse_map: Dict[str, PulseMapEntry]
     schedule: Dict[str, Any]
 
@@ -89,9 +90,8 @@ class RealtimeCompiler:
 
         _logger.debug("Code generation completed")
 
-    def run(self):
-        # todo: near-time parameters
-        self._scheduler.run()
+    def run(self, near_time_parameters: Optional[ParameterStore] = None):
+        self._scheduler.run(near_time_parameters)
         self._generate_code()
 
         compiler_output = RealtimeCompilerOutput(

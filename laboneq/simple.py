@@ -52,5 +52,6 @@ from laboneq.dsl.result import Results
 from laboneq.dsl.session import Session
 from laboneq.dsl.utils import has_onboard_lo
 from laboneq.implementation.data_storage.l1q_database_wrapper import L1QDatabase
+from laboneq.openqasm3.openqasm3_importer import exp_from_qasm
 from laboneq.pulse_sheet_viewer.pulse_sheet_viewer import show_pulse_sheet
 from laboneq.simulator.output_simulator import OutputSimulator

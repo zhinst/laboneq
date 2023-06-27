@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import os
@@ -81,19 +82,17 @@ def show_pulse_sheet(name: str, compiled_experiment: CompiledExperiment):
         compiled_experiment: The compiled experiment to show.
 
     Returns:
-        A link to the html file.
+        A link to the HTML output if `IPython` is installed, otherwise
+        returns the output filename as a string.
     """
-    import datetime
-
-    try:
-        import IPython.display as ipd
-    except ImportError:
-        raise ImportError(
-            "showing pulse sheet requires ipython to be installed, use 'pip install ipython'"
-        )
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     filename = f"{name}_{timestamp}.html"
     PulseSheetViewer.generate_viewer_html_file(
         compiled_experiment.schedule, name, filename
     )
-    return ipd.FileLink(filename)
+    try:
+        import IPython.display as ipd
+
+        return ipd.FileLink(filename)
+    except ImportError:
+        return filename

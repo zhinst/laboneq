@@ -161,12 +161,6 @@ class Controller:
 
     @tracing.trace("awg-program-handler")
     def _upload_awg_programs(self, nt_step: NtStepKey):
-        if any(i != 0 for i in nt_step.indices):
-            # Only execute for the 1st NT step
-            # TODO(2K): remove, once NT steps are properly passed in the recipe.
-            # See also commented out condition on selection of realtime_execution_init
-            # element below
-            return
         # Mise en place:
         awg_data: dict[DeviceZI, list[_UploadItem]] = defaultdict(list)
         compile_data: dict[DeviceZI, list[_SeqCCompileItem]] = defaultdict(list)
@@ -188,7 +182,7 @@ class Controller:
                         for r in recipe_data.recipe.experiment.realtime_execution_init
                         if r.device_id == initialization.device_uid
                         and r.awg_id == awg_obj.awg
-                        # and r.nt_step == nt_step # TODO(2K): Enable once ready in recipe
+                        and r.nt_step == nt_step
                     ),
                     None,
                 )
@@ -198,13 +192,11 @@ class Controller:
                 seqc_code = device.prepare_seqc(
                     recipe_data.compiled, rt_exec_step.seqc_ref
                 )
-                # TODO(2K): rt_exec_step.wave_indices_ref instead of seqc_ref
                 waves = device.prepare_waves(
-                    recipe_data.compiled, rt_exec_step.seqc_ref
+                    recipe_data.compiled, rt_exec_step.wave_indices_ref
                 )
-                # TODO(2K): rt_exec_step.ct_ref instead of seqc_ref
                 command_table = device.prepare_command_table(
-                    recipe_data.compiled, rt_exec_step.seqc_ref
+                    recipe_data.compiled, rt_exec_step.wave_indices_ref
                 )
 
                 seqc_item = _SeqCCompileItem(
@@ -224,7 +216,8 @@ class Controller:
                     )
                 )
 
-        self._awg_compile(compile_data)
+        if compile_data:
+            self._awg_compile(compile_data)
 
         # Upload AWG programs, waveforms, and command tables:
         elf_node_settings: dict[DaqWrapper, list[DaqNodeSetAction]] = defaultdict(list)
@@ -399,7 +392,7 @@ class Controller:
         batch_set(nodes_to_execute)
 
     def _wait_execution_to_stop(self, acquisition_type: AcquisitionType):
-        min_wait_time = self._recipe_data.recipe.experiment.total_execution_time
+        min_wait_time = self._recipe_data.recipe.experiment.max_step_execution_time
         if min_wait_time is None:
             _logger.warning(
                 "No estimation available for the execution time, assuming 10 sec."
@@ -499,6 +492,8 @@ class Controller:
                 device.check_errors()
         finally:
             self._devices.stop_monitor()
+
+        self._devices.on_experiment_end()
 
         if self._run_parameters.shut_down is True:
             self.shut_down()

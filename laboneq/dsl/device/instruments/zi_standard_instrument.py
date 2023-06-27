@@ -5,9 +5,11 @@ from dataclasses import dataclass, field
 
 from laboneq.core.types.enums import ReferenceClockSource
 
+from ...dsl_dataclass_decorator import classformatter
 from ..instrument import Instrument
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class ZIStandardInstrument(Instrument):
     """Base class representing a ZI instrument controlled via a LabOne Data Server."""

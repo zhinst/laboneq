@@ -3,9 +3,11 @@
 
 from dataclasses import dataclass, field
 
+from ..dsl_dataclass_decorator import classformatter
 from .operation import Operation
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class Reserve(Operation):
     """Operation to reserve a signal for the active section.

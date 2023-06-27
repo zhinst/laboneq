@@ -14,6 +14,7 @@ class SectionInfo:
     execution_type: Optional[str]
     acquisition_types: Optional[List[str]]
     count: int
+    chunk_count: int
     align: Optional[str]
     on_system_grid: bool
     length: Optional[float]

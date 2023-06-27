@@ -89,6 +89,7 @@ class SectionInfo:
     length: float = None
     alignment: SectionInfoAlignment = None
     count: int = None
+    chunk_count: int = None
     execution_type: str = None
     averaging_type: str = None
     children: List[Any] = field(default_factory=list)

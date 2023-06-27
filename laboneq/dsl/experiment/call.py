@@ -4,9 +4,11 @@
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Union
 
+from ..dsl_dataclass_decorator import classformatter
 from .operation import Operation
 
 
+@classformatter
 @dataclass(init=False, repr=True, order=True)
 class Call(Operation):
     """Class abstracting a function call."""

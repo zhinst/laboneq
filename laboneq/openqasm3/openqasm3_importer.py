@@ -11,13 +11,14 @@ import openpulse
 from openpulse import ast
 
 import openqasm3.visitor
-from laboneq.dsl.experiment import Section
+from laboneq.core.exceptions import LabOneQException
+from laboneq.dsl.experiment import Experiment, Section
 from laboneq.dsl.experiment.utils import id_generator
+from laboneq.dsl.quantum.qubits import Qubit, SignalType
 from laboneq.openqasm3.expression import eval_expression, eval_lvalue
 from laboneq.openqasm3.gate_store import GateStore
 from laboneq.openqasm3.namespace import ClassicalRef, NamespaceNest, QubitRef
 from laboneq.openqasm3.openqasm_error import OpenQasmException
-from laboneq.openqasm3.signal_store import SignalLineType, SignalStore
 
 ALLOWED_NODE_TYPES = {
     # quantum logic
@@ -78,12 +79,12 @@ class _AllowedNodeTypesVisitor(openqasm3.visitor.QASMVisitor):
 
 class OpenQasm3Importer:
     def __init__(
-        self, gate_store: GateStore, signal_store: Optional[SignalStore] = None
+        self,
+        gate_store: GateStore,
+        qubits: dict[str, Qubit] = None,
     ):
         self.gate_store = gate_store
-        self.signal_store = (
-            signal_store if signal_store is not None else SignalStore({})
-        )
+        self.dsl_qubits = qubits
         self.scope = NamespaceNest()
 
     def __call__(
@@ -115,7 +116,6 @@ class OpenQasm3Importer:
         except OpenQasmException as e:
             e.source = text
             raise
-        self.signal_store.leftover_raise()
         return root
 
     @contextmanager
@@ -269,7 +269,10 @@ class OpenQasm3Importer:
         try:
             return self.gate_store.lookup_gate(name, qubit_names, args=args)
         except KeyError as e:
-            msg = f"Gate '{name}' for qubit(s) {qubit_names} not found."
+            gates = ", ".join(
+                f"{gate[0]} for {gate[1]}" for gate in self.gate_store.gates
+            )
+            msg = f"Gate '{name}' for qubit(s) {qubit_names} not found.\nAvailable gates: {gates}"
             raise OpenQasmException(msg, mark=statement.span) from e
 
     def _handle_box(self, statement: ast.Box):
@@ -280,20 +283,21 @@ class OpenQasm3Importer:
 
     def _handle_barrier(self, statement: ast.QuantumBarrier):
         sect = Section(uid=id_generator("barrier"), length=0)
+
         reserved_qubits = [
-            eval_expression(qubit, namespace=self.scope).canonical_name
+            self.dsl_qubits[eval_expression(qubit, namespace=self.scope).canonical_name]
             for qubit in statement.qubits
         ]
+        if not reserved_qubits:
+            reserved_qubits = self.dsl_qubits.values()  # reserve all qubits
+
         reserved_signals = set()
-        if not reserved_qubits:  # get all signals
-            for each_qubit_signals in self.signal_store.user_map.values():
-                for signal in each_qubit_signals:
-                    reserved_signals.add(signal.exp_signal)
-        for qubit in reserved_qubits:  # get only selected signals
-            for signal in self.signal_store.user_map[qubit]:
-                reserved_signals.add(signal.exp_signal)
-        for exp_signal in reserved_signals:
-            sect.reserve(exp_signal)
+        for qubit in reserved_qubits:
+            for exp_signal in qubit.experiment_signals():
+                reserved_signals.add(exp_signal.mapped_logical_signal_path)
+        for signal in reserved_signals:
+            sect.reserve(signal)
+
         return sect
 
     def _handle_include(self, statement: ast.Include) -> None:
@@ -313,10 +317,17 @@ class OpenQasm3Importer:
             uid=id_generator(f"{qubits_str}_delay_{duration * 1e9:.0f}ns")
         )
         for qubit in qubit_names:
-            for signal in self.signal_store.user_map[qubit]:
-                if signal.signal_type != SignalLineType.DRIVE:
+            dsl_qubit = self.dsl_qubits[qubit]
+            for role, sig in dsl_qubit.experiment_signals(with_types=True):
+                if role != SignalType.DRIVE:
                     continue
-                delay_section.delay(signal.exp_signal, time=duration)
+                delay_section.delay(sig.mapped_logical_signal_path, time=duration)
+        if not delay_section.children:
+            msg = (
+                f"Unable to apply delay to {qubit_names} due to missing drive signals."
+            )
+            raise OpenQasmException(msg, mark=statement.span)
+
         return delay_section
 
     def _handle_assignment(self, statement: ast.ClassicalAssignment):
@@ -394,3 +405,31 @@ class OpenQasm3Importer:
         except KeyError as e:
             msg = f"Reset gate for qubit '{qubit_name}' not found."
             raise OpenQasmException(msg, mark=statement.span) from e
+
+
+def exp_from_qasm(program: str, qubits: dict[str, Qubit], gate_store: GateStore):
+    """Create an experiment from an OpenQASM program.
+
+    Args:
+    -----
+        program (str):             OpenQASM program
+        qubits (dict[str, Qubit]): map from OpenQASM qubit names to LabOne Q DSL Qubit objects
+        gate_store (GateStore):    map from OpenQASM gate names to LabOne Q DSL Gate objects
+    """
+    importer = OpenQasm3Importer(qubits=qubits, gate_store=gate_store)
+    qasm_section = importer(text=program)
+
+    signals = []
+    for qubit in qubits.values():
+        for exp_signal in qubit.experiment_signals():
+            if exp_signal in signals:
+                msg = f"Signal with id {exp_signal.uid} already assigned."
+                raise LabOneQException(msg)
+            signals.append(exp_signal)
+
+    # TODO: feed qubits directly to experiment when feature is implemented
+    exp = Experiment(signals=signals)
+    with exp.acquire_loop_rt(count=1) as loop:
+        loop.add(qasm_section)
+
+    return exp

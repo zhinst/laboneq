@@ -5,8 +5,10 @@ from dataclasses import dataclass, field
 from typing import List
 
 from laboneq.core.types.enums import IODirection, IOSignalType
+from laboneq.dsl.dsl_dataclass_decorator import classformatter
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class Port:
     """Abstraction of a port"""

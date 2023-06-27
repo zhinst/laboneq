@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from laboneq.core.exceptions import LabOneQException
 from laboneq.dsl.calibration import Calibration, Oscillator, SignalCalibration
 from laboneq.dsl.device.io_units import LogicalSignal
+from laboneq.dsl.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.experiment import ExperimentSignal
 from laboneq.dsl.serialization import Serializer
 
@@ -67,6 +68,7 @@ class QuantumElementSignalMap(MutableMapping):
         return repr(self._items)
 
 
+@classformatter
 @dataclass(init=False, repr=True)
 class QuantumElement(ABC):
     """An abstract base class for quantum elements."""
@@ -179,6 +181,7 @@ class QuantumElement(ABC):
         return sigs
 
 
+@classformatter
 @dataclass
 class QubitParameters:
     #: Resonance frequency of the qubit.
@@ -203,6 +206,7 @@ class QubitParameters:
         return self.readout_res_frequency - self.readout_lo_frequency
 
 
+@classformatter
 @dataclass(init=False, repr=True, eq=False)
 class Qubit(QuantumElement):
     """A class for a generic Qubit."""
@@ -287,25 +291,35 @@ class Qubit(QuantumElement):
         )
 
     def calibration(self) -> Calibration:
-        """Generate calibration from parameters."""
+        """Generate calibration from the parameters and attached signal lines.
+
+        Returns:
+            Prefilled calibration object from Qubit parameters.
+        """
         calibs = {}
-        calibs[self.signals["drive"]] = SignalCalibration(
-            oscillator=Oscillator(
-                uid=f"{self.uid}_drive_osc", frequency=self.parameters.drive_frequency
+        if "drive" in self.signals:
+            calibs[self.signals["drive"]] = SignalCalibration(
+                oscillator=Oscillator(
+                    uid=f"{self.uid}_drive_osc",
+                    frequency=self.parameters.drive_frequency,
+                )
             )
-        )
-        calibs[self.signals["measure"]] = SignalCalibration(
-            oscillator=Oscillator(
-                uid=f"{self.uid}_measure_osc",
-                frequency=self.parameters.readout_frequency,
+        if "measure" in self.signals:
+            calibs[self.signals["measure"]] = SignalCalibration(
+                oscillator=Oscillator(
+                    uid=f"{self.uid}_measure_osc",
+                    frequency=self.parameters.readout_frequency,
+                )
             )
-        )
-        calibs[self.signals["acquire"]] = SignalCalibration(
-            oscillator=Oscillator(
-                uid=f"{self.uid}_acquire_osc",
-                frequency=self.parameters.readout_frequency,
+        if "acquire" in self.signals:
+            calibs[self.signals["acquire"]] = SignalCalibration(
+                oscillator=Oscillator(
+                    uid=f"{self.uid}_acquire_osc",
+                    frequency=self.parameters.readout_frequency,
+                )
             )
-        )
+        if "flux" in self.signals:
+            calibs[self.signals["flux"]] = SignalCalibration()
         return Calibration(calibs)
 
     def experiment_signals(

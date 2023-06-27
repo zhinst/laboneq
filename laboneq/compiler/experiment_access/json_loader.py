@@ -357,6 +357,7 @@ class JsonLoader(LoaderBase):
                     has_repeat=has_repeat,
                     execution_type=execution_type,
                     count=count,
+                    chunk_count=1,
                     acquisition_types=acquisition_types,
                     align=align,
                     on_system_grid=on_system_grid,

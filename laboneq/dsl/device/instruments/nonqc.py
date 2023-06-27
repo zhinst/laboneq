@@ -3,9 +3,11 @@
 
 from dataclasses import dataclass
 
+from ...dsl_dataclass_decorator import classformatter
 from .zi_standard_instrument import ZIStandardInstrument
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class NonQC(ZIStandardInstrument):
     """Class representing a ZI instrument that is of type not directly handled by L1Q."""

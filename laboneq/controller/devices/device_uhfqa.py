@@ -492,7 +492,10 @@ class DeviceUHFQA(DeviceZI):
                         ),
                     ]
                 )
-                if acquisition_type == AcquisitionType.DISCRIMINATION:
+                if acquisition_type in [
+                    AcquisitionType.INTEGRATION,
+                    AcquisitionType.DISCRIMINATION,
+                ]:
                     nodes_to_set_for_standard_mode.extend(
                         [
                             DaqNodeSetAction(
@@ -550,7 +553,7 @@ class DeviceUHFQA(DeviceZI):
         acquisition_type = RtExecutionInfo.get_acquisition_type(
             recipe_data.rt_execution_infos
         )
-        if acquisition_type == AcquisitionType.SPECTROSCOPY:
+        if acquisition_type == AcquisitionType.SPECTROSCOPY_IQ:
             return self._configure_spectroscopy_mode_nodes()
         else:
             return self._configure_standard_mode_nodes(
@@ -631,7 +634,7 @@ class DeviceUHFQA(DeviceZI):
         if triggering_mode == TriggeringMode.DIO_FOLLOWER or triggering_mode is None:
             nodes_to_configure_triggers.extend(
                 [
-                    DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/mode", 2),
+                    DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/mode", 4),
                     DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/drive", 0x3),
                     DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/extclk", 0x2),
                 ]

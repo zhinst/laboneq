@@ -21,6 +21,7 @@ from laboneq.compiler.common.awg_sampled_event import (
 from laboneq.compiler.common.compiler_settings import EXECUTETABLEENTRY_LATENCY
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.core.exceptions import LabOneQException
+from laboneq.core.types.enums import AcquisitionType
 
 if TYPE_CHECKING:
     from laboneq.compiler.code_generator.command_table_tracker import (
@@ -347,8 +348,18 @@ class SampledEventHandler:
         else:
             generator_mask = "QA_GEN_NONE"
 
-        if "spectroscopy" in sampled_event.params["acquisition_type"]:
-            args = [0, 0, 0, 0, 1]
+        is_spectroscopy = bool(
+            set(sampled_event.params["acquisition_type"]).intersection(
+                [
+                    AcquisitionType.SPECTROSCOPY_IQ.value,
+                    AcquisitionType.SPECTROSCOPY.value,
+                    AcquisitionType.SPECTROSCOPY_PSD.value,
+                ]
+            )
+        )
+        if is_spectroscopy:
+            mask_val_for_spectroscopy = 0
+            args = [mask_val_for_spectroscopy, 0, 0, 0, 1]
         else:
             args = [
                 generator_mask,
@@ -365,7 +376,7 @@ class SampledEventHandler:
             self.seqc_tracker.add_timing_comment(sampled_event.end)
 
         self.seqc_tracker.add_function_call_statement("startQA", args, deferred=True)
-        if "spectroscopy" in sampled_event.params["acquisition_type"]:
+        if is_spectroscopy:
             self.seqc_tracker.add_function_call_statement(
                 "setTrigger", [0], deferred=True
             )

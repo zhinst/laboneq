@@ -7,9 +7,11 @@ from typing import Dict
 import laboneq.core.path as qct_path
 
 from ..calibration import Calibratable
+from ..dsl_dataclass_decorator import classformatter
 from .io_units import LogicalSignal
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class LogicalSignalGroup:
     """Group of logical signals. This could be used as a qubit representation with

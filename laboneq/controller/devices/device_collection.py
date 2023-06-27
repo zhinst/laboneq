@@ -265,6 +265,12 @@ class DeviceCollection:
         for device in self._devices.values():
             device.free_allocations()
 
+    def on_experiment_end(self):
+        all_actions: list[DaqNodeSetAction] = []
+        for device in self._devices.values():
+            all_actions.extend(device.on_experiment_end())
+        batch_set(all_actions)
+
     def start_monitor(self):
         for daq in self._daqs.values():
             daq.node_monitor.stop()

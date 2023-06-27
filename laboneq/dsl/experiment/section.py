@@ -18,6 +18,7 @@ from laboneq.dsl.enums import (
 )
 from laboneq.dsl.experiment.pulse import Pulse
 
+from ..dsl_dataclass_decorator import classformatter
 from .acquire import Acquire
 from .call import Call
 from .delay import Delay
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
     from .. import Parameter
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class Section:
     """Representation of a section. A section is a logical concept that groups multiple operations into a single entity
@@ -212,6 +214,7 @@ class Section:
         self._add_operation(Call(func_name=func_name, **kwargs))
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class AcquireLoopNt(Section):
     """Near time acquire loop."""
@@ -223,6 +226,7 @@ class AcquireLoopNt(Section):
     execution_type: ExecutionType = field(default=ExecutionType.NEAR_TIME)
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class AcquireLoopRt(Section):
     """Real time acquire loop."""
@@ -250,6 +254,7 @@ class AcquireLoopRt(Section):
                 )
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class Sweep(Section):
     """Sweep loops. Sweeps are used to sample through a range of parameter values."""
@@ -258,6 +263,8 @@ class Sweep(Section):
     parameters: List[Parameter] = field(default_factory=list)
     #: When True, reset all oscillators at the start of every step.
     reset_oscillator_phase: bool = field(default=False)
+    #: When non-zero, split the sweep into N chunks.
+    chunk_count: int = field(default=1)
 
 
 @validating_allowed_values(
@@ -266,6 +273,7 @@ class Sweep(Section):
         "execution_type": [ExecutionType.REAL_TIME],
     }
 )
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class Match(Section):
     """Execute one of the child branches depending on feedback result."""
@@ -299,6 +307,7 @@ class Match(Section):
         "execution_type": [ExecutionType.REAL_TIME],
     }
 )
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class Case(Section):
     """Branch in a match/case statement"""

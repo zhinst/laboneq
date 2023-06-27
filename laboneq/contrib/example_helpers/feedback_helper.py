@@ -95,10 +95,10 @@ def exp_discrimination(
                 #         exp.play()
                 #     with exp.case(1):
                 #         pass
-                exp.delay(signal="measure0", time=100e-9)
+                exp.delay(signal="measure0", time=1e-6)
             with exp.section():
                 exp.play(signal="measure1", pulse=measure1)
                 exp.acquire(signal="acquire", handle="data1", kernel=kernel)
-                exp.delay(signal="measure1", time=100e-9)
+                exp.delay(signal="measure1", time=1e-6)
 
     return exp

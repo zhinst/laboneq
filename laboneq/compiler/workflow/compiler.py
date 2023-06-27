@@ -30,21 +30,26 @@ from laboneq.compiler.experiment_access.device_info import DeviceInfo
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.scheduler.scheduler import Scheduler
+from laboneq.compiler.workflow import rt_linker
+from laboneq.compiler.workflow.neartime_execution import (
+    NtCompilerExecutor,
+    legacy_execution_program,
+)
 from laboneq.compiler.workflow.precompensation_helpers import (
     compute_precompensation_delays_on_grid,
     compute_precompensations_and_delays,
     precompensation_is_nonzero,
     verify_precompensation_parameters,
 )
-from laboneq.compiler.workflow.realtime_compiler import (
-    RealtimeCompiler,
-    RealtimeCompilerOutput,
-)
+from laboneq.compiler.workflow.realtime_compiler import RealtimeCompiler
 from laboneq.compiler.workflow.recipe_generator import RecipeGenerator
+from laboneq.compiler.workflow.rt_linker import CombinedRealtimeCompilerOutput
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.compiled_experiment import CompiledExperiment
-from laboneq.core.types.enums.acquisition_type import AcquisitionType
+from laboneq.core.types.enums.acquisition_type import AcquisitionType, is_spectroscopy
 from laboneq.core.types.enums.mixer_type import MixerType
+from laboneq.executor.execution_from_experiment import ExecutionFactoryFromExperiment
+from laboneq.executor.executor import Statement
 
 _logger = logging.getLogger(__name__)
 
@@ -62,12 +67,12 @@ _AWGMapping = Dict[str, Dict[int, AWGInfo]]
 class Compiler:
     def __init__(self, settings: Optional[Dict] = None):
         self._osc_numbering = None
-        self._section_grids = {}
         self._experiment_dao: ExperimentDAO = None
+        self._execution: Statement = None
         self._settings = compiler_settings.from_dict(settings)
         self._sampling_rate_tracker: SamplingRateTracker = None
         self._scheduler: Scheduler = None
-        self._rt_compiler_output: RealtimeCompilerOutput = None
+        self._combined_compiler_output: CombinedRealtimeCompilerOutput = None
 
         self._leader_properties = LeaderProperties()
         self._clock_settings: Dict[str, Any] = {}
@@ -96,17 +101,18 @@ class Compiler:
                     f"TINYSAMPLE is not commensurable with sampling rate of {t}, has {num_tinysamples_per_sample} tinysamples per sample, which is not an integer"
                 )
 
-    def print_section_graph(self):
-        self._section_graph_object.log_graph()
-
     def use_experiment(self, experiment):
         if "experiment" in experiment and "setup" in experiment:
             _logger.debug("Processing DSLv3 setup and experiment")
             self._experiment_dao = ExperimentDAO(
                 None, experiment["setup"], experiment["experiment"]
             )
+            self._execution = ExecutionFactoryFromExperiment().make(
+                experiment["experiment"]
+            )
         else:
             self._experiment_dao = ExperimentDAO(experiment)
+            self._execution = legacy_execution_program()
 
     def _analyze_setup(self):
         def get_first_instr_of(device_infos: List[DeviceInfo], type) -> DeviceInfo:
@@ -235,8 +241,19 @@ class Compiler:
             self._signal_objects,
             self._settings,
         )
+        executor = NtCompilerExecutor(rt_compiler)
+        executor.run(self._execution)
 
-        self._rt_compiler_output = rt_compiler.run()
+        self._combined_compiler_output = executor.combined_compiler_output()
+        if self._combined_compiler_output is None:
+            # Some of our tests do not have an RT averaging loop, so the RT compiler will
+            # not have been run. For backwards compatibility, we still run it once.
+            _logger.warning("Experiment has no real-time averaging loop")
+            rt_compiler_output = rt_compiler.run()
+
+            self._combined_compiler_output = rt_linker.from_single_run(
+                rt_compiler_output, [0]
+            )
 
     @staticmethod
     def _get_total_rounded_delay(delay, signal_id, device_type, sampling_rate):
@@ -310,15 +327,22 @@ class Compiler:
                         )
                     )
                 )
-
+                if (
+                    self._experiment_dao.acquisition_type
+                    == AcquisitionType.SPECTROSCOPY_PSD
+                ):
+                    if device_type == device_type.UHFQA:
+                        raise LabOneQException(
+                            "`AcquisitionType` `SPECTROSCOPY_PSD` not allowed on UHFQA"
+                        )
                 integrators_per_signal = (
                     device_type.num_integration_units_per_acquire_signal
                     if self._experiment_dao.acquisition_type
                     in [
                         AcquisitionType.RAW,
-                        AcquisitionType.SPECTROSCOPY,
                         AcquisitionType.INTEGRATION,
                     ]
+                    or is_spectroscopy(self._experiment_dao.acquisition_type)
                     else 1
                 )
 
@@ -392,7 +416,6 @@ class Compiler:
                         device_id=device_id,
                         signal_type=AWGSignalType(signal_type),
                         awg_number=awg_number,
-                        seqc="seq_" + device_id + "_" + str(awg_number) + ".seqc",
                         device_type=device_type,
                         sampling_rate=None,
                     )
@@ -921,7 +944,7 @@ class Compiler:
             self._experiment_dao, self._leader_properties, self._clock_settings
         )
 
-        for output in self.calc_outputs(self._rt_compiler_output.signal_delays):
+        for output in self.calc_outputs(self._combined_compiler_output.signal_delays):
             _logger.debug("Adding output %s", output)
             recipe_generator.add_output(
                 output["device_id"],
@@ -943,7 +966,7 @@ class Compiler:
                 amplitude=output["amplitude"],
             )
 
-        for input in self.calc_inputs(self._rt_compiler_output.signal_delays):
+        for input in self.calc_inputs(self._combined_compiler_output.signal_delays):
             _logger.debug("Adding input %s", input)
             recipe_generator.add_input(
                 input["device_id"],
@@ -971,7 +994,7 @@ class Compiler:
                 # is used via a match/state construct for the drive signals of this awg
                 qa_signal_ids = {
                     h.acquire
-                    for h in self._rt_compiler_output.feedback_connections.values()
+                    for h in self._combined_compiler_output.feedback_connections.values()
                     if h.drive.intersection(awg_signals)
                 }
                 if len(qa_signal_ids) > 1:
@@ -984,45 +1007,50 @@ class Compiler:
                     awg_number=awg.awg_number,
                     signal_type=signal_type.value,
                     qa_signal_id=next(iter(qa_signal_ids), None),
-                    command_table_match_offset=self._rt_compiler_output.command_table_match_offsets.get(
+                    command_table_match_offset=self._combined_compiler_output.command_table_match_offsets.get(
                         awg.key
                     ),
-                    feedback_register=self._rt_compiler_output.feedback_registers.get(
+                    feedback_register=self._combined_compiler_output.feedback_registers.get(
                         awg.key
                     ),
-                )
-                recipe_generator.add_realtime_step(
-                    device_id=device_id,
-                    awg_id=awg.awg_number,
-                    seqc_filename=awg.seqc,
-                    wave_indices_name="",  # todo
-                    nt_loop_indices=[],  # todo
                 )
 
-        assert self._rt_compiler_output is not None
+        for step in self._combined_compiler_output.realtime_steps:
+            recipe_generator.add_realtime_step(
+                device_id=step.device_id,
+                awg_id=step.awg_id,
+                seqc_filename=step.seqc_ref,
+                wave_indices_name=step.wave_indices_ref,
+                nt_loop_indices=step.nt_step,
+            )
+
+        assert self._combined_compiler_output is not None
         recipe_generator.add_oscillator_params(self._experiment_dao)
         recipe_generator.add_integrator_allocations(
             self._integration_unit_allocation,
             self._experiment_dao,
-            self._rt_compiler_output.integration_weights,
+            self._combined_compiler_output.integration_weights,
         )
 
         recipe_generator.add_acquire_lengths(
-            integration_times=self._rt_compiler_output.integration_times
+            integration_times=self._combined_compiler_output.integration_times
         )
 
         recipe_generator.add_measurements(
             self.calc_measurement_map(
-                integration_times=self._rt_compiler_output.integration_times
+                integration_times=self._combined_compiler_output.integration_times
             )
         )
 
         recipe_generator.add_simultaneous_acquires(
-            self._rt_compiler_output.simultaneous_acquires
+            self._combined_compiler_output.simultaneous_acquires
         )
 
         recipe_generator.add_total_execution_time(
-            self._rt_compiler_output.total_execution_time
+            self._combined_compiler_output.total_execution_time
+        )
+        recipe_generator.add_max_step_execution_time(
+            self._combined_compiler_output.max_execution_time_per_step
         )
 
         self._recipe = recipe_generator.recipe()
@@ -1031,13 +1059,13 @@ class Compiler:
     def compiler_output(self) -> CompiledExperiment:
         return CompiledExperiment(
             recipe=self._recipe,
-            src=self._rt_compiler_output.src,
-            waves=self._rt_compiler_output.waves,
-            wave_indices=self._rt_compiler_output.wave_indices,
-            command_tables=self._rt_compiler_output.command_tables,
-            schedule=self._rt_compiler_output.schedule,
+            src=self._combined_compiler_output.src,
+            waves=list(self._combined_compiler_output.waves.values()),
+            wave_indices=self._combined_compiler_output.wave_indices,
+            command_tables=self._combined_compiler_output.command_tables,
+            schedule=self._combined_compiler_output.schedule,
             experiment_dict=ExperimentDAO.dump(self._experiment_dao),
-            pulse_map=self._rt_compiler_output.pulse_map,
+            pulse_map=self._combined_compiler_output.pulse_map,
         )
 
     def dump_src(self, info=False):
@@ -1063,6 +1091,7 @@ class Compiler:
         self.use_experiment(data)
         self._analyze_setup()
         self._process_experiment()
+
         self._generate_recipe()
 
         retval = self.compiler_output()
@@ -1111,11 +1140,3 @@ def get_lead_delay(
         return settings.SHFSG_LEAD_PQSC
     else:
         raise RuntimeError(f"Unsupported device type {device_type}")
-
-
-def find_obj_by_id(object_list, id):
-    for i in object_list:
-        if i["id"] == id:
-            return i
-
-    return None

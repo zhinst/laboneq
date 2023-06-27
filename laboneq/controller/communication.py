@@ -205,11 +205,6 @@ class DaqWrapper(ZiApiWrapperBase):
         self._vector_counter = 0
         self.node_monitor = None
 
-        if not server_qualifier.dry_run:
-            from laboneq._token import token_check
-
-            token_check()
-
         ZiApiClass = ziDAQServerEmulator if server_qualifier.dry_run else zi.ziDAQServer
 
         try:

@@ -4,9 +4,11 @@
 from dataclasses import dataclass, field
 from typing import Union
 
+from ...dsl_dataclass_decorator import classformatter
 from .. import Server
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class DataServer(Server):
     """Class representing a LabOne Data Server."""

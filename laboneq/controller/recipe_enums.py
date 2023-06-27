@@ -28,3 +28,12 @@ class TriggeringMode(Enum):
 @dataclass(frozen=True)
 class NtStepKey:
     indices: tuple[int]
+
+
+class AcquisitionType(Enum):
+    INTEGRATION_TRIGGER = "integration_trigger"
+    SPECTROSCOPY_IQ = "spectroscopy"
+    SPECTROSCOPY_PSD = "spectroscopy_psd"
+    SPECTROSCOPY = SPECTROSCOPY_IQ
+    DISCRIMINATION = "discrimination"
+    RAW = "raw"

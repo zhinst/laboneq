@@ -13,6 +13,7 @@ from laboneq.dsl.device.logical_signal_group import LogicalSignalGroup
 from laboneq.dsl.device.physical_channel_group import PhysicalChannelGroup
 from laboneq.dsl.serialization import Serializer
 
+from ..dsl_dataclass_decorator import classformatter
 from ._device_setup_generator import (
     ConnectionsType,
     DataServersType,
@@ -27,6 +28,7 @@ if TYPE_CHECKING:
     from .instrument import Instrument
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class DeviceSetup:
     """Data object describing the device setup of a QCCS system."""

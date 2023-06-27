@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 # Note: The simulator may be used as a testing tool, so it must be independent of the production code
 # Do not add dependencies to the code being tested here (such as compiler, DSL asf.)
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Dict, List
 
 import numpy as np
 from numpy import typing as npt
@@ -294,9 +294,10 @@ class SeqCDescriptor:
     sampling_rate: float
     output_port_delay: float
     source: str = None
-    channels: list[int] = None
-    wave_index: dict[Any, Any] = None
-    command_table: list[Any] = None
+    channels: List[int] = None
+    wave_index: Dict[Any, Any] = None
+    command_table: List[Any] = None
+    acquisition_type: str = None
 
 
 class Operation(Enum):
@@ -393,6 +394,7 @@ class SeqCSimulation:
     sampling_rate: float = field(default=2.0e9)
     startup_delay: float = field(default=0.0)
     output_port_delay: float = field(default=0.0)
+    acquisition_type: str = field(default="")
 
 
 class SimpleRuntime:
@@ -465,6 +467,7 @@ class SimpleRuntime:
         }
         self.variables = {}
         self.seqc_simulation = SeqCSimulation()
+        self.seqc_simulation.acquisition_type = descriptor.acquisition_type
         self.times = {}
         self.times_at_port = {}
         self.descriptor = descriptor
@@ -752,19 +755,30 @@ class SimpleRuntime:
 
         wave_data_idx = []
         event_length = 0
-        for gen_index in range(16):
-            if (generators_mask & (1 << gen_index)) != 0:
-                wave_key = self._args2key(["gen", gen_index])
-                known_wave = self.wave_lookup_by_args.get(wave_key)
-                if known_wave is None:
-                    known_wave = WaveRefInfo()
-                    self.wave_lookup_by_args[wave_key] = known_wave
-                wave = self.descriptor.wave_index[gen_index]
-                wave_names = [wave["wave_name"] + ".wave"]
-                wave_length_samples = len(self.waves[wave_names[0]])
-                event_length = max(event_length, wave_length_samples)
-                self._update_wave_refs(wave_names, known_wave)
-                wave_data_idx = known_wave.wave_data_idx
+
+        def add_wave(gen_index, wave_data_idx, event_length):
+            wave_key = self._args2key(["gen", gen_index])
+            known_wave = self.wave_lookup_by_args.get(wave_key)
+            if known_wave is None:
+                known_wave = WaveRefInfo()
+                self.wave_lookup_by_args[wave_key] = known_wave
+            wave = self.descriptor.wave_index[gen_index]
+            wave_names = [wave["wave_name"] + ".wave"]
+            wave_length_samples = len(self.waves[wave_names[0]])
+            event_length = max(event_length, wave_length_samples)
+            self._update_wave_refs(wave_names, known_wave)
+            wave_data_idx.append(known_wave.wave_data_idx)
+            return wave_data_idx, event_length
+
+        if "spectroscopy" in self.descriptor.acquisition_type:
+            assert generators_mask == self.predefined_consts["QA_GEN_NONE"]
+            wave_data_idx, event_length = add_wave(0, wave_data_idx, event_length)
+        else:
+            for gen_index in range(16):
+                if (generators_mask & (1 << gen_index)) != 0:
+                    wave_data_idx, event_length = add_wave(
+                        gen_index, wave_data_idx, event_length
+                    )
 
         start_samples, insert_at = self._last_play_start_samples()
         self.seqc_simulation.events.insert(
@@ -975,11 +989,9 @@ def analyze_recipe(
             for awg in init["awgs"]:
                 awg_nr = awg["awg"]
                 rt_exec_step = next(
-                    iter(
-                        r
-                        for r in recipe["experiment"]["realtime_execution_init"]
-                        if r["device_id"] == device_uid and r["awg_id"] == awg_nr
-                    )
+                    r
+                    for r in recipe["experiment"]["realtime_execution_init"]
+                    if r["device_id"] == device_uid and r["awg_id"] == awg_nr
                 )
                 seqc = rt_exec_step["seqc_ref"]
                 if device_type == "SHFSG" or device_type == "SHFQA":
@@ -1050,6 +1062,7 @@ def analyze_recipe(
         seqc_descriptor.channels = outputs[name]
         seqc_descriptor.wave_index = seq_c_wave_indices.get(name, {})
         seqc_descriptor.command_table = command_table
+        seqc_descriptor.acquisition_type = recipe["experiment"]["acquisition_type"]
         seqc_descriptors.append(seqc_descriptor)
     return seqc_descriptors
 

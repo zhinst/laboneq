@@ -9,6 +9,8 @@ from typing import List, Union
 import numpy as np
 from numpy.typing import ArrayLike
 
+from laboneq.dsl.dsl_dataclass_decorator import classformatter
+
 
 def _compare_nested(a, b):
     if isinstance(a, list) or isinstance(a, np.ndarray):
@@ -20,6 +22,7 @@ def _compare_nested(a, b):
     return a == b
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class AcquiredResult:
     """

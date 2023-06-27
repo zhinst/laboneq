@@ -11,9 +11,11 @@ from laboneq.dsl.calibration.mixer_calibration import MixerCalibration
 from laboneq.dsl.calibration.observable import Observable
 from laboneq.dsl.calibration.oscillator import Oscillator
 from laboneq.dsl.calibration.precompensation import Precompensation
+from laboneq.dsl.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.parameter import Parameter
 
 
+@classformatter
 @dataclass(init=False, order=True)
 class SignalCalibration(Observable):
     """Dataclass containing all calibration parameters

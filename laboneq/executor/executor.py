@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from enum import Enum, auto
+from contextlib import contextmanager
+from enum import Enum, Flag, auto
 from typing import Any, Dict, Iterator, List
 
 import numpy.typing as npt
@@ -14,11 +15,15 @@ from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 
 
-class LoopType(Enum):
-    SWEEP = auto()
+class LoopFlags(Flag):
+    NONE = 0
     AVERAGE = auto()
-    RT_AVERAGE = auto()
     HARDWARE = auto()
+    PIPELINE = auto()
+
+    # convenience aliases
+    SWEEP = NONE  # !AVERAGE
+    RT_AVERAGE = AVERAGE | HARDWARE
 
 
 class LoopingMode(Enum):
@@ -60,14 +65,9 @@ class Statement(ABC):
         pass
 
 
-class NoOperation(Statement):
-    def run(self, scope: ExecutionScope):
-        pass
-
-
 class Sequence(Statement):
-    def __init__(self):
-        self._sequence: List[Statement] = []
+    def __init__(self, sequence=None):
+        self._sequence: List[Statement] = sequence or []
 
     def append_statement(self, statement: Statement):
         self._sequence.append(statement)
@@ -76,16 +76,25 @@ class Sequence(Statement):
         for statement in self._sequence:
             statement.run(scope)
 
+    def __repr__(self):
+        return f"Sequence({self._sequence})"
+
 
 class Nop(Statement):
     def run(self, scope: ExecutionScope):
         pass
+
+    def __repr__(self):
+        return "Nop()"
 
 
 class ExecSet(Statement):
     def __init__(self, path, val):
         self._path = path
         self._val = val
+
+    def __repr__(self):
+        return f"ExecSet({repr(self._path)}, {repr(self._val)})"
 
     def run(self, scope: ExecutionScope):
         val = scope.resolve_variable(self._val) if type(self._val) is str else self._val
@@ -105,6 +114,9 @@ class ExecUserCall(Statement):
             )
         scope.root.user_func_handler(self._func_name, resolved_args)
 
+    def __repr__(self):
+        return f"ExecUserCall({repr(self._func_name)}, {repr(self._args)})"
+
 
 class ExecAcquire(Statement):
     def __init__(self, handle: str, signal: str, parent_uid: str):
@@ -114,6 +126,9 @@ class ExecAcquire(Statement):
 
     def run(self, scope: ExecutionScope):
         scope.root.acquire_handler(self._handle, self._signal, self._parent_uid)
+
+    def __repr__(self):
+        return f"ExecAcquire({repr(self._handle)}, {repr(self._signal)}, {repr(self._parent_uid)})"
 
 
 class SetSoftwareParamLinear(Statement):
@@ -128,6 +143,9 @@ class SetSoftwareParamLinear(Statement):
         value = self._start + self._step * index
         scope.set_variable(self._name, value)
         scope.root.set_sw_param_handler(self._name, index, value, self._axis_name, None)
+
+    def __repr__(self):
+        return f"SetSoftwareParamLinear({self._name}, {self._start}, {self._step}, {repr(self._axis_name)})"
 
 
 class SetSoftwareParam(Statement):
@@ -144,18 +162,26 @@ class SetSoftwareParam(Statement):
             self._name, index, value, self._axis_name, self._values
         )
 
+    def __repr__(self):
+        return f"SetSoftwareParam({repr(self._name)}, {repr(self._values)}, {repr(self._axis_name)})"
+
 
 class ForLoop(Statement):
     def __init__(
-        self, count: int, body: Sequence, loop_type: LoopType = LoopType.SWEEP
+        self,
+        count: int,
+        body: Sequence,
+        loop_flags: LoopFlags = LoopFlags.SWEEP,
+        chunk_count=1,
     ):
         self._count = count
         self._body = body
-        self._loop_type = loop_type
+        self._loop_flags = loop_flags
+        self._chunk_count = chunk_count
 
     def _loop_iterator(self, scope: ExecutionScope) -> Iterator[int]:
         if scope.root.looping_mode == LoopingMode.EXECUTE:
-            if self._loop_type == LoopType.HARDWARE:
+            if self._loop_flags & LoopFlags.HARDWARE:
                 yield 0
             else:
                 for i in range(self._count):
@@ -168,10 +194,12 @@ class ForLoop(Statement):
     def run(self, scope: ExecutionScope):
         sub_scope = scope.make_sub_scope()
         for i in self._loop_iterator(scope):
-            scope.root.for_loop_handler(self._count, i, self._loop_type, True)
-            sub_scope.set_variable(LOOP_INDEX, i)
-            self._body.run(sub_scope)
-            scope.root.for_loop_handler(None, None, None, False)
+            with scope.root.for_loop_handler(self._count, i, self._loop_flags):
+                sub_scope.set_variable(LOOP_INDEX, i)
+                self._body.run(sub_scope)
+
+    def __repr__(self):
+        return f"ForLoop({self._count}, {self._body}, {self._loop_flags})"
 
 
 class ExecRT(ForLoop):
@@ -183,22 +211,26 @@ class ExecRT(ForLoop):
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
     ):
-        super().__init__(count, body, LoopType.RT_AVERAGE)
+        super().__init__(count, body, LoopFlags.RT_AVERAGE)
         self._uid = uid
         self._averaging_mode = averaging_mode
         self._acquisition_type = acquisition_type
 
     def run(self, scope: ExecutionScope):
-        scope.root.rt_handler(
-            self._count, self._uid, self._averaging_mode, self._acquisition_type, True
-        )
-        if scope.root.looping_mode == LoopingMode.EXECUTE:
-            pass
-        elif scope.root.looping_mode == LoopingMode.ONCE:
-            super().run(scope)
-        else:
-            raise LabOneQException(f"Unknown looping mode '{scope.root.looping_mode}'")
-        scope.root.rt_handler(None, None, None, None, False)
+        with scope.root.rt_handler(
+            self._count, self._uid, self._averaging_mode, self._acquisition_type
+        ):
+            if scope.root.looping_mode == LoopingMode.EXECUTE:
+                pass
+            elif scope.root.looping_mode == LoopingMode.ONCE:
+                super().run(scope)
+            else:
+                raise LabOneQException(
+                    f"Unknown looping mode '{scope.root.looping_mode}'"
+                )
+
+    def __repr__(self):
+        return f"ExecRT({self._count}, {self._body}, {repr(self._uid)}, {self._averaging_mode}, {self._acquisition_type})"
 
 
 class ExecutorBase:
@@ -237,18 +269,17 @@ class ExecutorBase:
     ):
         pass
 
-    def for_loop_handler(
-        self, count: int, index: int, loop_type: LoopType, enter: bool
-    ):
+    @contextmanager
+    def for_loop_handler(self, count: int, index: int, loop_flags: LoopFlags):
         pass
 
+    @contextmanager
     def rt_handler(
         self,
         count: int,
         uid: str,
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
-        enter: bool,
     ):
         pass
 

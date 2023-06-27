@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, List, Union
 
+from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import ExecutionType
 from laboneq.executor import executor
 
@@ -14,7 +15,12 @@ if TYPE_CHECKING:
 
 
 class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
+    def __init__(self):
+        super().__init__()
+        self._chunked_sweep = None
+
     def make(self, experiment: Experiment) -> executor.Statement:
+        self._chunked_sweep = self.analyze_pipeline(experiment)
         self._handle_children(experiment.sections, experiment.uid)
         return self._root_sequence
 
@@ -38,30 +44,35 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
                     self._handle_children, child.children, child.uid
                 )
                 self._append_statement(
-                    executor.ForLoop(child.count, loop_body, executor.LoopType.AVERAGE)
+                    executor.ForLoop(child.count, loop_body, executor.LoopFlags.AVERAGE)
                 )
             elif isinstance(child, AcquireLoopRt):
                 loop_body = self._sub_scope(
                     self._handle_children, child.children, child.uid
                 )
-                self._append_statement(
-                    executor.ExecRT(
-                        count=child.count,
-                        body=loop_body,
-                        uid=child.uid,
-                        averaging_mode=child.averaging_mode,
-                        acquisition_type=child.acquisition_type,
-                    )
+                loop = executor.ExecRT(
+                    count=child.count,
+                    body=loop_body,
+                    uid=child.uid,
+                    averaging_mode=child.averaging_mode,
+                    acquisition_type=child.acquisition_type,
                 )
+                if self._chunked_sweep is not None:
+                    # add 'fake' pipeline loop
+                    loop = self._make_pipelined(loop)
+                self._append_statement(loop)
             elif isinstance(child, Sweep):
                 count = len(child.parameters[0].values)
                 loop_body = self._sub_scope(self._handle_sweep, child)
                 loop_type = (
-                    executor.LoopType.HARDWARE
+                    executor.LoopFlags.HARDWARE
                     if child.execution_type == ExecutionType.REAL_TIME
-                    else executor.LoopType.SWEEP
+                    else executor.LoopFlags.SWEEP
                 )
-                self._append_statement(executor.ForLoop(count, loop_body, loop_type))
+                chunk_count = child.chunk_count
+                self._append_statement(
+                    executor.ForLoop(count, loop_body, loop_type, chunk_count)
+                )
             else:
                 sub_sequence = self._sub_scope(
                     self._handle_children, child.children, child.uid
@@ -94,3 +105,51 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
         if isinstance(operation, Acquire):
             return executor.ExecAcquire(operation.handle, operation.signal, parent_uid)
         return executor.Nop()
+
+    def _make_pipelined(self, averaging_loop: executor.Statement):
+        return executor.ForLoop(
+            self._chunked_sweep.chunk_count,
+            executor.Sequence(
+                [
+                    executor.SetSoftwareParamLinear(
+                        "__pipeline_index", 0, 1, "pipeline_index"
+                    ),
+                    averaging_loop,
+                ]
+            ),
+            executor.LoopFlags.PIPELINE,
+            1,
+        )
+
+    @staticmethod
+    def analyze_pipeline(experiment: Experiment):
+        from laboneq.dsl.experiment import AcquireLoopRt, Section, Sweep
+
+        rt_averaging_loop = None
+        chunked_sweep = None
+
+        def visit(section: Section, inside_rt=False):
+            nonlocal rt_averaging_loop, chunked_sweep
+            if isinstance(section, AcquireLoopRt):
+                if rt_averaging_loop is not None:
+                    raise LabOneQException("Found multiple RT averaging loops")
+                rt_averaging_loop = section
+                inside_rt = True
+            if isinstance(section, Sweep):
+                if section.chunk_count > 1:
+                    if chunked_sweep is not None:
+                        raise LabOneQException("Found multiple chunked sweeps")
+                    if not inside_rt:
+                        raise LabOneQException(
+                            "Chunking of sweeps is only supported for real-time execution"
+                        )
+                    chunked_sweep = section
+            for child in section.children:
+                if isinstance(child, Section):
+                    visit(child, inside_rt)
+
+        for c in experiment.sections:
+            # depth-first search
+            visit(c)
+
+        return chunked_sweep

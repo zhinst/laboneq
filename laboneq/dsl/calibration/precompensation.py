@@ -12,6 +12,7 @@ from numpy.typing import ArrayLike
 
 from laboneq.core.types.enums import HighPassCompensationClearing
 from laboneq.dsl.calibration.observable import Observable, RecursiveObservable
+from laboneq.dsl.dsl_dataclass_decorator import classformatter
 
 precompensation_id = 0
 
@@ -23,6 +24,7 @@ def precompensation_id_generator():
     return retval
 
 
+@classformatter
 @dataclass
 class ExponentialCompensation(Observable):
     """Data object containing exponential filter parameters for the signal precompensation"""
@@ -33,6 +35,7 @@ class ExponentialCompensation(Observable):
     amplitude: float = 0.0
 
 
+@classformatter
 @dataclass
 class HighPassCompensation(Observable):
     """Data object containing highpass filter parameters for the signal precompensation.
@@ -58,6 +61,7 @@ class HighPassCompensation(Observable):
         super().__post_init__()
 
 
+@classformatter
 @dataclass
 class FIRCompensation(Observable):
     """Data object containing FIR filter parameters for the signal precompensation"""
@@ -66,6 +70,7 @@ class FIRCompensation(Observable):
     coefficients: ArrayLike = field(default_factory=lambda: np.zeros(40))
 
 
+@classformatter
 @dataclass
 class BounceCompensation(Observable):
     """Data object containing parameters for the bounce compensation component of the signal precompensation"""
@@ -76,6 +81,7 @@ class BounceCompensation(Observable):
     amplitude: float = 0.0
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class Precompensation(RecursiveObservable):
     """Data object containing a collection of parameters for the different filters possible to enable for precompensation of signal distortion."""

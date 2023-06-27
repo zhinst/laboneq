@@ -149,6 +149,7 @@ class WaveScroller:
         self.sim = sim
 
         self.is_shfqa = sim.device_type == "SHFQA"
+        self.acquisition_type = sim.acquisition_type
 
         self.sim_targets = sim_targets
 
@@ -318,9 +319,42 @@ class WaveScroller:
             # The old_output_simulator sets ChannelInfo("QAResult", -1, SimTarget.ACQUIRE) to
             # skip producing the SHFQA acquire play pulse, so we support that here too.
             return
-        if (generator_mask & (1 << self.ch[0])) != 0:
-            wave = 1j * self.sim.waves[event.args[4][1]]
-            wave += self.sim.waves[event.args[4][0]]
+
+        def retrieve_wave(real_idx, imag_idx):
+            wave = 1j * self.sim.waves[imag_idx]
+            wave += self.sim.waves[real_idx]
+            return wave
+
+        wave_indices = event.args[4]
+
+        if "spectroscopy" in self.acquisition_type:
+            spectroscopy_mask = 0
+            assert generator_mask == spectroscopy_mask
+            wave = retrieve_wave(
+                wave_indices[spectroscopy_mask][0], wave_indices[spectroscopy_mask][1]
+            )
+            _slice_copy(
+                self.wave_snippet,
+                snippet_start_samples,
+                wave,
+                event.start_samples,
+                event.length_samples,
+            )
+            self.last_played_value = wave[event.length_samples - 1]
+        else:
+            wave_iter = 0
+            wave = None
+            for gen_index in range(16):
+                if (generator_mask & (1 << gen_index)) != 0:
+                    if wave is None:
+                        wave = retrieve_wave(
+                            wave_indices[wave_iter][0], wave_indices[wave_iter][1]
+                        )
+                    else:
+                        wave += retrieve_wave(
+                            wave_indices[wave_iter][0], wave_indices[wave_iter][1]
+                        )
+                    wave_iter = wave_iter + 1
             _slice_copy(
                 self.wave_snippet,
                 snippet_start_samples,

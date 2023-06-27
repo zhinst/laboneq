@@ -10,6 +10,7 @@ from engineering_notation import EngNumber
 
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.fastlogging import NullLogger
+from laboneq.core.types.enums import AcquisitionType
 
 _logger = logging.getLogger(__name__)
 if _logger.getEffectiveLevel() == logging.DEBUG:
@@ -143,9 +144,14 @@ class MeasurementCalculator:
                                     event["time"] + delay_signal
                                 )
                                 acquisition_type = event.get("acquisition_type")
-                                if (
-                                    acquisition_type is not None
-                                    and "spectroscopy" in acquisition_type
+                                if acquisition_type and set(
+                                    acquisition_type
+                                ).intersection(
+                                    [
+                                        AcquisitionType.SPECTROSCOPY_IQ.value,
+                                        AcquisitionType.SPECTROSCOPY.value,
+                                        AcquisitionType.SPECTROSCOPY_PSD.value,
+                                    ]
                                 ):
                                     signal_integration_info.is_spectroscopy = True
                                 else:

@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 import copy
+import itertools
 import logging
 import typing
-import uuid
 from dataclasses import dataclass
 from numbers import Number
 from types import SimpleNamespace
@@ -66,7 +66,6 @@ class DSLLoader(LoaderBase):
                 reference_clock = device.reference_clock
 
         for device in sorted(device_setup.instruments, key=lambda x: x.uid):
-
             server = device.server_uid
 
             driver = type(device).__name__.lower()
@@ -429,7 +428,6 @@ class DSLLoader(LoaderBase):
 
             channels = []
             if local_paths:
-
                 device = dest_path_devices[lsuid]["device"]
 
                 local_ports = dest_path_devices[lsuid].get("local_ports")
@@ -622,6 +620,22 @@ class DSLLoader(LoaderBase):
                 parent_instance_id=instance_id,
             )
 
+    def _extract_markers(self, operation):
+        markers_raw = getattr(operation, "marker", None)
+        if markers_raw is None:
+            return None
+
+        return [
+            Marker(
+                k,
+                enable=v.get("enable"),
+                start=v.get("start"),
+                length=v.get("length"),
+                pulse_id=v.get("waveform", {}).get("$ref", None),
+            )
+            for k, v in markers_raw.items()
+        ]
+
     def _insert_section(
         self,
         section,
@@ -631,6 +645,8 @@ class DSLLoader(LoaderBase):
     ):
         has_repeat = False
         count = 1
+
+        _auto_pulse_id = (f"{section.uid}__auto_pulse_{i}" for i in itertools.count())
 
         if hasattr(section, "count"):
             has_repeat = True
@@ -715,6 +731,8 @@ class DSLLoader(LoaderBase):
             {"signal_id": k, "state": v["state"]} for k, v in section.trigger.items()
         ]
 
+        chunk_count = getattr(section, "chunk_count", 1)
+
         acquisition_types = None
         for operation in exchanger_map(section).operations:
             if hasattr(operation, "handle"):
@@ -729,6 +747,7 @@ class DSLLoader(LoaderBase):
                 has_repeat=has_repeat,
                 execution_type=execution_type,
                 count=count,
+                chunk_count=chunk_count,
                 acquisition_types=acquisition_types,
                 align=align,
                 on_system_grid=on_system_grid,
@@ -762,7 +781,6 @@ class DSLLoader(LoaderBase):
                 pulse_offset_param = None
 
                 if hasattr(operation, "time"):  # Delay operation
-
                     pulse_offset = operation.time
                     precompensation_clear = (
                         getattr(operation, "precompensation_clear", None) or False
@@ -783,11 +801,8 @@ class DSLLoader(LoaderBase):
                 else:  # All operations, except Delay
                     pulse = None
                     operation_length_param = None
+                    markers = self._extract_markers(operation)
 
-                    if hasattr(operation, "pulse"):
-                        pulse = getattr(operation, "pulse")
-                    if hasattr(operation, "kernel"):
-                        pulse = getattr(operation, "kernel")
                     length = getattr(operation, "length", None)
                     operation_length = length
                     if (
@@ -798,16 +813,35 @@ class DSLLoader(LoaderBase):
                     ):
                         operation_length_param = operation_length.uid
                         operation_length = None
+
+                    if hasattr(operation, "pulse"):
+                        pulse = getattr(operation, "pulse")
+                    if hasattr(operation, "kernel"):
+                        pulse = getattr(operation, "kernel")
                     if pulse is None and length is not None:
                         pulse = SimpleNamespace()
-                        setattr(pulse, "uid", uuid.uuid4().hex)
+                        setattr(pulse, "uid", next(_auto_pulse_id))
                         setattr(pulse, "length", length)
+                    if pulse is None and markers:
+                        # generate an zero amplitude pulse to play the markers
+                        pulse = SimpleNamespace()
+                        pulse.uid = next(_auto_pulse_id)
+                        pulse.function = "const"
+                        pulse.amplitude = 0.0
+                        pulse.length = max([m.start + m.length for m in markers])
+                        pulse.can_compress = False
+                        pulse.pulse_parameters = None
+                    if markers:
+                        for m in markers:
+                            if m.pulse_id is None:
+                                m.pulse_id = pulse.uid
+
                     if hasattr(operation, "handle") and pulse is None:
                         raise RuntimeError(
                             f"Either 'kernel' or 'length' must be provided for the acquire operation with handle '{getattr(operation, 'handle')}'."
                         )
-                    if pulse is not None:
 
+                    if pulse is not None:
                         function = None
                         length = None
 
@@ -891,27 +925,11 @@ class DSLLoader(LoaderBase):
                                         val.uid
                                     )
 
-                        markers = None
-                        if hasattr(operation, "marker"):
-                            markers_raw = operation.marker
-                            if markers_raw is not None:
-                                markers = []
-                                for k, v in markers_raw.items():
-                                    marker_pulse_id = None
-                                    pulse_ref = v.get("waveform")
-                                    if pulse_ref is not None:
-                                        marker_pulse_id = pulse_ref["$ref"]
-
-                                    markers.append(
-                                        Marker(
-                                            k,
-                                            enable=v.get("enable"),
-                                            start=v.get("start"),
-                                            length=v.get("length"),
-                                            pulse_id=marker_pulse_id,
-                                        )
-                                    )
-                                    self.add_signal_marker(operation.signal, k)
+                        if markers:
+                            for m in markers:
+                                self.add_signal_marker(
+                                    operation.signal, m.marker_selector
+                                )
 
                         ssp = SectionSignalPulse(
                             signal_id=operation.signal,

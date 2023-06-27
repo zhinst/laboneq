@@ -19,6 +19,7 @@ from laboneq.dsl.enums import (
 )
 from laboneq.dsl.experiment.pulse import Pulse
 
+from ..dsl_dataclass_decorator import classformatter
 from .experiment_signal import ExperimentSignal
 from .section import AcquireLoopNt, AcquireLoopRt, Case, Match, Section, Sweep
 
@@ -35,6 +36,7 @@ def experiment_id_generator():
     return retval
 
 
+@classformatter
 @dataclass(init=True, repr=True, order=True)
 class Experiment:
     """LabOne Q Experiment.
@@ -299,6 +301,10 @@ class Experiment:
         :param marker: Dictionary with markers to play. Example: `marker={"marker1": {"enable": True}}`
         :type marker: `dict`, optional
 
+        .. note::
+
+           If markers are specified but `pulse=None`, a zero amplitude pulse as long as the end of the longest
+           marker will be automatically generated.
         """
         current_section = self._peek_section()
         current_section.play(
@@ -486,6 +492,7 @@ class Experiment:
         uid=None,
         alignment=None,
         reset_oscillator_phase=False,
+        chunk_count=1,
     ):
         """Define a sweep section.
 
@@ -509,6 +516,7 @@ class Experiment:
                 :class:`.~SectionAlignment.LEFT`.
             reset_oscillator_phase: When True, reset all oscillators at the start of
                 each step.
+            chunk_count: The number of chunks to split the sweep into. Defaults to 1.
 
         """
         parameters = parameter if isinstance(parameter, list) else [parameter]
@@ -519,6 +527,7 @@ class Experiment:
             execution_type=execution_type,
             alignment=alignment,
             reset_oscillator_phase=reset_oscillator_phase,
+            chunk_count=chunk_count,
         )
 
     class _SweepSectionContext:
@@ -530,6 +539,7 @@ class Experiment:
             execution_type,
             alignment,
             reset_oscillator_phase,
+            chunk_count,
         ):
             self.exp = experiment
             args = {"parameters": parameters}
@@ -553,6 +563,8 @@ class Experiment:
 
             if reset_oscillator_phase is not None:
                 args["reset_oscillator_phase"] = reset_oscillator_phase
+
+            args["chunk_count"] = chunk_count
 
             self.sweep = Sweep(**args)
 

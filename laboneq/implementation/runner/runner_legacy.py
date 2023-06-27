@@ -331,9 +331,9 @@ from laboneq.executor import executor
 
 def convert_loop_type(loop_type: LoopType):
     return {
-        LoopType.AVERAGE: executor.LoopType.AVERAGE,
-        LoopType.SWEEP: executor.LoopType.SWEEP,
-        LoopType.HARDWARE: executor.LoopType.HARDWARE,
+        LoopType.AVERAGE: executor.LoopFlags.AVERAGE,
+        LoopType.SWEEP: executor.LoopFlags.SWEEP,
+        LoopType.HARDWARE: executor.LoopFlags.HARDWARE,
     }[loop_type]
 
 

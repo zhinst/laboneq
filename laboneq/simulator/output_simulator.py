@@ -30,7 +30,9 @@ class _AWG_ID:
     prog: str
     channels: List[int]
 
-    def __init__(self, device_setup: DeviceSetup, ch: PhysicalChannel):
+    def __init__(
+        self, device_setup: DeviceSetup, ch: PhysicalChannel, realtime_inits: list
+    ):
         self._device_setup = device_setup
         [self._dev_uid, pch] = ch.uid.split("/")
         ch_attrs = pch.split("_")
@@ -39,35 +41,51 @@ class _AWG_ID:
             "qas": self._decode_qas,
             "qachannels": self._decode_qachannels,
             "sgchannels": self._decode_sgchannels,
-        }[ch_attrs[0]](ch_attrs[1:])
+        }[ch_attrs[0]](ch_attrs[1:], realtime_inits)
 
-    def _decode_sigouts(self, chs: List[str]):
+    def find_seqc(self, device_name: str, awg_no: int, realtime_inits):
+        self.prog = next(
+            iter(
+                sorted(
+                    (
+                        rt_init
+                        for rt_init in realtime_inits
+                        if rt_init["awg_id"] == awg_no
+                        and rt_init["device_id"] == device_name
+                    ),
+                    key=lambda rt_init: rt_init["nt_step"]["indices"],
+                )
+            )
+        )["seqc_ref"]
+
+    def _decode_sigouts(self, chs: List[str], realtime_inits):
         self.is_out = True
         self.channels = [int(ch) for ch in chs]
         awg_no = self.channels[0] // 2
-        self.prog = f"seq_{self._dev_uid}_{awg_no}.seqc"
+        self.find_seqc(self._dev_uid, awg_no, realtime_inits)
 
-    def _decode_qas(self, chs: List[str]):
+    def _decode_qas(self, chs: List[str], realtime_inits):
         self.is_out = False
         self.channels = [int(ch) for ch in chs]
-        self.prog = f"seq_{self._dev_uid}_0.seqc"
+        self.find_seqc(self._dev_uid, 0, realtime_inits)
 
     def _is_qc(self):
         dev = self._device_setup.instrument_by_uid(self._dev_uid)
         return dev.calc_driver() == "SHFQA" and dev.is_qc
 
-    def _decode_qachannels(self, chs: List[str]):
+    def _decode_qachannels(self, chs: List[str], realtime_inits):
         self.is_out = chs[1] == "output"
         self.channels = [0]
-        self.prog = f"seq_{self._dev_uid}_{chs[0]}.seqc"
+        self.find_seqc(self._dev_uid, int(chs[0]), realtime_inits)
 
-    def _decode_sgchannels(self, chs: List[str]):
+    def _decode_sgchannels(self, chs: List[str], realtime_inits):
+        internal_device_name = (
+            self._dev_uid if not self._is_qc() else f"{self._dev_uid}_sg"
+        )
+
         self.is_out = True
         self.channels = [0, 1]
-        if self._is_qc():
-            self.prog = f"seq_{self._dev_uid}_sg_{chs[0]}.seqc"
-        else:
-            self.prog = f"seq_{self._dev_uid}_{chs[0]}.seqc"
+        self.find_seqc(internal_device_name, int(chs[0]), realtime_inits)
 
 
 class OutputSimulator:
@@ -154,7 +172,11 @@ class OutputSimulator:
             if isinstance(physical_channel, PhysicalChannel)
             else self._uid_to_channel(physical_channel)
         )
-        awg_id = _AWG_ID(self._compiled_experiment.device_setup, channel)
+        awg_id = _AWG_ID(
+            self._compiled_experiment.device_setup,
+            channel,
+            self._compiled_experiment.recipe["experiment"]["realtime_execution_init"],
+        )
 
         sim = self._simulations[awg_id.prog]
         sim_targets = SimTarget.NONE

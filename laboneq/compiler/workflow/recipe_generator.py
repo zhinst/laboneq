@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from laboneq.compiler.code_generator.measurement_calculator import IntegrationTimes
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
+from laboneq.core.types.enums.acquisition_type import AcquisitionType
 
 if TYPE_CHECKING:
     from laboneq.compiler.workflow.compiler import LeaderProperties
@@ -104,6 +105,13 @@ class RecipeGenerator:
             initializations.append({"device_uid": device.id, "config": {}})
         self._recipe["devices"] = devices
         self._recipe["experiment"]["initializations"] = initializations
+
+    def add_acquisition_type_from_experiment(self, experiment_dao: ExperimentDAO):
+        self._recipe["experiment"]["acquisition_type"] = (
+            AcquisitionType.INTEGRATION.value
+            if experiment_dao.acquisition_type is None
+            else experiment_dao.acquisition_type.value
+        )
 
     def _find_initialization(self, device_uid):
         for initialization in self._recipe["experiment"]["initializations"]:
@@ -293,6 +301,7 @@ class RecipeGenerator:
         self.add_connectivity_from_experiment(
             experiment_dao, leader_properties, clock_settings
         )
+        self.add_acquisition_type_from_experiment(experiment_dao)
 
     def add_simultaneous_acquires(
         self, simultaneous_acquires: Dict[float, Dict[str, str]]
@@ -304,6 +313,11 @@ class RecipeGenerator:
 
     def add_total_execution_time(self, total_execution_time):
         self._recipe["experiment"]["total_execution_time"] = total_execution_time
+
+    def add_max_step_execution_time(self, add_max_step_execution_time):
+        self._recipe["experiment"][
+            "max_step_execution_time"
+        ] = add_max_step_execution_time
 
     def recipe(self):
         return self._recipe
