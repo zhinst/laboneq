@@ -10,7 +10,7 @@ from laboneq.compiler.code_generator.sampled_event_handler import FeedbackConnec
 from laboneq.compiler.common.awg_info import AwgKey
 from laboneq.compiler.workflow.realtime_compiler import RealtimeCompilerOutput
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types.compiled_experiment import PulseMapEntry
+from laboneq.data.scheduled_experiment import PulseMapEntry
 
 
 @dataclass

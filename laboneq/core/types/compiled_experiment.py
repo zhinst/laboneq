@@ -3,11 +3,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from laboneq.core.types.enums.mixer_type import MixerType
 from laboneq.core.validators import dicts_equal
+from laboneq.data.scheduled_experiment import ScheduledExperiment
 
 if TYPE_CHECKING:
     from numpy.typing import ArrayLike
@@ -17,101 +17,58 @@ if TYPE_CHECKING:
     from laboneq.dsl.experiment.pulse import Pulse
 
 
-@dataclass
-class PulseInstance:
-    offset_samples: int
-    amplitude: float = None  # instance (final) amplitude
-    length: float = None  # instance (final) length
-    iq_phase: float = None
-    modulation_frequency: float = None
-    modulation_phase: float = None
-    channel: int = None  # The AWG channel for rf_signals
-    needs_conjugate: bool = False  # SHF devices need that for now
-    play_pulse_parameters: dict[str, Any] = field(default_factory=dict)
-    pulse_pulse_parameters: dict[str, Any] = field(default_factory=dict)
-
-    # uid of pulses that this instance overlaps with
-    overlaps: list[str] = None
-    has_marker1: bool = False
-    has_marker2: bool = False
-    can_compress: bool = False
-
-
-@dataclass
-class PulseWaveformMap:
-    """Data structure to store mappings between the given pulse and an AWG waveform."""
-
-    sampling_rate: float
-    length_samples: int
-    signal_type: str
-    # UHFQA's HW modulation is not an IQ mixer. None for flux pulses etc.
-    mixer_type: MixerType | None = None
-    instances: list[PulseInstance] = field(default_factory=list)
-
-
-@dataclass
-class PulseMapEntry:
-    """Data structure to store the :py:class:`PulseWaveformMap` of each AWG waveform."""
-
-    # key: waveform signature string
-    #: A mapping of signals to :py:class:`PulseWaveformMap`
-    waveforms: dict[str, PulseWaveformMap] = field(default_factory=dict)
-
-
 @dataclass(init=True, repr=True, order=True)
 class CompiledExperiment:
     """Data structure to store the output of the compiler."""
 
     #: The source device setup.
-    device_setup: DeviceSetup = field(default=None)
+    device_setup: DeviceSetup | None = None
 
     #: The source experiment.
-    experiment: Experiment = field(default=None)
-
-    #: Instructions to the controller for running the experiment.
-    recipe: dict[str, Any] = field(default=None)
-
-    #: The seqC source code, per device.
-    src: list[dict[str, str]] = field(default=None)
-
-    #: The waveforms that will be uploaded to the devices.
-    waves: list[dict[str, Any]] = field(default=None)
-
-    #: Data structure for storing the indices or filenames by which the waveforms are
-    #: referred to during and after upload.
-    wave_indices: list[dict[str, Any]] = field(default=None)
-
-    #: Data structure for storing the command table data
-    command_tables: list[dict[str, Any]] = field(default_factory=list)
-
-    #: list of events as scheduled by the compiler.
-    schedule: dict[str, Any] = field(default=None)
+    experiment: Experiment | None = None
 
     #: A representation of the source experiment, using primitive Python datatypes only
     #: (dicts, lists, etc.)
-    experiment_dict: dict[str, Any] = field(default=None)
+    experiment_dict: dict[str, Any] | None = None
 
-    #: Data structure for mapping pulses (in the experiment) to waveforms (on the
-    #: device).
-    pulse_map: dict[str, PulseMapEntry] = field(default=None)
+    #: Compiled
+    scheduled_experiment: ScheduledExperiment | None = None
 
-    def __eq__(self, other: CompiledExperiment):
-        if self is other:
+    # Proxy props for backwards compatibility
+    @property
+    def src(self):
+        return self.scheduled_experiment.src
+
+    @property
+    def waves(self):
+        return self.scheduled_experiment.waves
+
+    @property
+    def recipe(self):
+        return self.scheduled_experiment.recipe
+
+    @property
+    def wave_indices(self):
+        return self.scheduled_experiment.wave_indices
+
+    @property
+    def command_tables(self):
+        return self.scheduled_experiment.command_tables
+
+    @property
+    def schedule(self):
+        return self.scheduled_experiment.schedule
+
+    def __eq__(self, other):
+        if other is self:
             return True
-
-        if len(self.waves) != len(other.waves):
-            return False
-
-        return (
-            self.experiment == other.experiment
-            and self.recipe == other.recipe
-            and self.src == other.src
-            and self.wave_indices == other.wave_indices
-            and self.schedule == other.schedule
-            and dicts_equal(other.experiment_dict, self.experiment_dict)
-            and dicts_equal(other.waves, self.waves)
-            and self.pulse_map == other.pulse_map
-        )
+        if type(other) is not CompiledExperiment:
+            return NotImplemented
+        return (other.device_setup, other.experiment, other.scheduled_experiment) == (
+            self.device_setup,
+            self.experiment,
+            self.scheduled_experiment,
+        ) and dicts_equal(other.experiment_dict, self.experiment_dict)
 
     def replace_pulse(self, pulse_uid: str | Pulse, pulse_or_array: ArrayLike | Pulse):
         """Permanently replaces specific pulse with the new sample data in the compiled

@@ -160,6 +160,16 @@ class DeviceHDAWG(DeviceZI):
             Response(f"/{self.serial}/system/clocks/referenceclock/status", 0),
         ]
 
+    def collect_load_factory_preset_nodes(self):
+        return [
+            DaqNodeSetAction(
+                self._daq,
+                f"/{self.serial}/system/preset/load",
+                1,
+                caching_strategy=CachingStrategy.NO_CACHE,
+            )
+        ]
+
     def system_freq_control_nodes(self) -> list[NodeControlBase]:
         nodes = []
         # If we do not turn all channels off, we get the following error message from

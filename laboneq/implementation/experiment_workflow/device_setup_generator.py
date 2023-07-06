@@ -228,8 +228,8 @@ class DeviceSetupGenerator:
         setup_desc = load(yaml_text, Loader=Loader)
 
         return DeviceSetupGenerator.from_dicts(
-            instrument_list=setup_desc.get("instrument_list"),
-            instruments=setup_desc.get("instruments"),
+            instrument_list=setup_desc.get("instrument_list", {}),
+            instruments=setup_desc.get("instruments", {}),
             connections=setup_desc.get("connections"),
             dataservers=setup_desc.get("dataservers"),
             server_host=server_host,

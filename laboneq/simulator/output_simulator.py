@@ -175,7 +175,9 @@ class OutputSimulator:
         awg_id = _AWG_ID(
             self._compiled_experiment.device_setup,
             channel,
-            self._compiled_experiment.recipe["experiment"]["realtime_execution_init"],
+            self._compiled_experiment.scheduled_experiment.recipe["experiment"][
+                "realtime_execution_init"
+            ],
         )
 
         sim = self._simulations[awg_id.prog]

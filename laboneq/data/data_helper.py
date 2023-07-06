@@ -47,7 +47,7 @@ class DataHelper:
 
         if isinstance(data, list):
             for item in data:
-                cls.accept_visitor(item, visitor, visited, visited)
+                cls.accept_visitor(item, visitor, visited)
             return
 
         mapping = {}

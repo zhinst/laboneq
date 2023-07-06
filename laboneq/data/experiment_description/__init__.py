@@ -83,7 +83,17 @@ class SignalCalibration:
 
 @dataclass
 class Operation:
-    uid: str = None
+    """Operation."""
+
+    ...
+
+
+@dataclass
+class SignalOperation(Operation):
+    """Operation on a specific signal."""
+
+    #: Unique identifier of the signal for which the operation is executed.
+    signal: str = field(default=None)
 
 
 @dataclass
@@ -115,8 +125,7 @@ class Section:
 
 
 @dataclass
-class Acquire(Operation):
-    signal: str = None
+class Acquire(SignalOperation):
     handle: str = None
     kernel: Pulse = None
     length: float = None
@@ -156,8 +165,7 @@ class Case(Section):
 
 
 @dataclass
-class Delay(Operation):
-    signal: str = None
+class Delay(SignalOperation):
     time: Parameter = None
     precompensation_clear: Optional[bool] = None
 
@@ -188,8 +196,7 @@ class Match(Section):
 
 
 @dataclass
-class PlayPulse(Operation):
-    signal_uid: str = None
+class PlayPulse(SignalOperation):
     pulse: Pulse = None
     amplitude: Union[float, complex, Parameter] = None
     increment_oscillator_phase: Parameter = None
@@ -223,8 +230,8 @@ class PulseSampledReal(Pulse):
 
 
 @dataclass
-class Reserve(Operation):
-    signal: str = None
+class Reserve(SignalOperation):
+    ...
 
 
 @dataclass

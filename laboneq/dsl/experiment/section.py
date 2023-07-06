@@ -74,20 +74,13 @@ class Section:
         if self.uid is None:
             self.uid = id_generator("s")
 
-    def add(self, section: Section):
-        """Add a subsection, a sweep or a loop to the section.
+    def add(self, section: Union[Section, Operation, Set]):
+        """Add a subsection or operation to the section.
 
         Args:
-            section: Section that is added.
+            section: Item that is added.
         """
-        # if any(filter(lambda s: s.uid == section.uid, self._sections)):
-        #     raise LabOneQException(
-        #         f"Trying to add section with {section.uid} to section {self.uid}, but this uid is already used by a direct child section"
-        #     )
         self.children.append(section)
-
-    def _add_operation(self, operation):
-        self.children.append(operation)
 
     @property
     def sections(self) -> Tuple[Section]:
@@ -108,7 +101,7 @@ class Section:
             path: Path to the node whose value should be set.
             value: Value that should be set.
         """
-        self._add_operation(Set(path=path, value=value))
+        self.add(Set(path=path, value=value))
 
     def play(
         self,
@@ -134,7 +127,7 @@ class Section:
             precompensation_clear: Clear the precompensation filter during the pulse.
             marker: Instruction for playing marker signals along with the pulse
         """
-        self._add_operation(
+        self.add(
             PlayPulse(
                 signal,
                 pulse,
@@ -158,7 +151,7 @@ class Section:
         Args:
             signal: Signal that should be reserved.
         """
-        self._add_operation(Reserve(signal))
+        self.add(Reserve(signal))
 
     def acquire(
         self,
@@ -177,7 +170,7 @@ class Section:
             length: Integration length (only valid in spectroscopy mode).
             pulse_parameters: Dictionary with user pulse function parameters (re)binding.
         """
-        self._add_operation(
+        self.add(
             Acquire(
                 signal=signal,
                 handle=handle,
@@ -186,6 +179,88 @@ class Section:
                 pulse_parameters=pulse_parameters,
             )
         )
+
+    def measure(
+        self,
+        acquire_signal: str,
+        handle: str,
+        integration_kernel: Optional[Pulse] = None,
+        integration_kernel_parameters: Optional[Dict[str, Any]] = None,
+        integration_length: Optional[float] = None,
+        measure_signal: Optional[str] = None,
+        measure_pulse: Optional[Pulse] = None,
+        measure_pulse_length: Optional[float] = None,
+        measure_pulse_parameters: Optional[Dict[str, Any]] = None,
+        measure_pulse_amplitude: Optional[float] = None,
+        acquire_delay: Optional[float] = None,
+        reset_delay: Optional[float] = None,
+    ):
+        """
+        Execute a measurement.
+
+        Unifies the optional playback of a measurement pulse, the acquisition of the return signal and an optional delay after the signal acquisition.
+
+        For pulsed spectroscopy, set `integration_length` and either `measure_pulse` or `measure_pulse_length`.
+        For CW spectroscopy, set only `integration_length` and do not specify the measure signal.
+        For all other measurements, set either length or pulse for both the measure pulse and integration kernel.
+
+        Args:
+
+            acquire_signal: A string that specifies the signal for the data acquisition.
+            handle: A string that specifies the handle of the acquired results.
+            integration_kernel: An optional Pulse object that specifies the kernel for integration.
+            integration_kernel_parameters: An optional dictionary that contains pulse parameters for the integration kernel.
+            integration_length: An optional float that specifies the integration length.
+            measure_signal: An optional string that specifies the signal to measure.
+            measure_pulse: An optional Pulse object that specifies the readout pulse for measurement.
+
+                If this parameter is not supplied, no pulse will be played back for the measurement,
+                which enables CW spectroscopy on SHFQA instruments.
+
+            measure_pulse_length: An optional float that specifies the length of the measurement pulse.
+            measure_pulse_parameters: An optional dictionary that contains parameters for the measurement pulse.
+            measure_pulse_amplitude: An optional float that specifies the amplitude of the measurement pulse.
+            acquire_delay: An optional float that specifies the delay between the acquisition and the measurement.
+            reset_delay: An optional float that specifies the delay after the acquisition to allow for state relaxation or signal processing.
+        """
+        if not isinstance(acquire_signal, str):
+            raise TypeError("`acquire_signal` must be a string.")
+
+        if measure_signal is None:
+            self.acquire(
+                signal=acquire_signal,
+                handle=handle,
+                length=integration_length,
+            )
+
+        elif isinstance(measure_signal, str):
+            self.play(
+                signal=measure_signal,
+                pulse=measure_pulse,
+                amplitude=measure_pulse_amplitude,
+                length=measure_pulse_length,
+                pulse_parameters=measure_pulse_parameters,
+            )
+
+            if acquire_delay is not None:
+                self.delay(
+                    signal=acquire_signal,
+                    time=acquire_delay,
+                )
+
+            self.acquire(
+                signal=acquire_signal,
+                handle=handle,
+                kernel=integration_kernel,
+                length=integration_length,
+                pulse_parameters=integration_kernel_parameters,
+            )
+
+        if reset_delay is not None:
+            self.delay(
+                signal=acquire_signal,
+                time=reset_delay,
+            )
 
     def delay(
         self,
@@ -200,7 +275,7 @@ class Section:
             time: Duration of the delay.
             precompensation_clear: Clear the precompensation filter during the delay.
         """
-        self._add_operation(
+        self.add(
             Delay(signal=signal, time=time, precompensation_clear=precompensation_clear)
         )
 
@@ -211,7 +286,7 @@ class Section:
             func_name (Union[str, Callable]): Function that should be called.
             kwargs: Arguments of the function call.
         """
-        self._add_operation(Call(func_name=func_name, **kwargs))
+        self.add(Call(func_name=func_name, **kwargs))
 
 
 @classformatter
@@ -315,9 +390,11 @@ class Case(Section):
     state: int = 0
 
     def add(self, obj):
-        raise LabOneQException(
-            f"Trying to add object to section {self.uid}. Only ``play`` and ``delay`` are allowed."
-        )
+        if not isinstance(obj, (PlayPulse, Delay)):
+            raise LabOneQException(
+                f"Trying to add object to section {self.uid}. Only ``play`` and ``delay`` are allowed."
+            )
+        super().add(obj)
 
     @classmethod
     def from_section(cls, section, state):

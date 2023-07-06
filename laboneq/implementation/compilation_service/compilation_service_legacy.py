@@ -232,19 +232,7 @@ def not_none_fields_dict(obj, fields, translator):
 def convert_compiler_output_to_scheduled_experiment(
     compiler_output: CompiledExperimentDSL,
 ) -> ScheduledExperiment:
-    recipe = copy.deepcopy(compiler_output.recipe)
-    src = copy.deepcopy(compiler_output.src)
-    waves = copy.deepcopy(compiler_output.waves)
-    wave_indices = copy.deepcopy(compiler_output.wave_indices)
-    command_tables = copy.deepcopy(compiler_output.command_tables)
-    pulse_map = copy.deepcopy(compiler_output.pulse_map)
+    scheduled_experiment = copy.deepcopy(compiler_output.scheduled_experiment)
+    scheduled_experiment.uid = uuid.uuid4().hex
 
-    return ScheduledExperiment(
-        uid=uuid.uuid4().hex,
-        recipe=recipe,
-        src=src,
-        waves=waves,
-        wave_indices=wave_indices,
-        command_tables=command_tables,
-        pulse_map=pulse_map,
-    )
+    return scheduled_experiment

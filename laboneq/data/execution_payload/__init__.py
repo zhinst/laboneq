@@ -11,6 +11,9 @@ from typing import Any, Dict, List
 
 from numpy.typing import ArrayLike
 
+from laboneq.data.scheduled_experiment import ScheduledExperiment
+from laboneq.data.setup_description import Connection
+
 
 #
 # Enums
@@ -30,8 +33,9 @@ class TargetDeviceType(Enum):
     HDAWG = auto()
     SHFQA = auto()
     SHFSG = auto()
-    SHFQC = auto()
+    SHFPPC = auto()
     PQSC = auto()
+    NONQC = auto()
 
     def __repr__(self):
         return f"{self.__class__.__name__}.{self.name}"
@@ -102,6 +106,19 @@ class SourceCode:
     source_text: str = None
 
 
+class TargetChannelType(Enum):
+    UNKNOWN = auto()
+    IQ = auto()
+    RF = auto()
+
+
+@dataclass
+class TargetChannelCalibration:
+    channel_type: TargetChannelType
+    ports: list[str]
+    voltage_offset: float | None
+
+
 @dataclass
 class TargetDevice:
     uid: str = None
@@ -109,6 +126,13 @@ class TargetDevice:
     device_serial: str = None
     device_type: TargetDeviceType = None
     interface: str = None
+    has_signals: bool | None = None
+    connected_outputs: dict[str, list[int]] | None = None
+    internal_connections: list[tuple[str, str]] = field(default_factory=list)
+    calibrations: list[TargetChannelCalibration] | None = None
+    is_qc: bool = False
+    qc_with_qa: bool = False
+    reference_clock_source: str | None = None  # TODO(2K): enum? bool?
 
 
 @dataclass
@@ -163,7 +187,6 @@ class Recipe:
 @dataclass
 class TargetSetup:
     uid: str = None
-    setup_name: str = None
     servers: List[TargetServer] = field(default_factory=list)
     devices: List[TargetDevice] = field(default_factory=list)
 
@@ -178,3 +201,4 @@ class ExecutionPayload:
     src: List[SourceCode] = field(default_factory=list)
     recipe: Recipe = None
     near_time_program: NearTimeProgram = None
+    scheduled_experiment: ScheduledExperiment | None = None

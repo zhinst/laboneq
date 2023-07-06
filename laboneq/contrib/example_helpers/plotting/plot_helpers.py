@@ -6,6 +6,7 @@
 
 # regular expressions
 import re
+from typing import List
 
 # additional imports for plotting
 import matplotlib.pyplot as plt
@@ -14,6 +15,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import cycler, style
 
+from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.simulator.output_simulator import OutputSimulator
 
 # Zurich Instruments style plotting
@@ -31,22 +33,47 @@ plt.rcParams.update(
 
 
 def plot_simulation(
-    compiled_experiment,
-    start_time=0.0,
-    length=10e-6,
-    xaxis_label="Time (s)",
-    yaxis_label="Amplitude",
-    plot_width=6,
-    plot_height=2,
-    save=False,
-    filename="filename",
-    filetype="svg",
+    compiled_experiment: CompiledExperiment,
+    start_time: float = 0.0,
+    length: float = 10e-6,
+    xaxis_label: str = "Time (s)",
+    yaxis_label: str = "Amplitude",
+    plot_width: int = 6,
+    plot_height: int = 2,
+    save: bool = False,
+    filename: str = "filename",
+    filetype: str = "svg",
+    signals: List[str] = None,
 ):
+    """Plot the signals that would be played by a compiled experiment.
+
+    Args:
+        compiled_experiment: The experiment to plot.
+        start_time: The start time of the plots (in seconds).
+        length: The maximum length of the plots (in seconds).
+        xaxis_label: The x-axis label.
+        yaxis_label: The y-axis label.
+        plot_width: The width of the plot.
+        plot_height: The height of the plot.
+        save: Whether to save the plot to a file.
+        filename: The name of the file to save the plot to without
+            the extension (e.g. `"filename"`).
+        filetype: The file name extension (e.g. `"svg"`).
+        signals: A list of the logical signals to plot (e.g.
+            `["/logical_signal_groups/q0/drive_line"]`). By default
+            all signals mapped by the experiment are plotted.
+
+    Returns:
+        None.
+    """
     simulation = OutputSimulator(compiled_experiment)
 
-    mapped_signals = compiled_experiment.experiment.signal_mapping_status[
-        "mapped_signals"
-    ]
+    if signals is None:
+        mapped_signals = compiled_experiment.experiment.signal_mapping_status[
+            "mapped_signals"
+        ]
+    else:
+        mapped_signals = signals
 
     xs = []
     y1s = []

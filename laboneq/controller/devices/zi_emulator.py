@@ -17,6 +17,8 @@ from typing import Any, Callable, overload
 import numpy as np
 from numpy import typing as npt
 
+from laboneq.controller.versioning import LabOneVersion
+
 
 @dataclass
 class NodeBase:
@@ -232,7 +234,7 @@ class DevEmuZI(DevEmu):
     def _node_def(self) -> dict[str, NodeInfo]:
         return {
             "about/version": NodeInfo(
-                type=NodeType.STR, default="23.02", read_only=True
+                type=NodeType.STR, default=LabOneVersion.LATEST.value, read_only=True
             ),
             "about/revision": NodeInfo(
                 type=NodeType.STR, default="99999", read_only=True

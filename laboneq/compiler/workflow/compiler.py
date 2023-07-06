@@ -48,6 +48,7 @@ from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.core.types.enums.acquisition_type import AcquisitionType, is_spectroscopy
 from laboneq.core.types.enums.mixer_type import MixerType
+from laboneq.data.scheduled_experiment import ScheduledExperiment
 from laboneq.executor.execution_from_experiment import ExecutionFactoryFromExperiment
 from laboneq.executor.executor import Statement
 
@@ -1058,18 +1059,21 @@ class Compiler:
 
     def compiler_output(self) -> CompiledExperiment:
         return CompiledExperiment(
-            recipe=self._recipe,
-            src=self._combined_compiler_output.src,
-            waves=list(self._combined_compiler_output.waves.values()),
-            wave_indices=self._combined_compiler_output.wave_indices,
-            command_tables=self._combined_compiler_output.command_tables,
-            schedule=self._combined_compiler_output.schedule,
             experiment_dict=ExperimentDAO.dump(self._experiment_dao),
-            pulse_map=self._combined_compiler_output.pulse_map,
+            scheduled_experiment=ScheduledExperiment(
+                recipe=self._recipe,
+                src=self._combined_compiler_output.src,
+                waves=list(self._combined_compiler_output.waves.values()),
+                wave_indices=self._combined_compiler_output.wave_indices,
+                command_tables=self._combined_compiler_output.command_tables,
+                schedule=self._combined_compiler_output.schedule,
+                pulse_map=self._combined_compiler_output.pulse_map,
+                execution=self._execution,
+            ),
         )
 
     def dump_src(self, info=False):
-        for src in self.compiler_output().src:
+        for src in self.compiler_output().scheduled_experiment.src:
             if info:
                 _logger.info("*** %s", src["filename"])
             else:
@@ -1097,12 +1101,12 @@ class Compiler:
         retval = self.compiler_output()
 
         total_seqc_lines = 0
-        for f in retval.src:
+        for f in retval.scheduled_experiment.src:
             total_seqc_lines += f["text"].count("\n")
         _logger.info("Total seqC lines generated: %d", total_seqc_lines)
 
         total_samples = 0
-        for f in retval.waves:
+        for f in retval.scheduled_experiment.waves:
             try:
                 total_samples += len(f["samples"])
             except KeyError:

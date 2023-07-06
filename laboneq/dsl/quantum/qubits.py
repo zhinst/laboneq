@@ -228,6 +228,7 @@ class Qubit(QuantumElement):
                 This is so that the Qubit parameters are assigned into the correct signal lines in
                 calibration.
             parameters: Parameters associated with the qubit.
+                Required for generating calibration and experiment signals via `calibration()` and `experiment_signals()`.
         """
         if isinstance(parameters, dict):
             parameters = QubitParameters(**parameters)
@@ -236,8 +237,11 @@ class Qubit(QuantumElement):
                 {}, key_validator=self._validate_signal_type
             )
         if isinstance(signals, dict):
+            sigs = {
+                k: self._resolve_to_logical_signal_uid(v) for k, v in signals.items()
+            }
             signals = QuantumElementSignalMap(
-                signals, key_validator=self._validate_signal_type
+                sigs, key_validator=self._validate_signal_type
             )
         super().__init__(uid, signals, parameters)
 
@@ -293,6 +297,8 @@ class Qubit(QuantumElement):
     def calibration(self) -> Calibration:
         """Generate calibration from the parameters and attached signal lines.
 
+        `Qubit` requires `parameters` for it to be able to produce calibration objects.
+
         Returns:
             Prefilled calibration object from Qubit parameters.
         """
@@ -326,6 +332,8 @@ class Qubit(QuantumElement):
         self, with_types=False
     ) -> Union[List[ExperimentSignal], List[Tuple[SignalType, ExperimentSignal]]]:
         """Experiment signals of the quantum element.
+
+        `Qubit` requires `parameters` for it to be able to produce experiment signals.
 
         Args:
             with_types: Return a list of tuples which consist of an mapped logical signal type and an experiment signal.

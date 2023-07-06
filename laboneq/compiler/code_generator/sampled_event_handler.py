@@ -484,12 +484,8 @@ class SampledEventHandler:
         iteration = sampled_event.params["iteration"]
         parameter_name = sampled_event.params["parameter_name"]
         counter_variable_name = string_sanitize(f"index_{parameter_name}")
-        if iteration == 0:
-            if counter_variable_name != f"index_{parameter_name}":
-                _logger.warning(
-                    "Parameter name '%s' has been sanitized in generated code.",
-                    parameter_name,
-                )
+
+        if not self.declarations_generator.is_variable_declared(counter_variable_name):
             self.declarations_generator.add_variable_declaration(
                 counter_variable_name, 0
             )
@@ -501,6 +497,14 @@ class SampledEventHandler:
                     sampled_event.params["step_frequency"],
                 ),
             )
+
+        if counter_variable_name != f"index_{parameter_name}":
+            _logger.warning(
+                "Parameter name '%s' has been sanitized in generated code.",
+                parameter_name,
+            )
+
+        if iteration == 0:
             self.seqc_tracker.add_variable_assignment(counter_variable_name, 0)
         self.seqc_tracker.add_required_playzeros(sampled_event)
         self.seqc_tracker.add_function_call_statement(

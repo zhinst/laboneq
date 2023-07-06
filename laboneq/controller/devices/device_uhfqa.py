@@ -102,7 +102,7 @@ class DeviceUHFQA(DeviceZI):
             )
         if len(self._uplinks) > 1:
             self._error_ambiguous_upstream()
-        upstream = next(iter(self._uplinks.values()))()
+        upstream = self._uplinks[0]()
         if upstream is None:
             self._error_ambiguous_upstream()
         is_desktop = upstream.is_leader() and (
@@ -121,6 +121,22 @@ class DeviceUHFQA(DeviceZI):
         )
         return [
             Command(f"/{self.serial}/system/extclk", source),
+        ]
+
+    def collect_load_factory_preset_nodes(self):
+        return [
+            DaqNodeSetAction(
+                self._daq,
+                f"/{self.serial}/system/preset/index",
+                0,
+                caching_strategy=CachingStrategy.NO_CACHE,
+            ),
+            DaqNodeSetAction(
+                self._daq,
+                f"/{self.serial}/system/preset/load",
+                1,
+                caching_strategy=CachingStrategy.NO_CACHE,
+            ),
         ]
 
     def configure_acquisition(
@@ -476,7 +492,7 @@ class DeviceUHFQA(DeviceZI):
                             f"{integration_unit_index}/real",
                             get_wave(
                                 integrator_allocation.weights + "_i.wave",
-                                recipe_data.compiled.waves,
+                                recipe_data.scheduled_experiment.waves,
                             ),
                         ),
                         DaqNodeSetAction(
@@ -486,7 +502,7 @@ class DeviceUHFQA(DeviceZI):
                             np.negative(
                                 get_wave(
                                     integrator_allocation.weights + "_q.wave",
-                                    recipe_data.compiled.waves,
+                                    recipe_data.scheduled_experiment.waves,
                                 )
                             ),
                         ),

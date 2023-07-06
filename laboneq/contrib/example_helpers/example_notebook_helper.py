@@ -121,7 +121,7 @@ def create_device_setup(generation=2):
     """
     if generation == 3:
         descriptor = descriptor_shfqc
-    if generation == 2:
+    elif generation == 2:
         descriptor = descriptor_shfsg_shfqa_hdawg_pqsc
     elif generation == 1:
         descriptor = descriptor_hdawg_uhfqa_pqsc

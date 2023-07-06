@@ -73,16 +73,16 @@ from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.common.trigger_mode import TriggerMode
 from laboneq.compiler.experiment_access.pulse_def import PulseDef
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types.compiled_experiment import (
-    PulseInstance,
-    PulseMapEntry,
-    PulseWaveformMap,
-)
 from laboneq.core.utilities.pulse_sampler import (
     combine_pulse_parameters,
     length_to_samples,
     sample_pulse,
     verify_amplitude_no_clipping,
+)
+from laboneq.data.scheduled_experiment import (
+    PulseInstance,
+    PulseMapEntry,
+    PulseWaveformMap,
 )
 
 _logger = logging.getLogger(__name__)
@@ -942,8 +942,7 @@ class CodeGenerator:
 
         for signal_obj in awg.signals:
             set_oscillator_events = analyze_set_oscillator_times(
-                events,
-                signal_obj,
+                events, signal_obj, global_delay
             )
             sampled_events.merge(set_oscillator_events)
 

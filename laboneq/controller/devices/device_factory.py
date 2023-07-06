@@ -1,6 +1,7 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from laboneq.controller.communication import DaqWrapper
 from laboneq.controller.devices.device_hdawg import DeviceHDAWG
 from laboneq.controller.devices.device_nonqc import DeviceNonQC
 from laboneq.controller.devices.device_pqsc import DevicePQSC
@@ -14,7 +15,7 @@ from laboneq.controller.util import LabOneQControllerException
 
 class DeviceFactory:
     @staticmethod
-    def create(device_qualifier: DeviceQualifier) -> DeviceZI:
+    def create(device_qualifier: DeviceQualifier, daq: DaqWrapper) -> DeviceZI:
         dev_class = {
             "HDAWG": DeviceHDAWG,
             "UHFQA": DeviceUHFQA,
@@ -28,4 +29,4 @@ class DeviceFactory:
             raise LabOneQControllerException(
                 f"Unknown device driver {device_qualifier.driver}"
             )
-        return dev_class(device_qualifier)
+        return dev_class(device_qualifier, daq)

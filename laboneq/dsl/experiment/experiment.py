@@ -397,78 +397,48 @@ class Experiment:
         reset_delay: Optional[float] = None,
     ):
         """
-        Execute a measurement - unifies the (optional) playback of a measurement pulse, the acquisition of the return signal and an (optional) delay after the signal acquisition.
-        For pulsed spectroscopy, set integration_length and either measure_pulse or measure_pulse_length.
-        For CW spectroscopy, set only integration_length and do not specify the measure signal.
+        Execute a measurement.
+
+        Unifies the optional playback of a measurement pulse, the acquisition of the return signal and an optional delay after the signal acquisition.
+
+        For pulsed spectroscopy, set `integration_length` and either `measure_pulse` or `measure_pulse_length`.
+        For CW spectroscopy, set only `integration_length` and do not specify the measure signal.
         For all other measurements, set either length or pulse for both the measure pulse and integration kernel.
 
-        :param acquire_signal: A string that specifies the signal for the data acquisition.
-        :type acquire_signal: str
-        :param handle: A string that specifies the handle of the acquired results.
-        :type handle: str
-        :param integration_kernel: An optional Pulse object that specifies the kernel for integration.
-        :type integration_kernel: Optional[:class:`~.experiment.pulse.Pulse`]
-        :param integration_kernel_parameters: An optional dictionary that contains pulse parameters for the integration kernel.
-        :type integration_kernel_parameters: Optional[Dict[str, Any]]
-        :param integration_length: An optional float that specifies the integration length.
-        :type integration_length: Optional[float]
-        :param measure_signal: An optional string that specifies the signal to measure.
-        :type measure_signal: Optional[str]
-        :param measure_pulse: An optional Pulse object that specifies the readout pulse for measurement.
-            If this parameter is not supplied, no pulse will be played back for the measurement, which enables CW spectroscopy on SHFQA instruments.
-        :type measure_pulse: Optional[:class:`~.experiment.pulse.Pulse`]
-        :param measure_pulse_length: An optional float that specifies the length of the measurement pulse.
-        :type measure_pulse_length: Optional[float]
-        :param measure_pulse_parameters: An optional dictionary that contains parameters for the measurement pulse.
-        :type measure_pulse_parameters: Optional[Dict[str, Any]]
-        :param measure_pulse_amplitude: An optional float that specifies the amplitude of the measurement pulse.
-        :type measure_pulse_amplitude: Optional[float]
-        :param acquire_delay: An optional float that specifies the delay between the acquisition and the measurement.
-        :type acquire_delay: Optional[float]
-        :param reset_delay: An optional float that specifies the delay after the acquisition to allow for state relaxation or signal processing.
-        :type reset_delay: Optional[float]
+        Args:
+
+            acquire_signal: A string that specifies the signal for the data acquisition.
+            handle: A string that specifies the handle of the acquired results.
+            integration_kernel: An optional Pulse object that specifies the kernel for integration.
+            integration_kernel_parameters: An optional dictionary that contains pulse parameters for the integration kernel.
+            integration_length: An optional float that specifies the integration length.
+            measure_signal: An optional string that specifies the signal to measure.
+            measure_pulse: An optional Pulse object that specifies the readout pulse for measurement.
+
+                If this parameter is not supplied, no pulse will be played back for the measurement,
+                which enables CW spectroscopy on SHFQA instruments.
+
+            measure_pulse_length: An optional float that specifies the length of the measurement pulse.
+            measure_pulse_parameters: An optional dictionary that contains parameters for the measurement pulse.
+            measure_pulse_amplitude: An optional float that specifies the amplitude of the measurement pulse.
+            acquire_delay: An optional float that specifies the delay between the acquisition and the measurement.
+            reset_delay: An optional float that specifies the delay after the acquisition to allow for state relaxation or signal processing.
         """
-
-        if not isinstance(acquire_signal, str):
-            raise ValueError("acquire_signal must be specified.")
-
         current_section = self._peek_section()
-
-        if measure_signal is None:
-            current_section.acquire(
-                signal=acquire_signal,
-                handle=handle,
-                length=integration_length,
-            )
-
-        elif isinstance(measure_signal, str):
-            current_section.play(
-                signal=measure_signal,
-                pulse=measure_pulse,
-                amplitude=measure_pulse_amplitude,
-                length=measure_pulse_length,
-                pulse_parameters=measure_pulse_parameters,
-            )
-
-            if acquire_delay is not None:
-                current_section.delay(
-                    signal=acquire_signal,
-                    time=acquire_delay,
-                )
-
-            current_section.acquire(
-                signal=acquire_signal,
-                handle=handle,
-                kernel=integration_kernel,
-                length=integration_length,
-                pulse_parameters=integration_kernel_parameters,
-            )
-
-        if reset_delay is not None:
-            current_section.delay(
-                signal=acquire_signal,
-                time=reset_delay,
-            )
+        current_section.measure(
+            acquire_signal=acquire_signal,
+            handle=handle,
+            integration_kernel=integration_kernel,
+            integration_kernel_parameters=integration_kernel_parameters,
+            integration_length=integration_length,
+            measure_signal=measure_signal,
+            measure_pulse=measure_pulse,
+            measure_pulse_length=measure_pulse_length,
+            measure_pulse_parameters=measure_pulse_parameters,
+            measure_pulse_amplitude=measure_pulse_amplitude,
+            acquire_delay=acquire_delay,
+            reset_delay=reset_delay,
+        )
 
     def call(self, func_name, **kwargs):
         """Add a callback function in the execution of the experiment.

@@ -6,7 +6,6 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
-from copy import deepcopy
 from typing import TYPE_CHECKING, Callable, Iterator, cast
 
 from zhinst.utils.api_compatibility import check_dataserver_device_compatibility
@@ -16,16 +15,11 @@ from laboneq.controller.communication import (
     DaqNodeSetAction,
     DaqWrapper,
     DaqWrapperDryRun,
-    ServerQualifier,
     batch_set,
 )
 from laboneq.controller.devices.device_factory import DeviceFactory
 from laboneq.controller.devices.device_setup_dao import DeviceSetupDAO
-from laboneq.controller.devices.device_zi import (
-    DeviceOptions,
-    DeviceQualifier,
-    DeviceZI,
-)
+from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.devices.zi_node_monitor import (
     ConditionsChecker,
     NodeControlBase,
@@ -35,13 +29,10 @@ from laboneq.controller.devices.zi_node_monitor import (
     filter_responses,
 )
 from laboneq.controller.util import LabOneQControllerException
-from laboneq.core.types.enums.io_signal_type import IOSignalType
 from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
-from laboneq.dsl.device.instruments.zi_standard_instrument import ZIStandardInstrument
 
 if TYPE_CHECKING:
-    from laboneq.dsl.device.device_setup import DeviceSetup
-    from laboneq.dsl.device.servers import DataServer
+    from laboneq.data.execution_payload import TargetSetup
 
 
 _logger = logging.getLogger(__name__)
@@ -50,13 +41,19 @@ _logger = logging.getLogger(__name__)
 class DeviceCollection:
     def __init__(
         self,
-        device_setup: DeviceSetup,
+        target_setup: TargetSetup,
         dry_run: bool,
         ignore_version_mismatch: bool = False,
+        reset_devices: bool = False,
     ):
-        self._ds = DeviceSetupDAO(deepcopy(device_setup))
+        self._ds = DeviceSetupDAO(
+            target_setup=target_setup,
+            dry_run=dry_run,
+            ignore_version_mismatch=ignore_version_mismatch,
+        )
         self._dry_run = dry_run
         self._ignore_version_mismatch = ignore_version_mismatch
+        self._reset_devices = reset_devices
         self._daqs: dict[str, DaqWrapper] = {}
         self._devices: dict[str, DeviceZI] = {}
 
@@ -102,6 +99,7 @@ class DeviceCollection:
         self._prepare_devices()
         for device in self._devices.values():
             device.connect()
+        self.load_factory_preset()
         self.start_monitor()
         self.configure_device_setup()
         self.stop_monitor()
@@ -288,16 +286,25 @@ class DeviceCollection:
         for daq in self._daqs.values():
             daq.node_monitor.reset()
 
+    def load_factory_preset(self):
+        if self._reset_devices:
+            reset_nodes = []
+            for device in self._devices.values():
+                reset_nodes += device.collect_load_factory_preset_nodes()
+            batch_set(reset_nodes)
+
     def _validate_dataserver_device_fw_compatibility(self):
         """Validate dataserver and device firmware compatibility."""
-        if not (self._dry_run or self._ignore_version_mismatch):
-            daq_dev_addrs = defaultdict(list)
-            for dev in self._ds.instruments:
-                daq_dev_addrs[dev.server_uid].append(dev.address)
-            for daq_uid, dev_addrs in daq_dev_addrs.items():
+        if not self._dry_run and not self._ignore_version_mismatch:
+            daq_dev_serials: dict[str, list[str]] = defaultdict(list)
+            for device_qualifier in self._ds.instruments:
+                daq_dev_serials[device_qualifier.server_uid].append(
+                    device_qualifier.options.serial
+                )
+            for server_uid, dev_serials in daq_dev_serials.items():
                 try:
                     check_dataserver_device_compatibility(
-                        self._daqs.get(daq_uid)._zi_api_object, dev_addrs
+                        self._daqs.get(server_uid)._zi_api_object, dev_serials
                     )
                 except Exception as error:
                     raise LabOneQControllerException(str(error)) from error
@@ -305,100 +312,71 @@ class DeviceCollection:
     def _prepare_devices(self):
         self._validate_dataserver_device_fw_compatibility()
 
-        def make_device_qualifier(
-            instrument: ZIStandardInstrument, daq: DaqWrapper, gen2: bool
-        ) -> DeviceQualifier:
-            driver = instrument.calc_driver()
-            options = DeviceOptions(
-                **instrument.calc_options(),
-                gen2=gen2,
-            )
-            if len(instrument.connections) == 0:
-                # Treat devices without connections as non-QC
-                if options.dev_type is None:
-                    options.dev_type = driver
-                if options.is_qc is None:
-                    options.is_qc = False
-                driver = "NONQC"
-
-            return DeviceQualifier(
-                dry_run=self._dry_run, driver=driver, server=daq, options=options
-            )
-
         updated_devices: dict[str, DeviceZI] = {}
-        for instrument in self._ds.instruments:
-            daq = self._daqs.get(instrument.server_uid)
-            device_qualifier = make_device_qualifier(instrument, daq, self._ds.has_shf)
+        for device_qualifier in self._ds.instruments:
+            daq = self._daqs.get(device_qualifier.server_uid)
 
             if device_qualifier.dry_run:
                 dry_run_daq: DaqWrapperDryRun = daq
                 dry_run_daq.map_device_type(device_qualifier)
-            device = self._devices.get(instrument.uid)
+            device = self._devices.get(device_qualifier.uid)
             if device is None or device.device_qualifier != device_qualifier:
-                device = DeviceFactory.create(device_qualifier)
+                device = DeviceFactory.create(device_qualifier, daq)
             device.remove_all_links()
-            updated_devices[instrument.uid] = device
+            updated_devices[device_qualifier.uid] = device
         self._devices = updated_devices
 
         # Update device links and leader/follower status
-        for instrument in self._ds.instruments:
-            from_dev = self._devices[instrument.uid]
-            for connection in instrument.connections:
-                if connection.signal_type in [IOSignalType.DIO, IOSignalType.ZSYNC]:
-                    from_port = connection.local_port
-                    to_dev_uid = connection.remote_path
-                    to_dev = self._devices.get(to_dev_uid)
-                    if to_dev is None:
-                        raise LabOneQControllerException(
-                            f"Could not find destination device '{connection.remote_path}' for "
-                            f"the port '{connection.local_port}' connection of the "
-                            f"device '{instrument.uid}'"
-                        )
-                    to_port = f"{connection.signal_type.name}/{connection.remote_port}"
-                    if not to_dev.is_secondary:
-                        from_dev.add_downlink(from_port, to_dev_uid, to_dev)
-                    to_dev.add_uplink(to_port, from_dev)
+        for device_qualifier in self._ds.instruments:
+            from_dev = self._devices[device_qualifier.uid]
+            for from_port, to_dev_uid in self._ds.downlinks_by_device_uid(
+                device_qualifier.uid
+            ):
+                to_dev = self._devices.get(to_dev_uid)
+                if to_dev is None:
+                    raise LabOneQControllerException(
+                        f"Could not find destination device '{to_dev_uid}' for "
+                        f"the port '{from_port}' of the device '{device_qualifier.uid}'"
+                    )
+                if not to_dev.is_secondary:
+                    from_dev.add_downlink(from_port, to_dev_uid, to_dev)
+                to_dev.add_uplink(from_dev)
 
         # Move various device settings from device setup
-        for instrument in self._ds.instruments:
-            dev = self._devices[instrument.uid]
+        for device_qualifier in self._ds.instruments:
+            dev = self._devices[device_qualifier.uid]
 
             # Set the clock source (external by default)
             # TODO(2K): Simplify the logic in this code snippet and the one in 'update_clock_source'.
             # Currently, it adheres to the previously existing logic in the compiler, but it appears
             # unnecessarily convoluted.
             force_internal: bool | None = None
-            if instrument.reference_clock_source is not None:
+            if device_qualifier.options.reference_clock_source is not None:
                 force_internal = (
-                    instrument.reference_clock_source == ReferenceClockSource.INTERNAL
+                    device_qualifier.options.reference_clock_source
+                    == ReferenceClockSource.INTERNAL.name
                 )
             dev.update_clock_source(force_internal)
 
             # Set RF channel offsets
             dev.update_rf_offsets(
-                self._ds.get_device_rf_voltage_offsets(instrument.uid)
+                self._ds.get_device_rf_voltage_offsets(device_qualifier.uid)
             )
 
     def _prepare_daqs(self):
-        def make_server_qualifier(server: DataServer):
-            return ServerQualifier(
-                dry_run=self._dry_run,
-                host=server.host,
-                port=int(server.port),
-                api_level=int(server.api_level),
-                ignore_version_mismatch=self._ignore_version_mismatch,
-            )
-
         updated_daqs: dict[str, DaqWrapper] = {}
-        for server_uid, server in self._ds.servers:
-            server_qualifier = make_server_qualifier(server)
+        for server_uid, server_qualifier in self._ds.servers:
             existing = self._daqs.get(server_uid)
             if existing is not None and existing.server_qualifier == server_qualifier:
                 existing.node_monitor.reset()
                 updated_daqs[server_uid] = existing
                 continue
 
-            _logger.info("Connecting to data server at %s:%s", server.host, server.port)
+            _logger.info(
+                "Connecting to data server at %s:%s",
+                server_qualifier.host,
+                server_qualifier.port,
+            )
             if server_qualifier.dry_run:
                 daq = DaqWrapperDryRun(server_uid, server_qualifier)
             else:

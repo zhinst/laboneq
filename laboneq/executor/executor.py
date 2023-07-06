@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from enum import Enum, Flag, auto
 from typing import Any, Dict, Iterator, List
 
+import numpy as np
 import numpy.typing as npt
 
 from laboneq.core.exceptions import LabOneQException
@@ -67,103 +68,167 @@ class Statement(ABC):
 
 class Sequence(Statement):
     def __init__(self, sequence=None):
-        self._sequence: List[Statement] = sequence or []
+        self.sequence: List[Statement] = sequence or []
 
     def append_statement(self, statement: Statement):
-        self._sequence.append(statement)
+        self.sequence.append(statement)
 
     def run(self, scope: ExecutionScope):
-        for statement in self._sequence:
+        for statement in self.sequence:
             statement.run(scope)
 
+    def __eq__(self, other):
+        if other is self:
+            return True
+        if type(other) is Sequence:
+            return self.sequence == other.sequence
+        return NotImplemented
+
     def __repr__(self):
-        return f"Sequence({self._sequence})"
+        return f"Sequence({self.sequence})"
 
 
 class Nop(Statement):
     def run(self, scope: ExecutionScope):
         pass
 
+    def __eq__(self, other):
+        if other is self:
+            return True
+        if type(other) is Nop:
+            return True
+        return NotImplemented
+
     def __repr__(self):
         return "Nop()"
 
 
 class ExecSet(Statement):
-    def __init__(self, path, val):
-        self._path = path
-        self._val = val
-
-    def __repr__(self):
-        return f"ExecSet({repr(self._path)}, {repr(self._val)})"
+    def __init__(self, path: str, val: Any):
+        self.path = path
+        self.val = val
 
     def run(self, scope: ExecutionScope):
-        val = scope.resolve_variable(self._val) if type(self._val) is str else self._val
-        scope.root.set_handler(self._path, val)
+        val = (
+            scope.resolve_variable(self.val) if isinstance(self.val, str) else self.val
+        )
+        scope.root.set_handler(self.path, val)
+
+    def __eq__(self, other):
+        if other is self:
+            return True
+        if type(other) is ExecSet:
+            return (self.path, self.val) == (other.path, other.val)
+        return NotImplemented
+
+    def __repr__(self):
+        return f"ExecSet({repr(self.path)}, {repr(self.val)})"
 
 
 class ExecUserCall(Statement):
     def __init__(self, func_name: str, args: Dict[str, Any]):
-        self._func_name = func_name
-        self._args = args
+        self.func_name = func_name
+        self.args = args
 
     def run(self, scope: ExecutionScope):
         resolved_args = {}
-        for name, val in self._args.items():
+        for name, val in self.args.items():
             resolved_args[name] = (
                 scope.resolve_variable(val) if type(val) is str else val
             )
-        scope.root.user_func_handler(self._func_name, resolved_args)
+        scope.root.user_func_handler(self.func_name, resolved_args)
+
+    def __eq__(self, other):
+        if other is self:
+            return True
+        if type(other) is ExecUserCall:
+            return (self.func_name, self.args) == (other.func_name, other.args)
+        return NotImplemented
 
     def __repr__(self):
-        return f"ExecUserCall({repr(self._func_name)}, {repr(self._args)})"
+        return f"ExecUserCall({repr(self.func_name)}, {repr(self.args)})"
 
 
 class ExecAcquire(Statement):
     def __init__(self, handle: str, signal: str, parent_uid: str):
-        self._handle = handle
-        self._signal = signal
-        self._parent_uid = parent_uid
+        self.handle = handle
+        self.signal = signal
+        self.parent_uid = parent_uid
 
     def run(self, scope: ExecutionScope):
-        scope.root.acquire_handler(self._handle, self._signal, self._parent_uid)
+        scope.root.acquire_handler(self.handle, self.signal, self.parent_uid)
+
+    def __eq__(self, other):
+        if other is self:
+            return True
+        if type(other) is ExecAcquire:
+            return (self.handle, self.signal, self.parent_uid) == (
+                other.handle,
+                other.signal,
+                other.parent_uid,
+            )
+        return NotImplemented
 
     def __repr__(self):
-        return f"ExecAcquire({repr(self._handle)}, {repr(self._signal)}, {repr(self._parent_uid)})"
+        return f"ExecAcquire({repr(self.handle)}, {repr(self.signal)}, {repr(self.parent_uid)})"
 
 
 class SetSoftwareParamLinear(Statement):
     def __init__(self, name: str, start: float, step: float, axis_name: str = None):
-        self._name = name
-        self._start = start
-        self._step = step
-        self._axis_name = axis_name
+        self.name = name
+        self.start = start
+        self.step = step
+        self.axis_name = axis_name
 
     def run(self, scope: ExecutionScope):
         index = scope.resolve_variable(LOOP_INDEX)
-        value = self._start + self._step * index
-        scope.set_variable(self._name, value)
-        scope.root.set_sw_param_handler(self._name, index, value, self._axis_name, None)
+        value = self.start + self.step * index
+        scope.set_variable(self.name, value)
+        scope.root.set_sw_param_handler(self.name, index, value, self.axis_name, None)
+
+    def __eq__(self, other):
+        if other is self:
+            return True
+        if type(other) is SetSoftwareParamLinear:
+            return (self.name, self.start, self.step, self.axis_name) == (
+                other.name,
+                other.start,
+                other.step,
+                other.axis_name,
+            )
+        return NotImplemented
 
     def __repr__(self):
-        return f"SetSoftwareParamLinear({self._name}, {self._start}, {self._step}, {repr(self._axis_name)})"
+        return f"SetSoftwareParamLinear({self.name}, {self.start}, {self.step}, {repr(self.axis_name)})"
 
 
 class SetSoftwareParam(Statement):
     def __init__(self, name: str, values: npt.ArrayLike, axis_name: str = None):
-        self._name = name
-        self._values = values
-        self._axis_name = axis_name
+        self.name = name
+        self.values = values
+        self.axis_name = axis_name
 
     def run(self, scope: ExecutionScope):
-        index = max(0, min(scope.resolve_variable(LOOP_INDEX), len(self._values) - 1))
-        value = self._values[index]
-        scope.set_variable(self._name, value)
+        index = max(0, min(scope.resolve_variable(LOOP_INDEX), len(self.values) - 1))
+        value = self.values[index]
+        scope.set_variable(self.name, value)
         scope.root.set_sw_param_handler(
-            self._name, index, value, self._axis_name, self._values
+            self.name, index, value, self.axis_name, self.values
         )
 
+    def __eq__(self, other):
+        if other is self:
+            return True
+        if type(other) is SetSoftwareParam:
+            return (self.name, self.axis_name) == (
+                other.name,
+                other.axis_name,
+            ) and np.allclose(self.values, other.values)
+
+        return NotImplemented
+
     def __repr__(self):
-        return f"SetSoftwareParam({repr(self._name)}, {repr(self._values)}, {repr(self._axis_name)})"
+        return f"SetSoftwareParam({repr(self.name)}, {repr(self.values)}, {repr(self.axis_name)})"
 
 
 class ForLoop(Statement):
@@ -174,17 +239,17 @@ class ForLoop(Statement):
         loop_flags: LoopFlags = LoopFlags.SWEEP,
         chunk_count=1,
     ):
-        self._count = count
-        self._body = body
-        self._loop_flags = loop_flags
-        self._chunk_count = chunk_count
+        self.count = count
+        self.body = body
+        self.loop_flags = loop_flags
+        self.chunk_count = chunk_count
 
     def _loop_iterator(self, scope: ExecutionScope) -> Iterator[int]:
         if scope.root.looping_mode == LoopingMode.EXECUTE:
-            if self._loop_flags & LoopFlags.HARDWARE:
+            if self.loop_flags & LoopFlags.HARDWARE:
                 yield 0
             else:
-                for i in range(self._count):
+                for i in range(self.count):
                     yield i
         elif scope.root.looping_mode == LoopingMode.ONCE:
             yield 0
@@ -194,12 +259,24 @@ class ForLoop(Statement):
     def run(self, scope: ExecutionScope):
         sub_scope = scope.make_sub_scope()
         for i in self._loop_iterator(scope):
-            with scope.root.for_loop_handler(self._count, i, self._loop_flags):
+            with scope.root.for_loop_handler(self.count, i, self.loop_flags):
                 sub_scope.set_variable(LOOP_INDEX, i)
-                self._body.run(sub_scope)
+                self.body.run(sub_scope)
+
+    def __eq__(self, other):
+        if other is self:
+            return True
+        if type(other) is ForLoop:
+            return (self.count, self.body, self.loop_flags, self.chunk_count) == (
+                other.count,
+                other.body,
+                other.loop_flags,
+                other.chunk_count,
+            )
+        return NotImplemented
 
     def __repr__(self):
-        return f"ForLoop({self._count}, {self._body}, {self._loop_flags})"
+        return f"ForLoop({self.count}, {self.body}, {self.loop_flags})"
 
 
 class ExecRT(ForLoop):
@@ -212,13 +289,13 @@ class ExecRT(ForLoop):
         acquisition_type: AcquisitionType,
     ):
         super().__init__(count, body, LoopFlags.RT_AVERAGE)
-        self._uid = uid
-        self._averaging_mode = averaging_mode
-        self._acquisition_type = acquisition_type
+        self.uid = uid
+        self.averaging_mode = averaging_mode
+        self.acquisition_type = acquisition_type
 
     def run(self, scope: ExecutionScope):
         with scope.root.rt_handler(
-            self._count, self._uid, self._averaging_mode, self._acquisition_type
+            self.count, self.uid, self.averaging_mode, self.acquisition_type
         ):
             if scope.root.looping_mode == LoopingMode.EXECUTE:
                 pass
@@ -229,8 +306,27 @@ class ExecRT(ForLoop):
                     f"Unknown looping mode '{scope.root.looping_mode}'"
                 )
 
+    def __eq__(self, other):
+        if other is self:
+            return True
+        if type(other) is ExecRT:
+            return (
+                self.count,
+                self.body,
+                self.uid,
+                self.averaging_mode,
+                self.acquisition_type,
+            ) == (
+                other.count,
+                other.body,
+                other.uid,
+                other.averaging_mode,
+                other.acquisition_type,
+            )
+        return NotImplemented
+
     def __repr__(self):
-        return f"ExecRT({self._count}, {self._body}, {repr(self._uid)}, {self._averaging_mode}, {self._acquisition_type})"
+        return f"ExecRT({self.count}, {self.body}, {repr(self.uid)}, {self.averaging_mode}, {self.acquisition_type})"
 
 
 class ExecutorBase:

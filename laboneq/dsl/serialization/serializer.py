@@ -108,6 +108,8 @@ class Serializer:
             "laboneq.dsl.device.servers.data_server",
             "laboneq.core.types.enums",
             "laboneq.core.types.compiled_experiment",
+            "laboneq.data.scheduled_experiment",
+            "laboneq.executor.executor",
             "laboneq.dsl.device.io_units.logical_signal",
             "laboneq.dsl.device.io_units.physical_channel",
             "laboneq.dsl.device.instruments",

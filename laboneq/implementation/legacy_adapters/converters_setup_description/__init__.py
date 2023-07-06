@@ -187,6 +187,7 @@ def convert_DeviceSetup(orig: DeviceSetupDSL):
         conversion_function_lookup=get_converter_function_setup_description,
     )
     retval.uid = orig.uid
+    retval.calibration = orig.get_calibration()
     return post_process(
         orig,
         retval,

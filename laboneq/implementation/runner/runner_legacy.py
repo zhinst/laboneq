@@ -4,8 +4,6 @@
 import logging
 import time
 
-from box import Box
-
 from laboneq import controller as ctrl
 from laboneq.data.execution_payload import (
     ExecutionPayload,
@@ -36,16 +34,13 @@ class RunnerLegacy(RunnerAPI, RunnerControlAPI):
 
     def connect(self, setup: TargetSetup, do_emulation: bool = True):
         _logger.debug(f"Connecting to TargetSetup {setup.uid}")
-        emulated = True
         run_parameters = ctrl.ControllerRunParameters()
-        run_parameters.dry_run = emulated
-        run_parameters.ignore_lab_one_version_error = False
-
-        device_setup = convert_to_device_setup(setup)
+        run_parameters.dry_run = do_emulation
+        run_parameters.ignore_version_mismatch = False
 
         controller = ctrl.Controller(
             run_parameters=run_parameters,
-            device_setup=device_setup,
+            target_setup=setup,
             user_functions={},
         )
         controller.connect()
@@ -63,9 +58,7 @@ class RunnerLegacy(RunnerAPI, RunnerControlAPI):
         if not self._connected:
             self.connect(job.target_setup)
 
-        compiled_experiment = convert_to_compiled_experiment(job)
-
-        self._controller.execute_compiled(compiled_experiment)
+        self._controller.execute_compiled(job)
         controller_results = self._controller._results
         self._job_results[job_id] = ExperimentResults(
             acquired_results=controller_results.acquired_results,
@@ -112,122 +105,6 @@ class RunnerLegacy(RunnerAPI, RunnerControlAPI):
         Disconnect from the setup.
         """
         pass
-
-
-def convert_to_device_setup(setup: TargetSetup):
-    _logger.debug(f"Converting setup to device setup: {setup}")
-    retval = {}
-
-    retval["servers"] = {
-        s.uid: {
-            "uid": s.uid,
-            "host": s.address,
-            "port": s.port,
-            "api_level": s.api_level,
-        }
-        for s in setup.servers
-    }
-
-    def driver_calculator(device_type):
-        def retval():
-            return device_type.name
-
-        return retval
-
-    def options_calculator(target_device):
-        def retval():
-            return {
-                "serial": target_device.device_serial,
-                "interface": target_device.interface,
-            }
-
-        return retval
-
-    retval["instruments"] = [
-        Box(
-            {
-                "uid": i.uid,
-                "address": i.device_serial,
-                "server_uid": i.server.uid,
-                "connections": [],
-                "device_type": i.device_type,
-                "reference_clock_source": None,
-                "calc_driver": driver_calculator(i.device_type),
-                "calc_options": options_calculator(i),
-            }
-        )
-        for i in setup.devices
-    ]
-
-    def instrument_by_uid(uid):
-        return next(i for i in retval["instruments"] if i["uid"] == uid)
-
-    retval["instrument_by_uid"] = instrument_by_uid
-
-    return Box(retval)
-
-
-def convert_to_compiled_experiment(job: ExecutionPayload):
-    _logger.debug(f"Converting job to compiled experiment: {job}")
-    retval = {}
-
-    def convert_config(config):
-        return {k: getattr(config, k) for k in ["reference_clock", "triggering_mode"]}
-
-    retval["recipe"] = {
-        "$schema": "../../interface/qccs/interface/schemas/recipe-schema-1_4_0.json",
-        "line_endings": "unix",
-        "header": {
-            "version": "1.4.0",
-            "unit": {"time": "s", "frequency": "Hz", "phase": "rad"},
-            "epsilon": {"time": 1e-12},
-        },
-    }
-
-    retval["recipe"]["experiment"] = {
-        "initializations": [
-            {"device_uid": i.device.uid, "config": convert_config(i.config)}
-            for i in job.recipe.initializations
-        ],
-        "realtime_execution_init": [
-            {
-                "device_id": i.device.uid,
-                "awg_id": i.awg_id,
-                "seqc_ref": i.seqc,
-                "wave_indices_ref": i.wave_indices_ref,
-                "nt_step": {"indices": i.nt_step.indices},
-            }
-            for i in job.recipe.realtime_execution_init
-        ],
-    }
-
-    import json
-
-    from laboneq.data.execution_payload.execution_payload_helper import (
-        ExecutionPayloadHelper,
-    )
-
-    _logger.debug(
-        f"Near time program:\n{json.dumps(ExecutionPayloadHelper.dump_near_time_program(job.near_time_program), indent=2)}"
-    )
-
-    retval["execution"] = convert(job.near_time_program)
-
-    for init in retval["recipe"]["experiment"]["initializations"]:
-        if (
-            "triggering_mode" not in init["config"]
-            or init["config"]["triggering_mode"] is None
-        ):
-            # TODO: the converter currently does not properly add the dio mode
-            # whereas the device_setup_generator does. As the converter will be
-            # removed in the future, I ignore this for now.
-            _logger.warning(
-                f"Missing triggering_mode in config for {init['device_uid']} - patching"
-            )
-            init["config"]["triggering_mode"] = "dio_follower"
-
-    _logger.debug(f"Converted job to compiled experiment: {retval}")
-    return Box(retval)
 
 
 class ExecutionFactoryFromNearTimeProgram(executor.ExecutionFactory):

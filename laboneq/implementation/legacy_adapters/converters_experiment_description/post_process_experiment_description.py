@@ -45,6 +45,6 @@ def post_process(source, target, conversion_function_lookup):
                 source.pulse
             )
         target.pulse = PULSES[source.pulse.uid]
-        target.signal_uid = source.signal
+        target.signal = source.signal
 
     return target

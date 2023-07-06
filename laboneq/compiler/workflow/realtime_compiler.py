@@ -19,7 +19,7 @@ from laboneq.compiler.experiment_access import ExperimentDAO
 from laboneq.compiler.scheduler.parameter_store import ParameterStore
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.scheduler.scheduler import Scheduler
-from laboneq.core.types.compiled_experiment import PulseMapEntry
+from laboneq.data.scheduled_experiment import PulseMapEntry
 
 _logger = logging.getLogger(__name__)
 

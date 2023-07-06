@@ -187,7 +187,7 @@ def dump(experiment_dao: ExperimentDAO):
 
         amplifier_pump = experiment_dao.amplifier_pump(signal_info.signal_id)
         if amplifier_pump is not None:
-            signal_connection["amplifier_pump"] = amplifier_pump
+            signal_connection["amplifier_pump"] = list(amplifier_pump)
 
         delay_signal = signal_info.delay_signal
         if delay_signal is not None:

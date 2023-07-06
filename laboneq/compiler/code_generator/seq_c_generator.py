@@ -9,7 +9,7 @@ import logging
 import re
 import textwrap
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from laboneq.compiler.code_generator.compressor import Run, compressor_core
 from laboneq.compiler.common.device_type import DeviceType
@@ -54,6 +54,7 @@ SeqCStatement = Dict[str, Any]
 class SeqCGenerator:
     def __init__(self):
         self._statements: List[SeqCStatement] = []
+        self._symbols: Set[str] = set()
 
     def num_statements(self):
         return len(self._statements)
@@ -147,7 +148,18 @@ class SeqCGenerator:
     def add_function_def(self, text):
         self.add_statement({"type": "function_def", "text": text})
 
+    # warning: this function is only meaningful if the seqc generator maps to a single scope
+    def is_variable_declared(self, variable_name):
+        return variable_name in self._symbols
+
+    # warning: this function is designed to only work if the seqc generator maps to a single scope
+    #          (it asserts that each variable may only be defined once)
     def add_variable_declaration(self, variable_name, initial_value=None):
+        if variable_name in self._symbols:
+            raise LabOneQException(
+                f"trying to declare variable {variable_name} which has already been declared in this scope"
+            )
+        self._symbols.add(variable_name)
         statement = {"type": "variable_declaration", "variable_name": variable_name}
         if initial_value is not None:
             statement["initial_value"] = initial_value

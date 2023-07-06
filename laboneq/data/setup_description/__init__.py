@@ -164,3 +164,4 @@ class Setup:
     setup_internal_connections: List[SetupInternalConnection] = field(
         default_factory=list
     )
+    calibration: Any = None

@@ -24,6 +24,7 @@ from laboneq.controller.communication import (
 from laboneq.controller.devices.device_shf_base import DeviceSHFBase
 from laboneq.controller.devices.device_zi import (
     SequencerPaths,
+    Waveforms,
     delay_to_rounded_samples,
 )
 from laboneq.controller.recipe_1_4_0 import (
@@ -694,7 +695,7 @@ class DeviceSHFQA(DeviceSHFBase):
     def prepare_upload_all_binary_waves(
         self,
         awg_index,
-        waves: list[tuple[str, npt.ArrayLike]],
+        waves: Waveforms,
         acquisition_type: AcquisitionType,
     ):
         waves_upload: list[DaqNodeSetAction] = []
@@ -702,48 +703,48 @@ class DeviceSHFQA(DeviceSHFBase):
         if is_spectroscopy(acquisition_type):
             if len(waves) > 1:
                 raise LabOneQControllerException(
-                    f"{self.dev_repr}: Only one envelope waveform per channel is possible in "
-                    f"spectroscopy mode. Check play commands for channel {awg_index}."
+                    f"{self.dev_repr}: Only one envelope waveform per physical channel is "
+                    f"possible in spectroscopy mode. Check play commands for channel {awg_index}."
                 )
             max_len = 65536
-            for wave_index, (filename, waveform) in enumerate(waves):
+            for wave in waves:
                 has_spectroscopy_envelope = True
-                wave_len = len(waveform)
+                wave_len = len(wave.samples)
                 if wave_len > max_len:
                     max_pulse_len = max_len / SAMPLE_FREQUENCY_HZ
                     raise LabOneQControllerException(
                         f"{self.dev_repr}: Length {wave_len} of the envelope waveform "
-                        f"'{filename}' for spectroscopy unit {awg_index} exceeds maximum "
+                        f"'{wave.name}' for spectroscopy unit {awg_index} exceeds maximum "
                         f"of {max_len} samples. Ensure measure pulse doesn't "
                         f"exceed {max_pulse_len * 1e6:.3f} us."
                     )
                 waves_upload.append(
                     self.prepare_upload_binary_wave(
-                        filename=filename,
-                        waveform=waveform,
+                        filename=wave.name,
+                        waveform=wave.samples,
                         awg_index=awg_index,
-                        wave_index=wave_index,
+                        wave_index=0,
                         acquisition_type=acquisition_type,
                     )
                 )
         else:
             max_len = 4096
-            for wave_index, (filename, waveform) in enumerate(waves):
-                wave_len = len(waveform)
+            for wave in waves:
+                wave_len = len(wave.samples)
                 if wave_len > max_len:
                     max_pulse_len = max_len / SAMPLE_FREQUENCY_HZ
                     raise LabOneQControllerException(
-                        f"{self.dev_repr}: Length {wave_len} of the waveform '{filename}' "
-                        f"for generator {awg_index} / wave slot {wave_index} exceeds maximum "
+                        f"{self.dev_repr}: Length {wave_len} of the waveform '{wave.name}' "
+                        f"for generator {awg_index} / wave slot {wave.index} exceeds maximum "
                         f"of {max_len} samples. Ensure measure pulse doesn't exceed "
                         f"{max_pulse_len * 1e6:.3f} us."
                     )
                 waves_upload.append(
                     self.prepare_upload_binary_wave(
-                        filename=filename,
-                        waveform=waveform,
+                        filename=wave.name,
+                        waveform=wave.samples,
                         awg_index=awg_index,
-                        wave_index=wave_index,
+                        wave_index=wave.index,
                         acquisition_type=acquisition_type,
                     )
                 )
@@ -797,7 +798,7 @@ class DeviceSHFQA(DeviceSHFBase):
             integration_unit_index = integrator_allocation.channels[0]
             wave_name = integrator_allocation.weights + ".wave"
             weight_vector = np.conjugate(
-                get_wave(wave_name, recipe_data.compiled.waves)
+                get_wave(wave_name, recipe_data.scheduled_experiment.waves)
             )
             wave_len = len(weight_vector)
             if wave_len > max_len:

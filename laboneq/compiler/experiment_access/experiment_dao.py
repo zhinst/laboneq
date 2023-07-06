@@ -448,5 +448,17 @@ class ExperimentDAO:
                                     f"Parameter {param_name} referenced in section {section_id} by a pulse on signal {signal_id} is not known."
                                 )
 
+                    if (
+                        self._data["signal_connections"][section_pulse.signal_id][
+                            "device_id"
+                        ]
+                        in ["device_shfqa", "device_uhfqa"]
+                    ) and not (
+                        section_pulse.markers is None or len(section_pulse.markers) == 0
+                    ):
+                        raise RuntimeError(
+                            f"Pulse {pulse_id} referenced in section {section_id} has markers but is to be played on a QA device. QA devices do not support markers."
+                        )
+
     def acquisition_signal(self, handle: str) -> Optional[str]:
         return self._data["handle_acquires"][handle]

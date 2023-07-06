@@ -15,7 +15,13 @@ from laboneq.compiler.workflow.realtime_compiler import (
     RealtimeCompilerOutput,
 )
 from laboneq.compiler.workflow.rt_linker import CombinedRealtimeCompilerOutput
-from laboneq.executor.executor import ExecRT, ExecutorBase, LoopFlags, LoopingMode
+from laboneq.executor.executor import (
+    ExecRT,
+    ExecutorBase,
+    LoopFlags,
+    LoopingMode,
+    Sequence,
+)
 
 
 @dataclass
@@ -55,7 +61,9 @@ def legacy_execution_program():
 
     # `None` as placeholder is acceptable here. Currently the executor requires none of
     # these.
-    return ExecRT(None, None, "", None, None)
+    return ExecRT(
+        count=1, body=Sequence(), uid="", acquisition_type=None, averaging_mode=None
+    )
 
 
 class NtCompilerExecutor(ExecutorBase):

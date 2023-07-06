@@ -27,7 +27,7 @@ from laboneq.controller.communication import (
 )
 from laboneq.controller.devices.device_collection import DeviceCollection
 from laboneq.controller.devices.device_uhfqa import DeviceUHFQA
-from laboneq.controller.devices.device_zi import DeviceZI
+from laboneq.controller.devices.device_zi import Waveforms
 from laboneq.controller.devices.zi_node_monitor import ResponseWaiter
 from laboneq.controller.near_time_runner import NearTimeRunner
 from laboneq.controller.recipe_1_4_0 import *  # noqa: F401, F403
@@ -45,11 +45,15 @@ from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.core.utilities.replace_pulse import ReplacementType, calc_wave_replacements
+from laboneq.data.execution_payload import TargetSetup
+from laboneq.executor.execution_from_experiment import ExecutionFactoryFromExperiment
+from laboneq.executor.executor import Statement
 
 if TYPE_CHECKING:
+    from laboneq.controller.devices.device_zi import DeviceZI
     from laboneq.core.types import CompiledExperiment
+    from laboneq.data.execution_payload import ExecutionPayload
     from laboneq.dsl import Session
-    from laboneq.dsl.device.device_setup import DeviceSetup
     from laboneq.dsl.experiment.pulse import Pulse
     from laboneq.dsl.result.results import Results
 
@@ -71,6 +75,7 @@ class ControllerRunParameters:
     setup_filename = None
     servers_filename = None
     ignore_version_mismatch = False
+    reset_devices = False
 
 
 # atexit hook
@@ -89,7 +94,7 @@ class _SeqCCompileItem:
 @dataclass
 class _UploadItem:
     seqc_item: _SeqCCompileItem | None
-    waves: list[Any] | None
+    waves: Waveforms | None
     command_table: dict[Any] | None
 
 
@@ -97,14 +102,15 @@ class Controller:
     def __init__(
         self,
         run_parameters: ControllerRunParameters = None,
-        device_setup: DeviceSetup = None,
+        target_setup: TargetSetup = None,
         user_functions: dict[str, Callable] = None,
     ):
         self._run_parameters = run_parameters or ControllerRunParameters()
         self._devices = DeviceCollection(
-            device_setup,
+            target_setup,
             self._run_parameters.dry_run,
             self._run_parameters.ignore_version_mismatch,
+            self._run_parameters.reset_devices,
         )
 
         self._last_connect_check_ts: float = None
@@ -190,13 +196,13 @@ class Controller:
                     continue
 
                 seqc_code = device.prepare_seqc(
-                    recipe_data.compiled, rt_exec_step.seqc_ref
+                    recipe_data.scheduled_experiment, rt_exec_step.seqc_ref
                 )
                 waves = device.prepare_waves(
-                    recipe_data.compiled, rt_exec_step.wave_indices_ref
+                    recipe_data.scheduled_experiment, rt_exec_step.wave_indices_ref
                 )
                 command_table = device.prepare_command_table(
-                    recipe_data.compiled, rt_exec_step.wave_indices_ref
+                    recipe_data.scheduled_experiment, rt_exec_step.wave_indices_ref
                 )
 
                 seqc_item = _SeqCCompileItem(
@@ -464,10 +470,21 @@ class Controller:
         self._last_connect_check_ts = None
         _logger.info("Successfully disconnected from all devices and servers.")
 
-    def execute_compiled(
+    # TODO(2K): remove legacy code
+    def execute_compiled_legacy(
         self, compiled_experiment: CompiledExperiment, session: Session = None
     ):
-        self._recipe_data = pre_process_compiled(compiled_experiment, self._devices)
+        execution: Statement
+        if hasattr(compiled_experiment.scheduled_experiment, "execution"):
+            execution = compiled_experiment.scheduled_experiment.execution
+        else:
+            execution = ExecutionFactoryFromExperiment().make(
+                compiled_experiment.experiment
+            )
+
+        self._recipe_data = pre_process_compiled(
+            compiled_experiment.scheduled_experiment, self._devices, execution
+        )
 
         self._session = session
         if session is None:
@@ -475,6 +492,19 @@ class Controller:
         else:
             self._results = session._last_results
 
+        self._execute_compiled_impl()
+
+    def execute_compiled(self, job: ExecutionPayload):
+        self._recipe_data = pre_process_compiled(
+            job.scheduled_experiment,
+            self._devices,
+            job.scheduled_experiment.execution,
+        )
+        self._results = None
+
+        self._execute_compiled_impl()
+
+    def _execute_compiled_impl(self):
         self.connect()  # Ensure all connect configurations are still valid!
         self._prepare_result_shapes()
         try:
@@ -523,7 +553,7 @@ class Controller:
             (see sampled_pulse_* from the pulse library)
         """
         if isinstance(pulse_uid, str):
-            for waveform in self._recipe_data.compiled.pulse_map[
+            for waveform in self._recipe_data.scheduled_experiment.pulse_map[
                 pulse_uid
             ].waveforms.values():
                 if any([instance.can_compress for instance in waveform.instances]):
@@ -550,12 +580,15 @@ class Controller:
             self._recipe_data.rt_execution_infos
         )
         wave_replacements = calc_wave_replacements(
-            self._recipe_data.compiled, pulse_uid, pulse_or_array, self._current_waves
+            self._recipe_data.scheduled_experiment,
+            pulse_uid,
+            pulse_or_array,
+            self._current_waves,
         )
         for repl in wave_replacements:
             awg_indices = next(
                 a
-                for a in self._recipe_data.compiled.wave_indices
+                for a in self._recipe_data.scheduled_experiment.wave_indices
                 if a["filename"] == repl.awg_id
             )
             awg_wave_map: dict[str, list[int | str]] = awg_indices["value"]

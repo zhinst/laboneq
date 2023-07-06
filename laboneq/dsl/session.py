@@ -172,9 +172,7 @@ class Session:
 
     @trace("session.connect()")
     def connect(
-        self,
-        do_emulation=False,
-        ignore_version_mismatch=False,
+        self, do_emulation=False, ignore_version_mismatch=False, reset_devices=False
     ) -> ConnectionState:
         """Connects the session to the QCCS system.
 
@@ -200,8 +198,11 @@ class Session:
                     Renamed `ignore_lab_one_version_error` to `ignore_version_mismatch` and include
                     LabOne and device firmware version compatibility check.
 
+            reset_devices (bool): Load the factory preset after connecting for device which support it.
+
         """
         self._ignore_version_mismatch = ignore_version_mismatch
+        self._reset_devices = reset_devices
         if (
             self._connection_state.connected
             and self._connection_state.emulated != do_emulation

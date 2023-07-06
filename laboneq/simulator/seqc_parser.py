@@ -1130,20 +1130,25 @@ def _analyze_compiled(
 ) -> tuple[list[SeqCDescriptor], dict[str, npt.ArrayLike]]:
     if isinstance(compiled, dict):
         compiled = SimpleNamespace(
-            recipe=compiled["recipe"],
-            src=compiled["src"],
-            waves=compiled["waves"],
-            wave_indices=compiled["wave_indices"],
+            scheduled_experiment=SimpleNamespace(
+                recipe=compiled["recipe"],
+                src=compiled["src"],
+                waves=compiled["waves"],
+                wave_indices=compiled["wave_indices"],
+            )
         )
     seqc_descriptors = analyze_recipe(
-        compiled.recipe,
-        compiled.src,
-        compiled.wave_indices,
-        compiled.command_tables,
+        compiled.scheduled_experiment.recipe,
+        compiled.scheduled_experiment.src,
+        compiled.scheduled_experiment.wave_indices,
+        compiled.scheduled_experiment.command_tables,
     )
 
     read_wave_bin = lambda w: w if w.ndim == 1 else np.array([[s] for s in w])
-    waves = {w["filename"]: read_wave_bin(w["samples"]) for w in compiled.waves}
+    waves = {
+        w["filename"]: read_wave_bin(w["samples"])
+        for w in compiled.scheduled_experiment.waves
+    }
     return seqc_descriptors, waves
 
 

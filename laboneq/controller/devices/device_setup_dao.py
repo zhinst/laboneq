@@ -3,81 +3,131 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import math
-from functools import cached_property
-from typing import Iterator
+from typing import TYPE_CHECKING, Iterator
 
-from laboneq.core.types.enums.io_signal_type import IOSignalType
-from laboneq.dsl.device.device_setup import DeviceSetup
-from laboneq.dsl.device.instruments.shfqa import SHFQA
-from laboneq.dsl.device.instruments.shfsg import SHFSG
-from laboneq.dsl.device.instruments.zi_standard_instrument import ZIStandardInstrument
-from laboneq.dsl.device.servers.data_server import DataServer
+from laboneq.controller.communication import ServerQualifier
+from laboneq.controller.devices.device_zi import DeviceOptions, DeviceQualifier
+from laboneq.data.execution_payload import (
+    TargetChannelCalibration,
+    TargetChannelType,
+    TargetDeviceType,
+)
+
+if TYPE_CHECKING:
+    from laboneq.data.execution_payload import TargetDevice, TargetServer, TargetSetup
 
 _logger = logging.getLogger(__name__)
 
 
-def _port_outputs(instrument: ZIStandardInstrument, local_port_path: str) -> list[int]:
-    output_port = instrument.output_by_uid(local_port_path)
-    dev_outputs = (
-        []
-        if output_port is None or output_port.physical_port_ids is None
-        else output_port.physical_port_ids
+def _make_server_qualifier(
+    server: TargetServer, dry_run: bool, ignore_version_mismatch: bool
+):
+    return ServerQualifier(
+        dry_run=dry_run,
+        host=server.address,
+        port=server.port,
+        api_level=server.api_level,
+        ignore_version_mismatch=ignore_version_mismatch,
     )
-    return [int(o) for o in dev_outputs]
+
+
+def _make_device_qualifier(
+    target_device: TargetDevice, dry_run: bool, has_shf: bool
+) -> DeviceQualifier:
+    driver = target_device.device_type.name
+    options = DeviceOptions(
+        serial=target_device.device_serial,
+        interface=target_device.interface,
+        dev_type=target_device.device_type.name,
+        is_qc=target_device.is_qc,
+        qc_with_qa=target_device.qc_with_qa,
+        gen2=has_shf,
+        reference_clock_source=target_device.reference_clock_source,
+    )
+    if not target_device.has_signals and not target_device.internal_connections:
+        # Treat devices without defined connections as non-QC
+        driver = "NONQC"
+        if options.is_qc is None:
+            options.is_qc = False
+
+    return DeviceQualifier(
+        uid=target_device.uid,
+        server_uid=target_device.server.uid,
+        driver=driver,
+        options=options,
+        dry_run=dry_run,
+    )
 
 
 class DeviceSetupDAO:
-    def __init__(self, device_setup: DeviceSetup):
-        self._device_setup = device_setup
+    def __init__(
+        self,
+        target_setup: TargetSetup,
+        dry_run: bool = True,
+        ignore_version_mismatch: bool = False,
+    ):
+        self._target_setup = target_setup
+        self._servers: dict[str, ServerQualifier] = {
+            server.uid: _make_server_qualifier(
+                server=server,
+                dry_run=dry_run,
+                ignore_version_mismatch=ignore_version_mismatch,
+            )
+            for server in target_setup.servers
+        }
+
+        has_shf = False
+        for device in target_setup.devices:
+            if device.device_type in (
+                TargetDeviceType.SHFQA,
+                TargetDeviceType.SHFSG,
+            ):
+                has_shf = True
+                break
+
+        self._devices: list[DeviceQualifier] = [
+            _make_device_qualifier(
+                target_device=device, dry_run=dry_run, has_shf=has_shf
+            )
+            for device in target_setup.devices
+        ]
+        self._used_outputs: dict[str, dict[str, list[int]]] = {
+            device.uid: device.connected_outputs for device in target_setup.devices
+        }
+        self._downlinks: dict[str, list[tuple[str, str]]] = {
+            device.uid: [i for i in device.internal_connections]
+            for device in target_setup.devices
+        }
+        self._calibrations: dict[str, list[TargetChannelCalibration]] = {
+            device.uid: copy.deepcopy(device.calibrations)
+            for device in target_setup.devices
+        }
 
     @property
-    def instruments(self) -> Iterator[ZIStandardInstrument]:
-        for instrument in self._device_setup.instruments:
-            if isinstance(instrument, ZIStandardInstrument):
-                yield instrument
-            if hasattr(instrument, "device_type"):
-                if instrument.device_type.name in {
-                    "HDAWG",
-                    "UHFQA",
-                    "SHFQA",
-                    "SHFQC",
-                    "SHFSG",
-                }:
-                    yield instrument
+    def servers(self) -> Iterator[tuple[str, ServerQualifier]]:
+        return self._servers.items()
 
     @property
-    def servers(self) -> Iterator[tuple[str, DataServer]]:
-        return self._device_setup.servers.items()
+    def instruments(self) -> Iterator[DeviceQualifier]:
+        return iter(self._devices)
 
-    @cached_property
-    def has_shf(self):
-        for instrument in self._device_setup.instruments:
-            if isinstance(instrument, (SHFQA, SHFSG)):
-                return True
-        return False
+    def downlinks_by_device_uid(self, device_uid: str) -> list[str]:
+        return self._downlinks[device_uid]
 
     def resolve_ls_path_outputs(self, ls_path: str) -> tuple[str, set[int]]:
-        device_uid: str = None
-        outputs: set[int] = set()
-        for instrument in self._device_setup.instruments:
-            for conn in instrument.connections:
-                if conn.remote_path == ls_path:
-                    if device_uid is None:
-                        device_uid = instrument.uid
-                    outputs.update(_port_outputs(instrument, conn.local_port))
-            if device_uid is not None:
-                # ignore the never-should-happen case when ls is mapped to multiple devices
-                break
-        return device_uid, outputs
+        for device_uid, used_outputs in self._used_outputs.items():
+            outputs = used_outputs.get(ls_path)
+            if outputs:
+                return device_uid, set(outputs)
+        return None, set()
 
     def get_device_used_outputs(self, device_uid: str) -> set[int]:
         used_outputs: set[int] = set()
-        instrument = self._device_setup.instrument_by_uid(device_uid)
-        if instrument is not None:
-            for conn in instrument.connections:
-                used_outputs.update(_port_outputs(instrument, conn.local_port))
+        for sig_used_outputs in self._used_outputs[device_uid].values():
+            used_outputs.update(sig_used_outputs)
         return used_outputs
 
     def get_device_rf_voltage_offsets(self, device_uid: str) -> dict[int, float]:
@@ -99,13 +149,19 @@ class DeviceSetupDAO:
             else:
                 voltage_offsets[sigout] = voltage_offset
 
-        instrument = self._device_setup.instrument_by_uid(device_uid)
-        if instrument is not None:
-            for conn in instrument.connections:
-                if conn.signal_type == IOSignalType.RF:
-                    calib = self._device_setup._get_calibration(conn.remote_path)
-                    if calib is not None and calib.voltage_offset is not None:
-                        outputs = _port_outputs(instrument, conn.local_port)
-                        if len(outputs) == 1:
-                            add_voltage_offset(int(outputs[0]), calib.voltage_offset)
+        for calib in self._calibrations.get(device_uid) or []:
+            if calib.channel_type == TargetChannelType.RF and len(calib.ports) == 1:
+                port_parts = calib.ports[0].upper().split("/")
+                if len(port_parts) == 2 and port_parts[0] == "SIGOUTS":
+                    sigout = int(port_parts[1])
+                elif (
+                    len(port_parts) == 3
+                    and port_parts[0] in ["SGCHANNELS", "QACHANNELS"]
+                    and port_parts[2] == "OUTPUT"
+                ):
+                    sigout = int(port_parts[1])
+                else:
+                    sigout = None
+                if sigout is not None:
+                    add_voltage_offset(sigout, calib.voltage_offset)
         return voltage_offsets

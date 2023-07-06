@@ -13,7 +13,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
 from math import floor
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import Any, Iterator
 from weakref import ReferenceType, ref
 
 import numpy as np
@@ -49,10 +49,7 @@ from laboneq.controller.recipe_processor import (
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
-
-if TYPE_CHECKING:
-    from laboneq.core.types import CompiledExperiment
-
+from laboneq.data.scheduled_experiment import ScheduledExperiment
 
 _logger = logging.getLogger(__name__)
 
@@ -82,17 +79,19 @@ class DeviceOptions:
     serial: str
     interface: str
     dev_type: str | None = None
-    is_qc: bool = False
+    is_qc: bool | None = False
     qc_with_qa: bool = False
     gen2: bool = False
+    reference_clock_source: str = None
 
 
 @dataclass
 class DeviceQualifier:
+    uid: str
+    server_uid: str
+    driver: str
+    options: DeviceOptions
     dry_run: bool = True
-    driver: str = None
-    server: DaqWrapper = None
-    options: DeviceOptions = None
 
 
 @dataclass
@@ -101,6 +100,16 @@ class SequencerPaths:
     progress: str
     enable: str
     ready: str
+
+
+@dataclass
+class WaveformItem:
+    index: int
+    name: str
+    samples: npt.ArrayLike
+
+
+Waveforms = list[WaveformItem]
 
 
 def delay_to_rounded_samples(
@@ -143,13 +152,13 @@ def delay_to_rounded_samples(
 
 
 class DeviceZI(ABC):
-    def __init__(self, device_qualifier: DeviceQualifier):
+    def __init__(self, device_qualifier: DeviceQualifier, daq: DaqWrapper):
         self._device_qualifier: DeviceQualifier = device_qualifier
         self._downlinks: dict[str, tuple[str, ReferenceType[DeviceZI]]] = {}
-        self._uplinks: dict[str, ReferenceType[DeviceZI]] = {}
+        self._uplinks: list[ReferenceType[DeviceZI]] = []
         self._rf_offsets: dict[int, float] = []
 
-        self._daq: DaqWrapper = device_qualifier.server
+        self._daq: DaqWrapper = daq
         self.dev_type: str = None
         self.dev_opts: list[str] = []
         self._connected = False
@@ -246,8 +255,8 @@ class DeviceZI(ABC):
     def add_downlink(self, port: str, linked_device_uid: str, linked_device: DeviceZI):
         self._downlinks[port] = (linked_device_uid, ref(linked_device))
 
-    def add_uplink(self, port: str, linked_device: DeviceZI):
-        self._uplinks[port] = ref(linked_device)
+    def add_uplink(self, linked_device: DeviceZI):
+        self._uplinks.append(ref(linked_device))
 
     def remove_all_links(self):
         self._downlinks.clear()
@@ -392,6 +401,9 @@ class DeviceZI(ABC):
 
     def update_rf_offsets(self, rf_offsets: dict[int, float]):
         self._rf_offsets = rf_offsets
+
+    def collect_load_factory_preset_nodes(self):
+        return []
 
     def clock_source_control_nodes(self) -> list[NodeControlBase]:
         return []
@@ -667,44 +679,48 @@ class DeviceZI(ABC):
         return sig, np.array(wave["samples"], dtype=np.complex128)
 
     def prepare_waves(
-        self, compiled: CompiledExperiment, wave_indices_ref: str
-    ) -> list[tuple[str, npt.ArrayLike]]:
+        self, scheduled_experiment: ScheduledExperiment, wave_indices_ref: str
+    ) -> Waveforms:
         if wave_indices_ref is None:
             return None
         wave_indices: dict[str, list[int | str]] = next(
-            (i for i in compiled.wave_indices if i["filename"] == wave_indices_ref),
+            (
+                i
+                for i in scheduled_experiment.wave_indices
+                if i["filename"] == wave_indices_ref
+            ),
             {"value": {}},
         )["value"]
 
-        waves_by_index = {}
-        waves = compiled.waves or []
-        for sig, [idx, sig_type] in wave_indices.items():
+        waves = scheduled_experiment.waves or []
+        bin_waves: Waveforms = []
+        for sig, [index, sig_type] in wave_indices.items():
             if sig_type in ("iq", "double", "multi"):
-                waves_by_index[idx] = self._prepare_wave_iq(waves, sig)
+                name, samples = self._prepare_wave_iq(waves, sig)
             elif sig_type == "single":
-                waves_by_index[idx] = self._prepare_wave_single(waves, sig)
+                name, samples = self._prepare_wave_single(waves, sig)
             elif sig_type == "complex":
-                waves_by_index[idx] = self._prepare_wave_complex(waves, sig)
+                name, samples = self._prepare_wave_complex(waves, sig)
             else:
                 raise LabOneQControllerException(
                     f"Unexpected signal type for binary wave for '{sig}' in '{wave_indices_ref}' - "
                     f"'{sig_type}', should be one of [iq, double, multi, single, complex]"
                 )
+            bin_waves.append(WaveformItem(index=index, name=name, samples=samples))
 
-        bin_waves: list[tuple[str, npt.ArrayLike]] = []
-        idx = 0
-        while idx in waves_by_index:
-            bin_waves.append(waves_by_index[idx])
-            idx += 1
         return bin_waves
 
     def prepare_command_table(
-        self, compiled: CompiledExperiment, ct_ref: str
+        self, scheduled_experiment: ScheduledExperiment, ct_ref: str
     ) -> dict | None:
         if ct_ref is None:
             return None
         command_table_body = next(
-            (ct["ct"] for ct in compiled.command_tables if ct["seqc"] == ct_ref),
+            (
+                ct["ct"]
+                for ct in scheduled_experiment.command_tables
+                if ct["seqc"] == ct_ref
+            ),
             None,
         )
 
@@ -721,11 +737,15 @@ class DeviceZI(ABC):
 
         return self.add_command_table_header(command_table_body)
 
-    def prepare_seqc(self, compiled: CompiledExperiment, seqc_ref: str) -> str:
+    def prepare_seqc(
+        self, scheduled_experiment: ScheduledExperiment, seqc_ref: str
+    ) -> str:
         if seqc_ref is None:
             return None
 
-        seqc = next((s for s in compiled.src if s["filename"] == seqc_ref), None)
+        seqc = next(
+            (s for s in scheduled_experiment.src if s["filename"] == seqc_ref), None
+        )
         if seqc is None:
             raise LabOneQControllerException(f"SeqC program '{seqc_ref}' not found")
 
@@ -773,31 +793,20 @@ class DeviceZI(ABC):
     def prepare_upload_all_binary_waves(
         self,
         awg_index,
-        waves: list[tuple[str, npt.ArrayLike]],
+        waves: Waveforms,
         acquisition_type: AcquisitionType,
     ):
         # Default implementation for "old" devices, override for newer devices
         return [
             self.prepare_upload_binary_wave(
-                filename=filename,
-                waveform=waveform,
+                filename=wave.name,
+                waveform=wave.samples,
                 awg_index=awg_index,
-                wave_index=wave_index,
+                wave_index=wave.index,
                 acquisition_type=acquisition_type,
             )
-            for wave_index, [filename, waveform] in enumerate(waves)
+            for wave in waves
         ]
-
-    def _upload_all_binary_waves(
-        self,
-        awg_index,
-        waves: list[tuple[str, npt.ArrayLike]],
-        acquisition_type: AcquisitionType,
-    ):
-        waves_upload = self.prepare_upload_all_binary_waves(
-            awg_index, waves, acquisition_type
-        )
-        self._daq.batch_set(waves_upload)
 
     def prepare_upload_command_table(self, awg_index, command_table: dict):
         command_table_path = self.command_table_path(awg_index)

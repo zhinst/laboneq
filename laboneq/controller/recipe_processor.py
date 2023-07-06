@@ -19,7 +19,7 @@ from laboneq.controller.attribute_value_tracker import (
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
-from laboneq.executor.execution_from_experiment import ExecutionFactoryFromExperiment
+from laboneq.data.scheduled_experiment import ScheduledExperiment
 from laboneq.executor.executor import (
     ExecutorBase,
     LoopFlags,
@@ -35,7 +35,6 @@ from .recipe_enums import SignalType
 
 if TYPE_CHECKING:
     from laboneq.controller.devices.device_collection import DeviceCollection
-    from laboneq.core.types import CompiledExperiment
 
 
 @dataclass
@@ -127,7 +126,7 @@ RtExecutionInfos = Dict[RtSectionId, RtExecutionInfo]
 
 @dataclass
 class RecipeData:
-    compiled: CompiledExperiment
+    scheduled_experiment: ScheduledExperiment
     recipe: Recipe.Data
     execution: Sequence
     result_shapes: HandleResultShapes
@@ -515,22 +514,16 @@ def _pre_process_attributes(
 
 
 def pre_process_compiled(
-    compiled_experiment: CompiledExperiment, devices: DeviceCollection
+    scheduled_experiment: ScheduledExperiment,
+    devices: DeviceCollection,
+    execution: Statement = None,
 ) -> RecipeData:
-    recipe: Recipe.Data = Recipe().load(compiled_experiment.recipe)
+    recipe: Recipe.Data = Recipe().load(scheduled_experiment.recipe)
 
     device_settings: DeviceSettings = defaultdict(DeviceRecipeData)
     for initialization in recipe.experiment.initializations:
         device_settings[initialization.device_uid] = DeviceRecipeData(
             iq_settings=_pre_process_iq_settings_hdawg(initialization)
-        )
-
-    # todo: remove legacy code
-    if hasattr(compiled_experiment, "execution"):
-        execution = compiled_experiment.execution
-    else:
-        execution = ExecutionFactoryFromExperiment().make(
-            compiled_experiment.experiment
         )
 
     result_shapes, rt_execution_infos = _calculate_result_shapes(execution)
@@ -540,7 +533,7 @@ def pre_process_compiled(
     )
 
     recipe_data = RecipeData(
-        compiled=compiled_experiment,
+        scheduled_experiment=scheduled_experiment,
         recipe=recipe,
         execution=execution,
         result_shapes=result_shapes,

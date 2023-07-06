@@ -6,7 +6,7 @@ import logging
 import uuid
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Union
 
 from laboneq.data.compilation_job import (
     CompilationJob,
@@ -31,6 +31,8 @@ from laboneq.data.execution_payload import (
     RealTimeExecutionInit,
     Recipe,
     ServerType,
+    TargetChannelCalibration,
+    TargetChannelType,
     TargetDevice,
     TargetDeviceType,
     TargetServer,
@@ -56,12 +58,21 @@ from laboneq.data.experiment_description import (
 )
 from laboneq.data.experiment_description.experiment_helper import ExperimentHelper
 from laboneq.data.scheduled_experiment import ScheduledExperiment
-from laboneq.data.setup_description import DeviceType, Instrument, Setup
+from laboneq.data.setup_description import (
+    DeviceType,
+    Instrument,
+    PhysicalChannelType,
+    Setup,
+)
 from laboneq.data.setup_description.setup_helper import SetupHelper
+from laboneq.dsl.calibration.signal_calibration import SignalCalibration
 from laboneq.interfaces.compilation_service.compilation_service_api import (
     CompilationServiceAPI,
 )
 from laboneq.interfaces.payload_builder.payload_builder_api import PayloadBuilderAPI
+
+if TYPE_CHECKING:
+    from laboneq.dsl.calibration import Calibration
 
 _logger = logging.getLogger(__name__)
 
@@ -100,6 +111,55 @@ class PayloadBuilder(PayloadBuilderAPI):
         ]
         server_dict = {s.uid: s for s in servers}
 
+        calibration: Calibration = device_setup.calibration
+
+        def instrument_calibrations(
+            i: Instrument,
+        ) -> Iterator[TargetChannelCalibration]:
+            if calibration is None:
+                return
+            for c in i.connections:
+                sig_calib: SignalCalibration = calibration.calibration_items.get(
+                    c.logical_signal.path
+                )
+                if sig_calib is not None:
+                    ports = [
+                        port.path
+                        for port in i.ports
+                        if (
+                            port.physical_channel
+                            and port.physical_channel.uid == c.physical_channel.uid
+                        )
+                    ]
+                    channel_type = {
+                        PhysicalChannelType.IQ_CHANNEL: TargetChannelType.IQ,
+                        PhysicalChannelType.RF_CHANNEL: TargetChannelType.RF,
+                    }.get(c.physical_channel.type, TargetChannelType.UNKNOWN)
+                    yield TargetChannelCalibration(
+                        channel_type=channel_type,
+                        ports=ports,
+                        voltage_offset=sig_calib.voltage_offset,
+                    )
+
+        def connected_outputs(i: Instrument) -> dict[str, list[int]]:
+            ls_ports: dict[str, list[int]] = {}
+            for c in i.connections:
+                ports: list[int] = []
+                for port in i.ports:
+                    if (
+                        port.physical_channel
+                        and port.physical_channel.uid == c.physical_channel.uid
+                    ):
+                        if (
+                            port.path.startswith("SIGOUTS")
+                            or port.path.startswith("SGCHANNELS")
+                            or port.path.startswith("QACHANNELS")
+                        ):
+                            ports.append(int(port.path.split("/")[1]))
+                if ports:
+                    ls_ports.setdefault(c.logical_signal.path, []).extend(ports)
+            return ls_ports
+
         target_setup.devices = [
             TargetDevice(
                 uid=i.uid,
@@ -107,6 +167,14 @@ class PayloadBuilder(PayloadBuilderAPI):
                 device_type=self._convert_to_target_deviceType(i.device_type),
                 server=server_dict[i.server.uid],
                 interface=i.interface if i.interface else "1GbE",
+                has_signals=len(i.connections) > 0,
+                connected_outputs=connected_outputs(i),
+                internal_connections=[
+                    (c.from_port.path, c.to_instrument.uid)
+                    for c in device_setup.setup_internal_connections
+                    if c.from_instrument.uid == i.uid
+                ],
+                calibrations=list(instrument_calibrations(i)),
             )
             for i in device_setup.instruments
         ]
@@ -133,7 +201,7 @@ class PayloadBuilder(PayloadBuilderAPI):
         job = CompilationJob(experiment_info=experiment_info)
         job_id = self._compilation_service.submit_compilation_job(job)
 
-        compiled_experiment: ScheduledExperiment = (
+        scheduled_experiment: ScheduledExperiment = (
             self._compilation_service.compilation_job_result(job_id)
         )
 
@@ -173,7 +241,7 @@ class PayloadBuilder(PayloadBuilderAPI):
 
         for srv in device_setup.servers.values():
             if srv.leader_uid is not None:
-                init = _find_initialization(compiled_experiment.recipe, srv.leader_uid)
+                init = _find_initialization(scheduled_experiment.recipe, srv.leader_uid)
                 if init is not None:
                     init["config"]["repetitions"] = 1
                     init["config"]["holdoff"] = 0
@@ -181,14 +249,14 @@ class PayloadBuilder(PayloadBuilderAPI):
         # adapt initializations to consider setup internal connections
 
         _logger.info(
-            f"initializations: {compiled_experiment.recipe['experiment']['initializations']}"
+            f"initializations: {scheduled_experiment.recipe['experiment']['initializations']}"
         )
         target_recipe.initializations = [
             Initialization(
                 device=device_dict[i["device_uid"]],
                 config=build_config(i),
             )
-            for i in compiled_experiment.recipe["experiment"]["initializations"]
+            for i in scheduled_experiment.recipe["experiment"]["initializations"]
         ]
         _logger.info(f"Built initializations: {target_recipe.initializations}")
 
@@ -200,7 +268,9 @@ class PayloadBuilder(PayloadBuilderAPI):
                 wave_indices_ref=i["wave_indices_ref"],
                 nt_step=NtStepKey(**i["nt_step"]),
             )
-            for i in compiled_experiment.recipe["experiment"]["realtime_execution_init"]
+            for i in scheduled_experiment.recipe["experiment"][
+                "realtime_execution_init"
+            ]
         ]
 
         ntp = NearTimeProgramFactory().make(experiment)
@@ -209,10 +279,11 @@ class PayloadBuilder(PayloadBuilderAPI):
         run_job = ExecutionPayload(
             uid=uuid.uuid4().hex,
             target_setup=target_setup,
-            compiled_experiment_hash=compiled_experiment.uid,
+            compiled_experiment_hash=scheduled_experiment.uid,
             recipe=target_recipe,
             near_time_program=ntp,
-            src=compiled_experiment.src,  # todo: create SourceCode object
+            src=scheduled_experiment.src,  # todo: create SourceCode object
+            scheduled_experiment=scheduled_experiment,
         )
         return run_job
 
@@ -454,9 +525,9 @@ class PayloadBuilder(PayloadBuilderAPI):
                         )
                     )
                 elif isinstance(child, PlayPulse):
-                    if child.signal_uid is None:
+                    if child.signal is None:
                         raise Exception(f"Signal uid is None for {child}")
-                    signal = next(s for s in signals if s.uid == child.signal_uid)
+                    signal = next(s for s in signals if s.uid == child.signal)
                     pulse_def = next(p for p in pulse_defs if p.uid == child.pulse.uid)
                     # import uuid library
 
@@ -469,7 +540,7 @@ class PayloadBuilder(PayloadBuilderAPI):
                         )
                     )
                 elif isinstance(child, Delay):
-                    signal = next(s for s in signals if s.uid == child.signal_uid)
+                    signal = next(s for s in signals if s.uid == child.signal)
                     section_signal_pulses.append(
                         SectionSignalPulse(
                             section=section_info,
@@ -479,7 +550,7 @@ class PayloadBuilder(PayloadBuilderAPI):
                         )
                     )
                 elif isinstance(child, Reserve):
-                    signal = next(s for s in signals if s.uid == child.signal_uid)
+                    signal = next(s for s in signals if s.uid == child.signal)
                     section_signal_pulses.append(
                         SectionSignalPulse(
                             section=section_info, signal=signal, uid=uuid.uuid4().hex

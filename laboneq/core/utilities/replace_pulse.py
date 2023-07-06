@@ -19,12 +19,10 @@ from laboneq.core.utilities.pulse_sampler import (
     sample_pulse,
     verify_amplitude_no_clipping,
 )
+from laboneq.data.scheduled_experiment import PulseWaveformMap, ScheduledExperiment
 
 if TYPE_CHECKING:
-    from laboneq.core.types.compiled_experiment import (
-        CompiledExperiment,
-        PulseWaveformMap,
-    )
+    from laboneq.core.types.compiled_experiment import CompiledExperiment
     from laboneq.dsl.experiment.pulse import Pulse
     from laboneq.dsl.session import Session
 
@@ -38,7 +36,7 @@ class Component(Enum):
 
 
 def _replace_pulse_in_wave(
-    compiled_experiment: CompiledExperiment,
+    scheduled_experiment: ScheduledExperiment,
     wave_name: str,
     pulse_or_array: ArrayLike | Pulse,
     pwm: PulseWaveformMap,
@@ -53,7 +51,7 @@ def _replace_pulse_in_wave(
         )
     if current_wave is None:
         specified_wave = next(
-            w for w in compiled_experiment.waves if w["filename"] == wave_name
+            w for w in scheduled_experiment.waves if w["filename"] == wave_name
         )
         # TODO(2K): Avoid deepcopy on every iteration, create working copy once per execution
         current_wave = deepcopy(specified_wave)
@@ -156,21 +154,21 @@ class WaveReplacement:
 
 
 def calc_wave_replacements(
-    compiled_experiment: CompiledExperiment,
+    scheduled_experiment: ScheduledExperiment,
     pulse_uid: str | Pulse,
     pulse_or_array: ArrayLike | Pulse,
     current_waves: list | None = None,
 ) -> list[WaveReplacement]:
     if not isinstance(pulse_uid, str):
         pulse_uid = pulse_uid.uid
-    pm = compiled_experiment.pulse_map.get(pulse_uid)
+    pm = scheduled_experiment.pulse_map.get(pulse_uid)
     if pm is None:
         _logger.warning("No mapping found for pulse '%s' - ignoring", pulse_uid)
         return []
 
     replacements: list[WaveReplacement] = []
     for sig_string, pwm in pm.waveforms.items():
-        for awgs in compiled_experiment.wave_indices:
+        for awgs in scheduled_experiment.wave_indices:
             awg_wave_map: dict[str, list[int | str]] = awgs["value"]
             target_wave = awg_wave_map.get(sig_string)
             if target_wave is None:
@@ -180,7 +178,7 @@ def calc_wave_replacements(
             if wave_type == "single":
                 replacement_type = ReplacementType.I_Q
                 samples_i = _replace_pulse_in_wave(
-                    compiled_experiment,
+                    scheduled_experiment,
                     sig_string + ".wave",
                     pulse_or_array,
                     pwm,
@@ -192,7 +190,7 @@ def calc_wave_replacements(
             elif wave_type != "complex":
                 replacement_type = ReplacementType.I_Q
                 samples_i = _replace_pulse_in_wave(
-                    compiled_experiment,
+                    scheduled_experiment,
                     sig_string + "_i.wave",
                     pulse_or_array,
                     pwm,
@@ -201,7 +199,7 @@ def calc_wave_replacements(
                     current_waves=current_waves,
                 )
                 samples_q = _replace_pulse_in_wave(
-                    compiled_experiment,
+                    scheduled_experiment,
                     sig_string + "_q.wave",
                     pulse_or_array,
                     pwm,
@@ -213,7 +211,7 @@ def calc_wave_replacements(
             else:
                 replacement_type = ReplacementType.COMPLEX
                 samples = _replace_pulse_in_wave(
-                    compiled_experiment,
+                    scheduled_experiment,
                     sig_string + ".wave",
                     pulse_or_array,
                     pwm,
@@ -249,18 +247,21 @@ def replace_pulse(
     from laboneq.core.types.compiled_experiment import CompiledExperiment
 
     if isinstance(target, CompiledExperiment):
-        wave_replacements = calc_wave_replacements(target, pulse_uid, pulse_or_array)
+        scheduled_experiment = target.scheduled_experiment
+        wave_replacements = calc_wave_replacements(
+            scheduled_experiment, pulse_uid, pulse_or_array
+        )
         for repl in wave_replacements:
             if repl.replacement_type == ReplacementType.I_Q:
                 if len(repl.samples) == 2:
                     wave_i = next(
                         w
-                        for w in target.waves
+                        for w in scheduled_experiment.waves
                         if w["filename"] == repl.sig_string + "_i.wave"
                     )
                     wave_q = next(
                         w
-                        for w in target.waves
+                        for w in scheduled_experiment.waves
                         if w["filename"] == repl.sig_string + "_q.wave"
                     )
                     wave_i["samples"] = repl.samples[0]
@@ -268,7 +269,7 @@ def replace_pulse(
                 else:
                     wave = next(
                         w
-                        for w in target.waves
+                        for w in scheduled_experiment.waves
                         if w["filename"] == repl.sig_string + ".wave"
                     )
                     wave["samples"] = repl.samples[0]

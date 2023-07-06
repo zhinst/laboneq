@@ -94,9 +94,16 @@ class LegacySessionAdapter:
         self.l1q = app_manager.laboneq()
         self.l1q.set_current_setup(device_setup)
         self.do_emulation = False
+        self.reset_devices = False
 
-    def connect(self, do_emulation: bool = False, ignore_version_mismatch=False):
+    def connect(
+        self,
+        do_emulation: bool = False,
+        ignore_version_mismatch=False,
+        reset_devices=False,
+    ):
         self.do_emulation = do_emulation
+        self.reset_devices = reset_devices
 
     def compile(self, experiment: Experiment) -> ExecutionPayload:
         self.l1q.set_current_experiment(experiment.data_experiment)
@@ -177,7 +184,7 @@ class ExperimentAdapter:
     ):
         self._register_pulse(pulse)
         operation = PlayPulse(
-            signal_uid=signal,
+            signal=signal,
             pulse=pulse,
             amplitude=amplitude,
             increment_oscillator_phase=increment_oscillator_phase,

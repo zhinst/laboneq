@@ -11,6 +11,7 @@ from numpy import typing as npt
 from laboneq import controller as ctrl
 from laboneq.compiler.workflow.compiler import Compiler
 from laboneq.core.types import CompiledExperiment
+from laboneq.dsl.new_arch_support import convert_dsl_to_target_setup
 
 if TYPE_CHECKING:
     from laboneq.dsl.experiment.pulse import Pulse
@@ -23,10 +24,13 @@ class LabOneQFacade:
         run_parameters = ctrl.ControllerRunParameters()
         run_parameters.dry_run = session._connection_state.emulated
         run_parameters.ignore_version_mismatch = session._ignore_version_mismatch
+        run_parameters.reset_devices = session._reset_devices
+
+        target_setup = convert_dsl_to_target_setup(session._device_setup)
 
         controller = ctrl.Controller(
             run_parameters=run_parameters,
-            device_setup=session._device_setup,
+            target_setup=target_setup,
             user_functions=session._user_functions,
         )
         controller.connect()
@@ -64,7 +68,7 @@ class LabOneQFacade:
         if controller._run_parameters.shut_down is True:
             atexit.register(ctrl._stop_controller, controller)
 
-        controller.execute_compiled(session.compiled_experiment, session)
+        controller.execute_compiled_legacy(session.compiled_experiment, session)
 
     @staticmethod
     def replace_pulse(

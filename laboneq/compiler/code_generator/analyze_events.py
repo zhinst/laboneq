@@ -289,14 +289,12 @@ def analyze_phase_reset_times(
 
 
 def analyze_set_oscillator_times(
-    events: List,
-    signal_obj: SignalObj,
+    events: List, signal_obj: SignalObj, global_delay: float
 ) -> AWGSampledEventSequence:
     signal_id = signal_obj.id
     device_id = signal_obj.awg.device_id
     device_type = signal_obj.awg.device_type
     sampling_rate = signal_obj.awg.sampling_rate
-    delay = signal_obj.total_delay
     set_oscillator_events = [
         event
         for event in events
@@ -312,26 +310,26 @@ def analyze_set_oscillator_times(
             "Real-time frequency sweep only supported on SHF and HDAWG devices"
         )
 
-    iterations = {event["iteration"]: event for event in set_oscillator_events}
-    assert list(iterations.keys()) == list(
-        range(len(iterations))
-    )  # "iteration" values are unique, ordered, and numbered 0 .. N-1
-    start_frequency = iterations[0]["value"]
+    iterations = [event["iteration"] for event in set_oscillator_events]
+
+    start_frequency = set_oscillator_events[0]["value"]
     if len(iterations) > 1:
-        step_frequency = iterations[1]["value"] - start_frequency
+        step_frequency = set_oscillator_events[1]["value"] - start_frequency
     else:
         step_frequency = 0
 
     retval = AWGSampledEventSequence()
 
-    for iteration, event in iterations.items():
+    for iteration, event in zip(iterations, set_oscillator_events):
         if (
             abs(event["value"] - iteration * step_frequency - start_frequency)
             > 1e-3  # tolerance: 1 mHz
         ):
             raise LabOneQException("Realtime oscillator sweeps must be linear")
 
-        event_time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
+        event_time_in_samples = length_to_samples(
+            event["time"] + global_delay, sampling_rate
+        )
         set_oscillator_event = AWGEvent(
             type=AWGEventType.SET_OSCILLATOR_FREQUENCY,
             start=event_time_in_samples,
