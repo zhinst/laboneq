@@ -29,7 +29,7 @@ def convert_dsl_to_target_setup(device_setup: DeviceSetup) -> TargetSetup:
         server_uid: TargetServer(
             uid=server_uid,
             address=server.host,
-            port=server.port,
+            port=int(server.port),
             server_type=ServerType.DATA_SERVER,
             api_level=server.api_level,
         )

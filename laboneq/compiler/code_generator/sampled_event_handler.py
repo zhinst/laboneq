@@ -113,13 +113,13 @@ class SampledEventHandler:
         self.use_command_table = use_command_table
         self.emit_timing_comments = emit_timing_comments
 
-        self.sampled_event_list: List[AWGEvent] = None
-        self.declared_variables = set()
+        self.sampled_event_list: List[AWGEvent] = None  # type: ignore
         self.loop_stack: List[AWGEvent] = []
-        self.last_event: AWGEvent = None
-        self.match_parent_event: AWGEvent = None
+        self.last_event: Optional[AWGEvent] = None
+        self.match_parent_event: Optional[AWGEvent] = None
         self.command_table_match_offset = None
-        self.match_command_table_entries = {}
+        self.match_command_table_entries: dict[int, tuple] = {}  # For feedback match
+        self.match_seqc_generators: dict[int, SeqCGenerator] = {}  # user_register match
         self.current_sequencer_step = 0 if use_current_sequencer_step else None
         self.sequencer_step = 8  # todo(JL): Is this always the case, and how to get it?
 
@@ -142,15 +142,14 @@ class SampledEventHandler:
         state = signature.state
 
         match_statement_active = self.match_parent_event is not None
+        assert (state is not None) == match_statement_active
         handle = (
             self.match_parent_event.params["handle"]
             if self.match_parent_event is not None
             else None
         )
 
-        assert (state is not None) == match_statement_active
-
-        if not self.use_command_table and state is not None:
+        if not self.use_command_table and state is not None and handle is not None:
             raise LabOneQException(
                 f"Found match/case statement for handle {handle} on unsupported device."
             )
@@ -175,13 +174,28 @@ class SampledEventHandler:
         if len(self.channels) > 0:
             play_wave_channel = self.channels[0] % 2
 
+        sig_string = signature.waveform.signature_string()
+        wave_index = self.get_wave_index(signature, sig_string, play_wave_channel)
+        if not match_statement_active:
+            self.handle_regular_playwave(
+                sampled_event, signature, sig_string, wave_index, play_wave_channel
+            )
+        else:
+            if handle is not None:
+                self.handle_playwave_on_feedback(sampled_event, signature, wave_index)
+            else:
+                self.handle_playwave_on_user_register(
+                    signature, sig_string, wave_index, play_wave_channel
+                )
+        return True
+
+    def get_wave_index(self, signature, sig_string, play_wave_channel):
         signal_type_for_wave_index = (
             self.awg.signal_type.value
             if self.device_type.supports_binary_waves
             else "csv"
             # Include CSV waves into the index to keep track of waves-AWG mapping
         )
-        sig_string = signature.waveform.signature_string()
         if (
             not signature.waveform.samples
             and all(p.pulse is None for p in signature.waveform.pulses)
@@ -204,50 +218,98 @@ class SampledEventHandler:
                         play_wave_channel,
                     )
 
-        if not match_statement_active:
-            if self.use_command_table:
-                ct_index = self.command_table_tracker.lookup_index_by_signature(
-                    signature
+        return wave_index
+
+    def handle_regular_playwave(
+        self,
+        sampled_event: AWGEvent,
+        signature: PlaybackSignature,
+        sig_string: str,
+        wave_index: Optional[int],
+        play_wave_channel: Optional[int],
+    ):
+        assert signature.waveform is not None
+        if self.use_command_table:
+            ct_index = self.command_table_tracker.lookup_index_by_signature(signature)
+            if ct_index is None:
+                ct_index = self.command_table_tracker.create_entry(
+                    signature, wave_index
                 )
-                if ct_index is None:
-                    ct_index = self.command_table_tracker.create_entry(
-                        signature, wave_index
-                    )
-                comment = sig_string
-                if signature.hw_oscillator is not None:
-                    comment += f", osc={signature.hw_oscillator}"
-                self.seqc_tracker.add_command_table_execution(ct_index, comment=comment)
-            else:
-                self.seqc_tracker.add_play_wave_statement(
-                    self.device_type,
-                    self.awg.signal_type.value,
-                    sig_string,
-                    play_wave_channel,
-                )
-            self.seqc_tracker.flush_deferred_function_calls()
-            self.seqc_tracker.current_time = sampled_event.end
+            comment = sig_string
+            if signature.hw_oscillator is not None:
+                comment += f", osc={signature.hw_oscillator}"
+            self.seqc_tracker.add_command_table_execution(ct_index, comment=comment)
         else:
-            assert self.use_command_table
-            if state in self.match_command_table_entries:
-                if self.match_command_table_entries[state] != (
-                    signature,
-                    wave_index,
-                    sampled_event.start - self.match_parent_event.start,
-                ):
-                    raise LabOneQException(
-                        f"Duplicate state {state} with different pulses for handle "
-                        f"{self.match_parent_event.params['handle']} found."
-                    )
-            else:
-                self.match_command_table_entries[state] = (
-                    signature,
-                    wave_index,
-                    sampled_event.start - self.match_parent_event.start,
+            self.seqc_tracker.add_play_wave_statement(
+                self.device_type,
+                self.awg.signal_type.value,
+                sig_string,
+                play_wave_channel,
+            )
+        self.seqc_tracker.flush_deferred_function_calls()
+        self.seqc_tracker.current_time = sampled_event.end
+
+    def handle_playwave_on_feedback(
+        self,
+        sampled_event: AWGEvent,
+        signature: PlaybackSignature,
+        wave_index: Optional[int],
+    ):
+        assert self.use_command_table
+        assert self.match_parent_event is not None
+        state = signature.state
+        signal_id = sampled_event.params["signal_id"]
+
+        if state in self.match_command_table_entries:
+            if self.match_command_table_entries[state] != (
+                signature,
+                wave_index,
+                sampled_event.start - self.match_parent_event.start,
+            ):
+                raise LabOneQException(
+                    f"Duplicate state {state} with different pulses for handle "
+                    f"{self.match_parent_event.params['handle']} found."
                 )
-            self.feedback_connections.setdefault(
-                self.match_parent_event.params["handle"], FeedbackConnection(None)
-            ).drive.add(signal_id)
-        return True
+        else:
+            self.match_command_table_entries[state] = (
+                signature,
+                wave_index,
+                sampled_event.start - self.match_parent_event.start,
+            )
+        self.feedback_connections.setdefault(
+            self.match_parent_event.params["handle"], FeedbackConnection(None)
+        ).drive.add(signal_id)
+
+    def handle_playwave_on_user_register(
+        self,
+        signature: PlaybackSignature,
+        sig_string: str,
+        wave_index: Optional[int],
+        play_wave_channel: Optional[int],
+    ):
+        assert self.match_parent_event is not None
+        user_register = self.match_parent_event.params["user_register"]
+        state = signature.state
+        assert state is not None
+        assert user_register is not None
+        branch_generator = self.match_seqc_generators.setdefault(state, SeqCGenerator())
+        if self.use_command_table:
+            ct_index = self.command_table_tracker.lookup_index_by_signature(signature)
+            if ct_index is None:
+                ct_index = self.command_table_tracker.create_entry(
+                    signature, wave_index
+                )
+            comment = sig_string
+            if signature.hw_oscillator is not None:
+                comment += f", osc={signature.hw_oscillator}"
+            branch_generator.add_command_table_execution(ct_index, comment=comment)
+        else:
+            branch_generator.add_play_wave_statement(
+                self.device_type,
+                self.awg.signal_type.value,
+                sig_string,
+                play_wave_channel,
+            )
 
     def handle_playhold(
         self,
@@ -602,67 +664,117 @@ class SampledEventHandler:
 
     def handle_match(self, sampled_event: AWGEvent):
         if self.match_parent_event is not None:
+            mpe_par = self.match_parent_event.params
+            se_par = sampled_event.params
             raise LabOneQException(
                 f"Simultaneous match events on the same physical AWG are not supported. "
-                f"Affected handles: '{self.match_parent_event.params['handle']}' and "
-                f"'{sampled_event.params['handle']}'"
+                "Affected handles/user registers: '"
+                f"{mpe_par['handle'] or mpe_par['user_register']}' and '"
+                f"{se_par['handle'] or se_par['user_register']}'"
             )
         self.match_parent_event = sampled_event
+        self.match_seqc_generators = {}
 
     def close_event_list(self):
         if self.match_parent_event is not None:
-            handle = self.match_parent_event.params["handle"]
-            sorted_ct_entries = sorted(self.match_command_table_entries.items())
-            first = sorted_ct_entries[0][0]
-            last = sorted_ct_entries[-1][0]
-            if first != 0 or last - first + 1 != len(sorted_ct_entries):
-                raise LabOneQException(
-                    f"States missing in match statement with handle {handle}. First "
-                    f"state: {first}, last state: {last}, number of states: "
-                    f"{len(sorted_ct_entries)}, expected {last+1}, starting from 0."
-                )
+            if self.match_parent_event.params["handle"] is not None:
+                self.close_event_list_for_handle()
+            elif self.match_parent_event.params["user_register"] is not None:
+                self.close_event_list_for_user_register()
 
-            # Check whether we already have the same states in the command table:
-            if self.command_table_match_offset is not None:
-                for idx, (signature, wave_index, _) in sorted_ct_entries:
-                    current_ct_entry = self.command_table_tracker[
-                        idx + self.command_table_match_offset
-                    ]
-                    current_wf_idx = current_ct_entry[1]["waveform"].get("index")
-                    if current_ct_entry[0] != signature or wave_index != current_wf_idx:
-                        raise LabOneQException(
-                            "Multiple command table entry sets for feedback "
-                            f"(handle {handle}), do you use the same pulses and states?"
-                        )
-            else:
-                self.command_table_match_offset = len(self.command_table_tracker)
-                for idx, (signature, wave_index, _) in sorted_ct_entries:
-                    id2 = self.command_table_tracker.create_entry(signature, wave_index)
-                    assert self.command_table_match_offset + idx == id2
+    def close_event_list_for_handle(self):
+        assert self.match_parent_event is not None
+        handle = self.match_parent_event.params["handle"]
+        sorted_ct_entries = sorted(self.match_command_table_entries.items())
+        first = sorted_ct_entries[0][0]
+        last = sorted_ct_entries[-1][0]
+        if first != 0 or last - first + 1 != len(sorted_ct_entries):
+            raise LabOneQException(
+                f"States missing in match statement with handle {handle}. First "
+                f"state: {first}, last state: {last}, number of states: "
+                f"{len(sorted_ct_entries)}, expected {last+1}, starting from 0."
+            )
 
-            ev = self.match_parent_event
-            start = ev.start
-            assert start >= self.seqc_tracker.current_time
-            assert start % self.sequencer_step == 0
-            self.seqc_tracker.add_required_playzeros(ev)
-            # Subtract the 3 cycles that we added (see match_schedule.py for details)
-            latency = (
-                start // self.sequencer_step
-                - self.current_sequencer_step
-                - EXECUTETABLEENTRY_LATENCY
+        # Check whether we already have the same states in the command table:
+        if self.command_table_match_offset is not None:
+            for idx, (signature, wave_index, _) in sorted_ct_entries:
+                current_ct_entry = self.command_table_tracker[
+                    idx + self.command_table_match_offset
+                ]
+                assert current_ct_entry is not None
+                current_wf_idx = current_ct_entry[1]["waveform"].get("index")
+                if current_ct_entry[0] != signature or wave_index != current_wf_idx:
+                    raise LabOneQException(
+                        "Multiple command table entry sets for feedback "
+                        f"(handle {handle}), do you use the same pulses and states?"
+                    )
+        else:
+            self.command_table_match_offset = len(self.command_table_tracker)
+            for idx, (signature, wave_index, _) in sorted_ct_entries:
+                id2 = self.command_table_tracker.create_entry(signature, wave_index)
+                assert self.command_table_match_offset + idx == id2
+
+        ev = self.match_parent_event
+        start = ev.start
+        assert start >= self.seqc_tracker.current_time
+        assert start % self.sequencer_step == 0
+        self.seqc_tracker.add_required_playzeros(ev)
+        # Subtract the 3 cycles that we added (see match_schedule.py for details)
+        assert self.current_sequencer_step is not None
+        latency = (
+            start // self.sequencer_step
+            - self.current_sequencer_step
+            - EXECUTETABLEENTRY_LATENCY
+        )
+        self.seqc_tracker.add_command_table_execution(
+            "QA_DATA_PROCESSED" if ev.params["local"] else "ZSYNC_DATA_PQSC_REGISTER",
+            latency="current_seq_step "
+            + (f"+ {latency}" if latency >= 0 else f"- {-latency}"),
+            comment="Match handle " + handle,
+        )
+        self.seqc_tracker.add_timing_comment(ev.end)
+        self.seqc_tracker.flush_deferred_function_calls()
+        self.seqc_tracker.current_time = self.match_parent_event.end
+        self.match_parent_event = None
+
+    def close_event_list_for_user_register(self):
+        match_event = self.match_parent_event
+        assert match_event is not None
+        user_register = match_event.params["user_register"]
+        if not 0 <= user_register <= 15:
+            raise LabOneQException(
+                f"Invalid user register {user_register} in match statement. User registers must be between 0 and 15."
             )
-            self.seqc_tracker.add_command_table_execution(
-                "QA_DATA_PROCESSED"
-                if ev.params["local"]
-                else "ZSYNC_DATA_PQSC_REGISTER",
-                latency="current_seq_step "
-                + (f"+ {latency}" if latency >= 0 else f"- {-latency}"),
-                comment="Match handle " + handle,
+        var_name = f"_match_user_register_{user_register}"
+        try:
+            self.declarations_generator.add_variable_declaration(
+                var_name, f"getUserReg({user_register})"
             )
-            self.seqc_tracker.add_timing_comment(ev.end)
-            self.seqc_tracker.flush_deferred_function_calls()
-            self.seqc_tracker.current_time = self.match_parent_event.end
-            self.match_parent_event = None
+        except LabOneQException:
+            pass  # Already declared, this is fine
+        self.seqc_tracker.add_required_playzeros(match_event)
+        if_generator = SeqCGenerator()
+        conditions_bodies: list[tuple[Optional[str], SeqCGenerator]] = [
+            (f"{var_name} == {state}", gen.compressed())
+            for state, gen in self.match_seqc_generators.items()
+            if gen.num_noncomment_statements() > 0
+        ]
+        # If there is no match, we just play zeros to keep the timing correct
+        play_zero_body = SeqCGenerator()
+        play_zero_body.add_play_zero_statement(
+            match_event.end - self.seqc_tracker.current_time,
+            self.device_type,
+        )
+        conditions_bodies.append((None, play_zero_body.compressed()))
+        if_generator.add_if(*zip(*conditions_bodies))  # type: ignore
+        self.seqc_tracker.append_loop_stack_generator(
+            always=True, generator=if_generator
+        )
+        self.seqc_tracker.append_loop_stack_generator(always=True)
+        self.seqc_tracker.add_timing_comment(match_event.end)
+        self.seqc_tracker.flush_deferred_function_calls()
+        self.seqc_tracker.current_time = match_event.end
+        self.match_parent_event = None
 
     def handle_sampled_event(self, sampled_event: AWGEvent):
         signature = sampled_event.type

@@ -662,6 +662,7 @@ class ziDAQServerEmulator:
         if api_level is None:
             api_level = 6
         assert api_level == 6
+        assert isinstance(port, int)
         super().__init__()
         self._scheduler = sched.scheduler()
         self._device_type_map: dict[str, str] = {}

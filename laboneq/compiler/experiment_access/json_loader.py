@@ -1,6 +1,8 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import copy
 import json
 import logging
@@ -25,7 +27,7 @@ _logger = logging.getLogger(__name__)
 
 def find_value_or_parameter_dict(
     pulse_ref: Dict[str, Any], name: str, types: Tuple[type, ...]
-):
+) -> tuple[float | None, str | None]:
     param = None
     value = pulse_ref.get(name)
     if value is not None and not isinstance(value, types):
@@ -59,41 +61,18 @@ class JsonLoader(LoaderBase):
 
     def _load_devices(self, experiment):
         for device in sorted(experiment["devices"], key=lambda x: x["id"]):
-            if "server" in device:
-                server = device["server"]["$ref"]
-            else:
-                server = None
             if "driver" in device:
                 driver = device["driver"]
             else:
                 driver = device["device_type"]
 
-            if "serial" in device:
-                serial = device["serial"]
-            else:
-                serial = None
-
-            if "interface" in device:
-                interface = device["interface"]
-            else:
-                interface = None
-
-            if (
-                "reference_clock_source" in device
-                and device["reference_clock_source"] is not None
-            ):
-                reference_clock_source = device["reference_clock_source"]
-            else:
-                reference_clock_source = None
+            reference_clock_source = device.get("reference_clock_source")
 
             is_qc = device.get("is_qc")
 
             self.add_device(
-                device["id"],
-                driver,
-                serial,
-                server,
-                interface,
+                device_id=device["id"],
+                device_type=driver,
                 reference_clock_source=reference_clock_source,
                 is_qc=is_qc,
             )
@@ -103,25 +82,20 @@ class JsonLoader(LoaderBase):
                     self.add_device_oscillator(device["id"], oscillator_ref["$ref"])
 
     def _load_oscillator(self, experiment):
-        if "oscillators" in experiment:
-            for oscillator in experiment["oscillators"]:
-                frequency = None
-                frequency_param = None
-                if "frequency" in oscillator:
-                    frequency = oscillator["frequency"]
-                    if not isinstance(frequency, float) and not isinstance(
-                        frequency, int
-                    ):
-                        if frequency is not None and "$ref" in frequency:
-                            frequency_param = frequency["$ref"]
-                        frequency = None
+        for oscillator in experiment.get("oscillators", []):
+            if (frequency := oscillator.get("frequency")) is None:
+                continue
+            if not isinstance(frequency, (int, float)):
+                if "$ref" in frequency:
+                    frequency = self._get_or_create_parameter(frequency["$ref"])
+                else:
+                    frequency = None
 
-                self.add_oscillator(
-                    oscillator["id"],
-                    frequency,
-                    frequency_param,
-                    bool(oscillator["hardware"]),
-                )
+            self.add_oscillator(
+                oscillator["id"],
+                frequency,
+                bool(oscillator["hardware"]),
+            )
 
     def _load_connectivity(self, experiment):
         if "connectivity" in experiment:
@@ -131,7 +105,7 @@ class JsonLoader(LoaderBase):
             if "leader" in experiment["connectivity"]:
 
                 leader_device_id = experiment["connectivity"]["leader"]["$ref"]
-                self._devices[leader_device_id]["is_global_leader"] = True
+                self.global_leader_device_id = leader_device_id
 
             if "reference_clock" in experiment["connectivity"]:
                 reference_clock = experiment["connectivity"]["reference_clock"]
@@ -316,6 +290,10 @@ class JsonLoader(LoaderBase):
             if "handle" in section:
                 handle = section["handle"]
 
+            user_register = None
+            if "user_register" in section:
+                user_register = section["user_register"]
+
             state = None
             if "state" in section:
                 state = section["state"]
@@ -369,6 +347,7 @@ class JsonLoader(LoaderBase):
                     reset_oscillator_phase=reset_oscillator_phase,
                     trigger_output=trigger_output,
                     handle=handle,
+                    user_register=user_register,
                     state=state,
                     local=local,
                 ),

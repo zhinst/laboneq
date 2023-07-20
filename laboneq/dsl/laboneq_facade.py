@@ -11,7 +11,9 @@ from numpy import typing as npt
 from laboneq import controller as ctrl
 from laboneq.compiler.workflow.compiler import Compiler
 from laboneq.core.types import CompiledExperiment
-from laboneq.dsl.new_arch_support import convert_dsl_to_target_setup
+from laboneq.implementation.legacy_adapters.converters_target_setup import (
+    convert_dsl_to_target_setup,
+)
 
 if TYPE_CHECKING:
     from laboneq.dsl.experiment.pulse import Pulse

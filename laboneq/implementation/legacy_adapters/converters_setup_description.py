@@ -5,13 +5,13 @@
 from typing import Any as AnyDSL
 
 from laboneq.core.types.enums.io_direction import IODirection as IODirectionDSL
-from laboneq.core.types.enums.io_signal_type import IOSignalType as IOSignalTypeDSL
 from laboneq.core.types.enums.port_mode import PortMode as PortModeDSL
 from laboneq.core.types.enums.reference_clock_source import (
     ReferenceClockSource as ReferenceClockSourceDSL,
 )
+from laboneq.data.calibration import PortMode as PortModeDATA
 from laboneq.data.setup_description import Any as AnyDATA
-from laboneq.data.setup_description import Connection as ConnectionDATA
+from laboneq.data.setup_description import ChannelMapEntry as ConnectionDATA
 from laboneq.data.setup_description import Instrument as HDAWGDATA
 from laboneq.data.setup_description import Instrument as InstrumentDATA
 from laboneq.data.setup_description import Instrument as PQSCDATA
@@ -19,7 +19,6 @@ from laboneq.data.setup_description import Instrument as SHFQADATA
 from laboneq.data.setup_description import Instrument as SHFSGDATA
 from laboneq.data.setup_description import Instrument as UHFQADATA
 from laboneq.data.setup_description import IODirection as IODirectionDATA
-from laboneq.data.setup_description import IOSignalType as IOSignalTypeDATA
 from laboneq.data.setup_description import LogicalSignal as LogicalSignalDATA
 from laboneq.data.setup_description import LogicalSignalGroup as LogicalSignalGroupDATA
 from laboneq.data.setup_description import PhysicalChannel as PhysicalChannelDATA
@@ -27,7 +26,6 @@ from laboneq.data.setup_description import (
     PhysicalChannelType as PhysicalChannelTypeDATA,
 )
 from laboneq.data.setup_description import Port as PortDATA
-from laboneq.data.setup_description import PortMode as PortModeDATA
 from laboneq.data.setup_description import QuantumElement as QuantumElementDATA
 from laboneq.data.setup_description import Qubit as QubitDATA
 from laboneq.data.setup_description import (
@@ -57,8 +55,8 @@ from laboneq.dsl.device.logical_signal_group import (
 from laboneq.dsl.device.ports import Port as PortDSL
 from laboneq.dsl.device.server import Server as ServerDSL
 from laboneq.dsl.device.servers.data_server import DataServer as DataServerDSL
-from laboneq.dsl.quantum.qubits import QuantumElement as QuantumElementDSL
-from laboneq.dsl.quantum.qubits import Qubit as QubitDSL
+from laboneq.dsl.quantum.quantum_element import QuantumElement as QuantumElementDSL
+from laboneq.dsl.quantum.qubit import Qubit as QubitDSL
 from laboneq.implementation.legacy_adapters.dynamic_converter import convert_dynamic
 
 # converter functions for data type package 'setup_description'
@@ -96,14 +94,6 @@ def convert_IODirection(orig: IODirectionDSL):
     )
 
 
-def convert_IOSignalType(orig: IOSignalTypeDSL):
-    return (
-        next(e for e in IOSignalTypeDATA if e.name == orig.name)
-        if orig is not None
-        else None
-    )
-
-
 def convert_PhysicalChannelType(orig: PhysicalChannelTypeDSL):
     return (
         next(e for e in PhysicalChannelTypeDATA if e.name == orig.name)
@@ -131,7 +121,7 @@ def convert_ReferenceClockSource(orig: ReferenceClockSourceDSL):
 def convert_Connection(orig: ConnectionDSL):
     if orig is None:
         return None
-    retval = ConnectionDATA()
+    retval = ConnectionDATA(None, None)
     return post_process(
         orig,
         retval,
@@ -239,11 +229,7 @@ def convert_Instrument(orig: InstrumentDSL):
 def convert_LogicalSignal(orig: LogicalSignalDSL):
     if orig is None:
         return None
-    retval = LogicalSignalDATA()
-    retval.direction = convert_IODirection(orig.direction)
-    retval.name = orig.name
-    retval.path = orig.path
-    retval.uid = orig.uid
+    retval = LogicalSignalDATA(name=orig.name, group=orig.uid.split("/")[0])
     return post_process(
         orig,
         retval,

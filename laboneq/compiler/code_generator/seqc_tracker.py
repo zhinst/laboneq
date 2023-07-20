@@ -148,7 +148,7 @@ class SeqCTracker:
 
         top_of_stack = self.loop_stack_generators[-1]
         if always or len(top_of_stack) == 0 or top_of_stack[-1].num_statements() > 0:
-            self.loop_stack_generators[-1].append(generator)
+            top_of_stack.append(generator)
 
     def push_loop_stack_generator(self, generator=None):
         self.loop_stack_generators.append([])

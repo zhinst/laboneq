@@ -1,0 +1,168 @@
+# Copyright 2022 Zurich Instruments AG
+# SPDX-License-Identifier: Apache-2.0
+
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional, Union
+
+from laboneq.dsl.calibration import Calibration, Oscillator, SignalCalibration
+from laboneq.dsl.device import LogicalSignalGroup
+from laboneq.dsl.device.io_units import LogicalSignal
+from laboneq.dsl.dsl_dataclass_decorator import classformatter
+from laboneq.dsl.enums import ModulationType
+from laboneq.dsl.quantum.quantum_element import QuantumElement, SignalType
+
+
+@classformatter
+@dataclass
+class QubitParameters:
+    #: Resonance frequency of the qubit.
+    resonance_frequency: float
+    #: Local oscillator frequency for the qubit drive line.
+    drive_lo_frequency: float
+    #: Resonance frequency of the readout resonators used to read the state of the qubit.
+    readout_resonator_frequency: float
+    #: Local oscillator frequency for the readout lines.
+    readout_lo_frequency: float
+    #: integration delay between readout pulse and data acquisition, defaults to 20 ns.
+    readout_integration_delay: Optional[float] = 20e-9
+    #: drive power setting, defaults to 10 dBm.
+    drive_range: Optional[float] = 10
+    #: readout output power setting, defaults to 5 dBm.
+    readout_range_out: Optional[float] = 5
+    #: readout input power setting, defaults to 10 dBm.
+    readout_range_in: Optional[float] = 10
+    #: offset voltage for flux control line - defaults to 0.
+    flux_offset_voltage: Optional[float] = 0
+    #: Free form dictionary of user defined parameters.
+    user_defined: Optional[Dict] = field(default_factory=dict)
+
+    @property
+    def drive_frequency(self) -> float:
+        """Qubit drive frequency."""
+        return self.resonance_frequency - self.drive_lo_frequency
+
+    @property
+    def readout_frequency(self) -> float:
+        """Readout baseband frequency."""
+        return self.readout_resonator_frequency - self.readout_lo_frequency
+
+
+@classformatter
+@dataclass(init=False, repr=True, eq=False)
+class Qubit(QuantumElement):
+    """A class for a generic two-level Qubit."""
+
+    def __init__(
+        self,
+        uid: str = None,
+        signals: Dict[str, LogicalSignal] = None,
+        parameters: Optional[Union[QubitParameters, Dict[str, Any]]] = None,
+    ):
+        """
+        Initializes a new Qubit.
+
+        Args:
+            uid: A unique identifier for the Qubit.
+            signals: A mapping of logical signals associated with the qubit.
+                Qubit accepts the following keys in the mapping: 'drive', 'measure', 'acquire', 'flux'
+
+                This is so that the Qubit parameters are assigned into the correct signal lines in
+                calibration.
+            parameters: Parameters associated with the qubit.
+                Required for generating calibration and experiment signals via `calibration()` and `experiment_signals()`.
+        """
+        if isinstance(parameters, dict):
+            parameters = QubitParameters(**parameters)
+        super().__init__(uid=uid, signals=signals, parameters=parameters)
+
+    @classmethod
+    def from_logical_signal_group(
+        cls,
+        uid: str,
+        lsg: LogicalSignalGroup,
+        parameters: Optional[Union[QubitParameters, Dict[str, Any]]] = None,
+    ) -> "Qubit":
+        """Qubit from logical signal group.
+
+        Args:
+            uid: A unique identifier for the Qubit.
+            lsg: Logical signal group.
+                Qubit understands the following signal line names:
+
+                    - drive: 'drive', 'drive_line'
+                    - measure: 'measure', 'measure_line'
+                    - acquire: 'acquire', 'acquire_line'
+                    - flux: 'flux', 'flux_line'
+
+                This is so that the Qubit parameters are assigned into the correct signal lines in
+                calibration.
+            parameters: Parameters associated with the qubit.
+        """
+        signal_type_map = {
+            SignalType.DRIVE: ["drive", "drive_line"],
+            SignalType.MEASURE: ["measure", "measure_line"],
+            SignalType.ACQUIRE: ["acquire", "acquire_line"],
+            SignalType.FLUX: ["flux", "flux_line"],
+        }
+        return cls._from_logical_signal_group(
+            cls,
+            uid=uid,
+            lsg=lsg,
+            parameters=parameters,
+            signal_type_map=signal_type_map,
+        )
+
+    def calibration(self) -> Calibration:
+        """Generate calibration from the qubits parameters and signal lines.
+
+        `Qubit` requires `parameters` for it to be able to produce a calibration object.
+
+        Returns:
+            Prefilled calibration object from Qubit parameters.
+        """
+        calib = {}
+
+        drive_lo = Oscillator(
+            uid=f"{self.uid}_drive_local_osc",
+            frequency=self.parameters.drive_lo_frequency,
+        )
+        readout_lo = Oscillator(
+            uid=f"{self.uid}_readout_local_osc",
+            frequency=self.parameters.readout_lo_frequency,
+        )
+
+        if "drive" in self.signals:
+            calib[self.signals["drive"]] = SignalCalibration(
+                oscillator=Oscillator(
+                    uid=f"{self.uid}_drive_osc",
+                    frequency=self.parameters.drive_frequency,
+                    modulation_type=ModulationType.HARDWARE,
+                ),
+                local_oscillator=drive_lo,
+                range=self.parameters.drive_range,
+            )
+        if "measure" in self.signals:
+            calib[self.signals["measure"]] = SignalCalibration(
+                oscillator=Oscillator(
+                    uid=f"{self.uid}_measure_osc",
+                    frequency=self.parameters.readout_frequency,
+                    modulation_type=ModulationType.SOFTWARE,
+                ),
+                local_oscillator=readout_lo,
+                range=self.parameters.readout_range_out,
+            )
+        if "acquire" in self.signals:
+            calib[self.signals["acquire"]] = SignalCalibration(
+                oscillator=Oscillator(
+                    uid=f"{self.uid}_acquire_osc",
+                    frequency=self.parameters.readout_frequency,
+                    modulation_type=ModulationType.SOFTWARE,
+                ),
+                local_oscillator=readout_lo,
+                range=self.parameters.readout_range_out,
+            )
+        if "flux" in self.signals:
+            calib[self.signals["flux"]] = SignalCalibration(
+                voltage_offset=self.parameters.flux_offset_voltage,
+            )
+        return Calibration(calib)

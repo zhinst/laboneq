@@ -27,11 +27,10 @@ from laboneq.controller.devices.zi_node_monitor import (
     Prepare,
     Response,
 )
-from laboneq.controller.recipe_1_4_0 import Initialization
-from laboneq.controller.recipe_enums import SignalType, TriggeringMode
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
+from laboneq.data.recipe import Initialization, SignalType, TriggeringMode
 
 _logger = logging.getLogger(__name__)
 
@@ -204,7 +203,7 @@ class DeviceHDAWG(DeviceZI):
             )
         return nodes
 
-    def collect_awg_after_upload_nodes(self, initialization: Initialization.Data):
+    def collect_awg_after_upload_nodes(self, initialization: Initialization):
         nodes_to_configure_phase = []
 
         for awg in initialization.awgs or []:
@@ -244,7 +243,7 @@ class DeviceHDAWG(DeviceZI):
         return conditions
 
     def collect_initialization_nodes(
-        self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
+        self, device_recipe_data: DeviceRecipeData, initialization: Initialization
     ) -> list[DaqNodeAction]:
         _logger.debug("%s: Initializing device...", self.dev_repr)
 
@@ -456,7 +455,7 @@ class DeviceHDAWG(DeviceZI):
         return nodes_to_set
 
     def collect_awg_before_upload_nodes(
-        self, initialization: Initialization.Data, recipe_data: RecipeData
+        self, initialization: Initialization, recipe_data: RecipeData
     ):
         device_specific_initialization_nodes = [
             DaqNodeSetAction(
@@ -477,7 +476,7 @@ class DeviceHDAWG(DeviceZI):
         return f"/{self.serial}/awgs/{awg_index}/commandtable/"
 
     def collect_trigger_configuration_nodes(
-        self, initialization: Initialization.Data, recipe_data: RecipeData
+        self, initialization: Initialization, recipe_data: RecipeData
     ) -> list[DaqNodeAction]:
         _logger.debug("%s: Configuring trigger configuration nodes.", self.dev_repr)
         nodes_to_configure_triggers = []

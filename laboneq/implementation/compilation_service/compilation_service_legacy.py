@@ -100,7 +100,7 @@ def convert_to_experiment_json(job: CompilationJob):
                 },
             }
         )
-        for osc in signal.oscillators:
+        if osc := signal.oscillator is not None:
             oscillators_in_job[osc.uid] = osc
             if osc.is_hardware:
                 device_oscillators.setdefault(signal.device.uid, []).append(osc)
@@ -135,12 +135,14 @@ def convert_to_experiment_json(job: CompilationJob):
         {
             "id": s.uid,
             "signal_type": signal_type_mapping[s.type],
-            "oscillators_list": [{"$ref": o.uid} for o in s.oscillators],
+            "oscillators_list": [{"$ref": s.oscillator.uid}]
+            if s.oscillator is not None
+            else [],
         }
         for s in job.experiment_info.signals
     ]
     for s in retval["signals"]:
-        if s["oscillators_list"] == []:
+        if not len(s["oscillators_list"]):
             del s["oscillators_list"]
         else:
             s["modulation"] = True

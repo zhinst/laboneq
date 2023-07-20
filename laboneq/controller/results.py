@@ -3,22 +3,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
 from numpy.typing import ArrayLike
 
-from laboneq.controller.recipe_enums import NtStepKey
-
-if TYPE_CHECKING:
-    from laboneq.dsl.result.acquired_result import AcquiredResult
-    from laboneq.dsl.result.results import Results
-
-
-def make_empty_results() -> Results:
-    from laboneq.dsl.result.results import Results
-
-    return Results(acquired_results={}, user_func_results={}, execution_errors=[])
+from laboneq.data.experiment_results import AcquiredResult
+from laboneq.data.recipe import NtStepKey
 
 
 def make_acquired_result(
@@ -26,8 +17,6 @@ def make_acquired_result(
     axis_name: list[str | list[str]],
     axis: list[ArrayLike | list[ArrayLike]],
 ) -> AcquiredResult:
-    from laboneq.dsl.result.acquired_result import AcquiredResult
-
     return AcquiredResult(data, axis_name, axis)
 
 

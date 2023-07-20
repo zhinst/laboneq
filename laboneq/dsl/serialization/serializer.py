@@ -67,7 +67,6 @@ class Serializer:
         if isinstance(serializable_object, dict):
             json_dump = orjson.dumps(serializable_object, option=options)
         else:
-
             entity_classes, entity_mapper = Serializer._entity_config()
 
             json_struct = serialize_to_dict_with_ref(
@@ -102,13 +101,16 @@ class Serializer:
             "laboneq.dsl.parameter",
             "laboneq.dsl.calibration",
             "laboneq.dsl.device",
-            "laboneq.dsl.quantum.qubits",
-            "laboneq.dsl.quantum.quantum_operations",
+            "laboneq.dsl.quantum.quantum_element",
+            "laboneq.dsl.quantum.quantum_operation",
+            "laboneq.dsl.quantum.qubit",
+            "laboneq.dsl.quantum.transmon",
             "laboneq.dsl.device.server",
             "laboneq.dsl.device.servers.data_server",
             "laboneq.core.types.enums",
             "laboneq.core.types.compiled_experiment",
             "laboneq.data.scheduled_experiment",
+            "laboneq.data.recipe",
             "laboneq.executor.executor",
             "laboneq.dsl.device.io_units.logical_signal",
             "laboneq.dsl.device.io_units.physical_channel",

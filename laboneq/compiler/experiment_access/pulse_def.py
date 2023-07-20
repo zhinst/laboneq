@@ -25,15 +25,6 @@ class PulseDef:
     def effective_amplitude(self) -> float:
         return 1.0 if self.amplitude is None else self.amplitude
 
-    @staticmethod
-    def effective_length(pulse_def: PulseDef, sampling_rate: float) -> float:
-        if pulse_def is None:
-            return None
-        length = pulse_def.length
-        if length is None and pulse_def.samples is not None:
-            length = len(pulse_def.samples) / sampling_rate
-        return length
-
     def __eq__(self, other: PulseDef):
         if isinstance(other, PulseDef):
             for k, v in asdict(self).items():

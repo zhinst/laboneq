@@ -10,7 +10,8 @@ from .zi_standard_instrument import ZIStandardInstrument
 @classformatter
 @dataclass(init=True, repr=True, order=True)
 class NonQC(ZIStandardInstrument):
-    """Class representing a ZI instrument that is of type not directly handled by L1Q."""
+    """Class representing a ZI instrument that is of type not directly handled by
+    LabOne Q."""
 
     dev_type: str = None
 

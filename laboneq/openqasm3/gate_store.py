@@ -19,9 +19,9 @@ class GateStore:
         kwargs = kwargs or {}
         return self.gates[(self.gate_map.get(name, name), qubits)](*args, **kwargs)
 
-    def map_gate(self, qasm_name: str, l1q_name: str):
-        """Define mapping from qasm gate name to L1Q gate name."""
-        self.gate_map[qasm_name] = l1q_name
+    def map_gate(self, qasm_name: str, labone_q_name: str):
+        """Define mapping from qasm gate name to LabOne Q gate name."""
+        self.gate_map[qasm_name] = labone_q_name
 
     def register_gate_section(self, name: str, qubit_names: list[str], section_factory):
         """Register a LabOne Q section factory as a gate."""

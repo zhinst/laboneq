@@ -685,7 +685,8 @@
               "type": "number"
             },
             {
-              "type": "null"}
+              "type": "null"
+            }
           ]
         },
         "length": {
@@ -694,7 +695,8 @@
               "type": "number"
             },
             {
-              "type": "null"}
+              "type": "null"
+            }
           ]
         },
         "waveform": {
@@ -795,6 +797,14 @@
         "handle": {
           "type": "string",
           "default": ""
+        },
+        "user_register": {
+          "type": "number",
+          "default": null
+        },
+        "state": {
+          "type": "number",
+          "default": null
         },
         "trigger_output": {
           "$ref": "#/definitions/trigger-outputs-def"

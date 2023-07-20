@@ -1,10 +1,15 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 from enum import Enum
 from typing import Any, Union
 
 
+# TODO: Move to laboneq.data. Note that moving the type will cause issues when deserialising
+#       objects that referred to the class in its old module. Moving the class is therefore
+#       not as straight-forward as one might naively hope.
 class AcquisitionType(Enum):
     """Acquisition type
 

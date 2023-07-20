@@ -191,7 +191,7 @@ class ZiApiWrapperBase(ABC):
 class ServerQualifier:
     dry_run: bool = True
     host: str = None
-    port: int = None
+    port: int = 8004
     api_level: int = None
     ignore_version_mismatch: bool = False
 

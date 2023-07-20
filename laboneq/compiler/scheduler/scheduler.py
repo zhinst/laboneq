@@ -63,6 +63,7 @@ from laboneq.compiler.scheduler.utils import (
 )
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import RepetitionMode, SectionAlignment
+from laboneq.data.compilation_job import ParameterInfo
 
 if TYPE_CHECKING:
     from laboneq.compiler.common.signal_obj import SignalObj
@@ -162,7 +163,7 @@ class Scheduler:
             retval.append(
                 {
                     "event_type": EventType.INITIAL_RESET_HW_OSCILLATOR_PHASE,
-                    "device_id": device_info.id,
+                    "device_id": device_info.uid,
                     "duration": device_type.reset_osc_duration,
                     "time": 0,
                 }
@@ -228,17 +229,15 @@ class Scheduler:
         section_info = self._experiment_dao.section_info(section_id)
         sweep_parameters = self._experiment_dao.section_parameters(section_id)
         for param in sweep_parameters:
-            if "values" not in param or param["values"] is None:
-                param["values"] = (
-                    param["start"] + np.arange(section_info.count) * param["step"]
-                )
+            if param.values is None:
+                param.values = param.start + np.arange(section_info.count) * param.step
 
         is_loop = section_info.has_repeat
         if is_loop:
             schedule = self._schedule_loop(
                 section_id, section_info, current_parameters, sweep_parameters
             )
-        elif section_info.handle is not None:
+        elif section_info.handle is not None or section_info.user_register is not None:
             schedule = self._schedule_match(
                 section_id, section_info, current_parameters
             )
@@ -271,17 +270,19 @@ class Scheduler:
             # Not every signal has an oscillator (e.g. flux lines), so check for None
             if oscillator is None:
                 continue
-            param = oscillator.frequency_param
-            if param in sweep_parameters and oscillator.hardware:
+            if not isinstance(oscillator.frequency, ParameterInfo):
+                continue
+            param = oscillator.frequency
+            if param.uid in sweep_parameters and oscillator.is_hardware:
                 if (
-                    param in oscillator_param_lookup
-                    and oscillator_param_lookup[param].id != oscillator.id
+                    param.uid in oscillator_param_lookup
+                    and oscillator_param_lookup[param.uid].id != oscillator.uid
                 ):
                     raise LabOneQException(
                         "Hardware frequency sweep may drive only a single oscillator"
                     )
-                oscillator_param_lookup[param] = SweptHardwareOscillator(
-                    id=oscillator.id, device=signal_info.device_id, signal=signal
+                oscillator_param_lookup[param.uid] = SweptHardwareOscillator(
+                    id=oscillator.uid, device=signal_info.device_id, signal=signal
                 )
 
         return oscillator_param_lookup
@@ -291,7 +292,7 @@ class Scheduler:
         section_id,
         section_info: SectionInfo,
         current_parameters: ParameterStore[str, float],
-        sweep_parameters: List[Dict],
+        sweep_parameters: List[ParameterInfo],
     ) -> LoopSchedule:
         """Schedule the individual iterations of the loop ``section_id``.
 
@@ -313,8 +314,8 @@ class Scheduler:
 
         children_schedules = []
         for param in sweep_parameters:
-            if param["values"] is not None:
-                assert len(param["values"]) >= section_info.count
+            if param.values is not None:
+                assert len(param.values) >= section_info.count
         # todo: unroll loops that are too short
         if len(sweep_parameters) == 0:
             compressed = section_info.count > 1
@@ -332,7 +333,7 @@ class Scheduler:
             compressed = False
             signals = self._experiment_dao.section_signals_with_children(section_id)
             swept_hw_oscillators = self._swept_hw_oscillators(
-                {p["id"] for p in sweep_parameters}, signals
+                {p.uid for p in sweep_parameters}, signals
             )
 
             if section_info.chunk_count > 1:
@@ -348,10 +349,10 @@ class Scheduler:
 
             for local_iteration, global_iteration in enumerate(global_iterations):
                 new_parameters = {
-                    param["id"]: (
-                        param["values"][global_iteration]
-                        if param["values"] is not None
-                        else param["start"] + param["step"] * global_iteration
+                    param.uid: (
+                        param.values[global_iteration]
+                        if param.values is not None
+                        else param.start + param.step * global_iteration
                     )
                     for param in sweep_parameters
                 }
@@ -383,7 +384,7 @@ class Scheduler:
         self,
         swept_hw_oscillators: Dict[str, SweptHardwareOscillator],
         iteration: int,
-        sweep_parameters: List[Dict],
+        sweep_parameters: List[ParameterInfo],
         signals: Set[str],
         grid: int,
         section_id: str,
@@ -399,12 +400,12 @@ class Scheduler:
         values = []
         params = []
         for param in sweep_parameters:
-            osc = swept_hw_oscillators.get(param["id"])
+            osc = swept_hw_oscillators.get(param.uid)
             if osc is None:
                 continue
-            values.append(param["values"][iteration])
+            values.append(param.values[iteration])
             swept_oscs_list.append(osc)
-            params.append(param["id"])
+            params.append(param.uid)
             device_id = osc.device
             device_info = self._experiment_dao.device_info(device_id)
             device_type = DeviceType(device_info.device_type)
@@ -493,7 +494,7 @@ class Scheduler:
         global_iteration: int,
         num_repeats: int,
         all_parameters: ParameterStore[str, float],
-        sweep_parameters: List[Dict],
+        sweep_parameters: List[ParameterInfo],
         swept_hw_oscillators: Dict[str, SweptHardwareOscillator],
     ) -> LoopIterationSchedule:
         """Schedule a single iteration of a loop.
@@ -524,7 +525,7 @@ class Scheduler:
                 section_id
             ):
                 osc_info = self._experiment_dao.signal_oscillator(signal)
-                if osc_info is not None and osc_info.hardware:
+                if osc_info is not None and osc_info.is_hardware:
                     hw_osc_reset_signals.add(signal)
 
         for _, osc in swept_hw_oscillators.items():
@@ -709,15 +710,15 @@ class Scheduler:
         osc = self._experiment_dao.signal_oscillator(pulse.signal_id)
         if osc is None:
             freq = None
-        elif not osc.hardware and osc.frequency_param is not None:
+        elif not osc.is_hardware and isinstance(osc.frequency, ParameterInfo):
             try:
-                freq = current_parameters[osc.frequency_param]
+                freq = current_parameters[osc.frequency.uid]
             except KeyError as e:
                 raise LabOneQException(
                     f"Playback of pulse '{pulse.pulse_id}' in section '{section} "
                     f"requires the parameter '{osc.frequency_param}' to set the frequency."
                 ) from e
-        elif osc is None or osc.hardware:
+        elif osc is None or osc.is_hardware:
             freq = None
         else:
             freq = osc.frequency if osc is not None else None
@@ -751,6 +752,11 @@ class Scheduler:
         current_parameters: ParameterStore[str, float],
     ) -> MatchSchedule:
 
+        assert section_info.handle is not None or section_info.user_register is not None
+        handle: Optional[str] = section_info.handle
+        user_register: Optional[int] = section_info.user_register
+        local: Optional[bool] = section_info.local
+
         dao = self._schedule_data.experiment_dao
         children_schedules = []
         section_children = dao.direct_section_children(section_id)
@@ -777,37 +783,39 @@ class Scheduler:
                     state=cs.state,
                 )
 
-        assert section_info.handle is not None
-        handle: str = section_info.handle
-        local: bool = section_info.local
-        try:
-            acquire_signal = dao.acquisition_signal(handle)
-        except KeyError as e:
-            raise LabOneQException(f"No acquisition with handle '{handle}'") from e
-        acquire_device = dao.device_from_signal(acquire_signal)
-        match_devices = {dao.device_from_signal(s) for s in signals}
+        if handle:
+            try:
+                acquire_signal = dao.acquisition_signal(handle)
+            except KeyError as e:
+                raise LabOneQException(f"No acquisition with handle '{handle}'") from e
+            acquire_device = dao.device_from_signal(acquire_signal)
+            match_devices = {dao.device_from_signal(s) for s in signals}
 
-        # todo: this is a brittle check for SHFQC
-        local_feedback_allowed = match_devices == {f"{acquire_device}_sg"}
+            # todo: this is a brittle check for SHFQC
+            local_feedback_allowed = match_devices == {f"{acquire_device}_sg"}
 
-        if local is None:
-            local = local_feedback_allowed
-        elif local and not local_feedback_allowed:
-            raise LabOneQException(
-                f"Local feedback not possible across devices {acquire_device} and {', '.join(match_devices)}"
+            if local is None:
+                local = local_feedback_allowed
+            elif local and not local_feedback_allowed:
+                raise LabOneQException(
+                    f"Local feedback not possible across devices {acquire_device} and {', '.join(match_devices)}"
+                )
+
+            compressed_loop_grid = round(
+                (
+                    (8 if local else 200)
+                    / self._sampling_rate_tracker.sampling_rate_for_device(
+                        acquire_device
+                    )
+                    / self._TINYSAMPLE
+                )
             )
+        else:
+            compressed_loop_grid = None
 
         play_after = section_info.play_after or []
         if isinstance(play_after, str):
             play_after = [play_after]
-
-        compressed_loop_grid = round(
-            (
-                (8 if local else 200)
-                / self._sampling_rate_tracker.sampling_rate_for_device(acquire_device)
-                / self._TINYSAMPLE
-            )
-        )
 
         return MatchSchedule(
             grid=grid,
@@ -819,6 +827,7 @@ class Scheduler:
             section=section_id,
             play_after=play_after,
             handle=handle,
+            user_register=user_register,
             local=local,
             compressed_loop_grid=compressed_loop_grid,
         )
@@ -838,7 +847,7 @@ class Scheduler:
         section_info = self._schedule_data.experiment_dao.section_info(section_id)
 
         assert not section_info.has_repeat  # case must not be a loop
-        assert section_info.handle is None
+        assert section_info.handle is None and section_info.user_register is None
         state = section_info.state
         assert state is not None
 
@@ -931,10 +940,10 @@ class Scheduler:
             assert device is not None
 
             sample_rate = self._sampling_rate_tracker.sampling_rate_for_device(
-                device.id
+                device.uid
             )
             sequencer_rate = self._sampling_rate_tracker.sequencer_rate_for_device(
-                device.id
+                device.uid
             )
 
             signal_grid = int(

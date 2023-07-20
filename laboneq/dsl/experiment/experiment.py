@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Deque, Dict, List, Optional, Union
@@ -540,7 +541,9 @@ class Experiment:
 
         def __enter__(self):
             self.exp._push_section(self.sweep)
-            return self.sweep
+            if len(self.sweep.parameters) == 1:
+                return self.sweep.parameters[0]
+            return tuple(self.sweep.parameters)
 
         def __exit__(self, exc_type, exc_val, exc_tb):
             self.exp._pop_and_add_section()
@@ -669,7 +672,7 @@ class Experiment:
         alignment=None,
         uid=None,
         on_system_grid=None,
-        play_after: Optional[Union[str, List[str]]] = None,
+        play_after: Optional[Union[str, Section, List[Union[str, Section]]]] = None,
         trigger: Optional[Dict[str, Dict[str, int]]] = None,
     ):
         """Define an section for scoping operations.
@@ -694,7 +697,7 @@ class Experiment:
             alignment: Alignment of the operations in the section. Defaults to
                 :class:`~.SectionAlignment.LEFT`.
             play_after: Play this section after the end of the section(s) with the
-                given ID(s) (single string or list of strings). Defaults to None.
+                given ID(s). Defaults to None.
             trigger: Play a pulse a trigger pulse for the duration of this section.
                 See below for details.
             on_system_grid: If True, the section boundaries are always rounded to the
@@ -830,7 +833,7 @@ class Experiment:
         self,
         handle: str,
         uid: str = None,
-        play_after: str | list[str] | None = None,
+        play_after: Optional[Union[str, Section, List[Union[str, Section]]]] = None,
     ):
         """Define a section which switches between different child sections based
         on a QA measurement on an SHFQC.
@@ -847,18 +850,23 @@ class Experiment:
             handle: A unique identifier string that allows to retrieve the
                 acquired data.
             play_after: Play this section after the end of the section(s) with the
-                given ID(s) (single string or list of strings). Defaults to None.
+                given ID(s). Defaults to None.
 
         """
         return Experiment._MatchSectionContext(
-            self, uid=uid, handle=handle, play_after=play_after, local=True
+            self,
+            uid=uid,
+            handle=handle,
+            user_register=None,
+            play_after=play_after,
+            local=True,
         )
 
     def match_global(
         self,
         handle: str,
         uid: str = None,
-        play_after: str | list[str] | None = None,
+        play_after: Optional[Union[str, Section, List[Union[str, Section]]]] = None,
     ):
         """Define a section which switches between different child sections based
         on a QA measurement via the PQSC.
@@ -875,11 +883,16 @@ class Experiment:
             handle: A unique identifier string that allows to retrieve the
                 acquired data.
             play_after: Play this section after the end of the section(s) with the
-                given ID(s) (single string or list of strings). Defaults to None.
+                given ID(s). Defaults to None.
 
         """
         return Experiment._MatchSectionContext(
-            self, uid=uid, handle=handle, play_after=play_after, local=False
+            self,
+            uid=uid,
+            handle=handle,
+            user_register=None,
+            play_after=play_after,
+            local=False,
         )
 
     class _MatchSectionContext:
@@ -888,6 +901,7 @@ class Experiment:
             experiment,
             uid,
             handle,
+            user_register,
             local,
             play_after=None,
         ):
@@ -898,6 +912,7 @@ class Experiment:
             if play_after is not None:
                 args["play_after"] = play_after
             args["local"] = local
+            args["user_register"] = user_register
 
             self.section = Match(**args)
 
@@ -910,32 +925,45 @@ class Experiment:
 
     def match(
         self,
-        handle: str,
+        handle: Optional[str] = None,
+        user_register: Optional[int] = None,
         uid: str = None,
-        play_after: str | list[str] | None = None,
+        play_after: Optional[Union[str, Section, List[Union[str, Section]]]] = None,
     ):
         """Define a section which switches between different child sections based
-        on a QA measurement.
+        on a QA measurement (using ``handle``) or a user register (using ``user_register``).
 
-        The feedback path (local, or global, via PQSC) is chosen automatically.
+        In case of the QA measurement option, the feedback path (local, or global,
+        via PQSC) is chosen automatically.
 
         Match needs to open a scope in the following way::
 
             with exp.match(...):
                 # here come the different branches to be selected
 
-        :note: Only subsections of type ``Case`` are allowed.
+        :note:
+            Only subsections of type ``Case`` are allowed. Exactly one of ``handle`` or
+            ``user_register`` must be specified, the other one must be None. The user register
+            is evaluated only at the beginning of the experiment, not during the experiment,
+            and only a few user registers per AWG can be used due to the limited number of
+            processor registers.
 
         Args:
             uid: The unique ID for this section.
             handle: A unique identifier string that allows to retrieve the
                 acquired data.
+            user_register: The user register to use for the match.
             play_after: Play this section after the end of the section(s) with the
-                given ID(s) (single string or list of strings). Defaults to None.
+                given ID(s). Defaults to None.
 
         """
         return Experiment._MatchSectionContext(
-            self, uid=uid, handle=handle, play_after=play_after, local=None
+            self,
+            uid=uid,
+            handle=handle,
+            user_register=user_register,
+            play_after=play_after,
+            local=None,
         )
 
     def case(self, state: int, uid: str = None):
@@ -1021,3 +1049,31 @@ class Experiment:
         for s in self.sections:
             retval.extend(Experiment._all_subsections(s))
         return retval
+
+
+_store = threading.local()
+_store.active_contexts = []
+
+
+class ExperimentContext:
+    def __init__(self, experiment: Experiment):
+        self.experiment = experiment
+        self.calibration = None
+
+    def __enter__(self):
+        _store.active_contexts.append(self)
+        return self.experiment
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.calibration is not None:
+            self.experiment.set_calibration(self.calibration)
+        _store.active_contexts.pop()
+
+
+def current_context() -> ExperimentContext:
+    try:
+        return _store.active_contexts[-1]
+    except IndexError as e:
+        raise LabOneQException(
+            "Not in an experiment context. Use '@experiment' to create an experiment scope first."
+        ) from e

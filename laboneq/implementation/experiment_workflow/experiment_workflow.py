@@ -1,6 +1,8 @@
 # Copyright 2020 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import copy
 import logging
 from typing import Dict
@@ -8,8 +10,8 @@ from typing import Dict
 from laboneq.data.data_helper import DataHelper
 from laboneq.data.execution_payload import ExecutionPayload
 from laboneq.data.experiment_description import Experiment
+from laboneq.data.experiment_results import ExperimentResults
 from laboneq.data.setup_description import Setup
-from laboneq.data.setup_description.setup_helper import SetupHelper
 from laboneq.implementation.experiment_workflow.device_setup_generator import (
     DeviceSetupGenerator,
 )
@@ -72,7 +74,9 @@ class ExperimentWorkflow(ExperimentAPI):
         """
         return copy.deepcopy(self._current_experiment)
 
-    def run_current_experiment(self, setup: Setup, signal_mappings: Dict[str, str]):
+    def run_current_experiment(
+        self, setup: Setup, signal_mappings: Dict[str, str]
+    ) -> ExperimentResults:
         """
         Run the current experiment.
         """
@@ -122,7 +126,7 @@ class ExperimentWorkflow(ExperimentAPI):
         self,
         yaml_text: str,
         server_host: str = None,
-        server_port: str = None,
+        server_port: str | int = None,
         setup_name: str = None,
     ) -> Setup:
         """
@@ -156,10 +160,6 @@ class ExperimentWorkflow(ExperimentAPI):
         Map experiment signals to logical signals.
         """
         self._signal_mappings = {}
-        logical_signals_by_path = {
-            ls[1].path: ls[1]
-            for ls in SetupHelper.flat_logical_signals(self._current_setup)
-        }
         _logger.info(
             f"Mapping signals, experiment signals: {self._current_experiment.signals}"
         )
@@ -168,5 +168,11 @@ class ExperimentWorkflow(ExperimentAPI):
         }
         for k, v in signal_mappings.items():
             experiment_signal = experiment_signals_by_uid[k]
-            logical_signal = logical_signals_by_path[v]
-            self._signal_mappings[experiment_signal.uid] = logical_signal.path
+            grp, ls_name = v.split("/")
+
+            if grp in self._current_setup.logical_signal_groups:
+                if (
+                    ls_name
+                    in self._current_setup.logical_signal_groups[grp].logical_signals
+                ):
+                    self._signal_mappings[experiment_signal.uid] = v

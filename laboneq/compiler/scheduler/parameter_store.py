@@ -8,8 +8,6 @@ import weakref
 from contextlib import contextmanager
 from typing import Dict, Set
 
-from laboneq.core.exceptions import LabOneQException
-
 
 class QueryTracker:
     """Tracks the queries made to the parameter store.
@@ -77,13 +75,7 @@ class ParameterStore(dict):
         This is useful for tracking the parameters used in a sub-block.
         """
 
-        if self.keys() & other.keys() != set():
-            reused_params = self.keys() & other.keys()
-            raise LabOneQException(
-                "Illegal nesting of multiple real-time sweeps over same parameter: {}".format(
-                    ", ".join(reused_params)
-                )
-            )
+        assert self.keys().isdisjoint(other.keys())
         self.update(other)
         yield
         for key in other:

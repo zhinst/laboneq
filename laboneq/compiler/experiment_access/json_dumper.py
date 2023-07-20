@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import typing
 
+from laboneq.data.compilation_job import ParameterInfo
+
 if typing.TYPE_CHECKING:
     from laboneq.compiler.experiment_access import ExperimentDAO
 
@@ -35,9 +37,10 @@ def dump(experiment_dao: ExperimentDAO):
         device_info = experiment_dao.device_info(device)
 
         device_entry = {}
-        for key in ["id", "serial", "interface", "reference_clock_source", "is_qc"]:
+        for key in ["reference_clock_source", "is_qc"]:
             if getattr(device_info, key) is not None:
                 device_entry[key] = getattr(device_info, key)
+        device_entry["id"] = device_info.uid
         device_entry["driver"] = device_info.device_type.lower()
 
         oscillator_ids = experiment_dao.device_oscillators(device)
@@ -46,8 +49,6 @@ def dump(experiment_dao: ExperimentDAO):
             device_entry["oscillators_list"] = [
                 {"$ref": oscillator_id} for oscillator_id in oscillator_ids
             ]
-        if device_info.server is not None:
-            device_entry["server"] = {"$ref": device_info.server}
         device_entries[device_entry["id"]] = device_entry
         reference_clock = experiment_dao.device_reference_clock(device)
 
@@ -94,12 +95,12 @@ def dump(experiment_dao: ExperimentDAO):
     out_oscillators = []
     for oscillator_info in oscillator_infos:
         frequency = oscillator_info.frequency
-        if oscillator_info.frequency_param is not None:
-            frequency = {"$ref": oscillator_info.frequency_param}
+        if isinstance(oscillator_info.frequency, ParameterInfo):
+            frequency = {"$ref": oscillator_info.frequency.uid}
         out_oscillator_entry = {
-            "id": oscillator_info.id,
+            "id": oscillator_info.uid,
             "frequency": frequency,
-            "hardware": oscillator_info.hardware,
+            "hardware": oscillator_info.is_hardware,
         }
         out_oscillators.append(out_oscillator_entry)
     if len(out_oscillators) > 0:
@@ -122,7 +123,7 @@ def dump(experiment_dao: ExperimentDAO):
             signal_entry["offset"] = signal_info.offset
         signal_oscillator = experiment_dao.signal_oscillator(signal_info.signal_id)
         if signal_oscillator is not None:
-            signal_entry["oscillators_list"] = [{"$ref": signal_oscillator.id}]
+            signal_entry["oscillators_list"] = [{"$ref": signal_oscillator.uid}]
         retval["signals"].append(signal_entry)
 
         device_id = experiment_dao.device_from_signal(signal_info.signal_id)
@@ -242,11 +243,11 @@ def dump(experiment_dao: ExperimentDAO):
             if len(section_parameters) > 0:
                 out_section["repeat"]["parameters"] = []
                 for parameter in section_parameters:
-                    param_object = {"id": parameter["id"]}
+                    param_object = {"id": parameter.uid}
                     keys = ["start", "step", "values"]
                     for key in keys:
-                        if parameter.get(key) is not None:
-                            param_object[key] = parameter[key]
+                        if getattr(parameter, key) is not None:
+                            param_object[key] = getattr(parameter, key)
 
                     out_section["repeat"]["parameters"].append(param_object)
 
@@ -268,6 +269,7 @@ def dump(experiment_dao: ExperimentDAO):
             "averaging_mode",
             "play_after",
             "handle",
+            "user_register",
             "state",
             "local",
         ]

@@ -17,10 +17,10 @@ from laboneq.controller.communication import (
     batch_set,
 )
 from laboneq.controller.protected_session import ProtectedSession
-from laboneq.controller.recipe_enums import NtStepKey
 from laboneq.controller.util import LabOneQControllerException, SweepParamsTracker
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
+from laboneq.data.recipe import NtStepKey
 from laboneq.executor.executor import ExecutorBase, LoopFlags, LoopingMode
 
 if TYPE_CHECKING:
@@ -54,7 +54,9 @@ class NearTimeRunner(ExecutorBase):
             raise LabOneQControllerException(
                 f"User function '{func_name}' is not registered."
             )
-        res = func(ProtectedSession(self.controller._session), **args)
+        res = func(
+            ProtectedSession(self.controller._session, self.controller._results), **args
+        )
         user_func_results = self.controller._results.user_func_results.setdefault(
             func_name, []
         )

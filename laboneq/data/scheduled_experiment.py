@@ -8,20 +8,19 @@ from enum import Enum, auto
 from typing import Any
 
 from laboneq.core.validators import dicts_equal
+from laboneq.data import EnumReprMixin
+from laboneq.data.recipe import Recipe
 
 
 #
 # Enums
 #
-class MixerType(Enum):
+class MixerType(EnumReprMixin, Enum):
     #: Mixer performs full complex modulation
     IQ = auto()
 
     #: Mixer only performs envelope modulation (UHFQA-style)
     UHFQA_ENVELOPE = auto()
-
-    def __repr__(self):
-        return f"{self.__class__.__name__}.{self.name}"
 
 
 #
@@ -73,7 +72,7 @@ class ScheduledExperiment:
     uid: str = None
 
     #: Instructions to the controller for running the experiment.
-    recipe: dict[str, Any] = None
+    recipe: Recipe = None
 
     #: The seqC source code, per device.
     src: list[dict[str, str]] = None

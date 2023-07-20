@@ -268,7 +268,7 @@ class Session:
     ) -> Optional[CompiledExperiment]:
         """Compiles the specified experiment and stores it in the compiled_experiment property.
 
-        Requires connected LabOneQ session (`session.connect()`) either with or without emulation mode.
+        Requires connected LabOne Q session (`session.connect()`) either with or without emulation mode.
 
         Args:
             experiment: Experiment instance that should be compiled.
@@ -305,7 +305,7 @@ class Session:
     ) -> Optional[Results]:
         """Executes the compiled experiment.
 
-        Requires connected LabOneQ session (`session.connect()`) either with or without emulation mode.
+        Requires connected LabOne Q session (`session.connect()`) either with or without emulation mode.
 
         If no experiment is specified, the last compiled experiment is run.
         If an experiment is specified, the provided experiment is assigned to the

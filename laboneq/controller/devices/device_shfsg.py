@@ -22,11 +22,10 @@ from laboneq.controller.communication import (
 from laboneq.controller.devices.device_shf_base import DeviceSHFBase
 from laboneq.controller.devices.device_zi import SequencerPaths
 from laboneq.controller.devices.zi_node_monitor import NodeControlBase
-from laboneq.controller.recipe_1_4_0 import IO, Initialization
-from laboneq.controller.recipe_enums import TriggeringMode
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
+from laboneq.data.recipe import IO, Initialization, TriggeringMode
 
 _logger = logging.getLogger(__name__)
 
@@ -101,7 +100,7 @@ class DeviceSHFSG(DeviceSHFBase):
     def _get_num_awgs(self):
         return self._channels
 
-    def _validate_range(self, io: IO.Data):
+    def _validate_range(self, io: IO):
         if io.range is None:
             return
         range_list = numpy.array(
@@ -206,7 +205,7 @@ class DeviceSHFSG(DeviceSHFBase):
             conditions[f"/{self.serial}/sgchannels/{awg_index}/awg/enable"] = 0
         return conditions
 
-    def _validate_initialization(self, initialization: Initialization.Data):
+    def _validate_initialization(self, initialization: Initialization):
         super()._validate_initialization(initialization)
         outputs = initialization.outputs or []
         for output in outputs:
@@ -221,13 +220,13 @@ class DeviceSHFSG(DeviceSHFBase):
 
     def pre_process_attributes(
         self,
-        initialization: Initialization.Data,
+        initialization: Initialization,
     ) -> Iterator[DeviceAttribute]:
         yield from super().pre_process_attributes(initialization)
 
-        center_frequencies: dict[int, IO.Data] = {}
+        center_frequencies: dict[int, IO] = {}
 
-        def get_synth_idx(io: IO.Data):
+        def get_synth_idx(io: IO):
             if io.channel >= self._channels:
                 raise LabOneQControllerException(
                     f"{self.dev_repr}: Attempt to configure channel {io.channel + 1} on a device "
@@ -266,7 +265,7 @@ class DeviceSHFSG(DeviceSHFBase):
                 )
 
     def collect_initialization_nodes(
-        self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
+        self, device_recipe_data: DeviceRecipeData, initialization: Initialization
     ) -> list[DaqNodeSetAction]:
         _logger.debug("%s: Initializing device...", self.dev_repr)
 
@@ -434,7 +433,7 @@ class DeviceSHFSG(DeviceSHFBase):
         )
 
     def collect_trigger_configuration_nodes(
-        self, initialization: Initialization.Data, recipe_data: RecipeData
+        self, initialization: Initialization, recipe_data: RecipeData
     ) -> list[DaqNodeAction]:
         _logger.debug("Configuring triggers...")
         self._wait_for_awgs = True

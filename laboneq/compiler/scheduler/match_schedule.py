@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Dict, Iterable, Iterator, List, Tuple
+from typing import TYPE_CHECKING, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from attrs import define
 from zhinst.utils.feedback_model import (
@@ -243,8 +243,9 @@ def _compute_start_with_latency(
 
 @define(kw_only=True, slots=True)
 class MatchSchedule(SectionSchedule):
-    handle: str
-    local: bool
+    handle: Optional[str]
+    user_register: Optional[int]
+    local: Optional[bool]
 
     def __attrs_post_init__(self):
         super().__attrs_post_init__()
@@ -253,22 +254,24 @@ class MatchSchedule(SectionSchedule):
     def _calculate_timing(
         self, schedule_data: ScheduleData, start: int, start_may_change
     ) -> int:
-        if start_may_change:
-            raise LabOneQException(
-                f"Match section '{self.section}' with handle '{self.handle}' may not be"
-                " a subsection of a right-aligned section or within a loop with"
-                " repetition mode AUTO."
-            )
+        if self.handle is not None:
+            assert self.local is not None
+            if start_may_change:
+                raise LabOneQException(
+                    f"Match section '{self.section}' with handle '{self.handle}' may not be"
+                    " a subsection of a right-aligned section or within a loop with"
+                    " repetition mode AUTO."
+                )
 
-        start = _compute_start_with_latency(
-            schedule_data,
-            start,
-            self.local,
-            self.handle,
-            self.section,
-            self.signals,
-            self.grid,
-        )
+            start = _compute_start_with_latency(
+                schedule_data,
+                start,
+                self.local,
+                self.handle,
+                self.section,
+                self.signals,
+                self.grid,
+            )
 
         for c in self.children:
             assert isinstance(c, CaseSchedule)
@@ -297,6 +300,7 @@ class MatchSchedule(SectionSchedule):
         section_start_event = events[0]
         assert section_start_event["event_type"] == EventType.SECTION_START
         section_start_event["handle"] = self.handle
+        section_start_event["user_register"] = self.user_register
         section_start_event["local"] = self.local
 
         return events

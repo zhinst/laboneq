@@ -1,34 +1,32 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import itertools
 import logging
 import warnings
+from collections import UserDict
 from typing import Dict, List, Optional, Tuple, Union
 
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.data.setup_description import (
-    Connection,
+    ChannelMapEntry,
     DeviceType,
     Instrument,
-    IOSignalType,
     LogicalSignal,
     LogicalSignalGroup,
     PhysicalChannel,
     PhysicalChannelType,
-    Port,
     Server,
     Setup,
     SetupInternalConnection,
 )
+from laboneq.implementation.legacy_adapters import device_setup_converter as converter
 
 _logger = logging.getLogger(__name__)
 
 PATH_SEPARATOR = "/"
-
-LogicalSignalGroups_Path = "logical_signal_groups"
-LogicalSignalGroups_Path_Abs = PATH_SEPARATOR + LogicalSignalGroups_Path
-
 
 # Terminal Symbols
 T_HDAWG_DEVICE = "HDAWG"
@@ -56,13 +54,6 @@ T_EXTCLK = "external_clock_signal"
 T_INTCLK = "internal_clock_signal"
 T_PORT = "port"
 T_PORTS = "ports"
-
-SIGNAL_TYPE_DIRECTORY = {
-    T_IQ_SIGNAL: IOSignalType.IQ,
-    T_ACQUIRE_SIGNAL: IOSignalType.IQ,
-    T_RF_SIGNAL: IOSignalType.RF,
-    T_TO: IOSignalType.DIO,
-}
 
 
 # Models 'instruments' (former 'instrument_list') part of the descriptor:
@@ -101,15 +92,6 @@ ConnectionsType = Dict[str, List[Dict[str, Union[str, List[str]]]]]
 #         port: 8004
 #         instruments: [device_hdawg, device_uhfqa, device_pqsc]
 DataServersType = Dict[str, Dict[str, Union[str, List[str]]]]
-
-
-def _iterate_over_descriptors_of_type(instruments: InstrumentsType, device_type: str):
-    for descriptor in instruments.get(device_type, []):
-        yield descriptor[T_UID], descriptor[T_ADDRESS], descriptor.get(T_INTERFACE)
-
-
-def _skip_nones(**kwargs):
-    return {k: v for k, v in kwargs.items() if v is not None}
 
 
 def _port_decoder(port_desc, additional_switch_keys=None) -> Tuple[str, str, List[str]]:
@@ -160,22 +142,12 @@ def _port_decoder(port_desc, additional_switch_keys=None) -> Tuple[str, str, Lis
         )
 
     if signal_type_keyword in signal_keys:
-        remote_path = PATH_SEPARATOR.join(["", "logical_signal_groups", remote_path])
+        remote_path = PATH_SEPARATOR.join(["", remote_path])
 
     if port_desc:
         raise LabOneQException(f"Unknown keyword found: {list(port_desc.keys())[0]}")
 
     return signal_type_keyword, remote_path, local_ports
-
-
-def _path_to_signal(path):
-    if PATH_SEPARATOR in path:
-        split_path = path.split(PATH_SEPARATOR)
-        if split_path[1] == LogicalSignalGroups_Path:
-            return split_path[2], split_path[3]
-        else:
-            return split_path[0], split_path[1]
-    return None
 
 
 def _create_physical_channel(
@@ -195,19 +167,60 @@ def _create_physical_channel(
             for group in itertools.groupby([x for y in zip(*split_ports) for x in y])
         )
     ).lower()
-
+    if not signal_name:
+        return
     if device_id not in physical_signals:
         physical_signals[device_id] = []
     else:
         other_signal: PhysicalChannel = next(
-            (ps for ps in physical_signals[device_id] if ps.uid == signal_name), None
+            (ps for ps in physical_signals[device_id] if ps.name == signal_name), None
         )
         if other_signal is not None:
             return other_signal
 
-    physical_channel = PhysicalChannel(uid=f"{signal_name}", type=channel_type)
+    physical_channel = PhysicalChannel(name=f"{signal_name}", type=channel_type)
     physical_signals[device_id].append(physical_channel)
     return physical_channel
+
+
+class DescriptorLogicalSignals(UserDict):
+    def __init__(self, data: Dict) -> Dict[str, LogicalSignalGroup]:
+        super().__init__(data)
+        self.data = self._generate_logical_signal_groups(data)
+
+    def _generate_logical_signal_groups(
+        self, data: Dict
+    ) -> Dict[str, LogicalSignalGroup]:
+        logical_signals_candidates = []
+
+        for conns in data.values():
+            for conn in conns:
+                _, remote_path, _ = _port_decoder(conn)
+                if PATH_SEPARATOR in remote_path:
+                    logical_signals_candidates.append(
+                        {
+                            "lsg_uid": remote_path.split(PATH_SEPARATOR)[1],
+                            "signal_id": remote_path.split(PATH_SEPARATOR)[2],
+                        }
+                    )
+
+        logical_signal_groups = {}
+        for lsg_uid in set([ls["lsg_uid"] for ls in logical_signals_candidates]):
+            signals = [
+                LogicalSignal(
+                    name=ls["signal_id"],
+                    group=ls["lsg_uid"],
+                )
+                for ls in logical_signals_candidates
+                if ls["lsg_uid"] == lsg_uid
+            ]
+
+            lsg = LogicalSignalGroup(lsg_uid, {ls.name: ls for ls in signals})
+            logical_signal_groups[lsg.uid] = lsg
+        return logical_signal_groups
+
+    def get_logical_signal(self, group: str, name: str) -> LogicalSignal:
+        return self.data[group].logical_signals[name]
 
 
 class DeviceSetupGenerator:
@@ -215,7 +228,7 @@ class DeviceSetupGenerator:
     def from_descriptor(
         yaml_text: str,
         server_host: str = None,
-        server_port: str = None,
+        server_port: int | str = None,
         setup_name: str = None,
     ):
         from yaml import load
@@ -275,7 +288,7 @@ class DeviceSetupGenerator:
         connections: ConnectionsType = None,
         dataservers: DataServersType = None,
         server_host: str = None,
-        server_port: str = None,
+        server_port: int | str = None,
         setup_name: str = None,
     ):
         if instrument_list is not None:
@@ -320,13 +333,12 @@ class DeviceSetupGenerator:
                 "At least one server must be defined either in the descriptor or in the constructor."
             )
 
-        # Construct servers
         servers = [
             (
                 Server(
                     uid=server_uid,
                     host=server_def["host"],
-                    port=server_def.get("port", 8004),
+                    port=int(server_def.get("port", 8004)),
                     api_level=6,
                 ),
                 server_def.get("instruments", []),
@@ -366,57 +378,21 @@ class DeviceSetupGenerator:
         out_instruments: List[Instrument] = []
         for it, il in {**instrument_list, **instruments}.items():
             for instrument_def in il:
+                legacy_ports = converter.legacy_instrument_ports(DeviceType[it])
                 instrument = Instrument(
                     uid=instrument_def[T_UID],
                     device_type=DeviceType[it],
                     server=server_finder(instrument_def[T_UID]),
                     address=instrument_def.get(T_ADDRESS, ""),
+                    ports=[converter.convert_instrument_port(x) for x in legacy_ports],
                 )
                 out_instruments.append(instrument)
 
         instruments_by_uid = {i.uid: i for i in out_instruments}
 
-        logical_signals_candidates = []
-        logical_signal_groups = []
         physical_signals = {}
         setup_internal_connections = []
-
-        for device_uid, conns in connections.items():
-            instrument = instruments_by_uid[device_uid]
-            for conn in conns:
-                signal_type_keyword, remote_path, local_ports = _port_decoder(conn)
-                if PATH_SEPARATOR in remote_path:
-                    logical_signals_candidates.append(
-                        {
-                            "lsg_uid": remote_path.split(PATH_SEPARATOR)[2],
-                            "signal_id": remote_path.split(PATH_SEPARATOR)[3],
-                        }
-                    )
-
-        def ls_path_from_parts(lsg_uid, signal_id):
-            return f"{LogicalSignalGroups_Path_Abs}/{lsg_uid}/{signal_id}"
-
-        ls_by_path = {}
-        logical_signal_group_uids = set(
-            [ls["lsg_uid"] for ls in logical_signals_candidates]
-        )
-        for lsg_uid in logical_signal_group_uids:
-            signals = [
-                LogicalSignal(
-                    uid=f"{ls['signal_id']}",
-                    name=ls["signal_id"],
-                    path=ls_path_from_parts(lsg_uid, ls["signal_id"]),
-                )
-                for ls in logical_signals_candidates
-                if ls["lsg_uid"] == lsg_uid
-            ]
-            ls_by_path = {**ls_by_path, **{ls.path: ls for ls in signals}}
-
-            logical_signal_groups.append(LogicalSignalGroup(lsg_uid, signals))
-
-        for lsg in logical_signal_groups:
-            lsg.logical_signals = {ls.uid: ls for ls in lsg.logical_signals}
-        logical_signal_groups = {lsg.uid: lsg for lsg in logical_signal_groups}
+        logical_signal_groups = DescriptorLogicalSignals(connections)
 
         # Define connections
         for device_uid, conns in connections.items():
@@ -424,64 +400,77 @@ class DeviceSetupGenerator:
             instrument = instruments_by_uid[device_uid]
             for conn in conns:
                 signal_type_keyword, remote_path, local_ports = _port_decoder(conn)
+                # TODO (MH): Device processors
                 if signal_type_keyword == T_ACQUIRE_SIGNAL:
                     if instrument.device_type == DeviceType.UHFQA:
                         local_ports = ["QAS/0", "QAS/1"]
 
                 logical_signal = None
                 if PATH_SEPARATOR in remote_path:
-                    logical_signal_id = {
-                        "lsg_uid": remote_path.split(PATH_SEPARATOR)[2],
-                        "signal_id": remote_path.split(PATH_SEPARATOR)[3],
-                    }
-                    logical_signal = ls_by_path[ls_path_from_parts(**logical_signal_id)]
+                    lsg = remote_path.split(PATH_SEPARATOR)[1]
+                    signal_id = remote_path.split(PATH_SEPARATOR)[2]
+                    logical_signal = logical_signal_groups.get_logical_signal(
+                        lsg, signal_id
+                    )
                 physical_channel = _create_physical_channel(
                     local_ports, signal_type_keyword, device_uid, physical_signals
                 )
-
                 if physical_channel is not None:
-                    if physical_channel.uid in physical_channels_by_uid:
+                    if physical_channel.name in physical_channels_by_uid:
                         physical_channel = physical_channels_by_uid[
-                            physical_channel.uid
+                            physical_channel.name
                         ]
                     else:
                         physical_channels_by_uid[
-                            physical_channel.uid
+                            physical_channel.name
                         ] = physical_channel
+                        if "ports" in conn:
+                            for port in instrument.ports:
+                                if port.path in conn["ports"]:
+                                    if not physical_channel.ports:
+                                        physical_channel.ports = [port]
+                                    if port not in physical_channel.ports:
+                                        physical_channel.ports.append(port)
+                        else:
+                            for l_port in local_ports:
+                                for dev_port in instrument.ports:
+                                    if l_port == dev_port.path:
+                                        if not physical_channel.ports:
+                                            physical_channel.ports = [dev_port]
+                                        if port not in physical_channel.ports:
+                                            physical_channel.ports.append(dev_port)
                         instrument.physical_channels.append(physical_channel)
 
                 if logical_signal is not None:
                     instrument.connections.append(
-                        Connection(
+                        ChannelMapEntry(
                             logical_signal=logical_signal,
                             physical_channel=physical_channel,
                         )
                     )
-                for i, p in enumerate(local_ports):
-                    if p not in [port.path for port in instrument.ports]:
-                        current_port = Port(path=p, physical_channel=physical_channel)
-                        instrument.ports.append(current_port)
-                    else:
-                        current_port = next(
-                            port for port in instrument.ports if port.path == p
-                        )
-
+                if "port" in conn:
                     if signal_type_keyword == T_TO:
-                        setup_internal_connections.append(
-                            SetupInternalConnection(
-                                from_instrument=instrument,
-                                from_port=current_port,
-                                to_instrument=instruments_by_uid[remote_path],
-                            )
-                        )
+                        if remote_path in instruments_by_uid:
+                            for instr_port in instrument.ports:
+                                if conn["port"] in instr_port.path:
+                                    setup_internal_connections.append(
+                                        SetupInternalConnection(
+                                            from_instrument=instrument,
+                                            from_port=instr_port,
+                                            to_instrument=instruments_by_uid[
+                                                remote_path
+                                            ],
+                                            to_port=None,
+                                        )
+                                    )
+                                    break
 
         servers = {s.uid: s for s, _ in servers}
         device_setup_constructor_args = {
             "uid": setup_name,
             "servers": servers,
             "instruments": out_instruments,
-            "logical_signal_groups": logical_signal_groups,
+            "logical_signal_groups": logical_signal_groups.data,
             "setup_internal_connections": setup_internal_connections,
         }
-
         return Setup(**device_setup_constructor_args)

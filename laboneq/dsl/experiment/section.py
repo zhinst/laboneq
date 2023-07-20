@@ -56,11 +56,13 @@ class Section:
     length: Optional[float] = field(default=None)
 
     #: Play after the section with the given ID.
-    play_after: Optional[Union[str, List[str]]] = field(default=None)
+    play_after: Optional[Union[str, Section, List[Union[str, Section]]]] = field(
+        default=None
+    )
 
     #: List of children. Each child may be another section or an operation.
     children: List[Union[Section, dsl.experiment.operation.Operation]] = field(
-        default_factory=list, compare=False
+        default_factory=list
     )
 
     #: Optional trigger pulses to play during this section. See :meth:`~.Experiment.section`.
@@ -354,10 +356,13 @@ class Match(Section):
     """Execute one of the child branches depending on feedback result."""
 
     #: Handle from which to obtain results
-    handle: str = ""
+    handle: Optional[str] = None
 
-    #: Whether to go via the PQSC (False) or SHFQC (True)
-    local: bool = False
+    #: User register on which to match
+    user_register: Optional[int] = None
+
+    #: Whether to fetch the codeword via the PQSC (False), SHFQC-internal bus (True) or automatic (None)
+    local: bool | None = None
 
     def add(self, case: Case):
         """Add a branch to which to switch.

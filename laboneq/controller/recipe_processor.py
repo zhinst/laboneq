@@ -19,6 +19,7 @@ from laboneq.controller.attribute_value_tracker import (
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
+from laboneq.data.recipe import IO, Initialization, Recipe, SignalType
 from laboneq.data.scheduled_experiment import ScheduledExperiment
 from laboneq.executor.executor import (
     ExecutorBase,
@@ -27,11 +28,6 @@ from laboneq.executor.executor import (
     Sequence,
     Statement,
 )
-
-from .recipe_1_4_0 import IO
-from .recipe_1_4_0 import Experiment as RecipeExperiment
-from .recipe_1_4_0 import Initialization, Recipe
-from .recipe_enums import SignalType
 
 if TYPE_CHECKING:
     from laboneq.controller.devices.device_collection import DeviceCollection
@@ -127,7 +123,7 @@ RtExecutionInfos = Dict[RtSectionId, RtExecutionInfo]
 @dataclass
 class RecipeData:
     scheduled_experiment: ScheduledExperiment
-    recipe: Recipe.Data
+    recipe: Recipe
     execution: Sequence
     result_shapes: HandleResultShapes
     rt_execution_infos: RtExecutionInfos
@@ -137,12 +133,11 @@ class RecipeData:
     oscillator_ids: list[str]
 
     @property
-    def initializations(self) -> Iterator[Initialization.Data]:
-        for initialization in self.recipe.experiment.initializations:
+    def initializations(self) -> Iterator[Initialization]:
+        for initialization in self.recipe.initializations:
             yield initialization
 
-    def get_initialization_by_device_uid(self, device_uid: str) -> Initialization.Data:
-        initialization: Initialization.Data
+    def get_initialization_by_device_uid(self, device_uid: str) -> Initialization:
         for initialization in self.initializations:
             if initialization.device_uid == device_uid:
                 return initialization
@@ -163,7 +158,7 @@ class RecipeData:
         )
 
 
-def _pre_process_iq_settings_hdawg(initialization: Initialization.Data):
+def _pre_process_iq_settings_hdawg(initialization: Initialization):
     # TODO(2K): Every pair of outputs with adjacent even+odd channel numbers (starting from 0)
     # is treated as an I/Q pair. I/Q pairs should be specified explicitly instead.
 
@@ -193,13 +188,9 @@ def _pre_process_iq_settings_hdawg(initialization: Initialization.Data):
         # Determine I and Q output elements for the IQ pair with index awg_idxs.
         if output.channel % 2 == 0:
             i_out = output
-            q_out = next(
-                (o for o in outputs if o.channel == output.channel + 1), IO.Data(0)
-            )
+            q_out = next((o for o in outputs if o.channel == output.channel + 1), IO(0))
         else:
-            i_out = next(
-                (o for o in outputs if o.channel == output.channel - 1), IO.Data(0)
-            )
+            i_out = next((o for o in outputs if o.channel == output.channel - 1), IO(0))
             q_out = output
 
         if i_out.gains is None or q_out.gains is None:
@@ -370,7 +361,7 @@ def _calculate_result_shapes(
 
 def _calculate_awg_configs(
     rt_execution_infos: RtExecutionInfos,
-    experiment: RecipeExperiment.Data,
+    recipe: Recipe,
 ) -> AwgConfigs:
     awg_configs: AwgConfigs = defaultdict(AwgConfig)
 
@@ -383,17 +374,17 @@ def _calculate_awg_configs(
 
     def integrator_index_by_acquire_signal(signal_id: str, is_local: bool) -> int:
         integrator = next(
-            ia for ia in experiment.integrator_allocations if ia.signal_id == signal_id
+            ia for ia in recipe.integrator_allocations if ia.signal_id == signal_id
         )
         # Only relevant for discrimination mode, where only one channel should
         # be assigned (no multi-state as of now)
         # TODO(2K): Check if HBAR-1359 affects also SHFQA / global feedback
         return integrator.channels[0] * (2 if is_local else 1)
 
-    for a in experiment.integrator_allocations:
+    for a in recipe.integrator_allocations:
         awg_configs[AwgKey(a.device_id, a.awg)].acquire_signals.add(a.signal_id)
 
-    for initialization in experiment.initializations:
+    for initialization in recipe.initializations:
         device_id = initialization.device_uid
         for awg in initialization.awgs or []:
             awg_config = awg_configs[AwgKey(device_id, awg.awg)]
@@ -425,7 +416,7 @@ def _calculate_awg_configs(
         for signal, sections in rt_execution_info.acquire_sections.items():
             awg_key = awg_key_by_acquire_signal(signal)
             for section in sections:
-                for acquire_length_info in experiment.acquire_lengths:
+                for acquire_length_info in recipe.acquire_lengths:
                     if (
                         acquire_length_info.signal_id == signal
                         and acquire_length_info.section_id == section
@@ -453,7 +444,7 @@ def _calculate_awg_configs(
             # regardless of the given integrators mask. Masked-out integrators just leave the
             # value at NaN (corresponds to None in the map).
             awg_result_map: Dict[str, List[str]] = defaultdict(list)
-            for acquires in experiment.simultaneous_acquires:
+            for acquires in recipe.simultaneous_acquires:
                 if any(signal in acquires for signal in awg_config.acquire_signals):
                     for signal in awg_config.acquire_signals:
                         awg_result_map[signal].append(acquires.get(signal))
@@ -474,13 +465,13 @@ def _calculate_awg_configs(
 
 
 def _pre_process_attributes(
-    experiment: RecipeExperiment.Data, devices: DeviceCollection
+    recipe: Recipe, devices: DeviceCollection
 ) -> tuple[AttributeValueTracker, list[str]]:
     attribute_value_tracker = AttributeValueTracker()
     oscillator_ids: list[str] = []
     oscillators_check: dict[str, str | float] = {}
 
-    for oscillator_param in experiment.oscillator_params:
+    for oscillator_param in recipe.oscillator_params:
         value_or_param = oscillator_param.param or oscillator_param.frequency
         if oscillator_param.id in oscillator_ids:
             osc_index = oscillator_ids.index(oscillator_param.id)
@@ -502,7 +493,7 @@ def _pre_process_attributes(
             ),
         )
 
-    for initialization in experiment.initializations:
+    for initialization in recipe.initializations:
         device = devices.find_by_uid(initialization.device_uid)
         for attribute in device.pre_process_attributes(initialization):
             attribute_value_tracker.add_attribute(
@@ -518,19 +509,17 @@ def pre_process_compiled(
     devices: DeviceCollection,
     execution: Statement = None,
 ) -> RecipeData:
-    recipe: Recipe.Data = Recipe().load(scheduled_experiment.recipe)
+    recipe = scheduled_experiment.recipe
 
     device_settings: DeviceSettings = defaultdict(DeviceRecipeData)
-    for initialization in recipe.experiment.initializations:
+    for initialization in recipe.initializations:
         device_settings[initialization.device_uid] = DeviceRecipeData(
             iq_settings=_pre_process_iq_settings_hdawg(initialization)
         )
 
     result_shapes, rt_execution_infos = _calculate_result_shapes(execution)
-    awg_configs = _calculate_awg_configs(rt_execution_infos, recipe.experiment)
-    attribute_value_tracker, oscillator_ids = _pre_process_attributes(
-        recipe.experiment, devices
-    )
+    awg_configs = _calculate_awg_configs(rt_execution_infos, recipe)
+    attribute_value_tracker, oscillator_ids = _pre_process_attributes(recipe, devices)
 
     recipe_data = RecipeData(
         scheduled_experiment=scheduled_experiment,

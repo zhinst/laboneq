@@ -20,8 +20,6 @@ from laboneq.controller.communication import (
 )
 from laboneq.controller.devices.device_zi import DeviceZI, delay_to_rounded_samples
 from laboneq.controller.devices.zi_node_monitor import Command, NodeControlBase
-from laboneq.controller.recipe_1_4_0 import IO, Initialization, IntegratorAllocation
-from laboneq.controller.recipe_enums import TriggeringMode
 from laboneq.controller.recipe_processor import (
     AwgConfig,
     AwgKey,
@@ -33,6 +31,7 @@ from laboneq.controller.recipe_processor import (
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
+from laboneq.data.recipe import IO, Initialization, IntegratorAllocation, TriggeringMode
 
 _logger = logging.getLogger(__name__)
 
@@ -102,7 +101,7 @@ class DeviceUHFQA(DeviceZI):
             )
         if len(self._uplinks) > 1:
             self._error_ambiguous_upstream()
-        upstream = self._uplinks[0]()
+        upstream = next(iter(self._uplinks))()
         if upstream is None:
             self._error_ambiguous_upstream()
         is_desktop = upstream.is_leader() and (
@@ -143,7 +142,7 @@ class DeviceUHFQA(DeviceZI):
         self,
         awg_key: AwgKey,
         awg_config: AwgConfig,
-        integrator_allocations: list[IntegratorAllocation.Data],
+        integrator_allocations: list[IntegratorAllocation],
         averages: int,
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
@@ -169,7 +168,7 @@ class DeviceUHFQA(DeviceZI):
         self,
         awg_key: AwgKey,
         awg_config: AwgConfig,
-        integrator_allocations: list[IntegratorAllocation.Data],
+        integrator_allocations: list[IntegratorAllocation],
         averages: int,
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
@@ -271,7 +270,7 @@ class DeviceUHFQA(DeviceZI):
             conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = 0
         return conditions
 
-    def _validate_range(self, io: IO.Data, is_out: bool):
+    def _validate_range(self, io: IO, is_out: bool):
         if io.range is None:
             return
 
@@ -299,7 +298,7 @@ class DeviceUHFQA(DeviceZI):
                 range_list,
             )
 
-    def _validate_initialization(self, initialization: Initialization.Data):
+    def _validate_initialization(self, initialization: Initialization):
         super()._validate_initialization(initialization)
         outputs = initialization.outputs or []
         for output in outputs:
@@ -313,7 +312,7 @@ class DeviceUHFQA(DeviceZI):
                 )
 
     def collect_initialization_nodes(
-        self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
+        self, device_recipe_data: DeviceRecipeData, initialization: Initialization
     ) -> list[DaqNodeAction]:
         _logger.debug("%s: Initializing device...", self.dev_repr)
 
@@ -436,9 +435,7 @@ class DeviceUHFQA(DeviceZI):
         nodes_to_set_for_standard_mode.append(
             DaqNodeSetAction(self._daq, f"/{self.serial}/qas/0/integration/mode", 0)
         )
-        for (
-            integrator_allocation
-        ) in recipe_data.recipe.experiment.integrator_allocations:
+        for integrator_allocation in recipe_data.recipe.integrator_allocations:
             if integrator_allocation.device_id != device_uid:
                 continue
 
@@ -564,7 +561,7 @@ class DeviceUHFQA(DeviceZI):
         return nodes_to_set_for_spectroscopy_mode
 
     def collect_awg_before_upload_nodes(
-        self, initialization: Initialization.Data, recipe_data: RecipeData
+        self, initialization: Initialization, recipe_data: RecipeData
     ):
         acquisition_type = RtExecutionInfo.get_acquisition_type(
             recipe_data.rt_execution_infos
@@ -576,7 +573,7 @@ class DeviceUHFQA(DeviceZI):
                 acquisition_type, initialization.device_uid, recipe_data
             )
 
-    def collect_awg_after_upload_nodes(self, initialization: Initialization.Data):
+    def collect_awg_after_upload_nodes(self, initialization: Initialization):
         nodes_to_initialize_measurement = []
         inputs = initialization.inputs
         if len(initialization.measurements) > 0:
@@ -616,7 +613,7 @@ class DeviceUHFQA(DeviceZI):
         return nodes_to_initialize_measurement
 
     def collect_trigger_configuration_nodes(
-        self, initialization: Initialization.Data, recipe_data: RecipeData
+        self, initialization: Initialization, recipe_data: RecipeData
     ) -> list[DaqNodeAction]:
         _logger.debug("Configuring triggers...")
         _logger.debug("Configuring strobe index: 16.")

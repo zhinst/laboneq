@@ -102,7 +102,8 @@ def _analyze_branches(events, delay, sampling_rate, playwave_max_hint):
     for ev in events:
         if ev["event_type"] == "SECTION_START":
             handle = ev.get("handle", None)
-            if handle is not None:
+            user_register = ev.get("user_register", None)
+            if handle is not None or user_register is not None:
                 begin = length_to_samples(ev["time"] + delay, sampling_rate)
                 # Add the command table interval boundaries as cut points
                 cut_points.add(begin)
@@ -112,7 +113,7 @@ def _analyze_branches(events, delay, sampling_rate, playwave_max_hint):
                         # right time; todo(JL): Use actual min_play_wave
                         begin=begin,
                         end=None,
-                        data=(handle, ev["local"]),
+                        data=(handle, ev["local"], user_register),
                     )
                 )
             else:
@@ -595,6 +596,7 @@ def analyze_play_wave_times(
                 params={
                     "handle": interval.data[0],
                     "local": interval.data[1],
+                    "user_register": interval.data[2],
                     "signal_id": signal_id,
                     "section_name": section_name,
                 },

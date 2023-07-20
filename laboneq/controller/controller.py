@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import copy
 import itertools
 import logging
 import os
@@ -30,32 +31,31 @@ from laboneq.controller.devices.device_uhfqa import DeviceUHFQA
 from laboneq.controller.devices.device_zi import Waveforms
 from laboneq.controller.devices.zi_node_monitor import ResponseWaiter
 from laboneq.controller.near_time_runner import NearTimeRunner
-from laboneq.controller.recipe_1_4_0 import *  # noqa: F401, F403
 from laboneq.controller.recipe_processor import (
     RecipeData,
     RtExecutionInfo,
     pre_process_compiled,
 )
-from laboneq.controller.results import (
-    build_partial_result,
-    make_acquired_result,
-    make_empty_results,
-)
+from laboneq.controller.results import build_partial_result, make_acquired_result
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.core.utilities.replace_pulse import ReplacementType, calc_wave_replacements
 from laboneq.data.execution_payload import TargetSetup
+from laboneq.data.experiment_results import ExperimentResults
+from laboneq.data.recipe import NtStepKey
 from laboneq.executor.execution_from_experiment import ExecutionFactoryFromExperiment
 from laboneq.executor.executor import Statement
+from laboneq.implementation.payload_builder.convert_from_legacy_json_recipe import (
+    convert_from_legacy_json_recipe,
+)
 
 if TYPE_CHECKING:
     from laboneq.controller.devices.device_zi import DeviceZI
     from laboneq.core.types import CompiledExperiment
     from laboneq.data.execution_payload import ExecutionPayload
-    from laboneq.dsl import Session
     from laboneq.dsl.experiment.pulse import Pulse
-    from laboneq.dsl.result.results import Results
+    from laboneq.dsl.session import Session
 
 
 _logger = logging.getLogger(__name__)
@@ -120,8 +120,8 @@ class Controller:
         self._user_functions: dict[str, Callable] = user_functions
         self._nodes_from_user_functions: list[DaqNodeAction] = []
         self._recipe_data: RecipeData = None
-        self._session = None
-        self._results: Results = None
+        self._session: Any = None
+        self._results = ExperimentResults()
 
         _logger.debug("Controller created")
         _logger.debug("Controller debug logging is on")
@@ -130,7 +130,7 @@ class Controller:
 
     def _allocate_resources(self):
         self._devices.free_allocations()
-        osc_params = self._recipe_data.recipe.experiment.oscillator_params
+        osc_params = self._recipe_data.recipe.oscillator_params
         for osc_param in sorted(osc_params, key=lambda p: p.id):
             self._devices.find_by_uid(osc_param.device_id).allocate_osc(osc_param)
 
@@ -185,7 +185,7 @@ class Controller:
                 rt_exec_step = next(
                     (
                         r
-                        for r in recipe_data.recipe.experiment.realtime_execution_init
+                        for r in recipe_data.recipe.realtime_execution_init
                         if r.device_id == initialization.device_uid
                         and r.awg_id == awg_obj.awg
                         and r.nt_step == nt_step
@@ -398,7 +398,7 @@ class Controller:
         batch_set(nodes_to_execute)
 
     def _wait_execution_to_stop(self, acquisition_type: AcquisitionType):
-        min_wait_time = self._recipe_data.recipe.experiment.max_step_execution_time
+        min_wait_time = self._recipe_data.recipe.max_step_execution_time
         if min_wait_time is None:
             _logger.warning(
                 "No estimation available for the execution time, assuming 10 sec."
@@ -482,17 +482,22 @@ class Controller:
                 compiled_experiment.experiment
             )
 
+        scheduled_experiment = copy.copy(compiled_experiment.scheduled_experiment)
+        if isinstance(scheduled_experiment.recipe, dict):
+            scheduled_experiment.recipe = convert_from_legacy_json_recipe(
+                scheduled_experiment.recipe
+            )
+
         self._recipe_data = pre_process_compiled(
-            compiled_experiment.scheduled_experiment, self._devices, execution
+            scheduled_experiment, self._devices, execution
         )
 
         self._session = session
-        if session is None:
-            self._results = None
-        else:
-            self._results = session._last_results
-
         self._execute_compiled_impl()
+        if session and session._last_results:
+            session._last_results.acquired_results = self._results.acquired_results
+            session._last_results.user_func_results = self._results.user_func_results
+            session._last_results.execution_errors = self._results.execution_errors
 
     def execute_compiled(self, job: ExecutionPayload):
         self._recipe_data = pre_process_compiled(
@@ -500,8 +505,7 @@ class Controller:
             self._devices,
             job.scheduled_experiment.execution,
         )
-        self._results = None
-
+        self._session = None
         self._execute_compiled_impl()
 
     def _execute_compiled_impl(self):
@@ -534,7 +538,7 @@ class Controller:
     def _find_awg(self, seqc_name: str) -> tuple[str, int]:
         # TODO(2K): Do this in the recipe preprocessor, or even modify the compiled experiment
         #  data model
-        for rt_exec_step in self._recipe_data.recipe.experiment.realtime_execution_init:
+        for rt_exec_step in self._recipe_data.recipe.realtime_execution_init:
             if rt_exec_step.seqc_ref == seqc_name:
                 return rt_exec_step.device_id, rt_exec_step.awg_id
         return None, None
@@ -644,7 +648,7 @@ class Controller:
                 device.configure_acquisition(
                     awg_key,
                     awg_config,
-                    self._recipe_data.recipe.experiment.integrator_allocations,
+                    self._recipe_data.recipe.integrator_allocations,
                     effective_averages,
                     effective_averaging_mode,
                     rt_execution_info.acquisition_type,
@@ -653,8 +657,7 @@ class Controller:
         return nodes_to_prepare_rt
 
     def _prepare_result_shapes(self):
-        if self._results is None:
-            self._results = make_empty_results()
+        self._results = ExperimentResults()
         if len(self._recipe_data.rt_execution_infos) == 0:
             return
         if len(self._recipe_data.rt_execution_infos) > 1:
@@ -738,7 +741,7 @@ class Controller:
                 for signal in awg_config.acquire_signals:
                     integrator_allocation = next(
                         i
-                        for i in self._recipe_data.recipe.experiment.integrator_allocations
+                        for i in self._recipe_data.recipe.integrator_allocations
                         if i.signal_id == signal
                     )
                     assert integrator_allocation.device_id == awg_key.device_uid

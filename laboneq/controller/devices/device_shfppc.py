@@ -12,8 +12,8 @@ from laboneq.controller.attribute_value_tracker import (
 )
 from laboneq.controller.communication import DaqNodeAction, DaqNodeSetAction
 from laboneq.controller.devices.device_zi import DeviceZI
-from laboneq.controller.recipe_1_4_0 import Initialization
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
+from laboneq.data.recipe import Initialization
 
 
 class DeviceSHFPPC(DeviceZI):
@@ -49,7 +49,7 @@ class DeviceSHFPPC(DeviceZI):
 
     def pre_process_attributes(
         self,
-        initialization: Initialization.Data,
+        initialization: Initialization,
     ) -> Iterator[DeviceAttribute]:
         yield from super().pre_process_attributes(initialization)
         ppchannels = initialization.ppchannels or []
@@ -68,7 +68,7 @@ class DeviceSHFPPC(DeviceZI):
         return []
 
     def collect_initialization_nodes(
-        self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
+        self, device_recipe_data: DeviceRecipeData, initialization: Initialization
     ) -> list[DaqNodeAction]:
         nodes_to_set: list[DaqNodeAction] = []
         ppchannels = initialization.ppchannels or []

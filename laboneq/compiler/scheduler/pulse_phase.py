@@ -59,11 +59,11 @@ def calculate_osc_phase(event_list, experiment_dao: ExperimentDAO):
                 ]:
                     incremented_phase = oscillator_phase_cumulative.get(signal_id, 0.0)
 
-                    if oscillator_info.hardware:
+                    if oscillator_info.is_hardware:
                         if signal_id in oscillator_phase_sets:
                             raise LabOneQException(
                                 f"There are set_oscillator_phase entries for signal "
-                                f"'{signal_id}', but oscillator '{oscillator_info.id}' "
+                                f"'{signal_id}', but oscillator '{oscillator_info.uid}' "
                                 f"is a hardware oscillator. Setting absolute phase is "
                                 f"not supported for hardware oscillators."
                             )

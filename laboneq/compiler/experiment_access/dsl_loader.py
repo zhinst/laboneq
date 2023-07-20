@@ -8,7 +8,6 @@ import itertools
 import logging
 import typing
 from dataclasses import dataclass
-from numbers import Number
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, Tuple
 
@@ -37,22 +36,30 @@ if typing.TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 
-def find_value_or_parameter_attr(entity: Any, attr: str, value_types: Tuple[type, ...]):
+def find_value_or_parameter_attr(
+    entity: Any, attr: str, value_types: tuple[type, ...]
+) -> tuple[Any, str]:
     param = None
     value = getattr(entity, attr, None)
     if value is not None and not isinstance(value, value_types):
         param = getattr(value, "uid", None)
         value = None
+
     return value, param
 
 
 class DSLLoader(LoaderBase):
+    def __init__(self):
+        super().__init__()
+        self._nt_only_params = []
+        self._section_operations_to_add = []
+
     def load(self, experiment: Experiment, device_setup: DeviceSetup):
-        global_leader_device_id = None
+        self.global_leader_device_id = None
 
         for server in device_setup.servers.values():
             if hasattr(server, "leader_uid"):
-                global_leader_device_id = server.leader_uid
+                self.global_leader_device_id = server.leader_uid
             self.add_server(server.uid, server.host, server.port, server.api_level)
 
         dest_path_devices = {}
@@ -66,25 +73,14 @@ class DSLLoader(LoaderBase):
                 reference_clock = device.reference_clock
 
         for device in sorted(device_setup.instruments, key=lambda x: x.uid):
-            server = device.server_uid
-
             driver = type(device).__name__.lower()
-            serial = device.address
-            interface = device.interface
-            is_global_leader = 0
-            if global_leader_device_id == device.uid:
-                is_global_leader = 1
             reference_clock_source = getattr(device, "reference_clock_source", None)
             is_qc = getattr(device, "is_qc", None)
 
             self.add_device(
                 device.uid,
                 driver,
-                serial,
-                server,
-                interface,
-                is_global_leader,
-                reference_clock,
+                reference_clock=reference_clock,
                 reference_clock_source=None
                 if reference_clock_source is None
                 else reference_clock_source.value,
@@ -235,8 +231,10 @@ class DSLLoader(LoaderBase):
 
             if calibration is not None:
 
-                def opt_param(val: float | Parameter | None) -> float | str | None:
-                    if val is None or isinstance(val, Number):
+                def opt_param(
+                    val: float | Parameter | None,
+                ) -> float | int | str | None:
+                    if val is None or isinstance(val, (float, int)):
                         return val
                     self._nt_only_params.append(val.uid)
                     return val.uid
@@ -254,26 +252,17 @@ class DSLLoader(LoaderBase):
 
                         oscillator_uid = oscillator.uid
 
-                        frequency_param = None
-
                         frequency = oscillator.frequency
-                        try:
-                            frequency = float(frequency)
-                        except (ValueError, TypeError):
-                            if frequency is not None and hasattr(frequency, "uid"):
-                                frequency_param = frequency.uid
-                                frequency = None
-                            else:
-                                raise
+                        if hasattr(frequency, "uid"):
+                            frequency = self._get_or_create_parameter(frequency.uid)
+
                         modulated_paths[ls.path] = {
                             "oscillator_id": oscillator_uid,
                             "is_hardware": is_hardware,
                         }
                         known_oscillator = self._oscillators.get(oscillator_uid)
                         if known_oscillator is None:
-                            self.add_oscillator(
-                                oscillator_uid, frequency, frequency_param, is_hardware
-                            )
+                            self.add_oscillator(oscillator_uid, frequency, is_hardware)
 
                             if is_hardware:
                                 device_id = dest_path_devices[ls.path]["device"]
@@ -281,9 +270,8 @@ class DSLLoader(LoaderBase):
                         else:
                             if (
                                 known_oscillator["frequency"],
-                                known_oscillator["frequency_param"],
-                                known_oscillator["hardware"],
-                            ) != (frequency, frequency_param, is_hardware):
+                                known_oscillator["is_hardware"],
+                            ) != (frequency, is_hardware):
                                 raise Exception(
                                     f"Duplicate oscillator uid {oscillator_uid} found in {ls.path}"
                                 )
@@ -462,7 +450,8 @@ class DSLLoader(LoaderBase):
             if len(channels) > 1:
                 if len(set(channels)) < len(channels):
                     raise RuntimeError(
-                        f"Channels for a signal must be distinct, but got {channels} for signal {signal}, connection ports: {local_ports}"
+                        f"Channels for a signal must be distinct, but got {channels}"
+                        f" for signal {signal}, connection ports: {local_ports}"
                     )
 
             self.add_signal_connection(
@@ -548,6 +537,14 @@ class DSLLoader(LoaderBase):
         for section in experiment.sections:
             self._process_section(
                 section, None, section_uid_map, acquisition_type_map, exchanger_map
+            )
+
+        # Need to defer the insertion of section operations. In sequential averaging mode,
+        # the tree-walking order might otherwise make us visit operations which depend on parameters
+        # we haven't seen the sweep of yet.
+        for section, acquisition_type, instance_id in self._section_operations_to_add:
+            self._insert_section_operations(
+                section, acquisition_type, exchanger_map, instance_id
             )
 
         if seq_avg_section is not None and len(sweep_sections):
@@ -636,6 +633,33 @@ class DSLLoader(LoaderBase):
             for k, v in markers_raw.items()
         ]
 
+    def _sweep_derived_param(self, param: Parameter):
+        base_swept_params = {
+            p.uid: s for s, pp in self._section_parameters.items() for p in pp
+        }
+        if param.uid in base_swept_params:
+            return
+
+        # This parameter is not swept directly, but derived from a swept parameter;
+        # we must add it to the corresponding loop.
+        parent = param.driven_by[0]
+        self._sweep_derived_param(parent)
+        # the parent should now be added correctly, so try the initial test again
+        base_swept_params = {
+            p.uid: s for s, pp in self._section_parameters.items() for p in pp
+        }
+        assert parent.uid in base_swept_params
+        values_list = None
+        if param.values is not None:
+            values_list = list(param.values)
+        axis_name = param.axis_name
+        self.add_section_parameter(
+            base_swept_params[parent.uid],
+            param.uid,
+            values_list=values_list,
+            axis_name=axis_name,
+        )
+
     def _insert_section(
         self,
         section,
@@ -645,8 +669,6 @@ class DSLLoader(LoaderBase):
     ):
         has_repeat = False
         count = 1
-
-        _auto_pulse_id = (f"{section.uid}__auto_pulse_{i}" for i in itertools.count())
 
         if hasattr(section, "count"):
             has_repeat = True
@@ -671,7 +693,8 @@ class DSLLoader(LoaderBase):
                     count = len(parameter.values)
                 if count < 1:
                     raise Exception(
-                        f"Repeat count must be at least 1, but section {section.uid} has count={count}"
+                        f"Repeat count must be at least 1, but section {section.uid}"
+                        f" has count={count}"
                     )
                 if (
                     section.execution_type is not None
@@ -679,8 +702,8 @@ class DSLLoader(LoaderBase):
                     and parameter.uid in self._nt_only_params
                 ):
                     raise Exception(
-                        f"Parameter {parameter.uid} can't be swept in real-time, it is bound to a value "
-                        f"that can only be set in near-time"
+                        f"Parameter {parameter.uid} can't be swept in real-time, it is"
+                        f" bound to a value that can only be set in near-time"
                     )
 
         execution_type = None
@@ -719,6 +742,10 @@ class DSLLoader(LoaderBase):
         if hasattr(section, "handle"):
             handle = section.handle
 
+        user_register = None
+        if hasattr(section, "user_register"):
+            user_register = section.user_register
+
         state = None
         if hasattr(section, "state"):
             state = section.state
@@ -739,6 +766,13 @@ class DSLLoader(LoaderBase):
                 # an acquire event - add acquisition_types
                 acquisition_types = [acquisition_type.value]
 
+        play_after = getattr(section, "play_after", None)
+        if play_after:
+            section_uid = lambda x: x.uid if hasattr(x, "uid") else x
+            play_after = section_uid(play_after)
+            if isinstance(play_after, list):
+                play_after = [section_uid(s) for s in play_after]
+
         self.add_section(
             instance_id,
             SectionInfo(
@@ -755,10 +789,11 @@ class DSLLoader(LoaderBase):
                 averaging_mode=averaging_mode,
                 repetition_mode=repetition_mode,
                 repetition_time=repetition_time,
-                play_after=getattr(section, "play_after", None),
+                play_after=play_after,
                 reset_oscillator_phase=reset_oscillator_phase,
                 trigger_output=trigger,
                 handle=handle,
+                user_register=user_register,
                 state=state,
                 local=local,
             ),
@@ -775,6 +810,17 @@ class DSLLoader(LoaderBase):
                 continue
             self.add_section_signal(instance_id, operation.signal)
 
+        self._section_operations_to_add.append((section, acquisition_type, instance_id))
+
+    def _insert_section_operations(
+        self,
+        section,
+        acquisition_type,
+        exchanger_map: Callable[[Any], Any],
+        instance_id: str,
+    ):
+
+        _auto_pulse_id = (f"{section.uid}__auto_pulse_{i}" for i in itertools.count())
         for operation in exchanger_map(section).operations:
             if hasattr(operation, "signal"):
                 pulse_offset = None
@@ -790,6 +836,9 @@ class DSLLoader(LoaderBase):
                     ):
                         pulse_offset = None
                         pulse_offset_param = operation.time.uid
+
+                    if pulse_offset_param is not None:
+                        self._sweep_derived_param(operation.time)
 
                     ssp = SectionSignalPulse(
                         signal_id=operation.signal,
@@ -812,6 +861,7 @@ class DSLLoader(LoaderBase):
                         and not isinstance(operation_length, int)
                     ):
                         operation_length_param = operation_length.uid
+                        self._sweep_derived_param(operation_length)
                         operation_length = None
 
                     if hasattr(operation, "pulse"):
@@ -838,7 +888,8 @@ class DSLLoader(LoaderBase):
 
                     if hasattr(operation, "handle") and pulse is None:
                         raise RuntimeError(
-                            f"Either 'kernel' or 'length' must be provided for the acquire operation with handle '{getattr(operation, 'handle')}'."
+                            f"Either 'kernel' or 'length' must be provided for the"
+                            f" acquire operation with handle '{getattr(operation, 'handle')}'."
                         )
 
                     if pulse is not None:
@@ -860,6 +911,8 @@ class DSLLoader(LoaderBase):
                             amplitude, amplitude_param = find_value_or_parameter_attr(
                                 pulse, "amplitude", (float, int, complex)
                             )
+                            if amplitude_param is not None:
+                                self._sweep_derived_param(pulse.amplitude)
 
                             can_compress = False
                             if hasattr(pulse, "can_compress"):
@@ -884,21 +937,31 @@ class DSLLoader(LoaderBase):
                         ) = find_value_or_parameter_attr(
                             operation, "amplitude", (int, float, complex)
                         )
+                        if pulse_amplitude_param is not None:
+                            self._sweep_derived_param(operation.amplitude)
                         pulse_phase, pulse_phase_param = find_value_or_parameter_attr(
                             operation, "phase", (int, float)
                         )
+                        if pulse_phase_param is not None:
+                            self._sweep_derived_param(operation.phase)
                         (
                             pulse_increment_oscillator_phase,
                             pulse_increment_oscillator_phase_param,
                         ) = find_value_or_parameter_attr(
                             operation, "increment_oscillator_phase", (int, float)
                         )
+                        if pulse_increment_oscillator_phase_param is not None:
+                            self._sweep_derived_param(
+                                operation.increment_oscillator_phase
+                            )
                         (
                             pulse_set_oscillator_phase,
                             pulse_set_oscillator_phase_param,
                         ) = find_value_or_parameter_attr(
                             operation, "set_oscillator_phase", (int, float)
                         )
+                        if pulse_set_oscillator_phase_param is not None:
+                            self._sweep_derived_param(operation.set_oscillator_phase)
 
                         acquire_params = None
                         if hasattr(operation, "handle"):
@@ -917,6 +980,7 @@ class DSLLoader(LoaderBase):
                                 if hasattr(val, "uid"):
                                     # Take the presence of "uid" as a proxy for isinstance(val, SweepParameter)
                                     pulse_parameters[param] = ParamRef(val.uid)
+                                    self._sweep_derived_param(val)
                         if operation_pulse_parameters is not None:
                             for param, val in operation_pulse_parameters.items():
                                 if hasattr(val, "uid"):
@@ -924,6 +988,7 @@ class DSLLoader(LoaderBase):
                                     operation_pulse_parameters[param] = ParamRef(
                                         val.uid
                                     )
+                                    self._sweep_derived_param(val)
 
                         if markers:
                             for m in markers:
@@ -972,12 +1037,18 @@ class DSLLoader(LoaderBase):
                         ) = find_value_or_parameter_attr(
                             operation, "increment_oscillator_phase", (int, float)
                         )
+                        if pulse_increment_oscillator_phase_param is not None:
+                            self._sweep_derived_param(
+                                operation.increment_oscillator_phase
+                            )
                         (
                             pulse_set_oscillator_phase,
                             pulse_set_oscillator_phase_param,
                         ) = find_value_or_parameter_attr(
                             operation, "set_oscillator_phase", (int, float)
                         )
+                        if pulse_set_oscillator_phase_param is not None:
+                            self._sweep_derived_param(operation.set_oscillator_phase)
                         for par in [
                             "precompensation_clear",
                             "amplitude",
@@ -1048,5 +1119,6 @@ class AttributeOverrider(object):
         if self._base is not None and hasattr(self._base, attr):
             return getattr(self._base, attr)
         raise AttributeError(
-            f"Field {attr} not found on overrider {self._overrider} (type {type(self._overrider)}) nor on base {self._base}"
+            f"Field {attr} not found on overrider {self._overrider}"
+            f" (type {type(self._overrider)}) nor on base {self._base}"
         )

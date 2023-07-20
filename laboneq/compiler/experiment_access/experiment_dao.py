@@ -12,15 +12,14 @@ from jsonschema import ValidationError
 
 from laboneq._utils import cached_method
 from laboneq.compiler.experiment_access import json_dumper
-from laboneq.compiler.experiment_access.device_info import DeviceInfo
 from laboneq.compiler.experiment_access.dsl_loader import DSLLoader
 from laboneq.compiler.experiment_access.json_loader import JsonLoader
-from laboneq.compiler.experiment_access.oscillator_info import OscillatorInfo
 from laboneq.compiler.experiment_access.section_info import SectionInfo
 from laboneq.compiler.experiment_access.signal_info import SignalInfo
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import AcquisitionType
 from laboneq.core.validators import dicts_equal
+from laboneq.data.compilation_job import DeviceInfo, OscillatorInfo, ParameterInfo
 
 _logger = logging.getLogger(__name__)
 
@@ -108,24 +107,17 @@ class ExperimentDAO:
         return sorted([s["signal_id"] for s in self._data["signals"].values()])
 
     def devices(self) -> List[str]:
-        return [d["id"] for d in self._data["devices"].values()]
+        return [d["uid"] for d in self._data["devices"].values()]
 
     def global_leader_device(self) -> str:
-        try:
-            return next(
-                d for d in self._data["devices"].values() if d.get("is_global_leader")
-            )["id"]
-        except StopIteration:
-            return None
+        return self._data["global_leader_device_id"]
 
     @classmethod
     def _device_info_keys(cls):
         return [
-            "id",
+            "uid",
             "device_type",
-            "serial",
-            "server",
-            "interface",
+            "reference_clock",
             "reference_clock_source",
             "is_qc",
         ]
@@ -159,7 +151,7 @@ class ExperimentDAO:
         return {
             d["device_type"]
             for d in self._data["devices"].values()
-            if d["id"] in devices
+            if d["uid"] in devices
         }
 
     def device_types_in_section(self, section_id):
@@ -178,7 +170,6 @@ class ExperimentDAO:
             "signal_id",
             "signal_type",
             "device_id",
-            "device_serial",
             "device_type",
             "connection_type",
             "channels",
@@ -200,7 +191,6 @@ class ExperimentDAO:
             device_info = self._data["devices"][signal_connection["device_id"]]
 
             signal_info_copy["device_type"] = device_info["device_type"]
-            signal_info_copy["device_serial"] = device_info["serial"]
             return SignalInfo(
                 **{k: signal_info_copy[k] for k in self._signal_info_keys()}
             )
@@ -323,9 +313,9 @@ class ExperimentDAO:
 
     @classmethod
     def _oscillator_info_fields(cls):
-        return ["id", "frequency", "frequency_param", "hardware"]
+        return ["uid", "frequency", "is_hardware"]
 
-    def oscillator_info(self, oscillator_id) -> OscillatorInfo:
+    def oscillator_info(self, oscillator_id) -> OscillatorInfo | None:
         oscillator = self._data["oscillators"].get(oscillator_id)
         if oscillator is None:
             return None
@@ -339,11 +329,11 @@ class ExperimentDAO:
             device_oscillators = self.device_oscillators(device)
             for oscillator_id in device_oscillators:
                 info = self.oscillator_info(oscillator_id)
-                if info is not None and info.hardware:
+                if info is not None and info.is_hardware:
                     info.device_id = device
                     oscillator_infos.append(info)
 
-        return list(sorted(oscillator_infos, key=lambda x: (x.device_id, x.id)))
+        return sorted(oscillator_infos, key=lambda x: x.uid)
 
     def device_oscillators(self, device_id):
         return [
@@ -419,17 +409,14 @@ class ExperimentDAO:
     def triggers_on_signal(self, signal_id: str):
         return self._data["signal_trigger"].get(signal_id)
 
-    def section_parameters(self, section_id):
-        return [
-            {k: p.get(k) for k in ["id", "start", "step", "values", "axis_name"]}
-            for p in self._data["section_parameters"].get(section_id, [])
-        ]
+    def section_parameters(self, section_id) -> list[ParameterInfo]:
+        return self._data["section_parameters"].get(section_id, [])
 
     def validate_experiment(self):
         all_parameters = set()
         for section_id in self.sections():
             for parameter in self.section_parameters(section_id):
-                all_parameters.add(parameter["id"])
+                all_parameters.add(parameter.uid)
 
         for section_id in self.sections():
             for signal_id in self.section_signals(section_id):

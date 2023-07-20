@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from laboneq.data.setup_description import (
-    Connection,
+    ChannelMapEntry,
     DeviceType,
     LogicalSignalGroup,
     PhysicalChannel,
@@ -38,9 +38,7 @@ def post_process(source, target, conversion_function_lookup):
         post_process_setup(source, target)
 
     if type(target) == LogicalSignalGroup:
-        target.logical_signals = {
-            ls.uid.split("/")[1]: ls for ls in target.logical_signals
-        }
+        target.logical_signals = {ls.group: ls for ls in target.logical_signals}
     return target
 
 
@@ -84,7 +82,7 @@ def post_process_setup(dsl_setup, data_setup):
     all_ls = {}
     for lsg in data_setup.logical_signal_groups:
         for ls in lsg.logical_signals.values():
-            all_ls[ls.path] = ls
+            all_ls[ls.group + "/" + ls.name] = ls
 
     for i in data_setup.instruments:
         server_uid = i.server
@@ -93,7 +91,7 @@ def post_process_setup(dsl_setup, data_setup):
 
         i.physical_channels = [
             PhysicalChannel(
-                uid=pc.name,
+                name=pc.name,
                 type=PhysicalChannelType.IQ_CHANNEL
                 if pc.type == PhysicalChannelTypeDSL.IQ_CHANNEL
                 else PhysicalChannelType.RF_CHANNEL,
@@ -123,17 +121,23 @@ def post_process_setup(dsl_setup, data_setup):
                     (
                         pc
                         for pc in i.physical_channels
-                        if pc.uid == pc_of_connection.name
+                        if pc.name == pc_of_connection.name
                     ),
                     None,
                 )
+            from laboneq.implementation.legacy_adapters import (
+                device_setup_converter as converter,
+            )
 
-            current_port = Port(path=c.local_port, physical_channel=pc_of_connection)
+            current_port = Port(
+                path=c.local_port,
+                type=converter.legacy_signal_to_port_type(c.signal_type),
+            )
             i.ports.append(current_port)
 
             if c.remote_path in all_ls and pc_of_connection is not None:
                 i.connections.append(
-                    Connection(
+                    ChannelMapEntry(
                         physical_channel=pc_of_connection,
                         logical_signal=all_ls[c.remote_path],
                     )
@@ -144,6 +148,7 @@ def post_process_setup(dsl_setup, data_setup):
                         from_instrument=i,
                         to_instrument=data_instrument_map[c.remote_path],
                         from_port=current_port,
+                        to_port=None,
                     )
                 )
 

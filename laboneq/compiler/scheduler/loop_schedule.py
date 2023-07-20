@@ -14,12 +14,13 @@ from laboneq.compiler.scheduler.section_schedule import SectionSchedule
 from laboneq.compiler.scheduler.utils import ceil_to_grid, lcm
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.core.types.enums.repetition_mode import RepetitionMode
+from laboneq.data.compilation_job import ParameterInfo
 
 
 @define(kw_only=True, slots=True)
 class LoopSchedule(SectionSchedule):
     compressed: bool
-    sweep_parameters: List[Dict]
+    sweep_parameters: List[ParameterInfo]
     iterations: int
     repetition_mode: Optional[RepetitionMode]
     repetition_time: Optional[int]
@@ -196,7 +197,7 @@ class LoopSchedule(SectionSchedule):
         cls,
         schedule: SectionSchedule,
         compressed: bool,
-        sweep_parameters: List[Dict],
+        sweep_parameters: List[ParameterInfo],
         iterations: int,
         repetition_mode: Optional[RepetitionMode],
         repetition_time: Optional[int],

@@ -24,6 +24,7 @@ class SectionInfo:
     play_after: Optional[Union[str, List[str]]]
     reset_oscillator_phase: bool
     handle: Optional[str]
+    user_register: Optional[int]
     state: Optional[int]
     local: Optional[bool]
     section_display_name: Optional[str] = None

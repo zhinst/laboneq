@@ -19,9 +19,9 @@ from laboneq.controller.devices.zi_node_monitor import (
     NodeControlBase,
     Response,
 )
-from laboneq.controller.recipe_1_4_0 import Initialization
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
+from laboneq.data.recipe import Initialization
 
 _logger = logging.getLogger(__name__)
 
@@ -65,14 +65,14 @@ class DevicePQSC(DeviceZI):
         ]
 
     def collect_initialization_nodes(
-        self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
+        self, device_recipe_data: DeviceRecipeData, initialization: Initialization
     ) -> list[DaqNodeAction]:
         return []
 
     def configure_feedback(self, recipe_data: RecipeData) -> list[DaqNodeAction]:
         # TODO(2K): Code duplication with Controller._wait_execution_to_stop
         # Make this mandatory in the recipe instead.
-        min_wait_time = recipe_data.recipe.experiment.max_step_execution_time
+        min_wait_time = recipe_data.recipe.max_step_execution_time
         if min_wait_time is None:
             min_wait_time = 10.0
         # This is required because PQSC is only receiving the feedback events
@@ -138,7 +138,7 @@ class DevicePQSC(DeviceZI):
         return {f"/{self.serial}/execution/enable": 0}
 
     def collect_trigger_configuration_nodes(
-        self, initialization: Initialization.Data, recipe_data: RecipeData
+        self, initialization: Initialization, recipe_data: RecipeData
     ) -> list[DaqNodeAction]:
         # TODO(2K): This was moved as is from no more existing "configure_as_leader".
         # Verify, if separate `batch_set` per node is truly necessary here, or the corresponding

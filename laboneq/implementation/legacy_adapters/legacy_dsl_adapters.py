@@ -1,7 +1,6 @@
 # Copyright 2023 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-import laboneq.dsl.experiment.pulse_library
 from laboneq.application_management.application_manager import ApplicationManager
 from laboneq.data.execution_payload import ExecutionPayload
 from laboneq.data.experiment_description import (
@@ -9,7 +8,6 @@ from laboneq.data.experiment_description import (
     ExecutionType,
     Experiment,
     PlayPulse,
-    PulseFunctional,
     Section,
     Sweep,
 )
@@ -137,7 +135,9 @@ class ExperimentAdapter:
             raise ValueError(
                 "Signal {} not found in experiment".format(experiment_signal_uid)
             )
-        self.signal_mappings[experiment_signal_uid] = logical_signal.path
+        self.signal_mappings[experiment_signal_uid] = (
+            logical_signal.group + "/" + logical_signal.name
+        )
 
     def sweep(self, uid=None, parameter=None):
         section = Sweep(uid=uid, parameters=[parameter])
@@ -268,11 +268,3 @@ class SectionContext:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.exp._pop_and_add_section()
-
-
-class pulse_library:
-    @staticmethod
-    def const(uid=None, length=None, amplitude=None):
-        return PulseFunctional(
-            uid=uid, length=length, amplitude=amplitude, function="const"
-        )

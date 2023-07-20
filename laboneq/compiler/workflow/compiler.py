@@ -26,7 +26,6 @@ from laboneq.compiler.common.device_type import (
 )
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.common.trigger_mode import TriggerMode
-from laboneq.compiler.experiment_access.device_info import DeviceInfo
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.scheduler.scheduler import Scheduler
@@ -48,6 +47,7 @@ from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.core.types.enums.acquisition_type import AcquisitionType, is_spectroscopy
 from laboneq.core.types.enums.mixer_type import MixerType
+from laboneq.data.compilation_job import DeviceInfo, ParameterInfo
 from laboneq.data.scheduled_experiment import ScheduledExperiment
 from laboneq.executor.execution_from_experiment import ExecutionFactoryFromExperiment
 from laboneq.executor.executor import Statement
@@ -135,7 +135,6 @@ class Compiler:
             for signal_id in self._experiment_dao.signals()
         ]
         used_devices = set(info.device_type for info in signal_infos)
-        used_device_serials = set(info.device_serial for info in signal_infos)
         if (
             "hdawg" in used_devices
             and "uhfqa" in used_devices
@@ -146,12 +145,15 @@ class Compiler:
                 + "instruments are not supported"
             )
 
+        standalone_qc = len(self._experiment_dao.devices()) <= 2 and all(
+            dev.is_qc for dev in device_infos
+        )
         self._leader_properties.is_desktop_setup = not has_pqsc and (
             used_devices == {"hdawg"}
             or used_devices == {"shfsg"}
             or used_devices == {"shfqa"}
             or used_devices == {"shfqa", "shfsg"}
-            and len(used_device_serials) == 1  # SHFQC
+            or standalone_qc
             or used_devices == {"hdawg", "uhfqa"}
             or (used_devices == {"uhfqa"} and has_hdawg)  # No signal on leader
         )
@@ -169,15 +171,15 @@ class Compiler:
         if self._leader_properties.is_desktop_setup:
             if leader is None:
                 if has_hdawg:
-                    leader = get_first_instr_of(device_infos, "hdawg").id
+                    leader = get_first_instr_of(device_infos, "hdawg").uid
                 elif has_shfqa:
-                    leader = get_first_instr_of(device_infos, "shfqa").id
+                    leader = get_first_instr_of(device_infos, "shfqa").uid
                     if has_shfsg:  # SHFQC
                         self._leader_properties.internal_followers = [
-                            get_first_instr_of(device_infos, "shfsg").id
+                            get_first_instr_of(device_infos, "shfsg").uid
                         ]
                 elif has_shfsg:
-                    leader = get_first_instr_of(device_infos, "shfsg").id
+                    leader = get_first_instr_of(device_infos, "shfsg").uid
 
             _logger.debug("Using desktop setup configuration with leader %s", leader)
 
@@ -210,16 +212,16 @@ class Compiler:
             if is_hdawg_solo:
                 first_hdawg = get_first_instr_of(device_infos, "hdawg")
                 if first_hdawg.reference_clock_source is None:
-                    self._clock_settings[first_hdawg.id] = "internal"
+                    self._clock_settings[first_hdawg.uid] = "internal"
             else:
                 if not has_hdawg and has_shfsg:  # SHFSG or SHFQC solo
                     first_shfsg = get_first_instr_of(device_infos, "shfsg")
                     if first_shfsg.reference_clock_source is None:
-                        self._clock_settings[first_shfsg.id] = "internal"
+                        self._clock_settings[first_shfsg.uid] = "internal"
                 if not has_hdawg and has_shfqa:  # SHFQA or SHFQC solo
                     first_shfqa = get_first_instr_of(device_infos, "shfqa")
                     if first_shfqa.reference_clock_source is None:
-                        self._clock_settings[first_shfqa.id] = "internal"
+                        self._clock_settings[first_shfqa.uid] = "internal"
 
         self._clock_settings["use_2GHz_for_HDAWG"] = has_shf
         self._leader_properties.global_leader = leader
@@ -292,8 +294,8 @@ class Compiler:
 
             hw_osc_names = set()
             oscillator_info = self._experiment_dao.signal_oscillator(signal_id)
-            if oscillator_info is not None and oscillator_info.hardware:
-                hw_osc_names.add(oscillator_info.id)
+            if oscillator_info is not None and oscillator_info.is_hardware:
+                hw_osc_names.add(oscillator_info.uid)
 
             base_channel = min(signal_info.channels)
             min_osc_number = base_channel * 2
@@ -554,7 +556,7 @@ class Compiler:
             oscillator_info = self._experiment_dao.signal_oscillator(signal_id)
             if (
                 oscillator_info is not None
-                and not oscillator_info.hardware
+                and not oscillator_info.is_hardware
                 and signal_info.modulation
             ):
                 oscillator_frequency = oscillator_info.frequency
@@ -568,8 +570,8 @@ class Compiler:
                     self._shfqa_generator_allocation[signal_id]["channels"]
                 )
             hw_oscillator = (
-                oscillator_info.id
-                if oscillator_info is not None and oscillator_info.hardware
+                oscillator_info.uid
+                if oscillator_info is not None and oscillator_info.is_hardware
                 else None
             )
 
@@ -577,7 +579,7 @@ class Compiler:
             if (
                 device_type == DeviceType.UHFQA
                 and oscillator_info
-                and oscillator_info.hardware
+                and oscillator_info.is_hardware
             ):
                 mixer_type = MixerType.UHFQA_ENVELOPE
             elif signal_type in ("single",):
@@ -629,10 +631,10 @@ class Compiler:
 
             oscillator_info = self._experiment_dao.signal_oscillator(signal_id)
             oscillator_is_hardware = (
-                oscillator_info is not None and oscillator_info.hardware
+                oscillator_info is not None and oscillator_info.is_hardware
             )
             if oscillator_is_hardware:
-                osc_name = oscillator_info.id
+                osc_name = oscillator_info.uid
                 oscillator_frequency = oscillator_info.frequency
                 oscillator_number = self.osc_number(osc_name)
 
@@ -686,17 +688,10 @@ class Compiler:
                     "amplitude": self._experiment_dao.amplitude(signal_id),
                 }
                 signal_is_modulated = signal_info.modulation
-                output_modulation_logic = {
-                    (True, True): True,
-                    (False, False): False,
-                    (True, False): False,
-                    (False, True): False,
-                }
-                if output_modulation_logic[
-                    (oscillator_is_hardware, signal_is_modulated)
-                ]:
+
+                if oscillator_is_hardware and signal_is_modulated:
                     output["modulation"] = True
-                    if oscillator_frequency is None:
+                    if isinstance(oscillator_frequency, ParameterInfo):
                         oscillator_frequency = 0
                 else:
                     output["modulation"] = False
@@ -1061,7 +1056,7 @@ class Compiler:
         return CompiledExperiment(
             experiment_dict=ExperimentDAO.dump(self._experiment_dao),
             scheduled_experiment=ScheduledExperiment(
-                recipe=self._recipe,
+                recipe=self._recipe,  # TODO(2K): Build 'Recipe' instead of dict
                 src=self._combined_compiler_output.src,
                 waves=list(self._combined_compiler_output.waves.values()),
                 wave_indices=self._combined_compiler_output.wave_indices,

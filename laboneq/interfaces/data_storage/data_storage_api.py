@@ -26,7 +26,7 @@ class DataStorageAPI(ABC):
         self, data: Any, key: str = None, metadata: Optional[Dict[str, Any]] = None
     ) -> None:
         """
-        Store data in the database. Only data that can be serialized with the L1Q serializer can be stored.
+        Store data in the database. Only data that can be serialized with the LabOne Q serializer can be stored.
 
         Args:
             key (str): The key to store the data under.

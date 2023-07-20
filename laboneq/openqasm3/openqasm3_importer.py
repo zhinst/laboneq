@@ -14,7 +14,9 @@ import openqasm3.visitor
 from laboneq.core.exceptions import LabOneQException
 from laboneq.dsl.experiment import Experiment, Section
 from laboneq.dsl.experiment.utils import id_generator
-from laboneq.dsl.quantum.qubits import Qubit, SignalType
+from laboneq.dsl.quantum.quantum_element import SignalType
+from laboneq.dsl.quantum.qubit import Qubit
+from laboneq.dsl.quantum.transmon import Transmon
 from laboneq.openqasm3.expression import eval_expression, eval_lvalue
 from laboneq.openqasm3.gate_store import GateStore
 from laboneq.openqasm3.namespace import ClassicalRef, NamespaceNest, QubitRef
@@ -81,7 +83,7 @@ class OpenQasm3Importer:
     def __init__(
         self,
         gate_store: GateStore,
-        qubits: dict[str, Qubit] = None,
+        qubits: dict[str, Qubit, Transmon] = None,
     ):
         self.gate_store = gate_store
         self.dsl_qubits = qubits

@@ -11,7 +11,6 @@ class SignalInfo:
     signal_id: str
     signal_type: str
     device_id: str
-    device_serial: str
     device_type: str
     connection_type: str
     channels: str

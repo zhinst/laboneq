@@ -15,15 +15,10 @@ class SetupHelper:
 
     @classmethod
     def get_instrument_of_logical_signal(cls, setup: Setup, logical_signal_path: str):
+        grp, name = logical_signal_path.split("/")
         for i in setup.instruments:
             for c in i.connections:
-                search_path = logical_signal_path
-                # todo: this is a hack to make the path comparison work
-                # to fix this, make sure paths are generated correctly
-                if not search_path.startswith("/logical_signal_groups/"):
-                    search_path = "/logical_signal_groups/" + search_path
-
-                if c.logical_signal.path == search_path:
+                if grp == c.logical_signal.group and name == c.logical_signal.name:
                     return i
         raise Exception("No instrument found for logical signal " + logical_signal_path)
 
@@ -35,30 +30,26 @@ class SetupHelper:
         return logical_signals
 
     @classmethod
-    def get_connections_of_logical_signal(cls, setup: Setup, logical_signal_path: str):
-        instrument = cls.get_instrument_of_logical_signal(setup, logical_signal_path)
-        connections = []
-        for c in instrument.connections:
-            if c.logical_signal.path == "/logical_signal_groups/" + logical_signal_path:
-                connections.append(c)
-        return connections
-
-    @classmethod
     def get_ports_of_logical_signal(cls, setup: Setup, logical_signal_path):
         instrument = cls.get_instrument_of_logical_signal(setup, logical_signal_path)
         ports = []
-        physical_channels = []
-        search_path = logical_signal_path
-        if not search_path.startswith("/logical_signal_groups/"):
-            search_path = "/logical_signal_groups/" + search_path
-
+        grp, name = logical_signal_path.split("/")
         for c in instrument.connections:
-            if c.logical_signal.path == search_path:
-                physical_channels.append(c.physical_channel)
-        for p in instrument.ports:
-            if p.physical_channel in physical_channels:
-                ports.append(p)
+            if c.logical_signal.name == name and grp == c.logical_signal.group:
+                for ch_port in c.physical_channel.ports:
+                    if ch_port not in ports:
+                        ports.append(ch_port)
         return ports
+
+    @classmethod
+    def get_connections_of_logical_signal(cls, setup: Setup, logical_signal_path: str):
+        instrument = cls.get_instrument_of_logical_signal(setup, logical_signal_path)
+        grp, name = logical_signal_path.split("/")
+        connections = []
+        for c in instrument.connections:
+            if c.logical_signal.name == name and grp == c.logical_signal.group:
+                connections.append(c)
+        return connections
 
     @classmethod
     def flat_logical_signals(cls, setup: Setup):

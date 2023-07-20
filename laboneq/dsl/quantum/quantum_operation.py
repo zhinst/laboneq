@@ -7,7 +7,7 @@ from os import PathLike
 from typing import Dict, Optional, Tuple, Union
 
 from laboneq.dsl.experiment.section import Section
-from laboneq.dsl.quantum.qubits import QuantumElement
+from laboneq.dsl.quantum.qubit import QuantumElement
 from laboneq.dsl.serialization import Serializer
 
 QuantumElementTuple = Tuple[QuantumElement, ...]

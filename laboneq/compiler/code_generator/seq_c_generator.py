@@ -9,7 +9,7 @@ import logging
 import re
 import textwrap
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Sequence, Set
 
 from laboneq.compiler.code_generator.compressor import Run, compressor_core
 from laboneq.compiler.common.device_type import DeviceType
@@ -141,6 +141,22 @@ class SeqCGenerator:
                 "type": "do_while",
                 "condition": condition,
                 "body": body,
+                "complexity": complexity,
+            }
+        )
+
+    def add_if(
+        self, conditions: Sequence[Optional[str]], bodies: Sequence[SeqCGenerator]
+    ):
+        assert len(conditions) == len(bodies)
+        assert all(b is not None for b in bodies)
+        assert all(c for c in conditions[:-1])
+        complexity = sum([b.estimate_complexity() + 1 for b in bodies])
+        self.add_statement(
+            {
+                "type": "if",
+                "conditions": conditions,
+                "bodies": bodies,
                 "complexity": complexity,
             }
         )
@@ -377,6 +393,25 @@ class SeqCGenerator:
         elif statement["type"] == "repeat":
             body = textwrap.indent(statement["body"].generate_seq_c(), "  ")
             return f"repeat ({statement['num_repeats']}) {{\n{body}}}\n"
+
+        elif statement["type"] == "if":
+            n = len(statement["conditions"])
+            bodies = [
+                textwrap.indent(b.generate_seq_c(), "  ") for b in statement["bodies"]
+            ]
+            assert len(statement["bodies"]) == n
+            text = ""
+            if n > 0:
+                text += f"if ({statement['conditions'][0]}) {{\n{bodies[0]}}}\n"
+            for condition, body in zip(statement["conditions"][1:-1], bodies[1:-1]):
+                text += f"else if ({condition}) {{\n{body}}}\n"
+            if n > 1:
+                condition = statement["conditions"][-1]
+                if condition is None:
+                    text += f"else {{\n{bodies[-1]}}}\n"
+                else:
+                    text += f"else if ({condition}) {{\n{bodies[-1]}}}\n"
+            return text
 
         elif statement["type"] == "assignWaveIndex":
             wave_channels = self._build_wave_channel_assignment(statement)

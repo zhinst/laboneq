@@ -4,9 +4,6 @@
 
 from typing import Any as AnyDSL
 
-from laboneq.core.types.enums.acquisition_type import (
-    AcquisitionType as AcquisitionTypeDSL,
-)
 from laboneq.core.types.enums.averaging_mode import AveragingMode as AveragingModeDSL
 from laboneq.core.types.enums.execution_type import ExecutionType as ExecutionTypeDSL
 from laboneq.core.types.enums.repetition_mode import RepetitionMode as RepetitionModeDSL
@@ -16,7 +13,6 @@ from laboneq.core.types.enums.section_alignment import (
 from laboneq.data.experiment_description import Acquire as AcquireDATA
 from laboneq.data.experiment_description import AcquireLoopNt as AcquireLoopNtDATA
 from laboneq.data.experiment_description import AcquireLoopRt as AcquireLoopRtDATA
-from laboneq.data.experiment_description import AcquisitionType as AcquisitionTypeDATA
 from laboneq.data.experiment_description import Any as AnyDATA
 from laboneq.data.experiment_description import AveragingMode as AveragingModeDATA
 from laboneq.data.experiment_description import Call as CallDATA
@@ -25,13 +21,9 @@ from laboneq.data.experiment_description import Delay as DelayDATA
 from laboneq.data.experiment_description import ExecutionType as ExecutionTypeDATA
 from laboneq.data.experiment_description import Experiment as ExperimentDATA
 from laboneq.data.experiment_description import ExperimentSignal as ExperimentSignalDATA
-from laboneq.data.experiment_description import (
-    LinearSweepParameter as LinearSweepParameterDATA,
-)
 from laboneq.data.experiment_description import Match as MatchDATA
 from laboneq.data.experiment_description import Operation as OperationDATA
 from laboneq.data.experiment_description import Optional as OptionalDATA
-from laboneq.data.experiment_description import Parameter as ParameterDATA
 from laboneq.data.experiment_description import PlayPulse as PlayPulseDATA
 from laboneq.data.experiment_description import Pulse as PulseDATA
 from laboneq.data.experiment_description import PulseFunctional as PulseFunctionalDATA
@@ -48,7 +40,9 @@ from laboneq.data.experiment_description import (
     SignalCalibration as SignalCalibrationDATA,
 )
 from laboneq.data.experiment_description import Sweep as SweepDATA
-from laboneq.data.experiment_description import SweepParameter as SweepParameterDATA
+from laboneq.data.parameter import LinearSweepParameter as LinearSweepParameterDATA
+from laboneq.data.parameter import Parameter as ParameterDATA
+from laboneq.data.parameter import SweepParameter as SweepParameterDATA
 from laboneq.dsl.calibration.signal_calibration import (
     SignalCalibration as SignalCalibrationDSL,
 )
@@ -109,14 +103,6 @@ def get_converter_function_experiment_description(orig):
         SweepParameterDSL: convert_SweepParameter,
     }
     return converter_function_directory.get(orig)
-
-
-def convert_AcquisitionType(orig: AcquisitionTypeDSL):
-    return (
-        next(e for e in AcquisitionTypeDATA if e.name == orig.name)
-        if orig is not None
-        else None
-    )
 
 
 def convert_AveragingMode(orig: AveragingModeDSL):
@@ -198,7 +184,7 @@ def convert_AcquireLoopRt(orig: AcquireLoopRtDSL):
     if orig is None:
         return None
     retval = AcquireLoopRtDATA()
-    retval.acquisition_type = convert_AcquisitionType(orig.acquisition_type)
+    retval.acquisition_type = orig.acquisition_type
     retval.averaging_mode = convert_AveragingMode(orig.averaging_mode)
     retval.count = orig.count
     retval.execution_type = convert_ExecutionType(orig.execution_type)
@@ -339,6 +325,7 @@ def convert_Match(orig: MatchDSL):
         return None
     retval = MatchDATA()
     retval.handle = orig.handle
+    retval.user_register = orig.user_register
     retval.local = orig.local
     retval.uid = orig.uid
     return post_process(

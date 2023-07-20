@@ -10,6 +10,7 @@ from laboneq.compiler.code_generator.measurement_calculator import IntegrationTi
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
+from laboneq.data.compilation_job import ParameterInfo
 
 if TYPE_CHECKING:
     from laboneq.compiler.workflow.compiler import LeaderProperties
@@ -32,25 +33,25 @@ class RecipeGenerator:
         self._recipe["experiment"] = {"realtime_execution_init": []}
 
     def add_oscillator_params(self, experiment_dao: ExperimentDAO):
-        hw_oscillators = {}
-        for oscillator in experiment_dao.hardware_oscillators():
-            hw_oscillators[oscillator.id] = oscillator
-
         oscillator_params = []
         for signal_id in experiment_dao.signals():
             signal_info = experiment_dao.signal_info(signal_id)
             oscillator_info = experiment_dao.signal_oscillator(signal_id)
             if oscillator_info is None:
                 continue
-            if oscillator_info.hardware:
-                oscillator = hw_oscillators[oscillator_info.id]
+            if oscillator_info.is_hardware:
+                if isinstance(oscillator_info.frequency, ParameterInfo):
+                    frequency, param = None, oscillator_info.frequency.uid
+                else:
+                    frequency, param = oscillator_info.frequency, None
+
                 for ch in signal_info.channels:
                     oscillator_param = {
-                        "id": oscillator.id,
-                        "device_id": oscillator.device_id,
+                        "id": oscillator_info.uid,
+                        "device_id": signal_info.device_id,
                         "channel": ch,
-                        "frequency": oscillator.frequency,
-                        "param": oscillator.frequency_param,
+                        "frequency": frequency,
+                        "param": param,
                     }
                     oscillator_params.append(oscillator_param)
 
@@ -100,9 +101,9 @@ class RecipeGenerator:
         initializations = []
         for device in experiment_dao.device_infos():
             devices.append(
-                {"device_uid": device.id, "driver": device.device_type.upper()}
+                {"device_uid": device.uid, "driver": device.device_type.upper()}
             )
-            initializations.append({"device_uid": device.id, "config": {}})
+            initializations.append({"device_uid": device.uid, "config": {}})
         self._recipe["devices"] = devices
         self._recipe["experiment"]["initializations"] = initializations
 
@@ -140,7 +141,7 @@ class RecipeGenerator:
                 initialization["config"]["triggering_mode"] = "internal_follower"
 
         for device in experiment_dao.device_infos():
-            device_uid = device.id
+            device_uid = device.uid
             initialization = self._find_initialization(device_uid)
             reference_clock = experiment_dao.device_reference_clock(device_uid)
             if reference_clock is not None:
@@ -212,7 +213,9 @@ class RecipeGenerator:
         if oscillator is not None:
             output["oscillator"] = oscillator
         output["modulation"] = modulation
-        if oscillator_frequency is not None:
+        if oscillator_frequency is not None and not isinstance(
+            oscillator_frequency, ParameterInfo
+        ):
             output["oscillator_frequency"] = oscillator_frequency
         if port_delay is not None:
             output["port_delay"] = port_delay

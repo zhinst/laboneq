@@ -10,6 +10,7 @@ from attrs import asdict, define, evolve
 from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.scheduler.section_schedule import SectionSchedule
+from laboneq.data.compilation_job import ParameterInfo
 
 
 @define(kw_only=True, slots=True)
@@ -17,7 +18,7 @@ class LoopIterationSchedule(SectionSchedule):
     """Schedule of a single iteration of a loop (sweep or average)"""
 
     iteration: int
-    sweep_parameters: List[Dict]
+    sweep_parameters: List[ParameterInfo]
     num_repeats: int
     shadow: bool
 
@@ -62,9 +63,9 @@ class LoopIterationSchedule(SectionSchedule):
                     event_type=EventType.PARAMETER_SET,
                     time=start,
                     section_name=self.section,
-                    parameter={"id": param["id"]},
+                    parameter={"id": param.uid},
                     iteration=self.iteration,
-                    value=param["values"][self.iteration],
+                    value=param.values[self.iteration],
                 )
                 for param in self.sweep_parameters
             ],

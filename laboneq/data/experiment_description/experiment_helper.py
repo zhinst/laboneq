@@ -3,7 +3,7 @@
 
 import numpy as np
 
-from laboneq.data.experiment_description import Parameter
+from laboneq.data.parameter import Parameter
 
 
 class ExperimentHelper:

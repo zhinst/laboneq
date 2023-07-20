@@ -27,13 +27,6 @@ from laboneq.controller.devices.device_zi import (
     Waveforms,
     delay_to_rounded_samples,
 )
-from laboneq.controller.recipe_1_4_0 import (
-    IO,
-    Initialization,
-    IntegratorAllocation,
-    Measurement,
-)
-from laboneq.controller.recipe_enums import TriggeringMode
 from laboneq.controller.recipe_processor import (
     AwgConfig,
     AwgKey,
@@ -45,6 +38,13 @@ from laboneq.controller.recipe_processor import (
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType, is_spectroscopy
 from laboneq.core.types.enums.averaging_mode import AveragingMode
+from laboneq.data.recipe import (
+    IO,
+    Initialization,
+    IntegratorAllocation,
+    Measurement,
+    TriggeringMode,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -105,7 +105,7 @@ class DeviceSHFQA(DeviceSHFBase):
     def _get_num_awgs(self):
         return self._channels
 
-    def _validate_range(self, io: IO.Data, is_out: bool):
+    def _validate_range(self, io: IO, is_out: bool):
         if io.range is None:
             return
         input_ranges = np.array(
@@ -192,7 +192,7 @@ class DeviceSHFQA(DeviceSHFBase):
         self,
         awg_key: AwgKey,
         awg_config: AwgConfig,
-        integrator_allocations: list[IntegratorAllocation.Data],
+        integrator_allocations: list[IntegratorAllocation],
         averages: int,
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
@@ -229,7 +229,7 @@ class DeviceSHFQA(DeviceSHFBase):
         acquisition_type: AcquisitionType,
         awg_key: AwgKey,
         awg_config: AwgConfig,
-        integrator_allocations: list[IntegratorAllocation.Data],
+        integrator_allocations: list[IntegratorAllocation],
         averages: int,
         average_mode: int,
     ):
@@ -484,7 +484,7 @@ class DeviceSHFQA(DeviceSHFBase):
 
     def pre_process_attributes(
         self,
-        initialization: Initialization.Data,
+        initialization: Initialization,
     ) -> Iterator[DeviceAttribute]:
         yield from super().pre_process_attributes(initialization)
 
@@ -517,7 +517,7 @@ class DeviceSHFQA(DeviceSHFBase):
                 )
 
     def collect_initialization_nodes(
-        self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
+        self, device_recipe_data: DeviceRecipeData, initialization: Initialization
     ) -> list[DaqNodeSetAction]:
         _logger.debug("%s: Initializing device...", self.dev_repr)
 
@@ -759,9 +759,9 @@ class DeviceSHFQA(DeviceSHFBase):
 
     def _configure_readout_mode_nodes(
         self,
-        dev_input: IO.Data,
-        dev_output: IO.Data,
-        measurement: Measurement.Data | None,
+        dev_input: IO,
+        dev_output: IO,
+        measurement: Measurement | None,
         device_uid: str,
         recipe_data: RecipeData,
     ):
@@ -776,9 +776,7 @@ class DeviceSHFQA(DeviceSHFBase):
         ]
 
         max_len = 4096
-        for (
-            integrator_allocation
-        ) in recipe_data.recipe.experiment.integrator_allocations:
+        for integrator_allocation in recipe_data.recipe.integrator_allocations:
             if (
                 integrator_allocation.device_id != device_uid
                 or integrator_allocation.awg != measurement.channel
@@ -825,7 +823,7 @@ class DeviceSHFQA(DeviceSHFBase):
         return nodes_to_set_for_readout_mode
 
     def _configure_spectroscopy_mode_nodes(
-        self, dev_input: IO.Data, measurement: Measurement.Data | None
+        self, dev_input: IO, measurement: Measurement | None
     ):
         _logger.debug("%s: Setting measurement mode to 'Spectroscopy'.", self.dev_repr)
 
@@ -845,7 +843,7 @@ class DeviceSHFQA(DeviceSHFBase):
         return nodes_to_set_for_spectroscopy_mode
 
     def collect_awg_before_upload_nodes(
-        self, initialization: Initialization.Data, recipe_data: RecipeData
+        self, initialization: Initialization, recipe_data: RecipeData
     ):
         nodes_to_initialize_measurement = []
 
@@ -894,7 +892,7 @@ class DeviceSHFQA(DeviceSHFBase):
                 )
         return nodes_to_initialize_measurement
 
-    def collect_awg_after_upload_nodes(self, initialization: Initialization.Data):
+    def collect_awg_after_upload_nodes(self, initialization: Initialization):
         nodes_to_initialize_measurement = []
         inputs = initialization.inputs or []
         for dev_input in inputs:
@@ -936,7 +934,7 @@ class DeviceSHFQA(DeviceSHFBase):
         return nodes_to_initialize_measurement
 
     def collect_trigger_configuration_nodes(
-        self, initialization: Initialization.Data, recipe_data: RecipeData
+        self, initialization: Initialization, recipe_data: RecipeData
     ) -> list[DaqNodeAction]:
         _logger.debug("Configuring triggers...")
         self._wait_for_awgs = True

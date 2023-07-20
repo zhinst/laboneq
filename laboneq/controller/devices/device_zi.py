@@ -35,11 +35,6 @@ from laboneq.controller.communication import (
     DaqWrapper,
 )
 from laboneq.controller.devices.zi_node_monitor import NodeControlBase
-from laboneq.controller.recipe_1_4_0 import (
-    Initialization,
-    IntegratorAllocation,
-    OscillatorParam,
-)
 from laboneq.controller.recipe_processor import (
     AwgConfig,
     AwgKey,
@@ -49,6 +44,7 @@ from laboneq.controller.recipe_processor import (
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
+from laboneq.data.recipe import Initialization, IntegratorAllocation, OscillatorParam
 from laboneq.data.scheduled_experiment import ScheduledExperiment
 
 _logger = logging.getLogger(__name__)
@@ -256,7 +252,9 @@ class DeviceZI(ABC):
         self._downlinks[port] = (linked_device_uid, ref(linked_device))
 
     def add_uplink(self, linked_device: DeviceZI):
-        self._uplinks.append(ref(linked_device))
+        dev_ref = ref(linked_device)
+        if dev_ref not in self._uplinks:
+            self._uplinks.append(dev_ref)
 
     def remove_all_links(self):
         self._downlinks.clear()
@@ -273,12 +271,12 @@ class DeviceZI(ABC):
     def is_standalone(self):
         return len(self._uplinks) == 0 and len(self._downlinks) == 0
 
-    def _validate_initialization(self, initialization: Initialization.Data):
+    def _validate_initialization(self, initialization: Initialization):
         pass
 
     def pre_process_attributes(
         self,
-        initialization: Initialization.Data,
+        initialization: Initialization,
     ) -> Iterator[DeviceAttribute]:
         self._validate_initialization(initialization)
         outputs = initialization.outputs or []
@@ -308,12 +306,12 @@ class DeviceZI(ABC):
             )
 
     def collect_initialization_nodes(
-        self, device_recipe_data: DeviceRecipeData, initialization: Initialization.Data
+        self, device_recipe_data: DeviceRecipeData, initialization: Initialization
     ) -> list[DaqNodeAction]:
         return []
 
     def collect_trigger_configuration_nodes(
-        self, initialization: Initialization.Data, recipe_data: RecipeData
+        self, initialization: Initialization, recipe_data: RecipeData
     ) -> list[DaqNodeAction]:
         return []
 
@@ -430,7 +428,7 @@ class DeviceZI(ABC):
     def _make_osc_path(self, channel: int, index: int) -> str:
         return f"/{self.serial}/oscs/{index}/freq"
 
-    def allocate_osc(self, osc_param: OscillatorParam.Data):
+    def allocate_osc(self, osc_param: OscillatorParam):
         osc_group = self._osc_group_by_channel(osc_param.channel)
         osc_group_oscs = [o for o in self._allocated_oscs if o.group == osc_group]
         same_id_osc = next((o for o in osc_group_oscs if o.id == osc_param.id), None)
@@ -467,7 +465,7 @@ class DeviceZI(ABC):
         self,
         awg_key: AwgKey,
         awg_config: AwgConfig,
-        integrator_allocations: list[IntegratorAllocation.Data],
+        integrator_allocations: list[IntegratorAllocation],
         averages: int,
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
@@ -900,11 +898,11 @@ class DeviceZI(ABC):
         return nodes_to_initialize_oscs
 
     def collect_awg_before_upload_nodes(
-        self, initialization: Initialization.Data, recipe_data: RecipeData
+        self, initialization: Initialization, recipe_data: RecipeData
     ):
         return []
 
-    def collect_awg_after_upload_nodes(self, initialization: Initialization.Data):
+    def collect_awg_after_upload_nodes(self, initialization: Initialization):
         return []
 
     def collect_execution_nodes(self):

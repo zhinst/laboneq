@@ -208,7 +208,7 @@ def sawtooth(x, **_):
 
 
 @register_pulse_functional
-def drag(x, sigma=1 / 3, beta=1.0, zero_boundaries=False, **_):
+def drag(x, sigma=1 / 3, beta=0.2, zero_boundaries=False, **_):
     """Create a DRAG pulse
 
     Args:

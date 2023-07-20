@@ -9,6 +9,7 @@ pytest-cov
 pytest_mock
 pytest-httpserver
 pytest-xdist
+pytest-benchmark[aspect,elasticsearch] @ git+https://github.com/ckutlu/pytest-benchmark.git@master-ckutlu
 jsonschema
 requests
 nbconvert
@@ -17,9 +18,15 @@ flaky==3.7.0
 pyvisa-py==0.5.3
 qcodes
 qiskit
+qiskit_experiments
+qiskit_qasm3_import
+pygsti
 ipykernel
 rustworkx
 ipython
+
+# Packaging test
+pydeps
 
 # Formatting (must match version in CI)
 black[jupyter]==22.10
