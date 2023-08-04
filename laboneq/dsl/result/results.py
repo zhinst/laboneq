@@ -72,7 +72,7 @@ class Results:
             handle (str): The handle assigned to an 'acquire' event in the experiment definition.
 
         Returns:
-            An object of type :class:`~.dsl.result.acquired_result.AcquiredResult`.
+            result: The acquire event result.
 
         Raises:
             LabOneQException: No result is available for the provided handle.
@@ -172,8 +172,8 @@ class Results:
     def device_calibration(self) -> Calibration | None:
         """Get the device setup's calibration.
 
-        See Also:
-            :py:meth:`DeviceSetup.get_calibration() <laboneq.dsl.device.device_setup.DeviceSetup.get_calibration>`
+        See also
+        [DeviceSetup.get_calibration][laboneq.dsl.device.device_setup.DeviceSetup.get_calibration].
         """
         if self.device_setup is None:
             return None

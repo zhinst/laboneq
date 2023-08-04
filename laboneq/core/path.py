@@ -4,8 +4,6 @@
 Separator = "/"
 InstrumentOutputs = "$OUTPUTS"
 InstrumentInputs = "$INPUTS"
-Results = "$RESULTS"
-
 
 Instruments_Path = "instruments"
 Instruments_Path_Abs = Separator + Instruments_Path

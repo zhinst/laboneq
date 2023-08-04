@@ -10,6 +10,7 @@ from laboneq.core.types.enums.repetition_mode import RepetitionMode as Repetitio
 from laboneq.core.types.enums.section_alignment import (
     SectionAlignment as SectionAlignmentDSL,
 )
+from laboneq.data.calibration import SignalCalibration as SignalCalibrationDATA
 from laboneq.data.experiment_description import Acquire as AcquireDATA
 from laboneq.data.experiment_description import AcquireLoopNt as AcquireLoopNtDATA
 from laboneq.data.experiment_description import AcquireLoopRt as AcquireLoopRtDATA
@@ -36,9 +37,6 @@ from laboneq.data.experiment_description import Reserve as ReserveDATA
 from laboneq.data.experiment_description import Section as SectionDATA
 from laboneq.data.experiment_description import SectionAlignment as SectionAlignmentDATA
 from laboneq.data.experiment_description import Set as SetDATA
-from laboneq.data.experiment_description import (
-    SignalCalibration as SignalCalibrationDATA,
-)
 from laboneq.data.experiment_description import Sweep as SweepDATA
 from laboneq.data.parameter import LinearSweepParameter as LinearSweepParameterDATA
 from laboneq.data.parameter import Parameter as ParameterDATA
@@ -66,7 +64,7 @@ from laboneq.dsl.experiment.section import Case as CaseDSL
 from laboneq.dsl.experiment.section import Match as MatchDSL
 from laboneq.dsl.experiment.section import Section as SectionDSL
 from laboneq.dsl.experiment.section import Sweep as SweepDSL
-from laboneq.dsl.experiment.set import Set as SetDSL
+from laboneq.dsl.experiment.set_node import SetNode as SetDSL
 from laboneq.dsl.parameter import LinearSweepParameter as LinearSweepParameterDSL
 from laboneq.dsl.parameter import Parameter as ParameterDSL
 from laboneq.dsl.parameter import SweepParameter as SweepParameterDSL

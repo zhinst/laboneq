@@ -102,7 +102,7 @@ def _compute_start_with_latency(
     # - The sum of the settings of the port_delay parameter for the acquisition device
     #   for measure and acquire pulse
 
-    qa_signal_obj = schedule_data.signal_objects[acquire_pulse.pulse.signal_id]
+    qa_signal_obj = schedule_data.signal_objects[acquire_pulse.pulse.signal.uid]
 
     qa_device_type = qa_signal_obj.awg.device_type
     qa_sampling_rate = qa_signal_obj.awg.sampling_rate

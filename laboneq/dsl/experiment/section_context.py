@@ -231,7 +231,7 @@ class CaseSectionContext(SectionContextBase):
         return super().__enter__()
 
 
-def active_section():
+def active_section() -> Section:
     s = peek_context()
     if s is None or not isinstance(s, SectionContextBase):
         raise LabOneQException("Must be in a section context")

@@ -11,9 +11,9 @@ import openpulse
 from openpulse import ast
 
 import openqasm3.visitor
+from laboneq._utils import id_generator
 from laboneq.core.exceptions import LabOneQException
 from laboneq.dsl.experiment import Experiment, Section
-from laboneq.dsl.experiment.utils import id_generator
 from laboneq.dsl.quantum.quantum_element import SignalType
 from laboneq.dsl.quantum.qubit import Qubit
 from laboneq.dsl.quantum.transmon import Transmon
@@ -413,10 +413,12 @@ def exp_from_qasm(program: str, qubits: dict[str, Qubit], gate_store: GateStore)
     """Create an experiment from an OpenQASM program.
 
     Args:
-    -----
-        program (str):             OpenQASM program
-        qubits (dict[str, Qubit]): map from OpenQASM qubit names to LabOne Q DSL Qubit objects
-        gate_store (GateStore):    map from OpenQASM gate names to LabOne Q DSL Gate objects
+        program:
+            OpenQASM program
+        qubits:
+            Map from OpenQASM qubit names to LabOne Q DSL Qubit objects
+        gate_store:
+            Map from OpenQASM gate names to LabOne Q DSL Gate objects
     """
     importer = OpenQasm3Importer(qubits=qubits, gate_store=gate_store)
     qasm_section = importer(text=program)

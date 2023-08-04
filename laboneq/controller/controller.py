@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import concurrent.futures
-import copy
 import itertools
 import logging
 import os
@@ -38,6 +37,7 @@ from laboneq.controller.recipe_processor import (
 )
 from laboneq.controller.results import build_partial_result, make_acquired_result
 from laboneq.controller.util import LabOneQControllerException
+from laboneq.controller.versioning import LabOneVersion
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.core.utilities.replace_pulse import ReplacementType, calc_wave_replacements
@@ -46,9 +46,6 @@ from laboneq.data.experiment_results import ExperimentResults
 from laboneq.data.recipe import NtStepKey
 from laboneq.executor.execution_from_experiment import ExecutionFactoryFromExperiment
 from laboneq.executor.executor import Statement
-from laboneq.implementation.payload_builder.convert_from_legacy_json_recipe import (
-    convert_from_legacy_json_recipe,
-)
 
 if TYPE_CHECKING:
     from laboneq.controller.devices.device_zi import DeviceZI
@@ -112,6 +109,8 @@ class Controller:
             self._run_parameters.ignore_version_mismatch,
             self._run_parameters.reset_devices,
         )
+
+        self._dataserver_version: LabOneVersion | None = None
 
         self._last_connect_check_ts: float = None
 
@@ -379,6 +378,8 @@ class Controller:
             _logger.warning(
                 "Conditions to start RT on followers still not fulfilled after 2"
                 " seconds, nonetheless trying to continue..."
+                "\nNot fulfilled:\n%s",
+                response_waiter.remaining_str(),
             )
 
         # Standalone workaround: The device is triggering itself,
@@ -421,9 +422,11 @@ class Controller:
                 (
                     "Stop conditions still not fulfilled after %f s, estimated"
                     " execution time was %.2f s. Continuing to the next step."
+                    "\nNot fulfilled:\n%s"
                 ),
                 guarded_wait_time,
                 min_wait_time,
+                response_waiter.remaining_str(),
             )
 
     def _execute_one_step(self, acquisition_type: AcquisitionType):
@@ -449,6 +452,16 @@ class Controller:
             or now - self._last_connect_check_ts > CONNECT_CHECK_HOLDOFF
         ):
             self._devices.connect()
+
+        try:
+            self._dataserver_version = next(self._devices.leaders)[
+                1
+            ].daq._dataserver_version
+        except StopIteration:
+            # It may happen in emulation mode, mainly for tests
+            # We use LATEST in emulation mode, keeping the consistency here.
+            self._dataserver_version = LabOneVersion.LATEST
+
         self._last_connect_check_ts = now
 
     def disable_outputs(
@@ -482,14 +495,11 @@ class Controller:
                 compiled_experiment.experiment
             )
 
-        scheduled_experiment = copy.copy(compiled_experiment.scheduled_experiment)
-        if isinstance(scheduled_experiment.recipe, dict):
-            scheduled_experiment.recipe = convert_from_legacy_json_recipe(
-                scheduled_experiment.recipe
-            )
-
         self._recipe_data = pre_process_compiled(
-            scheduled_experiment, self._devices, execution
+            compiled_experiment.scheduled_experiment,
+            self._devices,
+            execution,
+            self._dataserver_version,
         )
 
         self._session = session
@@ -504,6 +514,7 @@ class Controller:
             job.scheduled_experiment,
             self._devices,
             job.scheduled_experiment.execution,
+            self._dataserver_version,
         )
         self._session = None
         self._execute_compiled_impl()
@@ -740,13 +751,28 @@ class Controller:
                 )
                 for signal in awg_config.acquire_signals:
                     integrator_allocation = next(
-                        i
-                        for i in self._recipe_data.recipe.integrator_allocations
-                        if i.signal_id == signal
+                        (
+                            i
+                            for i in self._recipe_data.recipe.integrator_allocations
+                            if (
+                                i.signal_id
+                                if isinstance(i.signal_id, str)
+                                else i.signal_id[0]
+                            )
+                            == signal
+                        ),
+                        None,
                     )
+                    if not integrator_allocation:
+                        continue
+                    is_multistate = not isinstance(integrator_allocation.signal_id, str)
                     assert integrator_allocation.device_id == awg_key.device_uid
                     assert integrator_allocation.awg == awg_key.awg_index
-                    result_indices = integrator_allocation.channels
+                    result_indices = (
+                        integrator_allocation.channels[0]
+                        if is_multistate
+                        else integrator_allocation.channels
+                    )
                     raw_results = device.get_measurement_data(
                         awg_key.awg_index,
                         rt_execution_info.acquisition_type,

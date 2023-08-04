@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import datetime
 import json
 import logging
@@ -26,7 +27,37 @@ def _get_html_template():
 class PulseSheetViewer:
     @staticmethod
     def generate_viewer_html_text(events, title, interactive: bool = False):
-        events_json = json.dumps(events["event_list"], indent=2)
+        fixed_events = []
+        for e in events["event_list"]:
+            if isinstance(e.get("signal"), list):
+                n = len(e["signal"])
+                for s, p, par, ph, f, a, plp, pup, oph, bph in zip(
+                    e["signal"],
+                    e["play_wave_id"],
+                    e["parametrized_with"],
+                    e["phase"],
+                    e["oscillator_frequency"],
+                    e["amplitude"],
+                    e["play_pulse_parameters"],
+                    e["pulse_pulse_parameters"],
+                    e.get("oscillator_phase", [None] * n),
+                    e.get("baseband_phase", [None] * n),
+                ):
+                    e_new = copy.deepcopy(e)
+                    e_new["signal"] = s
+                    e_new["play_wave_id"] = p
+                    e_new["parametrized_with"] = par
+                    e_new["phase"] = ph
+                    e_new["oscillator_frequency"] = f
+                    e_new["amplitude"] = a
+                    e_new["play_pulse_parameters"] = plp
+                    e_new["pulse_pulse_parameters"] = pup
+                    e_new["oscillator_phase"] = oph
+                    e_new["baseband_phase"] = bph
+                    fixed_events.append(e_new)
+            else:
+                fixed_events.append(e)
+        events_json = json.dumps(fixed_events, indent=2)
         section_graph_json = json.dumps(events["section_graph"], indent=2)
         section_info_json = json.dumps(events["section_info"], indent=2)
         section_signals_with_children_json = json.dumps(
@@ -82,8 +113,9 @@ def show_pulse_sheet(name: str, compiled_experiment: CompiledExperiment):
         compiled_experiment: The compiled experiment to show.
 
     Returns:
-        A link to the HTML output if `IPython` is installed, otherwise
-        returns the output filename as a string.
+        link (IPython link or filename):
+            A link to the HTML output if `IPython` is installed, otherwise
+            returns the output filename as a string.
     """
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     filename = f"{name}_{timestamp}.html"

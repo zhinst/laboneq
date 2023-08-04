@@ -4,11 +4,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Union
 
 from numpy.typing import ArrayLike
 
 from laboneq.core.types.compiled_experiment import CompiledExperiment
+from laboneq.data.recipe import RealtimeExecutionInit
 from laboneq.dsl.device.device_setup import DeviceSetup
 from laboneq.dsl.device.io_units.physical_channel import PhysicalChannel
 from laboneq.simulator.seqc_parser import simulate
@@ -28,10 +28,13 @@ class OutputData:
 class _AWG_ID:
     is_out: bool
     prog: str
-    channels: List[int]
+    channels: list[int]
 
     def __init__(
-        self, device_setup: DeviceSetup, ch: PhysicalChannel, realtime_inits: list
+        self,
+        device_setup: DeviceSetup,
+        ch: PhysicalChannel,
+        realtime_inits: list[RealtimeExecutionInit],
     ):
         self._device_setup = device_setup
         [self._dev_uid, pch] = ch.uid.split("/")
@@ -43,28 +46,31 @@ class _AWG_ID:
             "sgchannels": self._decode_sgchannels,
         }[ch_attrs[0]](ch_attrs[1:], realtime_inits)
 
-    def find_seqc(self, device_name: str, awg_no: int, realtime_inits):
+    def find_seqc(
+        self, device_name: str, awg_no: int, realtime_inits: list[RealtimeExecutionInit]
+    ):
         self.prog = next(
             iter(
                 sorted(
                     (
                         rt_init
                         for rt_init in realtime_inits
-                        if rt_init["awg_id"] == awg_no
-                        and rt_init["device_id"] == device_name
+                        if rt_init.awg_id == awg_no and rt_init.device_id == device_name
                     ),
-                    key=lambda rt_init: rt_init["nt_step"]["indices"],
+                    key=lambda rt_init: rt_init.nt_step.indices,
                 )
             )
-        )["seqc_ref"]
+        ).seqc_ref
 
-    def _decode_sigouts(self, chs: List[str], realtime_inits):
+    def _decode_sigouts(
+        self, chs: list[str], realtime_inits: list[RealtimeExecutionInit]
+    ):
         self.is_out = True
         self.channels = [int(ch) for ch in chs]
         awg_no = self.channels[0] // 2
         self.find_seqc(self._dev_uid, awg_no, realtime_inits)
 
-    def _decode_qas(self, chs: List[str], realtime_inits):
+    def _decode_qas(self, chs: list[str], realtime_inits: list[RealtimeExecutionInit]):
         self.is_out = False
         self.channels = [int(ch) for ch in chs]
         self.find_seqc(self._dev_uid, 0, realtime_inits)
@@ -73,12 +79,16 @@ class _AWG_ID:
         dev = self._device_setup.instrument_by_uid(self._dev_uid)
         return dev.calc_driver() == "SHFQA" and dev.is_qc
 
-    def _decode_qachannels(self, chs: List[str], realtime_inits):
+    def _decode_qachannels(
+        self, chs: list[str], realtime_inits: list[RealtimeExecutionInit]
+    ):
         self.is_out = chs[1] == "output"
         self.channels = [0]
         self.find_seqc(self._dev_uid, int(chs[0]), realtime_inits)
 
-    def _decode_sgchannels(self, chs: List[str], realtime_inits):
+    def _decode_sgchannels(
+        self, chs: list[str], realtime_inits: list[RealtimeExecutionInit]
+    ):
         internal_device_name = (
             self._dev_uid if not self._is_qc() else f"{self._dev_uid}_sg"
         )
@@ -91,11 +101,26 @@ class _AWG_ID:
 class OutputSimulator:
     """Interface to the output simulator.
 
-    .. highlight:: python
-    .. code-block:: python
+    Arguments:
+        compiled_experiment:
+            The compiled experiment to simulate.
+        max_simulation_length:
+            The maximum amount of time to simulate (in seconds).
+        max_output_length:
+            Deprecated and has no effect. Use the `output_length` argument to
+            the `get_snippet` method instead.
 
-        # Usage:
+    Attributes:
+        max_output_length:
+            Deprecated nad has no effect. Use the `output_length` argument to
+            the `get_snippet` method instead.
 
+    Examples:
+
+        Example showing how to compile an experiment and make use of the
+        output simulator:
+
+        ``` py
         # Given compiled_experiment
         compiled_experiment = session.compile(exp)
 
@@ -110,7 +135,6 @@ class OutputSimulator:
 
         # Maximum output length can also be set later
         output_simulator.max_output_length = 5e-6
-
 
         # As next, retrieve the actual simulated waveform
         data = output_simulator.get_snippet(
@@ -127,6 +151,7 @@ class OutputSimulator:
         data.wave       # waveform data
         data.trigger    # trigger values
         data.frequency  # frequency data
+        ```
     """
 
     def __init__(
@@ -159,7 +184,7 @@ class OutputSimulator:
 
     def get_snippet(
         self,
-        physical_channel: Union[str, PhysicalChannel],
+        physical_channel: str | PhysicalChannel,
         start: float,
         output_length: float,
         get_wave: bool = True,
@@ -167,6 +192,28 @@ class OutputSimulator:
         get_marker: bool = False,
         get_frequency: bool = False,
     ) -> OutputData:
+        """Retrieve the simulated waveforms for a given channel and window of time.
+
+        Arguments:
+            physical_channel: The physical channel to retrieve waveforms for.
+            start: The start time of the window of events to retrieve (in seconds).
+            output_length: The maximum length of the window to retrieve (in seconds).
+            get_wave: Whether to return the waveform data.
+            get_trigger: Whether to return the trigger data.
+            get_marker: Whether to return the marker data.
+            get_frequency: Whether to return the oscillator frequency data.
+
+        Returns:
+            The output data has the following attributes:
+
+                - `time`: an array of the times corresponding to the returned waveform samples.
+                - `wave`: an array of waveform values at the given times.
+                - `trigger`: an array of trigger values at the given times.
+                - `frequency`: an array of oscillator frequencies at the given times.
+
+                The corresponding attribute is `None` if the associated data was not
+                requested.
+        """
         channel = (
             physical_channel
             if isinstance(physical_channel, PhysicalChannel)
@@ -175,9 +222,7 @@ class OutputSimulator:
         awg_id = _AWG_ID(
             self._compiled_experiment.device_setup,
             channel,
-            self._compiled_experiment.scheduled_experiment.recipe["experiment"][
-                "realtime_execution_init"
-            ],
+            self._compiled_experiment.scheduled_experiment.recipe.realtime_execution_init,
         )
 
         sim = self._simulations[awg_id.prog]

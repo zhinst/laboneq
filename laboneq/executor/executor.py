@@ -6,7 +6,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from enum import Enum, Flag, auto
-from typing import Any, Dict, Iterator, List
+from typing import Any, Iterator
 
 import numpy as np
 import numpy.typing as npt
@@ -19,16 +19,19 @@ from laboneq.core.types.enums.averaging_mode import AveragingMode
 class LoopFlags(Flag):
     NONE = 0
     AVERAGE = auto()
-    HARDWARE = auto()
     PIPELINE = auto()
 
-    # convenience aliases
-    SWEEP = NONE  # !AVERAGE
-    RT_AVERAGE = AVERAGE | HARDWARE
+    @property
+    def is_average(self) -> bool:
+        return bool(self & LoopFlags.AVERAGE)
+
+    @property
+    def is_pipeline(self) -> bool:
+        return bool(self & LoopFlags.PIPELINE)
 
 
 class LoopingMode(Enum):
-    EXECUTE = auto()
+    NEAR_TIME_ONLY = auto()
     ONCE = auto()
 
 
@@ -36,10 +39,14 @@ LOOP_INDEX = "_loop_index"
 
 
 class ExecutionScope:
-    def __init__(self, parent: ExecutionScope, root: ExecutorBase):
+    def __init__(self, parent: ExecutionScope | None, root: ExecutorBase):
         self._parent = parent
+        self._is_real_time: bool = False if parent is None else parent._is_real_time
         self._root = root
-        self._variables: Dict[str, Any] = {}
+        self._variables: dict[str, Any] = {}
+
+    def enter_real_time(self):
+        self._is_real_time = True
 
     def set_variable(self, name: str, value: Any):
         self._variables[name] = value
@@ -68,7 +75,7 @@ class Statement(ABC):
 
 class Sequence(Statement):
     def __init__(self, sequence=None):
-        self.sequence: List[Statement] = sequence or []
+        self.sequence: list[Statement] = sequence or []
 
     def append_statement(self, statement: Statement):
         self.sequence.append(statement)
@@ -126,7 +133,7 @@ class ExecSet(Statement):
 
 
 class ExecUserCall(Statement):
-    def __init__(self, func_name: str, args: Dict[str, Any]):
+    def __init__(self, func_name: str, args: dict[str, Any]):
         self.func_name = func_name
         self.args = args
 
@@ -152,7 +159,7 @@ class ExecUserCall(Statement):
 class ExecAcquire(Statement):
     def __init__(self, handle: str, signal: str, parent_uid: str):
         self.handle = handle
-        self.signal = signal
+        self.signal = min(signal) if isinstance(signal, list) else signal
         self.parent_uid = parent_uid
 
     def run(self, scope: ExecutionScope):
@@ -236,17 +243,15 @@ class ForLoop(Statement):
         self,
         count: int,
         body: Sequence,
-        loop_flags: LoopFlags = LoopFlags.SWEEP,
-        chunk_count=1,
+        loop_flags: LoopFlags = LoopFlags.NONE,
     ):
         self.count = count
         self.body = body
         self.loop_flags = loop_flags
-        self.chunk_count = chunk_count
 
     def _loop_iterator(self, scope: ExecutionScope) -> Iterator[int]:
-        if scope.root.looping_mode == LoopingMode.EXECUTE:
-            if self.loop_flags & LoopFlags.HARDWARE:
+        if scope.root.looping_mode == LoopingMode.NEAR_TIME_ONLY:
+            if scope._is_real_time:
                 yield 0
             else:
                 for i in range(self.count):
@@ -267,11 +272,10 @@ class ForLoop(Statement):
         if other is self:
             return True
         if type(other) is ForLoop:
-            return (self.count, self.body, self.loop_flags, self.chunk_count) == (
+            return (self.count, self.body, self.loop_flags) == (
                 other.count,
                 other.body,
                 other.loop_flags,
-                other.chunk_count,
             )
         return NotImplemented
 
@@ -288,7 +292,7 @@ class ExecRT(ForLoop):
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
     ):
-        super().__init__(count, body, LoopFlags.RT_AVERAGE)
+        super().__init__(count=count, body=body, loop_flags=LoopFlags.AVERAGE)
         self.uid = uid
         self.averaging_mode = averaging_mode
         self.acquisition_type = acquisition_type
@@ -297,10 +301,12 @@ class ExecRT(ForLoop):
         with scope.root.rt_handler(
             self.count, self.uid, self.averaging_mode, self.acquisition_type
         ):
-            if scope.root.looping_mode == LoopingMode.EXECUTE:
+            if scope.root.looping_mode == LoopingMode.NEAR_TIME_ONLY:
                 pass
             elif scope.root.looping_mode == LoopingMode.ONCE:
-                super().run(scope)
+                sub_scope = scope.make_sub_scope()
+                sub_scope.enter_real_time()
+                super().run(sub_scope)
             else:
                 raise LabOneQException(
                     f"Unknown looping mode '{scope.root.looping_mode}'"
@@ -348,13 +354,13 @@ class ExecutorBase:
         class as needed.
     """
 
-    def __init__(self, looping_mode: LoopingMode = LoopingMode.EXECUTE):
+    def __init__(self, looping_mode: LoopingMode = LoopingMode.NEAR_TIME_ONLY):
         self.looping_mode: LoopingMode = looping_mode
 
     def set_handler(self, path: str, value):
         pass
 
-    def user_func_handler(self, func_name: str, args: Dict[str, Any]):
+    def user_func_handler(self, func_name: str, args: dict[str, Any]):
         pass
 
     def acquire_handler(self, handle: str, signal: str, parent_uid: str):
@@ -367,7 +373,7 @@ class ExecutorBase:
 
     @contextmanager
     def for_loop_handler(self, count: int, index: int, loop_flags: LoopFlags):
-        pass
+        yield
 
     @contextmanager
     def rt_handler(
@@ -377,7 +383,7 @@ class ExecutorBase:
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
     ):
-        pass
+        yield
 
     def run(self, root_sequence: Statement):
         """Start execution of the provided sequence."""

@@ -75,11 +75,13 @@ class CompiledExperiment:
         experiment. Previous pulse data is lost.
 
         Args:
-            pulse_uid: pulse to replace, can be :py:class:`~.dsl.experiment.pulse.Pulse`
+            pulse_uid:
+                Pulse to replace, can be [Pulse][laboneq.dsl.experiment.pulse.Pulse]
                 object or uid of the pulse
             pulse_or_array: replacement pulse, can be
-                :py:class:`~.dsl.experiment.pulse.Pulse` object or value array (see
-                ``sampled_pulse_*`` from the :py:mod:`~.dsl.experiment.pulse_library`)
+                [Pulse][laboneq.dsl.experiment.pulse.Pulse] object or
+                value array (see `sampled_pulse_*` from
+                [pulse_library][laboneq.dsl.experiment.pulse_library])
         """
         from laboneq.core.utilities.replace_pulse import replace_pulse
 

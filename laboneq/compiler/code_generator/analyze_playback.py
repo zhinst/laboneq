@@ -445,9 +445,7 @@ def _make_pulse_signature(pulse_iv: Interval, wave_iv: Interval, signal_ids: Lis
         pulse_parameters=None
         if combined_pulse_parameters is None
         else frozenset(combined_pulse_parameters.items()),
-        markers=None
-        if markers is None
-        else tuple(frozenset(m.items()) for m in markers),
+        markers=None if not markers else tuple(frozenset(m.items()) for m in markers),
     )
     pulse_parameters = (
         frozenset((data.play_pulse_parameters or {}).items()),

@@ -19,7 +19,7 @@ precompensation_id = 0
 
 def precompensation_id_generator():
     global precompensation_id
-    retval = f"mc{precompensation_id}"
+    retval = f"pc{precompensation_id}"
     precompensation_id += 1
     return retval
 
@@ -40,8 +40,7 @@ class ExponentialCompensation(Observable):
 class HighPassCompensation(Observable):
     """Data object containing highpass filter parameters for the signal precompensation.
 
-    .. versionchanged:: 2.8
-
+    !!! version-changed "Changed in version 2.8"
         Deprecated `clearing` argument: It has no functionality.
     """
 

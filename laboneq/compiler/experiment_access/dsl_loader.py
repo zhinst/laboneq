@@ -11,19 +11,29 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, Tuple
 
+from laboneq._utils import ensure_list, id_generator
 from laboneq.compiler.experiment_access.acquire_info import AcquireInfo
 from laboneq.compiler.experiment_access.loader_base import LoaderBase
-from laboneq.compiler.experiment_access.marker import Marker
 from laboneq.compiler.experiment_access.param_ref import ParamRef
-from laboneq.compiler.experiment_access.pulse_def import PulseDef
-from laboneq.compiler.experiment_access.section_info import SectionInfo
-from laboneq.compiler.experiment_access.section_signal_pulse import SectionSignalPulse
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import (
     AcquisitionType,
     AveragingMode,
+    ExecutionType,
     IODirection,
     IOSignalType,
+    SectionAlignment,
+)
+from laboneq.data.compilation_job import (
+    AmplifierPumpInfo,
+    FollowerInfo,
+    Marker,
+    MixerCalibrationInfo,
+    PrecompensationInfo,
+    PulseDef,
+    SectionInfo,
+    SectionSignalPulse,
+    SignalRange,
 )
 
 if typing.TYPE_CHECKING:
@@ -60,7 +70,6 @@ class DSLLoader(LoaderBase):
         for server in device_setup.servers.values():
             if hasattr(server, "leader_uid"):
                 self.global_leader_device_id = server.leader_uid
-            self.add_server(server.uid, server.host, server.port, server.api_level)
 
         dest_path_devices = {}
 
@@ -269,8 +278,8 @@ class DSLLoader(LoaderBase):
                                 self.add_device_oscillator(device_id, oscillator_uid)
                         else:
                             if (
-                                known_oscillator["frequency"],
-                                known_oscillator["is_hardware"],
+                                known_oscillator.frequency,
+                                known_oscillator.is_hardware,
                             ) != (frequency, is_hardware):
                                 raise Exception(
                                     f"Duplicate oscillator uid {oscillator_uid} found in {ls.path}"
@@ -279,51 +288,22 @@ class DSLLoader(LoaderBase):
                     ls_voltage_offsets[ls.path] = calibration.voltage_offset
                 except AttributeError:
                     pass
-                try:
-                    ls_mixer_calibrations[ls.path] = {
-                        "voltage_offsets": calibration.mixer_calibration.voltage_offsets,
-                        "correction_matrix": calibration.mixer_calibration.correction_matrix,
-                    }
-                except (AttributeError, KeyError):
-                    pass
-                try:
-                    precomp = calibration.precompensation
-                    if precomp is None:
-                        raise AttributeError
-                except AttributeError:
-                    pass
-                else:
-                    precomp_dict = {}
 
-                    if precomp.exponential:
-                        precomp_exp = [
-                            {"timeconstant": e.timeconstant, "amplitude": e.amplitude}
-                            for e in precomp.exponential
-                        ]
-                        precomp_dict["exponential"] = precomp_exp
-                    if precomp.high_pass is not None:
-                        # Since we currently only support clearing the integrator
-                        # inside a delay, the different modes are not relevant.
-                        # Instead, we would like to merge subsequent pulses into the
-                        # same waveform, so we restrict the choice to "rise", regardless
-                        # of what the user may have specified.
-                        clearing = "rise"
+                mixer_cal = getattr(calibration, "mixer_calibration", None)
+                if mixer_cal is not None:
+                    ls_mixer_calibrations[ls.path] = MixerCalibrationInfo(
+                        voltage_offsets=calibration.mixer_calibration.voltage_offsets,
+                        correction_matrix=calibration.mixer_calibration.correction_matrix,
+                    )
 
-                        precomp_dict["high_pass"] = {
-                            "timeconstant": precomp.high_pass.timeconstant,
-                            "clearing": clearing,
-                        }
-                    if precomp.bounce is not None:
-                        precomp_dict["bounce"] = {
-                            "delay": precomp.bounce.delay,
-                            "amplitude": precomp.bounce.amplitude,
-                        }
-                    if precomp.FIR is not None:
-                        precomp_dict["FIR"] = {
-                            "coefficients": copy.deepcopy(precomp.FIR.coefficients),
-                        }
-                    if precomp_dict:
-                        ls_precompensations[ls.path] = precomp_dict
+                precomp = getattr(calibration, "precompensation", None)
+                if precomp is not None:
+                    ls_precompensations[ls.path] = PrecompensationInfo(
+                        precomp.exponential,
+                        precomp.high_pass,
+                        precomp.bounce,
+                        precomp.FIR,
+                    )
 
                 local_oscillator = calibration.local_oscillator
                 if local_oscillator is not None:
@@ -363,18 +343,16 @@ class DSLLoader(LoaderBase):
                             ls.path,
                         )
                     else:
-                        ls_amplifier_pumps[ls.path] = (
-                            ppc_connections[ls.path][0],
-                            {
-                                "channel": ppc_connections[ls.path][1],
-                                "pump_freq": opt_param(amp_pump.pump_freq),
-                                "pump_power": opt_param(amp_pump.pump_power),
-                                "cancellation": amp_pump.cancellation,
-                                "alc_engaged": amp_pump.alc_engaged,
-                                "use_probe": amp_pump.use_probe,
-                                "probe_frequency": opt_param(amp_pump.probe_frequency),
-                                "probe_power": opt_param(amp_pump.probe_power),
-                            },
+                        ls_amplifier_pumps[ls.path] = AmplifierPumpInfo(
+                            channel=ppc_connections[ls.path][1],
+                            device=self._devices[ppc_connections[ls.path][0]],
+                            pump_freq=opt_param(amp_pump.pump_freq),
+                            pump_power=opt_param(amp_pump.pump_power),
+                            cancellation=amp_pump.cancellation,
+                            alc_engaged=amp_pump.alc_engaged,
+                            use_probe=amp_pump.use_probe,
+                            probe_frequency=opt_param(amp_pump.probe_frequency),
+                            probe_power=opt_param(amp_pump.probe_power),
                         )
 
         for signal in sorted(experiment.signals.values(), key=lambda x: x.uid):
@@ -397,11 +375,7 @@ class DSLLoader(LoaderBase):
             else:
                 _logger.debug("exp signal %s ls %s IS AN OUTPUT", signal, ls)
 
-            self.add_signal(
-                signal.uid,
-                signal_type,
-                modulation=signal.mapped_logical_signal_path in modulated_paths,
-            )
+            self.add_signal(signal.uid, signal_type)
 
             if signal.mapped_logical_signal_path in modulated_paths:
                 oscillator_id = modulated_paths[signal.mapped_logical_signal_path][
@@ -465,8 +439,11 @@ class DSLLoader(LoaderBase):
                     "mixer_calibration": ls_mixer_calibrations.get(lsuid),
                     "precompensation": ls_precompensations.get(lsuid),
                     "lo_frequency": ls_lo_frequencies.get(lsuid),
-                    "range": ls_ranges.get(lsuid),
-                    "range_unit": ls_range_units.get(lsuid),
+                    "range": SignalRange(
+                        ls_ranges.get(lsuid), ls_range_units.get(lsuid)
+                    )
+                    if ls_ranges.get(lsuid) is not None
+                    else None,
                     "port_delay": ls_port_delays.get(lsuid),
                     "delay_signal": ls_delays_signal.get(lsuid),
                     "port_mode": ls_port_modes.get(lsuid),
@@ -504,11 +481,13 @@ class DSLLoader(LoaderBase):
 
         for sc in syncing_connections:
             if sc.signal_type == IOSignalType.DIO:
-                self.dios.append((sc.leader_device_uid, sc.follower_device_uid))
+                leader = self._devices[sc.leader_device_uid]
+                follower = self._devices[sc.follower_device_uid]
+                leader.followers.append(FollowerInfo(follower, 0))
             elif sc.signal_type == IOSignalType.ZSYNC:
                 port = int(sc.output.physical_port_ids[0])
-                self.pqsc_ports.append(
-                    (sc.leader_device_uid, sc.follower_device_uid, port)
+                self._devices[sc.leader_device_uid].followers.append(
+                    FollowerInfo(self._devices[sc.follower_device_uid], port)
                 )
 
         seq_avg_section, sweep_sections = find_sequential_averaging(experiment)
@@ -548,18 +527,19 @@ class DSLLoader(LoaderBase):
             )
 
         if seq_avg_section is not None and len(sweep_sections):
-            avg_children = self._section_tree.get(sweep_sections[0].uid, [])
-            sweep_children = self._section_tree.get(seq_avg_section.uid, [])
+            avg_info = self._sections[seq_avg_section.uid]
+            sweep_info = self._sections[sweep_sections[0].uid]
+            avg_info.children, sweep_info.children = (
+                sweep_info.children,
+                avg_info.children,
+            )
 
-            self._section_tree[seq_avg_section.uid] = avg_children
-            self._section_tree[sweep_sections[0].uid] = sweep_children
-
-            for _parent, children in self._section_tree.items():
-                for i, c in enumerate(children):
-                    if c == sweep_sections[0].uid:
-                        children[i] = seq_avg_section.uid
-                    elif c == seq_avg_section.uid:
-                        children[i] = sweep_sections[0].uid
+            for parent in self._sections.values():
+                for i, c in enumerate(parent.children):
+                    if c is avg_info:
+                        parent.children[i] = sweep_info
+                    elif c is sweep_info:
+                        parent.children[i] = avg_info
 
         self.acquisition_type = AcquisitionType(
             next(
@@ -618,9 +598,7 @@ class DSLLoader(LoaderBase):
             )
 
     def _extract_markers(self, operation):
-        markers_raw = getattr(operation, "marker", None)
-        if markers_raw is None:
-            return None
+        markers_raw = getattr(operation, "marker", None) or {}
 
         return [
             Marker(
@@ -663,16 +641,14 @@ class DSLLoader(LoaderBase):
     def _insert_section(
         self,
         section,
-        acquisition_type,
+        exp_acquisition_type,
         exchanger_map: Callable[[Any], Any],
         instance_id: str,
     ):
-        has_repeat = False
-        count = 1
+        count = None
 
         if hasattr(section, "count"):
-            has_repeat = True
-            count = section.count
+            count = int(section.count)
 
         if hasattr(section, "parameters"):
             for parameter in section.parameters:
@@ -680,7 +656,6 @@ class DSLLoader(LoaderBase):
                 if parameter.values is not None:
                     values_list = list(parameter.values)
                 axis_name = getattr(parameter, "axis_name", None)
-                has_repeat = True
                 self.add_section_parameter(
                     instance_id,
                     parameter.uid,
@@ -706,53 +681,21 @@ class DSLLoader(LoaderBase):
                         f" bound to a value that can only be set in near-time"
                     )
 
-        execution_type = None
-        if section.execution_type is not None:
-            execution_type = section.execution_type.value
+        execution_type = (
+            ExecutionType(section.execution_type) if section.execution_type else None
+        )
+        align = SectionAlignment(exchanger_map(section).alignment)
+        on_system_grid = exchanger_map(section).on_system_grid
+        length = section.length
 
-        align = "left"
-        if exchanger_map(section).alignment is not None:
-            align = exchanger_map(section).alignment.value
-
-        on_system_grid = None
-        if exchanger_map(section).on_system_grid is not None:
-            on_system_grid = exchanger_map(section).on_system_grid
-
-        length = None
-        if section.length is not None:
-            length = section.length
-
-        averaging_mode = None
-        if hasattr(section, "averaging_mode"):
-            averaging_mode = section.averaging_mode.value
-
-        repetition_mode = None
-        if hasattr(section, "repetition_mode"):
-            repetition_mode = section.repetition_mode.value
-
-        repetition_time = None
-        if hasattr(section, "repetition_time"):
-            repetition_time = section.repetition_time
-
-        reset_oscillator_phase = False
-        if hasattr(section, "reset_oscillator_phase"):
-            reset_oscillator_phase = section.reset_oscillator_phase
-
-        handle = None
-        if hasattr(section, "handle"):
-            handle = section.handle
-
-        user_register = None
-        if hasattr(section, "user_register"):
-            user_register = section.user_register
-
-        state = None
-        if hasattr(section, "state"):
-            state = section.state
-
-        local = None
-        if hasattr(section, "local"):
-            local = section.local
+        averaging_mode = getattr(section, "averaging_mode", None)
+        repetition_mode = getattr(section, "repetition_mode", None)
+        repetition_time = getattr(section, "repetition_time", None)
+        reset_oscillator_phase = getattr(section, "reset_oscillator_phase", False)
+        handle = getattr(section, "handle", None)
+        user_register = getattr(section, "user_register", None)
+        state = getattr(section, "state", None)
+        local = getattr(section, "local", None)
 
         trigger = [
             {"signal_id": k, "state": v["state"]} for k, v in section.trigger.items()
@@ -760,11 +703,11 @@ class DSLLoader(LoaderBase):
 
         chunk_count = getattr(section, "chunk_count", 1)
 
-        acquisition_types = None
+        acquisition_type = None
         for operation in exchanger_map(section).operations:
             if hasattr(operation, "handle"):
                 # an acquire event - add acquisition_types
-                acquisition_types = [acquisition_type.value]
+                acquisition_type = exp_acquisition_type
 
         play_after = getattr(section, "play_after", None)
         if play_after:
@@ -776,14 +719,12 @@ class DSLLoader(LoaderBase):
         self.add_section(
             instance_id,
             SectionInfo(
-                section_id=instance_id,
-                section_display_name=section.uid,
-                has_repeat=has_repeat,
+                uid=instance_id,
                 execution_type=execution_type,
                 count=count,
                 chunk_count=chunk_count,
-                acquisition_types=acquisition_types,
-                align=align,
+                acquisition_type=acquisition_type,
+                alignment=align,
                 on_system_grid=on_system_grid,
                 length=length,
                 averaging_mode=averaging_mode,
@@ -791,7 +732,7 @@ class DSLLoader(LoaderBase):
                 repetition_time=repetition_time,
                 play_after=play_after,
                 reset_oscillator_phase=reset_oscillator_phase,
-                trigger_output=trigger,
+                triggers=trigger,
                 handle=handle,
                 user_register=user_register,
                 state=state,
@@ -810,7 +751,9 @@ class DSLLoader(LoaderBase):
                 continue
             self.add_section_signal(instance_id, operation.signal)
 
-        self._section_operations_to_add.append((section, acquisition_type, instance_id))
+        self._section_operations_to_add.append(
+            (section, exp_acquisition_type, instance_id)
+        )
 
     def _insert_section_operations(
         self,
@@ -824,7 +767,6 @@ class DSLLoader(LoaderBase):
         for operation in exchanger_map(section).operations:
             if hasattr(operation, "signal"):
                 pulse_offset = None
-                pulse_offset_param = None
 
                 if hasattr(operation, "time"):  # Delay operation
                     pulse_offset = operation.time
@@ -834,247 +776,255 @@ class DSLLoader(LoaderBase):
                     if not isinstance(operation.time, float) and not isinstance(
                         operation.time, int
                     ):
-                        pulse_offset = None
-                        pulse_offset_param = operation.time.uid
-
-                    if pulse_offset_param is not None:
+                        pulse_offset = self._get_or_create_parameter(operation.time.uid)
                         self._sweep_derived_param(operation.time)
 
                     ssp = SectionSignalPulse(
-                        signal_id=operation.signal,
+                        signal=self._signals[operation.signal],
                         offset=pulse_offset,
-                        offset_param=pulse_offset_param,
                         precompensation_clear=precompensation_clear,
                     )
                     self.add_section_signal_pulse(instance_id, operation.signal, ssp)
                 else:  # All operations, except Delay
-                    pulse = None
-                    operation_length_param = None
+                    pulses = None
                     markers = self._extract_markers(operation)
 
                     length = getattr(operation, "length", None)
                     operation_length = length
-                    if (
-                        operation_length is not None
-                        and not isinstance(operation_length, float)
-                        and not isinstance(operation_length, complex)
-                        and not isinstance(operation_length, int)
+                    if operation_length is not None and not isinstance(
+                        operation_length, (float, complex, int)
                     ):
-                        operation_length_param = operation_length.uid
                         self._sweep_derived_param(operation_length)
-                        operation_length = None
+                        operation_length = self._get_or_create_parameter(
+                            operation_length.uid
+                        )
 
                     if hasattr(operation, "pulse"):
-                        pulse = getattr(operation, "pulse")
+                        pulses = getattr(operation, "pulse")
+                        if isinstance(pulses, list) and len(pulses) > 1:
+                            raise RuntimeError(
+                                f"Only one pulse can be provided for pulse play command in section {instance_id}."
+                            )
                     if hasattr(operation, "kernel"):
-                        pulse = getattr(operation, "kernel")
-                    if pulse is None and length is not None:
-                        pulse = SimpleNamespace()
-                        setattr(pulse, "uid", next(_auto_pulse_id))
-                        setattr(pulse, "length", length)
-                    if pulse is None and markers:
+                        # We allow multiple kernels for multistate
+                        pulses = getattr(operation, "kernel")
+                        if not hasattr(operation, "handle"):
+                            raise RuntimeError(
+                                f"Kernels {pulses} in section {instance_id} do not have a handle."
+                            )
+                    if pulses is None and length is not None:
+                        pulses = SimpleNamespace()
+                        setattr(pulses, "uid", next(_auto_pulse_id))
+                        setattr(pulses, "length", length)
+                    if pulses is None and markers:
                         # generate an zero amplitude pulse to play the markers
-                        pulse = SimpleNamespace()
-                        pulse.uid = next(_auto_pulse_id)
-                        pulse.function = "const"
-                        pulse.amplitude = 0.0
-                        pulse.length = max([m.start + m.length for m in markers])
-                        pulse.can_compress = False
-                        pulse.pulse_parameters = None
+                        pulses = SimpleNamespace()
+                        pulses.uid = next(_auto_pulse_id)
+                        pulses.function = "const"
+                        pulses.amplitude = 0.0
+                        pulses.length = max([m.start + m.length for m in markers])
+                        pulses.can_compress = False
+                        pulses.pulse_parameters = None
+                    pulses = ensure_list(pulses)
+                    pulse_group = (
+                        None if len(pulses) == 1 else id_generator("pulse_group")
+                    )
                     if markers:
                         for m in markers:
                             if m.pulse_id is None:
-                                m.pulse_id = pulse.uid
+                                assert len(pulses) == 1 and pulses[0] is not None
+                                m.pulse_id = pulses[0].uid
 
-                    if hasattr(operation, "handle") and pulse is None:
+                    if hasattr(operation, "handle") and pulses is None:
                         raise RuntimeError(
                             f"Either 'kernel' or 'length' must be provided for the"
                             f" acquire operation with handle '{getattr(operation, 'handle')}'."
                         )
 
-                    if pulse is not None:
-                        function = None
-                        length = None
+                    signals = ensure_list(operation.signal)
+                    if len(signals) != len(pulses):
+                        raise RuntimeError(
+                            f"Number of pulses ({len(pulses)}) must be equal to number of signals ({len(signals)}) for section {instance_id}."
+                        )
 
-                        pulse_parameters = getattr(pulse, "pulse_parameters", None)
+                    # Play/acquire/measure command parameters
+                    (
+                        pulse_amplitude,
+                        pulse_amplitude_param,
+                    ) = find_value_or_parameter_attr(
+                        operation, "amplitude", (int, float, complex)
+                    )
+                    if pulse_amplitude_param is not None:
+                        self._sweep_derived_param(operation.amplitude)
+                        pulse_amplitude = self._get_or_create_parameter(
+                            pulse_amplitude_param
+                        )
 
-                        if pulse.uid not in self._pulses:
-                            samples = None
-                            if hasattr(pulse, "function"):
-                                function = pulse.function
-                            if hasattr(pulse, "length"):
-                                length = pulse.length
+                    pulse_phase, pulse_phase_param = find_value_or_parameter_attr(
+                        operation, "phase", (int, float)
+                    )
+                    if pulse_phase_param is not None:
+                        self._sweep_derived_param(operation.phase)
+                        pulse_phase = self._get_or_create_parameter(pulse_phase_param)
 
-                            if hasattr(pulse, "samples"):
-                                samples = pulse.samples
-
-                            amplitude, amplitude_param = find_value_or_parameter_attr(
-                                pulse, "amplitude", (float, int, complex)
+                    (
+                        pulse_increment_oscillator_phase,
+                        pulse_increment_oscillator_phase_param,
+                    ) = find_value_or_parameter_attr(
+                        operation, "increment_oscillator_phase", (int, float)
+                    )
+                    if pulse_increment_oscillator_phase_param is not None:
+                        self._sweep_derived_param(operation.increment_oscillator_phase)
+                        pulse_increment_oscillator_phase = (
+                            self._get_or_create_parameter(
+                                pulse_increment_oscillator_phase_param
                             )
-                            if amplitude_param is not None:
-                                self._sweep_derived_param(pulse.amplitude)
-
-                            can_compress = False
-                            if hasattr(pulse, "can_compress"):
-                                can_compress = pulse.can_compress
-
-                            self.add_pulse(
-                                pulse.uid,
-                                PulseDef(
-                                    id=pulse.uid,
-                                    function=function,
-                                    length=length,
-                                    amplitude=amplitude,
-                                    amplitude_param=amplitude_param,
-                                    play_mode=None,
-                                    can_compress=can_compress,
-                                    samples=samples,
-                                ),
-                            )
-                        (
-                            pulse_amplitude,
-                            pulse_amplitude_param,
-                        ) = find_value_or_parameter_attr(
-                            operation, "amplitude", (int, float, complex)
                         )
-                        if pulse_amplitude_param is not None:
-                            self._sweep_derived_param(operation.amplitude)
-                        pulse_phase, pulse_phase_param = find_value_or_parameter_attr(
-                            operation, "phase", (int, float)
-                        )
-                        if pulse_phase_param is not None:
-                            self._sweep_derived_param(operation.phase)
-                        (
-                            pulse_increment_oscillator_phase,
-                            pulse_increment_oscillator_phase_param,
-                        ) = find_value_or_parameter_attr(
-                            operation, "increment_oscillator_phase", (int, float)
-                        )
-                        if pulse_increment_oscillator_phase_param is not None:
-                            self._sweep_derived_param(
-                                operation.increment_oscillator_phase
-                            )
-                        (
-                            pulse_set_oscillator_phase,
-                            pulse_set_oscillator_phase_param,
-                        ) = find_value_or_parameter_attr(
-                            operation, "set_oscillator_phase", (int, float)
-                        )
-                        if pulse_set_oscillator_phase_param is not None:
-                            self._sweep_derived_param(operation.set_oscillator_phase)
-
-                        acquire_params = None
-                        if hasattr(operation, "handle"):
-                            acquire_params = AcquireInfo(
-                                handle=operation.handle,
-                                acquisition_type=acquisition_type.value,
-                            )
-
-                        operation_pulse_parameters = copy.deepcopy(
-                            getattr(operation, "pulse_parameters", None)
+                    (
+                        pulse_set_oscillator_phase,
+                        pulse_set_oscillator_phase_param,
+                    ) = find_value_or_parameter_attr(
+                        operation, "set_oscillator_phase", (int, float)
+                    )
+                    if pulse_set_oscillator_phase_param is not None:
+                        self._sweep_derived_param(operation.set_oscillator_phase)
+                        pulse_set_oscillator_phase = self._get_or_create_parameter(
+                            pulse_set_oscillator_phase_param
                         )
 
-                        # Replace sweep params with a ParamRef
-                        if pulse_parameters is not None:
-                            for param, val in pulse_parameters.items():
+                    acquire_params = None
+                    if hasattr(operation, "handle"):
+                        acquire_params = AcquireInfo(
+                            handle=operation.handle,
+                            acquisition_type=acquisition_type.value,
+                        )
+
+                    operation_pulse_parameters = copy.deepcopy(
+                        getattr(operation, "pulse_parameters", None)
+                    )
+
+                    if operation_pulse_parameters is not None:
+                        operation_pulse_parameters_list = ensure_list(
+                            operation_pulse_parameters
+                        )
+                        for p in operation_pulse_parameters_list:
+                            for param, val in p.items():
                                 if hasattr(val, "uid"):
                                     # Take the presence of "uid" as a proxy for isinstance(val, SweepParameter)
-                                    pulse_parameters[param] = ParamRef(val.uid)
+                                    p[param] = ParamRef(val.uid)
                                     self._sweep_derived_param(val)
-                        if operation_pulse_parameters is not None:
-                            for param, val in operation_pulse_parameters.items():
-                                if hasattr(val, "uid"):
-                                    # Take the presence of "uid" as a proxy for isinstance(val, SweepParameter)
-                                    operation_pulse_parameters[param] = ParamRef(
-                                        val.uid
-                                    )
-                                    self._sweep_derived_param(val)
+                    else:
+                        operation_pulse_parameters_list = [None] * len(pulses)
 
-                        if markers:
-                            for m in markers:
-                                self.add_signal_marker(
-                                    operation.signal, m.marker_selector
-                                )
+                    if markers:
+                        for m in markers:
+                            self.add_signal_marker(operation.signal, m.marker_selector)
 
-                        ssp = SectionSignalPulse(
-                            signal_id=operation.signal,
-                            pulse_id=pulse.uid,
-                            offset=pulse_offset,
-                            offset_param=pulse_offset_param,
-                            amplitude=pulse_amplitude,
-                            amplitude_param=pulse_amplitude_param,
-                            length=operation_length,
-                            length_param=operation_length_param,
-                            acquire_params=acquire_params,
-                            phase=pulse_phase,
-                            phase_param=pulse_phase_param,
-                            increment_oscillator_phase=pulse_increment_oscillator_phase,
-                            increment_oscillator_phase_param=pulse_increment_oscillator_phase_param,
-                            set_oscillator_phase=pulse_set_oscillator_phase,
-                            set_oscillator_phase_param=pulse_set_oscillator_phase_param,
-                            play_pulse_parameters=operation_pulse_parameters,
-                            pulse_pulse_parameters=pulse_parameters,
-                            precompensation_clear=False,  # not supported
-                            markers=markers,
-                        )
-                        self.add_section_signal_pulse(
-                            instance_id, operation.signal, ssp
-                        )
-                    elif (
-                        getattr(operation, "increment_oscillator_phase", None)
-                        is not None
-                        or getattr(operation, "set_oscillator_phase", None) is not None
-                        or getattr(operation, "phase", None) is not None
+                    for pulse, signal, op_pars in zip(
+                        pulses, signals, operation_pulse_parameters_list
                     ):
-                        if getattr(operation, "phase", None) is not None:
-                            raise LabOneQException(
-                                "Phase argument has no effect for virtual Z gates."
-                            )
-                        # virtual Z gate
-                        (
-                            pulse_increment_oscillator_phase,
-                            pulse_increment_oscillator_phase_param,
-                        ) = find_value_or_parameter_attr(
-                            operation, "increment_oscillator_phase", (int, float)
-                        )
-                        if pulse_increment_oscillator_phase_param is not None:
-                            self._sweep_derived_param(
-                                operation.increment_oscillator_phase
-                            )
-                        (
-                            pulse_set_oscillator_phase,
-                            pulse_set_oscillator_phase_param,
-                        ) = find_value_or_parameter_attr(
-                            operation, "set_oscillator_phase", (int, float)
-                        )
-                        if pulse_set_oscillator_phase_param is not None:
-                            self._sweep_derived_param(operation.set_oscillator_phase)
-                        for par in [
-                            "precompensation_clear",
-                            "amplitude",
-                            "phase",
-                            "pulse_parameters",
-                            "handle",
-                            "length",
-                        ]:
-                            if getattr(operation, par, None) is not None:
-                                raise LabOneQException(
-                                    f"parameter {par} not supported for virtual Z gates"
-                                )
+                        if pulse is not None:
+                            function = None
+                            length = None
 
-                        ssp = SectionSignalPulse(
-                            signal_id=operation.signal,
-                            offset=pulse_offset,
-                            offset_param=pulse_offset_param,
-                            increment_oscillator_phase=pulse_increment_oscillator_phase,
-                            increment_oscillator_phase_param=pulse_increment_oscillator_phase_param,
-                            set_oscillator_phase=pulse_set_oscillator_phase,
-                            set_oscillator_phase_param=pulse_set_oscillator_phase_param,
-                            precompensation_clear=False,  # not supported
-                        )
-                        self.add_section_signal_pulse(
-                            instance_id, operation.signal, ssp
-                        )
+                            pulse_parameters = getattr(pulse, "pulse_parameters", None)
+
+                            if pulse.uid not in self._pulses:
+                                samples = None
+                                if hasattr(pulse, "function"):
+                                    function = pulse.function
+                                if hasattr(pulse, "length"):
+                                    length = pulse.length
+                                if hasattr(pulse, "samples"):
+                                    samples = pulse.samples
+
+                                (
+                                    amplitude,
+                                    amplitude_param,
+                                ) = find_value_or_parameter_attr(
+                                    pulse, "amplitude", (float, int, complex)
+                                )
+                                if amplitude_param is not None:
+                                    raise LabOneQException(
+                                        f"Amplitude of pulse '{pulse.uid}' cannot be a parameter."
+                                        f" To sweep the amplitude, pass the parameter in the"
+                                        f" corresponding `play()` command."
+                                    )
+
+                                can_compress = False
+                                if hasattr(pulse, "can_compress"):
+                                    can_compress = pulse.can_compress
+
+                                self.add_pulse(
+                                    pulse.uid,
+                                    PulseDef(
+                                        uid=pulse.uid,
+                                        function=function,
+                                        length=length,
+                                        amplitude=amplitude,
+                                        can_compress=can_compress,
+                                        samples=samples,
+                                    ),
+                                )
+                            # Replace sweep params with a ParamRef
+                            if pulse_parameters is not None:
+                                for param, val in pulse_parameters.items():
+                                    if hasattr(val, "uid"):
+                                        # Take the presence of "uid" as a proxy for isinstance(val, SweepParameter)
+                                        pulse_parameters[param] = ParamRef(val.uid)
+                                        self._sweep_derived_param(val)
+
+                            ssp = SectionSignalPulse(
+                                signal=self._signals[signal],
+                                pulse=self._pulses[pulse.uid],
+                                offset=pulse_offset,
+                                amplitude=pulse_amplitude,
+                                length=operation_length,
+                                acquire_params=acquire_params,
+                                phase=pulse_phase,
+                                increment_oscillator_phase=pulse_increment_oscillator_phase,
+                                set_oscillator_phase=pulse_set_oscillator_phase,
+                                play_pulse_parameters=op_pars,
+                                pulse_pulse_parameters=pulse_parameters,
+                                precompensation_clear=False,  # only for delay
+                                markers=markers,
+                                pulse_group=pulse_group,
+                            )
+                            self.add_section_signal_pulse(instance_id, signal, ssp)
+                        elif (
+                            getattr(operation, "increment_oscillator_phase", None)
+                            is not None
+                            or getattr(operation, "set_oscillator_phase", None)
+                            is not None
+                            or getattr(operation, "phase", None) is not None
+                        ):
+                            # virtual Z gate
+                            if getattr(operation, "phase", None) is not None:
+                                raise LabOneQException(
+                                    "Phase argument has no effect for virtual Z gates."
+                                )
+                            for par in [
+                                "precompensation_clear",
+                                "amplitude",
+                                "phase",
+                                "pulse_parameters",
+                                "handle",
+                                "length",
+                            ]:
+                                if getattr(operation, par, None) is not None:
+                                    raise LabOneQException(
+                                        f"parameter {par} not supported for virtual Z gates"
+                                    )
+
+                            ssp = SectionSignalPulse(
+                                signal=self._signals[operation.signal],
+                                increment_oscillator_phase=pulse_increment_oscillator_phase,
+                                set_oscillator_phase=pulse_set_oscillator_phase,
+                                precompensation_clear=False,  # only for delay
+                            )
+                            self.add_section_signal_pulse(
+                                instance_id, operation.signal, ssp
+                            )
 
 
 def find_sequential_averaging(section) -> Tuple[Any, Tuple]:

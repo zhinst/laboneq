@@ -30,8 +30,7 @@ from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.experiment_access.param_ref import ParamRef
-from laboneq.compiler.experiment_access.section_info import SectionInfo
-from laboneq.compiler.experiment_access.section_signal_pulse import SectionSignalPulse
+from laboneq.compiler.scheduler.acquire_group_schedule import AcquireGroupSchedule
 from laboneq.compiler.scheduler.case_schedule import CaseSchedule, EmptyBranch
 from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
 from laboneq.compiler.scheduler.loop_iteration_schedule import LoopIterationSchedule
@@ -62,8 +61,14 @@ from laboneq.compiler.scheduler.utils import (
     to_tinysample,
 )
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types.enums import RepetitionMode, SectionAlignment
-from laboneq.data.compilation_job import ParameterInfo
+from laboneq.core.types.enums import RepetitionMode
+from laboneq.data.compilation_job import (
+    ParameterInfo,
+    SectionAlignment,
+    SectionInfo,
+    SectionSignalPulse,
+    SignalInfoType,
+)
 
 if TYPE_CHECKING:
     from laboneq.compiler.common.signal_obj import SignalObj
@@ -154,7 +159,7 @@ class Scheduler:
         # Todo (PW): Drop once system tests have been migrated from legacy behaviour.
         for device_info in self._experiment_dao.device_infos():
             try:
-                device_type = DeviceType(device_info.device_type)
+                device_type = DeviceType.from_device_info_type(device_info.device_type)
             except ValueError:
                 # Not every device has a corresponding DeviceType (e.g. PQSC)
                 continue
@@ -232,7 +237,7 @@ class Scheduler:
             if param.values is None:
                 param.values = param.start + np.arange(section_info.count) * param.step
 
-        is_loop = section_info.has_repeat
+        is_loop = section_info.count is not None
         if is_loop:
             schedule = self._schedule_loop(
                 section_id, section_info, current_parameters, sweep_parameters
@@ -282,7 +287,7 @@ class Scheduler:
                         "Hardware frequency sweep may drive only a single oscillator"
                     )
                 oscillator_param_lookup[param.uid] = SweptHardwareOscillator(
-                    id=oscillator.uid, device=signal_info.device_id, signal=signal
+                    id=oscillator.uid, device=signal_info.device.uid, signal=signal
                 )
 
         return oscillator_param_lookup
@@ -408,7 +413,7 @@ class Scheduler:
             params.append(param.uid)
             device_id = osc.device
             device_info = self._experiment_dao.device_info(device_id)
-            device_type = DeviceType(device_info.device_type)
+            device_type = DeviceType.from_device_info_type(device_info.device_type)
             length = max(
                 length,
                 int(device_type.oscillator_set_latency / self._TINYSAMPLE),
@@ -447,13 +452,11 @@ class Scheduler:
         hw_osc_devices = {}
         for signal in hw_signals:
             device = self._experiment_dao.device_from_signal(signal)
-            device_type = DeviceType(
-                self._experiment_dao.device_info(device).device_type
-            )
+            device_type = DeviceType.from_device_info_type(device.device_type)
             if not device_type.supports_reset_osc_phase:
                 continue
             duration = device_type.reset_osc_duration / self._TINYSAMPLE
-            hw_osc_devices[device] = duration
+            hw_osc_devices[device.uid] = duration
             length = max(length, duration)
             if device_type.lo_frequency_granularity is not None:
                 # The frequency of Grimsel's LO in RF mode is a multiple of 100 MHz.
@@ -574,7 +577,11 @@ class Scheduler:
         )
 
     def _schedule_children(
-        self, section_id, section_info, children: List[IntervalSchedule], grid=1
+        self,
+        section_id,
+        section_info: SectionInfo,
+        children: List[IntervalSchedule],
+        grid=1,
     ) -> SectionSchedule:
         """Schedule the given children of a section, arranging them in the required
         order.
@@ -585,10 +592,8 @@ class Scheduler:
         restrictions beyond those imposed by the children. In addition, escalation to
         the system grid can be enforced via the DSL.
         """
-        right_align = section_info.align == SectionAlignment.RIGHT.value
-        signals = set()
-        for c in children:
-            signals.update(c.signals)
+        right_align = section_info.alignment == SectionAlignment.RIGHT
+        signals = set(s for c in children for s in c.signals)
 
         signals.update(self._experiment_dao.section_signals(section_id))
         play_after = section_info.play_after or []
@@ -633,16 +638,15 @@ class Scheduler:
 
         # todo: add memoization
 
-        grid, _ = self.grid(pulse.signal_id)
+        grid, _ = self.grid(pulse.signal.uid)
 
         def resolve_value_or_parameter(name, default):
-            value = default
-            param_name = name + "_param"
-            if getattr(pulse, name) is not None:
-                value = getattr(pulse, name)
-            elif getattr(pulse, param_name) is not None:
+            if (value := getattr(pulse, name)) is None:
+                return default
+
+            if isinstance(value, ParameterInfo):
                 try:
-                    value = current_parameters[getattr(pulse, param_name)]
+                    value = current_parameters[value.uid]
                 except KeyError as e:
                     raise LabOneQException(
                         f"Parameter '{name}' requested outside of sweep. "
@@ -652,26 +656,26 @@ class Scheduler:
 
         offset = resolve_value_or_parameter("offset", 0.0)
         length = resolve_value_or_parameter("length", None)
-        if length is None:
-            pulse_def = self._experiment_dao.pulse(pulse.pulse_id)
-            if pulse_def is not None:
-                assert pulse_def.length is None
-                if pulse_def.samples is None:
-                    raise LabOneQException(
-                        f"Cannot determine length of pulse '{pulse.pulse_id}' in section "
-                        f"'{section}'. Either specify the length at the pulse definition, "
-                        f"when playing the pulse, or by specifying the samples."
-                    )
+        if length is None and (pulse_def := pulse.pulse) is not None:
+            if pulse_def.length is not None:
+                length = pulse_def.length
+            elif pulse_def.samples is not None:
                 length = len(pulse_def.samples) * grid * self._TINYSAMPLE
             else:
-                assert offset is not None
-                length = 0.0
+                raise LabOneQException(
+                    f"Cannot determine length of pulse '{pulse_def.uid}' in section "
+                    f"'{section}'. Either specify the length at the pulse definition, "
+                    f"when playing the pulse, or by specifying the samples."
+                )
+        elif length is None:
+            assert offset is not None
+            length = 0.0
 
         amplitude = resolve_value_or_parameter("amplitude", 1.0)
         if abs(amplitude) > 1.0 + 1e-9:
             raise LabOneQException(
                 f"Magnitude of amplitude {amplitude} exceeding unity for pulse "
-                f"'{pulse.pulse_id}' on signal '{pulse.signal_id}' in section '{section}'"
+                f"'{pulse.pulse.uid}' on signal '{pulse.signal.uid}' in section '{section}'"
             )
         phase = resolve_value_or_parameter("phase", 0.0)
         set_oscillator_phase = resolve_value_or_parameter("set_oscillator_phase", None)
@@ -686,7 +690,7 @@ class Scheduler:
                         resolved = current_parameters[value.param_name]
                     except KeyError as e:
                         raise LabOneQException(
-                            f"Pulse '{pulse.pulse_id}' in section '{section}' requires "
+                            f"Pulse '{pulse.pulse.uid}' in section '{section}' requires "
                             f"parameter '{param}' which is not available. "
                             f"Note that only RT sweep parameters are currently supported here."
                         ) from e
@@ -707,7 +711,7 @@ class Scheduler:
         length_int = round_to_grid(scheduled_length / self._TINYSAMPLE, grid)
         offset_int = round_to_grid(offset / self._TINYSAMPLE, grid)
 
-        osc = self._experiment_dao.signal_oscillator(pulse.signal_id)
+        osc = self._experiment_dao.signal_oscillator(pulse.signal.uid)
         if osc is None:
             freq = None
         elif not osc.is_hardware and isinstance(osc.frequency, ParameterInfo):
@@ -715,22 +719,22 @@ class Scheduler:
                 freq = current_parameters[osc.frequency.uid]
             except KeyError as e:
                 raise LabOneQException(
-                    f"Playback of pulse '{pulse.pulse_id}' in section '{section} "
-                    f"requires the parameter '{osc.frequency_param}' to set the frequency."
+                    f"Playback of pulse '{pulse.pulse.uid}' in section '{section} "
+                    f"requires the parameter '{osc.frequency.uid}' to set the frequency."
                 ) from e
         elif osc is None or osc.is_hardware:
             freq = None
         else:
             freq = osc.frequency if osc is not None else None
 
-        signal_info = self._experiment_dao.signal_info(pulse.signal_id)
-        is_acquire = signal_info.signal_type == "integration"
+        signal_info = self._experiment_dao.signal_info(pulse.signal.uid)
+        is_acquire = signal_info.type == SignalInfoType.INTEGRATION
         markers = pulse.markers
 
         return PulseSchedule(
             grid=grid,
             length=length_int,
-            signals={pulse.signal_id},
+            signals={pulse.signal.uid},
             pulse=pulse,
             section=section,
             amplitude=amplitude,
@@ -743,6 +747,63 @@ class Scheduler:
             pulse_pulse_params=pulse_pulse_params,
             is_acquire=is_acquire,
             markers=markers,
+        )
+
+    def _schedule_acquire_group(
+        self,
+        pulses: list[SectionSignalPulse],
+        section: str,
+        current_parameters: ParameterStore[str, float],
+    ) -> AcquireGroupSchedule:
+        # Take the first one, they all run on the same device
+        grid, _ = self.grid(pulses[0].signal.uid)
+        offsets_int = []
+        lengths_int = []
+        amplitudes = []
+        phases = []
+        set_oscillator_phases = []
+        increment_oscillator_phases = []
+        play_pulse_params = []
+        pulse_pulse_params = []
+        freqs = []
+
+        for pulse in pulses:
+            pulse_schedule = self._schedule_pulse(pulse, section, current_parameters)
+
+            lengths_int.append(pulse_schedule.length)
+            offsets_int.append(pulse_schedule.offset)
+            amplitudes.append(pulse_schedule.amplitude)
+            phases.append(pulse_schedule.phase)
+            set_oscillator_phases.append(pulse_schedule.set_oscillator_phase)
+            increment_oscillator_phases.append(
+                pulse_schedule.increment_oscillator_phase
+            )
+            pulse_pulse_params.append(pulse_schedule.pulse_pulse_params)
+            play_pulse_params.append(pulse_schedule.play_pulse_params)
+            freqs.append(pulse_schedule.oscillator_frequency)
+
+            assert pulse_schedule.is_acquire
+            assert not pulse.markers
+
+        if len(set(lengths_int)) != 1 or len(set(offsets_int)) != 1:
+            raise LabOneQException(
+                f"Cannot schedule pulses with different lengths or offsets in the multistate discrimination group in section '{section}'. "
+            )
+
+        return AcquireGroupSchedule(
+            grid=grid,
+            length=lengths_int[0],
+            signals={p.signal.uid for p in pulses},
+            pulses=pulses,
+            section=section,
+            amplitudes=amplitudes,
+            phases=phases,
+            offset=offsets_int[0],
+            set_oscillator_phases=set_oscillator_phases,
+            increment_oscillator_phases=increment_oscillator_phases,
+            oscillator_frequencies=freqs,
+            play_pulse_params=play_pulse_params,
+            pulse_pulse_params=pulse_pulse_params,
         )
 
     def _schedule_match(
@@ -785,11 +846,12 @@ class Scheduler:
 
         if handle:
             try:
-                acquire_signal = dao.acquisition_signal(handle)
+                acquire_signals = dao.acquisition_signal(handle)
             except KeyError as e:
                 raise LabOneQException(f"No acquisition with handle '{handle}'") from e
-            acquire_device = dao.device_from_signal(acquire_signal)
-            match_devices = {dao.device_from_signal(s) for s in signals}
+            assert isinstance(acquire_signals, list) and len(acquire_signals) >= 1
+            acquire_device = dao.device_from_signal(acquire_signals[0]).uid
+            match_devices = {dao.device_from_signal(s).uid for s in signals}
 
             # todo: this is a brittle check for SHFQC
             local_feedback_allowed = match_devices == {f"{acquire_device}_sg"}
@@ -846,7 +908,7 @@ class Scheduler:
 
         section_info = self._schedule_data.experiment_dao.section_info(section_id)
 
-        assert not section_info.has_repeat  # case must not be a loop
+        assert section_info.count is None  # case must not be a loop
         assert section_info.handle is None and section_info.user_register is None
         state = section_info.state
         assert state is not None
@@ -872,7 +934,7 @@ class Scheduler:
         return schedule
 
     def _schedule_precomp_clear(self, pulse: PulseSchedule):
-        signal = pulse.pulse.signal_id
+        signal = pulse.pulse.signal.uid
         _, grid = self.grid(signal)
         # The precompensation clearing overlaps with a 'pulse' on the same signal,
         # whereas regular scheduling rules disallow this. For this reason we do not
@@ -898,25 +960,32 @@ class Scheduler:
 
         pulse_schedules = []
         section_signals = self._schedule_data.experiment_dao.section_signals(section_id)
+        pulse_groups: dict[str | None, list[Any]] = {None: []}
         for signal_id in section_signals:
             pulses = self._schedule_data.experiment_dao.section_pulses(
                 section_id, signal_id
             )
-            for pulse in pulses:
-                pulse_schedules.append(
-                    self._schedule_pulse(pulse, section_id, parameters)
-                )
-                if pulse.precompensation_clear:
-                    pulse_schedules.append(
-                        self._schedule_precomp_clear(pulse_schedules[-1])
-                    )
 
-            signal_grid, _ = self.grid(signal_id)
             if len(pulses) == 0:
                 # the section occupies the signal via a reserve, so add a placeholder
                 # to include this signal in the grid calculation
+                signal_grid, _ = self.grid(signal_id)
                 pulse_schedules.append(ReserveSchedule.create(signal_id, signal_grid))
+            else:
+                for p in pulses:
+                    pulse_groups.setdefault(p.pulse_group, []).append(p)
 
+        for pulse in pulse_groups[None]:
+            pulse_schedules.append(self._schedule_pulse(pulse, section_id, parameters))
+            if pulse.precompensation_clear:
+                pulse_schedules.append(
+                    self._schedule_precomp_clear(pulse_schedules[-1])
+                )
+        for (group, group_pulses) in pulse_groups.items():
+            if group is not None:
+                pulse_schedules.append(
+                    self._schedule_acquire_group(group_pulses, section_id, parameters)
+                )
         if len(pulse_schedules) and len(subsection_schedules):
             if any(not isinstance(ps, ReserveSchedule) for ps in pulse_schedules):
                 raise LabOneQException(
@@ -936,7 +1005,7 @@ class Scheduler:
 
         for signal_id in signal_ids:
             signal = self._schedule_data.experiment_dao.signal_info(signal_id)
-            device = self._schedule_data.experiment_dao.device_info(signal.device_id)
+            device = signal.device
             assert device is not None
 
             sample_rate = self._sampling_rate_tracker.sampling_rate_for_device(
@@ -967,11 +1036,10 @@ class Scheduler:
 
         The return value is a set of `(signal_id, bit_index)` tuples.
         """
-        if len(section_info.trigger_output) == 0:
+        if len(section_info.triggers) == 0:
             return set()
-        section_name = section_info.section_display_name or section_info.section_id
         parent_section_trigger_states = {}  # signal -> state
-        parent_section_id = section_name
+        parent_section_id = section_info.uid
         while True:
             parent_section_id = self._schedule_data.experiment_dao.section_parent(
                 parent_section_id
@@ -981,7 +1049,7 @@ class Scheduler:
             parent_section_info = self._schedule_data.experiment_dao.section_info(
                 parent_section_id
             )
-            for trigger_info in parent_section_info.trigger_output:
+            for trigger_info in parent_section_info.triggers:
                 state = trigger_info["state"]
                 signal = trigger_info["signal_id"]
                 parent_section_trigger_states[signal] = (
@@ -989,7 +1057,7 @@ class Scheduler:
                 )
 
         section_trigger_signals = set()
-        for trigger_info in section_info.trigger_output:
+        for trigger_info in section_info.triggers:
             signal = trigger_info["signal_id"]
             state = trigger_info["state"]
             parent_state = parent_section_trigger_states.get(signal, 0)
@@ -1037,7 +1105,7 @@ class Scheduler:
         def search_lowest_level_loop(section):
             loop: Optional[str] = None
             section_info = self._schedule_data.experiment_dao.section_info(section)
-            if section_info.has_repeat:
+            if section_info.count is not None:
                 loop = section
 
             children = self._schedule_data.experiment_dao.direct_section_children(

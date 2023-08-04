@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 # Note: The simulator may be used as a testing tool, so it must be independent of the production code
 # Do not add dependencies to the code being tested here (such as compiler, DSL asf.)
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy import typing as npt
@@ -32,6 +32,7 @@ from pycparser.c_ast import (
 from pycparser.c_parser import CParser
 
 from laboneq.compiler.common.compiler_settings import EXECUTETABLEENTRY_LATENCY
+from laboneq.data.recipe import Recipe, TriggeringMode
 
 if TYPE_CHECKING:
     from laboneq.core.types.compiled_experiment import CompiledExperiment
@@ -294,10 +295,10 @@ class SeqCDescriptor:
     sampling_rate: float
     output_port_delay: float
     source: str = None
-    channels: List[int] = None
-    wave_index: Dict[Any, Any] = None
-    command_table: List[Any] = None
-    acquisition_type: str = None
+    channels: list[int] = None
+    wave_index: dict[Any, Any] = None
+    command_table: list[Any] = None
+    is_spectroscopy: bool = False
 
 
 class Operation(Enum):
@@ -394,7 +395,7 @@ class SeqCSimulation:
     sampling_rate: float = field(default=2.0e9)
     startup_delay: float = field(default=0.0)
     output_port_delay: float = field(default=0.0)
-    acquisition_type: str = field(default="")
+    is_spectroscopy: bool = False
 
 
 class SimpleRuntime:
@@ -467,7 +468,7 @@ class SimpleRuntime:
         }
         self.variables = {}
         self.seqc_simulation = SeqCSimulation()
-        self.seqc_simulation.acquisition_type = descriptor.acquisition_type
+        self.seqc_simulation.is_spectroscopy = descriptor.is_spectroscopy
         self.times = {}
         self.times_at_port = {}
         self.descriptor = descriptor
@@ -770,7 +771,7 @@ class SimpleRuntime:
             wave_data_idx.append(known_wave.wave_data_idx)
             return wave_data_idx, event_length
 
-        if "spectroscopy" in self.descriptor.acquisition_type:
+        if self.descriptor.is_spectroscopy:
             assert generators_mask == self.predefined_consts["QA_GEN_NONE"]
             wave_data_idx, event_length = add_wave(0, wave_data_idx, event_length)
         else:
@@ -936,33 +937,22 @@ class SimpleRuntime:
         self._start_trigger()
 
 
-def find_device(recipe, device_uid):
-    for device in recipe["devices"]:
-        if device["device_uid"] == device_uid:
-            return device
-    return None
-
-
 def analyze_recipe(
-    recipe, sources, wave_indices, command_tables
+    recipe: Recipe, sources, wave_indices, command_tables
 ) -> list[SeqCDescriptor]:
     outputs: dict[str, list[int]] = {}
     seqc_descriptors_from_recipe: dict[str, SeqCDescriptor] = {}
-    for init in recipe["experiment"]["initializations"]:
-        device_uid = init["device_uid"]
-        device = find_device(recipe, device_uid)
-        device_type = device["driver"]
+    for init in recipe.initializations:
+        device_uid = init.device_uid
+        device_type = init.device_type
         sample_multiple = get_sample_multiple(device_type)
-        try:
-            sampling_rate = init["config"]["sampling_rate"]
-        except KeyError:
-            sampling_rate = None
+        sampling_rate = init.config.sampling_rate
         if sampling_rate is None or sampling_rate == 0:
             sampling_rate = get_frequency(device_type)
         startup_delay = -80e-9
-        if device_type == "HDAWG" and "config" in init:
-            triggering_mode = init["config"].get("triggering_mode")
-            if triggering_mode == "desktop_leader":
+        if device_type == "HDAWG":
+            triggering_mode = init.config.triggering_mode
+            if triggering_mode == TriggeringMode.DESKTOP_LEADER:
                 if sampling_rate == 2e9:
                     startup_delay = -24e-9
                 else:
@@ -971,74 +961,71 @@ def analyze_recipe(
         # TODO(2K): input port_delay previously was not taken into account by the simulator
         # - keeping it as is for not breaking the tests. To be cleaned up.
         input_channel_delays: dict[int, float] = {
-            i["channel"]: i["scheduler_port_delay"]  # + i.get("port_delay", 0.0)
-            for i in init.get("inputs", [])
+            i.channel: i.scheduler_port_delay  # + (0.0 if i.port_delay is None else i.port_delay)
+            for i in init.inputs
         }
 
         output_channel_delays: dict[int, float] = {
-            o["channel"]: o["scheduler_port_delay"] + o.get("port_delay", 0.0)
-            for o in init.get("outputs", [])
+            o.channel: o.scheduler_port_delay
+            + (0.0 if o.port_delay is None else o.port_delay)
+            for o in init.outputs
         }
 
         output_channel_precompensation = {
-            o["channel"]: o.get("precompensation", {}) for o in init.get("outputs", [])
+            o.channel: o.precompensation for o in init.outputs
         }
 
         awg_index = 0
-        if "awgs" in init:
-            for awg in init["awgs"]:
-                awg_nr = awg["awg"]
-                rt_exec_step = next(
-                    r
-                    for r in recipe["experiment"]["realtime_execution_init"]
-                    if r["device_id"] == device_uid and r["awg_id"] == awg_nr
+        for awg in init.awgs:
+            awg_nr = awg.awg
+            rt_exec_step = next(
+                r
+                for r in recipe.realtime_execution_init
+                if r.device_id == device_uid and r.awg_id == awg_nr
+            )
+            seqc = rt_exec_step.seqc_ref
+            if device_type == "SHFSG" or device_type == "SHFQA":
+                input_channel = awg_nr
+                output_channels = [awg_nr]
+            else:
+                input_channel = 2 * awg_nr
+                output_channels = [2 * awg_nr, 2 * awg_nr + 1]
+
+            seqc_descriptors_from_recipe[seqc] = SeqCDescriptor(
+                name=seqc,
+                device_uid=device_uid,
+                device_type=device_type,
+                awg_index=awg_index,
+                measurement_delay_samples=round(
+                    input_channel_delays.get(input_channel, 0.0) * sampling_rate
+                ),
+                startup_delay=startup_delay,
+                sample_multiple=sample_multiple,
+                sampling_rate=sampling_rate,
+                output_port_delay=output_channel_delays.get(output_channels[0], 0.0),
+            )
+
+            precompensation_info = output_channel_precompensation.get(
+                output_channels[0]
+            )
+            if precompensation_info is not None:
+                precompensation_delay = (
+                    precompensation_delay_samples(precompensation_info) / sampling_rate
                 )
-                seqc = rt_exec_step["seqc_ref"]
-                if device_type == "SHFSG" or device_type == "SHFQA":
-                    input_channel = awg_nr
-                    output_channels = [awg_nr]
-                else:
-                    input_channel = 2 * awg_nr
-                    output_channels = [2 * awg_nr, 2 * awg_nr + 1]
+                seqc_descriptors_from_recipe[
+                    seqc
+                ].output_port_delay += precompensation_delay
 
-                seqc_descriptors_from_recipe[seqc] = SeqCDescriptor(
-                    name=seqc,
-                    device_uid=device_uid,
-                    device_type=device_type,
-                    awg_index=awg_index,
-                    measurement_delay_samples=round(
-                        input_channel_delays.get(input_channel, 0.0) * sampling_rate
-                    ),
-                    startup_delay=startup_delay,
-                    sample_multiple=sample_multiple,
-                    sampling_rate=sampling_rate,
-                    output_port_delay=output_channel_delays.get(
-                        output_channels[0], 0.0
-                    ),
-                )
+            channels: list[int] = [
+                output.channel
+                for output in init.outputs
+                if output.channel in output_channels
+            ]
+            if len(channels) == 0:
+                channels.append(0)
+            outputs[seqc] = channels
 
-                precompensation_info = output_channel_precompensation.get(
-                    output_channels[0]
-                )
-                if precompensation_info is not None:
-                    precompensation_delay = (
-                        precompensation_delay_samples(precompensation_info)
-                        / sampling_rate
-                    )
-                    seqc_descriptors_from_recipe[
-                        seqc
-                    ].output_port_delay += precompensation_delay
-
-                channels: list[int] = [
-                    output["channel"]
-                    for output in init["outputs"]
-                    if output["channel"] in output_channels
-                ]
-                if len(channels) == 0:
-                    channels.append(0)
-                outputs[seqc] = channels
-
-                awg_index += 1
+            awg_index += 1
 
     seq_c_wave_indices = {}
     for wave_index in wave_indices:
@@ -1062,7 +1049,7 @@ def analyze_recipe(
         seqc_descriptor.channels = outputs[name]
         seqc_descriptor.wave_index = seq_c_wave_indices.get(name, {})
         seqc_descriptor.command_table = command_table
-        seqc_descriptor.acquisition_type = recipe["experiment"]["acquisition_type"]
+        seqc_descriptor.is_spectroscopy = recipe.is_spectroscopy
         seqc_descriptors.append(seqc_descriptor)
     return seqc_descriptors
 
@@ -1102,7 +1089,7 @@ def preprocess_source(text):
     # Note that the result does not correspond to the usual C for-loop semantics.
     # This is fine though, as we do not emit 'regular' for loops from L1Q.
     pattern = r"repeat\s*\((\d+)\)\s*{"
-    regex = re.compile(pattern, re.MULTILINE | re.DOTALL)
+    regex = re.compile(pattern)
 
     def replace_repeat(match_obj):
         if match_obj.group(1) is not None:
@@ -1110,6 +1097,11 @@ def preprocess_source(text):
             return f"for({n};;) {{"
 
     main = regex.sub(replace_repeat, main)
+
+    # Constant definitions in SeqC omit the type (constants can only be int or float;
+    # compile-time strings are instead defined via the `string` keyword). This is not
+    # valid C, so we 'patch' statements like `const a = 5;` to `const int a = 5;`.
+    main = re.sub(r"const(\s+[A-Za-z_]\w*\s+=)", r"const int\1", main)
 
     # Define SeqC built-ins and wrap program into function
     # to make the program syntactically correct for C parser.

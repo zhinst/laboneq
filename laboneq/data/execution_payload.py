@@ -10,18 +10,12 @@ from numpy.typing import ArrayLike
 
 from laboneq.data import EnumReprMixin
 from laboneq.data.scheduled_experiment import ScheduledExperiment
+from laboneq.data.setup_description import ReferenceClockSource
 
 
 #
 # Enums
 #
-class ServerType(EnumReprMixin, Enum):
-    DATA_SERVER = auto()
-    WEB_SERVER = auto()
-    SCOPE_SERVER = auto()
-    POWER_SWITCH_SERVER = auto()
-
-
 class TargetDeviceType(EnumReprMixin, Enum):
     UHFQA = auto()
     HDAWG = auto()
@@ -38,9 +32,8 @@ class TargetDeviceType(EnumReprMixin, Enum):
 @dataclass
 class TargetServer:
     uid: str = None
-    address: str = None
+    host: str = None
     port: int = None
-    server_type: ServerType = None
     api_level: int = None
 
 
@@ -70,7 +63,7 @@ class TargetDevice:
     calibrations: list[TargetChannelCalibration] | None = None
     is_qc: bool = False
     qc_with_qa: bool = False
-    reference_clock_source: str | None = None  # TODO(2K): enum? bool?
+    reference_clock_source: ReferenceClockSource = None
 
 
 @dataclass

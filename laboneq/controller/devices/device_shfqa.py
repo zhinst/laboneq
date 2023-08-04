@@ -171,6 +171,7 @@ class DeviceSHFQA(DeviceSHFBase):
                 self._daq,
                 f"/{self.serial}/qachannels/*/spectroscopy/envelope/enable",
                 1,
+                caching_strategy=CachingStrategy.NO_CACHE,
             ),
         ]
 
@@ -281,16 +282,32 @@ class DeviceSHFQA(DeviceSHFBase):
                         or integrator.signal_id not in awg_config.acquire_signals
                     ):
                         continue
-                    assert len(integrator.channels) == 1
-                    integrator_idx = integrator.channels[0]
-                    nodes_to_initialize_readout.append(
-                        DaqNodeSetAction(
-                            self._daq,
-                            f"/{self.serial}/qachannels/{channel}/readout/discriminators/"
-                            f"{integrator_idx}/threshold",
-                            integrator.threshold,
+                    if self._integrator_uses_multistate_discrimation(integrator):
+                        assert self._integrator_has_consistent_msd_num_state(integrator)
+                        num_states = len(integrator.weights)
+                        for state_i in range(0, num_states):
+                            channel = integrator.channels[state_i]
+                            integrator_idx = channel[0]
+                            nodes_to_initialize_readout.append(
+                                DaqNodeSetAction(
+                                    self._daq,
+                                    f"/{self.serial}/qachannels/{channel[0]}/readout/multistate/qudits/"
+                                    f"{integrator_idx}/thresholds/{state_i}/value",
+                                    integrator.threshold[state_i] or 0.0,
+                                )
+                            )
+
+                    else:
+                        assert len(integrator.channels) == 1
+                        integrator_idx = integrator.channels[0]
+                        nodes_to_initialize_readout.append(
+                            DaqNodeSetAction(
+                                self._daq,
+                                f"/{self.serial}/qachannels/{channel}/readout/discriminators/"
+                                f"{integrator_idx}/threshold",
+                                integrator.threshold or 0.0,
+                            )
                         )
-                    )
         nodes_to_initialize_readout.append(
             DaqNodeSetAction(
                 self._daq,
@@ -757,6 +774,159 @@ class DeviceSHFQA(DeviceSHFBase):
         )
         return waves_upload
 
+    def _integrator_has_consistent_msd_num_state(
+        self, integrator_allocation: IntegratorAllocation.Data
+    ):
+        num_msd_states = [
+            len(integrator_allocation.weights),
+            len(integrator_allocation.threshold),
+            len(integrator_allocation.channels),
+        ]
+        if len(set(num_msd_states)) != 1:
+            raise LabOneQControllerException(
+                f"Multi discrimination configuration of experiment is not consistent. "
+                f"Received num weights={len(integrator_allocation.weights)}, num thresholds={len(integrator_allocation.threshold)}, num channels={len(integrator_allocation.channels)}, "
+                f"these three quantities need to have the same number of entries."
+            )
+        return True
+
+    def _integrator_uses_multistate_discrimation(
+        self, integrator_allocation: IntegratorAllocation.Data
+    ):
+        weights_is_msd = isinstance(integrator_allocation.weights, list)
+        threshold_is_msd = isinstance(integrator_allocation.threshold, list)
+        channels_is_msd = all(
+            isinstance(item, list) for item in integrator_allocation.channels
+        )
+        msd_state = [weights_is_msd, threshold_is_msd, channels_is_msd]
+        if len(set(msd_state)) != 1:
+            raise LabOneQControllerException(
+                f"Multi discrimination configuration of experiment is not consistent. "
+                f"Received weights={integrator_allocation.weights}, thresholds={integrator_allocation.threshold}, channels={integrator_allocation.channels}, "
+                f"these three quantities need to either all be lists, or all be singular items"
+            )
+        return all(msd_state)
+
+    def _configure_readout_mode_nodes_single_state(
+        self,
+        integrator_allocation: IntegratorAllocation.Data,
+        recipe_data: RecipeData,
+        measurement: Measurement.Data,
+        max_len: int,
+    ):
+        if len(integrator_allocation.channels) != 1:
+            raise LabOneQControllerException(
+                f"{self.dev_repr}: Internal error - expected 1 integrator for "
+                f"signal '{integrator_allocation.signal_id}', "
+                f"got {len(integrator_allocation.channels)}"
+            )
+        integration_unit_index = integrator_allocation.channels[0]
+        wave_name = integrator_allocation.weights + ".wave"
+        weight_vector = np.conjugate(
+            get_wave(wave_name, recipe_data.scheduled_experiment.waves)
+        )
+        wave_len = len(weight_vector)
+        if wave_len > max_len:
+            max_pulse_len = max_len / SAMPLE_FREQUENCY_HZ
+            raise LabOneQControllerException(
+                f"{self.dev_repr}: Length {wave_len} of the integration weight "
+                f"'{integration_unit_index}' of channel {measurement.channel} exceeds "
+                f"maximum of {max_len} samples. Ensure length of acquire kernels don't "
+                f"exceed {max_pulse_len * 1e6:.3f} us."
+            )
+        node_path = (
+            f"/{self.serial}/qachannels/{measurement.channel}/readout/integration/"
+            f"weights/{integration_unit_index}/wave"
+        )
+
+        return [
+            DaqNodeSetAction(
+                self._daq,
+                node_path,
+                weight_vector,
+                filename=wave_name,
+                caching_strategy=CachingStrategy.CACHE,
+            )
+        ]
+
+    def _configure_readout_mode_nodes_multi_state(
+        self,
+        integrator_allocation: IntegratorAllocation.Data,
+        recipe_data: RecipeData,
+        measurement: Measurement.Data,
+        max_len: int,
+    ):
+        ret_nodes = []
+        num_states = len(integrator_allocation.weights)
+        assert self._integrator_has_consistent_msd_num_state(integrator_allocation)
+
+        # Note: copying this from grimsel_multistate_demo jupyter notebook
+        ret_nodes.append(
+            DaqNodeSetAction(
+                self._daq,
+                f"/{self.serial}/qachannels/{measurement.channel}/readout/multistate/qudits/*/enable",
+                0,
+                caching_strategy=CachingStrategy.NO_CACHE,
+            )
+        )
+        ret_nodes.append(
+            DaqNodeSetAction(
+                self._daq,
+                f"/{self.serial}/qachannels/{measurement.channel}/readout/multistate/enable",
+                1,
+                caching_strategy=CachingStrategy.CACHE,
+            )
+        )
+
+        for state_i in range(0, num_states):
+            channel = integrator_allocation.channels[state_i]
+            if len(channel) != 1:
+                raise LabOneQControllerException(
+                    f"{self.dev_repr}: Internal error - expected 1 integrator for "
+                    f"signal '{integrator_allocation.signal_id}', "
+                    f"got {len(channel)}"
+                )
+            integration_unit_index = channel[0]
+            node_path = (
+                f"/{self.serial}/qachannels/{measurement.channel}/readout/multistate/qudits/"
+                f"{integration_unit_index}/numstates"
+            )
+            ret_nodes.append(
+                DaqNodeSetAction(
+                    self._daq,
+                    node_path,
+                    num_states,
+                    caching_strategy=CachingStrategy.CACHE,
+                )
+            )
+            wave_name = integrator_allocation.weights[state_i] + ".wave"
+            weight_vector = np.conjugate(
+                get_wave(wave_name, recipe_data.scheduled_experiment.waves)
+            )
+            wave_len = len(weight_vector)
+            if wave_len > max_len:
+                max_pulse_len = max_len / SAMPLE_FREQUENCY_HZ
+                raise LabOneQControllerException(
+                    f"{self.dev_repr}: Length {wave_len} of the integration weight "
+                    f"'{integration_unit_index}' of channel {measurement.channel} exceeds "
+                    f"maximum of {max_len} samples. Ensure length of acquire kernels don't "
+                    f"exceed {max_pulse_len * 1e6:.3f} us."
+                )
+            node_path = (
+                f"/{self.serial}/qachannels/{measurement.channel}/readout/multistate/qudits/{integration_unit_index}"
+                f"/weights/{state_i}/wave"
+            )
+            ret_nodes.append(
+                DaqNodeSetAction(
+                    self._daq,
+                    node_path,
+                    weight_vector,
+                    filename=wave_name,
+                    caching_strategy=CachingStrategy.CACHE,
+                )
+            )
+        return ret_nodes
+
     def _configure_readout_mode_nodes(
         self,
         dev_input: IO,
@@ -787,39 +957,17 @@ class DeviceSHFQA(DeviceSHFBase):
                 # TODO(2K): Consider not emitting the integrator allocation in this case.
                 continue
 
-            if len(integrator_allocation.channels) != 1:
-                raise LabOneQControllerException(
-                    f"{self.dev_repr}: Internal error - expected 1 integrator for "
-                    f"signal '{integrator_allocation.signal_id}', "
-                    f"got {len(integrator_allocation.channels)}"
+            if self._integrator_uses_multistate_discrimation(integrator_allocation):
+                readout_nodes = self._configure_readout_mode_nodes_multi_state(
+                    integrator_allocation, recipe_data, measurement, max_len
                 )
-            integration_unit_index = integrator_allocation.channels[0]
-            wave_name = integrator_allocation.weights + ".wave"
-            weight_vector = np.conjugate(
-                get_wave(wave_name, recipe_data.scheduled_experiment.waves)
-            )
-            wave_len = len(weight_vector)
-            if wave_len > max_len:
-                max_pulse_len = max_len / SAMPLE_FREQUENCY_HZ
-                raise LabOneQControllerException(
-                    f"{self.dev_repr}: Length {wave_len} of the integration weight "
-                    f"'{integration_unit_index}' of channel {measurement.channel} exceeds "
-                    f"maximum of {max_len} samples. Ensure length of acquire kernels don't "
-                    f"exceed {max_pulse_len * 1e6:.3f} us."
+            else:
+                readout_nodes = self._configure_readout_mode_nodes_single_state(
+                    integrator_allocation, recipe_data, measurement, max_len
                 )
-            node_path = (
-                f"/{self.serial}/qachannels/{measurement.channel}/readout/integration/"
-                f"weights/{integration_unit_index}/wave"
-            )
-            nodes_to_set_for_readout_mode.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    node_path,
-                    weight_vector,
-                    filename=wave_name,
-                    caching_strategy=CachingStrategy.CACHE,
-                )
-            )
+
+            nodes_to_set_for_readout_mode.extend(readout_nodes)
+
         return nodes_to_set_for_readout_mode
 
     def _configure_spectroscopy_mode_nodes(

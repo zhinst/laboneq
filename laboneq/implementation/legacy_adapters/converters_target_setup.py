@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 from laboneq.core.types.enums.io_direction import IODirection
 from laboneq.core.types.enums.io_signal_type import IOSignalType
 from laboneq.data.execution_payload import (
-    ServerType,
     TargetChannelCalibration,
     TargetChannelType,
     TargetDevice,
@@ -28,9 +27,8 @@ def convert_dsl_to_target_setup(device_setup: DeviceSetup) -> TargetSetup:
     servers: dict[str, TargetServer] = {
         server_uid: TargetServer(
             uid=server_uid,
-            address=server.host,
+            host=server.host,
             port=int(server.port),
-            server_type=ServerType.DATA_SERVER,
             api_level=server.api_level,
         )
         for server_uid, server in device_setup.servers.items()

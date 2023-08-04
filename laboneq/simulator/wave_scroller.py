@@ -149,7 +149,7 @@ class WaveScroller:
         self.sim = sim
 
         self.is_shfqa = sim.device_type == "SHFQA"
-        self.acquisition_type = sim.acquisition_type
+        self.is_spectroscopy = sim.is_spectroscopy
 
         self.sim_targets = sim_targets
 
@@ -327,7 +327,7 @@ class WaveScroller:
 
         wave_indices = event.args[4]
 
-        if "spectroscopy" in self.acquisition_type:
+        if self.is_spectroscopy:
             spectroscopy_mask = 0
             assert generator_mask == spectroscopy_mask
             wave = retrieve_wave(

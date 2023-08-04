@@ -6,7 +6,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, List, Union
 
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types.enums import ExecutionType
 from laboneq.executor import executor
 
 if TYPE_CHECKING:
@@ -44,7 +43,11 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
                     self._handle_children, child.children, child.uid
                 )
                 self._append_statement(
-                    executor.ForLoop(child.count, loop_body, executor.LoopFlags.AVERAGE)
+                    executor.ForLoop(
+                        count=child.count,
+                        body=loop_body,
+                        loop_flags=executor.LoopFlags.AVERAGE,
+                    )
                 )
             elif isinstance(child, AcquireLoopRt):
                 loop_body = self._sub_scope(
@@ -64,15 +67,7 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
             elif isinstance(child, Sweep):
                 count = len(child.parameters[0].values)
                 loop_body = self._sub_scope(self._handle_sweep, child)
-                loop_type = (
-                    executor.LoopFlags.HARDWARE
-                    if child.execution_type == ExecutionType.REAL_TIME
-                    else executor.LoopFlags.SWEEP
-                )
-                chunk_count = child.chunk_count
-                self._append_statement(
-                    executor.ForLoop(count, loop_body, loop_type, chunk_count)
-                )
+                self._append_statement(executor.ForLoop(count=count, body=loop_body))
             else:
                 sub_sequence = self._sub_scope(
                     self._handle_children, child.children, child.uid
@@ -90,11 +85,18 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
         )
 
     def _statement_from_operation(self, operation, parent_uid: str):
-        from laboneq.dsl.experiment import Acquire, Call, Delay, PlayPulse, Reserve, Set
+        from laboneq.dsl.experiment import (
+            Acquire,
+            Call,
+            Delay,
+            PlayPulse,
+            Reserve,
+            SetNode,
+        )
 
         if isinstance(operation, Call):
             return executor.ExecUserCall(operation.func_name, operation.args)
-        if isinstance(operation, Set):
+        if isinstance(operation, SetNode):
             return executor.ExecSet(operation.path, operation.value)
         if isinstance(operation, PlayPulse):
             return executor.Nop()
@@ -108,17 +110,9 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
 
     def _make_pipelined(self, averaging_loop: executor.Statement):
         return executor.ForLoop(
-            self._chunked_sweep.chunk_count,
-            executor.Sequence(
-                [
-                    executor.SetSoftwareParamLinear(
-                        "__pipeline_index", 0, 1, "pipeline_index"
-                    ),
-                    averaging_loop,
-                ]
-            ),
-            executor.LoopFlags.PIPELINE,
-            1,
+            count=self._chunked_sweep.chunk_count,
+            body=averaging_loop,
+            loop_flags=executor.LoopFlags.PIPELINE,
         )
 
     @staticmethod

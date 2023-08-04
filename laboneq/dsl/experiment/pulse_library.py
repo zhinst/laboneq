@@ -18,11 +18,11 @@ def register_pulse_functional(sampler: Callable, name: str = None):
 
     The sampler function must have the following signature:
 
-    .. code-block:: python
+    ``` py
 
         def sampler(x: ndarray, **pulse_params: Dict[str, Any]) -> ndarray:
             pass
-
+    ```
 
     The vector ``x`` marks the points where the pulse function is to be evaluated. The
     values of ``x`` range from -1 to +1. The argument ``pulse_params`` contains all
@@ -39,26 +39,26 @@ def register_pulse_functional(sampler: Callable, name: str = None):
     amplitude and length.
 
 
-    Args
-        - sampler (Callable): the function used for sampling the pulse
+    Args:
+        sampler:
+            the function used for sampling the pulse
+        name:
+            the name used internally for referring to this pulse type
 
-        - name (str): the name used internally for referring to this pulse type
+    Returns:
+        pulse_factory (function):
+            A factory function for new ``Pulse`` objects.
+            The return value has the following signature:
+            ``` py
 
-    Returns
-        A factory function for new :py:class:`~.Pulse` objects. The return value has the
-        following signature:
-
-        .. code-block:: python
-
-            def <name>(
-                uid: str = None,
-                length: float = 100e-9,
-                amplitude: float = 1.0,
-                **pulse_parameters: Dict[str, Any],
-            ):
-                pass
-
-
+                def <name>(
+                    uid: str = None,
+                    length: float = 100e-9,
+                    amplitude: float = 1.0,
+                    **pulse_parameters: Dict[str, Any],
+                ):
+                    pass
+            ```
     """
     if name is None:
         function_name = sampler.__name__
@@ -112,7 +112,7 @@ def gaussian(x, sigma=1 / 3, zero_boundaries=False, **_):
         zero_boundaries (bool): Whether to zero the pulse at the boundaries
 
     Returns:
-        Gaussian pulse.
+        pulse (Pulse): Gaussian pulse.
     """
     gauss = np.exp(-(x**2) / (2 * sigma**2))
     if zero_boundaries:
@@ -139,7 +139,7 @@ def gaussian_square(
         zero_boundaries (bool): Whether to zero the pulse at the boundaries
 
     Returns:
-        Gaussian square pulse.
+        pulse (Pulse): Gaussian square pulse.
     """
 
     risefall_in_samples = round(len(x) * (1 - width / length) / 2)
@@ -171,7 +171,7 @@ def const(x, **_):
         amplitude (float): Amplitude of the pulse
 
     Returns:
-        Constant pulse.
+        pulse (Pulse): Constant pulse.
     """
     return np.ones_like(x)
 
@@ -186,7 +186,7 @@ def triangle(x, **_):
         amplitude (float): Amplitude of the pulse
 
     Returns:
-        Triangle pulse.
+        pulse (Pulse): Triangle pulse.
     """
     return 1 - np.abs(x)
 
@@ -201,7 +201,7 @@ def sawtooth(x, **_):
         amplitude (float): Amplitude of the pulse
 
     Returns:
-        Sawtooth pulse.
+        pulse (Pulse): Sawtooth pulse.
     """
 
     return 0.5 * (1 - x)
@@ -220,7 +220,7 @@ def drag(x, sigma=1 / 3, beta=0.2, zero_boundaries=False, **_):
         zero_boundaries (bool): Whether to zero the pulse at the boundaries
 
     Returns:
-        DRAG pulse.
+        pulse (Pulse): DRAG pulse.
     """
     gauss = np.exp(-(x**2) / (2 * sigma**2))
     delta = 0
@@ -242,7 +242,7 @@ def cos2(x, **_):
         amplitude (float): Amplitude of the pulse
 
     Returns:
-        Raised cosine pulse.
+        pulse (Pulse): Raised cosine pulse.
     """
     return np.cos(x * np.pi / 2) ** 2
 
@@ -251,11 +251,11 @@ def sampled_pulse_real(samples, uid=None, can_compress=False):
     """Create a pulse based on a array of real values.
 
     Args:
-        samples: Real valued data.
-        uid: Unique identifier of the created pulse.
+        samples (numpy.ndarray): Real valued data.
+        uid (str): Unique identifier of the created pulse.
 
     Returns:
-        Pulse based on the provided sample values.
+        pulse (Pulse): Pulse based on the provided sample values.
     """
     if uid is None:
         return PulseSampledReal(samples=samples, can_compress=can_compress)
@@ -267,11 +267,11 @@ def sampled_pulse_complex(samples, uid=None, can_compress=False):
     """Create a pulse based on a array of complex values.
 
     Args:
-        samples: Complex valued data.
-        uid: Unique identifier of the created pulse.
+        samples (numpy.ndarray): Complex valued data.
+        uid (str): Unique identifier of the created pulse.
 
     Returns:
-        Pulse based on the provided sample values.
+        pulse (Pulse): Pulse based on the provided sample values.
     """
     if uid is None:
         return PulseSampledComplex(samples=samples, can_compress=can_compress)

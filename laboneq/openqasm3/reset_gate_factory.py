@@ -5,11 +5,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Callable, Optional
 
+from laboneq._utils import id_generator
 from laboneq.dsl.experiment.acquire import Acquire
 from laboneq.dsl.experiment.play_pulse import PlayPulse
 from laboneq.dsl.experiment.pulse import Pulse
 from laboneq.dsl.experiment.section import Case, Match, Section
-from laboneq.dsl.experiment.utils import id_generator
 from laboneq.openqasm3.signal_store import SignalLineType
 
 if TYPE_CHECKING:

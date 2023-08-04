@@ -62,14 +62,4 @@ class SHFQA(ZIStandardInstrument):
                     connector_labels=[f"Signal Output {ch+1}"],
                 )
             )
-        for i in range(16):
-            outputs.append(
-                Port(
-                    IODirection.OUT,
-                    uid=f"QACHANNELS/{ch}/RESULT/{i}",
-                    signal_type=IOSignalType.IQ,
-                    physical_port_ids=[],
-                    connector_labels=[],
-                )
-            )
         return inputs + outputs

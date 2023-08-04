@@ -47,7 +47,12 @@ from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.core.types.enums.acquisition_type import AcquisitionType, is_spectroscopy
 from laboneq.core.types.enums.mixer_type import MixerType
-from laboneq.data.compilation_job import DeviceInfo, ParameterInfo
+from laboneq.data.compilation_job import (
+    DeviceInfo,
+    ParameterInfo,
+    PrecompensationInfo,
+    SignalInfoType,
+)
 from laboneq.data.scheduled_experiment import ScheduledExperiment
 from laboneq.executor.execution_from_experiment import ExecutionFactoryFromExperiment
 from laboneq.executor.executor import Statement
@@ -79,9 +84,7 @@ class Compiler:
         self._clock_settings: Dict[str, Any] = {}
         self._integration_unit_allocation = None
         self._awgs: _AWGMapping = {}
-        self._precompensations: Dict[
-            str, Dict[str, Union[Dict[str, Any], float]]
-        ] = None
+        self._precompensations: dict[str, PrecompensationInfo] | None = None
         self._signal_objects: Dict[str, SignalObj] = {}
 
         _logger.info("Starting LabOne Q Compiler run...")
@@ -103,7 +106,11 @@ class Compiler:
                 )
 
     def use_experiment(self, experiment):
-        if "experiment" in experiment and "setup" in experiment:
+        if (
+            isinstance(experiment, dict)
+            and "experiment" in experiment
+            and "setup" in experiment
+        ):
             _logger.debug("Processing DSLv3 setup and experiment")
             self._experiment_dao = ExperimentDAO(
                 None, experiment["setup"], experiment["experiment"]
@@ -112,15 +119,21 @@ class Compiler:
                 experiment["experiment"]
             )
         else:
+            # todo (Pol): ExperimentInfo currently tumbles down this path. For current
+            #  tests, the mock execution is fine, but it won't be in production.
             self._experiment_dao = ExperimentDAO(experiment)
             self._execution = legacy_execution_program()
 
+    @staticmethod
+    def _get_first_instr_of(device_infos: List[DeviceInfo], type: str) -> DeviceInfo:
+        return next(
+            (instr for instr in device_infos if instr.device_type.value == type)
+        )
+
     def _analyze_setup(self):
-        def get_first_instr_of(device_infos: List[DeviceInfo], type) -> DeviceInfo:
-            return next((instr for instr in device_infos if instr.device_type == type))
 
         device_infos = self._experiment_dao.device_infos()
-        device_type_list = [i.device_type for i in device_infos]
+        device_type_list = [i.device_type.value for i in device_infos]
         type_counter = Counter(device_type_list)
         has_pqsc = type_counter["pqsc"] > 0
         has_hdawg = type_counter["hdawg"] > 0
@@ -134,7 +147,7 @@ class Compiler:
             self._experiment_dao.signal_info(signal_id)
             for signal_id in self._experiment_dao.signals()
         ]
-        used_devices = set(info.device_type for info in signal_infos)
+        used_devices = set(info.device.device_type.value for info in signal_infos)
         if (
             "hdawg" in used_devices
             and "uhfqa" in used_devices
@@ -171,15 +184,15 @@ class Compiler:
         if self._leader_properties.is_desktop_setup:
             if leader is None:
                 if has_hdawg:
-                    leader = get_first_instr_of(device_infos, "hdawg").uid
+                    leader = self._get_first_instr_of(device_infos, "hdawg").uid
                 elif has_shfqa:
-                    leader = get_first_instr_of(device_infos, "shfqa").uid
+                    leader = self._get_first_instr_of(device_infos, "shfqa").uid
                     if has_shfsg:  # SHFQC
                         self._leader_properties.internal_followers = [
-                            get_first_instr_of(device_infos, "shfsg").uid
+                            self._get_first_instr_of(device_infos, "shfsg").uid
                         ]
                 elif has_shfsg:
-                    leader = get_first_instr_of(device_infos, "shfsg").uid
+                    leader = self._get_first_instr_of(device_infos, "shfsg").uid
 
             _logger.debug("Using desktop setup configuration with leader %s", leader)
 
@@ -187,7 +200,7 @@ class Compiler:
                 has_signal_on_awg_0_of_leader = False
                 for signal_id in self._experiment_dao.signals():
                     signal_info = self._experiment_dao.signal_info(signal_id)
-                    if signal_info.device_id == leader and (
+                    if signal_info.device.uid == leader and (
                         0 in signal_info.channels or 1 in signal_info.channels
                     ):
                         has_signal_on_awg_0_of_leader = True
@@ -199,7 +212,7 @@ class Compiler:
                     signal_type = "iq"
                     channels = [0, 1]
                     self._experiment_dao.add_signal(
-                        device_id, channels, "out", signal_id, signal_type, False
+                        device_id, channels, signal_id, signal_type
                     )
                     _logger.debug(
                         "No pulses played on channels 1 or 2 of %s, adding dummy signal %s to ensure triggering of the setup",
@@ -210,16 +223,16 @@ class Compiler:
             has_qa = type_counter["shfqa"] > 0 or type_counter["uhfqa"] > 0
             is_hdawg_solo = type_counter["hdawg"] == 1 and not has_shf and not has_qa
             if is_hdawg_solo:
-                first_hdawg = get_first_instr_of(device_infos, "hdawg")
+                first_hdawg = self._get_first_instr_of(device_infos, "hdawg")
                 if first_hdawg.reference_clock_source is None:
                     self._clock_settings[first_hdawg.uid] = "internal"
             else:
                 if not has_hdawg and has_shfsg:  # SHFSG or SHFQC solo
-                    first_shfsg = get_first_instr_of(device_infos, "shfsg")
+                    first_shfsg = self._get_first_instr_of(device_infos, "shfsg")
                     if first_shfsg.reference_clock_source is None:
                         self._clock_settings[first_shfsg.uid] = "internal"
                 if not has_hdawg and has_shfqa:  # SHFQA or SHFQC solo
-                    first_shfqa = get_first_instr_of(device_infos, "shfqa")
+                    first_shfqa = self._get_first_instr_of(device_infos, "shfqa")
                     if first_shfqa.reference_clock_source is None:
                         self._clock_settings[first_shfqa.uid] = "internal"
 
@@ -258,6 +271,8 @@ class Compiler:
                 rt_compiler_output, [0]
             )
 
+        self._combine_multistate_integrator_allocations()
+
     @staticmethod
     def _get_total_rounded_delay(delay, signal_id, device_type, sampling_rate):
         if delay < 0:
@@ -287,9 +302,11 @@ class Compiler:
 
         for signal_id in self._experiment_dao.signals():
             signal_info = self._experiment_dao.signal_info(signal_id)
-            device_type = DeviceType(signal_info.device_type)
+            device_type = DeviceType.from_device_info_type(
+                signal_info.device.device_type
+            )
 
-            if signal_info.signal_type == "integration":
+            if signal_info.type == SignalInfoType.INTEGRATION:
                 continue
 
             hw_osc_names = set()
@@ -312,19 +329,19 @@ class Compiler:
         for signal_id in self._experiment_dao.signals():
             signal_info = self._experiment_dao.signal_info(signal_id)
             _logger.debug("_integration_unit_allocation considering %s", signal_info)
-            if signal_info.signal_type == "integration":
+            if signal_info.type == SignalInfoType.INTEGRATION:
                 _logger.debug(
                     "_integration_unit_allocation: found integration signal %s",
                     signal_info,
                 )
-                device_id = signal_info.device_id
-                device_type = DeviceType(signal_info.device_type)
+                device_type = DeviceType.from_device_info_type(
+                    signal_info.device.device_type
+                )
                 awg_nr = Compiler.calc_awg_number(signal_info.channels[0], device_type)
-
                 num_acquire_signals = len(
                     list(
                         filter(
-                            lambda x: x["device_id"] == device_id
+                            lambda x: x["device_id"] == signal_info.device.uid
                             and x["awg_nr"] == awg_nr,
                             self._integration_unit_allocation.values(),
                         )
@@ -350,7 +367,7 @@ class Compiler:
                 )
 
                 self._integration_unit_allocation[signal_id] = {
-                    "device_id": device_id,
+                    "device_id": signal_info.device.uid,
                     "awg_nr": awg_nr,
                     "channels": [
                         integrators_per_signal * num_acquire_signals + i
@@ -358,17 +375,36 @@ class Compiler:
                     ],
                 }
 
+    def _combine_multistate_integrator_allocations(self):
+        msgroups = self._combined_compiler_output.multistate_signal_groups
+        for msg in msgroups:
+            if allocations := [self._integration_unit_allocation.pop(s) for s in msg]:
+                a0 = allocations[0]
+                assert all(a["device_id"] == a0["device_id"] for a in allocations)
+                assert all(a["awg_nr"] == a0["awg_nr"] for a in allocations)
+                self._integration_unit_allocation[msg[0]] = {
+                    "device_id": a0["device_id"],
+                    "awg_nr": a0["awg_nr"],
+                    "channels": [a["channels"] for a in allocations],
+                    "signals": msg,
+                }
+
     def _calc_shfqa_generator_allocation(self):
         self._shfqa_generator_allocation = {}
         for signal_id in self._experiment_dao.signals():
             signal_info = self._experiment_dao.signal_info(signal_id)
-            device_type = DeviceType(signal_info.device_type)
+            device_type = DeviceType.from_device_info_type(
+                signal_info.device.device_type
+            )
 
-            if signal_info.signal_type == "iq" and device_type == DeviceType.SHFQA:
+            if (
+                signal_info.type == SignalInfoType.IQ
+                and device_type == DeviceType.SHFQA
+            ):
                 _logger.debug(
                     "_shfqa_generator_allocation: found SHFQA iq signal %s", signal_info
                 )
-                device_id = signal_info.device_id
+                device_id = signal_info.device.uid
                 awg_nr = Compiler.calc_awg_number(signal_info.channels[0], device_type)
                 num_generator_signals = len(
                     list(
@@ -404,14 +440,16 @@ class Compiler:
         ] = {}
         for signal_id in self._experiment_dao.signals():
             signal_info = self._experiment_dao.signal_info(signal_id)
-            device_id = signal_info.device_id
-            device_type = DeviceType(signal_info.device_type)
+            device_id = signal_info.device.uid
+            device_type = DeviceType.from_device_info_type(
+                signal_info.device.device_type
+            )
             for channel in sorted(signal_info.channels):
                 awg_number = Compiler.calc_awg_number(channel, device_type)
                 device_awgs = awgs.setdefault(device_id, SortedDict())
                 awg = device_awgs.get(awg_number)
                 if awg is None:
-                    signal_type = signal_info.signal_type
+                    signal_type = signal_info.type.value
                     # Treat "integration" signal type same as "iq" at AWG level
                     if signal_type == "integration":
                         signal_type = "iq"
@@ -426,7 +464,7 @@ class Compiler:
 
                 awg.signal_channels.append((signal_id, channel))
 
-                if signal_info.signal_type == "iq":
+                if signal_info.type == SignalInfoType.IQ:
                     signal_channel_awg_key = (device_id, awg.awg_number, channel)
                     if signal_channel_awg_key in signals_by_channel_and_awg:
                         signals_by_channel_and_awg[signal_channel_awg_key][
@@ -474,13 +512,15 @@ class Compiler:
         self._awgs = awgs
 
     def get_awg(self, signal_id) -> AWGInfo:
-        awg_number = None
         signal_info = self._experiment_dao.signal_info(signal_id)
 
-        device_id = signal_info.device_id
-        device_type = DeviceType(signal_info.device_type)
+        device_id = signal_info.device.uid
+        device_type = DeviceType.from_device_info_type(signal_info.device.device_type)
         awg_number = Compiler.calc_awg_number(signal_info.channels[0], device_type)
-        if signal_info.signal_type == "integration" and device_type != DeviceType.SHFQA:
+        if (
+            signal_info.type == SignalInfoType.INTEGRATION
+            and device_type != DeviceType.SHFQA
+        ):
             awg_number = 0
         return self._awgs[device_id][awg_number]
 
@@ -508,8 +548,10 @@ class Compiler:
             signal_info = self._experiment_dao.signal_info(signal_id)
             delay_signal = signal_info.delay_signal
 
-            device_type = DeviceType(signal_info.device_type)
-            device_id = signal_info.device_id
+            device_type = DeviceType.from_device_info_type(
+                signal_info.device.device_type
+            )
+            device_id = signal_info.device.uid
 
             sampling_rate = self._sampling_rate_tracker.sampling_rate_for_device(
                 device_id
@@ -520,7 +562,7 @@ class Compiler:
                 self._leader_properties.is_desktop_setup,
                 self._clock_settings["use_2GHz_for_HDAWG"],
             )
-            start_delay += self._precompensations[signal_id]["computed_delay_signal"]
+            start_delay += self._precompensations[signal_id].computed_delay_signal
 
             if delay_signal is not None:
                 delay_signal = self._get_total_rounded_delay(
@@ -545,7 +587,7 @@ class Compiler:
                 }.get(device_type, TriggerMode.NONE)
             awg.sampling_rate = sampling_rate
 
-            signal_type = signal_info.signal_type
+            signal_type = signal_info.type.value
 
             _logger.debug(
                 "Adding signal %s with signal type %s", signal_id, signal_type
@@ -554,11 +596,7 @@ class Compiler:
             oscillator_frequency = None
 
             oscillator_info = self._experiment_dao.signal_oscillator(signal_id)
-            if (
-                oscillator_info is not None
-                and not oscillator_info.is_hardware
-                and signal_info.modulation
-            ):
+            if oscillator_info is not None and not oscillator_info.is_hardware:
                 oscillator_frequency = oscillator_info.frequency
             channels = copy.deepcopy(signal_info.channels)
             if signal_id in self._integration_unit_allocation:
@@ -624,7 +662,7 @@ class Compiler:
 
         for signal_id in self._experiment_dao.signals():
             signal_info = self._experiment_dao.signal_info(signal_id)
-            if signal_info.signal_type == "integration":
+            if signal_info.type == SignalInfoType.INTEGRATION:
                 continue
             oscillator_frequency = None
             oscillator_number = None
@@ -642,17 +680,17 @@ class Compiler:
             mixer_calibration = self._experiment_dao.mixer_calibration(signal_id)
             lo_frequency = self._experiment_dao.lo_frequency(signal_id)
             port_mode = self._experiment_dao.port_mode(signal_id)
-            signal_range, signal_range_unit = self._experiment_dao.signal_range(
-                signal_id
+            signal_range = self._experiment_dao.signal_range(signal_id)
+            device_type = DeviceType.from_device_info_type(
+                signal_info.device.device_type
             )
-            device_type = DeviceType(signal_info.device_type)
             port_delay = self._experiment_dao.port_delay(signal_id)
 
             scheduler_port_delay: float = 0.0
             if signal_id in signal_delays:
                 scheduler_port_delay += signal_delays[signal_id].on_device
             precompensation = self._precompensations[signal_id]
-            pc_port_delay = precompensation["computed_port_delay"]
+            pc_port_delay = precompensation.computed_port_delay
             if pc_port_delay:
                 scheduler_port_delay += pc_port_delay
 
@@ -677,17 +715,19 @@ class Compiler:
 
             for channel in signal_info.channels:
                 output = {
-                    "device_id": signal_info.device_id,
+                    "device_id": signal_info.device.uid,
                     "channel": channel,
                     "lo_frequency": lo_frequency,
                     "port_mode": port_mode,
-                    "range": signal_range,
-                    "range_unit": signal_range_unit,
+                    "range": signal_range.value if signal_range is not None else None,
+                    "range_unit": signal_range.unit
+                    if signal_range is not None
+                    else None,
                     "port_delay": port_delay,
                     "scheduler_port_delay": scheduler_port_delay,
                     "amplitude": self._experiment_dao.amplitude(signal_id),
                 }
-                signal_is_modulated = signal_info.modulation
+                signal_is_modulated = signal_info.oscillator is not None
 
                 if oscillator_is_hardware and signal_is_modulated:
                     output["modulation"] = True
@@ -708,41 +748,46 @@ class Compiler:
                     output["diagonal"] = None
                     output["off_diagonal"] = None
 
-                if signal_info.signal_type == "single" and voltage_offset is not None:
+                if signal_info.type == SignalInfoType.RF and voltage_offset is not None:
                     output["offset"] = voltage_offset
 
-                if signal_info.signal_type == "iq" and mixer_calibration is not None:
-                    if mixer_calibration["voltage_offsets"] is not None:
-                        output["offset"] = mixer_calibration["voltage_offsets"][
+                if (
+                    signal_info.type == SignalInfoType.IQ
+                    and mixer_calibration is not None
+                ):
+                    if mixer_calibration.voltage_offsets is not None:
+                        output["offset"] = mixer_calibration.voltage_offsets[
                             channel - base_channel
                         ]
-                    if mixer_calibration["correction_matrix"] is not None:
-                        output["diagonal"] = mixer_calibration["correction_matrix"][
+                    if mixer_calibration.correction_matrix is not None:
+                        output["diagonal"] = mixer_calibration.correction_matrix[
                             channel - base_channel
                         ][channel - base_channel]
-                        output["off_diagonal"] = mixer_calibration["correction_matrix"][
+                        output["off_diagonal"] = mixer_calibration.correction_matrix[
                             flipper[channel - base_channel]
                         ][channel - base_channel]
 
-                device_type = DeviceType(signal_info.device_type)
+                device_type = DeviceType.from_device_info_type(
+                    signal_info.device.device_type
+                )
                 if precompensation_is_nonzero(precompensation):
                     if not device_type.supports_precompensation:
                         raise RuntimeError(
-                            f"Device {signal_info.device_id} does not"
+                            f"Device {signal_info.device.uid} does not"
                             + " support precompensation"
                         )
                     warnings = verify_precompensation_parameters(
                         precompensation,
                         self._sampling_rate_tracker.sampling_rate_for_device(
-                            signal_info.device_id
+                            signal_info.device.uid
                         ),
                         signal_id,
                     )
                     if warnings:
-                        _logger.warn(warnings)
+                        _logger.warning(warnings)
                     output["precompensation"] = precompensation
                 if markers is not None:
-                    if signal_info.signal_type == "iq":
+                    if signal_info.type == SignalInfoType.IQ:
                         if device_type == DeviceType.HDAWG:
                             marker_key = channel % 2 + 1
                             if f"marker{marker_key}" in markers:
@@ -753,7 +798,7 @@ class Compiler:
                             if "marker2" in markers:
                                 raise RuntimeError("Only marker1 supported on SHFSG")
                 if triggers is not None:
-                    if signal_info.signal_type == "iq":
+                    if signal_info.type == SignalInfoType.IQ:
                         if device_type == DeviceType.HDAWG:
                             trigger_bit = 2 ** (channel % 2)
                             if triggers & trigger_bit:
@@ -762,7 +807,7 @@ class Compiler:
                                     and output["marker_mode"] == "MARKER"
                                 ):
                                     raise RuntimeError(
-                                        f"Trying to use marker and trigger on the same output channel {channel} with signal {signal_id} on device {signal_info.device_id}"
+                                        f"Trying to use marker and trigger on the same output channel {channel} with signal {signal_id} on device {signal_info.device.uid}"
                                     )
                                 else:
                                     output["marker_mode"] = "TRIGGER"
@@ -775,14 +820,14 @@ class Compiler:
                                     and output["marker_mode"] == "MARKER"
                                 ):
                                     raise RuntimeError(
-                                        f"Trying to use marker and trigger on the same SG output channel {channel} with signal {signal_id} on device {signal_info.device_id}"
+                                        f"Trying to use marker and trigger on the same SG output channel {channel} with signal {signal_id} on device {signal_info.device.uid}"
                                     )
                                 else:
                                     output["marker_mode"] = "TRIGGER"
 
                 output["oscillator_frequency"] = oscillator_frequency
                 output["oscillator"] = oscillator_number
-                channel_key = (signal_info.device_id, channel)
+                channel_key = (signal_info.device.uid, channel)
                 # TODO(2K): check for conflicts if 'channel_key' already present in 'all_channels'
                 all_channels[channel_key] = output
         retval = sorted(
@@ -795,13 +840,11 @@ class Compiler:
         all_channels = {}
         for signal_id in self._experiment_dao.signals():
             signal_info = self._experiment_dao.signal_info(signal_id)
-            if signal_info.signal_type != "integration":
+            if signal_info.type != SignalInfoType.INTEGRATION:
                 continue
 
             lo_frequency = self._experiment_dao.lo_frequency(signal_id)
-            signal_range, signal_range_unit = self._experiment_dao.signal_range(
-                signal_id
-            )
+            signal_range = self._experiment_dao.signal_range(signal_id)
 
             port_delay = self._experiment_dao.port_delay(signal_id)
 
@@ -811,15 +854,17 @@ class Compiler:
 
             for channel in signal_info.channels:
                 input = {
-                    "device_id": signal_info.device_id,
+                    "device_id": signal_info.device.uid,
                     "channel": channel,
                     "lo_frequency": lo_frequency,
-                    "range": signal_range,
-                    "range_unit": signal_range_unit,
+                    "range": signal_range.value if signal_range is not None else None,
+                    "range_unit": signal_range.unit
+                    if signal_range is not None
+                    else None,
                     "port_delay": port_delay,
                     "scheduler_port_delay": scheduler_port_delay,
                 }
-                channel_key = (signal_info.device_id, channel)
+                channel_key = (signal_info.device.uid, channel)
                 # TODO(2K): check for conflicts if 'channel_key' already present in 'all_channels'
                 all_channels[channel_key] = input
         retval = sorted(
@@ -833,7 +878,7 @@ class Compiler:
 
         for section_name in self._experiment_dao.sections():
             section_info = self._experiment_dao.section_info(section_name)
-            if section_info.acquisition_types is not None:
+            if section_info.acquisition_type is not None:
                 measurement_sections.append(section_name)
 
         section_measurement_infos = []
@@ -849,13 +894,15 @@ class Compiler:
             infos_by_device_awg = {}
             for signal in section_signals:
                 signal_info_for_section = self._experiment_dao.signal_info(signal)
-                device_type = DeviceType(signal_info_for_section.device_type)
+                device_type = DeviceType.from_device_info_type(
+                    signal_info_for_section.device.device_type
+                )
                 awg_nr = Compiler.calc_awg_number(
                     signal_info_for_section.channels[0], device_type
                 )
 
-                if signal_info_for_section.signal_type == "integration":
-                    device_id = signal_info_for_section.device_id
+                if signal_info_for_section.type == SignalInfoType.INTEGRATION:
+                    device_id = signal_info_for_section.device.uid
                     device_awg_key = (device_id, awg_nr)
                     if device_awg_key not in infos_by_device_awg:
                         infos_by_device_awg[device_awg_key] = {
@@ -871,7 +918,7 @@ class Compiler:
 
                     _logger.debug(
                         "Added measurement device %s",
-                        signal_info_for_section.device_id,
+                        signal_info_for_section.device.uid,
                     )
 
             section_measurement_infos.extend(infos_by_device_awg.values())
@@ -880,8 +927,6 @@ class Compiler:
         measurements = {}
 
         for info in section_measurement_infos:
-            section_name = info["section_name"]
-
             for device_awg_nr, v in info["devices"].items():
 
                 device_id, awg_nr = device_awg_nr
@@ -1056,7 +1101,7 @@ class Compiler:
         return CompiledExperiment(
             experiment_dict=ExperimentDAO.dump(self._experiment_dao),
             scheduled_experiment=ScheduledExperiment(
-                recipe=self._recipe,  # TODO(2K): Build 'Recipe' instead of dict
+                recipe=self._recipe,
                 src=self._combined_compiler_output.src,
                 waves=list(self._combined_compiler_output.waves.values()),
                 wave_indices=self._combined_compiler_output.wave_indices,
@@ -1118,8 +1163,7 @@ def get_lead_delay(
     desktop_setup: bool,
     hdawg_uses_2GHz: bool,
 ):
-    if not isinstance(device_type, DeviceType):
-        raise RuntimeError(f"Device type {device_type} is not of type DeviceType")
+    assert isinstance(device_type, DeviceType)
     if device_type == DeviceType.HDAWG:
         if not desktop_setup:
             if hdawg_uses_2GHz:

@@ -127,10 +127,12 @@ class Transmon(QuantumElement):
         `Qubit` requires `parameters` for it to be able to produce calibration objects.
 
         Args:
-            set_local_oscillators: if True, adds local oscillator settings to the calibration.
+            set_local_oscillators (bool):
+                If True, adds local oscillator settings to the calibration.
 
         Returns:
-            Prefilled calibration object from Qubit parameters.
+            calibration:
+                Prefilled calibration object from Qubit parameters.
         """
 
         if set_local_oscillators:

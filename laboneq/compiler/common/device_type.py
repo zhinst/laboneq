@@ -5,6 +5,8 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Optional
 
+from laboneq.data.compilation_job import DeviceInfoType
+
 
 @dataclass(eq=True, frozen=True)
 class DeviceTraits:
@@ -40,6 +42,10 @@ class DeviceType(DeviceTraits, Enum):
         # This is needed to ensure DeviceType instance (created in custom __new__() above)
         # gets properly initialized with the original DeviceTraits value members
         super().__init__(**asdict(value))
+
+    @classmethod
+    def from_device_info_type(cls, value: DeviceInfoType):
+        return cls(value.name.lower())
 
     HDAWG = DeviceTraits(
         str_value="hdawg",

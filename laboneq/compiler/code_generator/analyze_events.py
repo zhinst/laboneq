@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from engineering_notation import EngNumber
 from sortedcontainers import SortedDict
 
+from laboneq._utils import ensure_list
 from laboneq.compiler.code_generator.feedback_register_allocator import (
     FeedbackRegisterAllocator,
 )
@@ -45,7 +46,7 @@ def analyze_loop_times(
     for e in events:
         if (
             e["event_type"] in ["PLAY_START", "ACQUIRE_START"]
-            and e.get("signal") in signal_ids
+            and ensure_list(e.get("signal"))[0] in signal_ids
         ):
             plays_anything = True
             break
@@ -300,7 +301,7 @@ def analyze_set_oscillator_times(
         for event in events
         if event["event_type"] == "SET_OSCILLATOR_FREQUENCY_START"
         and event.get("device_id") == device_id
-        and event.get("signal") == signal_id
+        and ensure_list(event.get("signal"))[0] == signal_id
     ]
     if len(set_oscillator_events) == 0:
         return AWGSampledEventSequence()
@@ -339,6 +340,7 @@ def analyze_set_oscillator_times(
                 "parameter_name": event["parameter"]["id"],
                 "iteration": iteration,
                 "iterations": len(iterations),
+                "oscillator_id": event["oscillator_id"],
             },
         )
 
@@ -368,6 +370,7 @@ def analyze_acquire_times(
 
     @dataclass
     class IntervalStartEvent:
+        signals: str | list[str]
         event_type: str
         time: float
         play_wave_id: str
@@ -375,6 +378,7 @@ def analyze_acquire_times(
         acquire_handle: str
         play_pulse_parameters: Optional[Dict[str, Any]]
         pulse_pulse_parameters: Optional[Dict[str, Any]]
+        channels: list[int | list[int]]
 
     @dataclass
     class IntervalEndEvent:
@@ -386,6 +390,7 @@ def analyze_acquire_times(
         zip(
             [
                 IntervalStartEvent(
+                    event["signal"],
                     event["event_type"],
                     event["time"] + delay,
                     event["play_wave_id"],
@@ -393,10 +398,11 @@ def analyze_acquire_times(
                     event["acquire_handle"],
                     event.get("play_pulse_parameters"),
                     event.get("pulse_pulse_parameters"),
+                    event.get("channel") or channels,
                 )
                 for event in events
                 if event["event_type"] in ["ACQUIRE_START"]
-                and event["signal"] == signal_id
+                and signal_id in ensure_list(event["signal"])
             ],
             [
                 IntervalEndEvent(
@@ -406,7 +412,7 @@ def analyze_acquire_times(
                 )
                 for event in events
                 if event["event_type"] in ["ACQUIRE_END"]
-                and event["signal"] == signal_id
+                and signal_id in ensure_list(event["signal"])
             ],
         )
     )
@@ -437,12 +443,13 @@ def analyze_acquire_times(
             start=start_samples,
             end=end_samples,
             params={
-                "signal_id": signal_id,
+                "signal_id": ensure_list(interval_start.signals)[0],
+                "signals": interval_start.signals,  # for multistate discrimination
                 "play_wave_id": interval_start.play_wave_id,
                 "acquisition_type": interval_start.acquisition_type,
                 "acquire_handles": [interval_start.acquire_handle],
                 "feedback_register": feedback_register,
-                "channels": channels,
+                "channels": interval_start.channels,
                 "play_pulse_parameters": interval_start.play_pulse_parameters,
                 "pulse_pulse_parameters": interval_start.pulse_pulse_parameters,
             },
@@ -460,7 +467,7 @@ def analyze_trigger_events(
         event
         for event in events
         if event["event_type"] == EventType.DIGITAL_SIGNAL_STATE_CHANGE
-        and signal.id == event["signal"]
+        and signal.id == ensure_list(event["signal"])[0]
     ]
     delay = signal.total_delay
     sampling_rate = signal.awg.sampling_rate

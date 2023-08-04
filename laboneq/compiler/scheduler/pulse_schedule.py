@@ -11,8 +11,8 @@ from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.common.play_wave_type import PlayWaveType
 from laboneq.compiler.common.pulse_parameters import encode_pulse_parameters
-from laboneq.compiler.experiment_access.section_signal_pulse import SectionSignalPulse
 from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
+from laboneq.data.compilation_job import ParameterInfo, SectionSignalPulse
 
 
 @define(kw_only=True, slots=True)
@@ -41,11 +41,14 @@ class PulseSchedule(IntervalSchedule):
         assert self.length is not None
         assert self.absolute_start is not None
         params_list = []
-        for f in ("length_param", "amplitude_param", "phase_param", "offset_param"):
-            if getattr(self.pulse, f) is not None:
-                params_list.append(getattr(self.pulse, f))
+        for f in ("length", "amplitude", "phase", "offset"):
+            if isinstance(getattr(self.pulse, f), ParameterInfo):
+                params_list.append(getattr(self.pulse, f).uid)
 
-        play_wave_id = self.pulse.pulse_id or "delay"
+        if self.pulse.pulse is not None:
+            play_wave_id = self.pulse.pulse.uid
+        else:
+            play_wave_id = "delay"
 
         amplitude_resolution = pow(
             2, getattr(settings, "AMPLITUDE_RESOLUTION_BITS", 24)
@@ -55,9 +58,9 @@ class PulseSchedule(IntervalSchedule):
         start_id = next(id_tracker)
         d = {
             "section_name": self.section,
-            "signal": self.pulse.signal_id,
+            "signal": self.pulse.signal.uid,
             "play_wave_id": play_wave_id,
-            "parameterized_with": params_list,
+            "parametrized_with": params_list,
             "phase": self.phase,
             "amplitude": amplitude,
             "chain_element_id": start_id,
@@ -80,7 +83,7 @@ class PulseSchedule(IntervalSchedule):
         osc_common = {
             "time": start,
             "section_name": self.section,
-            "signal": self.pulse.signal_id,
+            "signal": self.pulse.signal.uid,
         }
         if self.increment_oscillator_phase:
             osc_events.append(
@@ -101,7 +104,7 @@ class PulseSchedule(IntervalSchedule):
                 }
             )
 
-        is_delay = self.pulse.pulse_id is None
+        is_delay = self.pulse.pulse is None
 
         if is_delay:
             return osc_events + [
@@ -200,7 +203,7 @@ class PrecompClearSchedule(IntervalSchedule):
             {
                 "event_type": EventType.RESET_PRECOMPENSATION_FILTERS,
                 "time": start,
-                "signal_id": self.pulse.pulse.signal_id,
+                "signal_id": self.pulse.pulse.signal.uid,
                 "section_name": self.pulse.section,
                 "id": next(id_tracker),
             }

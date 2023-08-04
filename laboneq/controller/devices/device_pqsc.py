@@ -20,6 +20,7 @@ from laboneq.controller.devices.zi_node_monitor import (
     Response,
 )
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
+from laboneq.controller.versioning import SUPPORT_PRE_V23_06, LabOneVersion
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.data.recipe import Initialization
 
@@ -93,23 +94,37 @@ class DevicePQSC(DeviceZI):
                     or awg_config.source_feedback_register is None
                 ):
                     continue  # Only consider devices receiving feedback from PQSC
-                zsync_base = f"/{self.serial}/zsyncs/{p_addr}/output/registerbank"
-                feedback_actions.append(
-                    DaqNodeSetAction(self.daq, f"{zsync_base}/enable", 1)
+
+                zsync_output = f"/{self.serial}/zsyncs/{p_addr}/output"
+                zsync_base = f"{zsync_output}/registerbank"
+                if SUPPORT_PRE_V23_06 and (
+                    self.daq._dataserver_version < LabOneVersion.V_23_06
+                ):
+                    actions_to_enable_feedback = [
+                        DaqNodeSetAction(self.daq, f"{zsync_base}/enable", 1)
+                    ]
+                else:
+                    actions_to_enable_feedback = [
+                        DaqNodeSetAction(self.daq, f"{zsync_output}/enable", 1),
+                        DaqNodeSetAction(self.daq, f"{zsync_output}/source", 0),
+                    ]
+
+                feedback_actions.extend(actions_to_enable_feedback)
+                reg_selector_base = (
+                    f"{zsync_base}/sources/{awg_config.register_selector_index}"
                 )
-                bit_base = f"{zsync_base}/sources/{awg_config.zsync_bit}"
                 feedback_actions.extend(
                     [
-                        DaqNodeSetAction(self.daq, f"{bit_base}/enable", 1),
+                        DaqNodeSetAction(self.daq, f"{reg_selector_base}/enable", 1),
                         DaqNodeSetAction(
                             self.daq,
-                            f"{bit_base}/register",
+                            f"{reg_selector_base}/register",
                             awg_config.source_feedback_register,
                         ),
                         DaqNodeSetAction(
                             self.daq,
-                            f"{bit_base}/index",
-                            awg_config.feedback_register_bit,
+                            f"{reg_selector_base}/index",
+                            awg_config.readout_result_index,
                         ),
                     ]
                 )
@@ -164,7 +179,7 @@ class DevicePQSC(DeviceZI):
                 DaqNodeSetAction(
                     self._daq,
                     f"/{self.serial}/system/clocks/referenceclock/out/freq",
-                    initialization.config.reference_clock,
+                    initialization.config.reference_clock.value,
                 )
             ]
         )

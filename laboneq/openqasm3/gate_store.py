@@ -3,9 +3,9 @@
 
 from typing import Callable, Dict, Optional, Tuple
 
+from laboneq._utils import id_generator
 from laboneq.dsl.experiment import Section
 from laboneq.dsl.experiment.pulse import Pulse
-from laboneq.dsl.experiment.utils import id_generator
 
 
 class GateStore:

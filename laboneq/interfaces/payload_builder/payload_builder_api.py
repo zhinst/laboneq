@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import ABC
-from dataclasses import dataclass
 from typing import Dict
 
 from laboneq.data.execution_payload import ExecutionPayload, TargetSetup
@@ -10,7 +9,6 @@ from laboneq.data.experiment_description import Experiment
 from laboneq.data.setup_description import Setup
 
 
-@dataclass
 class PayloadBuilderAPI(ABC):
     def build_payload(
         self,

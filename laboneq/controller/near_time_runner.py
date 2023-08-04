@@ -31,7 +31,7 @@ _logger = logging.getLogger(__name__)
 
 class NearTimeRunner(ExecutorBase):
     def __init__(self, controller: Controller):
-        super().__init__(looping_mode=LoopingMode.EXECUTE)
+        super().__init__(looping_mode=LoopingMode.NEAR_TIME_ONLY)
         self.controller = controller
         self.user_set_nodes = []
         self.nt_loop_indices: list[int] = []

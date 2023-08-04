@@ -3,10 +3,7 @@
 
 from __future__ import annotations
 
-import functools
-import hashlib
 import logging
-import re
 import textwrap
 from enum import Enum
 from typing import Any, Dict, List, Optional, Sequence, Set
@@ -22,31 +19,6 @@ MAX_PLAY_ZERO_HOLD_UHFQA = 131056
 MAX_PLAY_ZERO_HOLD_HDAWG = 1048560
 
 MIN_PLAY_ZERO_HOLD = 512 + 128
-
-
-@functools.lru_cache()
-def string_sanitize(input):
-    """Sanitize the input string, so it can be safely used as (part of) an identifier
-    in seqC."""
-
-    # strip non-ascii characters
-    s = input.encode("ascii", "ignore").decode()
-
-    if s == "":
-        s = "_"
-
-    # only allowed characters are alphanumeric and underscore
-    s = re.sub(r"[^\w\d]", "_", s)
-
-    # names must not start with a digit
-    if s[0].isdigit():
-        s = "_" + s
-
-    if s != input:
-        s = f"{s}_{hashlib.md5(input.encode()).hexdigest()[:4]}"
-
-    return s
-
 
 SeqCStatement = Dict[str, Any]
 
@@ -107,6 +79,12 @@ class SeqCGenerator:
                 "has_marker2": has_marker2,
             }
         )
+
+    def add_constant_definition(self, name: str, value, comment: str | None = None):
+        statement = {"type": "constant", "name": name, "value": value}
+        if comment is not None:
+            statement["comment"] = comment
+        self.add_statement(statement)
 
     def estimate_complexity(self):
         """Calculate a rough estimate for the complexity (~nr of instructions)
@@ -441,6 +419,15 @@ class SeqCGenerator:
 
         elif statement["type"] == "playHold":
             return f"playHold({statement['num_samples']});\n"
+
+        elif statement["type"] == "constant":
+            if statement["comment"] is not None:
+                comment = "  // " + statement["comment"]
+            else:
+                comment = ""
+            return f"const {statement['name']} = {statement['value']};{comment}\n"
+
+        raise ValueError(f"Invalid statement type '{statement['type']}'")
 
     def _gen_wave_declaration_placeholder(self, statement: SeqCStatement) -> str:
         dual_channel = statement["signal_type"] in ["iq", "double", "multi"]

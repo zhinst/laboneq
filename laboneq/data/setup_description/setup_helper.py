@@ -1,11 +1,7 @@
 # Copyright 2023 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-import logging
-
 from laboneq.data.setup_description import Setup
-
-_logger = logging.getLogger(__name__)
 
 
 class SetupHelper:

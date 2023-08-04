@@ -520,7 +520,7 @@ class DeviceUHFQA(DeviceZI):
                             DaqNodeSetAction(
                                 self._daq,
                                 f"/{self.serial}/qas/0/thresholds/{integration_unit_index}/level",
-                                integrator_allocation.threshold,
+                                integrator_allocation.threshold or 0.0,
                             ),
                         ]
                     )

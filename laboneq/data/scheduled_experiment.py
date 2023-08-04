@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum, auto
+from enum import Enum
 from typing import Any
 
 from laboneq.core.validators import dicts_equal
@@ -12,20 +12,13 @@ from laboneq.data import EnumReprMixin
 from laboneq.data.recipe import Recipe
 
 
-#
-# Enums
-#
 class MixerType(EnumReprMixin, Enum):
     #: Mixer performs full complex modulation
-    IQ = auto()
-
+    IQ = "IQ"
     #: Mixer only performs envelope modulation (UHFQA-style)
-    UHFQA_ENVELOPE = auto()
+    UHFQA_ENVELOPE = "UHFQA_ENVELOPE"
 
 
-#
-# Data Classes
-#
 @dataclass
 class PulseInstance:
     offset_samples: int

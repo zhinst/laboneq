@@ -3,4 +3,4 @@
 
 
 class CalibrationItem:
-    pass
+    """A base class for calibration items."""

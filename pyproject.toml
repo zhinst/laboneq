@@ -53,9 +53,9 @@ dependencies = [
     "lagom",
     "attrs",
     "sortedcontainers",
-    "zhinst-core==23.2.42414",
-    "zhinst-toolkit~=0.5.0",
-    "zhinst-utils~=0.3.0",
+    "zhinst-core==23.6.45428",
+    "zhinst-toolkit~=0.6.0",
+    "zhinst-utils==0.3.2",
 ]
 
 [project.urls]

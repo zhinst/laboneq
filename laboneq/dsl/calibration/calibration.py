@@ -1,6 +1,8 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+"""A container for calibration items."""
+
 from dataclasses import dataclass, field
 from typing import Any, Dict
 
@@ -20,10 +22,20 @@ def _sanitize_key(key: Any) -> str:
 @classformatter
 @dataclass(init=True, repr=True, order=True)
 class Calibration:
-    """Calibration object containing a dict of :class:`~.CalibrationItem`.
+    """Calibration object containing a dictionary of
+    [CalibrationItem][laboneq.dsl.calibration.CalibrationItem]s.
 
-    The dictionary has the path i.e. UID to the :py:class:`~.Calibratable` object as
-    key and the actual :py:class:`~.CalibrationItem` object as value.
+    Parameters:
+        calibration_items:
+            A mapping to initialize the dictionary of
+            calibration items.
+
+    Attributes:
+        calibration_items:
+            mapping from a UID of a
+            [Calibratable][laboneq.dsl.calibration.Calibratable] to
+            the actual
+            [CalibrationItem][laboneq.dsl.calibration.CalibrationItem].
     """
 
     calibration_items: Dict[str, CalibrationItem] = field(default_factory=dict)
@@ -58,10 +70,11 @@ class Calibration:
         return self.calibration_items.values()
 
     @staticmethod
-    def load(filename):
+    def load(filename: str):
         """Load calibration data from file.
 
-        The file is in JSON format, as generated via :meth:`save()`.
+        The file is in JSON format, as generated via
+        [.save()][laboneq.dsl.calibration.Calibration.save].
 
         Args:
             filename: The filename to load data from.
@@ -71,8 +84,7 @@ class Calibration:
 
         return Serializer.from_json_file(filename, Calibration)
 
-    def save(self, filename):
-
+    def save(self, filename: str):
         """Save calibration data to file.
 
         The file is written in JSON format.

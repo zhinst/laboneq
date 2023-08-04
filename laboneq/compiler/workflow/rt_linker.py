@@ -1,8 +1,12 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Any
+
+import numpy as np
 
 from laboneq.compiler.code_generator import IntegrationTimes
 from laboneq.compiler.code_generator.measurement_calculator import SignalDelays
@@ -11,6 +15,24 @@ from laboneq.compiler.common.awg_info import AwgKey
 from laboneq.compiler.workflow.realtime_compiler import RealtimeCompilerOutput
 from laboneq.core.exceptions import LabOneQException
 from laboneq.data.scheduled_experiment import PulseMapEntry
+
+
+def deep_compare(a: Any, b: Any) -> bool:
+    if type(a) != type(b):
+        return False
+    if isinstance(a, list):
+        if len(a) != len(b):
+            return False
+        return all([deep_compare(_a, _b) for _a, _b in zip(a, b)])
+    if isinstance(a, dict):
+        if len(a) != len(b):
+            return False
+        if not deep_compare(list(a.keys()), list(b.keys())):
+            return False
+        return deep_compare(list(a.values()), list(b.values()))
+    if isinstance(a, np.ndarray):
+        return np.array_equal(a, b, equal_nan=True)
+    return a == b
 
 
 @dataclass
@@ -40,6 +62,7 @@ class CombinedRealtimeCompilerOutput:
     command_tables: list[dict[str, Any]] = field(default_factory=dict)
     pulse_map: dict[str, PulseMapEntry] = field(default_factory=dict)
     schedule: dict[str, Any] = field(default_factory=dict)
+    multistate_signal_groups: set[tuple[str, ...]] = field(default_factory=set)
 
 
 def make_seqc_name(awg: AwgKey, step_indices: list[int]) -> str:
@@ -90,6 +113,7 @@ def from_single_run(
         wave_indices=wave_indices,
         pulse_map=rt_compiler_output.pulse_map,
         schedule=rt_compiler_output.schedule,
+        multistate_signal_groups=rt_compiler_output.multistate_signal_groups,
     )
 
 
@@ -115,7 +139,7 @@ def merge_compiler_runs(
         raise LabOneQException(
             "Signal delays do not match between real-time iterations"
         )
-    if this.integration_weights != new.integration_weights:
+    if not deep_compare(this.integration_weights, new.integration_weights):
         # todo: this we probably want to allow in the future
         raise LabOneQException(
             "Integration weights do not match between real-time iterations"
@@ -127,6 +151,10 @@ def merge_compiler_runs(
     if this.simultaneous_acquires != new.simultaneous_acquires:
         raise LabOneQException(
             "Simultaneous acquires do not match between real-time iterations"
+        )
+    if this.multistate_signal_groups != new.multistate_signal_groups:
+        raise LabOneQException(
+            "Multistate discrimination signal groups do not match between real-time iterations"
         )
 
     for awg, awg_src in new.src.items():
@@ -152,7 +180,7 @@ def merge_compiler_runs(
             previous_src == awg_src
             and previous_ct == new_ct
             and previous_wave_indices == new_wave_indices
-            and previous_waves == new_waves
+            and deep_compare(previous_waves, new_waves)
         ):
             # No change in this iteration
             continue

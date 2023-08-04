@@ -453,11 +453,11 @@ class DeviceSHFSG(DeviceSHFBase):
                     [
                         (
                             f"sgchannels/{awg_key.awg_index}/awg/intfeedback/direct/shift",
-                            awg_config.feedback_register_bit,
+                            awg_config.readout_result_index,
                         ),
                         (
                             f"sgchannels/{awg_key.awg_index}/awg/intfeedback/direct/mask",
-                            0b1,
+                            awg_config.register_selector_bitmask,
                         ),
                         (
                             f"sgchannels/{awg_key.awg_index}/awg/intfeedback/direct/offset",
@@ -475,11 +475,11 @@ class DeviceSHFSG(DeviceSHFBase):
                         ),
                         (
                             f"sgchannels/{awg_key.awg_index}/awg/zsync/register/shift",
-                            awg_config.zsync_bit,
+                            awg_config.register_selector_shift,
                         ),
                         (
                             f"sgchannels/{awg_key.awg_index}/awg/zsync/register/mask",
-                            0b1,
+                            awg_config.register_selector_bitmask,
                         ),
                         (
                             f"sgchannels/{awg_key.awg_index}/awg/zsync/register/offset",

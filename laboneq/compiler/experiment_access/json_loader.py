@@ -13,14 +13,27 @@ from typing import Any, Dict, Tuple
 
 from jsonschema.validators import validator_for
 
-from laboneq.compiler.experiment_access.acquire_info import AcquireInfo
 from laboneq.compiler.experiment_access.loader_base import LoaderBase
-from laboneq.compiler.experiment_access.marker import Marker
-from laboneq.compiler.experiment_access.pulse_def import PulseDef
-from laboneq.compiler.experiment_access.section_info import SectionInfo
-from laboneq.compiler.experiment_access.section_signal_pulse import SectionSignalPulse
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types.enums import AcquisitionType
+from laboneq.data.calibration import ExponentialCompensation, HighPassCompensation
+from laboneq.data.compilation_job import (
+    AcquireInfo,
+    FollowerInfo,
+    Marker,
+    MixerCalibrationInfo,
+    PrecompensationInfo,
+    PulseDef,
+    SectionInfo,
+    SectionSignalPulse,
+    SignalRange,
+)
+from laboneq.data.experiment_description import (
+    AcquisitionType,
+    AveragingMode,
+    ExecutionType,
+    RepetitionMode,
+    SectionAlignment,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -41,7 +54,6 @@ class JsonLoader(LoaderBase):
     _validator = None
 
     def load(self, experiment: Dict):
-        self._load_servers(experiment)
         self._load_devices(experiment)
         self._load_oscillator(experiment)
         self._load_connectivity(experiment)
@@ -49,15 +61,6 @@ class JsonLoader(LoaderBase):
         self._load_signal_connections(experiment)
         self._load_pulses(experiment)
         self._load_sections(experiment)
-
-    def _load_servers(self, experiment):
-        for server in experiment["servers"]:
-            self.add_server(
-                server["id"],
-                server.get("host"),
-                server.get("port"),
-                server.get("api_level"),
-            )
 
     def _load_devices(self, experiment):
         for device in sorted(experiment["devices"], key=lambda x: x["id"]):
@@ -99,37 +102,32 @@ class JsonLoader(LoaderBase):
 
     def _load_connectivity(self, experiment):
         if "connectivity" in experiment:
-            if "dios" in experiment["connectivity"]:
-                for dio in experiment["connectivity"]["dios"]:
-                    self.dios.append((dio["leader"]["$ref"], dio["follower"]["$ref"]))
+            for dio in experiment["connectivity"].get("dios", {}):
+                leader = self._devices[dio["leader"]["$ref"]]
+                follower = self._devices[dio["follower"]["$ref"]]
+                leader.followers.append(FollowerInfo(follower, 0))
             if "leader" in experiment["connectivity"]:
-
                 leader_device_id = experiment["connectivity"]["leader"]["$ref"]
                 self.global_leader_device_id = leader_device_id
 
             if "reference_clock" in experiment["connectivity"]:
                 reference_clock = experiment["connectivity"]["reference_clock"]
                 for device in self._devices.values():
-                    if device["device_type"] in {"hdawg", "uhfqa", "pqsc"}:
-                        device["reference_clock"] = reference_clock
+                    if device.device_type.value in {"hdawg", "uhfqa", "pqsc"}:
+                        device.reference_clock = reference_clock
 
-            if "pqscs" in experiment["connectivity"]:
-                pqscs = experiment["connectivity"]["pqscs"]
-                for pqsc in pqscs:
-                    pqsc_device_id = pqsc["device"]["$ref"]
-                    if "ports" in pqsc:
-                        for port in pqsc["ports"]:
-                            self.pqsc_ports.append(
-                                (pqsc_device_id, port["device"]["$ref"], port["port"])
-                            )
+            for pqsc in experiment["connectivity"].get("pqscs", {}):
+                pqsc_device_id = pqsc["device"]["$ref"]
+                for port in pqsc.get("ports", ()):
+                    self._devices[pqsc_device_id].followers.append(
+                        FollowerInfo(
+                            self._devices[port["device"]["$ref"]], port["port"]
+                        )
+                    )
 
     def _load_signals(self, experiment):
         for signal in sorted(experiment["signals"], key=lambda s: s["id"]):
-            self.add_signal(
-                signal["id"],
-                signal["signal_type"],
-                modulation=bool(signal.get("modulation")),
-            )
+            self.add_signal(signal["id"], signal["signal_type"])
             if "oscillators_list" in signal:
                 for oscillator_ref in signal["oscillators_list"]:
                     oscillator_id = oscillator_ref["$ref"]
@@ -137,20 +135,39 @@ class JsonLoader(LoaderBase):
 
     def _load_signal_connections(self, experiment):
         for connection in experiment["signal_connections"]:
-            try:
-                voltage_offset = copy.deepcopy(connection["voltage_offset"])
-            except KeyError:
-                voltage_offset = None
-            try:
-                mixer_calibration = copy.deepcopy(connection["mixer_calibration"])
-            except KeyError:
+            voltage_offset = copy.deepcopy(connection.get("voltage_offset"))
+            mixer_calibration_dict = connection.get("mixer_calibration")
+            if mixer_calibration_dict is not None:
+                mixer_calibration = MixerCalibrationInfo(
+                    voltage_offsets=mixer_calibration_dict.get("voltage_offsets"),
+                    correction_matrix=mixer_calibration_dict.get("correction_matrix"),
+                )
+            else:
                 mixer_calibration = None
-            try:
-                precompensation = copy.deepcopy(connection["precompensation"])
-            except KeyError:
+            precompensation_dict = connection.get("precompensation")
+            if precompensation_dict is not None:
+                exponential = precompensation_dict.get("exponential")
+                if exponential:
+                    exponential = [ExponentialCompensation(**e) for e in exponential]
+                high_pass = precompensation_dict.get("high_pass")
+                if high_pass:
+                    high_pass = HighPassCompensation(**high_pass)
+                bounce = precompensation_dict.get("bounce")
+                if bounce:
+                    bounce = HighPassCompensation(**bounce)
+                FIR = precompensation_dict.get("FIR")
+                if FIR:
+                    FIR = HighPassCompensation(**FIR)
+
+                precompensation = PrecompensationInfo(
+                    exponential, high_pass, bounce, FIR
+                )
+            else:
                 precompensation = None
             range = connection.get("range")
             range_unit = connection.get("range_unit")
+            if range is not None or range_unit is not None:
+                range = SignalRange(range, range_unit)
             lo_frequency = connection.get("lo_frequency")
             port_delay = connection.get("port_delay")
             delay_signal = connection.get("delay_signal")
@@ -184,16 +201,20 @@ class JsonLoader(LoaderBase):
             amplitude, amplitude_param = find_value_or_parameter_dict(
                 pulse, "amplitude", (int, float, complex)
             )
+            if amplitude_param is not None:
+                raise LabOneQException(
+                    f"Amplitude of pulse '{pulse.uid}' cannot be a parameter."
+                    f" To sweep the amplitude, pass the parameter in the"
+                    f" corresponding `play()` command."
+                )
 
             self.add_pulse(
                 pulse["id"],
                 PulseDef(
-                    id=pulse["id"],
+                    uid=pulse["id"],
                     function=pulse.get("function"),
                     length=pulse.get("length"),
                     amplitude=amplitude,
-                    amplitude_param=amplitude_param,
-                    play_mode=pulse.get("play_mode"),
                     samples=samples,
                 ),
             )
@@ -231,9 +252,6 @@ class JsonLoader(LoaderBase):
 
             section = sections_proto[section_name]
 
-            if parent_instance is not None:
-                self.add_section_child(parent_instance, instance_id)
-
             sections_list = None
             if "repeat" in section and "sections_list" in section["repeat"]:
                 sections_list = section["repeat"]["sections_list"]
@@ -244,14 +262,12 @@ class JsonLoader(LoaderBase):
                     sections_to_process.appendleft(
                         (child_section_ref["$ref"], instance_id)
                     )
-            has_repeat = False
             execution_type = None
             length = None
-            count: int = 1
+            count: int | None = None
 
             if "repeat" in section:
-                has_repeat = True
-                execution_type = section["repeat"]["execution_type"]
+                execution_type = ExecutionType(section["repeat"]["execution_type"])
 
                 count = int(section["repeat"]["count"])
                 if "parameters" in section["repeat"]:
@@ -268,15 +284,18 @@ class JsonLoader(LoaderBase):
                             values,
                         )
 
-            acquisition_types = section.get("acquisition_types")
-            # backwards-compatibility: "acquisition_types" field was previously named "trigger"
-            acquisition_types = acquisition_types or section.get("trigger")
-            if self.acquisition_type is None and acquisition_types is not None:
-                self.acquisition_type = AcquisitionType(acquisition_types[0])
+            acquisition_type = None
+            for field in ["acquisition_types", "trigger"]:
+                # backwards-compatibility: "acquisition_types" field was previously named "trigger"
+                acquisition_type = section.get(field, [acquisition_type])[0]
+                if acquisition_type is not None:
+                    acquisition_type = AcquisitionType(acquisition_type)
+            if self.acquisition_type is None and acquisition_type is not None:
+                self.acquisition_type = acquisition_type
 
             align = None
             if "align" in section:
-                align = section["align"]
+                align = SectionAlignment(section["align"])
 
             on_system_grid = False
             if "on_system_grid" in section:
@@ -307,7 +326,7 @@ class JsonLoader(LoaderBase):
 
             averaging_mode = None
             if "averaging_mode" in section:
-                averaging_mode = section["averaging_mode"]
+                averaging_mode = AveragingMode(section["averaging_mode"])
 
             repetition_time = None
             if "repetition_time" in section:
@@ -315,7 +334,7 @@ class JsonLoader(LoaderBase):
 
             repetition_mode = None
             if "repetition_mode" in section:
-                repetition_mode = section["repetition_mode"]
+                repetition_mode = RepetitionMode(section["repetition_mode"])
 
             trigger_output = []
             for to_item in section.get("trigger_output", ()):
@@ -330,14 +349,12 @@ class JsonLoader(LoaderBase):
             self.add_section(
                 instance_id,
                 SectionInfo(
-                    section_id=instance_id,
-                    section_display_name=section["id"],
-                    has_repeat=has_repeat,
+                    uid=instance_id,
                     execution_type=execution_type,
                     count=count,
                     chunk_count=1,
-                    acquisition_types=acquisition_types,
-                    align=align,
+                    acquisition_type=acquisition_type,
+                    alignment=align,
                     on_system_grid=on_system_grid,
                     length=length,
                     averaging_mode=averaging_mode,
@@ -345,13 +362,16 @@ class JsonLoader(LoaderBase):
                     repetition_time=repetition_time,
                     play_after=section.get("play_after"),
                     reset_oscillator_phase=reset_oscillator_phase,
-                    trigger_output=trigger_output,
+                    triggers=trigger_output,
                     handle=handle,
                     user_register=user_register,
                     state=state,
                     local=local,
                 ),
             )
+
+            if parent_instance is not None:
+                self.add_section_child(parent_instance, instance_id)
 
             if "signals_list" in section:
                 for signals_list_entry in section["signals_list"]:
@@ -366,36 +386,56 @@ class JsonLoader(LoaderBase):
                             ) = find_value_or_parameter_dict(
                                 pulse_ref, "offset", (int, float)
                             )
+                            if pulse_offset_param is not None:
+                                pulse_offset = self._all_parameters[pulse_offset_param]
                             (
                                 pulse_amplitude,
                                 pulse_amplitude_param,
                             ) = find_value_or_parameter_dict(
                                 pulse_ref, "amplitude", (int, float, complex)
                             )
+                            if pulse_amplitude_param is not None:
+                                pulse_amplitude = self._all_parameters[
+                                    pulse_amplitude_param
+                                ]
                             (
                                 pulse_increment,
                                 pulse_increment_oscillator_phase_param,
                             ) = find_value_or_parameter_dict(
                                 pulse_ref, "increment_oscillator_phase", (int, float)
                             )
+                            if pulse_increment_oscillator_phase_param is not None:
+                                pulse_increment = self._all_parameters[
+                                    pulse_increment_oscillator_phase_param
+                                ]
                             (
                                 pulse_set_oscillator_phase,
                                 pulse_set_oscillator_phase_param,
                             ) = find_value_or_parameter_dict(
                                 pulse_ref, "set_oscillator_phase", (int, float)
                             )
+                            if pulse_set_oscillator_phase_param is not None:
+                                pulse_set_oscillator_phase = self._all_parameters[
+                                    pulse_set_oscillator_phase_param
+                                ]
                             (
                                 pulse_phase,
                                 pulse_phase_param,
                             ) = find_value_or_parameter_dict(
                                 pulse_ref, "phase", (int, float)
                             )
+                            if pulse_phase_param is not None:
+                                pulse_phase = self._all_parameters[pulse_phase_param]
                             (
                                 resulting_pulse_instance_length,
                                 resulting_pulse_instance_length_param,
                             ) = find_value_or_parameter_dict(
                                 pulse_ref, "length", (int, float)
                             )
+                            if resulting_pulse_instance_length_param is not None:
+                                resulting_pulse_instance_length = self._all_parameters[
+                                    resulting_pulse_instance_length_param
+                                ]
 
                             precompensation_clear = pulse_ref.get(
                                 "precompensation_clear", False
@@ -406,7 +446,7 @@ class JsonLoader(LoaderBase):
                                 pulse_id = pulse_ref["pulse"]["$ref"]
 
                             acquire_params = None
-                            signal_type = self._signals[signal_id]["signal_type"]
+                            signal_type = self._signals[signal_id].type.value
                             if signal_type == "integration":
                                 acquire_params = AcquireInfo(
                                     handle=pulse_ref.get("readout_handle"),
@@ -414,45 +454,50 @@ class JsonLoader(LoaderBase):
                                         self.acquisition_type, "value", None
                                     ),
                                 )
-                            markers = []
-                            if "markers" in pulse_ref:
-                                for k, v in pulse_ref["markers"].items():
-                                    marker_pulse_id = None
-                                    pulse_ref = v.get("waveform")
-                                    if pulse_ref is not None:
-                                        marker_pulse_id = pulse_ref["$ref"]
 
-                                    markers.append(
-                                        Marker(
-                                            k,
-                                            enable=v.get("enable"),
-                                            start=v.get("start"),
-                                            length=v.get("length"),
-                                            pulse_id=marker_pulse_id,
-                                        )
+                            pulse_parameters = copy.deepcopy(
+                                pulse_ref.get("pulse_pulse_parameters")
+                            )
+                            operation_pulse_parameters = copy.deepcopy(
+                                pulse_ref.get("play_pulse_parameters")
+                            )
+
+                            pulse_group = pulse_ref.get("pulse_group")
+                            markers = []
+                            for k, v in pulse_ref.get("markers", {}).items():
+                                marker_pulse_id = None
+                                pulse_ref = v.get("waveform")
+                                if pulse_ref is not None:
+                                    marker_pulse_id = pulse_ref["$ref"]
+
+                                markers.append(
+                                    Marker(
+                                        k,
+                                        enable=v.get("enable"),
+                                        start=v.get("start"),
+                                        length=v.get("length"),
+                                        pulse_id=marker_pulse_id,
                                     )
-                                    self.add_signal_marker(signal_id, k)
+                                )
+                                self.add_signal_marker(signal_id, k)
 
                             new_ssp = SectionSignalPulse(
-                                pulse_id=pulse_id,
-                                signal_id=signal_id,
+                                pulse=self._pulses[pulse_id]
+                                if pulse_id is not None
+                                else None,
+                                signal=self._signals[signal_id],
                                 offset=pulse_offset,
-                                offset_param=pulse_offset_param,
                                 amplitude=pulse_amplitude,
-                                amplitude_param=pulse_amplitude_param,
                                 length=resulting_pulse_instance_length,
-                                length_param=resulting_pulse_instance_length_param,
                                 acquire_params=acquire_params,
                                 phase=pulse_phase,
-                                phase_param=pulse_phase_param,
                                 increment_oscillator_phase=pulse_increment,
-                                increment_oscillator_phase_param=pulse_increment_oscillator_phase_param,
                                 set_oscillator_phase=pulse_set_oscillator_phase,
-                                set_oscillator_phase_param=pulse_set_oscillator_phase_param,
-                                play_pulse_parameters=None,
-                                pulse_pulse_parameters=None,
+                                play_pulse_parameters=operation_pulse_parameters,
+                                pulse_pulse_parameters=pulse_parameters,
                                 precompensation_clear=precompensation_clear,
                                 markers=markers,
+                                pulse_group=pulse_group,
                             )
                             self.add_section_signal_pulse(
                                 instance_id, signal_id, new_ssp

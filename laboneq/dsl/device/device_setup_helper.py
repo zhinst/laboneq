@@ -20,7 +20,7 @@ class DeviceSetupHelper:
             wiring_text (str): Json-like string contains wiring information.
 
         Returns:
-            status code: 200 if succeeded.
+            status_code (int): 200 if succeeded.
         """
 
         with requests.Session() as session:
@@ -38,7 +38,7 @@ class DeviceSetupHelper:
             descriptor (str): yaml-like text contains wiring information.
 
         Returns:
-            status code: 200 if succeeded.
+            status_code (int): 200 if succeeded.
         """
         res = yaml.safe_load(descriptor)
         return DeviceSetupHelper.upload_wiring(api_url, json.dumps(res, indent=4))
@@ -51,7 +51,7 @@ class DeviceSetupHelper:
             api_url (str): URL of the monitoring server. http://localhost:9005/slugname/wiring
 
         Returns:
-            status code: 200 if succeeded.
+            status_code (int): 200 if succeeded.
         """
         with requests.Session() as session:
             response = session.delete(api_url, timeout=5)
@@ -67,7 +67,8 @@ class DeviceSetupHelper:
             api_url (str): URL of the monitoring server. http://localhost:9005/slugname/wiring
 
         Returns:
-            the GET content if succeeded.
+            wiring (str):
+                the GET content if succeeded.
         """
 
         with requests.Session() as session:

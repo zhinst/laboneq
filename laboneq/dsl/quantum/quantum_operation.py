@@ -28,7 +28,7 @@ class QuantumOperation:
 
         Args:
             uid: A unique identifier for the quantum operation.
-            lookup: A dictionary of sections associated with quantum elements.
+            operation_map: A dictionary of sections associated with quantum elements.
         """
         if uid is None:
             self.uid = uuid.uuid4().hex

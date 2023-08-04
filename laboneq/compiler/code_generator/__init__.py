@@ -10,9 +10,5 @@ from laboneq.compiler.code_generator.measurement_calculator import (
     IntegrationTimes,
     MeasurementCalculator,
 )
-from laboneq.compiler.code_generator.seq_c_generator import (
-    SeqCGenerator,
-    string_sanitize,
-)
+from laboneq.compiler.code_generator.seq_c_generator import SeqCGenerator
 from laboneq.compiler.code_generator.wave_index_tracker import WaveIndexTracker
-from laboneq.compiler.experiment_access.pulse_def import PulseDef

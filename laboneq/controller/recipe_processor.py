@@ -17,6 +17,7 @@ from laboneq.controller.attribute_value_tracker import (
     DeviceAttribute,
 )
 from laboneq.controller.util import LabOneQControllerException
+from laboneq.controller.versioning import SUPPORT_PRE_V23_06, LabOneVersion
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.data.recipe import IO, Initialization, Recipe, SignalType
@@ -62,8 +63,14 @@ class AwgConfig:
     qa_signal_id: str | None = None
     command_table_match_offset: int | None = None
     source_feedback_register: int | None = None
-    zsync_bit: int | None = None
-    feedback_register_bit: int | None = None
+    readout_result_index: int | None = None
+    readout_result_nbits: int = 2
+    register_selector_index: int | None = None
+    register_selector_bitmask: int = 0b1
+
+    @property
+    def register_selector_shift(self):
+        return self.readout_result_nbits * self.register_selector_index
 
 
 AwgConfigs = Dict[AwgKey, AwgConfig]
@@ -239,7 +246,6 @@ class _ResultShapeCalculator(ExecutorBase):
         self._loop_stack: List[_LoopStackEntry] = []
         self._current_rt_uid: str = None
         self._current_rt_info: RtExecutionInfo = None
-        self._pipeline_index: int | None = None
 
     def _single_shot_axis(self) -> npt.ArrayLike:
         return np.linspace(
@@ -283,22 +289,21 @@ class _ResultShapeCalculator(ExecutorBase):
     def set_sw_param_handler(
         self, name: str, index: int, value: float, axis_name: str, values: npt.ArrayLike
     ):
-        if name == "__pipeline_index":
-            self._pipeline_index = value
-            return
         self._loop_stack[-1].axis_names.append(name if axis_name is None else axis_name)
         self._loop_stack[-1].axis_points.append(values)
 
     @contextmanager
     def for_loop_handler(self, count: int, index: int, loop_flags: LoopFlags):
-        if loop_flags & LoopFlags.PIPELINE:
+        if loop_flags.is_pipeline:
+            self._chunk_count = count
             yield
-            self._pipeline_index = None
+            self._chunk_count = None
             return
 
-        is_averaging = bool(loop_flags & LoopFlags.AVERAGE)
-        self._loop_stack.append(_LoopStackEntry(count=count, is_averaging=is_averaging))
-        if is_averaging:
+        self._loop_stack.append(
+            _LoopStackEntry(count=count, is_averaging=loop_flags.is_average)
+        )
+        if loop_flags.is_average:
             single_shot_cyclic = (
                 self._current_rt_info.averaging_mode == AveragingMode.SINGLE_SHOT
             )
@@ -360,8 +365,7 @@ def _calculate_result_shapes(
 
 
 def _calculate_awg_configs(
-    rt_execution_infos: RtExecutionInfos,
-    recipe: Recipe,
+    rt_execution_infos: RtExecutionInfos, recipe: Recipe, labone_version: LabOneVersion
 ) -> AwgConfigs:
     awg_configs: AwgConfigs = defaultdict(AwgConfig)
 
@@ -372,7 +376,7 @@ def _calculate_awg_configs(
             if signal_id in awg_config.acquire_signals
         )
 
-    def integrator_index_by_acquire_signal(signal_id: str, is_local: bool) -> int:
+    def readout_result_index_by_acquire_signal(signal_id: str, is_local: bool) -> int:
         integrator = next(
             ia for ia in recipe.integrator_allocations if ia.signal_id == signal_id
         )
@@ -382,29 +386,40 @@ def _calculate_awg_configs(
         return integrator.channels[0] * (2 if is_local else 1)
 
     for a in recipe.integrator_allocations:
-        awg_configs[AwgKey(a.device_id, a.awg)].acquire_signals.add(a.signal_id)
+        if isinstance(a.signal_id, str):
+            awg_configs[AwgKey(a.device_id, a.awg)].acquire_signals.add(a.signal_id)
+        else:
+            assert isinstance(a.signal_id, list) or isinstance(a.signal_id, tuple)
+            awg_configs[AwgKey(a.device_id, a.awg)].acquire_signals.update(a.signal_id)
 
     for initialization in recipe.initializations:
         device_id = initialization.device_uid
+
         for awg in initialization.awgs or []:
             awg_config = awg_configs[AwgKey(device_id, awg.awg)]
+
+            if (labone_version < LabOneVersion.V_23_06) and SUPPORT_PRE_V23_06:
+                awg_config.readout_result_nbits = 1
+
             awg_config.qa_signal_id = awg.qa_signal_id
             awg_config.command_table_match_offset = awg.command_table_match_offset
             awg_config.target_feedback_register = awg.feedback_register
 
-    zsync_bits_allocation: Dict[str, int] = defaultdict(int)
+    zsync_reg_selector_allocation: Dict[str, int] = defaultdict(int)
     for awg_key, awg_config in awg_configs.items():
         if awg_config.qa_signal_id is not None:
             qa_awg_key = awg_key_by_acquire_signal(awg_config.qa_signal_id)
             feedback_register = awg_configs[qa_awg_key].target_feedback_register
             is_local = feedback_register is None
-            awg_config.feedback_register_bit = integrator_index_by_acquire_signal(
+            awg_config.readout_result_index = readout_result_index_by_acquire_signal(
                 awg_config.qa_signal_id, is_local
             )
             if not is_local:
                 awg_config.source_feedback_register = feedback_register
-                awg_config.zsync_bit = zsync_bits_allocation[awg_key.device_uid]
-                zsync_bits_allocation[awg_key.device_uid] += 1
+                awg_config.register_selector_index = zsync_reg_selector_allocation[
+                    awg_key.device_uid
+                ]
+                zsync_reg_selector_allocation[awg_key.device_uid] += 1
 
     # As currently just a single RT execution per experiment is supported,
     # AWG configs are not cloned per RT execution. May need to be changed in the future.
@@ -508,6 +523,7 @@ def pre_process_compiled(
     scheduled_experiment: ScheduledExperiment,
     devices: DeviceCollection,
     execution: Statement = None,
+    labone_version: LabOneVersion = LabOneVersion.LATEST,
 ) -> RecipeData:
     recipe = scheduled_experiment.recipe
 
@@ -518,7 +534,8 @@ def pre_process_compiled(
         )
 
     result_shapes, rt_execution_infos = _calculate_result_shapes(execution)
-    awg_configs = _calculate_awg_configs(rt_execution_infos, recipe)
+
+    awg_configs = _calculate_awg_configs(rt_execution_infos, recipe, labone_version)
     attribute_value_tracker, oscillator_ids = _pre_process_attributes(recipe, devices)
 
     recipe_data = RecipeData(

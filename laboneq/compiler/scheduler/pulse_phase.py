@@ -7,6 +7,7 @@ import math
 from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.experiment_access import ExperimentDAO
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
+from laboneq.data.compilation_job import DeviceInfoType
 
 _logger = logging.getLogger(__name__)
 
@@ -47,37 +48,50 @@ def calculate_osc_phase(event_list, experiment_dao: ExperimentDAO):
             oscillator_phase_sets[signal_id] = event["time"]
 
         elif event["event_type"] in [EventType.PLAY_START, EventType.ACQUIRE_START]:
-            oscillator_phase = None
-            baseband_phase = None
-            signal_id = event["signal"]
-            signal_info = experiment_dao.signal_info(signal_id)
-            oscillator_info = experiment_dao.signal_oscillator(signal_id)
-            if oscillator_info is not None:
-                if signal_info.modulation and signal_info.device_type in [
-                    "hdawg",
-                    "shfsg",
-                ]:
-                    incremented_phase = oscillator_phase_cumulative.get(signal_id, 0.0)
-
-                    if oscillator_info.is_hardware:
-                        if signal_id in oscillator_phase_sets:
-                            raise LabOneQException(
-                                f"There are set_oscillator_phase entries for signal "
-                                f"'{signal_id}', but oscillator '{oscillator_info.uid}' "
-                                f"is a hardware oscillator. Setting absolute phase is "
-                                f"not supported for hardware oscillators."
-                            )
-                        baseband_phase = incremented_phase
-                    else:
-                        phase_reference_time = phase_reset_time
-                        if signal_id in oscillator_phase_sets:
-                            phase_reference_time = max(
-                                phase_reset_time, oscillator_phase_sets[signal_id]
-                            )
-                        oscillator_phase = (
-                            event["time"] - phase_reference_time
-                        ) * 2.0 * math.pi * event.get(
-                            "oscillator_frequency", 0.0
-                        ) + incremented_phase
-            event["oscillator_phase"] = oscillator_phase
-            event["baseband_phase"] = baseband_phase
+            signal_ids = event["signal"]
+            is_signal_list = isinstance(signal_ids, list)
+            if not is_signal_list:
+                signal_ids = [signal_ids]
+            oscillator_phases = []
+            baseband_phases = []
+            for signal_id in signal_ids:
+                oscillator_phase = None
+                baseband_phase = None
+                signal_info = experiment_dao.signal_info(signal_id)
+                oscillator_info = experiment_dao.signal_oscillator(signal_id)
+                if oscillator_info is not None:
+                    if signal_info.device.device_type in [
+                        DeviceInfoType.HDAWG,
+                        DeviceInfoType.SHFSG,
+                    ]:
+                        incremented_phase = oscillator_phase_cumulative.get(
+                            signal_id, 0.0
+                        )
+                        if oscillator_info.is_hardware:
+                            if signal_id in oscillator_phase_sets:
+                                raise LabOneQException(
+                                    f"There are set_oscillator_phase entries for signal "
+                                    f"'{signal_id}', but oscillator '{oscillator_info.uid}' "
+                                    f"is a hardware oscillator. Setting absolute phase is "
+                                    f"not supported for hardware oscillators."
+                                )
+                            baseband_phase = incremented_phase
+                        else:
+                            phase_reference_time = phase_reset_time
+                            if signal_id in oscillator_phase_sets:
+                                phase_reference_time = max(
+                                    phase_reset_time, oscillator_phase_sets[signal_id]
+                                )
+                            oscillator_phase = (
+                                event["time"] - phase_reference_time
+                            ) * 2.0 * math.pi * event.get(
+                                "oscillator_frequency", 0.0
+                            ) + incremented_phase
+                oscillator_phases.append(oscillator_phase)
+                baseband_phases.append(baseband_phase)
+            event["oscillator_phase"] = (
+                oscillator_phases if is_signal_list else oscillator_phases[0]
+            )
+            event["baseband_phase"] = (
+                baseband_phases if is_signal_list else baseband_phases[0]
+            )

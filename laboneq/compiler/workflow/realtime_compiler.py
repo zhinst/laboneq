@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Set, Tuple
 
 from laboneq._observability.tracing import trace
 from laboneq.compiler import CodeGenerator, CompilerSettings
@@ -40,6 +40,7 @@ class RealtimeCompilerOutput:
     command_tables: Dict[AwgKey, Dict[str, Any]]
     pulse_map: Dict[str, PulseMapEntry]
     schedule: Dict[str, Any]
+    multistate_signal_groups: Set[Tuple[str, ...]]
 
 
 class RealtimeCompiler:
@@ -82,6 +83,7 @@ class RealtimeCompiler:
         events = self._scheduler.event_timing(expand_loops=False)
 
         code_generator.gen_acquire_map(events)
+        code_generator.find_multistate_signal_groups(events)
         code_generator.gen_seq_c(
             events,
             {k: self._experiment_dao.pulse(k) for k in self._experiment_dao.pulses()},
@@ -109,6 +111,7 @@ class RealtimeCompiler:
             command_tables=self._code_generator.command_tables(),
             pulse_map=self._code_generator.pulse_map(),
             schedule=self.prepare_schedule(),
+            multistate_signal_groups=self._code_generator.multistate_signal_groups(),
         )
 
         return compiler_output
@@ -146,7 +149,7 @@ class RealtimeCompiler:
             *self._experiment_dao.all_section_children(root_section),
         ]:
             section_info = self._experiment_dao.section_info(section)
-            section_display_name = section_info.section_display_name
+            section_display_name = section_info.uid
             section_signals_with_children[section] = list(
                 self._experiment_dao.section_signals_with_children(section)
             )
@@ -158,8 +161,8 @@ class RealtimeCompiler:
         sampling_rate_tuples = []
         for signal_id in self._experiment_dao.signals():
             signal_info = self._experiment_dao.signal_info(signal_id)
-            device_id = signal_info.device_id
-            device_type = signal_info.device_type
+            device_id = signal_info.device.uid
+            device_type = signal_info.device.device_type.value
             sampling_rate_tuples.append(
                 (
                     device_type,

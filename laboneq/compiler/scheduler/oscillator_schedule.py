@@ -49,6 +49,7 @@ class OscillatorFrequencyStepSchedule(IntervalSchedule):
                         "section_name": self.section,
                         "device_id": osc.device,
                         "signal": osc.signal,
+                        "oscillator_id": osc.id,
                         "id": start_id,
                         "chain_element_id": start_id,
                     },

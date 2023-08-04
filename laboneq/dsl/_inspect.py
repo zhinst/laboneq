@@ -47,7 +47,7 @@ class ExperimentInspector:
             raise NotImplementedError(
                 "Execution time can only be inspected for CompiledExperiment objects."
             )
-        exec_time = self._compiled_exp.recipe["experiment"]["total_execution_time"]
+        exec_time = self._compiled_exp.recipe.total_execution_time
 
         return exec_time
 

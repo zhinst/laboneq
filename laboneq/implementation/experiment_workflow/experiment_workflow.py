@@ -132,12 +132,8 @@ class ExperimentWorkflow(ExperimentAPI):
         """
         Create a device setup from a descriptor.
         """
-
         return DeviceSetupGenerator.from_descriptor(
-            yaml_text=yaml_text,
-            server_host=server_host,
-            server_port=server_port,
-            setup_name=setup_name,
+            yaml_text, server_host, server_port, setup_name
         )
 
     def set_current_setup(self, setup: Setup):

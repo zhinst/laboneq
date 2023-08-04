@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum, auto
+from enum import Enum
 
 from numpy.typing import ArrayLike
 
@@ -14,19 +14,19 @@ from laboneq.data.parameter import Parameter
 
 
 class CarrierType(EnumReprMixin, Enum):
-    IF = auto()
-    RF = auto()
+    IF = "if"
+    RF = "rf"
 
 
 class ModulationType(EnumReprMixin, Enum):
-    AUTO = auto()
-    HARDWARE = auto()
-    SOFTWARE = auto()
+    AUTO = "auto"
+    HARDWARE = "hardware"
+    SOFTWARE = "software"
 
 
 class PortMode(EnumReprMixin, Enum):
-    LF = auto()
-    RF = auto()
+    LF = "lf"
+    RF = "rf"
 
 
 @dataclass
@@ -37,7 +37,7 @@ class BounceCompensation:
 
 @dataclass
 class Calibration:
-    calibration_items: dict[str, SignalCalibration] = field(default_factory=dict)
+    items: dict[str, SignalCalibration] = field(default_factory=dict)
 
 
 @dataclass
@@ -45,11 +45,6 @@ class MixerCalibration:
     uid: str = None
     voltage_offsets: list[float] | None = None
     correction_matrix: list[list[float]] | None = None
-
-
-@dataclass
-class Signal:
-    uid: str = None
 
 
 @dataclass

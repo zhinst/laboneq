@@ -220,14 +220,14 @@ class DaqWrapper(ZiApiWrapperBase):
         path = "/zi/about/version"
         version_str = self.batch_get([DaqNodeGetAction(self, path)])[path]
         try:
-            self._dataserver_version = LabOneVersion(version_str)
-        except ValueError:
-            err_msg = f"Version {version_str} is not supported by LabOne Q."
+            self._dataserver_version = LabOneVersion.cast_if_supported(version_str)
+        except ValueError as e:
+            err_msg = e.args[0]
             if server_qualifier.ignore_version_mismatch:
                 _logger.warning("Ignoring that %s", err_msg)
                 self._dataserver_version = LabOneVersion.LATEST
             else:
-                raise LabOneQControllerException(err_msg)
+                raise LabOneQControllerException(err_msg) from e
 
         [major, minor] = zi.__version__.split(".")[0:2]
         zi_python_version = f"{major}.{minor}"

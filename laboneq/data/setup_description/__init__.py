@@ -4,39 +4,44 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum, auto
-from typing import Any, Dict, List
+from enum import Enum
+from typing import Dict, List
 
 from laboneq.data import EnumReprMixin
 from laboneq.data.calibration import Calibration
 
 
-#
-# Enums
-#
 class IODirection(EnumReprMixin, Enum):
-    IN = auto()
-    OUT = auto()
+    IN = "in"
+    OUT = "out"
 
 
 class ReferenceClockSource(EnumReprMixin, Enum):
-    EXTERNAL = auto()
-    INTERNAL = auto()
+    EXTERNAL = "external"
+    INTERNAL = "internal"
 
 
 class DeviceType(EnumReprMixin, Enum):
-    HDAWG = auto()
-    NonQC = auto()
-    PQSC = auto()
-    SHFQA = auto()
-    SHFSG = auto()
-    UHFQA = auto()
-    SHFQC = auto()
+    """Zurich Instruments device type.
+
+    `UNMANAGED` is a Zurich Instruments device which is not directly controlled
+    by LabOne Q, but which can still be controlled through LabOne Q's interface
+    with `zhinst.toolkit`.
+    """
+
+    HDAWG = "hdawg"
+    PQSC = "pqsc"
+    SHFQA = "shfqa"
+    SHFSG = "shfsg"
+    UHFQA = "uhfqa"
+    SHFQC = "shfqc"
+    SHFPPC = "shfppc"
+    UNMANAGED = "unmanaged"
 
 
 class PhysicalChannelType(EnumReprMixin, Enum):
-    IQ_CHANNEL = auto()
-    RF_CHANNEL = auto()
+    IQ_CHANNEL = "iq_channel"
+    RF_CHANNEL = "rf_channel"
 
 
 class PortType(EnumReprMixin, Enum):
@@ -45,23 +50,19 @@ class PortType(EnumReprMixin, Enum):
     ZSYNC = "ZSYNC"
 
 
-#
-# Data Classes
-#
-
-
-@dataclass
+@dataclass(unsafe_hash=True)
 class LogicalSignal:
     name: str
-    group: str  # Needed for referencing. TODO(MH): Remove
+    group: str  # Needed for referencing
 
 
-@dataclass
+@dataclass(unsafe_hash=True)
 class PhysicalChannel:
     name: str
+    group: str
     type: PhysicalChannelType = None
     direction: IODirection = None
-    ports: List[Port] = None
+    ports: List[Port] = field(default_factory=list)
 
 
 @dataclass
@@ -80,29 +81,34 @@ class ReferenceClock:
 
 @dataclass
 class Port:
+    """Instrument port."""
+
     path: str
     type: PortType
 
 
 @dataclass
 class Server:
+    """LabOne Dataserver."""
+
+    host: str
+    port: int
+    api_level: int = 6
     uid: str = None
-    api_level: int = None
-    host: str = None
     leader_uid: str = None
-    port: int = None
 
 
 @dataclass
 class Instrument:
-    uid: str = None
-    interface: str = None
-    reference_clock: ReferenceClock = ReferenceClock()
+    uid: str
+    address: str
+    device_type: DeviceType
+    interface: str = "1GbE"
+    reference_clock: ReferenceClock = field(default_factory=ReferenceClock)
     ports: List[Port] = field(default_factory=list)
     physical_channels: List[PhysicalChannel] = field(default_factory=list)
     connections: List[ChannelMapEntry] = field(default_factory=list)
-    address: str = None
-    device_type: DeviceType = None
+    # For ZI devices, the address is the device serial number.
     server: Server = None
 
 
@@ -114,6 +120,12 @@ class LogicalSignalGroup:
 
 @dataclass
 class SetupInternalConnection:
+    """Connections between ports on two devices.
+
+    That is, ports that are connected to each other, rather
+    than something to be controlled or measured.
+    """
+
     from_instrument: Instrument
     from_port: Port
     to_instrument: Instrument

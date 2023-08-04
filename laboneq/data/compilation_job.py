@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Optional, Union
 
 from numpy.typing import ArrayLike
 
@@ -35,8 +34,9 @@ class DeviceInfoType(EnumReprMixin, Enum):
     HDAWG = "hdawg"
     SHFQA = "shfqa"
     SHFSG = "shfsg"
-    SHFQC = "shfqc"
     PQSC = "pqsc"
+    SHFPPC = "shfppc"
+    NONQC = "nonqc"
 
 
 class ReferenceClockSourceInfo(EnumReprMixin, Enum):
@@ -45,9 +45,9 @@ class ReferenceClockSourceInfo(EnumReprMixin, Enum):
 
 
 class SignalInfoType(EnumReprMixin, Enum):
-    IQ = auto()
-    RF = auto()
-    INTEGRATION = auto()
+    IQ = "iq"
+    RF = "single"
+    INTEGRATION = "integration"
 
 
 #
@@ -65,12 +65,19 @@ class ParameterInfo:
 
 
 @dataclass
+class FollowerInfo:
+    device: DeviceInfo
+    port: int
+
+
+@dataclass
 class DeviceInfo:
     uid: str = None
     device_type: DeviceInfoType = None
     reference_clock: float = None
-    reference_clock_source: ReferenceClockSourceInfo = None
+    reference_clock_source: ReferenceClockSourceInfo | None = None
     is_qc: bool | None = None
+    followers: list[FollowerInfo] = field(default_factory=list)
 
 
 @dataclass
@@ -85,13 +92,12 @@ class PulseDef:
     uid: str = None
     function: str | None = None
     length: float = None
-    amplitude: float = None
-    phase: float = None
+    amplitude: float = 1.0
+    phase: float = 0.0
     can_compress: bool = False
     increment_oscillator_phase: float = None
     set_oscillator_phase: float = None
-    samples: ArrayLike = field(default_factory=list)
-    pulse_parameters: dict | None = None
+    samples: ArrayLike | None = None
 
 
 @dataclass
@@ -99,29 +105,38 @@ class SectionInfo:
     uid: str = None
     length: float = None
     alignment: SectionAlignment | None = None
+    on_system_grid: bool = None
+
+    children: list[SectionInfo] = field(default_factory=list)
+    pulses: list[SectionSignalPulse] = field(default_factory=list)
+
+    signals: list[SignalInfo] = field(default_factory=list)
+
     handle: str | None = None
     state: int | None = None
     local: bool | None = None
+    user_register: int | None = None
+
     count: int = None
     chunk_count: int = 1
     execution_type: ExecutionType | None = None
     averaging_mode: AveragingMode | None = None
-    acquisition_type: AcquisitionType | None = None
     repetition_mode: RepetitionMode | None = None
     repetition_time: float | None = None
+
+    acquisition_type: AcquisitionType | None = None
     reset_oscillator_phase: bool = False
-    children: list[SectionInfo] = field(default_factory=list)
-    pulses: list[SectionSignalPulse] = field(default_factory=list)
-    on_system_grid: bool = None
-    trigger: list = field(default_factory=list)
+    triggers: list = field(default_factory=list)
     parameters: list[ParameterInfo] = field(default_factory=list)
     play_after: list[str] = field(default_factory=list)
 
 
 @dataclass
 class MixerCalibrationInfo:
-    voltage_offsets: tuple[float, float] = (0.0, 0.0)
-    correction_matrix: tuple[tuple[float, float], tuple[float, float]] = (
+    voltage_offsets: tuple[float, float] | list[float] = (0.0, 0.0)
+    correction_matrix: tuple[tuple[float, float], tuple[float, float]] | list[
+        list[float]
+    ] = (
         (1.0, 0.0),
         (0.0, 1.0),
     )
@@ -134,6 +149,10 @@ class PrecompensationInfo:
     bounce: BounceCompensation | None = None
     FIR: FIRCompensation | None = None
 
+    computed_delay_samples: int | None = None
+    computed_port_delay: float | None = None
+    computed_delay_signal: float | None = None
+
 
 @dataclass
 class SignalRange:
@@ -143,6 +162,7 @@ class SignalRange:
 
 @dataclass
 class AmplifierPumpInfo:
+    device: DeviceInfo | None = None
     pump_freq: float | ParameterInfo | None = None
     pump_power: float | ParameterInfo | None = None
     cancellation: bool = True
@@ -150,6 +170,7 @@ class AmplifierPumpInfo:
     use_probe: bool = False
     probe_frequency: float | ParameterInfo | None = None
     probe_power: float | ParameterInfo | None = None
+    channel: int | None = None
 
 
 @dataclass
@@ -174,18 +195,20 @@ class SignalInfo:
 
 @dataclass
 class SectionSignalPulse:
-    section: SectionInfo = None
     signal: SignalInfo = None
-    pulse_def: PulseDef | None = None
+    pulse: PulseDef | None = None
     length: float | ParameterInfo | None = None
+    offset: float | ParameterInfo | None = None
     amplitude: float | ParameterInfo | None = None
     phase: float | ParameterInfo | None = None
     increment_oscillator_phase: float | ParameterInfo | None = None
     set_oscillator_phase: float | ParameterInfo | None = None
     precompensation_clear: bool | None = None
-    pulse_parameters: dict = field(default_factory=dict)
+    play_pulse_parameters: dict = field(default_factory=dict)
+    pulse_pulse_parameters: dict = field(default_factory=dict)
     acquire_params: AcquireInfo = None
-    marker: list[Marker] | None = None
+    markers: list[Marker] = field(default_factory=list)
+    pulse_group: str | None = None
 
 
 @dataclass

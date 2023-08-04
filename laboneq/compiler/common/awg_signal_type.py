@@ -11,6 +11,7 @@ class AWGSignalType(Enum):
     DOUBLE = "double"  # Two independent channels
     IQ = "iq"  # Two channels form an I/Q signal
     MULTI = "multi"  # Multiple logical channels mixed
+    # todo: "integration" missing here?
 
     def __repr__(self):
         cls_name = self.__class__.__name__

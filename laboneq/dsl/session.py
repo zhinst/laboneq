@@ -41,21 +41,24 @@ class ConnectionState:
 class Session:
     """This Session class represents the main endpoint for the user interaction with the QCCS system.
 
-    The session holds
-        * the wiring definition of the devices
-        * the experiment definition that should be run on the devices
-        * the calibration of the devices for experiment
-        * the compiled experiment
-        * the result of the executed experiment
+    The session holds:
 
-    The Session is a stateful object that hold all of the above. The expected steps to interact with the session are:
-        * initial state (construction)
-        * setting the device setup (optionally during construction)
-        * (optional) setting the calibration of the devices
-        * connecting to the devices (or the emulator)
-        * compiling the experiment
-        * running the experiment
-        * accessing the results of the last run experiment
+    * the wiring definition of the devices
+    * the experiment definition that should be run on the devices
+    * the calibration of the devices for experiment
+    * the compiled experiment
+    * the result of the executed experiment
+
+    The Session is a stateful object that hold all of the above.
+    The expected steps to interact with the session are:
+
+    * initial state (construction)
+    * setting the device setup (optionally during construction)
+    * (optional) setting the calibration of the devices
+    * connecting to the devices (or the emulator)
+    * compiling the experiment
+    * running the experiment
+    * accessing the results of the last run experiment
 
     The session is serializable in every state.
     """
@@ -64,8 +67,8 @@ class Session:
         self,
         device_setup: DeviceSetup = None,
         log_level: int = logging.INFO,
-        performance_log=False,
-        configure_logging=True,
+        performance_log: bool = False,
+        configure_logging: bool = True,
         _last_results=None,
         compiled_experiment=None,
         experiment=None,
@@ -83,9 +86,9 @@ class Session:
                 When True, the system creates a separate logfile containing logs aimed to analyze system performance.
             configure_logging: Whether to configure logger. Can be disabled for custom logging use cases.
 
-        .. versionchanged:: 2.0
-            Removed `pass_v3_to_compiler` argument.
-            Removed `max_simulation_time` instance variable.
+        !!! version-changed "Changed in version 2.0"
+            - Removed `pass_v3_to_compiler` argument.
+            - Removed `max_simulation_time` instance variable.
         """
         self._device_setup = device_setup if device_setup else DeviceSetup()
         self._controller: Controller = None
@@ -115,10 +118,12 @@ class Session:
 
         Usage:
 
+        ``` pycon
             >>> session.connect()
             >>> session.devices["device_hdawg"].awgs[0].outputs[0].amplitude(1)
             >>> session.devices["DEV1234"].awgs[0].outputs[0].amplitude()
             1
+        ```
         """
         return self._toolkit_devices
 
@@ -194,7 +199,7 @@ class Session:
 
                 It is suggested to keep the versions aligned and up-to-date to avoid any unexpected behaviour.
 
-                .. versionchanged:: 2.4
+                !!! version-changed "Changed in version 2.4"
                     Renamed `ignore_lab_one_version_error` to `ignore_version_mismatch` and include
                     LabOne and device firmware version compatibility check.
 
@@ -274,13 +279,12 @@ class Session:
             experiment: Experiment instance that should be compiled.
             compiler_settings: Extra options passed to the compiler.
 
-        .. versionchanged:: 2.4
-
+        !!! version-changed "Changed in version 2.4"
             Raises error if `Session` is not connected.
 
-        .. versionchanged:: 2.0
-
-            Removed `do_simulation` argument. Use :class:`~.OutputSimulator` instead.
+        !!! version-changed "Changed in version 2.0"
+            Removed `do_simulation` argument.
+            Use [OutputSimulator][laboneq.simulator.output_simulator.OutputSimulator] instead.
         """
         self._assert_connected(fail=True)
         self._experiment_definition = experiment
@@ -311,9 +315,9 @@ class Session:
         If an experiment is specified, the provided experiment is assigned to the
         internal experiment of the session.
 
-        .. versionchanged:: 2.0
-
-            Removed `do_simulation` argument. Use :class:`~.OutputSimulator` instead.
+        !!! version-changed "Changed in version 2.0"
+            Removed `do_simulation` argument.
+            Use [OutputSimulator][laboneq.simulator.output_simulator.OutputSimulator] instead.
 
         Args:
             experiment: Optional. Experiment instance that should be
@@ -325,8 +329,7 @@ class Session:
             A `Results` object in case of success. `None` if the session is not
             connected.
 
-        .. versionchanged:: 2.4
-
+        !!! version-changed "Changed in version 2.4"
             Raises error if `Session` is not connected.
         """
         self._assert_connected(fail=True)
@@ -408,10 +411,13 @@ class Session:
     @property
     def results(self) -> Results:
         """
-        Object holding the result of the last experiment execution. Attention! This accessor is provided for better
-        performance, unlike 'get_result' it doesn't make a copy, but instead returns the reference to the live
-        result object being updated during the session run. Care must be taken for not modifying this object from
-        the user code, otherwise behavior is undefined.
+        Object holding the result of the last experiment execution.
+
+        !!! Attention
+            This accessor is provided for better
+            performance, unlike `get_result` it doesn't make a copy, but instead returns the reference to the live
+            result object being updated during the session run. Care must be taken for not modifying this object from
+            the user code, otherwise behavior is undefined.
         """
         return self._last_results
 
@@ -601,8 +607,9 @@ class Session:
         """Loads a compiled experiment from a given file into the session.
 
         Args:
-            filename (str): Filename (full path) of the experiment should be loaded
-            into the session.
+            filename (str):
+                Filename (full path) of the experiment should be loaded
+                into the session.
         """
 
         self._compiled_experiment = CompiledExperiment.load(filename)
@@ -611,8 +618,9 @@ class Session:
         """Saves the compiled experiment from the session into a given file.
 
         Args:
-            filename (str): Filename (full path) of the file where the experiment
-            should be stored in.
+            filename (str):
+                Filename (full path) of the file where the experiment
+                should be stored in.
         """
         if self._compiled_experiment is None:
             self.logger.info(

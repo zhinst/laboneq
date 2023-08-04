@@ -44,6 +44,7 @@ from laboneq.controller.recipe_processor import (
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
+from laboneq.core.utilities.string_sanitize import string_sanitize
 from laboneq.data.recipe import Initialization, IntegratorAllocation, OscillatorParam
 from laboneq.data.scheduled_experiment import ScheduledExperiment
 
@@ -737,7 +738,7 @@ class DeviceZI(ABC):
 
     def prepare_seqc(
         self, scheduled_experiment: ScheduledExperiment, seqc_ref: str
-    ) -> str:
+    ) -> str | None:
         if seqc_ref is None:
             return None
 
@@ -758,6 +759,16 @@ class DeviceZI(ABC):
                         seqc_lines[
                             i
                         ] = f"{m.group(1)}{m.group(2)}{m.group(3)}{osc.index}{m.group(4)}"
+
+        # Substitute oscillator index by actual assignment
+        for osc in self._allocated_oscs:
+            osc_index_symbol = string_sanitize(osc.id)
+            pattern = re.compile(rf"const {osc_index_symbol} = \w+;")
+            for i, l in enumerate(seqc_lines):
+                if not pattern.match(l):
+                    continue
+                seqc_lines[i] = f"const {osc_index_symbol} = {osc.index};  // final"
+
         seqc_text = "\n".join(seqc_lines)
 
         return seqc_text

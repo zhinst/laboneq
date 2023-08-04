@@ -19,13 +19,14 @@ from laboneq.dsl.parameter import Parameter
 @dataclass(init=False, order=True)
 class SignalCalibration(Observable):
     """Dataclass containing all calibration parameters
-    and settings related to a :class:`~.LogicalSignal`.
+    and settings related to a
+    [LogicalSignal][laboneq.dsl.device.io_units.logical_signal.LogicalSignal].
     """
 
-    #: The oscillator assigned to the :class:`~.LogicalSignal`
+    #: The oscillator assigned to the [LogicalSignal][laboneq.dsl.device.io_units.logical_signal.LogicalSignal]
     #: - determines the frequency and type of modulation for any pulses played back on this line.
     oscillator: Oscillator | None
-    #: The local oscillator assigned to the :class:`~.LogicalSignal`
+    #: The local oscillator assigned to the [LogicalSignal][laboneq.dsl.device.io_units.logical_signal.LogicalSignal]
     #: - sets the center frequency of the playback - only relevant on SHFSG, SHFQA and SHFQC
     local_oscillator: Oscillator | None
     #: Settings to enable the optional mixer calibration correction

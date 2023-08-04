@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from laboneq import dsl
+from laboneq._utils import id_generator
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import SectionAlignment
 from laboneq.core.validators import validating_allowed_values
@@ -25,8 +26,7 @@ from .delay import Delay
 from .operation import Operation
 from .play_pulse import PlayPulse
 from .reserve import Reserve
-from .set import Set
-from .utils import id_generator
+from .set_node import SetNode
 
 if TYPE_CHECKING:
     from .. import Parameter
@@ -40,7 +40,7 @@ class Section:
     at the same time). Operations within a section can be aligned in various ways (left, right). Sections can have a offset
     and/or a predefined length, and they can be specified to play after another section.
 
-    .. versionchanged:: 2.0.0
+    !!! version-changed "Changed in version 2.0.0"
         Removed `offset` member variable.
     """
 
@@ -65,18 +65,19 @@ class Section:
         default_factory=list
     )
 
-    #: Optional trigger pulses to play during this section. See :meth:`~.Experiment.section`.
+    #: Optional trigger pulses to play during this section.
+    #: See [Experiment.section][laboneq.dsl.experiment.experiment.Experiment.section].
     trigger: Dict[str, Dict] = field(default_factory=dict)
 
     #: Whether to escalate to the system grid even if tighter alignment is possible.
-    #: See :meth:`~.Experiment.section`.
+    #: See [Experiment.section][laboneq.dsl.experiment.experiment.Experiment.section].
     on_system_grid: Optional[bool] = field(default=False)
 
     def __post_init__(self):
         if self.uid is None:
             self.uid = id_generator("s")
 
-    def add(self, section: Union[Section, Operation, Set]):
+    def add(self, section: Union[Section, Operation, SetNode]):
         """Add a subsection or operation to the section.
 
         Args:
@@ -85,25 +86,26 @@ class Section:
         self.children.append(section)
 
     @property
-    def sections(self) -> Tuple[Section]:
+    def sections(self) -> Tuple[Section, ...]:
         """A list of subsections of this section"""
         return tuple([s for s in self.children if isinstance(s, Section)])
 
     @property
-    def operations(self) -> Tuple[Operation]:
+    def operations(self) -> Tuple[Operation, ...]:
         """A list of operations in the section.
 
-        Note that there may be other children of a section which are not operations but subsections."""
+        Note that there may be other children of a section which are not operations but subsections.
+        """
         return tuple([s for s in self.children if isinstance(s, Operation)])
 
-    def set(self, path: str, value: Any):
+    def set_node(self, path: str, value: Any):
         """Set the value of an instrument node.
 
         Args:
             path: Path to the node whose value should be set.
             value: Value that should be set.
         """
-        self.add(Set(path=path, value=value))
+        self.add(SetNode(path=path, value=value))
 
     def play(
         self,
@@ -157,11 +159,11 @@ class Section:
 
     def acquire(
         self,
-        signal: str,
+        signal: str | list[str],
         handle: str,
-        kernel: Pulse = None,
-        length: float = None,
-        pulse_parameters: Optional[Dict[str, Any]] = None,
+        kernel: Pulse | list[Pulse] | None = None,
+        length: float | None = None,
+        pulse_parameters: dict[str, Any] | list[dict[str, Any] | None] | None = None,
     ):
         """Acquisition of results of a signal.
 
@@ -184,10 +186,12 @@ class Section:
 
     def measure(
         self,
-        acquire_signal: str,
+        acquire_signal: str | List[str],
         handle: str,
-        integration_kernel: Optional[Pulse] = None,
-        integration_kernel_parameters: Optional[Dict[str, Any]] = None,
+        integration_kernel: Optional[Pulse | list[Pulse]] = None,
+        integration_kernel_parameters: Optional[
+            Dict[str, Any] | List[Dict[str, Any]]
+        ] = None,
         integration_length: Optional[float] = None,
         measure_signal: Optional[str] = None,
         measure_pulse: Optional[Pulse] = None,
@@ -225,8 +229,14 @@ class Section:
             acquire_delay: An optional float that specifies the delay between the acquisition and the measurement.
             reset_delay: An optional float that specifies the delay after the acquisition to allow for state relaxation or signal processing.
         """
-        if not isinstance(acquire_signal, str):
-            raise TypeError("`acquire_signal` must be a string.")
+        if not (
+            isinstance(acquire_signal, str)
+            or (
+                isinstance(acquire_signal, list)
+                and all(isinstance(s, str) for s in acquire_signal)
+            )
+        ):
+            raise TypeError("`acquire_signal` must be a string or a list of strings.")
 
         if measure_signal is None:
             self.acquire(
@@ -286,7 +296,7 @@ class Section:
 
         Args:
             func_name (Union[str, Callable]): Function that should be called.
-            kwargs: Arguments of the function call.
+            kwargs (dict): Arguments of the function call.
         """
         self.add(Call(func_name=func_name, **kwargs))
 
@@ -317,7 +327,8 @@ class AcquireLoopRt(Section):
     execution_type: ExecutionType = field(default=ExecutionType.REAL_TIME)
     #: Repetition method. One of fastest, constant and auto.
     repetition_mode: RepetitionMode = field(default=RepetitionMode.FASTEST)
-    #: The repetition time, when :py:attr:`repetition_mode` is :py:attr:`~.RepetitionMode.CONSTANT`
+    #: The repetition time, when `repetition_mode` is
+    #: [RepetitionMode.CONSTANT][laboneq.core.types.enums.repetition_mode.RepetitionMode.CONSTANT].
     repetition_time: float = field(default=None)
     #: When True, reset all oscillators at the start of every step.
     reset_oscillator_phase: bool = field(default=False)

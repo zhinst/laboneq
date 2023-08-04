@@ -214,15 +214,17 @@ class QuantumElement(ABC):
 
     def experiment_signals(
         self,
-        with_types=False,
-        with_calibration=False,
+        with_types: bool = False,
+        with_calibration: bool = False,
     ) -> Union[List[ExperimentSignal], List[Tuple[SignalType, ExperimentSignal]]]:
         """Experiment signals of the quantum element.
 
         Args:
-            with_types: When true, return a list of tuples which consist of a mapped logical signal
-               type and an experiment signal. Otherwise, just return the experiment signals.
-            with_calibration: Apply the qubit's calibration to the ExperimentSignal.
+            with_types:
+                When true, return a list of tuples which consist of a mapped logical signal
+                type and an experiment signal. Otherwise, just return the experiment signals.
+            with_calibration:
+                Apply the qubit's calibration to the ExperimentSignal.
         """
 
         if not with_calibration:

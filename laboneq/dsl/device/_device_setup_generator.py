@@ -356,23 +356,6 @@ class _UHFQAProcessor(_ProcessorBase):
                     elif signal_type_keyword == T_RF_SIGNAL:
                         raise LabOneQException(f"RF signal not supported on {uid}.")
 
-            device_connections.extend(
-                [
-                    Connection(
-                        local_port="I_measured",
-                        remote_path="$RESULTS",
-                        remote_port="0",
-                        signal_type=IOSignalType.I,
-                    ),
-                    Connection(
-                        local_port="Q_measured",
-                        remote_path="$RESULTS",
-                        remote_port="1",
-                        signal_type=IOSignalType.Q,
-                    ),
-                ]
-            )
-
         return UHFQA(
             **_skip_nones(
                 server_uid=server_finder(uid),
@@ -503,18 +486,6 @@ class _SHFQAProcessor(_ProcessorBase):
                         )
                 elif signal_type_keyword == T_RF_SIGNAL:
                     raise LabOneQException(f"RF signal not supported on {uid}.")
-
-            if len(device_connections) > 0:
-                device_connections.extend(
-                    [
-                        Connection(
-                            local_port="IQ_measured",
-                            remote_path="$RESULTS",
-                            remote_port="0",
-                            signal_type=IOSignalType.IQ,
-                        )
-                    ]
-                )
 
         if len(device_connections) == 0:
             return None
@@ -994,7 +965,6 @@ def _path_to_signal(path):
 def _create_physical_channel(
     ports: List[str], signal_type_token: str, device_id, physical_signals
 ) -> Optional[PhysicalChannel]:
-
     if signal_type_token in (T_IQ_SIGNAL, T_ACQUIRE_SIGNAL):
         channel_type = PhysicalChannelType.IQ_CHANNEL
     elif signal_type_token == T_RF_SIGNAL:
@@ -1254,7 +1224,6 @@ class _DeviceSetupGenerator:
             )
             for device, channels in physical_signals.items()
         }
-
         device_setup_constructor_args = {
             "uid": setup_name,
             "servers": {server.uid: server for server, _ in servers},

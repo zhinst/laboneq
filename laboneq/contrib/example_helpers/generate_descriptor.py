@@ -35,6 +35,7 @@ def generate_descriptor(
     filename="yaml_descriptor",
     get_zsync=False,
     get_dio=False,
+    dummy_dio: dict = None,  # {"DEV8XX0":"DEV2XX0"}
     ip_address: str = "localhost",
 ):
     """A function to generate a descriptor given a list of devices based on wiring assumptions.
@@ -87,6 +88,10 @@ def generate_descriptor(
             listed devices to determine the connections of the ZSync cables.
         get_dio: If True, starts a Session to determine the connections of HDAWG
             to UHFQA instruments via DIO cables.
+        dummy_dio: Allows the user to specify a dictionary with a DIO connection
+            without querying the instruments with the HDAWG as the key and UHFQA as
+            the value
+            (e.g. `{"DEV8XX0": "DEV2XX0"}`).
         ip_address: The IP address needed to connect to the instruments if using
             get_zsync or get_dio.
 
@@ -289,6 +294,9 @@ for how to set them up without a PQSC.
     ):
         print("Get DIO not supported with SHF Instruments.")
         return
+    elif get_dio and dummy_dio:
+        print("Can't use get_dio and dummy_dio together!")
+        return
 
     # Create instrument dictionary
     def generate_instrument_list(instrument, instrument_name):
@@ -481,7 +489,7 @@ for how to set them up without a PQSC.
                 sig_dict.append(
                     {
                         "iq_signal": f"q{i}/drive_line",
-                        "ports": f"[SIGOUTS/{i_hd_ch_8}, SIGOUTS/{i_hd_ch_8+1}]",
+                        "ports": [f"SIGOUTS/{i_hd_ch_8}", f"SIGOUTS/{i_hd_ch_8+1}"],
                     }
                 )
                 i_hd_ch_8 += 2
@@ -500,7 +508,7 @@ for how to set them up without a PQSC.
                 sig_dict.append(
                     {
                         "iq_signal": f"q{i}/drive_line",
-                        "ports": f"[SIGOUTS/{i_hd_ch_4}, SIGOUTS/{i_hd_ch_4+1}]",
+                        "ports": [f"SIGOUTS/{i_hd_ch_4}", f"SIGOUTS/{i_hd_ch_4+1}"],
                     }
                 )
                 i_hd_ch_4 += 2
@@ -779,13 +787,12 @@ for how to set them up without a PQSC.
                 sig_dict.append(
                     {
                         "iq_signal": f"q{i}/measure_line",
-                        "ports": f"[SIGOUTS/{i_uhfqa_ch}, SIGOUTS/{i_uhfqa_ch+1}]",
+                        "ports": [f"SIGOUTS/{i_uhfqa_ch}", f"SIGOUTS/{i_uhfqa_ch+1}"],
                     }
                 )
                 sig_dict.append(
                     {
                         "acquire_signal": f"q{i}/acquire_line",
-                        "ports": f"[SIGINS/{i_uhfqa_ch},SIGINS/{i_uhfqa_ch+1}]",
                     }
                 )
                 i_uhfqa_ch += 2
@@ -952,13 +959,12 @@ for how to set them up without a PQSC.
                 sig_dict.append(
                     {
                         "iq_signal": f"q{i}/measure_line",
-                        "ports": f"[SIGOUTS/{i_uhfqa_ch}, SIGOUTS/{i_uhfqa_ch+1}]",
+                        "ports": [f"SIGOUTS/{i_uhfqa_ch}", f"SIGOUTS/{i_uhfqa_ch+1}"],
                     }
                 )
                 sig_dict.append(
                     {
                         "acquire_signal": f"q{i}/acquire_line",
-                        "ports": f"[SIGINS/{i_uhfqa_ch},SIGINS/{i_uhfqa_ch+1}]",
                     }
                 )
                 current_qubit += 1
@@ -1058,6 +1064,28 @@ for how to set them up without a PQSC.
             session.disconnect_device(pqsc[0])
             for device in all_list:
                 session.disconnect_device(device)
+
+    if hdawg_8 is not None and uhfqa is not None and dummy_dio:
+        for hd in hdawg_8:
+            sig_dict = signal_and_port_dict.setdefault(f"HDAWG_{hd}", [])
+            if hd in str(dummy_dio):
+                sig_dict.append(
+                    {
+                        "to": f"UHFQA_{dummy_dio[hd]}",
+                        "port": "DIOS/0",
+                    }
+                )
+
+    if hdawg_4 is not None and uhfqa is not None and dummy_dio:
+        for hd in hdawg_4:
+            sig_dict = signal_and_port_dict.setdefault(f"HDAWG_{hd}", [])
+            if hd in str(dummy_dio):
+                sig_dict.append(
+                    {
+                        "to": f"UHFQA_{dummy_dio[hd]}",
+                        "port": "DIOS/0",
+                    }
+                )
 
     clean_connections_dict = {
         "connections": {k: v for k, v in signal_and_port_dict.items() if v is not None}

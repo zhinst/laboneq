@@ -11,8 +11,8 @@ from typing import Any, Dict, FrozenSet, Optional, Tuple
 import numpy as np
 from orjson import orjson
 
-from laboneq.compiler.code_generator.seq_c_generator import string_sanitize
 from laboneq.compiler.code_generator.utils import normalize_phase
+from laboneq.core.utilities.string_sanitize import string_sanitize
 
 
 @dataclass(unsafe_hash=True)

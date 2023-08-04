@@ -7,10 +7,10 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set
 
+from laboneq._utils import flatten
 from laboneq.compiler.code_generator.seq_c_generator import (
     SeqCGenerator,
     merge_generators,
-    string_sanitize,
 )
 from laboneq.compiler.code_generator.signatures import PlaybackSignature
 from laboneq.compiler.common.awg_sampled_event import (
@@ -22,6 +22,7 @@ from laboneq.compiler.common.compiler_settings import EXECUTETABLEENTRY_LATENCY
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import AcquisitionType
+from laboneq.core.utilities.string_sanitize import string_sanitize
 
 if TYPE_CHECKING:
     from laboneq.compiler.code_generator.command_table_tracker import (
@@ -387,16 +388,14 @@ class SampledEventHandler:
                         current_signal_obj.channels[0],
                     )
 
-        integration_channels = [
-            event.params["channels"] for event in sampled_event.params["acquire_events"]
-        ]
-
-        integration_channels = [
-            item for sublist in integration_channels for item in sublist
-        ]
+        integration_channels = list(
+            flatten(
+                event.params["channels"]
+                for event in sampled_event.params["acquire_events"]
+            )
+        )
 
         if len(integration_channels) > 0:
-
             integrator_mask = "|".join(
                 map(lambda x: "QA_INT_" + str(x), integration_channels)
             )
@@ -546,15 +545,21 @@ class SampledEventHandler:
         iteration = sampled_event.params["iteration"]
         parameter_name = sampled_event.params["parameter_name"]
         counter_variable_name = string_sanitize(f"index_{parameter_name}")
+        osc_id_symbol = string_sanitize(sampled_event.params["oscillator_id"])
 
         if not self.declarations_generator.is_variable_declared(counter_variable_name):
             self.declarations_generator.add_variable_declaration(
                 counter_variable_name, 0
             )
+            self.declarations_generator.add_constant_definition(
+                osc_id_symbol,
+                0,
+                "preliminary! will be updated by controller",
+            )
             self.declarations_generator.add_function_call_statement(
                 "configFreqSweep",
                 (
-                    0,
+                    osc_id_symbol,
                     sampled_event.params["start_frequency"],
                     sampled_event.params["step_frequency"],
                 ),
@@ -569,9 +574,10 @@ class SampledEventHandler:
         if iteration == 0:
             self.seqc_tracker.add_variable_assignment(counter_variable_name, 0)
         self.seqc_tracker.add_required_playzeros(sampled_event)
+
         self.seqc_tracker.add_function_call_statement(
             "setSweepStep",
-            args=(0, f"{counter_variable_name}++"),
+            args=(osc_id_symbol, f"{counter_variable_name}++"),
             deferred=True,
         )
 

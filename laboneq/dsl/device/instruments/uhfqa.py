@@ -55,25 +55,4 @@ class UHFQA(ZIStandardInstrument):
                 connector_labels=["Signal Output 2"],
             ),
         ]
-
-        for i in range(10):
-            outputs.append(
-                Port(
-                    IODirection.OUT,
-                    uid=f"QAS/{i}/RESULT/0",
-                    signal_type=IOSignalType.I,
-                    physical_port_ids=[],
-                    connector_labels=[],
-                )
-            )
-            outputs.append(
-                Port(
-                    IODirection.OUT,
-                    uid=f"QAS/{i}/RESULT/1",
-                    signal_type=IOSignalType.Q,
-                    physical_port_ids=[],
-                    connector_labels=[],
-                )
-            )
-
         return inputs + outputs

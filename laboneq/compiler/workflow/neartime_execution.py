@@ -68,7 +68,7 @@ def legacy_execution_program():
 
 class NtCompilerExecutor(ExecutorBase):
     def __init__(self, rt_compiler: RealtimeCompiler):
-        super().__init__(looping_mode=LoopingMode.EXECUTE)
+        super().__init__(looping_mode=LoopingMode.NEAR_TIME_ONLY)
         self._rt_compiler = rt_compiler
         self._iteration_stack = IterationStack()
 
@@ -93,7 +93,8 @@ class NtCompilerExecutor(ExecutorBase):
     @contextmanager
     def for_loop_handler(self, count: int, index: int, loop_flags: LoopFlags):
         self._iteration_stack.push(index, {})
-        # the name & value will be set by the set_sw_param_handler
+        if loop_flags.is_pipeline:
+            self._iteration_stack.set_parameter_value("__pipeline_index", index)
 
         yield
 

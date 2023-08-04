@@ -215,6 +215,9 @@
         "port_delay": {
           "type": "number"
         },
+        "threshold": {
+          "type": "number"
+        },
         "delay_signal": {
           "type": "number"
         }
@@ -402,10 +405,6 @@
         "id": {
           "$ref": "#/definitions/id-def"
         },
-        "play_mode": {
-          "type": "string",
-          "value": "FUNCTIONAL"
-        },
         "function": {
           "type": "string"
         },
@@ -441,10 +440,6 @@
         "id": {
           "$ref": "#/definitions/id-def"
         },
-        "play_mode": {
-          "type": "string",
-          "value": "SAMPLED_REAL"
-        },
         "samples": {
           "type": "array",
           "items": {
@@ -455,7 +450,6 @@
       "additionalProperties": false,
       "required": [
         "id",
-        "play_mode",
         "samples"
       ]
     },
@@ -464,10 +458,6 @@
       "properties": {
         "id": {
           "$ref": "#/definitions/id-def"
-        },
-        "play_mode": {
-          "type": "string",
-          "value": "SAMPLED_COMPLEX"
         },
         "samples": {
           "type": "array",
@@ -656,6 +646,17 @@
         },
         "readout_handle": {
           "type": "string"
+        },
+        "pulse_group": {
+          "type": "string"
+        },
+        "pulse_pulse_parameters": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "play_pulse_parameters": {
+          "type": "object",
+          "additionalProperties": true
         }
       },
       "additionalProperties": false
@@ -751,7 +752,9 @@
             "type": "string",
             "enum": [
               "integration_trigger",
-              "spectroscopy"
+              "spectroscopy",
+              "discrimination",
+              "RAW"
             ]
           }
         },
@@ -975,7 +978,6 @@
   "required": [
     "$schema",
     "metadata",
-    "servers",
     "devices",
     "signals",
     "signal_connections",

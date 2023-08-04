@@ -15,7 +15,7 @@ class SamplingRateTracker:
     def sampling_rate_for_device(self, device_id):
         if device_id not in self._sampling_rate_cache:
 
-            device_type = DeviceType(
+            device_type = DeviceType.from_device_info_type(
                 self._experiment_dao.device_info(device_id).device_type
             )
             if (
@@ -33,7 +33,7 @@ class SamplingRateTracker:
 
     def sequencer_rate_for_device(self, device_id):
         if device_id not in self._sequencer_rate_cache:
-            device_type = DeviceType(
+            device_type = DeviceType.from_device_info_type(
                 self._experiment_dao.device_info(device_id).device_type
             )
             if (

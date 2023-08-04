@@ -156,11 +156,11 @@ def reserve(signal):
 
 
 def acquire(
-    signal: str,
+    signal: str | list[str],
     handle: str,
-    kernel: Pulse = None,
-    length: float = None,
-    pulse_parameters: dict[str, Any] | None = None,
+    kernel: Pulse | list[Pulse] | None = None,
+    length: float | None = None,
+    pulse_parameters: dict[str, Any] | list[dict[str, Any]] | None = None,
 ):
     return active_section().acquire(
         signal=signal,
@@ -172,10 +172,10 @@ def acquire(
 
 
 def measure(
-    acquire_signal: str,
+    acquire_signal: str | list[str],
     handle: str,
-    integration_kernel: Pulse | None = None,
-    integration_kernel_parameters: dict[str, Any] | None = None,
+    integration_kernel: Pulse | list[Pulse] | None = None,
+    integration_kernel_parameters: dict[str, Any] | list[dict[str, Any]] | None = None,
     integration_length: float | None = None,
     measure_signal: str | None = None,
     measure_pulse: Pulse | None = None,
@@ -210,7 +210,7 @@ def add(section: Section):
 
 
 def set_node(path: str, value: Any):
-    return active_section().set(path=path, value=value)
+    return active_section().set_node(path=path, value=value)
 
 
 def sweep_range(start, stop, count, uid=None, axis_name=None, **kwargs):

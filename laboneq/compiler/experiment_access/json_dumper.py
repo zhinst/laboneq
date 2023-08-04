@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import copy
+import dataclasses
 import typing
 
 from laboneq.data.compilation_job import ParameterInfo
@@ -20,15 +22,6 @@ def dump(experiment_dao: ExperimentDAO):
             "epsilon": {"time": 1e-12},
             "line_endings": "unix",
         },
-        "servers": [
-            {
-                "id": server_info["id"],
-                "host": server_info["host"],
-                "port": int(server_info["port"]),
-                "api_level": server_info["api_level"],
-            }
-            for server_info in experiment_dao.server_infos()
-        ],
     }
 
     device_entries = {}
@@ -41,7 +34,7 @@ def dump(experiment_dao: ExperimentDAO):
             if getattr(device_info, key) is not None:
                 device_entry[key] = getattr(device_info, key)
         device_entry["id"] = device_info.uid
-        device_entry["driver"] = device_info.device_type.lower()
+        device_entry["driver"] = device_info.device_type.name.lower()
 
         oscillator_ids = experiment_dao.device_oscillators(device)
 
@@ -114,81 +107,64 @@ def dump(experiment_dao: ExperimentDAO):
     signal_connections = []
     for signal_info in signal_infos:
         signal_entry = {
-            "id": signal_info.signal_id,
-            "signal_type": signal_info.signal_type,
+            "id": signal_info.uid,
+            "signal_type": signal_info.type.value,
         }
-        if signal_info.modulation:
-            signal_entry["modulation"] = signal_info.modulation
-        if signal_info.offset is not None:
-            signal_entry["offset"] = signal_info.offset
-        signal_oscillator = experiment_dao.signal_oscillator(signal_info.signal_id)
+        if signal_info.oscillator is not None:
+            signal_entry["modulation"] = True
+        signal_oscillator = experiment_dao.signal_oscillator(signal_info.uid)
         if signal_oscillator is not None:
             signal_entry["oscillators_list"] = [{"$ref": signal_oscillator.uid}]
         retval["signals"].append(signal_entry)
 
-        device_id = experiment_dao.device_from_signal(signal_info.signal_id)
         signal_connection = {
-            "signal": {"$ref": signal_info.signal_id},
-            "device": {"$ref": device_id},
+            "signal": {"$ref": signal_info.uid},
+            "device": {"$ref": signal_info.device.uid},
             "connection": {
-                "type": signal_info.connection_type,
+                "type": "in" if signal_info.type.value == "integration" else "out",
                 "channels": signal_info.channels,
             },
         }
 
-        voltage_offset = experiment_dao.voltage_offset(signal_info.signal_id)
+        voltage_offset = experiment_dao.voltage_offset(signal_info.uid)
         if voltage_offset is not None:
             signal_connection["voltage_offset"] = voltage_offset
 
-        mixer_calibration = experiment_dao.mixer_calibration(signal_info.signal_id)
+        mixer_calibration = experiment_dao.mixer_calibration(signal_info.uid)
         if mixer_calibration is not None:
-            mixer_calibration_object = {}
-            for key in ["voltage_offsets", "correction_matrix"]:
-                if mixer_calibration.get(key) is not None:
-                    mixer_calibration_object[key] = mixer_calibration[key]
-            if len(mixer_calibration_object.keys()) > 0:
-                signal_connection["mixer_calibration"] = mixer_calibration_object
+            signal_connection["mixer_calibration"] = dataclasses.asdict(
+                mixer_calibration
+            )
 
-        precompensation = experiment_dao.precompensation(signal_info.signal_id)
+        precompensation = experiment_dao.precompensation(signal_info.uid)
         if precompensation is not None:
-            precompensation_object = {}
-            for key in ["exponential", "high_pass", "bounce", "FIR"]:
-                if precompensation.get(key) is not None:
-                    precompensation_object[key] = precompensation[key]
-            if precompensation_object:
-                signal_connection["precompensation"] = precompensation_object
+            signal_connection["precompensation"] = dataclasses.asdict(precompensation)
 
-        lo_frequency = experiment_dao.lo_frequency(signal_info.signal_id)
+        lo_frequency = experiment_dao.lo_frequency(signal_info.uid)
         if lo_frequency is not None:
             signal_connection["lo_frequency"] = lo_frequency
 
-        port_mode = experiment_dao.port_mode(signal_info.signal_id)
+        port_mode = experiment_dao.port_mode(signal_info.uid)
         if port_mode is not None:
             signal_connection["port_mode"] = port_mode
 
-        signal_range, signal_range_unit = experiment_dao.signal_range(
-            signal_info.signal_id
-        )
-        if signal_range is not None:
-            signal_connection["range"] = signal_range
-        if signal_range_unit is not None:
-            signal_connection["range_unit"] = signal_range_unit
+        signal_range = experiment_dao.signal_range(signal_info.uid)
+        if signal_range is not None and signal_range.value is not None:
+            signal_connection["range"] = signal_range.value
+        if signal_range is not None and signal_range.unit is not None:
+            signal_connection["range_unit"] = signal_range.unit
 
-        port_delay = experiment_dao.port_delay(signal_info.signal_id)
+        port_delay = experiment_dao.port_delay(signal_info.uid)
         if port_delay is not None:
             signal_connection["port_delay"] = port_delay
 
-        threshold = experiment_dao.threshold(signal_info.signal_id)
+        threshold = experiment_dao.threshold(signal_info.uid)
         if threshold is not None:
             signal_connection["threshold"] = threshold
 
-        amplitude = experiment_dao.amplitude(signal_info.signal_id)
+        amplitude = experiment_dao.amplitude(signal_info.uid)
         if amplitude is not None:
             signal_connection["amplitude"] = amplitude
-
-        amplifier_pump = experiment_dao.amplifier_pump(signal_info.signal_id)
-        if amplifier_pump is not None:
-            signal_connection["amplifier_pump"] = list(amplifier_pump)
 
         delay_signal = signal_info.delay_signal
         if delay_signal is not None:
@@ -202,17 +178,15 @@ def dump(experiment_dao: ExperimentDAO):
 
     for pulse_id in experiment_dao.pulses():
         pulse = experiment_dao.pulse(pulse_id)
-        pulse_entry = {"id": pulse.id}
-        fields = ["function", "length", "samples", "amplitude", "play_mode"]
-        for field_ in fields:
-            val = getattr(pulse, field_, None)
-            if val is not None:
-                pulse_entry[field_] = val
-
-        if pulse_entry.get("amplitude_param"):
-            pulse_entry["amplitude"] = {"$ref": pulse_entry["amplitude_param"]}
-        if pulse_entry.get("length_param"):
-            pulse_entry["length"] = {"$ref": pulse_entry["length_param"]}
+        pulse_entry = {"id": pulse.uid}
+        if pulse.function:
+            pulse_entry["function"] = pulse.function
+        if pulse.amplitude is not None:
+            pulse_entry["amplitude"] = pulse.amplitude
+        if pulse.length is not None:
+            pulse_entry["length"] = pulse.length
+        if pulse.samples is not None:
+            pulse_entry["samples"] = pulse.samples
 
         pulses_list.append(pulse_entry)
     retval["pulses"] = pulses_list
@@ -220,22 +194,23 @@ def dump(experiment_dao: ExperimentDAO):
     sections = {}
     for section_id in experiment_dao.sections():
         section_info = experiment_dao.section_info(section_id)
-        if section_info.section_display_name in sections:
+        if section_info.uid in sections:
             # Section is reused, has already been processed
             continue
 
-        out_section = {"id": section_info.section_display_name}
+        out_section = {"id": section_info.uid}
 
         direct_children = experiment_dao.direct_section_children(section_id)
 
         direct_children = [
-            experiment_dao.section_info(child_id).section_display_name
-            for child_id in direct_children
+            experiment_dao.section_info(child_id).uid for child_id in direct_children
         ]
 
-        if section_info.has_repeat:
+        if section_info.count is not None:
             out_section["repeat"] = {
-                "execution_type": section_info.execution_type,
+                "execution_type": section_info.execution_type.value
+                if section_info.execution_type
+                else None,
                 "count": section_info.count,
             }
 
@@ -252,7 +227,7 @@ def dump(experiment_dao: ExperimentDAO):
                     out_section["repeat"]["parameters"].append(param_object)
 
         if len(direct_children) > 0:
-            if section_info.has_repeat:
+            if section_info.count is not None:
                 out_section["repeat"]["sections_list"] = [
                     {"$ref": child} for child in direct_children
                 ]
@@ -261,12 +236,8 @@ def dump(experiment_dao: ExperimentDAO):
                     {"$ref": child} for child in direct_children
                 ]
         keys = [
-            "align",
             "length",
-            "acquisition_types",
-            "repetition_mode",
             "repetition_time",
-            "averaging_mode",
             "play_after",
             "handle",
             "user_register",
@@ -278,26 +249,32 @@ def dump(experiment_dao: ExperimentDAO):
                 out_section[key] = getattr(section_info, key)
         if section_info.reset_oscillator_phase:
             out_section["reset_oscillator_phase"] = section_info.reset_oscillator_phase
-        if section_info.trigger_output:
+        if section_info.alignment:
+            out_section["align"] = section_info.alignment.value
+        if section_info.repetition_mode:
+            out_section["repetition_mode"] = section_info.repetition_mode.value
+        if section_info.acquisition_type:
+            out_section["acquisition_types"] = [section_info.acquisition_type.value]
+        if section_info.averaging_mode:
+            out_section["averaging_mode"] = section_info.averaging_mode.value
+        if section_info.triggers:
             out_section["trigger_output"] = [
                 {
                     "signal": {"$ref": to_item["signal_id"]},
                     "state": to_item["state"],
                 }
-                for to_item in section_info.trigger_output
+                for to_item in section_info.triggers
             ]
 
         signals_list = []
         for signal_id in sorted(experiment_dao.section_signals(section_id)):
             section_signal_object = {"signal": {"$ref": signal_id}}
             section_signal_pulses = []
-            for section_pulse in experiment_dao._section_pulses_raw(
-                section_id, signal_id
-            ):
+            for section_pulse in experiment_dao.section_pulses(section_id, signal_id):
                 section_signal_pulse_object = {}
-                if section_pulse.pulse_id is not None:
+                if section_pulse.pulse is not None:
                     section_signal_pulse_object["pulse"] = {
-                        "$ref": section_pulse.pulse_id
+                        "$ref": section_pulse.pulse.uid
                     }
                 if section_pulse.precompensation_clear:
                     section_signal_pulse_object[
@@ -311,16 +288,27 @@ def dump(experiment_dao: ExperimentDAO):
                     "set_oscillator_phase",
                     "length",
                 ]:
-                    if getattr(section_pulse, key) is not None:
-                        section_signal_pulse_object[key] = getattr(section_pulse, key)
-                    if getattr(section_pulse, key + "_param") is not None:
-                        section_signal_pulse_object[key] = {
-                            "$ref": getattr(section_pulse, key + "_param")
-                        }
+                    if (val := getattr(section_pulse, key)) is not None:
+                        if isinstance(val, ParameterInfo):
+                            section_signal_pulse_object[key] = {"$ref": val.uid}
+                        else:
+                            section_signal_pulse_object[key] = val
                 if section_pulse.acquire_params is not None:
                     handle = section_pulse.acquire_params.handle
                     if handle is not None:
                         section_signal_pulse_object["readout_handle"] = handle
+                if section_pulse.play_pulse_parameters:
+                    section_signal_pulse_object[
+                        "play_pulse_parameters"
+                    ] = copy.deepcopy(section_pulse.play_pulse_parameters)
+                if section_pulse.pulse_pulse_parameters:
+                    section_signal_pulse_object[
+                        "pulse_pulse_parameters"
+                    ] = copy.deepcopy(section_pulse.pulse_pulse_parameters)
+                if section_pulse.pulse_group is not None:
+                    section_signal_pulse_object[
+                        "pulse_group"
+                    ] = section_pulse.pulse_group
                 markers = getattr(section_pulse, "markers")
                 if markers is not None:
                     markers_object = {}
@@ -344,13 +332,13 @@ def dump(experiment_dao: ExperimentDAO):
         if len(signals_list) > 0:
             out_section["signals_list"] = signals_list
 
-        sections[section_info.section_display_name] = out_section
+        sections[section_info.uid] = out_section
 
     retval["sections"] = list(sorted(sections.values(), key=lambda x: x["id"]))
 
     retval["experiment"] = {
         "sections_list": [
-            {"$ref": experiment_dao.section_info(section).section_display_name}
+            {"$ref": experiment_dao.section_info(section).uid}
             for section in experiment_dao.root_sections()
         ],
         "signals_list": [{"$ref": signal_id} for signal_id in experiment_dao.signals()],

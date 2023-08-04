@@ -5,42 +5,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum, auto
 from typing import Any, Dict, List, Optional
 
 from numpy.typing import ArrayLike
 
+from laboneq.core.types.enums import (
+    AveragingMode,
+    ExecutionType,
+    RepetitionMode,
+    SectionAlignment,
+)
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
-from laboneq.data import EnumReprMixin
-from laboneq.data.calibration import SignalCalibration
+from laboneq.data.calibration import Calibration
 from laboneq.data.parameter import Parameter
 
 #
 # Enums
 #
-
-
-class AveragingMode(EnumReprMixin, Enum):
-    CYCLIC = auto()
-    SEQUENTIAL = auto()
-    SINGLE_SHOT = auto()
-
-
-class ExecutionType(EnumReprMixin, Enum):
-    NEAR_TIME = auto()
-    REAL_TIME = auto()
-
-
-class RepetitionMode(EnumReprMixin, Enum):
-    AUTO = auto()
-    CONSTANT = auto()
-    FASTEST = auto()
-
-
-class SectionAlignment(EnumReprMixin, Enum):
-    LEFT = auto()
-    RIGHT = auto()
-
 
 #
 # Data Classes
@@ -65,7 +46,6 @@ class SignalOperation(Operation):
 @dataclass
 class ExperimentSignal:
     uid: str = None
-    calibration: Optional[SignalCalibration] = None
 
 
 @dataclass
@@ -89,9 +69,9 @@ class Section:
 @dataclass
 class Acquire(SignalOperation):
     handle: str = None
-    kernel: Pulse = None
+    kernel: Pulse | list[Pulse] | None = None
     length: float = None
-    pulse_parameters: Optional[Any] = None
+    pulse_parameters: Optional[Any] | list[Optional[Any]] = None
 
 
 @dataclass
@@ -136,9 +116,10 @@ class Delay(SignalOperation):
 class Experiment:
     uid: str = None
     signals: List[ExperimentSignal] = field(default_factory=list)
-    epsilon: float = None
     sections: List[Section] = field(default_factory=list)
     pulses: List[Pulse] = field(default_factory=list)
+    #: Calibration for individual `ExperimentSignal`s.
+    calibration: Calibration = field(default_factory=Calibration)
 
 
 @dataclass
@@ -159,7 +140,7 @@ class PlayPulse(SignalOperation):
     length: float | Parameter = None
     pulse_parameters: dict | None = None
     precompensation_clear: bool | None = None
-    marker: dict | Optional = None
+    marker: dict | None = None
 
 
 @dataclass

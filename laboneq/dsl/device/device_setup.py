@@ -197,10 +197,12 @@ class DeviceSetup:
         """Retrieve the calibration of a specific path.
 
         Args:
-            path: Path of the calibration information. default = None.
+            path (str):
+                Path of the calibration information.
 
         Returns:
-            Calibration object of the device setup.
+            calibration:
+                Calibration object of the device setup.
         """
         if path is not None:
             return self._get_calibration(path)
@@ -354,14 +356,19 @@ class DeviceSetup:
         """Construct the device setup from Python dicts, same structure as yaml
 
         Args:
-            instrument_list (dict): List of instruments in the setup (deprecated; for
+            instrument_list (dict):
+                List of instruments in the setup (deprecated; for
                 backwards compatibility)
-            instruments (dict): List of instruments in the setup
-            connections (dict): Connections between devices
-            filepath (str): Path to the YAML file containing the device description.
-            server_host (str): Server host of the setup that should be created.
-            server_port (str): Port of the server that should be created.
-            setup_name (str): Name of the setup that should be created.
+            instruments (dict):
+                List of instruments in the setup
+            connections (dict):
+                Connections between devices
+            server_host:
+                Server host of the setup that should be created.
+            server_port:
+                Port of the server that should be created.
+            setup_name:
+                Name of the setup that should be created.
         """
         return DeviceSetup(
             **_DeviceSetupGenerator.from_dicts(

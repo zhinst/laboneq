@@ -365,13 +365,10 @@ class DeviceHDAWG(DeviceZI):
                 try:
                     hp = precomp["high_pass"]
                     timeconstant = hp["timeconstant"]
-                    clearing = {"level": 0, "rise": 1, "fall": 2, "both": 3}[
-                        hp["clearing"]
-                    ]
                     nodes += [
                         (hp_p + "enable", 1),
                         (hp_p + "timeconstant", timeconstant),
-                        (hp_p + "clearing/slope", clearing),
+                        (hp_p + "clearing/slope", 1),
                     ]
                 except (KeyError, TypeError):
                     nodes.append((hp_p + "enable", 0))
@@ -528,12 +525,12 @@ class DeviceHDAWG(DeviceZI):
                             DaqNodeSetAction(
                                 self._daq,
                                 f"{awg_path}/zsync/register/shift",
-                                awg_config.zsync_bit,
+                                awg_config.register_selector_shift,
                             ),
                             DaqNodeSetAction(
                                 self._daq,
                                 f"{awg_path}/zsync/register/mask",
-                                0b1,
+                                awg_config.register_selector_bitmask,
                             ),
                             DaqNodeSetAction(
                                 self._daq,

@@ -16,8 +16,8 @@ class SignalType(Enum):
 
 
 class RefClkType(Enum):
-    _10MHZ = 10
-    _100MHZ = 100
+    _10MHZ = 10  # TODO(2K): should be 10e6
+    _100MHZ = 100  # TODO(2K): should be 100e6
 
 
 class TriggeringMode(Enum):
@@ -32,6 +32,11 @@ class TriggeringMode(Enum):
 class NtStepKey:
     indices: tuple[int]
 
+    def __post_init__(self):
+        # Required for JSON deserialization, as tuples are serialized as lists.
+        if isinstance(self.indices, list):
+            object.__setattr__(self, "indices", tuple(self.indices))
+
 
 @dataclass
 class Gains:
@@ -44,8 +49,6 @@ class IO:
     channel: int
     enable: bool | None = None
     modulation: bool | None = None
-    oscillator: int | None = None
-    oscillator_frequency: int | None = None
     offset: float | None = None
     gains: Gains | None = None
     range: float | None = None
@@ -78,7 +81,7 @@ class Measurement:
 @dataclass
 class Config:
     repetitions: int = 1
-    reference_clock: RefClkType = None
+    reference_clock: RefClkType = RefClkType._100MHZ
     holdoff: float = 0
     triggering_mode: TriggeringMode = TriggeringMode.DIO_FOLLOWER
     sampling_rate: float | None = None
@@ -87,12 +90,13 @@ class Config:
 @dataclass
 class Initialization:
     device_uid: str
+    device_type: str = None
     config: Config = field(default_factory=Config)
-    awgs: list[AWG] = None
-    outputs: list[IO] = None
-    inputs: list[IO] = None
+    awgs: list[AWG] = field(default_factory=list)
+    outputs: list[IO] = field(default_factory=list)
+    inputs: list[IO] = field(default_factory=list)
     measurements: list[Measurement] = field(default_factory=list)
-    ppchannels: list[dict[str, Any]] | None = None
+    ppchannels: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -140,3 +144,4 @@ class Recipe:
     simultaneous_acquires: list[dict[str, str]] = field(default_factory=list)
     total_execution_time: float = None
     max_step_execution_time: float = None
+    is_spectroscopy: bool = False

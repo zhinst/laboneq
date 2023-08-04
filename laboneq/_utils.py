@@ -3,7 +3,9 @@
 
 """General utility functions for development."""
 import functools
-from typing import Any
+from collections import defaultdict
+from itertools import count
+from typing import Any, Iterable
 
 
 def cached_method(maxsize: int = 128, typed=False) -> Any:
@@ -31,3 +33,27 @@ def cached_method(maxsize: int = 128, typed=False) -> Any:
         return wrapper
 
     return outer_wrapper
+
+
+def ensure_list(obj):
+    if not isinstance(obj, list):
+        return [obj]
+    return obj
+
+
+def flatten(l: Iterable):
+    """Flatten an arbitrarily nested list."""
+    for el in l:
+        if isinstance(el, Iterable) and not isinstance(el, (str, bytes)):
+            yield from flatten(el)
+        else:
+            yield el
+
+
+_iid_map = defaultdict(count)
+
+
+def id_generator(cat: str = "") -> str:
+    """Incremental IDs for each category."""
+    global _iid_map
+    return f"_{cat}_{next(_iid_map[cat])}"

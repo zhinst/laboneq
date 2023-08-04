@@ -10,11 +10,12 @@ import math
 from collections import namedtuple
 from contextlib import suppress
 from itertools import groupby
-from typing import Any, Dict, List, NamedTuple, Tuple
+from typing import Any, Dict, List, NamedTuple, Set, Tuple
 
 import numpy as np
 from engineering_notation import EngNumber
 
+from laboneq._utils import ensure_list
 from laboneq.compiler.code_generator.analyze_events import (
     analyze_acquire_times,
     analyze_init_times,
@@ -71,7 +72,6 @@ from laboneq.compiler.common.event_type import EventList, EventType
 from laboneq.compiler.common.pulse_parameters import decode_pulse_parameters
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.common.trigger_mode import TriggerMode
-from laboneq.compiler.experiment_access.pulse_def import PulseDef
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.pulse_sampler import (
     combine_pulse_parameters,
@@ -79,6 +79,7 @@ from laboneq.core.utilities.pulse_sampler import (
     sample_pulse,
     verify_amplitude_no_clipping,
 )
+from laboneq.data.compilation_job import ParameterInfo, PulseDef
 from laboneq.data.scheduled_experiment import (
     PulseInstance,
     PulseMapEntry,
@@ -170,74 +171,90 @@ def setup_sine_phase(
 
 
 def calculate_integration_weights(
-    acquire_events: AWGSampledEventSequence, signal_obj, pulse_defs, device_type
+    acquire_events: AWGSampledEventSequence, signal_obj, pulse_defs
 ):
     integration_weights = {}
     for event_list in acquire_events.sequence.values():
         for event in event_list:
             _logger.debug("For weights, look at %s", event)
-            play_wave_id = event.params.get("play_wave_id")
-            if play_wave_id is not None:
+            signal_ids = ensure_list(
+                event.params.get("signals") or event.params.get("signal_id") or []
+            )
+            n = len(signal_ids)
+            play_wave_ids = ensure_list(event.params.get("play_wave_id") or [None] * n)
+            play_pars = ensure_list(
+                event.params.get("play_pulse_parameters") or [None] * n
+            )
+            pulse_pars = ensure_list(
+                event.params.get("pulse_pulse_parameters") or [None] * n
+            )
+            assert n == len(play_wave_ids) == len(play_pars) == len(pulse_pars)
+            for signal_id, play_wave_id, play_par, pulse_par in zip(
+                signal_ids, play_wave_ids, play_pars, pulse_pars
+            ):
+                if play_wave_id is None or signal_id != signal_obj.id:
+                    continue
                 _logger.debug("Event %s has play wave id %s", event, play_wave_id)
                 if (
-                    play_wave_id in pulse_defs
-                    and play_wave_id not in integration_weights
+                    play_wave_id not in pulse_defs
+                    or play_wave_id in integration_weights
                 ):
-                    pulse_def = pulse_defs[play_wave_id]
-                    _logger.debug("Pulse def: %s", pulse_def)
+                    continue
+                pulse_def = pulse_defs[play_wave_id]
+                _logger.debug("Pulse def: %s", pulse_def)
 
-                    if None is pulse_def.samples is pulse_def.function:
-                        # Not a real pulse, just a placeholder for the length - skip
-                        continue
+                if None is pulse_def.samples and None is pulse_def.function:
+                    # Not a real pulse, just a placeholder for the length - skip
+                    continue
 
-                    samples = pulse_def.samples
-                    amplitude = pulse_def.effective_amplitude
+                samples = pulse_def.samples
+                pulse_amplitude = pulse_def.amplitude
+                if pulse_amplitude is None:
+                    pulse_amplitude = 1.0
+                elif isinstance(pulse_amplitude, ParameterInfo):
+                    pulse_amplitude = event.params.get(pulse_def.amplitude.uid)
 
-                    length = pulse_def.length
-                    if length is None:
-                        length = len(samples) / signal_obj.awg.sampling_rate
+                length = pulse_def.length
+                if length is None:
+                    length = len(samples) / signal_obj.awg.sampling_rate
 
-                    _logger.debug(
-                        "Sampling integration weights for %s with modulation_frequency %s",
-                        signal_obj.id,
-                        str(signal_obj.oscillator_frequency),
-                    )
+                _logger.debug(
+                    "Sampling integration weights for %s with modulation_frequency %s",
+                    signal_obj.id,
+                    signal_obj.oscillator_frequency,
+                )
 
-                    pulse_parameters = combine_pulse_parameters(
-                        event.params.get("pulse_pulse_parameters"),
-                        None,
-                        event.params.get("play_pulse_parameters"),
-                    )
-                    pulse_parameters = decode_pulse_parameters(pulse_parameters)
-                    integration_weight = sample_pulse(
-                        signal_type="iq",
-                        sampling_rate=signal_obj.awg.sampling_rate,
-                        length=length,
-                        amplitude=amplitude,
-                        pulse_function=pulse_def.function,
-                        modulation_frequency=signal_obj.oscillator_frequency,
-                        samples=samples,
-                        mixer_type=signal_obj.mixer_type,
-                        pulse_parameters=pulse_parameters,
-                    )
+                pulse_parameters = combine_pulse_parameters(pulse_par, None, play_par)
+                pulse_parameters = decode_pulse_parameters(pulse_parameters)
+                integration_weight = sample_pulse(
+                    signal_type="iq",
+                    sampling_rate=signal_obj.awg.sampling_rate,
+                    length=length,
+                    amplitude=pulse_amplitude,
+                    pulse_function=pulse_def.function,
+                    modulation_frequency=signal_obj.oscillator_frequency,
+                    samples=samples,
+                    mixer_type=signal_obj.mixer_type,
+                    pulse_parameters=pulse_parameters,
+                )
 
-                    verify_amplitude_no_clipping(
-                        integration_weight,
-                        pulse_def.id,
-                        signal_obj.mixer_type,
-                        signal_obj.id,
-                    )
+                verify_amplitude_no_clipping(
+                    integration_weight,
+                    pulse_def.uid,
+                    signal_obj.mixer_type,
+                    signal_obj.id,
+                )
 
-                    integration_weight["basename"] = (
-                        signal_obj.awg.device_id
-                        + "_"
-                        + str(signal_obj.awg.awg_number)
-                        + "_"
-                        + str(min(signal_obj.channels))
-                        + "_"
-                        + play_wave_id
-                    )
-                    integration_weights[play_wave_id] = integration_weight
+                integration_weight["basename"] = (
+                    signal_obj.awg.device_id
+                    + "_"
+                    + str(signal_obj.awg.awg_number)
+                    + "_"
+                    + str(min(signal_obj.channels))
+                    + "_"
+                    + play_wave_id
+                )
+                integration_weights[play_wave_id] = integration_weight
     return integration_weights
 
 
@@ -282,6 +299,7 @@ class CodeGenerator:
         self._feedback_register_allocator: FeedbackRegisterAllocator = None
         self._total_execution_time = None
         self._wave_compressor = WaveCompressor()
+        self._multistate_signal_groups = set()
 
         self.EMIT_TIMING_COMMENTS = self._settings.EMIT_TIMING_COMMENTS
         self.PHASE_RESOLUTION_BITS = self._settings.PHASE_RESOLUTION_BITS
@@ -333,8 +351,6 @@ class CodeGenerator:
         self._append_to_pulse_map(signature_pulse_map, sig_string)
 
     def gen_waves(self):
-        if _logger.getEffectiveLevel() == logging.DEBUG:
-            _logger.debug("Sampled signatures: %s", self._sampled_signatures)
         for awg in self._awgs.values():
             # Handle integration weights separately
             for signal_obj in awg.signals:
@@ -488,17 +504,23 @@ class CodeGenerator:
             group = list(group)
             assert all(np.all(group[0][1] == g[1]) for g in group[1:])
 
-        if _logger.getEffectiveLevel() == logging.DEBUG:
-            _logger.debug("Sampled signatures: %s", self._sampled_signatures)
-
-            _logger.debug(self._waves)
-
     def gen_acquire_map(self, events: EventList):
         # timestamp -> map[signal -> handle]
         self._simultaneous_acquires: Dict[float, Dict[str, str]] = {}
         for e in (e for e in events if e["event_type"] == "ACQUIRE_START"):
             time_events = self._simultaneous_acquires.setdefault(e["time"], {})
-            time_events[e["signal"]] = e["acquire_handle"]
+            for s in ensure_list(e["signal"]):
+                time_events[s] = e["acquire_handle"]
+
+    def find_multistate_signal_groups(self, events: EventList):
+        # find all signals that are used in a multi-state acquisition
+        for e in events:
+            if (
+                e["event_type"] == "ACQUIRE_START"
+                and isinstance(e["signal"], list)
+                and len(e["signal"]) > 1
+            ):
+                self._multistate_signal_groups.add(tuple(sorted(e["signal"])))
 
     def gen_seq_c(self, events: List[Any], pulse_defs: Dict[str, PulseDef]):
         signal_info_map = {
@@ -693,7 +715,10 @@ class CodeGenerator:
             event_replacement = {}
             for i, event in enumerate(event_group):
                 if event.type == AWGEventType.ACQUIRE:
-                    if pulse_defs[event.params["play_wave_id"]].can_compress:
+                    if any(
+                        pulse_defs[id].can_compress
+                        for id in ensure_list(event.params["play_wave_id"])
+                    ):
                         _logger.warn(
                             "Compression for integration pulses is not supported. %s, for which compression has been requested, will not be compressed.",
                             event.params["play_wave_id"],
@@ -867,7 +892,7 @@ class CodeGenerator:
         own_sections = set(
             event["section_name"]
             for event in events
-            if event.get("signal") in signal_ids
+            if ensure_list(event.get("signal"))[0] in signal_ids
             or event["event_type"]
             in (
                 EventType.PARAMETER_SET,
@@ -876,7 +901,9 @@ class CodeGenerator:
                 EventType.SET_OSCILLATOR_FREQUENCY_START,
             )
             or set(
-                [to_item["signal_id"] for to_item in event.get("trigger_output", [])]
+                s
+                for to_item in event.get("trigger_output", [])
+                for s in ensure_list(to_item["signal_id"])
             ).intersection(signal_ids)
         )
         has_match_case = False
@@ -940,6 +967,18 @@ class CodeGenerator:
         )
         sampled_events.merge(loop_events)
 
+        # Retrieve the channel numbers for multistate discrimination
+        # events
+        for signal_obj in awg.signals:
+            for e in events:
+                if (sigs := e.get("signal")) and isinstance(sigs, list):
+                    if not e.get("channel"):
+                        e["channel"] = [None] * len(sigs)
+                    for i, s in enumerate(sigs):
+                        if s == signal_obj.id:
+                            e["channel"][i] = signal_obj.channels
+                            break
+
         for signal_obj in awg.signals:
             set_oscillator_events = analyze_set_oscillator_times(
                 events, signal_obj, global_delay
@@ -975,8 +1014,18 @@ class CodeGenerator:
                 self._integration_weights[
                     signal_obj.id
                 ] = calculate_integration_weights(
-                    acquire_events, signal_obj, pulse_defs, awg.device_type
+                    acquire_events, signal_obj, pulse_defs
                 )
+
+            # We have created events for all signals of a multistate
+            # discrimination; later, we only need one of them. Let's choose
+            # the one where the first signal id matches.
+            for t in acquire_events.sequence:
+                acquire_events.sequence[t] = [
+                    e
+                    for e in acquire_events.sequence[t]
+                    if e.params["signal_id"] == signal_obj.id
+                ]
 
             sampled_events.merge(acquire_events)
 
@@ -1357,14 +1406,16 @@ class CodeGenerator:
                     # that is used to reset the precompensation. It is all zeros, but we
                     # use it to force a playWave command to be generated.
                     pulse_def = PulseDef(
-                        id="dummy_precomp_reset",
+                        uid="dummy_precomp_reset",
                         length=32,
                         amplitude=1.0,
                         samples=np.zeros(32),
-                        play_mode="",
                         function=None,
-                        amplitude_param=None,
                     )
+
+                if pulse_def.amplitude is None:
+                    pulse_def = copy.deepcopy(pulse_def)
+                    pulse_def.amplitude = 1.0
                 _logger.debug(" Pulse def: %s", pulse_def)
 
                 sampling_signal_type = signal_type
@@ -1375,8 +1426,7 @@ class CodeGenerator:
                 if pulse_part.sub_channel is not None:
                     sampling_signal_type = "iq"
 
-                amplitude = pulse_def.effective_amplitude
-
+                amplitude = pulse_def.amplitude
                 if pulse_part.amplitude is not None:
                     amplitude *= pulse_part.amplitude
 
@@ -1428,12 +1478,12 @@ class CodeGenerator:
                     mixer_type=mixer_type,
                     pulse_parameters=decoded_pulse_parameters,
                     markers=None
-                    if pulse_part.markers is None
+                    if not pulse_part.markers
                     else [{k: v for k, v in m} for m in pulse_part.markers],
                 )
 
                 verify_amplitude_no_clipping(
-                    sampled_pulse, pulse_def.id, mixer_type, signal_id
+                    sampled_pulse, pulse_def.uid, mixer_type, signal_id
                 )
 
                 if "samples_q" in sampled_pulse and len(
@@ -1520,7 +1570,7 @@ class CodeGenerator:
                     )
                     has_marker2 = True
 
-                pm = signature_pulse_map.get(pulse_def.id)
+                pm = signature_pulse_map.get(pulse_def.uid)
                 if pm is None:
                     pm = PulseWaveformMap(
                         sampling_rate=sampling_rate,
@@ -1528,11 +1578,10 @@ class CodeGenerator:
                         signal_type=sampling_signal_type,
                         mixer_type=mixer_type,
                     )
-                    signature_pulse_map[pulse_def.id] = pm
+                    signature_pulse_map[pulse_def.uid] = pm
+                pulse_amplitude = pulse_def.amplitude
                 amplitude_multiplier = (
-                    amplitude / pulse_def.effective_amplitude
-                    if pulse_def.effective_amplitude
-                    else 0.0
+                    amplitude / pulse_amplitude if pulse_amplitude else 0.0
                 )
                 pm.instances.append(
                     PulseInstance(
@@ -1616,6 +1665,9 @@ class CodeGenerator:
 
     def feedback_registers(self) -> Dict[AwgKey, int]:
         return self._feedback_register_allocator.feedback_registers
+
+    def multistate_signal_groups(self) -> Set[Tuple[str, ...]]:
+        return self._multistate_signal_groups
 
     @staticmethod
     def stencil_samples(start, source, target):
