@@ -60,8 +60,8 @@ class LogicalSignal:
 class PhysicalChannel:
     name: str
     group: str
-    type: PhysicalChannelType = None
-    direction: IODirection = None
+    type: PhysicalChannelType
+    direction: IODirection
     ports: List[Port] = field(default_factory=list)
 
 
@@ -85,31 +85,31 @@ class Port:
 
     path: str
     type: PortType
+    channel: int
 
 
 @dataclass
 class Server:
     """LabOne Dataserver."""
 
+    uid: str
     host: str
     port: int
-    api_level: int = 6
-    uid: str = None
-    leader_uid: str = None
+    leader_uid: str
 
 
 @dataclass
 class Instrument:
     uid: str
+    # For ZI devices, the address is the device serial number.
     address: str
     device_type: DeviceType
+    server: Server
     interface: str = "1GbE"
     reference_clock: ReferenceClock = field(default_factory=ReferenceClock)
     ports: List[Port] = field(default_factory=list)
     physical_channels: List[PhysicalChannel] = field(default_factory=list)
     connections: List[ChannelMapEntry] = field(default_factory=list)
-    # For ZI devices, the address is the device serial number.
-    server: Server = None
 
 
 @dataclass
@@ -146,11 +146,11 @@ class Qubit(QuantumElement):
 
 @dataclass
 class Setup:
-    uid: str = None
+    uid: str
     servers: Dict[str, Server] = field(default_factory=dict)
     instruments: List[Instrument] = field(default_factory=list)
     logical_signal_groups: Dict[str, LogicalSignalGroup] = field(default_factory=dict)
     setup_internal_connections: List[SetupInternalConnection] = field(
         default_factory=list
     )
-    calibration: Calibration = None
+    calibration: Calibration = field(default_factory=Calibration)

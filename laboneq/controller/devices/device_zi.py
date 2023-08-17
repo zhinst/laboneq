@@ -194,6 +194,10 @@ class DeviceZI(ABC):
         return self._get_num_awgs() > 0
 
     @property
+    def has_pipeliner(self) -> bool:
+        return False
+
+    @property
     def options(self) -> DeviceOptions:
         return self._device_qualifier.options
 
@@ -486,13 +490,23 @@ class DeviceZI(ABC):
     def get_input_monitor_data(self, channel: int, num_results: int):
         return None  # default -> no results available from the device
 
-    def conditions_for_execution_ready(self) -> dict[str, Any]:
+    def conditions_for_execution_ready(self, with_pipeliner: bool) -> dict[str, Any]:
         return {}
 
     def conditions_for_execution_done(
-        self, acquisition_type: AcquisitionType
+        self, acquisition_type: AcquisitionType, with_pipeliner: bool
     ) -> dict[str, Any]:
         return {}
+
+    def collect_execution_setup_nodes(
+        self, with_pipeliner: bool
+    ) -> list[DaqNodeAction]:
+        return []
+
+    def collect_execution_teardown_nodes(
+        self, with_pipeliner: bool
+    ) -> list[DaqNodeAction]:
+        return []
 
     def check_results_acquired_status(
         self, channel, acquisition_type: AcquisitionType, result_length, hw_averages
@@ -890,6 +904,15 @@ class DeviceZI(ABC):
 
         return elf
 
+    def pipeliner_prepare_for_upload(self, index: int) -> list[DaqNodeAction]:
+        return []
+
+    def pipeliner_commit(self, index: int) -> list[DaqNodeAction]:
+        return []
+
+    def pipeliner_ready_conditions(self, index: int) -> dict[str, Any]:
+        return {}
+
     def _get_num_awgs(self):
         return 0
 
@@ -916,7 +939,7 @@ class DeviceZI(ABC):
     def collect_awg_after_upload_nodes(self, initialization: Initialization):
         return []
 
-    def collect_execution_nodes(self):
+    def collect_execution_nodes(self, with_pipeliner: bool):
         nodes_to_execute = []
         _logger.debug("%s: Executing AWGS...", self.dev_repr)
 
@@ -934,7 +957,7 @@ class DeviceZI(ABC):
 
         return nodes_to_execute
 
-    def collect_start_execution_nodes(self):
+    def collect_internal_start_execution_nodes(self):
         return []
 
     def check_errors(self):

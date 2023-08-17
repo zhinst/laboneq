@@ -9,10 +9,19 @@ from laboneq.data.compilation_job import ExperimentInfo, SectionInfo
 
 class ExperimentInfoLoader(LoaderBase):
     def load(self, job: ExperimentInfo):
-        self.global_leader_device_id = job.global_leader_device
+        self.global_leader_device_id = (
+            job.global_leader_device.uid
+            if job.global_leader_device is not None
+            else None
+        )
+
+        for dev in job.devices:
+            assert dev.uid not in self._devices
+            self._devices[dev.uid] = dev
 
         for s in job.signals:
             self._signals[s.uid] = s
+            assert self._devices[s.device.uid] == s.device
             if s.device.uid not in self._devices:
                 self._devices[s.device.uid] = s.device
 

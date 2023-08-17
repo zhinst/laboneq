@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
-import logging
 import time
 import uuid
 
@@ -13,8 +12,6 @@ from laboneq.core.types.compiled_experiment import (
 from laboneq.data.compilation_job import CompilationJob
 from laboneq.data.scheduled_experiment import ScheduledExperiment
 from laboneq.interfaces.compilation_service import CompilationServiceAPI
-
-_logger = logging.getLogger(__name__)
 
 
 class CompilationServiceLegacy(CompilationServiceAPI):
@@ -29,7 +26,7 @@ class CompilationServiceLegacy(CompilationServiceAPI):
         job_id = len(self._job_queue)
         queue_entry = {"job_id": job_id, "job": job}
         compiler = Compiler()
-        compiler_output = compiler.run(job.experiment_info)
+        compiler_output = compiler.run(job)
 
         self._job_results[job_id] = convert_compiler_output_to_scheduled_experiment(
             compiler_output

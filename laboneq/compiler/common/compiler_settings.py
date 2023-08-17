@@ -3,7 +3,7 @@
 
 import logging
 import math
-import os
+import warnings
 from dataclasses import asdict, dataclass
 from typing import Dict, Optional, TypeVar
 
@@ -25,7 +25,19 @@ _USER_ENABLED_SETTINGS = [
     "HDAWG_FORCE_COMMAND_TABLE",
     "SHFSG_FORCE_COMMAND_TABLE",
     "USE_EXPERIMENTAL_SCHEDULER",
+    "PREPARE_PSV_DATA",
 ]
+
+
+DEFAULT_HDAWG_LEAD_PQSC: float = 80e-9
+DEFAULT_HDAWG_LEAD_PQSC_2GHz: float = 80e-9
+DEFAULT_HDAWG_LEAD_DESKTOP_SETUP: float = (
+    20e-9  # PW 2022-09-21, dev2806, FPGA 68366, dev8047, FPGA 68666 & 68603
+)
+DEFAULT_HDAWG_LEAD_DESKTOP_SETUP_2GHz: float = 24e-9
+DEFAULT_UHFQA_LEAD_PQSC: float = 80e-9
+DEFAULT_SHFQA_LEAD_PQSC: float = 80e-9
+DEFAULT_SHFSG_LEAD_PQSC: float = 80e-9
 
 
 def round_min_playwave_hint(n: int, multiple: int) -> int:
@@ -38,20 +50,19 @@ class CompilerSettings:
     # properly.
     # Alternatively, use `dataclasses.field()`.
 
-    HDAWG_LEAD_PQSC: float = 80e-9
-    HDAWG_LEAD_PQSC_2GHz: float = 80e-9
-    HDAWG_LEAD_DESKTOP_SETUP: float = (
-        20e-9  # PW 2022-09-21, dev2806, FPGA 68366, dev8047, FPGA 68666 & 68603
-    )
-    HDAWG_LEAD_DESKTOP_SETUP_2GHz: float = 24e-9
-    UHFQA_LEAD_PQSC: float = 80e-9
-    SHFQA_LEAD_PQSC: float = 80e-9
-    SHFSG_LEAD_PQSC: float = 80e-9
+    HDAWG_LEAD_PQSC: float = DEFAULT_HDAWG_LEAD_PQSC
+    HDAWG_LEAD_PQSC_2GHz: float = DEFAULT_HDAWG_LEAD_PQSC_2GHz
+    HDAWG_LEAD_DESKTOP_SETUP: float = DEFAULT_HDAWG_LEAD_DESKTOP_SETUP
+    HDAWG_LEAD_DESKTOP_SETUP_2GHz: float = DEFAULT_HDAWG_LEAD_DESKTOP_SETUP_2GHz
+    UHFQA_LEAD_PQSC: float = DEFAULT_UHFQA_LEAD_PQSC
+    SHFQA_LEAD_PQSC: float = DEFAULT_SHFQA_LEAD_PQSC
+    SHFSG_LEAD_PQSC: float = DEFAULT_SHFSG_LEAD_PQSC
 
     AMPLITUDE_RESOLUTION_BITS: int = 24
     PHASE_RESOLUTION_BITS: int = 16
     MAX_EVENTS_TO_PUBLISH: int = 1000
     EXPAND_LOOPS_FOR_SCHEDULE: bool = True
+    PREPARE_PSV_DATA: bool = False
     CONSTRAINT_TOLERANCE: float = 1e-15
     TINYSAMPLE: float = 1 / 3600000e6
 
@@ -74,6 +85,23 @@ class CompilerSettings:
 
     USE_EXPERIMENTAL_SCHEDULER: bool = True
 
+    def __post_init__(self):
+        if self.MAX_EVENTS_TO_PUBLISH != CompilerSettings.MAX_EVENTS_TO_PUBLISH:
+            warnings.warn(
+                """Setting `MAX_EVENTS_TO_PUBLISH` is deprecated.
+                          Use the max_number_of_events argument of laboneq.pulse_sheet_viewer.pulse_sheet_viewer.view_pulse_sheet
+                          to limit the number of events in the pulse sheet viewer""",
+                FutureWarning,
+            )
+
+        if self.EXPAND_LOOPS_FOR_SCHEDULE != CompilerSettings.EXPAND_LOOPS_FOR_SCHEDULE:
+            warnings.warn(
+                """Setting `EXPAND_LOOPS_FOR_SCHEDULE` is deprecated.
+                          Use the expand_loops_for_schedule argument of laboneq.pulse_sheet_viewer.pulse_sheet_viewer.view_pulse_sheet
+                          to set loop expansion for the pulse sheet viewer""",
+                FutureWarning,
+            )
+
 
 UserSettings = TypeVar("UserSettings", Dict, None)
 
@@ -85,36 +113,7 @@ def filter_user_settings(settings: UserSettings = None) -> UserSettings:
 
 
 def from_dict(settings: Optional[Dict] = None) -> CompilerSettings:
-    def to_value(input_string):
-        try:
-            return int(input_string)
-        except ValueError:
-            pass
-        try:
-            return float(input_string)
-        except ValueError:
-            pass
-        if input_string.lower() in ["true", "false"]:
-            return input_string.lower() == "true"
-
-    PREFIX = "QCCS_COMPILER_"
     compiler_settings_dict = asdict(CompilerSettings())
-
-    for settings_key in compiler_settings_dict.keys():
-        key = PREFIX + settings_key
-        if key in os.environ:
-            value = to_value(os.environ[key])
-            if value is not None:
-                compiler_settings_dict[settings_key] = value
-                _logger.warning(
-                    "Environment variable %s is set. %s overridden to be %s instead of default value %s",
-                    key,
-                    settings_key,
-                    value,
-                    getattr(CompilerSettings, settings_key),
-                )
-        else:
-            _logger.debug("Key %s not found in environment variables", key)
 
     if settings is not None:
         for k, v in settings.items():

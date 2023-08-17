@@ -574,6 +574,39 @@ class DevEmuSHFSGBase(Gen2Base):
             delay=0.001, priority=0, action=self._awg_stop_sg, argument=(channel,)
         )
 
+    def _pipeliner_committed(self, channel: int):
+        avail_slots: int = self._get_node(
+            f"sgchannels/{channel}/pipeliner/availableslots"
+        ).value
+        self._set_val(f"sgchannels/{channel}/pipeliner/availableslots", avail_slots - 1)
+
+    def _pipeliner_commit(self, node: NodeBase, channel: int):
+        self._scheduler.enter(
+            delay=0.001,
+            priority=0,
+            action=self._pipeliner_committed,
+            argument=(channel,),
+        )
+
+    def _pipeliner_reset(self, node: NodeBase, channel: int):
+        self._set_val(f"sgchannels/{channel}/pipeliner/status", 0)
+        max_slots: int = self._get_node(
+            f"sgchannels/{channel}/pipeliner/maxslots"
+        ).value
+        self._set_val(f"sgchannels/{channel}/pipeliner/availableslots", max_slots)
+
+    def _pipeliner_stop(self, channel: int):
+        self._set_val(f"sgchannels/{channel}/pipeliner/status", 3)
+
+    def _pipeliner_enable(self, node: NodeBase, channel: int):
+        self._set_val(f"sgchannels/{channel}/pipeliner/status", 1)
+        self._scheduler.enter(
+            delay=0.001,
+            priority=0,
+            action=self._pipeliner_stop,
+            argument=(channel,),
+        )
+
     def _node_def_sg(self) -> dict[str, NodeInfo]:
         nd = {}
         for channel in range(8):
@@ -581,6 +614,35 @@ class DevEmuSHFSGBase(Gen2Base):
                 type=NodeType.INT,
                 default=0,
                 handler=partial(DevEmuSHFSGBase._awg_execute_sg, channel=channel),
+            )
+            nd[f"sgchannels/{channel}/pipeliner/maxslots"] = NodeInfo(
+                type=NodeType.INT,
+                default=1024,
+                read_only=True,
+            )
+            nd[f"sgchannels/{channel}/pipeliner/availableslots"] = NodeInfo(
+                type=NodeType.INT,
+                default=1024,
+            )
+            nd[f"sgchannels/{channel}/pipeliner/commit"] = NodeInfo(
+                type=NodeType.INT,
+                default=0,
+                handler=partial(DevEmuSHFSGBase._pipeliner_commit, channel=channel),
+            )
+            nd[f"sgchannels/{channel}/pipeliner/reset"] = NodeInfo(
+                type=NodeType.INT,
+                default=0,
+                handler=partial(DevEmuSHFSGBase._pipeliner_reset, channel=channel),
+            )
+            nd[f"sgchannels/{channel}/pipeliner/status"] = NodeInfo(
+                type=NodeType.INT,
+                default=0,
+                read_only=True,
+            )
+            nd[f"sgchannels/{channel}/pipeliner/enable"] = NodeInfo(
+                type=NodeType.INT,
+                default=0,
+                handler=partial(DevEmuSHFSGBase._pipeliner_enable, channel=channel),
             )
         return nd
 
@@ -772,9 +834,7 @@ class ziDAQServerEmulator:
         # TODO(2K): emulate timestamp
         return raw_results
 
-    def _set(self, device: DevEmu, dev_path: str, value_dict: dict[str, Any]):
-        full_path = device._full_path(dev_path)
-        value = value_dict[full_path]
+    def _set(self, device: DevEmu, dev_path: str, value: Any):
         device.set(dev_path, value)
 
     @overload
@@ -791,12 +851,10 @@ class ziDAQServerEmulator:
             pass
             # TODO(2K): stub
         else:
-            items = path_or_items
-            value_dict = {v[0].lower(): v[1] for v in items}
-            paths = list(value_dict.keys())
-            self._resolve_paths_and_perform(
-                paths, partial(self._set, value_dict=value_dict)
-            )
+            for [path, value] in path_or_items:
+                self._resolve_paths_and_perform(
+                    path.lower(), partial(self._set, value=value)
+                )
 
     def getString(self, path: str) -> str:
         self._progress_scheduler()

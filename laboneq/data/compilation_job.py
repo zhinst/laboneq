@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
+import numpy as np
 from numpy.typing import ArrayLike
 
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
@@ -24,6 +25,7 @@ from laboneq.data.experiment_description import (
     RepetitionMode,
     SectionAlignment,
 )
+from laboneq.executor.executor import Statement
 
 
 #
@@ -63,6 +65,22 @@ class ParameterInfo:
     values: ArrayLike | None = None
     axis_name: str | None = None
 
+    # auto generated __eq__ fails to compare array-likes correctly
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, ParameterInfo):
+            if self.values is None != other.values is None:
+                return False
+            values_equal = (
+                self.values is None and other.values is None
+            ) or np.allclose(self.values, other.values)
+            return (self.uid, self.start, self.step, self.axis_name,) == (
+                other.uid,
+                other.start,
+                other.step,
+                other.axis_name,
+            ) and values_equal
+        return NotImplemented
+
 
 @dataclass
 class FollowerInfo:
@@ -98,6 +116,35 @@ class PulseDef:
     increment_oscillator_phase: float = None
     set_oscillator_phase: float = None
     samples: ArrayLike | None = None
+
+    # auto generated __eq__ fails to compare array-likes correctly
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, PulseDef):
+            if self.samples is None != other.samples is None:
+                return False
+            samples_equal = (
+                self.samples is None and other.samples is None
+            ) or np.allclose(self.samples, other.samples)
+            return (
+                self.uid,
+                self.function,
+                self.length,
+                self.amplitude,
+                self.phase,
+                self.can_compress,
+                self.increment_oscillator_phase,
+                self.set_oscillator_phase,
+            ) == (
+                other.uid,
+                other.function,
+                other.length,
+                other.amplitude,
+                other.phase,
+                other.can_compress,
+                other.increment_oscillator_phase,
+                other.set_oscillator_phase,
+            ) and samples_equal
+        return NotImplemented
 
 
 @dataclass
@@ -229,11 +276,9 @@ class Marker:
 @dataclass
 class ExperimentInfo:
     uid: str = None
+    devices: list[DeviceInfo] = field(default_factory=list)
     signals: list[SignalInfo] = field(default_factory=list)
     sections: list[SectionInfo] = field(default_factory=list)
-    section_signal_pulses: list[SectionSignalPulse] = field(
-        default_factory=list
-    )  # todo: remove
     global_leader_device: DeviceInfo | None = None  # todo: remove
     pulse_defs: list[PulseDef] = field(default_factory=list)
 
@@ -243,3 +288,4 @@ class CompilationJob:
     uid: str = None
     experiment_hash: str = None
     experiment_info: ExperimentInfo = None
+    execution: Statement = None

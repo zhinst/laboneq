@@ -442,7 +442,7 @@ class DeviceSHFQA(DeviceSHFBase):
         )
         return nodes_to_initialize_scope
 
-    def collect_execution_nodes(self):
+    def collect_execution_nodes(self, with_pipeliner: bool):
         _logger.debug("Starting execution...")
         return [
             DaqNodeSetAction(
@@ -454,7 +454,7 @@ class DeviceSHFQA(DeviceSHFBase):
             for awg_index in self._allocated_awgs
         ]
 
-    def collect_start_execution_nodes(self):
+    def collect_internal_start_execution_nodes(self):
         if self._emit_trigger:
             return [
                 DaqNodeSetAction(
@@ -468,7 +468,7 @@ class DeviceSHFQA(DeviceSHFBase):
             ]
         return []
 
-    def conditions_for_execution_ready(self) -> dict[str, Any]:
+    def conditions_for_execution_ready(self, with_pipeliner: bool) -> dict[str, Any]:
         # TODO(janl): Not sure whether we need this condition this on the SHFQA (including SHFQC)
         # as well. The state of the generator enable wasn't always pickup up reliably, so we
         # only check in cases where we rely on external triggering mechanisms.
@@ -481,7 +481,7 @@ class DeviceSHFQA(DeviceSHFBase):
         return conditions
 
     def conditions_for_execution_done(
-        self, acquisition_type: AcquisitionType
+        self, acquisition_type: AcquisitionType, with_pipeliner: bool
     ) -> dict[str, Any]:
         conditions: dict[str, Any] = {}
         for awg_index in self._allocated_awgs:

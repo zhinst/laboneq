@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import threading
 from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Deque, Dict, List, Optional, Union
@@ -1114,31 +1113,3 @@ class Experiment:
         for s in self.sections:
             retval.extend(Experiment._all_subsections(s))
         return retval
-
-
-_store = threading.local()
-_store.active_contexts = []
-
-
-class ExperimentContext:
-    def __init__(self, experiment: Experiment):
-        self.experiment = experiment
-        self.calibration = None
-
-    def __enter__(self):
-        _store.active_contexts.append(self)
-        return self.experiment
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.calibration is not None:
-            self.experiment.set_calibration(self.calibration)
-        _store.active_contexts.pop()
-
-
-def current_context() -> ExperimentContext:
-    try:
-        return _store.active_contexts[-1]
-    except IndexError as e:
-        raise LabOneQException(
-            "Not in an experiment context. Use '@experiment' to create an experiment scope first."
-        ) from e

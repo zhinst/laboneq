@@ -12,7 +12,6 @@ from numpy import typing as npt
 
 from laboneq.controller.communication import (
     CachingStrategy,
-    DaqNodeAction,
     DaqNodeSetAction,
     batch_set,
 )
@@ -35,6 +34,7 @@ class NearTimeRunner(ExecutorBase):
         self.controller = controller
         self.user_set_nodes = []
         self.nt_loop_indices: list[int] = []
+        self.pipeline_chunk: int = 0
         self.sweep_params_tracker = SweepParamsTracker()
 
     def nt_step(self) -> NtStepKey:
@@ -74,6 +74,11 @@ class NearTimeRunner(ExecutorBase):
 
     @contextmanager
     def for_loop_handler(self, count: int, index: int, loop_flags: LoopFlags):
+        if loop_flags.is_pipeline:
+            # Don't add the pipeliner loop index to NT indices
+            self.pipeline_chunk = index
+            yield
+            return
         self.nt_loop_indices.append(index)
         yield
         self.nt_loop_indices.pop()
@@ -86,35 +91,26 @@ class NearTimeRunner(ExecutorBase):
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
     ):
-        self.controller._initialize_awgs(nt_step=self.nt_step())
+        if self.pipeline_chunk > 0:
+            # Skip the pipeliner loop iterations, except the first one - iterated by the pipeliner itself
+            yield
+            return
+
+        self.controller._initialize_awgs(nt_step=self.nt_step(), rt_section_uid=uid)
         self.controller._configure_triggers()
-        attribute_value_tracker = self.controller._recipe_data.attribute_value_tracker
-        for param in self.sweep_params_tracker.updated_params():
-            attribute_value_tracker.update(
-                param, self.sweep_params_tracker.get_param(param)
-            )
-        self.sweep_params_tracker.clear_for_next_step()
-
-        nt_sweep_nodes: list[DaqNodeAction] = []
-        for device_uid, device in self.controller._devices.all:
-            nt_sweep_nodes.extend(
-                device.collect_prepare_nt_step_nodes(
-                    attribute_value_tracker.device_view(device_uid),
-                    self.controller._recipe_data,
-                )
-            )
-
+        nt_sweep_nodes = self.controller._prepare_nt_step(self.sweep_params_tracker)
         step_prepare_nodes = self.controller._prepare_rt_execution(rt_section_uid=uid)
 
         batch_set([*self.user_set_nodes, *nt_sweep_nodes, *step_prepare_nodes])
         self.user_set_nodes.clear()
+        self.sweep_params_tracker.clear_for_next_step()
 
         for retry in range(3):  # Up to 3 retries
             if retry > 0:
                 _logger.info("Step retry %s of 3...", retry + 1)
                 batch_set(step_prepare_nodes)
             try:
-                self.controller._execute_one_step(acquisition_type)
+                self.controller._execute_one_step(acquisition_type, rt_section_uid=uid)
                 self.controller._read_one_step_results(
                     nt_step=self.nt_step(), rt_section_uid=uid
                 )

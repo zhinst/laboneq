@@ -23,6 +23,9 @@ class AttributeName(Enum):
     SG_SYNTH_CENTER_FREQ = auto()
     SG_DIG_MIXER_CENTER_FREQ = auto()
 
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}.{self.name}"
+
 
 @dataclass
 class DeviceAttribute:

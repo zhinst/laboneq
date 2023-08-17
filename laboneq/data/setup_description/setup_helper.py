@@ -1,60 +1,75 @@
 # Copyright 2023 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from laboneq.data.setup_description import Setup
+from typing import List, Mapping, Tuple, Union
+
+from laboneq.data.path import Separator
+from laboneq.data.setup_description import (
+    Instrument,
+    LogicalSignal,
+    PhysicalChannel,
+    Setup,
+)
+from laboneq.data.utils.calibration_helper import CalibrationHelper
+
+
+def split_path(path: str) -> Tuple[str, str]:
+    """Split path into group and name."""
+    return path.split(Separator)
+
+
+class InstrumentHelper:
+    def __init__(self, instruments: List[Instrument]):
+        self._instruments = instruments
+        self._ls_to_pc: Mapping[LogicalSignal, PhysicalChannel] = {}
+
+    def physical_channel_by_logical_signal(
+        self, logical_signal: Union[LogicalSignal, str]
+    ) -> PhysicalChannel:
+        if isinstance(logical_signal, str):
+            group, name = split_path(logical_signal)
+            logical_signal = LogicalSignal(name=name, group=group)
+        try:
+            return self._ls_to_pc[logical_signal]
+        except KeyError:
+            for instr in self._instruments:
+                for conn in instr.connections:
+                    if conn.logical_signal == logical_signal:
+                        self._ls_to_pc[logical_signal] = conn.physical_channel
+                        return self._ls_to_pc[logical_signal]
+        raise RuntimeError(
+            f"Could not find physical channel for logical signal {logical_signal}"
+        )
 
 
 class SetupHelper:
-    """
-    Helper class for setup related tasks. Main purpose is to provide queries into the setup data structure.
-    """
+    def __init__(self, setup: Setup):
+        # TODO: `Setup` is not hashable, thus cannot use `cached_method()` decorator
+        self._setup = setup
+        self._instrument_helper = InstrumentHelper(setup.instruments)
+        self._calibration_helper = CalibrationHelper(setup.calibration)
+        self._logical_signals: List[LogicalSignal] = []
 
-    @classmethod
-    def get_instrument_of_logical_signal(cls, setup: Setup, logical_signal_path: str):
-        grp, name = logical_signal_path.split("/")
-        for i in setup.instruments:
-            for c in i.connections:
-                if grp == c.logical_signal.group and name == c.logical_signal.name:
-                    return i
-        raise Exception("No instrument found for logical signal " + logical_signal_path)
+    @property
+    def instruments(self) -> InstrumentHelper:
+        return self._instrument_helper
 
-    @classmethod
-    def get_flat_logcial_signals(cls, setup: Setup):
-        logical_signals = []
-        for logical_signal_group in setup.logical_signal_groups:
-            logical_signals.extend(logical_signal_group.logical_signals)
-        return logical_signals
+    @property
+    def calibration(self) -> CalibrationHelper:
+        return self._calibration_helper
 
-    @classmethod
-    def get_ports_of_logical_signal(cls, setup: Setup, logical_signal_path):
-        instrument = cls.get_instrument_of_logical_signal(setup, logical_signal_path)
-        ports = []
-        grp, name = logical_signal_path.split("/")
-        for c in instrument.connections:
-            if c.logical_signal.name == name and grp == c.logical_signal.group:
-                for ch_port in c.physical_channel.ports:
-                    if ch_port not in ports:
-                        ports.append(ch_port)
-        return ports
-
-    @classmethod
-    def get_connections_of_logical_signal(cls, setup: Setup, logical_signal_path: str):
-        instrument = cls.get_instrument_of_logical_signal(setup, logical_signal_path)
-        grp, name = logical_signal_path.split("/")
-        connections = []
-        for c in instrument.connections:
-            if c.logical_signal.name == name and grp == c.logical_signal.group:
-                connections.append(c)
-        return connections
-
-    @classmethod
-    def flat_logical_signals(cls, setup: Setup):
-        logical_signals = []
-        for logical_signal_group in setup.logical_signal_groups.values():
-            logical_signals.extend(
+    def logical_signals(self) -> List[LogicalSignal]:
+        if self._logical_signals:
+            return self._logical_signals
+        for logical_signal_group in self._setup.logical_signal_groups.values():
+            self._logical_signals.extend(
                 [
-                    (logical_signal_group.uid, logical_signal)
+                    logical_signal
                     for logical_signal in logical_signal_group.logical_signals.values()
                 ]
             )
-        return logical_signals
+        return self._logical_signals
+
+    def logical_signal_by_path(self, path: str) -> LogicalSignal:
+        group, name = split_path(path)
+        return self._setup.logical_signal_groups[group].logical_signals[name]

@@ -4,6 +4,7 @@
 from laboneq.application_management.application_manager import ApplicationManager
 from laboneq.data.execution_payload import ExecutionPayload
 from laboneq.data.experiment_description import (
+    Acquire,
     AcquireLoopRt,
     ExecutionType,
     Experiment,
@@ -74,14 +75,14 @@ class DeviceSetupAdapter:
         retval = l1q.device_setup_from_descriptor(
             yaml_text, server_host, server_port, setup_name
         )
-        for ls in SetupHelper.flat_logical_signals(retval):
-            ls[1].oscillator = OscillatorGetter(ls)
+        for ls in SetupHelper(retval).logical_signals():
+            ls.oscillator = OscillatorGetter(ls)
         return retval
 
 
 class SignalCalibrationAdapter:
     def __init__(self, *args, **kwargs):
-        pass
+        self.oscillator = None
 
 
 class LegacySessionAdapter:
@@ -197,8 +198,9 @@ class ExperimentAdapter:
         )
         self._push_operation(operation)
 
-    def acquire(self, *args, **kwargs):
-        return self
+    def acquire(self, signal, handle, length):
+        operation = Acquire(signal=signal, handle=handle, length=length)
+        self._push_operation(operation)
 
     def _push_section(self, section):
         if section.execution_type is None:

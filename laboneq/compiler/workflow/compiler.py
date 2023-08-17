@@ -48,6 +48,7 @@ from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.core.types.enums.acquisition_type import AcquisitionType, is_spectroscopy
 from laboneq.core.types.enums.mixer_type import MixerType
 from laboneq.data.compilation_job import (
+    CompilationJob,
     DeviceInfo,
     ParameterInfo,
     PrecompensationInfo,
@@ -118,9 +119,11 @@ class Compiler:
             self._execution = ExecutionFactoryFromExperiment().make(
                 experiment["experiment"]
             )
-        else:
-            # todo (Pol): ExperimentInfo currently tumbles down this path. For current
-            #  tests, the mock execution is fine, but it won't be in production.
+        elif isinstance(experiment, CompilationJob):
+            self._experiment_dao = ExperimentDAO(experiment.experiment_info)
+            self._execution = experiment.execution
+
+        else:  # legacy JSON
             self._experiment_dao = ExperimentDAO(experiment)
             self._execution = legacy_execution_program()
 

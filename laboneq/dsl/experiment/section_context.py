@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from copy import copy
 from functools import wraps
 
 from laboneq.core.exceptions import LabOneQException
@@ -14,7 +15,6 @@ from laboneq.core.types.enums import (
 )
 from laboneq.dsl.experiment.context import (
     Context,
-    current_context,
     peek_context,
     pop_context,
     push_context,
@@ -29,48 +29,71 @@ from laboneq.dsl.experiment.section import (
 )
 
 
-class SectionContextBase(Context):
-    section_class = ...
-
-    def __init__(self):
-        self.section = None
-        self.kwargs = {}
-        self._auto_add = True
-
-    def __enter__(self):
-        self.section = self.section_class(**self.kwargs)
-        parent = current_context()
-        if self.section.execution_type is None:
-            if parent is not None:
-                if isinstance(parent, SectionContextBase):
-                    self.section.execution_type = parent.section.execution_type
-        elif self.section.execution_type == ExecutionType.NEAR_TIME:
-            if parent is not None and isinstance(parent, SectionContextBase):
-                if parent.section.execution_type == ExecutionType.REAL_TIME:
-                    raise LabOneQException(
-                        "Cannot nest near-time section inside real-time context"
-                    )
-        if self.section.execution_type is None:
-            self.section.execution_type = ExecutionType.NEAR_TIME
-        push_context(self)
-        return self.section
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        assert pop_context() is self
-        if exc_val is None and self._auto_add:
-            # auto-add section to parent
-            parent = current_context()
-            if parent is not None:
-                parent.add(self.section)
-
-    def __call__(self, f):
-        raise NotImplementedError
+class SectionContext(Context):
+    def __init__(self, section, auto_add):
+        self.section = section
+        self.auto_add = auto_add
 
     def add(self, section):
         self.section.add(section)
 
 
-class SectionSectionContext(SectionContextBase):
+class SectionContextManagerBase:
+    section_class = ...
+
+    def __init__(self, kwargs, auto_add=True):
+        self.kwargs = kwargs
+        self.auto_add = auto_add
+
+    def replace(self, update_kwargs=None, auto_add=None):
+        ctx_manager = copy(self)
+        if update_kwargs is not None:
+            ctx_manager.kwargs |= update_kwargs
+        if auto_add is not None:
+            ctx_manager.auto_add = auto_add
+        return ctx_manager
+
+    def _section_create(self):
+        return self.section_class(**self.kwargs)
+
+    def _section_post_create(self, section, parent):
+        if section.execution_type is None:
+            if parent is not None:
+                section.execution_type = parent.execution_type
+        elif section.execution_type == ExecutionType.NEAR_TIME:
+            if parent is not None:
+                if parent.execution_type == ExecutionType.REAL_TIME:
+                    raise LabOneQException(
+                        "Cannot nest near-time section inside real-time context"
+                    )
+        if section.execution_type is None:
+            section.execution_type = ExecutionType.NEAR_TIME
+
+    def _peek_section_parent(self):
+        parent = peek_context()
+        if isinstance(parent, SectionContext):
+            return parent.section
+        return None
+
+    def __enter__(self):
+        section = self._section_create()
+        parent = self._peek_section_parent()
+        self._section_post_create(section, parent)
+        section_ctx = SectionContext(section, auto_add=self.auto_add)
+        push_context(section_ctx)
+        return section
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        section_ctx = pop_context()
+        assert isinstance(section_ctx, SectionContext)
+        if exc_val is None and section_ctx.auto_add:
+            # auto-add section to parent
+            parent = peek_context()
+            if parent is not None:
+                parent.add(section_ctx.section)
+
+
+class SectionContextManager(SectionContextManagerBase):
     section_class = Section
 
     def __init__(
@@ -83,42 +106,43 @@ class SectionSectionContext(SectionContextBase):
         trigger: dict[str, dict[str, int]] | None = None,
         execution_type=None,
     ):
-        super().__init__()
+        kwargs = {}
         if uid is not None:
-            self.kwargs["uid"] = uid
+            kwargs["uid"] = uid
         if length is not None:
-            self.kwargs["length"] = length
+            kwargs["length"] = length
         if alignment is not None:
-            self.kwargs["alignment"] = alignment
+            kwargs["alignment"] = alignment
         if play_after is not None:
-            self.kwargs["play_after"] = play_after
+            kwargs["play_after"] = play_after
         if trigger is not None:
-            self.kwargs["trigger"] = trigger
+            kwargs["trigger"] = trigger
         if on_system_grid is not None:
-            self.kwargs["on_system_grid"] = on_system_grid
+            kwargs["on_system_grid"] = on_system_grid
         if execution_type is not None:
-            self.kwargs["execution_type"] = execution_type
+            kwargs["execution_type"] = execution_type
+        super().__init__(kwargs=kwargs)
 
     def __call__(self, f):
         """Use as a decorator for a function defining the context"""
 
+        update_kwargs = {}
         if "uid" not in self.kwargs:
-            self.kwargs["uid"] = f.__name__
+            update_kwargs["uid"] = f.__name__
 
         @wraps(f)
         def wrapper(*inner_args, section_auto_add=True, **inner_kwargs):
-            self._auto_add = bool(section_auto_add)
-            with self:
+            ctx_manager = self.replace(
+                update_kwargs=update_kwargs, auto_add=section_auto_add
+            )
+            with ctx_manager as section:
                 f(*inner_args, **inner_kwargs)
-            return self.section
+            return section
 
         return wrapper
 
-    def add(self, section):
-        self.section.add(section)
 
-
-class SweepSectionContext(SectionContextBase):
+class SweepSectionContextManager(SectionContextManagerBase):
     section_class = Sweep
 
     def __init__(
@@ -130,42 +154,38 @@ class SweepSectionContext(SectionContextBase):
         reset_oscillator_phase=False,
         chunk_count=1,
     ):
-        super().__init__()
-        self.kwargs = {"parameters": parameters}
+        kwargs = dict(parameters=parameters, chunk_count=chunk_count)
         if uid is not None:
-            self.kwargs["uid"] = uid
+            kwargs["uid"] = uid
         if execution_type is not None:
-            self.kwargs["execution_type"] = execution_type
-
+            kwargs["execution_type"] = execution_type
         if alignment is not None:
-            self.kwargs["alignment"] = alignment
-
+            kwargs["alignment"] = alignment
         if reset_oscillator_phase is not None:
-            self.kwargs["reset_oscillator_phase"] = reset_oscillator_phase
-
-        self.kwargs["chunk_count"] = chunk_count
+            kwargs["reset_oscillator_phase"] = reset_oscillator_phase
+        super().__init__(kwargs=kwargs)
 
     def __enter__(self):
-        super().__enter__()
-        if len(self.section.parameters) == 1:
-            return self.section.parameters[0]
-        return tuple(self.section.parameters)
+        section = super().__enter__()
+        if len(section.parameters) == 1:
+            return section.parameters[0]
+        return tuple(section.parameters)
 
 
-class AcquireLoopNtSectionContext(SectionContextBase):
+class AcquireLoopNtSectionContextManager(SectionContextManagerBase):
     section_class = AcquireLoopNt
 
     def __init__(self, count, averaging_mode=AveragingMode.CYCLIC, uid=None):
-        super().__init__()
-        self.kwargs = dict(
+        kwargs = dict(
             count=count,
             averaging_mode=averaging_mode,
         )
         if uid is not None:
-            self.kwargs["uid"] = uid
+            kwargs["uid"] = uid
+        super().__init__(kwargs=kwargs)
 
 
-class AcquireLoopRtSectionContext(SectionContextBase):
+class AcquireLoopRtSectionContextManager(SectionContextManagerBase):
     section_class = AcquireLoopRt
 
     def __init__(
@@ -178,8 +198,7 @@ class AcquireLoopRtSectionContext(SectionContextBase):
         reset_oscillator_phase=False,
         uid=None,
     ):
-        super().__init__()
-        self.kwargs = dict(
+        kwargs = dict(
             count=count,
             averaging_mode=averaging_mode,
             repetition_mode=repetition_mode,
@@ -188,10 +207,11 @@ class AcquireLoopRtSectionContext(SectionContextBase):
             reset_oscillator_phase=reset_oscillator_phase,
         )
         if uid is not None:
-            self.kwargs["uid"] = uid
+            kwargs["uid"] = uid
+        super().__init__(kwargs=kwargs)
 
 
-class MatchSectionContext(SectionContextBase):
+class MatchSectionContextManager(SectionContextManagerBase):
     section_class = Match
 
     def __init__(
@@ -201,18 +221,19 @@ class MatchSectionContext(SectionContextBase):
         uid=None,
         play_after=None,
     ):
-        super().__init__()
+        kwargs = {}
         if uid is not None:
-            self.kwargs["uid"] = uid
+            kwargs["uid"] = uid
         if play_after is not None:
-            self.kwargs["play_after"] = play_after
+            kwargs["play_after"] = play_after
         if handle is not None:
-            self.kwargs["handle"] = handle
+            kwargs["handle"] = handle
         if user_register is not None:
-            self.kwargs["user_register"] = user_register
+            kwargs["user_register"] = user_register
+        super().__init__(kwargs=kwargs)
 
 
-class CaseSectionContext(SectionContextBase):
+class CaseSectionContextManager(SectionContextManagerBase):
     section_class = Case
 
     def __init__(
@@ -220,19 +241,19 @@ class CaseSectionContext(SectionContextBase):
         uid,
         state,
     ):
-        super().__init__()
-        self.kwargs["state"] = state
+        kwargs = dict(state=state)
         if uid is not None:
-            self.kwargs["uid"] = uid
+            kwargs["uid"] = uid
+        super().__init__(kwargs=kwargs)
 
-    def __enter__(self):
-        if not isinstance(peek_context(), MatchSectionContext):
+    def _section_post_create(self, section, parent):
+        super()._section_post_create(section, parent)
+        if not isinstance(parent, Match):
             raise LabOneQException("Case section must be inside a Match section")
-        return super().__enter__()
 
 
 def active_section() -> Section:
     s = peek_context()
-    if s is None or not isinstance(s, SectionContextBase):
+    if s is None or not isinstance(s, SectionContext):
         raise LabOneQException("Must be in a section context")
     return s.section

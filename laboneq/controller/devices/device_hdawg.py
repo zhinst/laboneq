@@ -228,14 +228,14 @@ class DeviceHDAWG(DeviceZI):
 
         return nodes_to_configure_phase
 
-    def conditions_for_execution_ready(self) -> dict[str, Any]:
+    def conditions_for_execution_ready(self, with_pipeliner: bool) -> dict[str, Any]:
         conditions: dict[str, Any] = {}
         for awg_index in self._allocated_awgs:
             conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = 1
         return conditions
 
     def conditions_for_execution_done(
-        self, acquisition_type: AcquisitionType
+        self, acquisition_type: AcquisitionType, with_pipeliner: bool
     ) -> dict[str, Any]:
         conditions: dict[str, Any] = {}
         for awg_index in self._allocated_awgs:

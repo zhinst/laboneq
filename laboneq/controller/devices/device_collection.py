@@ -107,7 +107,7 @@ class DeviceCollection:
     def _configure_parallel(
         self,
         devices: list[DeviceZI],
-        control_nodes_getter: Callable([DeviceZI], list[NodeControlBase]),
+        control_nodes_getter: Callable[[DeviceZI], list[NodeControlBase]],
         config_name: str,
     ):
         response_waiter = ResponseWaiter()

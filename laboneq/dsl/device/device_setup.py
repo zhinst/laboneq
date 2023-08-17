@@ -268,7 +268,7 @@ class DeviceSetup:
 
     def dumps(self):
         # TODO ErC: Error handling
-        return Serializer.to_json(self)
+        return Serializer.to_json(self, omit_none_fields=True)
 
     @staticmethod
     def from_descriptor(

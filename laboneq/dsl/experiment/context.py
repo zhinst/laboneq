@@ -5,21 +5,10 @@ from __future__ import annotations
 
 import abc
 import threading
+from typing import Iterable
 
 
 class Context(abc.ABC):
-    @abc.abstractmethod
-    def __enter__(self):
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def __call__(self, f):
-        raise NotImplementedError
-
     @abc.abstractmethod
     def add(self, section):
         raise NotImplementedError
@@ -29,21 +18,21 @@ _store = threading.local()
 _store.active_contexts = []
 
 
-def push_context(context):
+def push_context(context: Context):
     _store.active_contexts.append(context)
 
 
-def peek_context():
+def peek_context() -> Context | None:
     return _store.active_contexts[-1] if len(_store.active_contexts) else None
 
 
-def pop_context():
+def pop_context() -> Context:
     return _store.active_contexts.pop()
 
 
-def iter_contexts():
+def iter_contexts() -> Iterable[Context]:
     return iter(_store.active_contexts)
 
 
-def current_context() -> Context | None:
-    return _store.active_contexts[-1] if len(_store.active_contexts) else None
+def reversed_iter_contexts() -> Iterable[Context]:
+    return reversed(_store.active_contexts)

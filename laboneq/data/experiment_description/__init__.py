@@ -177,3 +177,4 @@ class Sweep(Section):
     parameters: List[Parameter] = field(default_factory=list)
     reset_oscillator_phase: bool = None
     execution_type: ExecutionType = None
+    chunk_count: int = 1

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
@@ -89,8 +90,8 @@ class ZiApiWrapperBase(ABC):
     def name(self):
         return self._name
 
-    def _log_node(self, str):
-        self._node_logger.debug(str)
+    def _log_node(self, msg):
+        self._node_logger.debug(msg)
 
     def _log_set(self, method_name: str, daq_action):
         path = daq_action.path
@@ -192,11 +193,12 @@ class ServerQualifier:
     dry_run: bool = True
     host: str = None
     port: int = 8004
-    api_level: int = None
     ignore_version_mismatch: bool = False
 
 
 class DaqWrapper(ZiApiWrapperBase):
+    _API_LEVEL = 6  # The ZI device API level used by this class
+
     def __init__(self, name, server_qualifier: ServerQualifier):
         super().__init__(name)
         self._server_qualifier = server_qualifier
@@ -211,7 +213,7 @@ class DaqWrapper(ZiApiWrapperBase):
             self._zi_api_object = ZiApiClass(
                 self.server_qualifier.host,
                 self.server_qualifier.port,
-                self.server_qualifier.api_level,
+                self._API_LEVEL,
             )
             self.node_monitor = NodeMonitor(self._zi_api_object)
         except RuntimeError as exp:
@@ -251,14 +253,31 @@ class DaqWrapper(ZiApiWrapperBase):
         return f"DAQ - {self._server_qualifier.host}:{self._server_qualifier.port}"
 
     def _api_wrapper(self, method_name, *args, **kwargs):
-        try:
-            api_method = getattr(self._zi_api_object, method_name)
-            retval = api_method(*args, **kwargs)
-            return retval
-        except Exception as ex:
-            raise LabOneQControllerException(
-                f"Exception {ex} when calling method {method_name} with {args} and {kwargs}"
-            )
+        # This is a hotfix for L1-1050, can be removed once L1 migrates to HPK,
+        # presumably 23.10.
+        for attempt in range(3):
+            try:
+                api_method = getattr(self._zi_api_object, method_name)
+                retval = api_method(*args, **kwargs)
+                return retval
+            except Exception as ex:
+                if (
+                    attempt < 2
+                    and method_name == "set"
+                    and str(ex) == "ZIAPIServerException with status code: 32782 - "
+                    "Command failed internally. Extended information: Inconsistency "
+                    "during vector write: sum of numBlockElements doesn't match "
+                    "numTotalElements"
+                ):
+                    _logger.warning("Exception '%s', retrying...", ex)
+                else:
+                    d_args = "<big args>" if sys.getsizeof(args, 101) > 100 else args
+                    d_kwargs = (
+                        "<big kwargs>" if sys.getsizeof(kwargs, 101) > 100 else kwargs
+                    )
+                    raise LabOneQControllerException(
+                        f"Exception {ex} when calling method {method_name} with {d_args} and {d_kwargs}"
+                    )
 
     @cached_property
     def toolkit_session(self) -> TKSession:
@@ -342,15 +361,18 @@ class DaqWrapper(ZiApiWrapperBase):
 
         cached_values, actions_to_perform = self._filter_cached_actions(daq_actions)
 
-        for daq_action in actions_to_perform:
-            _logger.debug("get not caching: %s", daq_action.path)
+        if actions_to_perform:
+            for daq_action in actions_to_perform:
+                _logger.debug("get not caching: %s", daq_action.path)
 
-        api_input = ",".join([daq_action.path for daq_action in actions_to_perform])
+            api_input = ",".join([daq_action.path for daq_action in actions_to_perform])
 
-        daq_reply = self._api_wrapper("get", api_input, flat=True)
-        current_values = self._api_reply_to_val_history_dict(daq_reply)
+            daq_reply = self._api_wrapper("get", api_input, flat=True)
+            current_values = self._api_reply_to_val_history_dict(daq_reply)
 
-        get_values = self._update_cache_with_value_history_dict(current_values)
+            get_values = self._update_cache_with_value_history_dict(current_values)
+        else:
+            get_values = {}
 
         return {**cached_values, **get_values}
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import logging
 from enum import IntEnum
-from typing import Any
 
 from laboneq.controller.communication import (
     CachingStrategy,
@@ -21,7 +20,6 @@ from laboneq.controller.devices.zi_node_monitor import (
 )
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.controller.versioning import SUPPORT_PRE_V23_06, LabOneVersion
-from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.data.recipe import Initialization
 
 _logger = logging.getLogger(__name__)
@@ -130,27 +128,54 @@ class DevicePQSC(DeviceZI):
                 )
         return feedback_actions
 
-    def collect_execution_nodes(self):
+    def collect_execution_nodes(self, with_pipeliner: bool):
         _logger.debug("Starting execution...")
-        return [
+        nodes = []
+        nodes.append(
             DaqNodeSetAction(
                 self._daq,
                 f"/{self.serial}/execution/enable",
                 1,
                 caching_strategy=CachingStrategy.NO_CACHE,
-            ),
+            )
+        )
+        nodes.append(
             DaqNodeSetAction(
                 self._daq,
                 f"/{self.serial}/triggers/out/0/enable",
                 1,
                 caching_strategy=CachingStrategy.NO_CACHE,
-            ),
-        ]
+            )
+        )
+        return nodes
 
-    def conditions_for_execution_done(
-        self, acquisition_type: AcquisitionType
-    ) -> dict[str, Any]:
-        return {f"/{self.serial}/execution/enable": 0}
+    def collect_execution_setup_nodes(
+        self, with_pipeliner: bool
+    ) -> list[DaqNodeAction]:
+        nodes = []
+        if with_pipeliner:
+            nodes.append(
+                DaqNodeSetAction(
+                    self._daq,
+                    f"/{self.serial}/execution/synchronization/enable",
+                    1,
+                )
+            )
+        return nodes
+
+    def collect_execution_teardown_nodes(
+        self, with_pipeliner: bool
+    ) -> list[DaqNodeAction]:
+        nodes = []
+        if with_pipeliner:
+            nodes.append(
+                DaqNodeSetAction(
+                    self._daq,
+                    f"/{self.serial}/execution/synchronization/enable",
+                    0,
+                )
+            )
+        return nodes
 
     def collect_trigger_configuration_nodes(
         self, initialization: Initialization, recipe_data: RecipeData

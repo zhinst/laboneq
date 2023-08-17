@@ -24,12 +24,6 @@ def post_process(source, target, conversion_function_lookup):
                 source_type_string="List",
                 conversion_function_lookup=conversion_function_lookup,
             )
-        if source.trigger is not None:
-            target.trigger = convert_dynamic(
-                source.trigger,
-                source_type_string="Dict",
-                conversion_function_lookup=conversion_function_lookup,
-            )
         return target
 
     if type(target) == Experiment:

@@ -259,13 +259,6 @@ def convert_Experiment(orig: ExperimentDSL):
     if orig is None:
         return None
     retval = ExperimentDATA()
-    retval._section_stack = convert_dynamic(
-        orig._section_stack,
-        source_type_hint=SectionDSL,
-        target_type_hint=SectionDATA,
-        orig_is_collection=True,
-        conversion_function_lookup=get_converter_function_experiment_description,
-    )
     retval.epsilon = orig.epsilon
     retval.sections = convert_dynamic(
         orig.sections,
@@ -508,7 +501,7 @@ def convert_Section(orig: SectionDSL):
     )
     retval.trigger = convert_dynamic(
         orig.trigger,
-        source_type_string="Dict[str, Dict]",
+        source_type_string="Dict",
         target_type_string="Dict",
         orig_is_collection=True,
         conversion_function_lookup=get_converter_function_experiment_description,
@@ -643,6 +636,7 @@ def convert_Sweep(orig: SweepDSL):
     )
     retval.reset_oscillator_phase = orig.reset_oscillator_phase
     retval.uid = orig.uid
+    retval.chunk_count = orig.chunk_count
     return post_process(
         orig,
         retval,

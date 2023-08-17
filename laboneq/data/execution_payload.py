@@ -34,7 +34,6 @@ class TargetServer:
     uid: str = None
     host: str = None
     port: int = None
-    api_level: int = None
 
 
 class TargetChannelType(EnumReprMixin, Enum):
@@ -95,7 +94,4 @@ class ExecutionPayload:
     compiled_experiment_hash: str = None
     experiment_hash: str = None
     device_setup_hash: str = None
-    src: list[SourceCode] = field(
-        default_factory=list
-    )  # TODO(2K): Controller uses scheduled_experiment.src
     scheduled_experiment: ScheduledExperiment | None = None

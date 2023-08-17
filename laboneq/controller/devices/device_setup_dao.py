@@ -29,7 +29,6 @@ def _make_server_qualifier(
         dry_run=dry_run,
         host=server.host,
         port=server.port,
-        api_level=server.api_level,
         ignore_version_mismatch=ignore_version_mismatch,
     )
 

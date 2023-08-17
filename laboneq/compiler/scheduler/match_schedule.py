@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from attrs import define
@@ -31,19 +30,6 @@ if TYPE_CHECKING:
     from laboneq.compiler.scheduler.schedule_data import ScheduleData
 
 _logger = logging.getLogger(__name__)
-
-# Temporary corrected timing model
-@dataclass
-class QCCSFeedbackModelPlus(QCCSFeedbackModel):
-    additional_latency: int = 6
-
-    def get_latency(self, length: int) -> int:
-        return super().get_latency(length) + self.additional_latency
-
-
-FeedbackTimingModel = lambda *args, **kwargs: QCCSFeedbackModelPlus(
-    kwargs["description"]
-)
 
 # Copy from device_zi.py (without checks)
 def _get_total_rounded_delay_samples(
@@ -159,9 +145,8 @@ def _compute_start_with_latency(
                 "shfqc": SGType.SHFQC,
             }[sg_device_type.str_value]
 
-        model = FeedbackTimingModel if not local else QCCSFeedbackModel
         if toolkit_qatype is not None:
-            time_of_arrival_at_register = model(
+            time_of_arrival_at_register = QCCSFeedbackModel(
                 description=get_feedback_system_description(
                     generator_type=toolkit_sgtype,
                     analyzer_type=toolkit_qatype,

@@ -6,6 +6,7 @@ from .nonqc import NonQC
 from .pqsc import PQSC
 from .shfppc import SHFPPC
 from .shfqa import SHFQA
+from .shfqc import SHFQC
 from .shfsg import SHFSG
 from .uhfqa import UHFQA
 

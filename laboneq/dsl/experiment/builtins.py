@@ -15,7 +15,7 @@ from laboneq.dsl import Parameter
 from laboneq.dsl.calibration import Calibration
 from laboneq.dsl.device.io_units import LogicalSignal
 from laboneq.dsl.experiment.experiment_context import (
-    ExperimentContext,
+    ExperimentContextManager,
     current_experiment_context,
 )
 from laboneq.dsl.experiment.pulse import Pulse
@@ -46,12 +46,12 @@ __all__ = [
 ]
 
 from laboneq.dsl.experiment.section_context import (
-    AcquireLoopNtSectionContext,
-    AcquireLoopRtSectionContext,
-    CaseSectionContext,
-    MatchSectionContext,
-    SectionSectionContext,
-    SweepSectionContext,
+    AcquireLoopNtSectionContextManager,
+    AcquireLoopRtSectionContextManager,
+    CaseSectionContextManager,
+    MatchSectionContextManager,
+    SectionContextManager,
+    SweepSectionContextManager,
     active_section,
 )
 
@@ -64,12 +64,12 @@ def _active_experiment() -> Experiment:
 
 
 def section(*args, **kwargs):
-    return SectionSectionContext(*args, **kwargs)
+    return SectionContextManager(*args, **kwargs)
 
 
 def sweep(*args, parameter=None, **kwargs):
     parameters = parameter if isinstance(parameter, list) else [parameter]
-    return SweepSectionContext(*args, parameters=parameters, **kwargs)
+    return SweepSectionContextManager(*args, parameters=parameters, **kwargs)
 
 
 def acquire_loop_rt(
@@ -81,7 +81,7 @@ def acquire_loop_rt(
     uid=None,
     reset_oscillator_phase=False,
 ):
-    return AcquireLoopRtSectionContext(
+    return AcquireLoopRtSectionContextManager(
         count=count,
         averaging_mode=averaging_mode,
         repetition_mode=repetition_mode,
@@ -93,7 +93,7 @@ def acquire_loop_rt(
 
 
 def acquire_loop_nt(*args, **kwargs):
-    return AcquireLoopNtSectionContext(*args, **kwargs)
+    return AcquireLoopNtSectionContextManager(*args, **kwargs)
 
 
 def match(
@@ -102,13 +102,13 @@ def match(
     uid: str = None,
     play_after: str | list[str] | None = None,
 ):
-    return MatchSectionContext(
+    return MatchSectionContextManager(
         handle=handle, user_register=user_register, uid=uid, play_after=play_after
     )
 
 
 def case(state: int, uid: str = None):
-    return CaseSectionContext(state=state, uid=uid)
+    return CaseSectionContextManager(state=state, uid=uid)
 
 
 def call(funcname, **kwargs):
@@ -230,20 +230,20 @@ def for_each(iterable, uid=None, axis_name=None, **kwargs):
 
 
 def experiment(uid=None, signals=None):
-    return ExperimentContext(uid=uid, signals=signals)
+    return ExperimentContextManager(uid=uid, signals=signals)
 
 
 def qubit_experiment(qubits: list, **kwargs):
     def decorator(f):
         @wraps(f)
         def wrapper(*inner_args, **inner_kwargs):
-            context = ExperimentContext(
+            context = ExperimentContextManager(
                 uid=f.__name__,
                 signals=[s for q in qubits for s in q.experiment_signals()],
             )
-            with context:
+            with context as experiment:
                 f(*inner_args, **inner_kwargs)
-            return context.experiment
+            return experiment
 
         return wrapper
 

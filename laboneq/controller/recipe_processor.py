@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -90,6 +91,8 @@ class RtExecutionInfo:
     averages: int
     averaging_mode: AveragingMode
     acquisition_type: AcquisitionType
+    pipeliner_chunk_count: int
+    pipeliner_repetitions: int
 
     # signal id -> set of section ids
     acquire_sections: Dict[str, Set[str]] = field(default_factory=dict)
@@ -105,12 +108,17 @@ class RtExecutionInfo:
     def get_acquisition_type(rt_execution_infos: RtExecutionInfos) -> AcquisitionType:
         # Currently only single RT execution per experiment supported
         rt_execution_info = next(iter(rt_execution_infos.values()), None)
-        acquisition_type = (
+        return RtExecutionInfo.get_acquisition_type_def(rt_execution_info)
+
+    @staticmethod
+    def get_acquisition_type_def(
+        rt_execution_info: RtExecutionInfo | None,
+    ) -> AcquisitionType:
+        return (
             AcquisitionType.INTEGRATION
             if rt_execution_info is None
             else rt_execution_info.acquisition_type
         )
-        return acquisition_type
 
     def signal_by_handle(self, handle: str) -> Optional[str]:
         return next(
@@ -236,12 +244,14 @@ class _LoopStackEntry:
         return self.axis_points[0] if len(self.axis_points) == 1 else self.axis_points
 
 
-class _ResultShapeCalculator(ExecutorBase):
+class _LoopsPreprocessor(ExecutorBase):
     def __init__(self):
         super().__init__(looping_mode=LoopingMode.ONCE)
 
         self.result_shapes: HandleResultShapes = {}
         self.rt_execution_infos: RtExecutionInfos = {}
+        self.pipeliner_chunk_count: int = None
+        self.pipeliner_repetitions: int = None
 
         self._loop_stack: List[_LoopStackEntry] = []
         self._current_rt_uid: str = None
@@ -295,9 +305,13 @@ class _ResultShapeCalculator(ExecutorBase):
     @contextmanager
     def for_loop_handler(self, count: int, index: int, loop_flags: LoopFlags):
         if loop_flags.is_pipeline:
-            self._chunk_count = count
+            self.pipeliner_chunk_count = count
+            self.pipeliner_repetitions = math.prod(
+                len(l.axis_points) for l in self._loop_stack
+            )
             yield
-            self._chunk_count = None
+            self.pipeliner_chunk_count = None
+            self.pipeliner_repetitions = None
             return
 
         self._loop_stack.append(
@@ -340,6 +354,8 @@ class _ResultShapeCalculator(ExecutorBase):
                 averages=count,
                 averaging_mode=averaging_mode,
                 acquisition_type=acquisition_type,
+                pipeliner_chunk_count=self.pipeliner_chunk_count,
+                pipeliner_repetitions=self.pipeliner_repetitions,
             ),
         )
 
@@ -352,16 +368,10 @@ class _ResultShapeCalculator(ExecutorBase):
         self._current_rt_uid = None
         self._current_rt_info = None
 
-
-def _calculate_result_shapes(
-    execution: Statement,
-) -> Tuple[HandleResultShapes, RtExecutionInfos]:
-    # Skip for recipe-only execution (used in older tests)
-    if execution is None:
-        return {}, {}
-    rs_calc = _ResultShapeCalculator()
-    rs_calc.run(execution)
-    return rs_calc.result_shapes, rs_calc.rt_execution_infos
+    def run(self, root_sequence: Statement):
+        # Skip for recipe-only execution (used in older tests)
+        if root_sequence is not None:
+            super().run(root_sequence)
 
 
 def _calculate_awg_configs(
@@ -533,7 +543,9 @@ def pre_process_compiled(
             iq_settings=_pre_process_iq_settings_hdawg(initialization)
         )
 
-    result_shapes, rt_execution_infos = _calculate_result_shapes(execution)
+    lp = _LoopsPreprocessor()
+    lp.run(execution)
+    rt_execution_infos = lp.rt_execution_infos
 
     awg_configs = _calculate_awg_configs(rt_execution_infos, recipe, labone_version)
     attribute_value_tracker, oscillator_ids = _pre_process_attributes(recipe, devices)
@@ -542,7 +554,7 @@ def pre_process_compiled(
         scheduled_experiment=scheduled_experiment,
         recipe=recipe,
         execution=execution,
-        result_shapes=result_shapes,
+        result_shapes=lp.result_shapes,
         rt_execution_infos=rt_execution_infos,
         device_settings=device_settings,
         awg_configs=awg_configs,

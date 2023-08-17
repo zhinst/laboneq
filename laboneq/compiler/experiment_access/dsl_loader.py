@@ -12,7 +12,6 @@ from types import SimpleNamespace
 from typing import Any, Callable, Dict, Tuple
 
 from laboneq._utils import ensure_list, id_generator
-from laboneq.compiler.experiment_access.acquire_info import AcquireInfo
 from laboneq.compiler.experiment_access.loader_base import LoaderBase
 from laboneq.compiler.experiment_access.param_ref import ParamRef
 from laboneq.core.exceptions import LabOneQException
@@ -25,6 +24,7 @@ from laboneq.core.types.enums import (
     SectionAlignment,
 )
 from laboneq.data.compilation_job import (
+    AcquireInfo,
     AmplifierPumpInfo,
     FollowerInfo,
     Marker,
@@ -178,10 +178,7 @@ class DSLLoader(LoaderBase):
             mapped_logical_signals[mapped_ls] = sig_copy
             experiment_signals_by_physical_channel.setdefault(
                 mapped_ls.physical_channel, []
-            )
-            experiment_signals_by_physical_channel[mapped_ls.physical_channel].append(
-                sig_copy
-            )
+            ).append(sig_copy)
 
         from laboneq.dsl.device.io_units.physical_channel import (
             PHYSICAL_CHANNEL_CALIBRATION_FIELDS,
@@ -395,16 +392,13 @@ class DSLLoader(LoaderBase):
                 local_ports = dest_path_devices[lsuid].get("local_ports")
 
                 for i, local_port in enumerate(local_ports):
-                    current_port = device_setup.instrument_by_uid(device).output_by_uid(
+                    instrument = device_setup.instrument_by_uid(device)
+                    current_port = instrument.output_by_uid(
                         local_port
-                    )
-                    if current_port is None:
-                        current_port = device_setup.instrument_by_uid(
-                            device
-                        ).input_by_uid(local_port)
+                    ) or instrument.input_by_uid(local_port)
                     if current_port is None:
                         raise RuntimeError(
-                            f"local port {local_port} not found in {device_setup.instrument_by_uid(device)}"
+                            f"local port {local_port} not found in {instrument}"
                         )
                     if current_port.direction == IODirection.IN:
                         if len(current_port.physical_port_ids) < 2:
@@ -762,7 +756,6 @@ class DSLLoader(LoaderBase):
         exchanger_map: Callable[[Any], Any],
         instance_id: str,
     ):
-
         _auto_pulse_id = (f"{section.uid}__auto_pulse_{i}" for i in itertools.count())
         for operation in exchanger_map(section).operations:
             if hasattr(operation, "signal"):

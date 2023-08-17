@@ -117,6 +117,9 @@ class RealtimeCompiler:
         return compiler_output
 
     def prepare_schedule(self):
+        if not self._settings.PREPARE_PSV_DATA:
+            return None
+
         event_list = self._scheduler.event_timing(
             expand_loops=self._settings.EXPAND_LOOPS_FOR_SCHEDULE,
             max_events=self._settings.MAX_EVENTS_TO_PUBLISH,

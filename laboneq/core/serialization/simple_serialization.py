@@ -7,7 +7,7 @@ import functools
 import importlib
 import inspect
 import logging
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from enum import Enum
 from io import BytesIO
 from typing import Dict
@@ -88,27 +88,56 @@ def short_typename(o):
     return type(o).__name__
 
 
-def module_classes(modules_list):
+def module_classes(modules_list, class_names=None):
     classes_by_fullname = SortedDict()
     classes_by_short_name = SortedDict()
     for x in modules_list:
         module = importlib.import_module(x)
         for name, member in inspect.getmembers(module):
             if inspect.isclass(member):
-                classes_by_fullname[full_classname(member)] = member
-                classes_by_short_name[member.__name__] = member
+                if class_names is None or member.__name__ in class_names:
+                    classes_by_fullname[full_classname(member)] = member
+                    classes_by_short_name[member.__name__] = member
     return classes_by_fullname, classes_by_short_name
 
 
-def serialize_to_dict(to_serialize, emit_enum_types=False):
+@functools.lru_cache()
+def all_slots(cls):
+    slots = set()
+    for cls in cls.__mro__:
+        if isinstance(getattr(cls, "__slots__", []), str):
+            slots.add(getattr(cls, "__slots__", []))
+        else:
+            for attr in getattr(cls, "__slots__", []):
+                slots.add(attr)
+    return list(slots)
 
+
+__fields_cache = dict()
+
+
+def all_fields(obj):
+    if short_typename(obj) == "NumpyArrayRepr":
+        return (
+            [fname for fname in obj.__dict__.keys()] if hasattr(obj, "__dict__") else []
+        )
+    if obj.__class__ not in __fields_cache:
+        __fields_cache[obj.__class__] = (
+            [fname for fname in obj.__dict__.keys()] if hasattr(obj, "__dict__") else []
+        )
+    return __fields_cache[obj.__class__]
+
+
+def get_fields_and_slots(obj):
+    slots = all_slots(type(obj))
+    fields = all_fields(obj)
+    return slots + fields
+
+
+def serialize_to_dict(to_serialize, emit_enum_types=False, omit_none_fields=False):
     if to_serialize is None:
         return
-    if (
-        isinstance(to_serialize, str)
-        or isinstance(to_serialize, float)
-        or isinstance(to_serialize, int)
-    ):
+    if isinstance(to_serialize, (str, float, int, np.int64, np.complex128, complex)):
         return to_serialize
 
     if isinstance(to_serialize, Enum):
@@ -122,27 +151,40 @@ def serialize_to_dict(to_serialize, emit_enum_types=False):
             return str(to_serialize)
 
     if isinstance(to_serialize, np.ndarray):
-        to_serialize = to_serialize.tolist()
+        return NumpyArrayRepr(array_data=to_serialize)
 
     if isinstance(to_serialize, list):
-        retval = [serialize_to_dict(item, emit_enum_types) for item in to_serialize]
+        return [serialize_to_dict(item, emit_enum_types) for item in to_serialize]
+
+    if isinstance(to_serialize, (tuple, set)):
+        retval = {
+            "__type": full_typename(to_serialize),
+            "__content": [
+                serialize_to_dict(item, emit_enum_types) for item in to_serialize
+            ],
+        }
+        if isinstance(to_serialize, set):
+            retval["__content"] = sorted(retval["__content"])
         return retval
 
     mapping = {}
     sub_dict = {}
     dir_list = _dir(to_serialize.__class__)
     is_object = False
-    if hasattr(to_serialize, "__dict__"):
+
+    if hasattr(to_serialize, "__dict__") or hasattr(to_serialize, "__slots__"):
         is_object = True
-        mapping = to_serialize.__dict__
+        all_attrs_slots = get_fields_and_slots(to_serialize)
+        mapping = {a_or_s: getattr(to_serialize, a_or_s) for a_or_s in all_attrs_slots}
         sub_dict["__type"] = full_typename(to_serialize)
+
     elif isinstance(to_serialize, Mapping):
         mapping = to_serialize
 
     for k, v in mapping.items():
         outkey = k
         outvalue = v
-        if k[0] == "_" and is_object:
+        if is_object and k[0] == "_":
             if k[1:] in dir_list:
                 outkey = k[1:]
                 outvalue = getattr(to_serialize, outkey)
@@ -150,15 +192,16 @@ def serialize_to_dict(to_serialize, emit_enum_types=False):
                 continue
         if isinstance(outvalue, Mapping):
             sub_dict[outkey] = serialize_to_dict(v, emit_enum_types)
-        elif isinstance(outvalue, Iterable) and not isinstance(outvalue, str):
+        elif isinstance(outvalue, list):
             sub_dict[outkey] = []
-            index = 0
             for item in outvalue:
                 sub_dict[outkey].append(serialize_to_dict(item, emit_enum_types))
-                index += 1
         else:
             sub_dict[outkey] = serialize_to_dict(outvalue, emit_enum_types)
-    sub_dict = {k: v for k, v in sub_dict.items() if v is not None}
+
+    if is_object and omit_none_fields:
+        sub_dict = {k: v for k, v in sub_dict.items() if v is not None}
+
     return sub_dict
 
 
@@ -174,7 +217,6 @@ def construct_object(content, mapped_class):
     has_kwargs = "kwargs" in arg_names
     filtered_args = {}
     for k, v in content.items():
-
         if k in arg_names:
             filtered_args[k] = v
         elif has_kwargs and isinstance(v, Mapping):
@@ -191,13 +233,24 @@ def create_ref(item, item_ref_type):
 
 
 def serialize_to_dict_with_entities(
-    to_serialize, entity_classes, entities_collector, emit_enum_types=False
+    to_serialize,
+    entity_classes,
+    entities_collector,
+    emit_enum_types=False,
+    omit_none_fields=False,
 ):
     cls = to_serialize.__class__
     if to_serialize is None:
         return None
-    if _issubclass(cls, (bool, int, float, str)):
+    if _issubclass(cls, (bool, int, float, str, np.int64)):
         return to_serialize
+
+    if _issubclass(cls, (np.complex128, complex)):
+        return {
+            "__type": "np.complex128",
+            "real": to_serialize.real,
+            "imag": to_serialize.imag,
+        }
 
     if _issubclass(cls, Enum):
         if emit_enum_types:
@@ -214,6 +267,7 @@ def serialize_to_dict_with_entities(
             entity_classes,
             entities_collector,
             emit_enum_types,
+            omit_none_fields,
         )
 
     if _issubclass(cls, list):
@@ -236,7 +290,11 @@ def serialize_to_dict_with_entities(
                     entities_collector[entity_typename_short][
                         item.uid
                     ] = serialize_to_dict_with_entities(
-                        item, entity_classes, entities_collector, emit_enum_types
+                        item,
+                        entity_classes,
+                        entities_collector,
+                        emit_enum_types,
+                        omit_none_fields,
                     )
                     entities_collector[entity_typename_short][item.uid][ID_KEY] = id(
                         item
@@ -245,18 +303,41 @@ def serialize_to_dict_with_entities(
             else:
                 retval.append(
                     serialize_to_dict_with_entities(
-                        item, entity_classes, entities_collector, emit_enum_types
+                        item,
+                        entity_classes,
+                        entities_collector,
+                        emit_enum_types,
+                        omit_none_fields,
                     )
                 )
         return retval
+
+    if _issubclass(cls, (set, tuple)):
+        sub_dict = {}
+        sub_dict["__type"] = full_typename(to_serialize)
+        sub_dict["__contents"] = []
+        for cotent in to_serialize:
+            sub_dict["__contents"].append(
+                serialize_to_dict_with_entities(
+                    cotent,
+                    entity_classes,
+                    entities_collector,
+                    emit_enum_types,
+                    omit_none_fields,
+                )
+            )
+        if _issubclass(cls, set):
+            sub_dict["__contents"] = sorted(sub_dict["__contents"])
+        return sub_dict
 
     mapping = {}
     sub_dict = {}
     dir_list = _dir(to_serialize.__class__)
     is_object = False
+
     if _issubclass(cls, Mapping):
         mapping = to_serialize
-    elif hasattr(to_serialize, "__dict__"):
+    elif hasattr(to_serialize, "__dict__") or hasattr(to_serialize, "__slots__"):
         is_object = True
         item_is_entity, item_entity_class = is_entity_class(
             to_serialize.__class__, entity_classes
@@ -265,7 +346,8 @@ def serialize_to_dict_with_entities(
             if to_serialize.uid is None:
                 raise RuntimeError(f"to_serialize has uid of None, {to_serialize}")
 
-        mapping = to_serialize.__dict__
+        all_attrs_slots = get_fields_and_slots(to_serialize)
+        mapping = {a_or_s: getattr(to_serialize, a_or_s) for a_or_s in all_attrs_slots}
         sub_dict["__type"] = short_typename(to_serialize)
 
     for k, v in mapping.items():
@@ -295,7 +377,11 @@ def serialize_to_dict_with_entities(
                 entities_collector[entity_typename_short][
                     v.uid
                 ] = serialize_to_dict_with_entities(
-                    v, entity_classes, entities_collector, emit_enum_types
+                    v,
+                    entity_classes,
+                    entities_collector,
+                    emit_enum_types,
+                    omit_none_fields,
                 )
                 entities_collector[entity_typename_short][v.uid][ID_KEY] = id(v)
             else:
@@ -311,13 +397,14 @@ def serialize_to_dict_with_entities(
                 entity_classes,
                 entities_collector,
                 emit_enum_types,
+                omit_none_fields,
             )
 
         elif _issubclass(item_class, Mapping):
             sub_dict[outkey] = serialize_to_dict_with_entities(
-                v, entity_classes, entities_collector, emit_enum_types
+                v, entity_classes, entities_collector, emit_enum_types, omit_none_fields
             )
-        elif _issubclass(item_class, Iterable) and not _issubclass(item_class, str):
+        elif _issubclass(item_class, list):
             sub_dict[outkey] = []
             for item in outvalue:
                 item_is_entity, item_entity_class = is_entity_class(
@@ -341,6 +428,7 @@ def serialize_to_dict_with_entities(
                             entity_classes,
                             entities_collector,
                             emit_enum_types,
+                            omit_none_fields,
                         )
                         entities_collector[entity_typename_short][item.uid][
                             ID_KEY
@@ -361,19 +449,30 @@ def serialize_to_dict_with_entities(
                             entity_classes,
                             entities_collector,
                             emit_enum_types,
+                            omit_none_fields,
                         )
                     )
         else:
             sub_dict[outkey] = serialize_to_dict_with_entities(
-                outvalue, entity_classes, entities_collector, emit_enum_types
+                outvalue,
+                entity_classes,
+                entities_collector,
+                emit_enum_types,
+                omit_none_fields,
             )
-    if is_object:
+
+    if is_object and omit_none_fields:
         sub_dict = {k: v for k, v in sub_dict.items() if v is not None}
+
     return sub_dict
 
 
 def serialize_to_dict_with_ref(
-    to_serialize, entity_classes, entity_mapper=None, emit_enum_types=False
+    to_serialize,
+    entity_classes,
+    entity_mapper=None,
+    emit_enum_types=False,
+    omit_none_fields=False,
 ):
     if entity_mapper is None:
         entity_mapper = {}
@@ -383,6 +482,7 @@ def serialize_to_dict_with_ref(
         entity_classes,
         entities_collector,
         emit_enum_types=emit_enum_types,
+        omit_none_fields=omit_none_fields,
     )
 
     for k, v in entities_collector.items():
@@ -451,6 +551,31 @@ def deserialize_from_dict_with_ref_recursor(
         if type_name is None:
             return out_mapping
         type_name_short = type_name.split(".")[-1]
+        if type_name_short == "set":
+            return {
+                deserialize_from_dict_with_ref_recursor(
+                    item, class_mapping, entity_pool_raw, entity_pool_deserialized
+                )
+                if item.__class__ not in (bool, int, float, str)
+                else item
+                # for performance: do not recurse on simple primitives
+                for item in data["__contents"]
+            }
+        if type_name_short == "tuple":
+            return tuple(
+                deserialize_from_dict_with_ref_recursor(
+                    item, class_mapping, entity_pool_raw, entity_pool_deserialized
+                )
+                if item.__class__ not in (bool, int, float, str)
+                else item
+                # for performance: do not recurse on simple primitives
+                for item in data["__contents"]
+            )
+
+        if type_name_short == "complex128":
+            return np.complex128(data["real"] + data["imag"] * 1j)
+        if type_name_short == "complex":
+            return complex(data["real"] + data["imag"] * 1j)
         mapped_class = class_mapping.get(type_name_short)
         if mapped_class is None:
             raise Exception(
@@ -503,12 +628,24 @@ def deserialize_from_dict_with_ref(data, class_mapping, entity_classes, entity_m
 
 def deserialize_from_dict(data, class_mapping):
     cls = data.__class__
+    if _issubclass(cls, list):
+        return [deserialize_from_dict(item, class_mapping) for item in data]
     if _issubclass(cls, Mapping):
+        type_name = data.get("__type")
+        if type_name == "set":
+            return {
+                deserialize_from_dict(item, class_mapping)
+                for item in data.get("__content")
+            }
+        if type_name == "tuple":
+            return tuple(
+                deserialize_from_dict(item, class_mapping)
+                for item in data.get("__content")
+            )
         out_mapping = {}
         for k, v in data.items():
             if k != "__type":
                 out_mapping[k] = deserialize_from_dict(v, class_mapping)
-        type_name = data.get("__type")
         if type_name is not None:
             type_name_short = type_name.split(".")[-1]
             mapped_class = class_mapping.get(type_name_short)
@@ -519,10 +656,9 @@ def deserialize_from_dict(data, class_mapping):
             return construct_object(out_mapping, mapped_class)
         else:
             return out_mapping
-    elif _issubclass(cls, Iterable) and not _issubclass(cls, str):
-        out_list = []
-        for item in data:
-            out_list.append(deserialize_from_dict(item, class_mapping))
-        return out_list
+    elif _issubclass(cls, NumpyArrayRepr):
+        nparray_dir = get_fields_and_slots(data)
+        mapping = {a_or_s: getattr(data, a_or_s) for a_or_s in nparray_dir}
+        return NumpyArrayRepr(**mapping)
     else:
         return data

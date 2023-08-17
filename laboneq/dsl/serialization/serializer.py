@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
+from collections import OrderedDict
+from itertools import chain
 from typing import Dict
 
 import orjson
@@ -62,24 +64,51 @@ class Serializer:
         return entity_classes, entity_mapper
 
     @staticmethod
-    def to_json(serializable_object) -> str:
-        options = orjson.OPT_SORT_KEYS | orjson.OPT_SERIALIZE_NUMPY
-        if isinstance(serializable_object, dict):
-            json_dump = orjson.dumps(serializable_object, option=options)
-        else:
-            entity_classes, entity_mapper = Serializer._entity_config()
+    def to_json_struct(serializable_object, omit_none_fields=False) -> str:
+        entity_classes, entity_mapper = Serializer._entity_config()
 
-            json_struct = serialize_to_dict_with_ref(
-                serializable_object, entity_classes, entity_mapper, emit_enum_types=True
-            )
-            json_dump = orjson.dumps(json_struct, option=options)
-        return json_dump.decode()
+        json_struct = serialize_to_dict_with_ref(
+            serializable_object,
+            entity_classes,
+            entity_mapper,
+            emit_enum_types=True,
+            omit_none_fields=omit_none_fields,
+        )
+
+        return json_struct
 
     @staticmethod
-    def to_dict(serializable_object) -> Dict:
+    def to_json(serializable_object, omit_none_fields=False) -> str:
+        options = orjson.OPT_SORT_KEYS | orjson.OPT_SERIALIZE_NUMPY
+        try:
+            if isinstance(serializable_object, dict):
+                json_dump = orjson.dumps(serializable_object, option=options)
+            else:
+                entity_classes, entity_mapper = Serializer._entity_config()
+
+                json_struct = serialize_to_dict_with_ref(
+                    serializable_object,
+                    entity_classes,
+                    entity_mapper,
+                    emit_enum_types=True,
+                    omit_none_fields=omit_none_fields,
+                )
+                json_dump = orjson.dumps(json_struct, option=options)
+            return json_dump.decode()
+        except TypeError as ex:
+            raise LabOneQException(
+                f"Serializing dictionaries with non integer keys is not supported: {ex}"
+            ) from ex
+
+    @staticmethod
+    def to_dict(serializable_object, omit_none_fields=False) -> Dict:
         entity_classes, entity_mapper = Serializer._entity_config()
         return serialize_to_dict_with_ref(
-            serializable_object, entity_classes, entity_mapper, emit_enum_types=True
+            serializable_object,
+            entity_classes,
+            entity_mapper,
+            emit_enum_types=True,
+            omit_none_fields=omit_none_fields,
         )
 
     @staticmethod
@@ -117,8 +146,34 @@ class Serializer:
             "laboneq.dsl.device.instruments",
             "laboneq.dsl.calibration.units",
         ]
-        _, classes_by_short_name = module_classes(dsl_modules)
-        return classes_by_short_name
+        schedule_modules = [
+            "laboneq.compiler.scheduler.scheduler",
+        ]
+        _, classes_by_short_name = module_classes(dsl_modules + schedule_modules)
+        # TODO: remove this after migration to new data types is complete (?)
+        _, classes_by_short_name_compilation_job = module_classes(
+            ["laboneq.data.compilation_job"],
+            class_names=[
+                "DeviceInfoType",
+                "AmplifierPumpInfo",
+                "DeviceInfo",
+                "OscillatorInfo",
+                "SignalInfo",
+                "MixerCalibrationInfo",
+                "PrecompensationInfo",
+                "PulseDef",
+                "FollowerInfo",
+                "AcquireInfo",
+                "SignalRange",
+                "Marker",
+            ],
+        )
+        return OrderedDict(
+            chain(
+                classes_by_short_name.items(),
+                classes_by_short_name_compilation_job.items(),
+            )
+        )
 
     @staticmethod
     def from_json(serialized_string: str, type_hint):

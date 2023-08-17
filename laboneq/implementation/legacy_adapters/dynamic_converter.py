@@ -72,6 +72,6 @@ def convert_dynamic(
         _logger.info(f"List converted with {len(retval)} elements")
         return retval
     _logger.info(
-        f"NOT doing anythiing , return source object of type {type(source_object)}, source_type_hint: {source_type_hint}, source_type_string: {source_type_string}, target_type_hint: {target_type_hint}, target_tpye_string: {target_type_string}, orig_is_collection: {orig_is_collection}, conversion_function_lookup: {conversion_function_lookup}"
+        f"NOT doing anything , return source object of type {type(source_object)}, source_type_hint: {source_type_hint}, source_type_string: {source_type_string}, target_type_hint: {target_type_hint}, target_tpye_string: {target_type_string}, orig_is_collection: {orig_is_collection}, conversion_function_lookup: {conversion_function_lookup}"
     )
     return None

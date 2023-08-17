@@ -39,12 +39,17 @@ class DeviceSHFSG(DeviceSHFBase):
         self._output_to_synth_map = [0, 0, 1, 1, 2, 2, 3, 3]
         self._wait_for_awgs = True
         self._emit_trigger = False
+        self._pipeliner_slot_tracker: list[int] = [0] * 8
 
     @property
     def dev_repr(self) -> str:
         if self.options.is_qc:
             return f"SHFQC/SG:{self.serial}"
         return f"SHFSG:{self.serial}"
+
+    @property
+    def has_pipeliner(self) -> bool:
+        return True
 
     @property
     def is_secondary(self) -> bool:
@@ -96,6 +101,45 @@ class DeviceSHFSG(DeviceSHFBase):
             enable=f"/{self.serial}/sgchannels/{index}/awg/enable",
             ready=f"/{self.serial}/sgchannels/{index}/awg/ready",
         )
+
+    def pipeliner_prepare_for_upload(self, index: int) -> list[DaqNodeAction]:
+        self._pipeliner_slot_tracker = [0] * 8
+        return [
+            DaqNodeSetAction(
+                self._daq,
+                f"/{self.serial}/sgchannels/{index}/pipeliner/mode",
+                1,
+            ),
+            DaqNodeSetAction(
+                self._daq,
+                f"/{self.serial}/sgchannels/{index}/pipeliner/reset",
+                1,
+                caching_strategy=CachingStrategy.NO_CACHE,
+            ),
+            DaqNodeSetAction(
+                self._daq,
+                f"/{self.serial}/sgchannels/{index}/synchronization/enable",
+                1,
+            ),
+        ]
+
+    def pipeliner_commit(self, index: int) -> list[DaqNodeAction]:
+        self._pipeliner_slot_tracker[index] += 1
+        return [
+            DaqNodeSetAction(
+                self._daq,
+                f"/{self.serial}/sgchannels/{index}/pipeliner/commit",
+                1,
+                caching_strategy=CachingStrategy.NO_CACHE,
+            ),
+        ]
+
+    def pipeliner_ready_conditions(self, index: int) -> dict[str, Any]:
+        max_slots = 1024  # TODO(2K): read on connect from pipeliner/maxslots
+        avail_slots = max_slots - self._pipeliner_slot_tracker[index]
+        return {
+            f"/{self.serial}/sgchannels/{index}/pipeliner/availableslots": avail_slots
+        }
 
     def _get_num_awgs(self):
         return self._channels
@@ -158,6 +202,8 @@ class DeviceSHFSG(DeviceSHFBase):
         for awg in range(self._get_num_awgs()):
             nodes.append(f"/{self.serial}/sgchannels/{awg}/awg/enable")
             nodes.append(f"/{self.serial}/sgchannels/{awg}/awg/ready")
+            nodes.append(f"/{self.serial}/sgchannels/{awg}/pipeliner/availableslots")
+            nodes.append(f"/{self.serial}/sgchannels/{awg}/pipeliner/status")
         return nodes
 
     def clock_source_control_nodes(self) -> list[NodeControlBase]:
@@ -166,19 +212,43 @@ class DeviceSHFSG(DeviceSHFBase):
         else:
             return super().clock_source_control_nodes()
 
-    def collect_execution_nodes(self):
+    def collect_execution_nodes(self, with_pipeliner: bool):
         _logger.debug("Starting execution...")
+        control_unit = "pipeliner" if with_pipeliner else "awg"
         return [
             DaqNodeSetAction(
                 self._daq,
-                f"/{self.serial}/sgchannels/{awg_index}/awg/enable",
+                f"/{self.serial}/sgchannels/{awg_index}/{control_unit}/enable",
                 1,
                 caching_strategy=CachingStrategy.NO_CACHE,
             )
             for awg_index in self._allocated_awgs
         ]
 
-    def collect_start_execution_nodes(self):
+    def collect_execution_setup_nodes(
+        self, with_pipeliner: bool
+    ) -> list[DaqNodeAction]:
+        nodes = []
+        if with_pipeliner:
+            if self._emit_trigger:
+                nodes.append(
+                    DaqNodeSetAction(
+                        self._daq,
+                        f"/{self.serial}/system/internaltrigger/synchronization/enable",
+                        1,
+                    )
+                )
+            else:
+                nodes.append(
+                    DaqNodeSetAction(
+                        self._daq,
+                        f"/{self.serial}/system/synchronization/source",
+                        1,  # external
+                    )
+                )
+        return nodes
+
+    def collect_internal_start_execution_nodes(self):
         if self._emit_trigger:
             return [
                 DaqNodeSetAction(
@@ -190,19 +260,29 @@ class DeviceSHFSG(DeviceSHFBase):
             ]
         return []
 
-    def conditions_for_execution_ready(self) -> dict[str, Any]:
+    def conditions_for_execution_ready(self, with_pipeliner: bool) -> dict[str, Any]:
         conditions: dict[str, Any] = {}
         if self._wait_for_awgs:
             for awg_index in self._allocated_awgs:
-                conditions[f"/{self.serial}/sgchannels/{awg_index}/awg/enable"] = 1
+                if with_pipeliner:
+                    conditions[
+                        f"/{self.serial}/sgchannels/{awg_index}/pipeliner/status"
+                    ] = 1  # exec
+                else:
+                    conditions[f"/{self.serial}/sgchannels/{awg_index}/awg/enable"] = 1
         return conditions
 
     def conditions_for_execution_done(
-        self, acquisition_type: AcquisitionType
+        self, acquisition_type: AcquisitionType, with_pipeliner: bool
     ) -> dict[str, Any]:
         conditions: dict[str, Any] = {}
         for awg_index in self._allocated_awgs:
-            conditions[f"/{self.serial}/sgchannels/{awg_index}/awg/enable"] = 0
+            if with_pipeliner:
+                conditions[
+                    f"/{self.serial}/sgchannels/{awg_index}/pipeliner/status"
+                ] = 3  # done
+            else:
+                conditions[f"/{self.serial}/sgchannels/{awg_index}/awg/enable"] = 0
         return conditions
 
     def _validate_initialization(self, initialization: Initialization):
@@ -442,11 +522,12 @@ class DeviceSHFSG(DeviceSHFBase):
         ntc = []
 
         for awg_key, awg_config in recipe_data.awg_configs.items():
-            if (
-                awg_key.device_uid != initialization.device_uid
-                or awg_config.qa_signal_id is None
-            ):
+            if awg_key.device_uid != initialization.device_uid:
                 continue
+
+            if awg_config.qa_signal_id is None:
+                continue
+
             if awg_config.source_feedback_register is None and self.is_secondary:
                 # local feedback
                 ntc.extend(
@@ -487,8 +568,8 @@ class DeviceSHFSG(DeviceSHFBase):
                         ),
                     ]
                 )
-        triggering_mode = initialization.config.triggering_mode
 
+        triggering_mode = initialization.config.triggering_mode
         if triggering_mode == TriggeringMode.ZSYNC_FOLLOWER:
             pass
         elif triggering_mode in (
@@ -535,12 +616,38 @@ class DeviceSHFSG(DeviceSHFBase):
 
     def collect_reset_nodes(self) -> list[DaqNodeAction]:
         reset_nodes = super().collect_reset_nodes()
-        reset_nodes.append(
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/sgchannels/*/awg/enable",
-                0,
-                caching_strategy=CachingStrategy.NO_CACHE,
-            )
+        reset_nodes.extend(
+            [
+                DaqNodeSetAction(
+                    self._daq,
+                    f"/{self.serial}/sgchannels/*/awg/enable",
+                    0,
+                    caching_strategy=CachingStrategy.NO_CACHE,
+                ),
+                DaqNodeSetAction(
+                    self._daq,
+                    f"/{self.serial}/sgchannels/*/pipeliner/mode",
+                    0,  # off
+                    caching_strategy=CachingStrategy.NO_CACHE,
+                ),
+                DaqNodeSetAction(
+                    self._daq,
+                    f"/{self.serial}/sgchannels/*/synchronization/enable",
+                    0,
+                    caching_strategy=CachingStrategy.NO_CACHE,
+                ),
+                DaqNodeSetAction(
+                    self._daq,
+                    f"/{self.serial}/system/synchronization/source",
+                    0,  # internal
+                    caching_strategy=CachingStrategy.NO_CACHE,
+                ),
+                DaqNodeSetAction(
+                    self._daq,
+                    f"/{self.serial}/system/internaltrigger/synchronization/enable",
+                    0,
+                    caching_strategy=CachingStrategy.NO_CACHE,
+                ),
+            ]
         )
         return reset_nodes

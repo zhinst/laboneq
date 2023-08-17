@@ -15,9 +15,9 @@ class LogicalSignalPhysicalChannelUID:
     """A helper for legacy logical signal and physical channel UIDs."""
 
     def __init__(self, seq: str):
-        self._seq = Separator.join(seq.split(legacy_path.Separator)[-2:])
+        self._parts = seq.split(legacy_path.Separator)
         try:
-            self._group, self._name = self._seq.split(Separator)
+            self._group, self._name = self._parts[-2:]
             if not self._group or not self._name:
                 raise ValueError
         except ValueError as e:
@@ -27,7 +27,11 @@ class LogicalSignalPhysicalChannelUID:
 
     @property
     def uid(self):
-        return self._seq
+        return f"{self._group}{Separator}{self._name}"
+
+    @property
+    def path(self):
+        return Separator.join(self._parts)
 
     @property
     def group(self):
@@ -36,3 +40,12 @@ class LogicalSignalPhysicalChannelUID:
     @property
     def name(self):
         return self._name
+
+    def replace(self, group=None, name=None):
+        if group is None:
+            group = self._group
+        if name is None:
+            name = self._name
+        parts = [*self._parts[:-2], group, name]
+        path = legacy_path.Separator.join(parts)
+        return LogicalSignalPhysicalChannelUID(path)

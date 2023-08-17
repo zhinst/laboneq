@@ -68,7 +68,6 @@ class TargetSetupGenerator:
             uid=server.uid,
             host=server.host,
             port=server.port,
-            api_level=server.api_level,
         )
 
     @classmethod

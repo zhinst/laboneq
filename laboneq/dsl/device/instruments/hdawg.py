@@ -30,21 +30,15 @@ class HDAWG(ZIStandardInstrument):
         ]
 
         outputs = []
-        for i in range(4):
+
+        for i in range(8):
             outputs += [
                 Port(
                     IODirection.OUT,
-                    uid=f"SIGOUTS/{2 * i}",
+                    uid=f"SIGOUTS/{i}",
                     signal_type=IOSignalType.RF,
-                    physical_port_ids=[f"{2 * i}"],
-                    connector_labels=[f"Wave {2 * i + 1}"],
-                ),
-                Port(
-                    IODirection.OUT,
-                    uid=f"SIGOUTS/{2 * i + 1}",
-                    signal_type=IOSignalType.RF,
-                    physical_port_ids=[f"{2 * i + 1}"],
-                    connector_labels=[f"Wave {2 * i + 2}"],
+                    physical_port_ids=[str(i)],
+                    connector_labels=[f"Wave {i + 1}"],
                 ),
             ]
         outputs.append(

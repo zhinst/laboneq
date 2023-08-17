@@ -11,6 +11,7 @@ from enum import Enum, auto
 from typing import Any, Iterable
 
 from laboneq._observability.tracing import trace
+from laboneq.controller.util import LabOneQControllerException
 
 _logger = logging.getLogger(__name__)
 
@@ -59,17 +60,15 @@ class NodeMonitor:
         self._daq = daq
         self._nodes: dict[str, Node] = {}
 
-    def _log_missing_node(self, path: str):
-        _logger.warning(
-            "Internal error: Node %s is not registered for monitoring", path
-        )
+    def _fail_on_missing_node(self, path: str):
+        if path not in self._nodes:
+            raise LabOneQControllerException(
+                f"Internal error: Node {path} is not registered for monitoring"
+            )
 
     def _get_node(self, path: str) -> Node:
-        node = self._nodes.get(path)
-        if node is None:
-            self._log_missing_node(path)
-            return Node(path)
-        return node
+        self._fail_on_missing_node(path)
+        return self._nodes[path]
 
     def reset(self):
         self.stop()
@@ -117,9 +116,7 @@ class NodeMonitor:
 
     def check_last_for_conditions(self, conditions: dict[str, Any]) -> str:
         for path, expected in conditions.items():
-            if path not in self._nodes:
-                self._log_missing_node(path)
-                return path
+            self._fail_on_missing_node(path)
             # expected may be None, single value or a list
             all_expected = expected if isinstance(expected, Iterable) else [expected]
             val = self.get_last(path)
@@ -133,9 +130,7 @@ class NodeMonitor:
         self.poll()
         remaining = {}
         for path, expected in conditions.items():
-            if path not in self._nodes:
-                self._log_missing_node(path)
-                continue
+            self._fail_on_missing_node(path)
             # expected may be None, single value or a list
             all_expected = expected if isinstance(expected, Iterable) else [expected]
             while True:

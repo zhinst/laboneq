@@ -173,10 +173,7 @@ class RecipeGenerator:
                 ppchannels = []
                 for signal in experiment_dao.signals():
                     amplifier_pump = experiment_dao.amplifier_pump(signal)
-                    if (
-                        amplifier_pump is None
-                        or amplifier_pump.device.uid != device_uid
-                    ):
+                    if amplifier_pump is None:
                         continue
                     amplifier_pump_dict: dict[str, str | float | bool | int] = {
                         "cancellation": amplifier_pump.cancellation,
