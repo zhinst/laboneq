@@ -47,6 +47,7 @@ from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.core.types.enums.acquisition_type import AcquisitionType, is_spectroscopy
 from laboneq.core.types.enums.mixer_type import MixerType
+from laboneq.data.calibration import PortMode
 from laboneq.data.compilation_job import (
     CompilationJob,
     DeviceInfo,
@@ -55,7 +56,6 @@ from laboneq.data.compilation_job import (
     SignalInfoType,
 )
 from laboneq.data.scheduled_experiment import ScheduledExperiment
-from laboneq.executor.execution_from_experiment import ExecutionFactoryFromExperiment
 from laboneq.executor.executor import Statement
 
 _logger = logging.getLogger(__name__)
@@ -107,22 +107,9 @@ class Compiler:
                 )
 
     def use_experiment(self, experiment):
-        if (
-            isinstance(experiment, dict)
-            and "experiment" in experiment
-            and "setup" in experiment
-        ):
-            _logger.debug("Processing DSLv3 setup and experiment")
-            self._experiment_dao = ExperimentDAO(
-                None, experiment["setup"], experiment["experiment"]
-            )
-            self._execution = ExecutionFactoryFromExperiment().make(
-                experiment["experiment"]
-            )
-        elif isinstance(experiment, CompilationJob):
+        if isinstance(experiment, CompilationJob):
             self._experiment_dao = ExperimentDAO(experiment.experiment_info)
             self._execution = experiment.execution
-
         else:  # legacy JSON
             self._experiment_dao = ExperimentDAO(experiment)
             self._execution = legacy_execution_program()
@@ -262,7 +249,6 @@ class Compiler:
         )
         executor = NtCompilerExecutor(rt_compiler)
         executor.run(self._execution)
-
         self._combined_compiler_output = executor.combined_compiler_output()
         if self._combined_compiler_output is None:
             # Some of our tests do not have an RT averaging loop, so the RT compiler will
@@ -274,7 +260,8 @@ class Compiler:
                 rt_compiler_output, [0]
             )
 
-        self._combine_multistate_integrator_allocations()
+        if self._settings.LOG_REPORT:
+            executor.report()
 
     @staticmethod
     def _get_total_rounded_delay(delay, signal_id, device_type, sampling_rate):
@@ -342,13 +329,12 @@ class Compiler:
                 )
                 awg_nr = Compiler.calc_awg_number(signal_info.channels[0], device_type)
                 num_acquire_signals = len(
-                    list(
-                        filter(
-                            lambda x: x["device_id"] == signal_info.device.uid
-                            and x["awg_nr"] == awg_nr,
-                            self._integration_unit_allocation.values(),
-                        )
-                    )
+                    [
+                        x
+                        for x in self._integration_unit_allocation.values()
+                        if x["device_id"] == signal_info.device.uid
+                        and x["awg_nr"] == awg_nr
+                    ]
                 )
                 if (
                     self._experiment_dao.acquisition_type
@@ -376,20 +362,6 @@ class Compiler:
                         integrators_per_signal * num_acquire_signals + i
                         for i in range(integrators_per_signal)
                     ],
-                }
-
-    def _combine_multistate_integrator_allocations(self):
-        msgroups = self._combined_compiler_output.multistate_signal_groups
-        for msg in msgroups:
-            if allocations := [self._integration_unit_allocation.pop(s) for s in msg]:
-                a0 = allocations[0]
-                assert all(a["device_id"] == a0["device_id"] for a in allocations)
-                assert all(a["awg_nr"] == a0["awg_nr"] for a in allocations)
-                self._integration_unit_allocation[msg[0]] = {
-                    "device_id": a0["device_id"],
-                    "awg_nr": a0["awg_nr"],
-                    "channels": [a["channels"] for a in allocations],
-                    "signals": msg,
                 }
 
     def _calc_shfqa_generator_allocation(self):
@@ -704,8 +676,8 @@ class Compiler:
             triggers = self._experiment_dao.triggers_on_signal(signal_id)
             if (
                 lo_frequency is not None
-                and not isinstance(lo_frequency, str)
-                and port_mode != "LF"
+                and not isinstance(lo_frequency, ParameterInfo)
+                and port_mode != PortMode.LF
             ):
                 # TODO(2K): This validation had to be implemented in the controller
                 # to support swept lo_frequency
@@ -1143,20 +1115,6 @@ class Compiler:
 
         retval = self.compiler_output()
 
-        total_seqc_lines = 0
-        for f in retval.scheduled_experiment.src:
-            total_seqc_lines += f["text"].count("\n")
-        _logger.info("Total seqC lines generated: %d", total_seqc_lines)
-
-        total_samples = 0
-        for f in retval.scheduled_experiment.waves:
-            try:
-                total_samples += len(f["samples"])
-            except KeyError:
-                pass
-        _logger.info("Total sample points generated: %d", total_samples)
-
-        _logger.info("Finished LabOne Q Compiler run.")
         return retval
 
 

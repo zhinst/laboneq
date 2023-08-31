@@ -1,6 +1,8 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import functools
 import logging
 import logging.config
@@ -31,7 +33,7 @@ DEFAULT_CONFIG_YML = """
 
     formatters:
         console_formatter:
-            format: \"%(asctime)s.%(msecs)03d %(name)-30s %(levelname)-6s %(message)s\"
+            format: \"[%(asctime)s.%(msecs)03d] %(levelname)-7s %(message)s\"
             datefmt: \"%Y.%m.%d %H:%M:%S\"
 
         file_formatter:
@@ -84,7 +86,42 @@ DEFAULT_CONFIG_YML = """
 """
 
 
-def initialize_logging(performance_log=False, logging_config_dict=None, log_level=None):
+def initialize_logging(
+    performance_log: bool = False,
+    logging_config_dict: dict = None,
+    log_level: int | str = None,
+):
+    """Configure logging.
+
+    If logging has already been configured, it is configured again.
+
+    The logging configuration is read from one of the following, in order
+    of preference:
+
+    - The default log configuration file, `./controller_log_config.yml`.
+    - The configuration dictionary passed via the `logging_config_dict`
+      parameter.
+    - The hardcoded default configuration.
+
+    In the hardcoded default configuration:
+
+    - `laboneq` messages are logged at the `INFO` level to `stdout` and
+      to the file `laboneq_output/log/controller.log`.
+    - `node.log` messages are logged at the `DEBUG` level to the file
+      `laboneq_output/log/node.log`.
+    - Other messages are logged at the `ERROR` level to `stderr`.
+
+    Args:
+        performance_log:
+            If true, timestamped logs are written to
+            `laboneq_output/log/controller_perf.log` at the `DEBUG` level.
+        logging_config_dict:
+            The logging configuration to use. Only used if the
+            default log configuration file, `./controller_log_config.yml`
+            does not exist.
+        log_level:
+            If specified, sets the log level for the `laboneq` logger.
+    """
     global _logging_initialized
     logdir = get_log_dir()
     if _logging_initialized:
@@ -155,7 +192,13 @@ def initialize_logging(performance_log=False, logging_config_dict=None, log_leve
         _logger.info("Performance logging into %s", performance_log_file)
 
 
-def set_level(log_level=logging.INFO):
+def set_level(log_level: int | str = logging.INFO):
+    """Set the logging level for the root and `laboneq` loggers.
+
+    Args:
+        log_level:
+            The logging level to set.
+    """
     initialize_logging(log_level=log_level)
     logging.getLogger().setLevel(log_level)
     logging.getLogger("laboneq").setLevel(log_level)

@@ -1,12 +1,15 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import abc
 import copy
 import itertools
 import logging
 import warnings
-from typing import Callable, Dict, Iterator, List, Optional, Tuple, Union
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 import laboneq.core.path as qct_path
 from laboneq.core.exceptions import LabOneQException
@@ -32,6 +35,10 @@ from laboneq.dsl.device.physical_channel_group import PhysicalChannelGroup
 from laboneq.dsl.device.servers import DataServer
 from laboneq.dsl.enums import IODirection, IOSignalType
 
+if TYPE_CHECKING:
+    from laboneq.dsl.quantum import QuantumElement
+
+
 _logger = logging.getLogger(__name__)
 
 
@@ -54,6 +61,7 @@ T_ALL_DEVICE_TYPES = [
 ]
 T_UID = "uid"
 T_ADDRESS = "address"
+T_OPTIONS = "options"
 T_INTERFACE = "interface"
 T_IQ_SIGNAL = "iq_signal"
 T_ACQUIRE_SIGNAL = "acquire_signal"
@@ -70,9 +78,11 @@ T_PORTS = "ports"
 #       HDAWG:
 #       - address: DEV8001
 #         uid: device_hdawg
+#         options: HDAWG8/CNT/ME/MF
 #       SHFQA:
 #       - address: DEV12001
 #         uid: device_shfqa
+#         options: SHFQA2
 #       PQSC:
 #       - address: DEV10001
 #         uid: device_pqsc
@@ -105,7 +115,12 @@ DataServersType = Dict[str, Dict[str, Union[str, List[str]]]]
 
 def _iterate_over_descriptors_of_type(instruments: InstrumentsType, device_type: str):
     for descriptor in instruments.get(device_type, []):
-        yield descriptor[T_UID], descriptor[T_ADDRESS], descriptor.get(T_INTERFACE)
+        yield (
+            descriptor[T_UID],
+            descriptor[T_ADDRESS],
+            descriptor.get(T_INTERFACE),
+            descriptor.get(T_OPTIONS),
+        )
 
 
 def _skip_nones(**kwargs):
@@ -135,13 +150,14 @@ class _HDAWGProcessor(_ProcessorBase):
         logical_signals_candidates,
         physical_signals,
     ) -> Iterator[Instrument]:
-        for uid, address, interface in _iterate_over_descriptors_of_type(
+        for uid, address, interface, options in _iterate_over_descriptors_of_type(
             instruments, T_HDAWG_DEVICE
         ):
             yield cls.make_device(
                 uid,
                 address,
                 interface,
+                options,
                 connections,
                 server_finder,
                 logical_signals_candidates,
@@ -153,6 +169,7 @@ class _HDAWGProcessor(_ProcessorBase):
         uid,
         address,
         interface,
+        options,
         connections: ConnectionsType,
         server_finder: Callable[[str], str],
         logical_signals_candidates,
@@ -239,6 +256,7 @@ class _HDAWGProcessor(_ProcessorBase):
                 uid=uid,
                 address=address,
                 interface=interface,
+                device_options=options,
                 connections=device_connections,
                 reference_clock_source=external_clock_signal,
             )
@@ -255,13 +273,14 @@ class _UHFQAProcessor(_ProcessorBase):
         logical_signals_candidates,
         physical_signals,
     ) -> Iterator[Instrument]:
-        for uid, address, interface in _iterate_over_descriptors_of_type(
+        for uid, address, interface, options in _iterate_over_descriptors_of_type(
             instruments, T_UHFQA_DEVICE
         ):
             yield cls.make_device(
                 uid,
                 address,
                 interface,
+                options,
                 connections,
                 server_finder,
                 logical_signals_candidates,
@@ -273,6 +292,7 @@ class _UHFQAProcessor(_ProcessorBase):
         uid,
         address,
         interface,
+        options,
         connections: ConnectionsType,
         server_finder: Callable[[str], str],
         logical_signals_candidates,
@@ -362,6 +382,7 @@ class _UHFQAProcessor(_ProcessorBase):
                 uid=uid,
                 address=address,
                 interface=interface,
+                device_options=options,
                 connections=device_connections,
                 reference_clock_source=external_clock_signal,
             )
@@ -388,13 +409,14 @@ class _SHFQAProcessor(_ProcessorBase):
         logical_signals_candidates,
         physical_signals,
     ) -> Iterator[Instrument]:
-        for uid, address, interface in _iterate_over_descriptors_of_type(
+        for uid, address, interface, options in _iterate_over_descriptors_of_type(
             instruments, T_SHFQA_DEVICE
         ):
             yield cls.make_device(
                 uid,
                 address,
                 interface,
+                options,
                 connections,
                 server_finder,
                 logical_signals_candidates,
@@ -406,6 +428,7 @@ class _SHFQAProcessor(_ProcessorBase):
         uid,
         address,
         interface,
+        options,
         connections: ConnectionsType,
         server_finder: Callable[[str], str],
         logical_signals_candidates,
@@ -496,6 +519,7 @@ class _SHFQAProcessor(_ProcessorBase):
                 uid=uid,
                 address=address,
                 interface=interface,
+                device_options=options,
                 connections=device_connections,
                 reference_clock_source=external_clock_signal,
                 is_qc=is_qc,
@@ -528,13 +552,14 @@ class _SHFSGProcessor(_ProcessorBase):
         logical_signals_candidates,
         physical_signals,
     ) -> Iterator[Instrument]:
-        for uid, address, interface in _iterate_over_descriptors_of_type(
+        for uid, address, interface, options in _iterate_over_descriptors_of_type(
             instruments, T_SHFSG_DEVICE
         ):
             yield cls.make_device(
                 uid,
                 address,
                 interface,
+                options,
                 connections,
                 server_finder,
                 logical_signals_candidates,
@@ -546,6 +571,7 @@ class _SHFSGProcessor(_ProcessorBase):
         uid,
         address,
         interface,
+        options,
         connections: ConnectionsType,
         server_finder: Callable[[str], str],
         logical_signals_candidates,
@@ -628,6 +654,7 @@ class _SHFSGProcessor(_ProcessorBase):
                 uid=uid + ("_sg" if is_qc and qc_with_qa else ""),
                 address=address,
                 interface=interface,
+                device_options=options,
                 connections=device_connections,
                 reference_clock_source=external_clock_signal,
                 is_qc=is_qc,
@@ -661,13 +688,14 @@ class _SHFQCProcessor(_ProcessorBase):
         logical_signals_candidates,
         physical_signals,
     ) -> Iterator[Instrument]:
-        for uid, address, interface in _iterate_over_descriptors_of_type(
+        for uid, address, interface, options in _iterate_over_descriptors_of_type(
             instruments, T_SHFQC_DEVICE
         ):
             sg_dev = _SHFSGProcessor.make_device(
                 uid,
                 address,
                 interface,
+                options,
                 connections,
                 server_finder,
                 logical_signals_candidates,
@@ -681,6 +709,7 @@ class _SHFQCProcessor(_ProcessorBase):
                 uid,
                 address,
                 interface,
+                options,
                 connections,
                 server_finder,
                 logical_signals_candidates,
@@ -701,13 +730,14 @@ class _SHFPPCProcessor(_ProcessorBase):
         logical_signals_candidates,
         physical_signals,
     ) -> Iterator[Instrument]:
-        for uid, address, interface in _iterate_over_descriptors_of_type(
+        for uid, address, interface, options in _iterate_over_descriptors_of_type(
             instruments, T_SHFPPC_DEVICE
         ):
             yield cls.make_device(
                 uid,
                 address,
                 interface,
+                options,
                 connections,
                 server_finder,
                 logical_signals_candidates,
@@ -719,6 +749,7 @@ class _SHFPPCProcessor(_ProcessorBase):
         uid,
         address,
         interface,
+        options,
         connections: ConnectionsType,
         server_finder: Callable[[str], str],
         logical_signals_candidates,
@@ -751,6 +782,7 @@ class _SHFPPCProcessor(_ProcessorBase):
                 uid=uid,
                 address=address,
                 interface=interface,
+                device_options=options,
                 connections=device_connections,
                 reference_clock_source=external_clock_signal,
             )
@@ -783,13 +815,14 @@ class _PQSCProcessor:
         logical_signals_candidates,
         physical_signals,
     ):
-        for uid, address, interface in _iterate_over_descriptors_of_type(
+        for uid, address, interface, options in _iterate_over_descriptors_of_type(
             instruments, T_PQSC_DEVICE
         ):
             dev = cls.make_device(
                 uid,
                 address,
                 interface,
+                options,
                 connections,
                 server_finder,
                 logical_signals_candidates,
@@ -823,6 +856,7 @@ class _PQSCProcessor:
         uid,
         address,
         interface,
+        options,
         connections: ConnectionsType,
         server_finder: Callable[[str], str],
         logical_signals_candidates,
@@ -852,6 +886,7 @@ class _PQSCProcessor:
                 uid=uid,
                 address=address,
                 interface=interface,
+                device_options=options,
                 connections=device_connections,
                 reference_clock_source=internal_clock_signal,
                 reference_clock=10e6,
@@ -1001,6 +1036,60 @@ def _create_physical_channel(
     return physical_channel
 
 
+@dataclass
+class DescriptorQubit:
+    name: str
+    type: str
+    signals: list[dict[str]]
+    quantum_element: QuantumElement = field(init=False)
+
+    def __post_init__(self):
+        from laboneq.dsl import quantum
+
+        supported_types = {
+            "qubit": quantum.Qubit,
+            "transmon": quantum.Transmon,
+        }
+        if self.type not in supported_types:
+            raise LabOneQException(
+                f"Invalid qubit type '{self.type}'. Supported: {list(supported_types.keys())}."
+            )
+        self.quantum_element = supported_types[self.type]
+
+        req_signals_keys = {"name", "role"}
+        for sig in self.signals:
+            diff_sigs = req_signals_keys.difference(sig.keys())
+            if diff_sigs:
+                raise LabOneQException(
+                    f"Missing 'qubit' 'signals' keyword(s): '{list(diff_sigs)}'."
+                )
+
+    def as_qubit(
+        self, logical_signal_groups: list[LogicalSignalGroup]
+    ) -> QuantumElement:
+        return self.quantum_element.from_logical_signal_group(
+            self.name, lsg=logical_signal_groups[self.name]
+        )
+
+    @classmethod
+    def from_descriptor(cls, data: dict) -> DescriptorQubit:
+        req_keys = {"name", "type", "signals"}
+        diff_keys = req_keys.difference(data.keys())
+        if diff_keys:
+            raise LabOneQException(f"Missing 'qubit' keyword(s): '{list(diff_keys)}'.")
+        return DescriptorQubit(**data)
+
+
+def make_qubits(
+    qubit_descriptor, logical_signal_groups: list[LogicalSignalGroup]
+) -> dict[str, QuantumElement]:
+    qubits = {}
+    for qubit in qubit_descriptor:
+        q = DescriptorQubit.from_descriptor(qubit)
+        qubits[q.name] = q.as_qubit(logical_signal_groups)
+    return qubits
+
+
 class _DeviceSetupGenerator:
     @staticmethod
     def from_descriptor(
@@ -1023,6 +1112,7 @@ class _DeviceSetupGenerator:
             instruments=setup_desc.get("instruments"),
             connections=setup_desc.get("connections"),
             dataservers=setup_desc.get("dataservers"),
+            qubits=setup_desc.get("qubits", []),
             server_host=server_host,
             server_port=server_port,
             setup_name=setup_desc.get("setup_name")
@@ -1052,6 +1142,7 @@ class _DeviceSetupGenerator:
             instruments=setup_desc.get("instruments"),
             connections=setup_desc.get("connections"),
             dataservers=setup_desc.get("dataservers"),
+            qubits=setup_desc.get("qubits", []),
             server_host=server_host,
             server_port=server_port,
             setup_name=setup_desc.get("setup_name")
@@ -1065,6 +1156,7 @@ class _DeviceSetupGenerator:
         instruments: InstrumentsType = None,
         connections: ConnectionsType = None,
         dataservers: DataServersType = None,
+        qubits: list = [],
         server_host: str = None,
         server_port: str = None,
         setup_name: str = None,
@@ -1228,6 +1320,7 @@ class _DeviceSetupGenerator:
             "uid": setup_name,
             "servers": {server.uid: server for server, _ in servers},
             "instruments": out_instruments,
+            "qubits": make_qubits(qubits, logical_signal_groups),
             "logical_signal_groups": logical_signal_groups,
             "physical_channel_groups": physical_channel_groups,
         }

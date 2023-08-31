@@ -24,10 +24,9 @@ _USER_ENABLED_SETTINGS = [
     "EMIT_TIMING_COMMENTS",
     "HDAWG_FORCE_COMMAND_TABLE",
     "SHFSG_FORCE_COMMAND_TABLE",
-    "USE_EXPERIMENTAL_SCHEDULER",
     "PREPARE_PSV_DATA",
+    "LOG_REPORT",
 ]
-
 
 DEFAULT_HDAWG_LEAD_PQSC: float = 80e-9
 DEFAULT_HDAWG_LEAD_PQSC_2GHz: float = 80e-9
@@ -83,14 +82,16 @@ class CompilerSettings:
     EMIT_TIMING_COMMENTS: bool = False
     IGNORE_GRAPH_VERIFY_RESULTS: bool = False
 
-    USE_EXPERIMENTAL_SCHEDULER: bool = True
+    LOG_REPORT: bool = True
 
     def __post_init__(self):
-        if self.MAX_EVENTS_TO_PUBLISH != CompilerSettings.MAX_EVENTS_TO_PUBLISH:
+        if (
+            self.MAX_EVENTS_TO_PUBLISH != CompilerSettings.MAX_EVENTS_TO_PUBLISH
+            and not self.PREPARE_PSV_DATA
+        ):
             warnings.warn(
-                """Setting `MAX_EVENTS_TO_PUBLISH` is deprecated.
-                          Use the max_number_of_events argument of laboneq.pulse_sheet_viewer.pulse_sheet_viewer.view_pulse_sheet
-                          to limit the number of events in the pulse sheet viewer""",
+                "Setting `PREPARE_PSV_DATA` is required in addition to"
+                " `MAX_EVENTS_TO_PUBLISH` if a schedule should be produced.",
                 FutureWarning,
             )
 

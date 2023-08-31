@@ -7,7 +7,7 @@ import warnings
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from laboneq.dsl.dsl_dataclass_decorator import classformatter
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.enums import CarrierType, ModulationType
 
 if TYPE_CHECKING:
@@ -28,19 +28,24 @@ def oscillator_uid_generator():
 class Oscillator:
     """
     This oscillator class represents an oscillator on a `PhysicalChannel`.
-    All pulses played on any signal line attached to this physical channel will be modulated with the oscillator assigned to that channel.
+    All pulses played on any signal line attached to this physical channel will be
+    modulated with the oscillator assigned to that channel.
 
-    Args:
-        frequency (float): The frequency in units of Hz
-        modulation_type (ModulationType): The modulation type (`ModulationType.SOFTWARE` or `ModulationType.HARDWARE`).
-            When choosing a HARDWARE oscillator, a digital oscillator on the instrument will be used to modulate the output signal,
-            while the choice SOFTWARE will lead to waveform being modulated in software before upload to the instruments.
-            The default `ModulationType.AUTO` currently falls back to `ModulationType.Software`.
-        carrier_type (CarrierType): Deprecated: The carrier type, defaults to radio frequency (`CarrierType.RF`)
+    Attributes:
+        frequency (float):
+            The oscillator frequency. Units: Hz.
+        modulation_type (ModulationType):
+            The modulation type (`ModulationType.SOFTWARE` or
+            `ModulationType.HARDWARE`). When choosing a HARDWARE oscillator, a digital
+            oscillator on the instrument will be used to modulate the output signal,
+            while the choice SOFTWARE will lead to waveform being modulated in software
+            before upload to the instruments.
+            The default, `ModulationType.AUTO`, falls back to `ModulationType.Software`.
+        carrier_type (CarrierType):
+            Deprecated. The carrier type is no longer used. Default: `CarrierType.RF`.
 
-            .. deprecated:: 2.7
-
-                Argument has no functionality.
+            !!! version-changed "Deprecated in 2.7"
+                The `carrier_type` has no effect.
     """
 
     uid: str = field(default_factory=oscillator_uid_generator)

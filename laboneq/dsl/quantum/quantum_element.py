@@ -10,10 +10,10 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from laboneq.core.exceptions import LabOneQException
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration import Calibration
 from laboneq.dsl.device import LogicalSignalGroup
 from laboneq.dsl.device.io_units import LogicalSignal
-from laboneq.dsl.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.experiment import ExperimentSignal
 from laboneq.dsl.serialization import Serializer
 
@@ -28,7 +28,7 @@ class SignalType(Enum):
 
 class QuantumElementSignalMap(MutableMapping):
     def __init__(
-        self, items: Dict[str, str], key_validator: Callable[[str], None] = None
+        self, items: Dict[str, str], key_validator: Callable[[str], SignalType] = None
     ) -> None:
         """A mapping between signal.
 
@@ -40,7 +40,8 @@ class QuantumElementSignalMap(MutableMapping):
         self._key_validator = key_validator
         if self._key_validator:
             for k, v in items.items():
-                self._items[self._key_validator(k)] = v
+                key = self._key_validator(k).value
+                self._items[key] = v
         else:
             self._items = items
 
@@ -69,6 +70,13 @@ class QuantumElementSignalMap(MutableMapping):
     def __repr__(self):
         return repr(self._items)
 
+    def roles(self) -> dict[str, SignalType]:
+        """Roles of the signals."""
+        roles = {}
+        for sig in self._items:
+            roles[sig] = SignalType(sig)
+        return roles
+
 
 @classformatter
 @dataclass(init=False, repr=True)
@@ -77,13 +85,11 @@ class QuantumElement(ABC):
 
     uid: str
     signals: Dict[str, str]
-    parameters: Dict[str, Any]
 
     def __init__(
         self,
         uid: str = None,
         signals: Dict[str, LogicalSignal] = None,
-        parameters: Dict[str, Any] = None,
     ):
         """
         Initializes a new QuantumElement object.
@@ -91,23 +97,21 @@ class QuantumElement(ABC):
         Args:
             uid: A unique identifier for the quantum element.
             signals: A dictionary of logical signals associated with the quantum element.
-            parameters: A dictionary of parameters associated with the quantum element.
         """
         self.uid = uuid.uuid4().hex if uid is None else uid
         if signals is None:
             self.signals = QuantumElementSignalMap(
-                {}, key_validator=self._validate_signal_type
+                {}, key_validator=self._coerce_signal_type
             )
         elif isinstance(signals, dict):
             sigs = {
                 k: self._resolve_to_logical_signal_uid(v) for k, v in signals.items()
             }
             self.signals = QuantumElementSignalMap(
-                sigs, key_validator=self._validate_signal_type
+                sigs, key_validator=self._coerce_signal_type
             )
         else:
             self.signals = signals
-        self._parameters = {} if parameters is None else parameters
 
     def __hash__(self):
         return hash(self.uid)
@@ -117,18 +121,25 @@ class QuantumElement(ABC):
         return signal.path if isinstance(signal, LogicalSignal) else signal
 
     @staticmethod
-    def _validate_signal_type(name: str) -> str:
+    def _coerce_signal_type(name: str) -> SignalType:
+        """Coerse signal type.
+
+        The method can be overwritten if the child class
+        does additional validation or uses custom `SignalType`.
+
+        Raises:
+            LabOneQException: If `name` is not one of `SignalType` values.
+        """
         try:
-            SignalType(name)
-            return name
+            return SignalType(name)
         except ValueError:
             raise LabOneQException(
                 f"Signal {name} is not one of {[enum.value for enum in SignalType]}"
             )
 
-    # @classmethod
+    @classmethod
     def _from_logical_signal_group(
-        self,
+        cls,
         uid: str,
         lsg: LogicalSignalGroup,
         parameters: Optional[Dict[str, Any]] = None,
@@ -149,15 +160,10 @@ class QuantumElement(ABC):
             for signal_type, id_list in signal_type_map.items():
                 if name in id_list:
                     signal_value = signal_type.value
-            signal_map[signal_value] = self._resolve_to_logical_signal_uid(signal)
-        return self(
+            signal_map[signal_value] = cls._resolve_to_logical_signal_uid(signal)
+        return cls(
             uid=uid, signals=QuantumElementSignalMap(signal_map), parameters=parameters
         )
-
-    @property
-    def parameters(self):
-        """Parameters of the quantum element."""
-        return self._parameters
 
     @classmethod
     def load(cls, filename: Union[str, bytes, os.PathLike]) -> "QuantumElement":
@@ -226,7 +232,6 @@ class QuantumElement(ABC):
             with_calibration:
                 Apply the qubit's calibration to the ExperimentSignal.
         """
-
         if not with_calibration:
             exp_signals = [
                 ExperimentSignal(uid=k, map_to=k) for k in self.signals.values()
@@ -238,11 +243,11 @@ class QuantumElement(ABC):
             ]
         if with_types:
             sigs = []
+            roles = self.signals.roles()
             for exp_sig in exp_signals:
-                for role, signal in self.signals.items():
+                for name, signal in self.signals.items():
                     if signal == exp_sig.mapped_logical_signal_path:
-                        role = SignalType(role)
-                        sigs.append((role, exp_sig))
+                        sigs.append((roles[name], exp_sig))
                         break
             return sigs
         return exp_signals

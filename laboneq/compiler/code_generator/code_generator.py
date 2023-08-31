@@ -10,7 +10,8 @@ import math
 from collections import namedtuple
 from contextlib import suppress
 from itertools import groupby
-from typing import Any, Dict, List, NamedTuple, Set, Tuple
+from numbers import Number
+from typing import Any, Dict, List, NamedTuple, Tuple
 
 import numpy as np
 from engineering_notation import EngNumber
@@ -174,25 +175,25 @@ def calculate_integration_weights(
     acquire_events: AWGSampledEventSequence, signal_obj, pulse_defs
 ):
     integration_weights = {}
+    signal_id = signal_obj.id
     for event_list in acquire_events.sequence.values():
         for event in event_list:
             _logger.debug("For weights, look at %s", event)
-            signal_ids = ensure_list(
-                event.params.get("signals") or event.params.get("signal_id") or []
-            )
-            n = len(signal_ids)
-            play_wave_ids = ensure_list(event.params.get("play_wave_id") or [None] * n)
+
+            assert (event.params.get("signal_id") or signal_id) == signal_id
+            play_wave_ids = ensure_list(event.params.get("play_wave_id"))
+            n = len(play_wave_ids)
             play_pars = ensure_list(
                 event.params.get("play_pulse_parameters") or [None] * n
             )
             pulse_pars = ensure_list(
                 event.params.get("pulse_pulse_parameters") or [None] * n
             )
-            assert n == len(play_wave_ids) == len(play_pars) == len(pulse_pars)
-            for signal_id, play_wave_id, play_par, pulse_par in zip(
-                signal_ids, play_wave_ids, play_pars, pulse_pars
+            assert n == len(play_pars) == len(pulse_pars)
+            for play_wave_id, play_par, pulse_par in zip(
+                play_wave_ids, play_pars, pulse_pars
             ):
-                if play_wave_id is None or signal_id != signal_obj.id:
+                if play_wave_id is None:
                     continue
                 _logger.debug("Event %s has play wave id %s", event, play_wave_id)
                 if (
@@ -208,11 +209,14 @@ def calculate_integration_weights(
                     continue
 
                 samples = pulse_def.samples
-                pulse_amplitude = pulse_def.amplitude
+                pulse_amplitude: Number | ParameterInfo = pulse_def.amplitude
                 if pulse_amplitude is None:
                     pulse_amplitude = 1.0
                 elif isinstance(pulse_amplitude, ParameterInfo):
-                    pulse_amplitude = event.params.get(pulse_def.amplitude.uid)
+                    pulse_amplitude = (
+                        event.params.get(pulse_def.amplitude.uid) or pulse_amplitude
+                    )
+                assert isinstance(pulse_amplitude, Number)
 
                 length = pulse_def.length
                 if length is None:
@@ -299,7 +303,6 @@ class CodeGenerator:
         self._feedback_register_allocator: FeedbackRegisterAllocator = None
         self._total_execution_time = None
         self._wave_compressor = WaveCompressor()
-        self._multistate_signal_groups = set()
 
         self.EMIT_TIMING_COMMENTS = self._settings.EMIT_TIMING_COMMENTS
         self.PHASE_RESOLUTION_BITS = self._settings.PHASE_RESOLUTION_BITS
@@ -509,18 +512,7 @@ class CodeGenerator:
         self._simultaneous_acquires: Dict[float, Dict[str, str]] = {}
         for e in (e for e in events if e["event_type"] == "ACQUIRE_START"):
             time_events = self._simultaneous_acquires.setdefault(e["time"], {})
-            for s in ensure_list(e["signal"]):
-                time_events[s] = e["acquire_handle"]
-
-    def find_multistate_signal_groups(self, events: EventList):
-        # find all signals that are used in a multi-state acquisition
-        for e in events:
-            if (
-                e["event_type"] == "ACQUIRE_START"
-                and isinstance(e["signal"], list)
-                and len(e["signal"]) > 1
-            ):
-                self._multistate_signal_groups.add(tuple(sorted(e["signal"])))
+            time_events[e["signal"]] = e["acquire_handle"]
 
     def gen_seq_c(self, events: List[Any], pulse_defs: Dict[str, PulseDef]):
         signal_info_map = {
@@ -892,7 +884,7 @@ class CodeGenerator:
         own_sections = set(
             event["section_name"]
             for event in events
-            if ensure_list(event.get("signal"))[0] in signal_ids
+            if event.get("signal") in signal_ids
             or event["event_type"]
             in (
                 EventType.PARAMETER_SET,
@@ -901,9 +893,7 @@ class CodeGenerator:
                 EventType.SET_OSCILLATOR_FREQUENCY_START,
             )
             or set(
-                s
-                for to_item in event.get("trigger_output", [])
-                for s in ensure_list(to_item["signal_id"])
+                to_item["signal_id"] for to_item in event.get("trigger_output", [])
             ).intersection(signal_ids)
         )
         has_match_case = False
@@ -967,18 +957,6 @@ class CodeGenerator:
         )
         sampled_events.merge(loop_events)
 
-        # Retrieve the channel numbers for multistate discrimination
-        # events
-        for signal_obj in awg.signals:
-            for e in events:
-                if (sigs := e.get("signal")) and isinstance(sigs, list):
-                    if not e.get("channel"):
-                        e["channel"] = [None] * len(sigs)
-                    for i, s in enumerate(sigs):
-                        if s == signal_obj.id:
-                            e["channel"][i] = signal_obj.channels
-                            break
-
         for signal_obj in awg.signals:
             set_oscillator_events = analyze_set_oscillator_times(
                 events, signal_obj, global_delay
@@ -1016,16 +994,6 @@ class CodeGenerator:
                 ] = calculate_integration_weights(
                     acquire_events, signal_obj, pulse_defs
                 )
-
-            # We have created events for all signals of a multistate
-            # discrimination; later, we only need one of them. Let's choose
-            # the one where the first signal id matches.
-            for t in acquire_events.sequence:
-                acquire_events.sequence[t] = [
-                    e
-                    for e in acquire_events.sequence[t]
-                    if e.params["signal_id"] == signal_obj.id
-                ]
 
             sampled_events.merge(acquire_events)
 
@@ -1665,9 +1633,6 @@ class CodeGenerator:
 
     def feedback_registers(self) -> Dict[AwgKey, int]:
         return self._feedback_register_allocator.feedback_registers
-
-    def multistate_signal_groups(self) -> Set[Tuple[str, ...]]:
-        return self._multistate_signal_groups
 
     @staticmethod
     def stencil_samples(start, source, target):

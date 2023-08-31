@@ -4,6 +4,7 @@
 
 from laboneq.compiler.experiment_access.loader_base import LoaderBase
 from laboneq.core.exceptions import LabOneQException
+from laboneq.core.types.enums import AcquisitionType
 from laboneq.data.compilation_job import ExperimentInfo, SectionInfo
 
 
@@ -48,14 +49,21 @@ class ExperimentInfoLoader(LoaderBase):
         if section.acquisition_type is not None:
             self.acquisition_type = section.acquisition_type
 
-        if section.pulses:
-            self._section_signal_pulses[section.uid] = {
-                ssp.signal.uid: ssp for ssp in section.pulses
-            }
+        if self.acquisition_type is None:
+            self.acquisition_type = AcquisitionType.INTEGRATION
 
-        for ssp in section.pulses:
-            for marker in ssp.markers:
-                self.add_signal_marker(ssp.signal.uid, marker.marker_selector)
+        if section.pulses:
+            d = self._section_signal_pulses[section.uid] = {}
+            for ssp in section.pulses:
+                d.setdefault(ssp.signal.uid, []).append(ssp)
+
+                for marker in ssp.markers:
+                    self.add_signal_marker(ssp.signal.uid, marker.marker_selector)
+
+                if ssp.acquire_params is not None:
+                    handle = ssp.acquire_params.handle
+                    if handle is not None:
+                        self.add_handle_acquire(handle, ssp.signal.uid)
 
         if section.parameters:
             self._section_parameters[section.uid] = section.parameters[:]

@@ -1,10 +1,12 @@
 # Copyright 2023 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 from typing import List, Mapping, Tuple, Union
 
 from laboneq.data.path import Separator
 from laboneq.data.setup_description import (
+    DeviceType,
     Instrument,
     LogicalSignal,
     PhysicalChannel,
@@ -27,7 +29,7 @@ class InstrumentHelper:
         self, logical_signal: Union[LogicalSignal, str]
     ) -> PhysicalChannel:
         if isinstance(logical_signal, str):
-            group, name = split_path(logical_signal)
+            *_, group, name = split_path(logical_signal)
             logical_signal = LogicalSignal(name=name, group=group)
         try:
             return self._ls_to_pc[logical_signal]
@@ -40,6 +42,12 @@ class InstrumentHelper:
         raise RuntimeError(
             f"Could not find physical channel for logical signal {logical_signal}"
         )
+
+
+@dataclasses.dataclass
+class PPCConnection:
+    device: Instrument
+    channel: int
 
 
 class SetupHelper:
@@ -71,5 +79,32 @@ class SetupHelper:
         return self._logical_signals
 
     def logical_signal_by_path(self, path: str) -> LogicalSignal:
-        group, name = split_path(path)
+        *_, group, name = split_path(path)
         return self._setup.logical_signal_groups[group].logical_signals[name]
+
+    def ppc_connections(self) -> dict[LogicalSignal, PPCConnection]:
+        ppc_conn_by_pc: dict[PhysicalChannel, PPCConnection] = {}
+        ppc_conn_by_ls: dict[LogicalSignal, PPCConnection] = {}
+
+        for conn in self._setup.setup_internal_connections:
+            if (ppc := conn.from_instrument).device_type != DeviceType.SHFPPC:
+                continue
+            channel = conn.from_port.channel
+            target_instrument = conn.to_instrument
+            target_port = conn.to_port
+            [physical_channel] = [
+                pc
+                for pc in target_instrument.physical_channels
+                if target_port in pc.ports
+            ]
+            ppc_conn_by_pc[physical_channel] = PPCConnection(ppc, channel)
+
+            ppc_conn_by_ls.update(
+                {
+                    ls_map.logical_signal: ppc_conn_by_pc[physical_channel]
+                    for ls_map in target_instrument.connections
+                    if ls_map.physical_channel == physical_channel
+                }
+            )
+
+        return ppc_conn_by_ls

@@ -114,8 +114,8 @@ class IntegratorAllocation:
     device_id: str
     awg: int
     channels: list[int]
-    weights: str = None
-    threshold: float = 0.0
+    weights: list[str | None] = field(default_factory=lambda: [None])
+    thresholds: list[float] = field(default_factory=lambda: [0.0])
 
 
 @dataclass

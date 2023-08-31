@@ -7,7 +7,6 @@ import copy
 import logging
 from typing import Dict
 
-from laboneq.data.data_helper import DataHelper
 from laboneq.data.execution_payload import ExecutionPayload
 from laboneq.data.experiment_description import Experiment
 from laboneq.data.experiment_results import ExperimentResults
@@ -86,7 +85,6 @@ class ExperimentWorkflow(ExperimentAPI):
         execution_payload: ExecutionPayload = (
             self.build_payload_for_current_experiment()
         )
-        DataHelper.generate_uids(execution_payload)
 
         job_id = self._runner.submit_execution_payload(execution_payload)
         return self._runner.run_job_result(job_id)
@@ -98,7 +96,9 @@ class ExperimentWorkflow(ExperimentAPI):
         job_id = self._runner.submit_execution_payload(execution_payload)
         return self._runner.run_job_result(job_id)
 
-    def build_payload_for_current_experiment(self) -> ExecutionPayload:
+    def build_payload_for_current_experiment(
+        self, compiler_settings: dict = None
+    ) -> ExecutionPayload:
         """
         Compose the current experiment with a setup.
         """
@@ -108,10 +108,11 @@ class ExperimentWorkflow(ExperimentAPI):
                 "Signal mappings must be set before building payload for experiment"
             )
         execution_payload = self._payload_builder.build_payload(
-            self._current_setup, self._current_experiment, self._signal_mappings
+            self._current_setup,
+            self._current_experiment,
+            self._signal_mappings,
+            compiler_settings,
         )
-
-        DataHelper.generate_uids(execution_payload)
 
         return copy.deepcopy(execution_payload)
 
@@ -120,7 +121,6 @@ class ExperimentWorkflow(ExperimentAPI):
         Set the current experiment.
         """
         self._current_experiment = copy.deepcopy(experiment)
-        DataHelper.generate_uids(self._current_experiment)
 
     def device_setup_from_descriptor(
         self,
@@ -141,9 +141,8 @@ class ExperimentWorkflow(ExperimentAPI):
         Set the current setup.
         """
         self._current_setup = copy.deepcopy(setup)
-        DataHelper.generate_uids(self._current_setup)
         if self._settings.runner_is_local:
-            _logger.info(f"Experiment runner is local, connecting to {setup.uid}")
+            _logger.debug(f"Experiment runner is local, connecting to {setup.uid}")
             target_setup = self._payload_builder.convert_to_target_setup(setup)
             self._runner_control.connect(target_setup)
             # in local mode, we start the experiment runner immediately
@@ -156,7 +155,7 @@ class ExperimentWorkflow(ExperimentAPI):
         Map experiment signals to logical signals.
         """
         self._signal_mappings = {}
-        _logger.info(
+        _logger.debug(
             f"Mapping signals, experiment signals: {self._current_experiment.signals}"
         )
         experiment_signals_by_uid = {
@@ -164,7 +163,7 @@ class ExperimentWorkflow(ExperimentAPI):
         }
         for k, v in signal_mappings.items():
             experiment_signal = experiment_signals_by_uid[k]
-            grp, ls_name = v.split("/")
+            *_, grp, ls_name = v.split("/")
 
             if grp in self._current_setup.logical_signal_groups:
                 if (

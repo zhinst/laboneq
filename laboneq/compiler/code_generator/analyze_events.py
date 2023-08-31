@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from engineering_notation import EngNumber
 from sortedcontainers import SortedDict
 
-from laboneq._utils import ensure_list
 from laboneq.compiler.code_generator.feedback_register_allocator import (
     FeedbackRegisterAllocator,
 )
@@ -46,7 +45,7 @@ def analyze_loop_times(
     for e in events:
         if (
             e["event_type"] in ["PLAY_START", "ACQUIRE_START"]
-            and ensure_list(e.get("signal"))[0] in signal_ids
+            and e.get("signal") in signal_ids
         ):
             plays_anything = True
             break
@@ -301,7 +300,7 @@ def analyze_set_oscillator_times(
         for event in events
         if event["event_type"] == "SET_OSCILLATOR_FREQUENCY_START"
         and event.get("device_id") == device_id
-        and ensure_list(event.get("signal"))[0] == signal_id
+        and event.get("signal") == signal_id
     ]
     if len(set_oscillator_events) == 0:
         return AWGSampledEventSequence()
@@ -370,7 +369,6 @@ def analyze_acquire_times(
 
     @dataclass
     class IntervalStartEvent:
-        signals: str | list[str]
         event_type: str
         time: float
         play_wave_id: str
@@ -390,7 +388,6 @@ def analyze_acquire_times(
         zip(
             [
                 IntervalStartEvent(
-                    event["signal"],
                     event["event_type"],
                     event["time"] + delay,
                     event["play_wave_id"],
@@ -402,7 +399,7 @@ def analyze_acquire_times(
                 )
                 for event in events
                 if event["event_type"] in ["ACQUIRE_START"]
-                and signal_id in ensure_list(event["signal"])
+                and event["signal"] == signal_id
             ],
             [
                 IntervalEndEvent(
@@ -412,7 +409,7 @@ def analyze_acquire_times(
                 )
                 for event in events
                 if event["event_type"] in ["ACQUIRE_END"]
-                and signal_id in ensure_list(event["signal"])
+                and event["signal"] == signal_id
             ],
         )
     )
@@ -443,8 +440,7 @@ def analyze_acquire_times(
             start=start_samples,
             end=end_samples,
             params={
-                "signal_id": ensure_list(interval_start.signals)[0],
-                "signals": interval_start.signals,  # for multistate discrimination
+                "signal_id": signal_id,
                 "play_wave_id": interval_start.play_wave_id,
                 "acquisition_type": interval_start.acquisition_type,
                 "acquire_handles": [interval_start.acquire_handle],
@@ -467,7 +463,7 @@ def analyze_trigger_events(
         event
         for event in events
         if event["event_type"] == EventType.DIGITAL_SIGNAL_STATE_CHANGE
-        and signal.id == ensure_list(event["signal"])[0]
+        and signal.id == event["signal"]
     ]
     delay = signal.total_delay
     sampling_rate = signal.awg.sampling_rate
@@ -475,6 +471,7 @@ def analyze_trigger_events(
 
     sampled_digital_signal_change_events = AWGSampledEventSequence()
 
+    event: Dict[Any, Any]
     for event in digital_signal_change_events:
         time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
         sampled_digital_signal_change_events.add(
@@ -485,6 +482,7 @@ def analyze_trigger_events(
     retval = AWGSampledEventSequence()
     state_progression = SortedDict()
 
+    event: AWGEvent
     event_list: List[AWGEvent]
     for (
         time_in_samples,

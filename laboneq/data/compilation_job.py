@@ -68,7 +68,7 @@ class ParameterInfo:
     # auto generated __eq__ fails to compare array-likes correctly
     def __eq__(self, other: object) -> bool:
         if isinstance(other, ParameterInfo):
-            if self.values is None != other.values is None:
+            if (self.values is None) != (other.values is None):
                 return False
             values_equal = (
                 self.values is None and other.values is None
@@ -164,7 +164,7 @@ class SectionInfo:
     local: bool | None = None
     user_register: int | None = None
 
-    count: int = None
+    count: int | None = None  # 'None' means 'not a  loop'
     chunk_count: int = 1
     execution_type: ExecutionType | None = None
     averaging_mode: AveragingMode | None = None
@@ -235,7 +235,7 @@ class SignalInfo:
     port_delay: float | ParameterInfo | None = None
     delay_signal: float | ParameterInfo | None = None
     port_mode: PortMode | None = None
-    threshold: float | None = None
+    threshold: float | list[float] | None = None
     amplitude: float | ParameterInfo | None = None
     amplifier_pump: AmplifierPumpInfo | None = None
 
@@ -289,3 +289,15 @@ class CompilationJob:
     experiment_hash: str = None
     experiment_info: ExperimentInfo = None
     execution: Statement = None
+    compiler_settings: dict = None
+
+
+@dataclass
+class SweepParamRef:
+    """For use as a pulse parameter.
+
+    The pulse parameters will end up in the (serialized) event list, so a more
+    light-weight alternative to ParameterInfo is preferred.
+    """
+
+    name: str

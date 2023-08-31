@@ -354,7 +354,7 @@ class DeviceCollection:
             if device_qualifier.options.reference_clock_source is not None:
                 force_internal = (
                     device_qualifier.options.reference_clock_source
-                    == ReferenceClockSource.INTERNAL.name
+                    == ReferenceClockSource.INTERNAL
                 )
             dev.update_clock_source(force_internal)
 

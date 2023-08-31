@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Dict, List, Mapping, Optional, Tuple
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types import enums as legacy_enums
+from laboneq.data.execution_payload import VIRTUAL_SHFSG_UID_SUFFIX
 from laboneq.data.setup_description import (
     ChannelMapEntry,
     DeviceType,
@@ -42,11 +43,6 @@ if TYPE_CHECKING:
     from laboneq.dsl.device.instruments.zi_standard_instrument import (
         ZIStandardInstrument,
     )
-
-
-# Added when SHFQC is split into virtual SHFSG & SHFQA
-# SHFQC(uid="shfqc") --> SHFSG(uid="shfqc_sg"), SHFQA(uid="shfqc")
-_VIRTUAL_SHFSG_UID_SUFFIX = "_sg"
 
 
 def convert_io_direction(obj: legacy_enums.io_direction.IODirection) -> IODirection:
@@ -119,8 +115,6 @@ def convert_device_type(target: ZIStandardInstrument) -> DeviceType:
 def convert_physical_channel_type(
     target: Optional[legacy_io_units.PhysicalChannelType],
 ) -> Optional[PhysicalChannelType]:
-    if target is None:
-        return None
     if target == legacy_io_units.PhysicalChannelType.IQ_CHANNEL:
         return PhysicalChannelType.IQ_CHANNEL
     if target == legacy_io_units.PhysicalChannelType.RF_CHANNEL:
@@ -347,6 +341,7 @@ class InstrumentConverter:
             uid=self.uid,
             address=self.address,
             interface=self.interface,
+            device_options=self._src.device_options,
             reference_clock=self.reference_clock,
             ports=self.ports,
             device_type=convert_device_type(self._src),
@@ -474,6 +469,14 @@ def combine_shfqa_and_shfsg(
 
     connections = shfqa.connections + shfsg.connections
 
+    device_options = None
+    if shfqa is not None:
+        device_options = shfqa.device_options
+    if shfsg is not None and shfsg.device_options is not None:
+        if device_options is not None:
+            assert device_options == shfsg.device_options
+        device_options = shfsg.device_options
+
     return legacy_instruments.SHFQC(
         uid=shfqa.uid,
         interface=shfqa.interface,
@@ -481,6 +484,7 @@ def combine_shfqa_and_shfsg(
         address=shfqa.address,
         reference_clock_source=shfqa.reference_clock_source,
         connections=connections,
+        device_options=device_options,
     )
 
 
@@ -495,41 +499,57 @@ def recombine_shfqcs(
         for instr in instruments
         if isinstance(instr, legacy_instruments.SHFSG) and instr.is_qc
     }
+
     virtual_shfqas = {
         instr.uid: instr
         for instr in instruments
         if isinstance(instr, legacy_instruments.SHFQA) and instr.is_qc
     }
+    extra_virtual_shfqas = {}
     for instr in virtual_shfsgs.values():
-        if not instr.qc_with_qa:
+        if not instr.uid.endswith(VIRTUAL_SHFSG_UID_SUFFIX) and instr.qc_with_qa:
             raise AssertionError(
-                f"Virtual SHFSG {instr.uid} has .qc_with_qa=False."
+                f"Virtual SHFSG {instr.uid} has .uid which does not end with '{VIRTUAL_SHFSG_UID_SUFFIX}'."
                 " This is not currently supported."
             )
-        if not instr.uid.endswith(_VIRTUAL_SHFSG_UID_SUFFIX):
-            raise AssertionError(
-                f"Virtual SHFSG {instr.uid} has .uid which does not end with '{_VIRTUAL_SHFSG_UID_SUFFIX}'."
-                " This is not currently supported."
-            )
-        expected_shfqa_uid = instr.uid.removesuffix(_VIRTUAL_SHFSG_UID_SUFFIX)
+        expected_shfqa_uid = instr.uid.removesuffix(VIRTUAL_SHFSG_UID_SUFFIX)
         if expected_shfqa_uid not in virtual_shfqas:
-            raise AssertionError(
-                f"Virtual SHFSG {instr.uid} has no corresponding SHFQA"
-                f" (expected uid: {expected_shfqa_uid})"
+            assert not instr.qc_with_qa, "Missing the QA half of SHFQC"
+            extra_virtual_shfqas[expected_shfqa_uid] = legacy_instruments.SHFQA(
+                uid=expected_shfqa_uid,
+                server_uid=instr.server_uid,
+                interface=instr.interface,
+                address=instr.address,
+                reference_clock_source=instr.reference_clock_source,
+                is_qc=True,
             )
+        else:
+            assert (
+                instr.qc_with_qa
+            ), "qc_with_qa is not set, but a matching QA instrument is present"
+
+    for instr in extra_virtual_shfqas.values():
+        expected_shfsg_uid = instr.uid + VIRTUAL_SHFSG_UID_SUFFIX
+        virtual_shfsgs[expected_shfsg_uid] = virtual_shfsgs[instr.uid]
+        del virtual_shfsgs[instr.uid]
+
     for instr in virtual_shfqas.values():
-        expected_shfsg_uid = instr.uid + _VIRTUAL_SHFSG_UID_SUFFIX
+        expected_shfsg_uid = instr.uid + VIRTUAL_SHFSG_UID_SUFFIX
         if expected_shfsg_uid not in virtual_shfsgs:
-            raise AssertionError(
-                f"Virtual SHFQA {instr.uid} has no corresponding SHFSG"
-                f" (expected uid: {expected_shfsg_uid})"
+            virtual_shfsgs[expected_shfsg_uid] = legacy_instruments.SHFSG(
+                uid=expected_shfsg_uid,
+                server_uid=instr.server_uid,
+                interface=instr.interface,
+                address=instr.address,
+                reference_clock_source=instr.reference_clock_source,
+                is_qc=True,
             )
 
     shfqcs = {
         uid: combine_shfqa_and_shfsg(
-            shfqa, virtual_shfsgs[uid + _VIRTUAL_SHFSG_UID_SUFFIX]
+            shfqa, virtual_shfsgs[uid + VIRTUAL_SHFSG_UID_SUFFIX]
         )
-        for uid, shfqa in virtual_shfqas.items()
+        for uid, shfqa in (virtual_shfqas | extra_virtual_shfqas).items()
     }
 
     # replace SHFQAs with their SHFQC and drop SHFSGs:
@@ -539,13 +559,13 @@ def recombine_shfqcs(
         if instr.uid not in virtual_shfsgs
     ]
 
-    # Remove virtual SHFSG references in connections:
     for instr in instruments:
+        # drop any connections that still refer to the old "_sg" ID (e.g. PQSC's zsync)
         instr.connections = [
             conn for conn in instr.connections if conn.remote_path not in virtual_shfsgs
         ]
 
-    # replace SHFSG physical channel paths used in logicals
+    # replace SHFSG physical channel paths used in logical
     # signals by their new references:
     logical_signal_groups = copy.deepcopy(logical_signal_groups)
     for lsg in logical_signal_groups.values():
@@ -553,7 +573,7 @@ def recombine_shfqcs(
             pc_path = utils.LogicalSignalPhysicalChannelUID(ls.physical_channel.path)
             if pc_path.group in virtual_shfsgs:
                 new_path = pc_path.replace(
-                    group=pc_path.group.removesuffix(_VIRTUAL_SHFSG_UID_SUFFIX),
+                    group=pc_path.group.removesuffix(VIRTUAL_SHFSG_UID_SUFFIX),
                 )
                 ls.physical_channel.path = new_path.path
                 ls.physical_channel.uid = new_path.uid

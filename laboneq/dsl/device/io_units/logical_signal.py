@@ -1,12 +1,15 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 from contextlib import contextmanager
 from dataclasses import dataclass, fields
 from typing import Optional, Union
 
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.core.types.enums import IODirection
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration import MixerCalibration, SignalCalibration
 from laboneq.dsl.calibration.amplifier_pump import AmplifierPump
 from laboneq.dsl.calibration.calibratable import Calibratable
@@ -14,7 +17,6 @@ from laboneq.dsl.device.io_units.physical_channel import (
     PHYSICAL_CHANNEL_CALIBRATION_FIELDS,
     PhysicalChannel,
 )
-from laboneq.dsl.dsl_dataclass_decorator import classformatter
 
 
 @classformatter
@@ -69,6 +71,16 @@ class LogicalSignal(Calibratable):
             else:
                 field_values.append(f"{field.name}={value!r}")
         return f"{self.__class__.__name__}({', '.join(field_values)})"
+
+    def __rich_repr__(self):
+        for field in fields(self):
+            value = getattr(self, field.name)
+            if field.name == "_calibration":
+                yield "calibration", value
+            elif field.name == "_physical_channel":
+                yield "physical_channel", value
+            else:
+                yield f"{field.name}", value
 
     @property
     def mixer_calibration(self):
@@ -215,14 +227,14 @@ class LogicalSignal(Calibratable):
         return self.calibration.threshold if self.is_calibrated() else None
 
     @threshold.setter
-    def threshold(self, value: float):
+    def threshold(self, value: float | list[float]):
         if not self.is_calibrated():
             self.calibration = SignalCalibration(threshold=value)
         else:
             self.calibration.threshold = value
 
     @property
-    def amplifier_pump(self) -> AmplifierPump:
+    def amplifier_pump(self) -> AmplifierPump | None:
         return self.calibration.amplifier_pump if self.is_calibrated() else None
 
     @amplifier_pump.setter
@@ -233,7 +245,7 @@ class LogicalSignal(Calibratable):
             self.calibration.amplifier_pump = value
 
     @property
-    def calibration(self) -> SignalCalibration:
+    def calibration(self) -> SignalCalibration | None:
         return self._calibration
 
     @calibration.setter

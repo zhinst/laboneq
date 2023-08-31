@@ -42,6 +42,7 @@ class ApplicationManager:
 
     def __init__(self):
         self._experimenter_api = None
+        self._payload_builder = None
 
     def start(self):
         if self._experimenter_api is not None:
@@ -56,6 +57,7 @@ class ApplicationManager:
         container[PayloadBuilderAPI] = PayloadBuilder
         container[ExperimentAPI] = ExperimentWorkflow
         self._experimenter_api = container[ExperimentAPI]
+        self._payload_builder = container[PayloadBuilderAPI]
 
     def laboneq(self) -> ExperimentAPI:
         return self._experimenter_api

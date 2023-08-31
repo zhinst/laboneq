@@ -42,18 +42,6 @@ def convert_maybe_parameter(obj: Any) -> Any:
     raise_not_implemented(obj)
 
 
-def convert_carrier_type(
-    obj: Optional[legacy_enums.CarrierType],
-) -> Optional[calibration.CarrierType]:
-    if obj is None:
-        return None
-    if obj == legacy_enums.CarrierType.RF:
-        return calibration.CarrierType.RF
-    if obj == legacy_enums.CarrierType.IF:
-        return calibration.CarrierType.IF
-    raise_not_implemented(obj)
-
-
 def convert_modulation_type(
     obj: Optional[legacy_enums.ModulationType],
 ) -> Optional[calibration.ModulationType]:
@@ -77,7 +65,6 @@ def convert_oscillator(
         uid=obj.uid,
         frequency=convert_maybe_parameter(obj.frequency),
         modulation_type=convert_modulation_type(obj.modulation_type),
-        carrier_type=convert_carrier_type(obj.carrier_type),
     )
 
 
@@ -153,14 +140,6 @@ def convert_port_mode(
     raise_not_implemented(obj)
 
 
-def convert_maybe_quantity(obj: Any) -> Any:
-    if obj is None:
-        return None
-    if isinstance(obj, (int, float)):
-        return obj
-    raise_not_implemented(obj)
-
-
 def format_ls_pc_uid(seq: str) -> str:
     return LogicalSignalPhysicalChannelUID(seq).uid
 
@@ -187,7 +166,7 @@ def convert_calibration(
             new.delay_signal = legacy_ls.delay_signal
             new.port_mode = convert_port_mode(legacy_ls.port_mode)
             new.voltage_offset = legacy_ls.voltage_offset
-            new.range = convert_maybe_quantity(legacy_ls.range)
+            new.range = legacy_ls.range
             new.threshold = legacy_ls.threshold
             new.amplitude = convert_maybe_parameter(legacy_ls.amplitude)
             new.amplifier_pump = convert_amplifier_pump(legacy_ls.amplifier_pump)

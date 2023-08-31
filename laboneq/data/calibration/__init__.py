@@ -9,13 +9,9 @@ from enum import Enum
 
 from numpy.typing import ArrayLike
 
+from laboneq.core.types.units import Quantity
 from laboneq.data import EnumReprMixin
 from laboneq.data.parameter import Parameter
-
-
-class CarrierType(EnumReprMixin, Enum):
-    IF = "if"
-    RF = "rf"
 
 
 class ModulationType(EnumReprMixin, Enum):
@@ -68,7 +64,6 @@ class Oscillator:
     uid: str = None
     frequency: float | Parameter = None
     modulation_type: ModulationType = None
-    carrier_type: CarrierType = None
 
 
 @dataclass
@@ -102,7 +97,7 @@ class SignalCalibration:
     port_mode: PortMode | None = None
     delay_signal: float | None = None
     voltage_offset: float | None = None
-    range: int | float | None = None
-    threshold: float | None = None
+    range: int | float | Quantity | None = None
+    threshold: float | list[float] | None = None
     amplitude: float | Parameter | None = None
     amplifier_pump: AmplifierPump | None = None

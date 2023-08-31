@@ -50,7 +50,7 @@ class LoaderBase:
         self._signal_oscillator = {}
         self._signal_trigger = {}
         self._root_sections = []
-        self._handle_acquires = {}
+        self._handle_acquires: dict[str, str] = {}
 
         self._all_parameters: dict[str, ParameterInfo] = {}
 
@@ -73,12 +73,15 @@ class LoaderBase:
         }
 
     def add_device_oscillator(self, device_id, oscillator_id):
-        self._device_oscillators.setdefault(device_id, []).append(
-            {
-                "device_id": device_id,
-                "oscillator_id": oscillator_id,
-            }
-        )
+        o = {
+            "device_id": device_id,
+            "oscillator_id": oscillator_id,
+        }
+        if device_id not in self._device_oscillators:
+            self._device_oscillators[device_id] = []
+        d = self._device_oscillators[device_id]
+        if o not in d:
+            d.append(o)
 
     def _get_or_create_parameter(self, parameter_id) -> ParameterInfo:
         if (parameter := self._all_parameters.get(parameter_id)) is not None:
@@ -96,17 +99,6 @@ class LoaderBase:
         axis_name=None,
     ):
         param = self._get_or_create_parameter(parameter_id)
-        if (
-            param.start is not None
-            or param.step is not None
-            or param.values is not None
-            or param.axis_name is not None
-        ):
-            raise LabOneQException(
-                "Illegal nesting of multiple real-time sweeps over same parameter: {}".format(
-                    parameter_id
-                )
-            )
         param.start = start
         param.step = step
         param.values = values_list
@@ -115,21 +107,17 @@ class LoaderBase:
         self._section_parameters.setdefault(section_id, []).append(param)
 
     def add_section_signal(self, section_uid, signal_uid):
-        if isinstance(signal_uid, list):
-            for signal in signal_uid:
-                self.add_section_signal(section_uid, signal)
-        else:
-            assert section_uid in self._sections, "use `add_section()` first"
-            section = self._sections[section_uid]
+        assert section_uid in self._sections, "use `add_section()` first"
+        section = self._sections[section_uid]
 
-            assert signal_uid in self._signals, "use `add_signal()` first"
-            signal = self._signals[signal_uid]
+        assert signal_uid in self._signals, "use `add_signal()` first"
+        signal = self._signals[signal_uid]
 
-            if signal not in section.signals:
-                section.signals.append(signal)
+        if signal not in section.signals:
+            section.signals.append(signal)
 
     def add_section_signal_pulse(
-        self, section_id, signal_id, section_signal_pulse: SectionSignalPulse
+        self, section_id, signal_id: str, section_signal_pulse: SectionSignalPulse
     ):
         self._section_signal_pulses.setdefault(section_id, {}).setdefault(
             signal_id, []
@@ -137,7 +125,7 @@ class LoaderBase:
         if section_signal_pulse.acquire_params is not None:
             handle = section_signal_pulse.acquire_params.handle
             if handle is not None:
-                self._handle_acquires.setdefault(handle, []).append(signal_id)
+                self.add_handle_acquire(handle, signal_id)
 
     def add_signal_marker(self, signal_id, marker: str):
         self._signal_markers.setdefault(signal_id, set()).add(marker)
@@ -204,3 +192,12 @@ class LoaderBase:
 
         parent: SectionInfo = self._sections[parent_id]
         parent.children.append(self._sections[child_id])
+
+    def add_handle_acquire(self, handle: str, signal: str):
+        if handle in self._handle_acquires:
+            other_signal = self._handle_acquires[handle]
+            if other_signal != signal:
+                raise LabOneQException(
+                    f"Acquisition handle '{handle}' used on multiple signals: {other_signal}, {signal}"
+                )
+        self._handle_acquires[handle] = signal

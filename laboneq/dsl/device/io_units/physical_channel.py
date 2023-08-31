@@ -7,9 +7,9 @@ from dataclasses import dataclass, fields
 from enum import Enum
 from typing import Optional
 
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration import Calibratable, SignalCalibration
 from laboneq.dsl.calibration.observable import Signal
-from laboneq.dsl.dsl_dataclass_decorator import classformatter
 
 
 class PhysicalChannelType(Enum):
@@ -76,6 +76,14 @@ class PhysicalChannel(Calibratable):
             else:
                 field_values.append(f"{field.name}={value!r}")
         return f"{self.__class__.__name__}({', '.join(field_values)})"
+
+    def __rich_repr__(self):
+        for field in fields(self):
+            value = getattr(self, field.name)
+            if field.name == "_calibration":
+                yield "calibration", value
+            else:
+                yield f"{field.name}", value
 
     def __hash__(self):
         # By default, dataclass does not generate a __hash__() method for

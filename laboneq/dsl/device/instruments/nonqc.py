@@ -3,7 +3,8 @@
 
 from dataclasses import dataclass
 
-from ...dsl_dataclass_decorator import classformatter
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
+
 from .zi_standard_instrument import ZIStandardInstrument
 
 

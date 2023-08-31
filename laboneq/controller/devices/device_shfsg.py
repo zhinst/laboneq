@@ -56,6 +56,7 @@ class DeviceSHFSG(DeviceSHFBase):
         return self.options.qc_with_qa
 
     def _process_dev_opts(self):
+        self._check_expected_dev_opts()
         if self.dev_type == "SHFSG8":
             self._channels = 8
             self._output_to_synth_map = [0, 0, 1, 1, 2, 2, 3, 3]

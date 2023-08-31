@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from laboneq.dsl.dsl_dataclass_decorator import classformatter
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.parameter import Parameter
 
 amplifier_pump_id = 0
@@ -21,7 +21,34 @@ def amplifier_pump_id_generator():
 @classformatter
 @dataclass(init=True, repr=True, order=True)
 class AmplifierPump:
-    """Data object containing settings for the Parametric Pump Controller."""
+    """Settings for the SHF Parametric Pump Controller (SHFPPC).
+
+    Attributes:
+        uid (str):
+            Unique identifier. If left blank, a new unique ID will be
+            generated.
+        pump_freq (float | Parameter | None):
+            Sets the pump frequency node. Default `None`.
+        pump_power (float | Parameter | None):
+            Sets the pump power node. Default `None`.
+        cancellation (bool):
+            Enable pump tone cancellation. Default `True`.
+        alc_engaged (bool):
+            Enable the automatic level control for pump
+            tone output. Default `True`.
+        use_probe (bool):
+            Enable probe tone output. Default `False`.
+        probe_frequency (float | Parameter | None):
+            Sets the frequency of the generated probe tone.
+            Units: Hz. Default: `None`.
+        probe_power (float | Parameter | None):
+            Sets the output power of the generated probe tone.
+            Units: dBm. Default: `None`.
+
+    Notes:
+        If an attribute is set to `None`, the corresponding node
+        is not set.
+    """
 
     #: Unique identifier. If left blank, a new unique ID will be generated.
     uid: str = field(default_factory=amplifier_pump_id_generator)

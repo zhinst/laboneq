@@ -10,6 +10,7 @@ from laboneq import dsl
 from laboneq._utils import id_generator
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import SectionAlignment
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.core.validators import validating_allowed_values
 from laboneq.dsl.enums import (
     AcquisitionType,
@@ -19,7 +20,6 @@ from laboneq.dsl.enums import (
 )
 from laboneq.dsl.experiment.pulse import Pulse
 
-from ..dsl_dataclass_decorator import classformatter
 from .acquire import Acquire
 from .call import Call
 from .delay import Delay
@@ -159,7 +159,7 @@ class Section:
 
     def acquire(
         self,
-        signal: str | list[str],
+        signal: str,
         handle: str,
         kernel: Pulse | list[Pulse] | None = None,
         length: float | None = None,
@@ -170,9 +170,9 @@ class Section:
         Args:
             signal: Unique identifier of the signal where the result should be acquired.
             handle: Unique identifier of the handle that will be used to access the acquired result.
-            kernel: Pulse base used for the acquisition.
+            kernel: Pulse base used for the acquisition. In case of multistate discrimination, a list of kernels.
             length: Integration length (only valid in spectroscopy mode).
-            pulse_parameters: Dictionary with user pulse function parameters (re)binding.
+            pulse_parameters: Dictionary with user pulse function parameters (re)binding. In case of multistate discrimination, a list of dicts.
         """
         self.add(
             Acquire(
@@ -186,11 +186,11 @@ class Section:
 
     def measure(
         self,
-        acquire_signal: str | List[str],
+        acquire_signal: str,
         handle: str,
         integration_kernel: Optional[Pulse | list[Pulse]] = None,
         integration_kernel_parameters: Optional[
-            Dict[str, Any] | List[Dict[str, Any]]
+            Dict[str, Any] | List[Dict[str, Any] | None]
         ] = None,
         integration_length: Optional[float] = None,
         measure_signal: Optional[str] = None,
@@ -214,8 +214,8 @@ class Section:
 
             acquire_signal: A string that specifies the signal for the data acquisition.
             handle: A string that specifies the handle of the acquired results.
-            integration_kernel: An optional Pulse object that specifies the kernel for integration.
-            integration_kernel_parameters: An optional dictionary that contains pulse parameters for the integration kernel.
+            integration_kernel: An optional Pulse object that specifies the kernel for integration. In case of multistate discrimination, a list of kernels.
+            integration_kernel_parameters: An optional dictionary that contains pulse parameters for the integration kernel. In case of multistate discrimination, a list of kernels.
             integration_length: An optional float that specifies the integration length.
             measure_signal: An optional string that specifies the signal to measure.
             measure_pulse: An optional Pulse object that specifies the readout pulse for measurement.
@@ -229,14 +229,8 @@ class Section:
             acquire_delay: An optional float that specifies the delay between the acquisition and the measurement.
             reset_delay: An optional float that specifies the delay after the acquisition to allow for state relaxation or signal processing.
         """
-        if not (
-            isinstance(acquire_signal, str)
-            or (
-                isinstance(acquire_signal, list)
-                and all(isinstance(s, str) for s in acquire_signal)
-            )
-        ):
-            raise TypeError("`acquire_signal` must be a string or a list of strings.")
+        if not (isinstance(acquire_signal, str)):
+            raise TypeError("`acquire_signal` must be a string.")
 
         if measure_signal is None:
             self.acquire(

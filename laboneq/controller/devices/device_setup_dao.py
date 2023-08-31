@@ -45,6 +45,7 @@ def _make_device_qualifier(
         qc_with_qa=target_device.qc_with_qa,
         gen2=has_shf,
         reference_clock_source=target_device.reference_clock_source,
+        expected_installed_options=target_device.device_options,
     )
     if not target_device.has_signals and not target_device.internal_connections:
         # Treat devices without defined connections as non-QC
@@ -130,7 +131,7 @@ class DeviceSetupDAO:
         return used_outputs
 
     def get_device_rf_voltage_offsets(self, device_uid: str) -> dict[int, float]:
-        "Returns map: <sigout index> -> <voltage_offset>"
+        """Returns map: <sigout index> -> <voltage_offset>"""
         voltage_offsets: dict[int, float] = {}
 
         def add_voltage_offset(sigout: int, voltage_offset: float):

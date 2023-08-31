@@ -58,7 +58,8 @@ class DataStorageAPI(ABC):
                 metadata will be returned.
                 If None, all data which also matches the condition will be returned.
 
-            condition (function): A function that takes a single argument (the metadata of a data entry) and returns True if the data entry should be returned. If None, ¨
-                all data matching the metadata will be returned.
+            condition (function): A function that takes a single argument (the metadata
+                of a data entry) and returns True if the data entry should be returned.
+                If None, all data matching the metadata will be returned.
         """
         raise NotImplementedError

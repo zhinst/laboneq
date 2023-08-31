@@ -4,9 +4,9 @@
 from dataclasses import dataclass
 
 from laboneq.core.types.enums.io_direction import IODirection
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.device import Port
 
-from ...dsl_dataclass_decorator import classformatter
 from ...enums import IOSignalType
 from .zi_standard_instrument import ZIStandardInstrument
 

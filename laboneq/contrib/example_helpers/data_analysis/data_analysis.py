@@ -78,33 +78,16 @@ def fit_Rabi(x, y, freq, phase, amp=None, off=None, plot=False, bounds=None):
 
 
 ## function to fit Ramsey oscillations
-def fit_Ramsey(x, y, freq, phase, rate, amp=None, off=None, plot=False, bounds=None):
+def fit_Ramsey(
+    x, y, freq, phase, rate, amp=None, off=None, plot=False, bounds=(-np.inf, np.inf)
+):
+    p0 = [freq, phase, rate]
     if amp is not None:
+        p0.append(amp)
         if off is not None:
-            if bounds is None:
-                popt, pcov = opt.curve_fit(
-                    func_decayOsc, x, y, p0=[freq, phase, rate, amp, off]
-                )
-            else:
-                popt, pcov = opt.curve_fit(
-                    func_decayOsc, x, y, p0=[freq, phase, rate, amp, off], bounds=bounds
-                )
-        else:
-            if bounds is None:
-                popt, pcov = opt.curve_fit(
-                    func_decayOsc, x, y, p0=[freq, phase, rate, amp]
-                )
-            else:
-                popt, pcov = opt.curve_fit(
-                    func_decayOsc, x, y, p0=[freq, phase, rate, amp], bounds=bounds
-                )
-    else:
-        if bounds is None:
-            popt, pcov = opt.curve_fit(func_decayOsc, x, y, p0=[freq, phase, rate])
-        else:
-            popt, pcov = opt.curve_fit(
-                func_decayOsc, x, y, p0=[freq, phase, rate], bounds=bounds
-            )
+            p0.append(off)
+
+    popt, pcov = opt.curve_fit(func_decayOsc, x, y, p0=p0, bounds=bounds)
 
     if plot:
         plt.plot(x, y, ".k")

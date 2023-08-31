@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import logging
 from copy import deepcopy
-from typing import Any, Dict, Optional, Union
+from numbers import Complex
+from typing import Any, Dict, Optional
 
 import numpy as np
 
@@ -65,7 +66,7 @@ def sample_pulse(
     signal_type: str,
     sampling_rate: float,
     length: float,
-    amplitude: Union[float, complex],
+    amplitude: Complex,
     pulse_function: Optional[str],
     modulation_frequency: Optional[float] = None,
     phase: Optional[float] = None,
@@ -127,6 +128,7 @@ def sample_pulse(
             sampling_rate=sampling_rate,
             **(pulse_parameters or {}),
         )
+    assert isinstance(samples, (list, np.ndarray))
     samples = np.array(samples[:num_samples])
     shape = samples.shape
     if len(shape) > 1:

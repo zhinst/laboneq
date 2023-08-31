@@ -6,57 +6,86 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from laboneq.core.types.enums import PortMode
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration.amplifier_pump import AmplifierPump
 from laboneq.dsl.calibration.mixer_calibration import MixerCalibration
 from laboneq.dsl.calibration.observable import Observable
 from laboneq.dsl.calibration.oscillator import Oscillator
 from laboneq.dsl.calibration.precompensation import Precompensation
-from laboneq.dsl.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.parameter import Parameter
 
 
 @classformatter
 @dataclass(init=False, order=True)
 class SignalCalibration(Observable):
-    """Dataclass containing all calibration parameters
-    and settings related to a
+    """Calibration parameters and settings for a
     [LogicalSignal][laboneq.dsl.device.io_units.logical_signal.LogicalSignal].
+
+    Attributes:
+        oscillator (Oscillator | None):
+            The oscillator assigned to the signal.
+            Determines the frequency and type of modulation for any pulses
+            played back on this line.
+            Default: `None`.
+        local_oscillator (Oscillator | None):
+            The local oscillator assigned to the signal.
+            Sets the center frequency of the playback. Only supported by
+            SHFSG, SHFQA and SHFQC signals.
+            Default: `None`.
+        mixer_calibration (MixerCalibration | None):
+            Mixer calibration correction settings.
+            Only supported by HDAWG IQ signals.
+            Default: `None`.
+        precompensation (Precompensation | None):
+            Signal distortion precompensation settings.
+            Only supported by HDAWG signals.
+            Default: `None`.
+        port_delay (float | Parameter | None):
+            An optional delay of all output on this signal.
+            Implemented by setting delay nodes on the instruments, and will
+            not be visible in the pulse sheet.
+            Not currently supported on SHFSG output channels.
+            Default: `None`.
+        port_mode (PortMode | None):
+            On SHFSG output channels, the port mode may be set to select
+            either amplified high-frequency mode (PortMode.RF) and
+            direct low frequency mode (PortMode.LF).
+            Default: `None`.
+        delay_signal (float | None):
+            Defines an additional global delay on this signal line.
+            Implemented by adjusting the waveforms and sequencer code emitted
+            for this logical signal, and is thus visible in the pulse sheet.
+            Default: `None`.
+        voltage_offset (float | None):
+            On the HDAWG lines, the voltage offset may be used to set a
+            constant voltage offset on individual RF line.
+        range (int | float | None):
+            The output or input range setting for the signal.
+        threshold (float | list[float] | None):
+            Specify the state discrimation threshold.
+            Only supported for acquisition signals on the UHFQA, SHFQA
+            and SHFQC.
+        amplitude (float | Parameter | None):
+            Amplitude multiplying all waveforms played on the signal line.
+
+            !!! warning
+                This feature is not implemented!
+        amplifier_pump (AmplifierPump | None):
+            Parametric Pump Controller settings.
     """
 
-    #: The oscillator assigned to the [LogicalSignal][laboneq.dsl.device.io_units.logical_signal.LogicalSignal]
-    #: - determines the frequency and type of modulation for any pulses played back on this line.
-    oscillator: Oscillator | None
-    #: The local oscillator assigned to the [LogicalSignal][laboneq.dsl.device.io_units.logical_signal.LogicalSignal]
-    #: - sets the center frequency of the playback - only relevant on SHFSG, SHFQA and SHFQC
-    local_oscillator: Oscillator | None
-    #: Settings to enable the optional mixer calibration correction
-    #: - only applies to IQ signals on HDAWG
-    mixer_calibration: MixerCalibration | None
-    #: Settings to enable signal distortion precomensation
-    #: - only applies to HDAWG instruments
-    precompensation: Precompensation | None
-    #: An optional delay of all output on this signal.
-    #: Works by setting delay nodes on the instruments, and will not be visible in the pulse sheet.
-    #: Not currently available on SHFSG output channels.
-    port_delay: float | Parameter | None
-    #: Allows to switch between amplified high-frequency mode (PortMode.RF)
-    #: and direct low_frequency mode (PortMode.LF) on SHFSG output channels.
-    port_mode: PortMode | None
-    #: Defines an additional global delay on this signal line.
-    #: Will be mapped to the waveforms and sequencer code emitted for this logical signal,
-    #: and thus visible in the pulse sheet viewer.
-    delay_signal: float | None
-    #: Allows to set a constant voltage offset on individual rf lines on the HDAWG.
-    voltage_offset: float | None
-    #: The output or input range setting for the logical signal
-    range: int | float | None
-    #: The state discrimination threshold
-    #: - only relevant for acquisition type signals on UHFQA and SHFQA/SHFQC
-    threshold: float | None
-    #: (Not Implemented) Amplitude multiplying all waveforms played on a signal line
-    amplitude: float | Parameter | None
-    #: Parametric Pump Controller settings
-    amplifier_pump: AmplifierPump | None
+    oscillator: Oscillator | None = None
+    local_oscillator: Oscillator | None = None
+    mixer_calibration: MixerCalibration | None = None
+    precompensation: Precompensation | None = None
+    port_delay: float | Parameter | None = None
+    port_mode: PortMode | None = None
+    delay_signal: float | None = None
+    voltage_offset: float | None = None
+    range: int | float | None = None
+    threshold: float | list[float] | None = None
+    amplitude: float | Parameter | None = None
+    amplifier_pump: AmplifierPump | None = None
 
     def __init__(
         self,

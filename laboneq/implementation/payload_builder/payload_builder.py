@@ -32,6 +32,7 @@ class PayloadBuilder(PayloadBuilderAPI):
         device_setup: Setup,
         experiment: Experiment,
         signal_mappings: dict[str, str],
+        compiler_settings: dict = None,
     ) -> ExecutionPayload:
         """
         Compose an experiment from a setup descriptor and an experiment descriptor.
@@ -41,11 +42,10 @@ class PayloadBuilder(PayloadBuilderAPI):
         if experiment.signals is None:
             experiment.signals = []
 
-        experiment_info = self._extract_experiment_info(
-            experiment, device_setup, signal_mappings
+        job = self.create_compilation_job(
+            device_setup, experiment, signal_mappings, compiler_settings
         )
-        execution = ExecutionFactoryFromNewExperiment().make(experiment)
-        job = CompilationJob(experiment_info=experiment_info, execution=execution)
+
         job_id = self._compilation_service.submit_compilation_job(job)
 
         scheduled_experiment = self._compilation_service.compilation_job_result(job_id)
@@ -72,3 +72,21 @@ class PayloadBuilder(PayloadBuilderAPI):
     ) -> ExperimentInfo:
         builder = ExperimentInfoBuilder(exp, setup, signal_mappings)
         return builder.load_experiment()
+
+    def create_compilation_job(
+        self,
+        device_setup: Setup,
+        experiment: Experiment,
+        signal_mappings: dict[str, str],
+        compiler_settings: dict = None,
+    ):
+        experiment_info = self._extract_experiment_info(
+            experiment, device_setup, signal_mappings
+        )
+        execution = ExecutionFactoryFromNewExperiment().make(experiment)
+        job = CompilationJob(
+            experiment_info=experiment_info,
+            execution=execution,
+            compiler_settings=compiler_settings,
+        )
+        return job

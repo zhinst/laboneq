@@ -4,10 +4,10 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Union
 
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration import Calibration, Oscillator, SignalCalibration
 from laboneq.dsl.device import LogicalSignalGroup
 from laboneq.dsl.device.io_units import LogicalSignal
-from laboneq.dsl.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.enums import ModulationType
 from laboneq.dsl.quantum.quantum_element import QuantumElement, SignalType
 
@@ -16,15 +16,15 @@ from laboneq.dsl.quantum.quantum_element import QuantumElement, SignalType
 @dataclass
 class TransmonParameters:
     #: Resonance frequency of the qubits g-e transition.
-    resonance_frequency_ge: float
+    resonance_frequency_ge: Optional[float] = None
     #: Resonance frequency of the qubits e-f transition.
-    resonance_frequency_ef: float
+    resonance_frequency_ef: Optional[float] = None
     #: Local oscillator frequency for the drive signals.
-    drive_lo_frequency: float
+    drive_lo_frequency: Optional[float] = None
     #: Readout resonantor frequency of the qubit.
-    readout_resonator_frequency: float
+    readout_resonator_frequency: Optional[float] = None
     #: local oscillator frequency for the readout lines.
-    readout_lo_frequency: float
+    readout_lo_frequency: Optional[float] = None
     #: integration delay between readout pulse and data acquisition, defaults to 20 ns.
     readout_integration_delay: Optional[float] = 20e-9
     #: drive power setting, defaults to 10 dBm.
@@ -39,19 +39,28 @@ class TransmonParameters:
     user_defined: Optional[Dict] = field(default_factory=dict)
 
     @property
-    def drive_frequency_ge(self) -> float:
+    def drive_frequency_ge(self) -> Optional[float]:
         """Qubit drive frequency."""
-        return self.resonance_frequency_ge - self.drive_lo_frequency
+        try:
+            return self.resonance_frequency_ge - self.drive_lo_frequency
+        except TypeError:
+            return None
 
     @property
-    def drive_frequency_ef(self) -> float:
+    def drive_frequency_ef(self) -> Optional[float]:
         """Qubit drive frequency."""
-        return self.resonance_frequency_ef - self.drive_lo_frequency
+        try:
+            return self.resonance_frequency_ef - self.drive_lo_frequency
+        except TypeError:
+            return None
 
     @property
-    def readout_frequency(self) -> float:
+    def readout_frequency(self) -> Optional[float]:
         """Readout baseband frequency."""
-        return self.readout_resonator_frequency - self.readout_lo_frequency
+        try:
+            return self.readout_resonator_frequency - self.readout_lo_frequency
+        except TypeError:
+            return None
 
 
 @classformatter
@@ -59,11 +68,15 @@ class TransmonParameters:
 class Transmon(QuantumElement):
     """A class for a superconducting, flux-tuneable Transmon Qubit."""
 
+    parameters: TransmonParameters = field(default=TransmonParameters)
+
     def __init__(
         self,
         uid: str = None,
         signals: Dict[str, LogicalSignal] = None,
-        parameters: Optional[Union[TransmonParameters, Dict[str, Any]]] = None,
+        parameters: Optional[
+            Union[TransmonParameters, Dict[str, Any]]
+        ] = TransmonParameters(),
     ):
         """
         Initializes a new Transmon Qubit.
@@ -79,15 +92,19 @@ class Transmon(QuantumElement):
                 Required for generating calibration and experiment signals via `calibration()` and `experiment_signals()`.
         """
         if isinstance(parameters, dict):
-            parameters = TransmonParameters(**parameters)
-        super().__init__(uid=uid, signals=signals, parameters=parameters)
+            self.parameters = TransmonParameters(**parameters)
+        else:
+            self.parameters = parameters
+        super().__init__(uid=uid, signals=signals)
 
     @classmethod
     def from_logical_signal_group(
         cls,
         uid: str,
         lsg: LogicalSignalGroup,
-        parameters: Optional[Union[TransmonParameters, Dict[str, Any]]] = None,
+        parameters: Optional[
+            Union[TransmonParameters, Dict[str, Any]]
+        ] = TransmonParameters(),
     ) -> "Transmon":
         """Transmon Qubit from logical signal group.
 
@@ -114,10 +131,11 @@ class Transmon(QuantumElement):
             SignalType.FLUX: ["flux", "flux_line"],
         }
         return cls._from_logical_signal_group(
-            cls,
             uid=uid,
             lsg=lsg,
-            parameters=parameters,
+            parameters=TransmonParameters(**parameters)
+            if isinstance(parameters, dict)
+            else parameters,
             signal_type_map=signal_type_map,
         )
 
@@ -134,62 +152,66 @@ class Transmon(QuantumElement):
             calibration:
                 Prefilled calibration object from Qubit parameters.
         """
-
+        drive_lo = None
+        readout_lo = None
         if set_local_oscillators:
-            drive_lo = Oscillator(
-                uid=f"{self.uid}_drive_local_osc",
-                frequency=self.parameters.drive_lo_frequency,
-            )
-            readout_lo = Oscillator(
-                uid=f"{self.uid}_readout_local_osc",
-                frequency=self.parameters.readout_lo_frequency,
-            )
-        else:
-            drive_lo = None
-            readout_lo = None
+            if self.parameters.drive_lo_frequency:
+                drive_lo = Oscillator(
+                    uid=f"{self.uid}_drive_local_osc",
+                    frequency=self.parameters.drive_lo_frequency,
+                )
+            if self.parameters.readout_lo_frequency:
+                readout_lo = Oscillator(
+                    uid=f"{self.uid}_readout_local_osc",
+                    frequency=self.parameters.readout_lo_frequency,
+                )
 
         calib = {}
         if "drive" in self.signals:
-            calib[self.signals["drive"]] = SignalCalibration(
-                oscillator=Oscillator(
+            sig_cal = SignalCalibration()
+            if self.parameters.drive_frequency_ge is not None:
+                sig_cal.oscillator = Oscillator(
                     uid=f"{self.uid}_drive_ge_osc",
                     frequency=self.parameters.drive_frequency_ge,
                     modulation_type=ModulationType.HARDWARE,
-                ),
-                local_oscillator=drive_lo,
-                range=self.parameters.drive_range,
-            )
+                )
+            sig_cal.local_oscillator = drive_lo
+            sig_cal.range = self.parameters.drive_range
+            calib[self.signals["drive"]] = sig_cal
         if "drive_ef" in self.signals:
-            calib[self.signals["drive_ef"]] = SignalCalibration(
-                oscillator=Oscillator(
+            sig_cal = SignalCalibration()
+            if self.parameters.drive_frequency_ef:
+                sig_cal.oscillator = Oscillator(
                     uid=f"{self.uid}_drive_ef_osc",
                     frequency=self.parameters.drive_frequency_ef,
                     modulation_type=ModulationType.HARDWARE,
-                ),
-                local_oscillator=drive_lo,
-                range=self.parameters.drive_range,
-            )
+                )
+            sig_cal.local_oscillator = drive_lo
+            sig_cal.range = self.parameters.drive_range
+            calib[self.signals["drive_ef"]] = sig_cal
         if "measure" in self.signals:
-            calib[self.signals["measure"]] = SignalCalibration(
-                oscillator=Oscillator(
+            sig_cal = SignalCalibration()
+            if self.parameters.readout_frequency:
+                sig_cal.oscillator = Oscillator(
                     uid=f"{self.uid}_measure_osc",
                     frequency=self.parameters.readout_frequency,
                     modulation_type=ModulationType.SOFTWARE,
-                ),
-                local_oscillator=readout_lo,
-                range=self.parameters.readout_range_out,
-            )
+                )
+            sig_cal.local_oscillator = readout_lo
+            sig_cal.range = self.parameters.readout_range_out
+            calib[self.signals["measure"]] = sig_cal
         if "acquire" in self.signals:
-            calib[self.signals["acquire"]] = SignalCalibration(
-                oscillator=Oscillator(
+            sig_cal = SignalCalibration()
+            if self.parameters.readout_frequency:
+                sig_cal.oscillator = Oscillator(
                     uid=f"{self.uid}_acquire_osc",
                     frequency=self.parameters.readout_frequency,
                     modulation_type=ModulationType.SOFTWARE,
-                ),
-                local_oscillator=readout_lo,
-                range=self.parameters.readout_range_in,
-                port_delay=self.parameters.readout_integration_delay,
-            )
+                )
+            sig_cal.local_oscillator = readout_lo
+            sig_cal.range = self.parameters.readout_range_in
+            sig_cal.port_delay = self.parameters.readout_integration_delay
+            calib[self.signals["acquire"]] = sig_cal
         if "flux" in self.signals:
             calib[self.signals["flux"]] = SignalCalibration(
                 voltage_offset=self.parameters.flux_offset_voltage,

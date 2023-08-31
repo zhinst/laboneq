@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List
 
+from laboneq.core.types.enums import ReferenceClockSource
 from laboneq.data import EnumReprMixin
 from laboneq.data.calibration import Calibration
 
@@ -14,11 +15,6 @@ from laboneq.data.calibration import Calibration
 class IODirection(EnumReprMixin, Enum):
     IN = "in"
     OUT = "out"
-
-
-class ReferenceClockSource(EnumReprMixin, Enum):
-    EXTERNAL = "external"
-    INTERNAL = "internal"
 
 
 class DeviceType(EnumReprMixin, Enum):
@@ -56,13 +52,20 @@ class LogicalSignal:
     group: str  # Needed for referencing
 
 
-@dataclass(unsafe_hash=True)
+@dataclass
 class PhysicalChannel:
     name: str
     group: str
     type: PhysicalChannelType
     direction: IODirection
     ports: List[Port] = field(default_factory=list)
+
+    def __hash__(self):
+        # Todo: Storing `self` in a hashmap is not safe if `self` is mutable!
+        #  Instead derive an immutable key (string?) from the object?
+        return hash(
+            (self.name, self.group, self.type, self.direction, tuple(self.ports))
+        )
 
 
 @dataclass
@@ -75,11 +78,13 @@ class ChannelMapEntry:
 
 @dataclass
 class ReferenceClock:
-    source: ReferenceClockSource = ReferenceClockSource.EXTERNAL
+    source: ReferenceClockSource | None = (
+        None  # `None` means decision is deferred to controller
+    )
     frequency: float | None = None
 
 
-@dataclass
+@dataclass(unsafe_hash=True)
 class Port:
     """Instrument port."""
 
@@ -105,6 +110,7 @@ class Instrument:
     address: str
     device_type: DeviceType
     server: Server
+    device_options: str = None
     interface: str = "1GbE"
     reference_clock: ReferenceClock = field(default_factory=ReferenceClock)
     ports: List[Port] = field(default_factory=list)

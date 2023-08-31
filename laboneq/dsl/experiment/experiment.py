@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Deque, Dict, List, Optional, Union
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import DSLVersion
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration.calibration import Calibration
 from laboneq.dsl.device.io_units.logical_signal import LogicalSignalRef
 from laboneq.dsl.enums import (
@@ -19,7 +20,6 @@ from laboneq.dsl.enums import (
 )
 from laboneq.dsl.experiment.pulse import Pulse
 
-from ..dsl_dataclass_decorator import classformatter
 from .experiment_signal import ExperimentSignal
 from .section import AcquireLoopNt, AcquireLoopRt, Case, Match, Section, Sweep
 
@@ -380,7 +380,7 @@ class Experiment:
 
     def acquire(
         self,
-        signal: str | list[str],
+        signal: str,
         handle: str,
         kernel: Pulse | list[Pulse] | None = None,
         length: float | None = None,
@@ -389,7 +389,7 @@ class Experiment:
         """Acquire a signal and make it available in [Result][laboneq.dsl.result.results.Results].
 
         Args:
-            signal: The input signal(s) to acquire data on.
+            signal: The input signal to acquire data on.
             handle:
                 A unique identifier string that allows to retrieve the
                 acquired data in the [Result][laboneq.dsl.result.results.Results]
@@ -409,12 +409,12 @@ class Experiment:
 
     def measure(
         self,
-        acquire_signal: str | list[str],
+        acquire_signal: str,
         handle: str,
         integration_kernel: Optional[Pulse | list[Pulse]] = None,
-        integration_kernel_parameters: Optional[
-            dict[str, Any] | list[dict[str, Any] | None]
-        ] = None,
+        integration_kernel_parameters: dict[str, Any]
+        | list[dict[str, Any] | None]
+        | None = None,
         integration_length: Optional[float] = None,
         measure_signal: Optional[str] = None,
         measure_pulse: Optional[Pulse] = None,
@@ -431,12 +431,12 @@ class Experiment:
 
         For pulsed spectroscopy, set `integration_length` and either `measure_pulse` or `measure_pulse_length`.
         For CW spectroscopy, set only `integration_length` and do not specify the measure signal.
-        For multistate discrimination, use lists of equal length for acquire_signal, integration_kernel and integration_kernel_parameters.
+        For multistate discrimination, use lists of equal length for integration_kernel and integration_kernel_parameters.
         For all other measurements, set either length or pulse for both the measure pulse and integration kernel.
 
         Args:
 
-            acquire_signal: A string or list of strings that specifies the signal(s) for the data acquisition.
+            acquire_signal: A string that specifies the signal for the data acquisition.
             handle: A string that specifies the handle of the acquired results.
             integration_kernel: An optional Pulse object or list of Pulse objects that specifies the kernel(s) for integration.
             integration_kernel_parameters: An optional dictionary (or list thereof) that contains pulse parameters for the integration kernel.

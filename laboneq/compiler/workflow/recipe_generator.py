@@ -7,6 +7,7 @@ import dataclasses
 import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from laboneq._utils import ensure_list
 from laboneq.compiler.code_generator.measurement_calculator import IntegrationTimes
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
@@ -72,30 +73,23 @@ class RecipeGenerator:
         def _make_integrator_allocation(
             signal_id: str, integrator
         ) -> IntegratorAllocation:
-            is_multistate = "signals" in integrator and len(integrator["signals"]) > 1
-            signals = integrator.get("signals") or [signal_id]
-            thresholds: list[float] = [
-                experiment_dao.threshold(signal_id) for signal_id in signals
-            ]
-            weights: list[dict[str, Any]] = [
-                next(iter(integration_weights[signal_id].values()), {})
+            thresholds = experiment_dao.threshold(signal_id)
+            weights: list[dict[str, Any]] = (
+                list(integration_weights[signal_id].values())
                 if signal_id in integration_weights
-                else {}
-                for signal_id in signals
-            ]
+                else []
+            )
+            if not thresholds or thresholds == [None]:
+                n = max(1, len(weights))
+                thresholds = [0.0] * (n * (n + 1) // 2)
             integrator_allocation = IntegratorAllocation(
-                signal_id=signals if is_multistate else signal_id,
+                signal_id=signal_id,
                 device_id=integrator["device_id"],
                 awg=integrator["awg_nr"],
                 channels=integrator["channels"],
-                weights=[w.get("basename") for w in weights]
-                if is_multistate
-                else weights[0].get("basename"),
+                weights=[w.get("basename") for w in weights] if weights else [None],
+                thresholds=ensure_list(thresholds),
             )
-            if is_multistate or thresholds[0] is not None:
-                integrator_allocation.threshold = (
-                    thresholds if is_multistate else thresholds[0]
-                )
             return integrator_allocation
 
         for signal_id, integrator in integration_unit_allocation.items():
@@ -244,6 +238,13 @@ class RecipeGenerator:
                 del precomp_dict["high_pass"]["clearing"]
         else:
             precomp_dict = None
+
+        if isinstance(lo_frequency, ParameterInfo):
+            lo_frequency = lo_frequency.uid
+        if isinstance(port_delay, ParameterInfo):
+            port_delay = port_delay.uid
+        if isinstance(amplitude, ParameterInfo):
+            amplitude = amplitude.uid
         output = IO(
             channel=channel,
             enable=True,
@@ -275,6 +276,10 @@ class RecipeGenerator:
         port_delay=None,
         scheduler_port_delay=0.0,
     ):
+        if isinstance(lo_frequency, ParameterInfo):
+            lo_frequency = lo_frequency.uid
+        if isinstance(port_delay, ParameterInfo):
+            port_delay = port_delay.uid
         input = IO(
             channel=channel,
             enable=True,

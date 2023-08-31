@@ -53,12 +53,10 @@ SOFTWARE_TRIGGER_CHANNEL = 8  # Software triggering on the SHFQA
 
 SAMPLE_FREQUENCY_HZ = 2.0e9
 DELAY_NODE_GRANULARITY_SAMPLES = 4
-DELAY_NODE_MAX_SAMPLES = 1e-6 * SAMPLE_FREQUENCY_HZ
-# About DELAY_NODE_MAX_SAMPLES: The max time is actually 131e-6 s (at least I can set that
-# value in GUI and API). However, there were concerns that these long times are not tested
-# often enough - also, if you read the value back from the API, some lesser significant bits
-# have strange values which looked a bit suspicious. Therefore, it was decided to limit the
-# maximum delay to 1 us for now
+DELAY_NODE_GENERATOR_MAX_SAMPLES = round(131.058e-6 * SAMPLE_FREQUENCY_HZ)
+DELAY_NODE_READOUT_INTEGRATION_MAX_SAMPLES = round(131.07e-6 * SAMPLE_FREQUENCY_HZ)
+DELAY_NODE_SPECTROSCOPY_ENVELOPE_MAX_SAMPLES = round(131.07e-6 * SAMPLE_FREQUENCY_HZ)
+DELAY_NODE_SPECTROSCOPY_MAX_SAMPLES = round(131.066e-6 * SAMPLE_FREQUENCY_HZ)
 
 
 class DeviceSHFQA(DeviceSHFBase):
@@ -77,6 +75,7 @@ class DeviceSHFQA(DeviceSHFBase):
         return f"SHFQA:{self.serial}"
 
     def _process_dev_opts(self):
+        self._check_expected_dev_opts()
         if self.dev_type == "SHFQA4":
             self._channels = 4
         elif self.dev_type == "SHFQA2":
@@ -282,30 +281,27 @@ class DeviceSHFQA(DeviceSHFBase):
                         or integrator.signal_id not in awg_config.acquire_signals
                     ):
                         continue
+                    assert len(integrator.channels) == 1
+                    integrator_idx = integrator.channels[0]
                     if self._integrator_uses_multistate_discrimation(integrator):
                         assert self._integrator_has_consistent_msd_num_state(integrator)
-                        num_states = len(integrator.weights)
-                        for state_i in range(0, num_states):
-                            channel = integrator.channels[state_i]
-                            integrator_idx = channel[0]
+                        for state_i, threshold in enumerate(integrator.thresholds):
                             nodes_to_initialize_readout.append(
                                 DaqNodeSetAction(
                                     self._daq,
-                                    f"/{self.serial}/qachannels/{channel[0]}/readout/multistate/qudits/"
+                                    f"/{self.serial}/qachannels/{channel}/readout/multistate/qudits/"
                                     f"{integrator_idx}/thresholds/{state_i}/value",
-                                    integrator.threshold[state_i] or 0.0,
+                                    threshold or 0.0,
                                 )
                             )
 
                     else:
-                        assert len(integrator.channels) == 1
-                        integrator_idx = integrator.channels[0]
                         nodes_to_initialize_readout.append(
                             DaqNodeSetAction(
                                 self._daq,
                                 f"/{self.serial}/qachannels/{channel}/readout/discriminators/"
                                 f"{integrator_idx}/threshold",
-                                integrator.threshold or 0.0,
+                                integrator.thresholds[0] or 0.0,
                             )
                         )
         nodes_to_initialize_readout.append(
@@ -648,11 +644,15 @@ class DeviceSHFQA(DeviceSHFBase):
             if is_spectroscopy(acquisition_type):
                 output_delay_path = f"{base_channel_path}/spectroscopy/envelope/delay"
                 meas_delay_path = f"{base_channel_path}/spectroscopy/delay"
+                max_generator_delay = DELAY_NODE_SPECTROSCOPY_ENVELOPE_MAX_SAMPLES
+                max_integrator_delay = DELAY_NODE_SPECTROSCOPY_MAX_SAMPLES
             else:
                 output_delay_path = f"{base_channel_path}/generator/delay"
                 meas_delay_path = f"{base_channel_path}/readout/integration/delay"
                 measurement_delay += output_delay
                 set_input = set_input or set_output
+                max_generator_delay = DELAY_NODE_GENERATOR_MAX_SAMPLES
+                max_integrator_delay = DELAY_NODE_READOUT_INTEGRATION_MAX_SAMPLES
 
             if set_output:
                 output_delay_rounded = (
@@ -662,7 +662,7 @@ class DeviceSHFQA(DeviceSHFBase):
                         delay=output_delay,
                         sample_frequency_hz=SAMPLE_FREQUENCY_HZ,
                         granularity_samples=DELAY_NODE_GRANULARITY_SAMPLES,
-                        max_node_delay_samples=DELAY_NODE_MAX_SAMPLES,
+                        max_node_delay_samples=max_generator_delay,
                     )
                     / SAMPLE_FREQUENCY_HZ
                 )
@@ -678,7 +678,7 @@ class DeviceSHFQA(DeviceSHFBase):
                         delay=measurement_delay,
                         sample_frequency_hz=SAMPLE_FREQUENCY_HZ,
                         granularity_samples=DELAY_NODE_GRANULARITY_SAMPLES,
-                        max_node_delay_samples=DELAY_NODE_MAX_SAMPLES,
+                        max_node_delay_samples=max_integrator_delay,
                     )
                     / SAMPLE_FREQUENCY_HZ
                 )
@@ -777,33 +777,28 @@ class DeviceSHFQA(DeviceSHFBase):
     def _integrator_has_consistent_msd_num_state(
         self, integrator_allocation: IntegratorAllocation.Data
     ):
-        num_msd_states = [
-            len(integrator_allocation.weights),
-            len(integrator_allocation.threshold),
-            len(integrator_allocation.channels),
-        ]
-        if len(set(num_msd_states)) != 1:
+        num_states = len(integrator_allocation.weights) + 1
+        num_thresholds = len(integrator_allocation.thresholds)
+        num_expected_thresholds = (num_states - 1) * (num_states) / 2
+        if num_thresholds != num_expected_thresholds:
             raise LabOneQControllerException(
                 f"Multi discrimination configuration of experiment is not consistent. "
-                f"Received num weights={len(integrator_allocation.weights)}, num thresholds={len(integrator_allocation.threshold)}, num channels={len(integrator_allocation.channels)}, "
-                f"these three quantities need to have the same number of entries."
+                f"Received num weights={len(integrator_allocation.weights)}, num thresholds={len(integrator_allocation.threshold)}, "
+                f"where num_weights should be n-1 and num_thresholds should be (n-1)*n/2 with n the number of states."
             )
         return True
 
     def _integrator_uses_multistate_discrimation(
         self, integrator_allocation: IntegratorAllocation.Data
     ):
-        weights_is_msd = isinstance(integrator_allocation.weights, list)
-        threshold_is_msd = isinstance(integrator_allocation.threshold, list)
-        channels_is_msd = all(
-            isinstance(item, list) for item in integrator_allocation.channels
-        )
-        msd_state = [weights_is_msd, threshold_is_msd, channels_is_msd]
+        weights_is_msd = len(integrator_allocation.weights) > 1
+        threshold_is_msd = len(integrator_allocation.thresholds) > 1
+        msd_state = [weights_is_msd, threshold_is_msd]
         if len(set(msd_state)) != 1:
             raise LabOneQControllerException(
                 f"Multi discrimination configuration of experiment is not consistent. "
-                f"Received weights={integrator_allocation.weights}, thresholds={integrator_allocation.threshold}, channels={integrator_allocation.channels}, "
-                f"these three quantities need to either all be lists, or all be singular items"
+                f"Received weights={integrator_allocation.weights}, thresholds={integrator_allocation.threshold}, "
+                f"these two quantities need to either all be lists, or all be singular items"
             )
         return all(msd_state)
 
@@ -821,7 +816,7 @@ class DeviceSHFQA(DeviceSHFBase):
                 f"got {len(integrator_allocation.channels)}"
             )
         integration_unit_index = integrator_allocation.channels[0]
-        wave_name = integrator_allocation.weights + ".wave"
+        wave_name = integrator_allocation.weights[0] + ".wave"
         weight_vector = np.conjugate(
             get_wave(wave_name, recipe_data.scheduled_experiment.waves)
         )
@@ -857,7 +852,7 @@ class DeviceSHFQA(DeviceSHFBase):
         max_len: int,
     ):
         ret_nodes = []
-        num_states = len(integrator_allocation.weights)
+        num_states = len(integrator_allocation.weights) + 1
         assert self._integrator_has_consistent_msd_num_state(integrator_allocation)
 
         # Note: copying this from grimsel_multistate_demo jupyter notebook
@@ -878,15 +873,13 @@ class DeviceSHFQA(DeviceSHFBase):
             )
         )
 
-        for state_i in range(0, num_states):
-            channel = integrator_allocation.channels[state_i]
-            if len(channel) != 1:
-                raise LabOneQControllerException(
-                    f"{self.dev_repr}: Internal error - expected 1 integrator for "
-                    f"signal '{integrator_allocation.signal_id}', "
-                    f"got {len(channel)}"
-                )
-            integration_unit_index = channel[0]
+        assert len(integrator_allocation.channels) == 1, (
+            f"{self.dev_repr}: Internal error - expected 1 integrator for "
+            f"signal '{integrator_allocation.signal_id}', "
+            f"got {integrator_allocation.channels}"
+        )
+        for state_i in range(0, num_states - 1):
+            integration_unit_index = integrator_allocation.channels[0]
             node_path = (
                 f"/{self.serial}/qachannels/{measurement.channel}/readout/multistate/qudits/"
                 f"{integration_unit_index}/numstates"
@@ -952,7 +945,7 @@ class DeviceSHFQA(DeviceSHFBase):
                 or integrator_allocation.awg != measurement.channel
             ):
                 continue
-            if integrator_allocation.weights is None:
+            if integrator_allocation.weights == [None]:
                 # Skip configuration if no integration weights provided to keep same behavior
                 # TODO(2K): Consider not emitting the integrator allocation in this case.
                 continue

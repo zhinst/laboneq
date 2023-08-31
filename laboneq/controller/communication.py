@@ -52,7 +52,7 @@ class DaqNodeSetAction(DaqNodeAction):
 
         if value is None:
             raise LabOneQControllerException(
-                "DaqNodeSetAction requires valid value to set"
+                f"DaqNodeSetAction for node '{path}' requires valid value to set"
             )
 
         self.value = value
@@ -399,6 +399,23 @@ class DaqWrapperDryRun(DaqWrapper):
             "dev_type",
             device_qualifier.options.dev_type,
         )
+        if device_qualifier.options.expected_installed_options is not None:
+            exp_opts = (
+                device_qualifier.options.expected_installed_options.upper().split("/")
+            )
+            if len(exp_opts) > 0 and exp_opts[0] == "":
+                exp_opts.pop(0)
+            if len(exp_opts) > 0:
+                self._zi_api_object.set_option(
+                    device_qualifier.options.serial,
+                    "features/devtype",
+                    exp_opts.pop(0),
+                )
+                self._zi_api_object.set_option(
+                    device_qualifier.options.serial,
+                    "features/options",
+                    "\n".join(exp_opts),
+                )
 
     def set_emulation_option(self, serial: str, option: str, value: Any):
         assert isinstance(self._zi_api_object, ziDAQServerEmulator)

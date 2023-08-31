@@ -3,4 +3,8 @@
 
 
 class LabOneQException(Exception):
-    pass
+    """Base class for exceptions raised by LabOne Q.
+
+    Where appropriate, LabOne Q also raises built-in Python
+    exceptions such as [ValueError][], [TypeError][] and [RuntimeError][].
+    """

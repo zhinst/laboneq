@@ -9,6 +9,7 @@ import logging
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, Tuple
 
+from laboneq._utils import ensure_list, id_generator
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import AveragingMode
 from laboneq.data.calibration import (
@@ -23,6 +24,7 @@ from laboneq.data.compilation_job import (
     AcquireInfo,
     AmplifierPumpInfo,
     ExperimentInfo,
+    Marker,
     MixerCalibrationInfo,
     OscillatorInfo,
     ParameterInfo,
@@ -32,6 +34,8 @@ from laboneq.data.compilation_job import (
     SectionSignalPulse,
     SignalInfo,
     SignalInfoType,
+    SignalRange,
+    SweepParamRef,
 )
 from laboneq.data.experiment_description import (
     Acquire,
@@ -52,6 +56,7 @@ from laboneq.data.setup_description import (
     Setup,
 )
 from laboneq.data.setup_description.setup_helper import SetupHelper
+from laboneq.dsl.calibration.units import Quantity
 from laboneq.implementation.payload_builder.experiment_info_builder.device_info_builder import (
     DeviceInfoBuilder,
 )
@@ -71,7 +76,7 @@ class ExperimentInfoBuilder:
         self._signal_mappings = copy.deepcopy(signal_mappings)
 
         self._params: dict[str, ParameterInfo] = {}
-        self._nt_only_params = set()
+        self._nt_only_params = []
         self._oscillators: dict[str, OscillatorInfo] = {}
         self._signal_infos: dict[str, SignalInfo] = {}
         self._pulse_defs: dict[str, PulseDef] = {}
@@ -80,13 +85,14 @@ class ExperimentInfoBuilder:
         self._setup_helper = SetupHelper(self._device_setup)
 
         self._section_operations_to_add = []
+        self._ppc_connections = self._setup_helper.ppc_connections()
+
+        self._parameter_parents: dict[str, list[str]] = {}
 
     def load_experiment(self) -> ExperimentInfo:
         self._check_physical_channel_calibration_conflict()
         for signal in self._experiment.signals:
             self._load_signal(signal)
-
-            # todo: dio & zsync & pqsc
 
         seq_avg_section, sweep_sections = find_sequential_averaging(self._experiment)
         if seq_avg_section is not None and len(sweep_sections) > 0:
@@ -105,7 +111,11 @@ class ExperimentInfoBuilder:
                 return section
 
         else:
-            exchanger_map = lambda section: section
+
+            def identity(section):
+                return section
+
+            exchanger_map = identity
 
         section_uid_map = {}
         acquisition_type_map = {}
@@ -127,6 +137,8 @@ class ExperimentInfoBuilder:
             self._load_section_operations(
                 section, section_info, acquisition_type, exchanger_map
             )
+
+        self._sweep_all_derived_parameters(root_sections)
 
         return ExperimentInfo(
             uid=self._experiment.uid,
@@ -157,7 +169,7 @@ class ExperimentInfoBuilder:
                 mapped_ls_path: str = self._signal_mappings[signal.uid]
             except KeyError as e:
                 raise LabOneQException(
-                    f"Experiment signal '{signal.uid}' is not mapped to a logical signal."
+                    f"Experiment signal '{signal.uid}' has no mapping to a logical signal."
                 ) from e
             pc = self._setup_helper.instruments.physical_channel_by_logical_signal(
                 mapped_ls_path
@@ -185,8 +197,13 @@ class ExperimentInfoBuilder:
                     conflicting_signals = [
                         exp_signal.uid
                         for exp_signal in exp_signals
-                        if exp_signal.is_calibrated()
-                        and getattr(exp_signal.calibration, field_) is not None
+                        if (
+                            other_signal_cal := self._experiment.calibration.items.get(
+                                exp_signal.uid
+                            )
+                        )
+                        is not None
+                        and getattr(other_signal_cal, field_) is not None
                     ]
                     pc_uid = f"{pc_group}/{pc_name}"
                     raise LabOneQException(
@@ -253,16 +270,18 @@ class ExperimentInfoBuilder:
             FIR=precomp.FIR,
         )
 
-    def _load_amplifier_pump(self, amp_pump: AmplifierPump) -> AmplifierPumpInfo:
+    def _load_amplifier_pump(
+        self, amp_pump: AmplifierPump, channel
+    ) -> AmplifierPumpInfo:
         return AmplifierPumpInfo(
-            pump_freq=self.opt_param(amp_pump.pump_freq),
-            pump_power=self.opt_param(amp_pump.pump_power),
+            pump_freq=self.opt_param(amp_pump.pump_freq, nt_only=True),
+            pump_power=self.opt_param(amp_pump.pump_power, nt_only=True),
             cancellation=amp_pump.cancellation,
             alc_engaged=amp_pump.alc_engaged,
             use_probe=amp_pump.use_probe,
-            probe_frequency=self.opt_param(amp_pump.probe_frequency),
-            probe_power=self.opt_param(amp_pump.probe_power),
-            channel=None,  # todo
+            probe_frequency=self.opt_param(amp_pump.probe_frequency, nt_only=True),
+            probe_power=self.opt_param(amp_pump.probe_power, nt_only=True),
+            channel=channel,
         )
 
     def _load_signal(self, signal: ExperimentSignal):
@@ -271,6 +290,18 @@ class ExperimentInfoBuilder:
         mapped_ls = self._setup_helper.logical_signal_by_path(mapped_ls_path)
 
         signal_info.device = self._device_info.device_by_ls(mapped_ls)
+
+        physical_channel = (
+            self._setup_helper.instruments.physical_channel_by_logical_signal(mapped_ls)
+        )
+
+        if physical_channel.direction == IODirection.IN:
+            signal_info.type = SignalInfoType.INTEGRATION
+        else:
+            if physical_channel.type == PhysicalChannelType.RF_CHANNEL:
+                signal_info.type = SignalInfoType.RF
+            else:
+                signal_info.type = SignalInfoType.IQ
 
         calibration = self._get_signal_calibration(signal, mapped_ls)
 
@@ -295,33 +326,49 @@ class ExperimentInfoBuilder:
                 calibration.local_oscillator_frequency, nt_only=True
             )
 
-            signal_info.signal_range = calibration.range  # todo: units
+            if isinstance(signal_range := calibration.range, Quantity):
+                signal_info.signal_range = SignalRange(
+                    signal_range.value, signal_range.unit
+                )
+            elif signal_range is not None:
+                signal_info.signal_range = SignalRange(value=signal_range, unit=None)
+            else:
+                signal_info.signal_range = None
             signal_info.port_mode = calibration.port_mode
             signal_info.threshold = calibration.threshold
-            signal_info.amplitude = calibration.amplitude
+            signal_info.amplitude = self.opt_param(calibration.amplitude, nt_only=True)
             if (amp_pump := calibration.amplifier_pump) is not None:
-                signal_info.amplifier_pump = self._load_amplifier_pump(amp_pump)
 
-        physical_channel = (
-            self._setup_helper.instruments.physical_channel_by_logical_signal(mapped_ls)
-        )
+                if physical_channel.direction != IODirection.IN:
+                    _logger.warning(
+                        "'amplifier_pump' calibration for logical signal %s will be ignored - "
+                        "only applicable to acquire lines",
+                        mapped_ls_path,
+                    )
+                elif (ppc_connection := self._ppc_connections.get(mapped_ls)) is None:
+                    _logger.warning(
+                        "'amplifier_pump' calibration for logical signal %s will be ignored - "
+                        "no PPC is connected to it",
+                        mapped_ls_path,
+                    )
+                else:
+                    channel = ppc_connection.channel
+                    signal_info.amplifier_pump = self._load_amplifier_pump(
+                        amp_pump, channel
+                    )
 
-        if physical_channel.direction == IODirection.IN:
-            signal_info.type = SignalInfoType.INTEGRATION
-        else:
-            if physical_channel.type == PhysicalChannelType.RF_CHANNEL:
-                signal_info.type = SignalInfoType.RF
-            else:
-                signal_info.type = SignalInfoType.IQ
         signal_info.channels = sorted((port.channel for port in physical_channel.ports))
 
         self._signal_infos[signal.uid] = signal_info
 
     def _add_parameter(
-        self, value: float | Parameter | None, nt_only=False
+        self, value: Parameter | None, nt_only=False
     ) -> float | ParameterInfo | None:
         if isinstance(value, LinearSweepParameter):
-            step = (value.stop - value.start) / value.count
+            if value.count > 1:
+                step = (value.stop - value.start) / (value.count - 1)
+            else:
+                step = 0
             param_info = ParameterInfo(
                 uid=value.uid,
                 start=value.start,
@@ -335,14 +382,22 @@ class ExperimentInfoBuilder:
                 values=value.values,
                 axis_name=value.axis_name,
             )
+
+            for parent_param in value.driven_by:
+                self._add_parameter(parent_param)
+            self._parameter_parents[value.uid] = [
+                parent_param.uid for parent_param in value.driven_by
+            ]
+
         if value.uid not in self._params:
             self._params[value.uid] = param_info
         elif self._params[value.uid] != param_info:
             raise LabOneQException(
                 f"Found multiple, inconsistent values for parameter {value.uid} with same UID."
             )
-        if nt_only:
-            self._nt_only_params.add(param_info)
+        if nt_only and param_info not in self._nt_only_params:
+            self._nt_only_params.append(param_info.uid)
+
         return param_info
 
     def opt_param(
@@ -358,9 +413,17 @@ class ExperimentInfoBuilder:
         Returns:
             the value or a `ParameterInfo`
         """
-        if value is None or isinstance(value, (float, int, complex)):
-            return value
-        return self._add_parameter(value, nt_only)
+        if isinstance(value, Parameter):
+            return self._add_parameter(value, nt_only)
+        return value
+
+    def opt_param_ref(
+        self, value: float | int | complex | Parameter
+    ) -> float | int | complex | SweepParamRef:
+        val_or_param_info = self.opt_param(value, False)
+        if isinstance(val_or_param_info, ParameterInfo):
+            return SweepParamRef(val_or_param_info.uid)
+        return val_or_param_info
 
     def _walk_sections(
         self,
@@ -407,136 +470,192 @@ class ExperimentInfoBuilder:
         return section_info
 
     def _load_markers(self, operation):
-        # todo
-        return []
+        markers_raw = getattr(operation, "marker", None) or {}
+        return [
+            Marker(
+                k,
+                enable=v.get("enable"),
+                start=v.get("start"),
+                length=v.get("length"),
+                pulse_id=v.get("waveform", {}).get("$ref", None),
+            )
+            for k, v in markers_raw.items()
+        ]
 
     def _load_ssp(
         self,
         operation: SignalOperation,
         signal_info: SignalInfo,
-        _auto_pulse_id,
+        auto_pulse_id,
         acquisition_type,
-    ) -> SectionSignalPulse:
+        section: SectionInfo,
+    ):
         if isinstance(operation, Delay):
             pulse_offset = self.opt_param(operation.time)
             precompensation_clear = operation.precompensation_clear
-            return SectionSignalPulse(
-                signal=signal_info,
-                pulse_def=None,
-                length=pulse_offset,
-                precompensation_clear=precompensation_clear,
+            section.pulses.append(
+                SectionSignalPulse(
+                    signal=signal_info,
+                    pulse=None,
+                    length=pulse_offset,
+                    precompensation_clear=precompensation_clear,
+                )
             )
+            if signal_info not in section.signals:
+                section.signals.append(signal_info)
+            return
+        if isinstance(operation, Reserve):
+            if signal_info not in section.signals:
+                section.signals.append(signal_info)
+            return
 
-        assert isinstance(operation, (PlayPulse, Reserve, Acquire))
-        pulse = None
+        assert isinstance(operation, (PlayPulse, Acquire))
+        pulses = []
         markers = self._load_markers(operation)
 
         length = getattr(operation, "length", None)
         operation_length = self.opt_param(length)
 
         if hasattr(operation, "pulse"):
-            pulse = getattr(operation, "pulse")
-        if hasattr(operation, "kernel"):
-            pulse = getattr(operation, "kernel")
-        if pulse is None and length is not None:
-            pulse = SimpleNamespace()
-            setattr(pulse, "uid", next(_auto_pulse_id))
-            setattr(pulse, "length", length)
-        if pulse is None and markers:
+            pulses = ensure_list(getattr(operation, "pulse"))
+            if len(pulses) > 1:
+                raise RuntimeError(
+                    f"Only one pulse can be provided for pulse play command in section"
+                    f" {section.uid}."
+                )
+        if pulses == [None] and markers:
             # generate a zero amplitude pulse to play the markers
-            pulse = SimpleNamespace()
-            pulse.uid = next(_auto_pulse_id)
+            # TODO: generate a proper constant pulse here
+            pulses = [pulse] = [SimpleNamespace()]
+            pulse.uid = next(auto_pulse_id)
             pulse.function = "const"
             pulse.amplitude = 0.0
             pulse.length = max([m.start + m.length for m in markers])
             pulse.can_compress = False
-            pulse.pulse_parameters = None
+
+        if hasattr(operation, "kernel"):
+            pulses = ensure_list(getattr(operation, "kernel") or [])
+        if len(pulses) == 0 and length is not None:
+            # TODO: generate a proper constant pulse here
+            pulses = [pulse] = [SimpleNamespace()]
+            pulse.uid = next(auto_pulse_id)
+            pulse.length = length
+
+        assert pulses is not None and isinstance(pulses, list)
+
+        pulse_group = None if len(pulses) == 1 else id_generator("pulse_group")
         if markers:
             for m in markers:
                 if m.pulse_id is None:
-                    m.pulse_id = pulse.uid
+                    assert len(pulses) == 1 and pulses[0] is not None
+                    m.pulse_id = pulses[0].uid
 
-        if hasattr(operation, "handle") and pulse is None:
+        if hasattr(operation, "handle") and len(pulses) == 0:
             raise RuntimeError(
-                f"Either 'kernel' or 'length' must be provided for the acquire operation with handle '{getattr(operation, 'handle')}'."
+                f"Either 'kernel' or 'length' must be provided for the acquire"
+                f" operation with handle '{getattr(operation, 'handle')}'."
             )
 
-        if pulse is not None:
-            pulse_def = self._add_pulse(pulse)
+        amplitude = self.opt_param(getattr(operation, "amplitude", None))
+        phase = self.opt_param(getattr(operation, "phase", None))
+        increment_oscillator_phase = self.opt_param(
+            getattr(operation, "increment_oscillator_phase", None)
+        )
+        set_oscillator_phase = self.opt_param(
+            getattr(operation, "set_oscillator_phase", None)
+        )
 
-            amplitude = self.opt_param(getattr(operation, "amplitude", None))
-            phase = self.opt_param(getattr(operation, "phase", None))
-            increment_oscillator_phase = self.opt_param(
-                getattr(operation, "increment_oscillator_phase", None)
+        acquire_params = None
+        if hasattr(operation, "handle"):
+            acquire_params = AcquireInfo(
+                handle=operation.handle,
+                acquisition_type=acquisition_type.value,
             )
-            set_oscillator_phase = self.opt_param(
-                getattr(operation, "set_oscillator_phase", None)
-            )
 
-            acquire_params = None
-            if hasattr(operation, "handle"):
-                acquire_params = AcquireInfo(
-                    handle=operation.handle,
-                    acquisition_type=acquisition_type.value,
-                )
-
-            operation_pulse_parameters = getattr(operation, "pulse_parameters", None)
-
-            if operation_pulse_parameters is not None:
-                operation_pulse_parameters = {
-                    param: self.opt_param(val)
+        operation_pulse_parameters = getattr(operation, "pulse_parameters")
+        if operation_pulse_parameters is not None:
+            operation_pulse_parameters_list = ensure_list(operation_pulse_parameters)
+            operation_pulse_parameters_list = [
+                {
+                    param: self.opt_param_ref(val)
                     for param, val in operation_pulse_parameters.items()
                 }
+                if operation_pulse_parameters is not None
+                else {}
+                for operation_pulse_parameters in operation_pulse_parameters_list
+            ]
+        else:
+            operation_pulse_parameters_list = [None] * len(pulses)
 
-            # todo: pulse parameters
+        for pulse, op_pars in zip(pulses, operation_pulse_parameters_list):
+            if pulse is not None:
+                pulse_def = self._add_pulse(pulse)
 
-            return SectionSignalPulse(
-                signal=signal_info,
-                pulse=pulse_def,
-                length=operation_length,
-                amplitude=amplitude,
-                phase=phase,
-                increment_oscillator_phase=increment_oscillator_phase,
-                set_oscillator_phase=set_oscillator_phase,
-                precompensation_clear=False,
-                play_pulse_parameters=operation_pulse_parameters,
-                acquire_params=acquire_params,
-                markers=markers,
-            )
-        if (
-            getattr(operation, "increment_oscillator_phase", None) is not None
-            or getattr(operation, "set_oscillator_phase", None) is not None
-            or getattr(operation, "phase", None) is not None
-        ):
-            # virtual Z gate
-            if operation.phase is not None:
-                raise LabOneQException(
-                    "Phase argument has no effect for virtual Z gates."
+                pulse_pulse_parameters = getattr(pulse, "pulse_parameters", {})
+                if pulse_pulse_parameters is not None:
+                    pulse_pulse_parameters = {
+                        param: self.opt_param_ref(val)
+                        for param, val in pulse_pulse_parameters.items()
+                    }
+
+                section.pulses.append(
+                    SectionSignalPulse(
+                        signal=signal_info,
+                        pulse=pulse_def,
+                        length=operation_length,
+                        amplitude=amplitude,
+                        phase=phase,
+                        increment_oscillator_phase=increment_oscillator_phase,
+                        set_oscillator_phase=set_oscillator_phase,
+                        precompensation_clear=False,
+                        play_pulse_parameters=op_pars,
+                        pulse_pulse_parameters=pulse_pulse_parameters,
+                        acquire_params=acquire_params,
+                        markers=markers,
+                        pulse_group=pulse_group,
+                    )
                 )
+                if signal_info not in section.signals:
+                    section.signals.append(signal_info)
 
-            increment_oscillator_phase = self.opt_param(
-                operation.increment_oscillator_phase
-            )
-            set_oscillator_phase = self.opt_param(operation.set_oscillator_phase)
-            for par in [
-                "precompensation_clear",
-                "amplitude",
-                "phase",
-                "pulse_parameters",
-                "handle",
-                "length",
-            ]:
-                if getattr(operation, par, None) is not None:
+            elif (
+                getattr(operation, "increment_oscillator_phase", None) is not None
+                or getattr(operation, "set_oscillator_phase", None) is not None
+                or getattr(operation, "phase", None) is not None
+            ):
+                # virtual Z gate
+                if operation.phase is not None:
                     raise LabOneQException(
-                        f"parameter {par} not supported for virtual Z gates"
+                        "Phase argument has no effect for virtual Z gates."
                     )
 
-            return SectionSignalPulse(
-                signal=signal_info,
-                precompensation_clear=False,
-                set_oscillator_phase=set_oscillator_phase,
-                increment_oscillator_phase=increment_oscillator_phase,
-            )
+                increment_oscillator_phase = self.opt_param(
+                    operation.increment_oscillator_phase
+                )
+                set_oscillator_phase = self.opt_param(operation.set_oscillator_phase)
+                for par in [
+                    "precompensation_clear",
+                    "amplitude",
+                    "phase",
+                    "pulse_parameters",
+                    "handle",
+                    "length",
+                ]:
+                    if getattr(operation, par, None) is not None:
+                        raise LabOneQException(
+                            f"parameter {par} not supported for virtual Z gates"
+                        )
+
+                section.pulses.append(
+                    SectionSignalPulse(
+                        signal=signal_info,
+                        precompensation_clear=False,
+                        set_oscillator_phase=set_oscillator_phase,
+                        increment_oscillator_phase=increment_oscillator_phase,
+                    )
+                )
+                if signal_info not in section.signals:
+                    section.signals.append(signal_info)
 
     def _load_section_operations(
         self,
@@ -546,16 +665,18 @@ class ExperimentInfoBuilder:
         exchanger_map: Callable[[Any], Any],
     ):
         _auto_pulse_id = (f"{section.uid}__auto_pulse_{i}" for i in itertools.count())
-        section_signal_pulses = []
 
         for operation in exchanger_map(section).children:
             if not isinstance(operation, SignalOperation):
                 continue
             signal_info = self._signal_infos[operation.signal]
-            section_signal_pulses.append(
-                self._load_ssp(operation, signal_info, _auto_pulse_id, acquisition_type)
+            self._load_ssp(
+                operation,
+                signal_info,
+                _auto_pulse_id,
+                acquisition_type,
+                section_info,
             )
-            section_info.pulses = section_signal_pulses
 
     def _load_section(
         self,
@@ -573,10 +694,10 @@ class ExperimentInfoBuilder:
             instance_id = f"{section.uid}_{visit_count}"
             section_uid_map[section.uid] = (section, visit_count)
 
-        count = 1
+        count = None
 
         if hasattr(section, "count"):
-            count = section.count
+            count = int(section.count)  # cast to int; user may provide float via pow()
 
         section_parameters = []
 
@@ -593,7 +714,7 @@ class ExperimentInfoBuilder:
                     )
                 if (
                     section.execution_type is not None
-                    and section.execution_type != ExecutionType.REAL_TIME
+                    and section.execution_type == ExecutionType.REAL_TIME
                     and parameter.uid in self._nt_only_params
                 ):
                     raise LabOneQException(
@@ -614,6 +735,7 @@ class ExperimentInfoBuilder:
         handle = getattr(section, "handle", None)
         state = getattr(section, "state", None)
         local = getattr(section, "local", None)
+        user_register = getattr(section, "user_register", None)
         assert section.trigger is not None
         triggers = [
             {"signal_id": k, "state": v["state"]} for k, v in section.trigger.items()
@@ -642,6 +764,7 @@ class ExperimentInfoBuilder:
             count=count,
             chunk_count=chunk_count,
             handle=handle,
+            user_register=user_register,
             state=state,
             local=local,
             execution_type=execution_type,
@@ -682,6 +805,57 @@ class ExperimentInfoBuilder:
                 samples=samples,
             )
         return self._pulse_defs[pulse.uid]
+
+    @staticmethod
+    def _find_sweeps_by_parameter(
+        root_sections: list[SectionInfo],
+    ) -> dict[str, list[SectionInfo]]:
+        sweeps_by_parameter = {}
+        sections_to_visit = root_sections[:]
+        while len(sections_to_visit):
+            section = sections_to_visit.pop()
+            for param in section.parameters:
+                sweeps_by_parameter.setdefault(param.uid, []).append(section)
+            sections_to_visit.extend(section.children)
+        return sweeps_by_parameter
+
+    def _sweep_derived_parameter(
+        self,
+        parameter: ParameterInfo,
+        sweeps_by_parameter: dict[str, list[SectionInfo]],
+    ):
+        if parameter.uid in sweeps_by_parameter:
+            return
+
+        # This parameter is not swept directly, but derived from a another parameter;
+        # we must add it to the corresponding loop.
+        parameter = self._params[parameter.uid]
+        parents = self._parameter_parents[parameter.uid]
+        for parent_id in parents:
+            parent = self._params.get(parent_id)
+            if parent is None:
+                raise LabOneQException(
+                    f"Parameter '{parameter.uid}' is driven by a parameter '{parent_id}' which is unknown."
+                )
+
+            self._sweep_derived_parameter(parent, sweeps_by_parameter)
+
+            # the parent should now have been added correctly
+            assert parent_id in sweeps_by_parameter
+
+            for sweep in sweeps_by_parameter[parent_id]:
+                assert parameter not in sweep.parameters
+                sweep.parameters.append(parameter)
+                sweeps_by_parameter.setdefault(parameter.uid, []).append(sweep)
+
+    def _sweep_all_derived_parameters(
+        self,
+        root_sections: list[SectionInfo],
+    ):
+        sweeps_by_parameter = self._find_sweeps_by_parameter(root_sections)
+
+        for child in self._parameter_parents.keys():
+            self._sweep_derived_parameter(self._params[child], sweeps_by_parameter)
 
 
 def find_sequential_averaging(section: Section | Experiment) -> Tuple[Any, Tuple]:

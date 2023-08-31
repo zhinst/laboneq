@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from typing import Iterator
+
 from laboneq.data.execution_payload import (
     TargetChannelCalibration,
     TargetChannelType,
@@ -14,6 +16,7 @@ from laboneq.data.execution_payload import (
 from laboneq.data.setup_description import (
     DeviceType,
     Instrument,
+    IODirection,
     PhysicalChannelType,
     Server,
     Setup,
@@ -47,13 +50,14 @@ class TargetSetupGenerator:
         ]
         server_lookup = {server.uid: server for server in servers}
         devices = [
-            cls._target_device_from_instrument(
+            d
+            for instrument in setup.instruments
+            for d in cls._target_devices_from_instrument(
                 instrument,
                 server_lookup[instrument.server.uid],
                 setup,
                 with_calibration=with_calibration,
             )
-            for instrument in setup.instruments
         ]
         return TargetSetup(
             uid=setup.uid,
@@ -71,60 +75,173 @@ class TargetSetupGenerator:
         )
 
     @classmethod
-    def _convert_to_target_device_type(cls, dt: DeviceType) -> TargetDeviceType:
-        return TargetDeviceType[dt.name]
+    def _convert_to_target_device_type(cls, dt: DeviceType) -> TargetDeviceType | None:
+        if dt == DeviceType.UNMANAGED:
+            return TargetDeviceType.NONQC
+        try:
+            return TargetDeviceType[dt.name]
+        except KeyError:
+            pass
+        return None
+
+    @staticmethod
+    def split_shfqc(shfqc: Instrument):
+        assert shfqc.device_type == DeviceType.SHFQC
+
+        shfqa = Instrument(
+            uid=f"{shfqc.uid}_shfqa",
+            address=shfqc.address,
+            device_type=DeviceType.SHFQA,
+            server=shfqc.server,
+            interface=shfqc.interface,
+            reference_clock=shfqc.reference_clock,
+        )
+        shfsg = Instrument(
+            uid=f"{shfqc.uid}_shfsg",
+            address=shfqc.address,
+            device_type=DeviceType.SHFSG,
+            server=shfqc.server,
+            interface=shfqc.interface,
+            reference_clock=shfqc.reference_clock,
+        )
+        for port in shfqc.ports:
+            if "SGCHANNELS" not in port.path:
+                shfqa.ports.append(port)
+            if "QACHANNELS" not in port.path:
+                shfsg.ports.append(port)
+
+        for device in shfsg, shfqa:
+            device.physical_channels = [
+                pc
+                for pc in shfqc.physical_channels
+                if any(port in device.ports for port in pc.ports)
+            ]
+            device.connections = [
+                conn
+                for conn in shfqc.connections
+                if conn.physical_channel in device.physical_channels
+            ]
+
+        return shfsg, shfqa
 
     @classmethod
-    def _target_device_from_instrument(
+    def _target_devices_from_instrument(
         cls,
         instrument: Instrument,
-        server: Server,
+        server: TargetServer,
         setup: Setup,
         with_calibration: bool,
-    ) -> TargetDevice:
-        device_type = cls._convert_to_target_device_type(instrument.device_type)
+    ) -> Iterator[TargetDevice]:
+
+        if instrument.device_type == DeviceType.SHFQC:
+            shfsg, shfqa = cls.split_shfqc(instrument)
+
+            connected_outputs = cls._connected_outputs_from_instrument(shfqa)
+            internal_connections = cls._internal_connections(shfqa, setup)
+            if with_calibration:
+                calibrations = cls._target_calibrations_from_instrument(shfqa, setup)
+            else:
+                calibrations = None
+
+            target_device_qa = (
+                TargetDevice(
+                    uid=instrument.uid,
+                    server=server,
+                    device_serial=instrument.address,
+                    device_type=TargetDeviceType.SHFQA,
+                    device_options=instrument.device_options,
+                    interface=instrument.interface,
+                    has_signals=len(instrument.connections) > 0,
+                    connected_outputs=connected_outputs,
+                    internal_connections=internal_connections,
+                    calibrations=calibrations,
+                    is_qc=True,
+                    qc_with_qa=True,
+                    reference_clock_source=instrument.reference_clock.source,
+                )
+                if shfqa.connections
+                else None
+            )
+            if target_device_qa is not None:
+                yield target_device_qa
+
+            connected_outputs = cls._connected_outputs_from_instrument(shfsg)
+            internal_connections = cls._internal_connections(shfsg, setup)
+            if with_calibration:
+                calibrations = cls._target_calibrations_from_instrument(shfsg, setup)
+            else:
+                calibrations = None
+
+            uid = (
+                f"{instrument.uid}_sg"
+                if target_device_qa is not None
+                else instrument.uid
+            )
+
+            target_device_sg = TargetDevice(
+                uid=uid,
+                server=server,
+                device_serial=instrument.address,
+                device_type=TargetDeviceType.SHFSG,
+                device_options=instrument.device_options,
+                interface=instrument.interface,
+                has_signals=len(instrument.connections) > 0,
+                connected_outputs=connected_outputs,
+                internal_connections=internal_connections,
+                calibrations=calibrations,
+                is_qc=True,
+                qc_with_qa=target_device_qa is not None,
+                reference_clock_source=instrument.reference_clock.source,
+            )
+            yield target_device_sg
+            return
+
         connected_outputs = cls._connected_outputs_from_instrument(instrument)
         internal_connections = cls._internal_connections(instrument, setup)
         if with_calibration:
             calibrations = cls._target_calibrations_from_instrument(instrument, setup)
         else:
             calibrations = None
-        return TargetDevice(
-            uid=instrument.uid,
-            server=server,
-            # Here we translate from a theoretical instrument address
-            # to a device serial number. For all ZI devices these
-            # are the same:
-            device_serial=instrument.address,
-            device_type=device_type,
-            interface=instrument.interface,
-            has_signals=len(instrument.connections) > 0,
-            # ...
-            connected_outputs=connected_outputs,
-            internal_connections=internal_connections,
-            calibrations=calibrations,
-            is_qc=False,  # XXX: handle this here or in the device setup?
-            qc_with_qa=False,  # XXX: handle this here or in the device setup?
-            reference_clock_source=instrument.reference_clock.source,
-        )
+
+        device_type = cls._convert_to_target_device_type(instrument.device_type)
+        if device_type is not None:
+            yield TargetDevice(
+                uid=instrument.uid,
+                server=server,
+                # Here we translate from a theoretical instrument address
+                # to a device serial number. For all ZI devices these
+                # are the same:
+                device_serial=instrument.address,
+                device_type=device_type,
+                device_options=instrument.device_options,
+                interface=instrument.interface,
+                has_signals=len(instrument.connections) > 0,
+                connected_outputs=connected_outputs,
+                internal_connections=internal_connections,
+                calibrations=calibrations,
+                is_qc=False,
+                qc_with_qa=False,
+                reference_clock_source=instrument.reference_clock.source,
+            )
 
     @classmethod
     def _connected_outputs_from_instrument(
-        cls, instrument: Instrument
+        cls,
+        instrument: Instrument,
+        port_path_filter=("SIGOUTS", "SGCHANNELS", "QACHANNELS"),
     ) -> dict[str, list[int]]:
         ls_ports = {}
         for c in instrument.connections:
+            if c.physical_channel.direction != IODirection.OUT:
+                continue
             ports = []
             for port in c.physical_channel.ports:
-                if (
-                    port.path.startswith("SIGOUTS")
-                    or port.path.startswith("SGCHANNELS")
-                    or port.path.startswith("QACHANNELS")
-                ):
+                if any(port.path.startswith(s) for s in port_path_filter):
                     ports.append(int(port.path.split("/")[1]))
             if ports:
                 ls_ports.setdefault(
-                    f"{c.logical_signal.group}/{c.logical_signal.name}", []
+                    f"/logical_signal_groups/{c.logical_signal.group}/{c.logical_signal.name}",
+                    [],
                 ).extend(ports)
         return ls_ports
 
@@ -150,7 +267,7 @@ class TargetSetupGenerator:
             return calibrations
         for c in instrument.connections:
             sig_calib = calibration.by_logical_signal(c.logical_signal)
-            if sig_calib is not None:
+            if sig_calib is not None and sig_calib.voltage_offset is not None:
                 channel_type = {
                     PhysicalChannelType.IQ_CHANNEL: TargetChannelType.IQ,
                     PhysicalChannelType.RF_CHANNEL: TargetChannelType.RF,

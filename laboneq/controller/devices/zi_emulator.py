@@ -367,7 +367,9 @@ class DevEmuUHFQA(DevEmuHW):
                     averages = self._get_node("qas/0/result/averages").value
                     res = user_readout_data(result_index, length, averages)
                 if res is None:
-                    res = [42 if result_index in [0, 1] else 0] * length
+                    integrator = result_index // 2
+                    res_c = (42 + integrator + 1j * np.arange(length)).view(float)
+                    res = res_c[result_index % 2 :: 2]
                 self._set_val(f"qas/0/result/data/{result_index}/wave", np.array(res))
         if monitor_enable != 0:
             length = self._get_node("qas/0/monitor/length").value
@@ -486,7 +488,7 @@ class DevEmuSHFQABase(Gen2Base):
             for integrator in range(16):
                 self._set_val(
                     f"qachannels/{channel}/readout/result/data/{integrator}/wave",
-                    np.array([(42 + 42j) if integrator == 0 else (0 + 0j)] * length),
+                    42 + integrator + 1j * np.arange(length),
                 )
         if spectroscopy_enable != 0:
             length = self._get_node(

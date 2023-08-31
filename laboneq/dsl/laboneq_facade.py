@@ -4,15 +4,22 @@
 from __future__ import annotations
 
 import atexit
-from typing import TYPE_CHECKING, Dict
+from typing import TYPE_CHECKING
 
 from numpy import typing as npt
 
 from laboneq import controller as ctrl
-from laboneq.compiler.workflow.compiler import Compiler
+from laboneq.application_management.application_manager import ApplicationManager
 from laboneq.core.types import CompiledExperiment
+from laboneq.implementation.legacy_adapters.converters_experiment_description import (
+    convert_Experiment,
+    convert_signal_map,
+)
 from laboneq.implementation.legacy_adapters.converters_target_setup import (
     convert_dsl_to_target_setup,
+)
+from laboneq.implementation.legacy_adapters.device_setup_converter import (
+    convert_device_setup_to_setup,
 )
 
 if TYPE_CHECKING:
@@ -52,15 +59,27 @@ class LabOneQFacade:
 
     @staticmethod
     def compile(
-        session: Session, logger, compiler_settings: Dict = None
+        session: Session, logger, compiler_settings: dict = None
     ) -> CompiledExperiment:
         logger.debug("Calling LabOne Q Compiler...")
-        compiler = Compiler.from_user_settings(compiler_settings)
-        compiled_experiment = compiler.run(
-            {"setup": session.device_setup, "experiment": session.experiment}
+
+        new_setup = convert_device_setup_to_setup(session.device_setup)
+        new_experiment = convert_Experiment(session.experiment)
+        signal_mapping = convert_signal_map(session.experiment)
+
+        api = ApplicationManager.instance().laboneq()
+        api.set_current_setup(new_setup)
+        api.set_current_experiment(new_experiment)
+        api.map_signals(signal_mapping)
+
+        payload = api.build_payload_for_current_experiment(compiler_settings)
+
+        compiled_experiment = CompiledExperiment(
+            device_setup=session.device_setup,
+            experiment=session.experiment,
+            experiment_dict=None,  # deprecated
+            scheduled_experiment=payload.scheduled_experiment,
         )
-        compiled_experiment.device_setup = session.device_setup
-        compiled_experiment.experiment = session.experiment
         return compiled_experiment
 
     @staticmethod

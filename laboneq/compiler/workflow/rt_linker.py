@@ -62,7 +62,6 @@ class CombinedRealtimeCompilerOutput:
     command_tables: list[dict[str, Any]] = field(default_factory=dict)
     pulse_map: dict[str, PulseMapEntry] = field(default_factory=dict)
     schedule: dict[str, Any] = field(default_factory=dict)
-    multistate_signal_groups: set[tuple[str, ...]] = field(default_factory=set)
 
 
 def make_seqc_name(awg: AwgKey, step_indices: list[int]) -> str:
@@ -113,7 +112,6 @@ def from_single_run(
         wave_indices=wave_indices,
         pulse_map=rt_compiler_output.pulse_map,
         schedule=rt_compiler_output.schedule,
-        multistate_signal_groups=rt_compiler_output.multistate_signal_groups,
     )
 
 
@@ -151,10 +149,6 @@ def merge_compiler_runs(
     if this.simultaneous_acquires != new.simultaneous_acquires:
         raise LabOneQException(
             "Simultaneous acquires do not match between real-time iterations"
-        )
-    if this.multistate_signal_groups != new.multistate_signal_groups:
-        raise LabOneQException(
-            "Multistate discrimination signal groups do not match between real-time iterations"
         )
 
     for awg, awg_src in new.src.items():

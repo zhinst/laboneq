@@ -11,7 +11,6 @@ from jsonschema import ValidationError
 
 from laboneq._utils import cached_method
 from laboneq.compiler.experiment_access import json_dumper
-from laboneq.compiler.experiment_access.dsl_loader import DSLLoader
 from laboneq.compiler.experiment_access.experiment_info_loader import (
     ExperimentInfoLoader,
 )
@@ -38,17 +37,13 @@ _logger = logging.getLogger(__name__)
 
 
 class ExperimentDAO:
-    def __init__(
-        self,
-        experiment,
-        core_device_setup=None,
-        core_experiment=None,
-    ):
+    def __init__(self, experiment, loader=None):
         self._data: dict[str, Any] = {}
         self._acquisition_type: AcquisitionType = None  # type: ignore
 
-        if core_device_setup is not None and core_experiment is not None:
-            self._loader = self._load_from_core(core_device_setup, core_experiment)
+        if loader is not None:
+            assert experiment is None, "Cannot pass both experiment and inject a loader"
+            self._loader = loader
         elif isinstance(experiment, ExperimentInfo):
             self._loader = self._load_experiment_info(experiment)
         else:
@@ -91,11 +86,6 @@ class ExperimentDAO:
             for line in str(exception).splitlines():
                 _logger.warning("validation error: %s", line)
         loader.load(experiment)
-        return loader
-
-    def _load_from_core(self, device_setup, experiment) -> DSLLoader:
-        loader = DSLLoader()
-        loader.load(experiment, device_setup)
         return loader
 
     @staticmethod
@@ -276,7 +266,7 @@ class ExperimentDAO:
     def signal_oscillator(self, signal_id):
         return self._data["signals"][signal_id].oscillator
 
-    def voltage_offset(self, signal_id):
+    def voltage_offset(self, signal_id) -> float | ParameterInfo:
         return self._data["signals"][signal_id].voltage_offset
 
     def mixer_calibration(self, signal_id):
@@ -285,13 +275,13 @@ class ExperimentDAO:
     def precompensation(self, signal_id):
         return self._data["signals"][signal_id].precompensation
 
-    def lo_frequency(self, signal_id):
+    def lo_frequency(self, signal_id) -> float | ParameterInfo:
         return self._data["signals"][signal_id].lo_frequency
 
     def signal_range(self, signal_id) -> SignalRange:
         return self._data["signals"][signal_id].signal_range
 
-    def port_delay(self, signal_id) -> float | str | None:
+    def port_delay(self, signal_id) -> float | ParameterInfo | None:
         return self._data["signals"][signal_id].port_delay
 
     def port_mode(self, signal_id):
@@ -300,7 +290,7 @@ class ExperimentDAO:
     def threshold(self, signal_id):
         return self._data["signals"][signal_id].threshold
 
-    def amplitude(self, signal_id) -> float | str | None:
+    def amplitude(self, signal_id) -> float | ParameterInfo | None:
         return self._data["signals"][signal_id].amplitude
 
     def amplifier_pump(self, signal_id) -> AmplifierPumpInfo | None:
@@ -342,16 +332,6 @@ class ExperimentDAO:
                             f" has markers but is to be played on a QA device. QA"
                             f" devices do not support markers."
                         )
-        for handle, acquisition_signals in self._data["handle_acquires"].items():
-            if not acquisition_signals:
-                continue
-            dev0 = self.device_from_signal(acquisition_signals[0])
-            for sig in acquisition_signals[1:]:
-                if self.device_from_signal(sig) != dev0:
-                    raise LabOneQException(
-                        f"Acquisition signals {acquisition_signals} for "
-                        f"handle '{handle}' are not on the same device"
-                    )
 
-    def acquisition_signal(self, handle: str) -> Optional[list[str]]:
+    def acquisition_signal(self, handle: str) -> Optional[str]:
         return self._data["handle_acquires"][handle]

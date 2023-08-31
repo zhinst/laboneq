@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional, Union
 
-from laboneq.dsl.dsl_dataclass_decorator import classformatter
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.experiment.operation import Operation
 
 if TYPE_CHECKING:

@@ -6,8 +6,8 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict
 
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration.calibration_item import CalibrationItem
-from laboneq.dsl.dsl_dataclass_decorator import classformatter
 
 
 def _sanitize_key(key: Any) -> str:
@@ -24,11 +24,6 @@ def _sanitize_key(key: Any) -> str:
 class Calibration:
     """Calibration object containing a dictionary of
     [CalibrationItem][laboneq.dsl.calibration.CalibrationItem]s.
-
-    Parameters:
-        calibration_items:
-            A mapping to initialize the dictionary of
-            calibration items.
 
     Attributes:
         calibration_items:
@@ -61,12 +56,30 @@ class Calibration:
         return len(self.calibration_items)
 
     def items(self):
+        """Return a iterator over calibration items.
+
+        Returns:
+            items (Iterator[tuple[str, CalibrationItem]]):
+                An iterator over tuples of UIDs and calibration items.
+        """
         return self.calibration_items.items()
 
     def keys(self):
+        """Returns an iterator over calibration UIDs.
+
+        Returns:
+            keys (Iterator[str]):
+                An iterator over UIDs.
+        """
         return self.calibration_items.keys()
 
     def values(self):
+        """Returns an iterator over calibration items.
+
+        Returns:
+            values (Iterator[CalibrationItem]):
+                An iterator over calibration items.
+        """
         return self.calibration_items.values()
 
     @staticmethod

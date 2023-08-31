@@ -1,16 +1,18 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Optional
 
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration import MixerCalibration, SignalCalibration
 from laboneq.dsl.calibration.amplifier_pump import AmplifierPump
 from laboneq.dsl.device.io_units.logical_signal import (
     LogicalSignalRef,
     resolve_logical_signal_ref,
 )
-from laboneq.dsl.dsl_dataclass_decorator import classformatter
 
 experiment_signal_id = 0
 
@@ -235,14 +237,14 @@ class ExperimentSignal:
         return self.calibration.threshold if self.is_calibrated() else None
 
     @threshold.setter
-    def threshold(self, value: float):
+    def threshold(self, value: float | list[float]):
         if not self.is_calibrated():
             self.calibration = SignalCalibration(threshold=value)
         else:
             self.calibration.threshold = value
 
     @property
-    def amplifier_pump(self) -> AmplifierPump:
+    def amplifier_pump(self) -> AmplifierPump | None:
         return self.calibration.amplifier_pump if self.is_calibrated() else None
 
     @amplifier_pump.setter

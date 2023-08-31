@@ -63,7 +63,9 @@ class ExperimentAPI(ABC):
         """
         raise NotImplementedError
 
-    def build_payload_for_current_experiment(self) -> ExecutionPayload:
+    def build_payload_for_current_experiment(
+        self, compiler_settings: dict = None
+    ) -> ExecutionPayload:
         """
         Compose the current experiment with a setup.
         """

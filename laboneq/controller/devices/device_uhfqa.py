@@ -449,7 +449,7 @@ class DeviceUHFQA(DeviceZI):
                         f"'{integrator_allocation.signal_id}' in integration mode, "
                         f"got {len(integrator_allocation.channels)}"
                     )
-                if integrator_allocation.weights is None:
+                if integrator_allocation.weights == [None]:
                     # Skip configuration if no integration weights provided to keep same behavior
                     # TODO(2K): Consider not emitting the integrator allocation in this case.
                     continue
@@ -488,7 +488,7 @@ class DeviceUHFQA(DeviceZI):
                             f"/{self.serial}/qas/0/integration/weights/"
                             f"{integration_unit_index}/real",
                             get_wave(
-                                integrator_allocation.weights + "_i.wave",
+                                integrator_allocation.weights[0] + "_i.wave",
                                 recipe_data.scheduled_experiment.waves,
                             ),
                         ),
@@ -498,7 +498,7 @@ class DeviceUHFQA(DeviceZI):
                             f"{integration_unit_index}/imag",
                             np.negative(
                                 get_wave(
-                                    integrator_allocation.weights + "_q.wave",
+                                    integrator_allocation.weights[0] + "_q.wave",
                                     recipe_data.scheduled_experiment.waves,
                                 )
                             ),
@@ -520,7 +520,7 @@ class DeviceUHFQA(DeviceZI):
                             DaqNodeSetAction(
                                 self._daq,
                                 f"/{self.serial}/qas/0/thresholds/{integration_unit_index}/level",
-                                integrator_allocation.threshold or 0.0,
+                                integrator_allocation.thresholds[0] or 0.0,
                             ),
                         ]
                     )

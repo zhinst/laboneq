@@ -80,6 +80,7 @@ class DeviceOptions:
     qc_with_qa: bool = False
     gen2: bool = False
     reference_clock_source: str = None
+    expected_installed_options: str = None
 
 
 @dataclass
@@ -153,7 +154,7 @@ class DeviceZI(ABC):
         self._device_qualifier: DeviceQualifier = device_qualifier
         self._downlinks: dict[str, tuple[str, ReferenceType[DeviceZI]]] = {}
         self._uplinks: list[ReferenceType[DeviceZI]] = []
-        self._rf_offsets: dict[int, float] = []
+        self._rf_offsets: dict[int, float] = {}
 
         self._daq: DaqWrapper = daq
         self.dev_type: str = None
@@ -237,6 +238,27 @@ class DeviceZI(ABC):
                 self.dev_repr,
                 param_name,
                 channel_clause,
+            )
+
+    def _check_expected_dev_opts(self):
+        if self.is_secondary:
+            return
+        actual_opts = "/".join([self.dev_type, *self.dev_opts]).upper()
+        if self.options.expected_installed_options is None:
+            # TODO: enable this warning when device options in setup descriptor are documented
+            # _logger.warning(
+            #     f"{self.dev_repr}: Include the device options '{actual_opts}' in the"
+            #     f" device setup ('options' field of the 'instruments' list in the device"
+            #     f" setup descriptor). This will become a strict requirement in the future."
+            # )
+            pass
+        elif actual_opts != self.options.expected_installed_options.upper():
+            _logger.warning(
+                f"{self.dev_repr}: The expected device options specified in the device"
+                f" setup '{self.options.expected_installed_options}' do not match the"
+                f" actual options '{actual_opts}'. Currently using the actual options,"
+                f" but please note that exact matching will become a strict"
+                f" requirement in the future."
             )
 
     def _process_dev_opts(self):

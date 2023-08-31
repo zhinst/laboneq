@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from numpy.typing import ArrayLike
 
@@ -26,3 +26,4 @@ class LinearSweepParameter(Parameter):
 class SweepParameter(Parameter):
     values: ArrayLike = None
     axis_name: str = None
+    driven_by: list[Parameter] = field(default_factory=list)

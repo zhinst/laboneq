@@ -1,6 +1,8 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 from typing import Any
 
 from laboneq.controller.util import LabOneQControllerException, SimpleProxy
@@ -21,6 +23,7 @@ class ProtectedSession(SimpleProxy):
     # Backwards compatibility after migration to the new architecture
     @property
     def _last_results(self) -> Results:
+
         return Results(
             acquired_results=self._experiment_results.acquired_results,
             user_func_results=self._experiment_results.user_func_results,

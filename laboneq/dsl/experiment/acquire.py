@@ -6,7 +6,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..dsl_dataclass_decorator import classformatter
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
+
 from .operation import Operation
 from .pulse import Pulse
 
@@ -16,8 +17,8 @@ from .pulse import Pulse
 class Acquire(Operation):
     """Class representing an acquire operation that is used to acquire results."""
 
-    #: Unique identifier of the signal(s) where the result should be acquired.
-    signal: str | list[str] = field(default=None)
+    #: Unique identifier of the signal where the result should be acquired.
+    signal: str = field(default=None)
 
     #: Unique identifier of the handle that will be used to access the acquired result.
     handle: str = field(default=None)

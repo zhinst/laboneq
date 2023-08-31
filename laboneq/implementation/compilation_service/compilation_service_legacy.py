@@ -25,7 +25,7 @@ class CompilationServiceLegacy(CompilationServiceAPI):
         """
         job_id = len(self._job_queue)
         queue_entry = {"job_id": job_id, "job": job}
-        compiler = Compiler()
+        compiler = Compiler(job.compiler_settings)
         compiler_output = compiler.run(job)
 
         self._job_results[job_id] = convert_compiler_output_to_scheduled_experiment(

@@ -16,45 +16,12 @@ from laboneq.contrib.example_helpers.descriptors.shfsg_shfqa_hdawg_pqsc import (
 from laboneq.core.types.enums import ModulationType
 from laboneq.dsl.calibration import Oscillator, SignalCalibration
 from laboneq.dsl.device import DeviceSetup
+from laboneq.dsl.quantum.qubit import Qubit, QubitParameters
 from laboneq.dsl.quantum.transmon import Transmon, TransmonParameters
 
 
-# function to create a transmon qubit object from entries in a parameter dictionary
-def create_transmon(index, base_parameters, device_setup):
-    q_name = "q" + str(index)
-    qubit = Transmon.from_logical_signal_group(
-        q_name,
-        lsg=device_setup.logical_signal_groups[q_name],
-        parameters=TransmonParameters(
-            resonance_frequency_ge=base_parameters["resonance_frequency_ge"][index],
-            resonance_frequency_ef=base_parameters["resonance_frequency_ge"][index],
-            drive_lo_frequency=base_parameters["drive_lo_frequency"][
-                int(np.floor(index / 2))
-            ],
-            readout_resonator_frequency=base_parameters["readout_resonator_frequency"][
-                index
-            ],
-            readout_lo_frequency=base_parameters["readout_lo_frequency"][
-                int(np.floor(index / 6))
-            ],
-            readout_integration_delay=base_parameters["readout_integration_delay"],
-            drive_range=base_parameters["drive_range"],
-            readout_range_out=base_parameters["readout_range_out"],
-            readout_range_in=base_parameters["readout_range_in"],
-            user_defined={
-                "amplitude_pi": base_parameters["amplitude_pi"],
-                "pulse_length": base_parameters["pulse_length"],
-                "readout_length": base_parameters["readout_length"],
-                "readout_amplitude": base_parameters["readout_amplitude"],
-                "reset_delay_length": base_parameters["reset_delay_length"],
-            },
-        ),
-    )
-    return qubit
-
-
 # function to generate a set of base transmon qubit parameters, used as input to the create_transmon function
-def generate_base_transmon_parameters(
+def generate_dummy_transmon_parameters(
     number_of_qubits,
     drive_centre_frequency=4e9,
     readout_centre_frequency=6e9,
@@ -97,6 +64,73 @@ def generate_base_transmon_parameters(
         #  delay inserted after every readout
         "reset_delay_length": 100e-9,
     }
+
+
+# function to create a transmon qubit object from entries in a parameter dictionary
+def create_dummy_transmon(index, base_parameters, device_setup):
+    q_name = "q" + str(index)
+    qubit = Transmon.from_logical_signal_group(
+        q_name,
+        lsg=device_setup.logical_signal_groups[q_name],
+        parameters=TransmonParameters(
+            resonance_frequency_ge=base_parameters["resonance_frequency_ge"][index],
+            resonance_frequency_ef=base_parameters["resonance_frequency_ef"][index],
+            drive_lo_frequency=base_parameters["drive_lo_frequency"][
+                int(np.floor(index / 2))
+            ],
+            readout_resonator_frequency=base_parameters["readout_resonator_frequency"][
+                index
+            ],
+            readout_lo_frequency=base_parameters["readout_lo_frequency"][
+                int(np.floor(index / 6))
+            ],
+            readout_integration_delay=base_parameters["readout_integration_delay"],
+            drive_range=base_parameters["drive_range"],
+            readout_range_out=base_parameters["readout_range_out"],
+            readout_range_in=base_parameters["readout_range_in"],
+            user_defined={
+                "amplitude_pi": base_parameters["amplitude_pi"],
+                "pulse_length": base_parameters["pulse_length"],
+                "readout_length": base_parameters["readout_length"],
+                "readout_amplitude": base_parameters["readout_amplitude"],
+                "reset_delay_length": base_parameters["reset_delay_length"],
+            },
+        ),
+    )
+    return qubit
+
+
+# function to create a transmon qubit object from entries in a parameter dictionary
+def create_dummy_qubit(index, base_parameters, device_setup):
+    q_name = "q" + str(index)
+    qubit = Qubit.from_logical_signal_group(
+        q_name,
+        lsg=device_setup.logical_signal_groups[q_name],
+        parameters=QubitParameters(
+            resonance_frequency=base_parameters["resonance_frequency_ge"][index],
+            drive_lo_frequency=base_parameters["drive_lo_frequency"][
+                int(np.floor(index / 2))
+            ],
+            readout_resonator_frequency=base_parameters["readout_resonator_frequency"][
+                index
+            ],
+            readout_lo_frequency=base_parameters["readout_lo_frequency"][
+                int(np.floor(index / 6))
+            ],
+            readout_integration_delay=base_parameters["readout_integration_delay"],
+            drive_range=base_parameters["drive_range"],
+            readout_range_out=base_parameters["readout_range_out"],
+            readout_range_in=base_parameters["readout_range_in"],
+            user_defined={
+                "amplitude_pi": base_parameters["amplitude_pi"],
+                "pulse_length": base_parameters["pulse_length"],
+                "readout_length": base_parameters["readout_length"],
+                "readout_amplitude": base_parameters["readout_amplitude"],
+                "reset_delay_length": base_parameters["reset_delay_length"],
+            },
+        ),
+    )
+    return qubit
 
 
 # functions that modifies the calibration on a given device setup

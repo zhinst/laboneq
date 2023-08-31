@@ -29,7 +29,6 @@ from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
-from laboneq.compiler.experiment_access.param_ref import ParamRef
 from laboneq.compiler.scheduler.acquire_group_schedule import AcquireGroupSchedule
 from laboneq.compiler.scheduler.case_schedule import CaseSchedule, EmptyBranch
 from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
@@ -68,6 +67,7 @@ from laboneq.data.compilation_job import (
     SectionInfo,
     SectionSignalPulse,
     SignalInfoType,
+    SweepParamRef,
 )
 
 if TYPE_CHECKING:
@@ -388,7 +388,8 @@ class Scheduler:
     def _schedule_oscillator_frequency_step(
         self,
         swept_hw_oscillators: Dict[str, SweptHardwareOscillator],
-        iteration: int,
+        global_iteration: int,
+        local_iteration: int,
         sweep_parameters: List[ParameterInfo],
         signals: Set[str],
         grid: int,
@@ -408,7 +409,7 @@ class Scheduler:
             osc = swept_hw_oscillators.get(param.uid)
             if osc is None:
                 continue
-            values.append(param.values[iteration])
+            values.append(param.values[global_iteration])
             swept_oscs_list.append(osc)
             params.append(param.uid)
             device_id = osc.device
@@ -428,7 +429,7 @@ class Scheduler:
             oscillators=swept_oscs_list,
             params=params,
             values=values,
-            iteration=iteration,
+            iteration=local_iteration,
         )
 
     @cached_method(8)
@@ -551,6 +552,7 @@ class Scheduler:
                 self._schedule_oscillator_frequency_step(
                     swept_hw_oscillators,
                     global_iteration,
+                    local_iteration,
                     sweep_parameters,
                     signals,
                     grid,
@@ -685,9 +687,9 @@ class Scheduler:
 
         def resolve_pulse_params(params: Dict[str, Any]):
             for param, value in params.items():
-                if isinstance(value, ParamRef):
+                if isinstance(value, SweepParamRef):
                     try:
-                        resolved = current_parameters[value.param_name]
+                        resolved = current_parameters[value.name]
                     except KeyError as e:
                         raise LabOneQException(
                             f"Pulse '{pulse.pulse.uid}' in section '{section}' requires "
@@ -785,15 +787,17 @@ class Scheduler:
             assert pulse_schedule.is_acquire
             assert not pulse.markers
 
-        if len(set(lengths_int)) != 1 or len(set(offsets_int)) != 1:
-            raise LabOneQException(
-                f"Cannot schedule pulses with different lengths or offsets in the multistate discrimination group in section '{section}'. "
-            )
+        assert (
+            len(set(offsets_int)) == 1
+        ), f"Cannot schedule pulses with different offsets in the multistate discrimination group in section '{section}'. "
+
+        signal_id = pulses[0].signal.uid
+        assert all(p.signal.uid == signal_id for p in pulses[1:])
 
         return AcquireGroupSchedule(
             grid=grid,
-            length=lengths_int[0],
-            signals={p.signal.uid for p in pulses},
+            length=max(lengths_int),
+            signals={signal_id},
             pulses=pulses,
             section=section,
             amplitudes=amplitudes,
@@ -846,11 +850,10 @@ class Scheduler:
 
         if handle:
             try:
-                acquire_signals = dao.acquisition_signal(handle)
+                acquire_signal = dao.acquisition_signal(handle)
             except KeyError as e:
                 raise LabOneQException(f"No acquisition with handle '{handle}'") from e
-            assert isinstance(acquire_signals, list) and len(acquire_signals) >= 1
-            acquire_device = dao.device_from_signal(acquire_signals[0]).uid
+            acquire_device = dao.device_from_signal(acquire_signal).uid
             match_devices = {dao.device_from_signal(s).uid for s in signals}
 
             # todo: this is a brittle check for SHFQC

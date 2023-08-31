@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import copy
 import datetime
 import json
 import logging
@@ -12,13 +11,14 @@ import socketserver
 import textwrap
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import flask.cli
 import numpy as np
 from flask import Flask, request
 
-from laboneq.compiler.workflow.compiler import Compiler
 from laboneq.core.types.compiled_experiment import CompiledExperiment
+from laboneq.dsl.laboneq_facade import LabOneQFacade
 from laboneq.simulator.output_simulator import OutputSimulator
 
 _logger = logging.getLogger(__name__)
@@ -95,37 +95,7 @@ def interactive_psv(compiled_experiment: CompiledExperiment, inline=True):
 class PulseSheetViewer:
     @staticmethod
     def generate_viewer_html_text(events, title, interactive: bool = False):
-        fixed_events = []
-        for e in events["event_list"]:
-            if isinstance(e.get("signal"), list):
-                n = len(e["signal"])
-                for s, p, par, ph, f, a, plp, pup, oph, bph in zip(
-                    e["signal"],
-                    e["play_wave_id"],
-                    e["parametrized_with"],
-                    e["phase"],
-                    e["oscillator_frequency"],
-                    e["amplitude"],
-                    e["play_pulse_parameters"],
-                    e["pulse_pulse_parameters"],
-                    e.get("oscillator_phase", [None] * n),
-                    e.get("baseband_phase", [None] * n),
-                ):
-                    e_new = copy.deepcopy(e)
-                    e_new["signal"] = s
-                    e_new["play_wave_id"] = p
-                    e_new["parametrized_with"] = par
-                    e_new["phase"] = ph
-                    e_new["oscillator_frequency"] = f
-                    e_new["amplitude"] = a
-                    e_new["play_pulse_parameters"] = plp
-                    e_new["pulse_pulse_parameters"] = pup
-                    e_new["oscillator_phase"] = oph
-                    e_new["baseband_phase"] = bph
-                    fixed_events.append(e_new)
-            else:
-                fixed_events.append(e)
-        events_json = json.dumps(fixed_events, indent=2)
+        events_json = json.dumps(events["event_list"], indent=2)
         section_graph_json = json.dumps(events["section_graph"], indent=2)
         section_info_json = json.dumps(events["section_info"], indent=2)
         section_signals_with_children_json = json.dumps(
@@ -197,22 +167,30 @@ def show_pulse_sheet(
 
     if (
         compiled_experiment.schedule is not None
-        and len(compiled_experiment.schedule) >= max_events_to_publish
+        and len(compiled_experiment.schedule["event_list"]) >= max_events_to_publish
     ):
         schedule = compiled_experiment.schedule
         compiled_experiment_for_psv = compiled_experiment
     else:
-        compiler = Compiler(
-            {"MAX_EVENTS_TO_PUBLISH": max_events_to_publish, "PREPARE_PSV_DATA": True}
+        _logger.info(
+            "Requesting more events for the PSV than currently published, recompiling experiment"
         )
-        compiled_experiment_for_psv = compiler.run(
+        dummy_session = SimpleNamespace()
+        dummy_session.experiment = compiled_experiment.experiment
+        dummy_session.device_setup = compiled_experiment.device_setup
+
+        compiled_experiment_for_psv = LabOneQFacade.compile(
+            dummy_session,
+            _logger,
             {
-                "experiment": compiled_experiment.experiment,
-                "setup": compiled_experiment.device_setup,
+                "MAX_EVENTS_TO_PUBLISH": max_events_to_publish,
+                "PREPARE_PSV_DATA": True,
+                "LOG_REPORT": False,
             },
         )
         schedule = compiled_experiment_for_psv.schedule
         compiled_experiment_for_psv.experiment = compiled_experiment.experiment
+        compiled_experiment.scheduled_experiment.schedule = schedule
 
     if not interactive:
         PulseSheetViewer.generate_viewer_html_file(schedule, name, filename)

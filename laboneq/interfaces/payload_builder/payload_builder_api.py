@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import ABC
-from typing import Dict
 
 from laboneq.data.execution_payload import ExecutionPayload, TargetSetup
 from laboneq.data.experiment_description import Experiment
@@ -14,7 +13,8 @@ class PayloadBuilderAPI(ABC):
         self,
         device_setup: Setup,
         experiment_descriptor: Experiment,
-        signal_mappings: Dict[str, str],
+        signal_mappings: dict[str, str],
+        compiler_settings: dict = None,
     ) -> ExecutionPayload:
         """
         Compose an experiment from a setup descriptor and an experiment descriptor.

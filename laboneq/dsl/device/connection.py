@@ -4,7 +4,7 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
-from laboneq.dsl.dsl_dataclass_decorator import classformatter
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.enums import IODirection, IOSignalType
 
 

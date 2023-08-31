@@ -1,6 +1,7 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+import warnings
 from typing import Any, Callable, Dict
 
 import numpy as np
@@ -101,25 +102,34 @@ def register_pulse_functional(sampler: Callable, name: str = None):
 
 
 @register_pulse_functional
-def gaussian(x, sigma=1 / 3, zero_boundaries=False, **_):
-    """Create a gaussian pulse.
+def gaussian(x, sigma=1 / 3, order=2, x_0=0.0, zero_boundaries=False, **_):
+    """Create a Gaussian pulse.
 
     Args:
-        uid (str): Unique identifier of the pulse.
+        uid (str): Unique identifier of the pulse
         length (float): Length of the pulse in seconds
         amplitude (float): Amplitude of the pulse
-        sigma (float): Std. deviation, relative to pulse length
-        zero_boundaries (bool): Whether to zero the pulse at the boundaries
+        sigma (float): Std. deviation, relative to pulse length, default is 1/3
+        order (int): Order of the Gaussian pulse, must be even and positive, default is 2
+        x_0 (float): Center of the Gaussian pulse, relative to pulse length, default is 0.0
+        zero_boundaries (bool): Whether to zero the pulse at the boundaries, default is False
 
     Returns:
         pulse (Pulse): Gaussian pulse.
     """
-    gauss = np.exp(-(x**2) / (2 * sigma**2))
+
+    # Check if order is even and positive
+    if order <= 0 or order % 2 != 0:
+        raise ValueError("The order must be positive and even.")
+
+    gauss = np.exp(-(((x - x_0) ** order) / (2 * sigma**2)))
+
     if zero_boundaries:
         dt = x[0] - (x[1] - x[0])
-        delta = np.exp(-(dt**2) / (2 * sigma**2))
+        delta = np.exp(-(((dt - x_0) ** order) / (2 * sigma**2)))
         gauss -= delta
         gauss /= 1 - delta
+
     return gauss
 
 
@@ -141,6 +151,12 @@ def gaussian_square(
     Returns:
         pulse (Pulse): Gaussian square pulse.
     """
+
+    warnings.warn(
+        "gaussian_square is deprecated and will be removed in future versions. "
+        "Use the `gaussian` function with a higher order instead.",
+        DeprecationWarning,
+    )
 
     risefall_in_samples = round(len(x) * (1 - width / length) / 2)
     flat_in_samples = len(x) - 2 * risefall_in_samples

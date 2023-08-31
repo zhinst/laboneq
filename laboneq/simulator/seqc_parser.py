@@ -69,17 +69,17 @@ def precompensation_delay_samples(precompensation):
 
 
 def get_frequency(device_type):
-    if device_type == "HDAWG":
-        return 2.4e9
-    elif device_type == "UHFQA":
-        return 1.8e9
-    elif device_type == "SHFQA":
-        return 2e9
-    elif device_type == "SHFSG":
-        return 2e9
-    elif device_type == "PQSC":
-        return 0.0
-    else:
+    try:
+        return {
+            "HDAWG": 2.4e9,
+            "UHFQA": 1.8e9,
+            "SHFQA": 2e9,
+            "SHFSG": 2e9,
+            "SHFQC": 2e9,
+            "PQSC": 0.0,
+            "SHFPPC": 0.0,
+        }[device_type]
+    except KeyError:
         raise RuntimeError(f"Unsupported device type {device_type}")
 
 

@@ -14,6 +14,7 @@ from laboneq.compiler.workflow.realtime_compiler import (
     RealtimeCompiler,
     RealtimeCompilerOutput,
 )
+from laboneq.compiler.workflow.reporter import CompilationReportGenerator
 from laboneq.compiler.workflow.rt_linker import CombinedRealtimeCompilerOutput
 from laboneq.executor.executor import (
     ExecRT,
@@ -78,6 +79,7 @@ class NtCompilerExecutor(ExecutorBase):
         self._last_compiler_output: Optional[RealtimeCompilerOutput] = None
         self._required_parameters: Optional[Set[str]] = None
         self._combined_compiler_output: Optional[CombinedRealtimeCompilerOutput] = None
+        self._compiler_report_generator = CompilationReportGenerator()
 
     def set_sw_param_handler(
         self,
@@ -139,23 +141,25 @@ class NtCompilerExecutor(ExecutorBase):
 
         self._compiler_output_by_param_values[requested_values] = new_compiler_output
 
+        nt_step_indices = list(self._iteration_stack.nt_loop_indices())
+
         # Assemble the combined compiler output
         if self._combined_compiler_output is None:
             self._combined_compiler_output = rt_linker.from_single_run(
                 new_compiler_output,
-                list(self._iteration_stack.nt_loop_indices()),
+                nt_step_indices,
             )
         else:
             rt_linker.merge_compiler_runs(
                 self._combined_compiler_output,
                 new_compiler_output,
                 self._last_compiler_output,
-                list(self._iteration_stack.nt_loop_indices()),
+                nt_step_indices,
             )
             self._combined_compiler_output.total_execution_time += (
                 new_compiler_output.total_execution_time
             )
-
+        self._compiler_report_generator.update(new_compiler_output, nt_step_indices)
         self._last_compiler_output = new_compiler_output
 
         yield
@@ -169,3 +173,10 @@ class NtCompilerExecutor(ExecutorBase):
 
     def combined_compiler_output(self):
         return self._combined_compiler_output
+
+    def report(self):
+        if self._combined_compiler_output is not None:
+            self._compiler_report_generator.calculate_total(
+                self._combined_compiler_output
+            )
+        return self._compiler_report_generator.log_report()

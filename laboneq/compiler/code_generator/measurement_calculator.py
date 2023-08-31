@@ -8,10 +8,8 @@ from typing import Any, Dict, Iterator, Optional, Tuple
 
 from engineering_notation import EngNumber
 
-from laboneq._utils import ensure_list
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.fastlogging import NullLogger
-from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import AcquisitionType
 
 _logger = logging.getLogger(__name__)
@@ -100,17 +98,10 @@ class MeasurementCalculator:
             return (acquire_signal_info["device_id"], acquire_signal_info["awg_number"])
 
         def group_by_awg_key(event):
-            signal = event.get("signal", "")
-            # Multiple signals in the multistate case play on the same AWG, thus take the alphabetically
-            # lowest signal for disambiguation.
-            return (calc_awg_key(min(signal) if isinstance(signal, list) else signal),)
+            return (calc_awg_key(event.get("signal", "")),)
 
         def group_by_signal_and_section(event):
-            signal = event.get("signal", "")
-            return (
-                min(signal) if isinstance(signal, list) else signal,
-                event.get("section_name", ""),
-            )
+            return (event.get("signal", ""), event.get("section_name", ""))
 
         for awg_key, events_for_awg_iterator in groupby(
             sorted(acquire_and_play_events, key=group_by_awg_key), key=group_by_awg_key
@@ -140,14 +131,6 @@ class MeasurementCalculator:
                     signal_info = signal_info_map[signal_id]
                     if signal_info.get("delay_signal") is not None:
                         delay_signal = signal_info.get("delay_signal")
-
-                    if any(
-                        signal_info_map[sig].get("delay_signal") != delay_signal
-                        for sig in ensure_list(k)[1:]
-                    ):
-                        raise LabOneQException(
-                            f"All acquire/play signals in section {section_name} must have the same signal delay."
-                        )
 
                     for event in sorted(
                         events_for_signal_and_section, key=lambda x: x["time"]

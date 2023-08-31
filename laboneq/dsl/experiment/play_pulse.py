@@ -6,7 +6,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
-from ..dsl_dataclass_decorator import classformatter
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
+
 from .operation import Operation
 from .pulse import Pulse
 

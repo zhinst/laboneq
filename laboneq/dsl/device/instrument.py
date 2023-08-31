@@ -8,9 +8,9 @@ from dataclasses import dataclass, field
 from typing import List
 
 from laboneq.core.types.enums.io_direction import IODirection
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.device.ports import Port
 
-from ..dsl_dataclass_decorator import classformatter
 from .connection import Connection
 
 

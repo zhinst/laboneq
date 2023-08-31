@@ -11,6 +11,7 @@ from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.common.pulse_parameters import encode_pulse_parameters
 from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
+from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.data.compilation_job import ParameterInfo, SectionSignalPulse
 
 
@@ -66,15 +67,17 @@ class AcquireGroupSchedule(IntervalSchedule):
             for p in self.pulses
         )
         start_id = next(id_tracker)
+        signal_id = self.pulses[0].signal.uid
+        assert all(p.signal.uid == signal_id for p in self.pulses)
         d = {
             "section_name": self.section,
-            "signal": [p.signal.uid for p in self.pulses],
+            "signal": signal_id,
             "play_wave_id": [p.pulse.uid for p in self.pulses],
             "parametrized_with": [],
             "phase": self.phases,
             "amplitude": amplitudes,
             "chain_element_id": start_id,
-            "acquisition_type": self.pulses[0].acquire_params.acquisition_type,
+            "acquisition_type": [self.pulses[0].acquire_params.acquisition_type],
             "acquire_handle": self.pulses[0].acquire_params.handle,
         }
 
@@ -93,38 +96,45 @@ class AcquireGroupSchedule(IntervalSchedule):
             ]
 
         osc_events = []
-        for pulse, iop, sop in zip(
-            self.pulses, self.increment_oscillator_phases, self.set_oscillator_phases
-        ):
+        osc_common = {
+            "time": start,
+            "section_name": self.section,
+            "signal": signal_id,
+        }
+        oscillator_phase_increments = set(self.increment_oscillator_phases)
+        if len(oscillator_phase_increments) > 1:
+            raise LabOneQException(
+                "Cannot handle multiple oscillator phase increments in one acquire group"
+            )
+        oscillator_phase_sets = set(self.set_oscillator_phases)
+        if len(oscillator_phase_sets) > 1:
+            raise LabOneQException(
+                "Cannot handle multiple oscillator phase sets in one acquire group"
+            )
+        if self.increment_oscillator_phases[0]:
+            osc_events.append(
+                {
+                    "event_type": EventType.INCREMENT_OSCILLATOR_PHASE,
+                    "increment_oscillator_phase": self.increment_oscillator_phases[0],
+                    "id": next(id_tracker),
+                    **osc_common,
+                }
+            )
+        if self.set_oscillator_phases[0] is not None:
+            osc_events.append(
+                {
+                    "event_type": EventType.SET_OSCILLATOR_PHASE,
+                    "set_oscillator_phase": self.set_oscillator_phases[0],
+                    "id": next(id_tracker),
+                    **osc_common,
+                }
+            )
+        for pulse in self.pulses:
             params_list = []
             for f in ("length", "amplitude", "phase", "offset"):
                 if isinstance(getattr(pulse, f), ParameterInfo):
                     params_list.append(getattr(pulse, f).uid)
             d["parametrized_with"].append(params_list)
-
-            osc_common = {
-                "time": start,
-                "section_name": self.section,
-                "signal": pulse.signal.uid,
-            }
-            if iop:
-                osc_events.append(
-                    {
-                        "event_type": EventType.INCREMENT_OSCILLATOR_PHASE,
-                        "increment_oscillator_phase": iop,
-                        "id": next(id_tracker),
-                        **osc_common,
-                    }
-                )
-            if sop is not None:
-                osc_events.append(
-                    {
-                        "event_type": EventType.SET_OSCILLATOR_PHASE,
-                        "set_oscillator_phase": sop,
-                        "id": next(id_tracker),
-                        **osc_common,
-                    }
-                )
 
         return osc_events + [
             {

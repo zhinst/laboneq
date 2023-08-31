@@ -156,11 +156,11 @@ def reserve(signal):
 
 
 def acquire(
-    signal: str | list[str],
+    signal: str,
     handle: str,
     kernel: Pulse | list[Pulse] | None = None,
     length: float | None = None,
-    pulse_parameters: dict[str, Any] | list[dict[str, Any]] | None = None,
+    pulse_parameters: dict[str, Any] | list[dict[str, Any] | None] | None = None,
 ):
     return active_section().acquire(
         signal=signal,
@@ -172,10 +172,12 @@ def acquire(
 
 
 def measure(
-    acquire_signal: str | list[str],
+    acquire_signal: str,
     handle: str,
     integration_kernel: Pulse | list[Pulse] | None = None,
-    integration_kernel_parameters: dict[str, Any] | list[dict[str, Any]] | None = None,
+    integration_kernel_parameters: dict[str, Any]
+    | list[dict[str, Any] | None]
+    | None = None,
     integration_length: float | None = None,
     measure_signal: str | None = None,
     measure_pulse: Pulse | None = None,

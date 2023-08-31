@@ -10,7 +10,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from laboneq.core.exceptions import LabOneQException
-from laboneq.dsl.dsl_dataclass_decorator import classformatter
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 
 pulse_id = 0
 

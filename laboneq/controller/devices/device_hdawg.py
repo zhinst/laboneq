@@ -73,6 +73,7 @@ class DeviceHDAWG(DeviceZI):
         )
 
     def _process_dev_opts(self):
+        self._check_expected_dev_opts()
         if self.dev_type == "HDAWG8":
             self._channels = 8
         elif self.dev_type == "HDAWG4":

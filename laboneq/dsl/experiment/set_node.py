@@ -4,9 +4,9 @@
 from dataclasses import dataclass
 from typing import Any
 
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.core.utilities.validate_path import validate_path
 
-from ..dsl_dataclass_decorator import classformatter
 from .operation import Operation
 
 

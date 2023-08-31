@@ -4,7 +4,8 @@
 from dataclasses import dataclass, field
 from typing import Union
 
-from ...dsl_dataclass_decorator import classformatter
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
+
 from .. import Server
 
 

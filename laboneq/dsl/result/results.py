@@ -7,9 +7,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from laboneq.core.exceptions import LabOneQException
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 
 from ..calibration import Calibration
-from ..dsl_dataclass_decorator import classformatter
 from ..serialization import Serializer
 from .acquired_result import AcquiredResult
 

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Set, Tuple
+from typing import Any, Dict, Optional
 
 from laboneq._observability.tracing import trace
 from laboneq.compiler import CodeGenerator, CompilerSettings
@@ -40,7 +40,6 @@ class RealtimeCompilerOutput:
     command_tables: Dict[AwgKey, Dict[str, Any]]
     pulse_map: Dict[str, PulseMapEntry]
     schedule: Dict[str, Any]
-    multistate_signal_groups: Set[Tuple[str, ...]]
 
 
 class RealtimeCompiler:
@@ -55,12 +54,6 @@ class RealtimeCompiler:
         self._sampling_rate_tracker = sampling_rate_tracker
         self._signal_objects = signal_objects
         self._settings = settings
-
-        if not self._settings.USE_EXPERIMENTAL_SCHEDULER:
-            _logger.warning(
-                "The legacy scheduler has been removed; "
-                "the 'USE_EXPERIMENTAL_SCHEDULER' compiler flag is ignored."
-            )
 
         self._scheduler = Scheduler(
             self._experiment_dao,
@@ -83,7 +76,6 @@ class RealtimeCompiler:
         events = self._scheduler.event_timing(expand_loops=False)
 
         code_generator.gen_acquire_map(events)
-        code_generator.find_multistate_signal_groups(events)
         code_generator.gen_seq_c(
             events,
             {k: self._experiment_dao.pulse(k) for k in self._experiment_dao.pulses()},
@@ -111,7 +103,6 @@ class RealtimeCompiler:
             command_tables=self._code_generator.command_tables(),
             pulse_map=self._code_generator.pulse_map(),
             schedule=self.prepare_schedule(),
-            multistate_signal_groups=self._code_generator.multistate_signal_groups(),
         )
 
         return compiler_output

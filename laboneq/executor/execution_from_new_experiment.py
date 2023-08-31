@@ -17,10 +17,10 @@ from laboneq.data.experiment_description import (
     PlayPulse,
     Reserve,
     Section,
+    SetNode,
     Sweep,
 )
 from laboneq.data.parameter import LinearSweepParameter, SweepParameter
-from laboneq.dsl.experiment import SetNode
 from laboneq.executor import executor
 
 

@@ -28,6 +28,7 @@ def generate_descriptor(
     number_flux_lines=0,
     multiplex=False,
     number_multiplex=0,
+    include_cr_lines=False,
     drive_only=False,
     readout_only=False,
     internal_clock=False,
@@ -343,12 +344,13 @@ for how to set them up without a PQSC.
                         "ports": f"SGCHANNELS/{i_qc_ch_6}/OUTPUT",
                     }
                 )
-                sig_dict.append(
-                    {
-                        "iq_signal": f"q{i}/drive_line_cr",
-                        "ports": f"SGCHANNELS/{i_qc_ch_6}/OUTPUT",
-                    }
-                )
+                if include_cr_lines:
+                    sig_dict.append(
+                        {
+                            "iq_signal": f"q{i}/drive_line_cr",
+                            "ports": f"SGCHANNELS/{i_qc_ch_6}/OUTPUT",
+                        }
+                    )
                 i_qc_ch_6 += 1
                 current_qubit += 1
                 if i_qc_ch_6 >= n_iq_shfqc_6:
@@ -374,12 +376,13 @@ for how to set them up without a PQSC.
                         "ports": f"SGCHANNELS/{i_qc_ch_4}/OUTPUT",
                     }
                 )
-                sig_dict.append(
-                    {
-                        "iq_signal": f"q{i}/drive_line_cr",
-                        "ports": f"SGCHANNELS/{i_qc_ch_4}/OUTPUT",
-                    }
-                )
+                if include_cr_lines:
+                    sig_dict.append(
+                        {
+                            "iq_signal": f"q{i}/drive_line_cr",
+                            "ports": f"SGCHANNELS/{i_qc_ch_4}/OUTPUT",
+                        }
+                    )
                 i_qc_ch_4 += 1
                 current_qubit += 1
                 if i_qc_ch_4 >= n_iq_shfqc_4:
@@ -405,12 +408,13 @@ for how to set them up without a PQSC.
                         "ports": f"SGCHANNELS/{i_qc_ch_2}/OUTPUT",
                     }
                 )
-                sig_dict.append(
-                    {
-                        "iq_signal": f"q{i}/drive_line_cr",
-                        "ports": f"SGCHANNELS/{i_qc_ch_2}/OUTPUT",
-                    }
-                )
+                if include_cr_lines:
+                    sig_dict.append(
+                        {
+                            "iq_signal": f"q{i}/drive_line_cr",
+                            "ports": f"SGCHANNELS/{i_qc_ch_2}/OUTPUT",
+                        }
+                    )
                 i_qc_ch_2 += 1
                 current_qubit += 1
                 if i_qc_ch_2 >= n_iq_shfqc_2:
@@ -436,12 +440,13 @@ for how to set them up without a PQSC.
                         "ports": f"SGCHANNELS/{i_sg_ch_8}/OUTPUT",
                     }
                 )
-                sig_dict.append(
-                    {
-                        "iq_signal": f"q{i}/drive_line_cr",
-                        "ports": f"SGCHANNELS/{i_sg_ch_8}/OUTPUT",
-                    }
-                )
+                if include_cr_lines:
+                    sig_dict.append(
+                        {
+                            "iq_signal": f"q{i}/drive_line_cr",
+                            "ports": f"SGCHANNELS/{i_sg_ch_8}/OUTPUT",
+                        }
+                    )
                 i_sg_ch_8 += 1
                 current_qubit += 1
                 if i_sg_ch_8 >= n_iq_shfsg_8:
@@ -467,12 +472,13 @@ for how to set them up without a PQSC.
                         "ports": f"SGCHANNELS/{i_sg_ch_4}/OUTPUT",
                     }
                 )
-                sig_dict.append(
-                    {
-                        "iq_signal": f"q{i}/drive_line_cr",
-                        "ports": f"SGCHANNELS/{i_sg_ch_4}/OUTPUT",
-                    }
-                )
+                if include_cr_lines:
+                    sig_dict.append(
+                        {
+                            "iq_signal": f"q{i}/drive_line_cr",
+                            "ports": f"SGCHANNELS/{i_sg_ch_4}/OUTPUT",
+                        }
+                    )
                 i_sg_ch_4 += 1
                 current_qubit += 1
                 if i_sg_ch_4 >= n_iq_shfsg_4:

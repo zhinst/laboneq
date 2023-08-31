@@ -5,9 +5,9 @@ from dataclasses import dataclass, field
 from typing import Dict
 
 import laboneq.core.path as qct_path
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 
 from ..calibration import Calibratable
-from ..dsl_dataclass_decorator import classformatter
 from .io_units import LogicalSignal
 
 

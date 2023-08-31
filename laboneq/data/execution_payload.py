@@ -12,6 +12,10 @@ from laboneq.data import EnumReprMixin
 from laboneq.data.scheduled_experiment import ScheduledExperiment
 from laboneq.data.setup_description import ReferenceClockSource
 
+# Added when SHFQC is split into virtual SHFSG & SHFQA
+# SHFQC(uid="shfqc") --> SHFSG(uid="shfqc_sg"), SHFQA(uid="shfqc")
+VIRTUAL_SHFSG_UID_SUFFIX = "_sg"
+
 
 #
 # Enums
@@ -55,6 +59,7 @@ class TargetDevice:
     server: TargetServer = None
     device_serial: str = None
     device_type: TargetDeviceType = None
+    device_options: str = None
     interface: str = None
     has_signals: bool | None = None
     connected_outputs: dict[str, list[int]] | None = None
@@ -62,7 +67,7 @@ class TargetDevice:
     calibrations: list[TargetChannelCalibration] | None = None
     is_qc: bool = False
     qc_with_qa: bool = False
-    reference_clock_source: ReferenceClockSource = None
+    reference_clock_source: ReferenceClockSource | None = None
 
 
 @dataclass

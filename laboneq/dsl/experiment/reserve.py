@@ -3,7 +3,8 @@
 
 from dataclasses import dataclass, field
 
-from ..dsl_dataclass_decorator import classformatter
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
+
 from .operation import Operation
 
 

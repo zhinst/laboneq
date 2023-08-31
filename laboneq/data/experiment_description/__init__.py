@@ -167,7 +167,7 @@ class Reserve(SignalOperation):
 
 
 @dataclass
-class Set(Operation):
+class SetNode(Operation):
     path: str = None
     value: Any = None
 

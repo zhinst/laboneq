@@ -8,12 +8,12 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from laboneq.core import path as qct_path
 from laboneq.core.exceptions import LabOneQException
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration import Calibratable, Calibration, CalibrationItem
 from laboneq.dsl.device.logical_signal_group import LogicalSignalGroup
 from laboneq.dsl.device.physical_channel_group import PhysicalChannelGroup
 from laboneq.dsl.serialization import Serializer
 
-from ..dsl_dataclass_decorator import classformatter
 from ._device_setup_generator import (
     ConnectionsType,
     DataServersType,
@@ -22,6 +22,7 @@ from ._device_setup_generator import (
 )
 
 if TYPE_CHECKING:
+    from laboneq.dsl import quantum
     from laboneq.dsl.device.logical_signal_group import LogicalSignal
     from laboneq.dsl.device.servers import DataServer
 
@@ -47,9 +48,11 @@ class DeviceSetup:
     physical_channel_groups: Dict[str, PhysicalChannelGroup] = field(
         default_factory=dict
     )
-
     #: Logical signal groups of this device setup, by name of the group.
     logical_signal_groups: Dict[str, LogicalSignalGroup] = field(default_factory=dict)
+    #: Experimental: Qubits of this device setup, by the name of the qubit.
+    #: Qubits are generated from the descriptor `qubits` section.
+    qubits: Dict[str, "quantum.QuantumElement"] = field(default_factory=dict)
 
     def instrument_by_uid(self, uid: str) -> Instrument | None:
         return next((i for i in self.instruments if i.uid == uid), None)
