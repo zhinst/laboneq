@@ -68,15 +68,13 @@ class TransmonParameters:
 class Transmon(QuantumElement):
     """A class for a superconducting, flux-tuneable Transmon Qubit."""
 
-    parameters: TransmonParameters = field(default=TransmonParameters)
+    parameters: TransmonParameters
 
     def __init__(
         self,
         uid: str = None,
         signals: Dict[str, LogicalSignal] = None,
-        parameters: Optional[
-            Union[TransmonParameters, Dict[str, Any]]
-        ] = TransmonParameters(),
+        parameters: Optional[Union[TransmonParameters, Dict[str, Any]]] = None,
     ):
         """
         Initializes a new Transmon Qubit.
@@ -91,7 +89,9 @@ class Transmon(QuantumElement):
             parameters: Parameters associated with the qubit.
                 Required for generating calibration and experiment signals via `calibration()` and `experiment_signals()`.
         """
-        if isinstance(parameters, dict):
+        if parameters is None:
+            self.parameters = TransmonParameters()
+        elif isinstance(parameters, dict):
             self.parameters = TransmonParameters(**parameters)
         else:
             self.parameters = parameters
@@ -102,9 +102,7 @@ class Transmon(QuantumElement):
         cls,
         uid: str,
         lsg: LogicalSignalGroup,
-        parameters: Optional[
-            Union[TransmonParameters, Dict[str, Any]]
-        ] = TransmonParameters(),
+        parameters: Optional[Union[TransmonParameters, Dict[str, Any]]] = None,
     ) -> "Transmon":
         """Transmon Qubit from logical signal group.
 
@@ -130,12 +128,14 @@ class Transmon(QuantumElement):
             SignalType.ACQUIRE: ["acquire", "acquire_line"],
             SignalType.FLUX: ["flux", "flux_line"],
         }
+        if parameters is None:
+            parameters = TransmonParameters()
+        elif isinstance(parameters, dict):
+            parameters = TransmonParameters(**parameters)
         return cls._from_logical_signal_group(
             uid=uid,
             lsg=lsg,
-            parameters=TransmonParameters(**parameters)
-            if isinstance(parameters, dict)
-            else parameters,
+            parameters=parameters,
             signal_type_map=signal_type_map,
         )
 

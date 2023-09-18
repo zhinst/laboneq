@@ -144,8 +144,8 @@ class PulseSheetViewer:
 def show_pulse_sheet(
     name: str,
     compiled_experiment: CompiledExperiment,
-    max_events_to_publish=1000,
-    interactive=False,
+    max_events_to_publish: int = 1000,
+    interactive: bool = False,
 ):
     """Creates the pulse sheet of an experiment as html file.
 

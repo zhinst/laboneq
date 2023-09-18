@@ -693,7 +693,7 @@ class Compiler:
                     "device_id": signal_info.device.uid,
                     "channel": channel,
                     "lo_frequency": lo_frequency,
-                    "port_mode": port_mode,
+                    "port_mode": port_mode.value if port_mode is not None else None,
                     "range": signal_range.value if signal_range is not None else None,
                     "range_unit": signal_range.unit
                     if signal_range is not None
@@ -823,6 +823,8 @@ class Compiler:
 
             port_delay = self._experiment_dao.port_delay(signal_id)
 
+            port_mode = self._experiment_dao.port_mode(signal_id)
+
             scheduler_port_delay: float = 0.0
             if signal_id in signal_delays:
                 scheduler_port_delay += signal_delays[signal_id].on_device
@@ -838,6 +840,7 @@ class Compiler:
                     else None,
                     "port_delay": port_delay,
                     "scheduler_port_delay": scheduler_port_delay,
+                    "port_mode": port_mode.value if port_mode is not None else None,
                 }
                 channel_key = (signal_info.device.uid, channel)
                 # TODO(2K): check for conflicts if 'channel_key' already present in 'all_channels'
@@ -992,7 +995,11 @@ class Compiler:
                 input_range_unit=input["range_unit"],
                 port_delay=input["port_delay"],
                 scheduler_port_delay=input["scheduler_port_delay"],
+                port_mode=input["port_mode"],
             )
+
+        for device in self._experiment_dao.device_infos():
+            recipe_generator.validate_and_postprocess_ios(device)
 
         for device_id, awgs in self._awgs.items():
             for awg in awgs.values():
@@ -1114,6 +1121,8 @@ class Compiler:
         self._generate_recipe()
 
         retval = self.compiler_output()
+
+        _logger.info("Finished LabOne Q Compiler run.")
 
         return retval
 

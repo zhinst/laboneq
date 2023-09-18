@@ -50,7 +50,7 @@ class _IntervalStartEvent:
     event_type: str
     signal_id: str
     time: float
-    play_wave_id: str
+    play_wave_id: str | None
     amplitude: float
     index: int
     oscillator_phase: Optional[float]
@@ -74,7 +74,7 @@ class _IntervalEndEvent:
 
 @dataclass
 class _PlayIntervalData:
-    pulse: str
+    pulse: str | None
     index: int
     signal_id: str
     amplitude: float
@@ -574,7 +574,7 @@ def analyze_play_wave_times(
         )
     except MinimumWaveformLengthViolation as e:
         raise LabOneQException(
-            f"Failed to map the scheduled pulses to seqC without violating the "
+            f"Failed to map the scheduled pulses to SeqC without violating the "
             f"minimum waveform size {min_play_wave} of device "
             f"'{device_type.value}'.\n"
             f"Suggested workaround: manually add delays to overly short loops, etc."

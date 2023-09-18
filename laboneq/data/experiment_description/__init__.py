@@ -86,9 +86,9 @@ class AcquireLoopNt(Section):
 class AcquireLoopRt(Section):
     uid: str = None
     acquisition_type: AcquisitionType = AcquisitionType.INTEGRATION
-    averaging_mode: AveragingMode = None
+    averaging_mode: AveragingMode = AveragingMode.CYCLIC
     count: int = None
-    execution_type: ExecutionType = None
+    execution_type: ExecutionType = ExecutionType.REAL_TIME
     repetition_mode: RepetitionMode = None
     repetition_time: float = None
     reset_oscillator_phase: bool = None

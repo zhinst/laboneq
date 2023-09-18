@@ -70,15 +70,13 @@ class QubitParameters:
 class Qubit(QuantumElement):
     """A class for a generic two-level Qubit."""
 
-    parameters: QubitParameters = field(default=QubitParameters)
+    parameters: QubitParameters
 
     def __init__(
         self,
         uid: str = None,
         signals: Dict[str, LogicalSignal] = None,
-        parameters: Optional[
-            Union[QubitParameters, Dict[str, Any]]
-        ] = QubitParameters(),
+        parameters: Optional[Union[QubitParameters, Dict[str, Any]]] = None,
     ):
         """
         Initializes a new Qubit.
@@ -93,8 +91,10 @@ class Qubit(QuantumElement):
             parameters: Parameters associated with the qubit.
                 Required for generating calibration and experiment signals via `calibration()` and `experiment_signals()`.
         """
-        if isinstance(parameters, dict):
-            self._parameters = QubitParameters(**parameters)
+        if parameters is None:
+            self.parameters = QubitParameters()
+        elif isinstance(parameters, dict):
+            self.parameters = QubitParameters(**parameters)
         else:
             self.parameters = parameters
         super().__init__(uid=uid, signals=signals)
@@ -104,9 +104,7 @@ class Qubit(QuantumElement):
         cls,
         uid: str,
         lsg: LogicalSignalGroup,
-        parameters: Optional[
-            Union[QubitParameters, Dict[str, Any]]
-        ] = QubitParameters(),
+        parameters: Optional[Union[QubitParameters, Dict[str, Any]]] = None,
     ) -> "Qubit":
         """Qubit from logical signal group.
 
@@ -130,12 +128,14 @@ class Qubit(QuantumElement):
             SignalType.ACQUIRE: ["acquire", "acquire_line"],
             SignalType.FLUX: ["flux", "flux_line"],
         }
+        if parameters is None:
+            parameters = QubitParameters()
+        elif isinstance(parameters, dict):
+            parameters = QubitParameters(**parameters)
         return cls._from_logical_signal_group(
             uid=uid,
             lsg=lsg,
-            parameters=QubitParameters(**parameters)
-            if isinstance(parameters, dict)
-            else parameters,
+            parameters=parameters,
             signal_type_map=signal_type_map,
         )
 

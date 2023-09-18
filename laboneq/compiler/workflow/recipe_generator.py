@@ -13,7 +13,8 @@ from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums.acquisition_type import is_spectroscopy
-from laboneq.data.compilation_job import ParameterInfo
+from laboneq.data.calibration import PortMode
+from laboneq.data.compilation_job import DeviceInfo, DeviceInfoType, ParameterInfo
 from laboneq.data.recipe import (
     AWG,
     IO,
@@ -136,7 +137,6 @@ class RecipeGenerator:
         if leader_properties.global_leader is not None:
             initialization = self._find_initialization(leader_properties.global_leader)
             initialization.config.repetitions = 1
-            initialization.config.holdoff = 0
             if leader_properties.is_desktop_setup:
                 initialization.config.triggering_mode = TriggeringMode.DESKTOP_LEADER
         if leader_properties.is_desktop_setup:
@@ -275,6 +275,7 @@ class RecipeGenerator:
         input_range_unit=None,
         port_delay=None,
         scheduler_port_delay=0.0,
+        port_mode=None,
     ):
         if isinstance(lo_frequency, ParameterInfo):
             lo_frequency = lo_frequency.uid
@@ -288,10 +289,38 @@ class RecipeGenerator:
             range_unit=input_range_unit,
             port_delay=port_delay,
             scheduler_port_delay=scheduler_port_delay,
+            port_mode=port_mode,
         )
 
         initialization = self._find_initialization(device_id)
         initialization.inputs.append(input)
+
+    def validate_and_postprocess_ios(self, device: DeviceInfo):
+        init = self._find_initialization(device.uid)
+        if device.device_type == DeviceInfoType.SHFQA:
+            for input in init.inputs or []:
+                output = next(
+                    (
+                        output
+                        for output in init.outputs or []
+                        if output.channel == input.channel
+                    ),
+                    None,
+                )
+                if output is None:
+                    continue
+                if input.port_mode is None and output.port_mode is not None:
+                    input.port_mode = output.port_mode
+                elif input.port_mode is not None and output.port_mode is None:
+                    output.port_mode = input.port_mode
+                elif input.port_mode is None and output.port_mode is None:
+                    input.port_mode = output.port_mode = PortMode.RF.value
+                if input.port_mode != output.port_mode:
+                    raise LabOneQException(
+                        f"Mismatch between input and output port mode on device"
+                        f" '{device.uid}', channel {input.channel}"
+                    )
+        # todo: Validation of synthesizer frequencies, etc could go here
 
     def add_awg(
         self,

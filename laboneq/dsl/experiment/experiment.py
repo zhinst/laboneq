@@ -17,6 +17,7 @@ from laboneq.dsl.enums import (
     AveragingMode,
     ExecutionType,
     RepetitionMode,
+    SectionAlignment,
 )
 from laboneq.dsl.experiment.pulse import Pulse
 
@@ -41,12 +42,23 @@ def experiment_id_generator():
 class Experiment:
     """LabOne Q Experiment.
 
-    Args:
-        uid: UID of the experiment.
-        signals: Experiment signals.
-        version: Used DSL version.
-        epsilon: Epsilon. Not used.
-        sections: Sections in the experiment.
+    Attributes:
+        uid (str):
+            Unique identifier for the experiment.
+            If not specified, one will be generated.
+        signals (Union[Dict[str, ExperimentSignal], List[ExperimentSignal]]):
+            Experiment signals.
+            Default: `{}`.
+        version (DSLVersion):
+            Used DSL version.
+            Default:
+            [DSLVersion.V3_0_0][laboneq.core.types.enums.dsl_version.DSLVersion]
+        epsilon (float):
+            Epsilon. Not used.
+            Default: `0.0`.
+        sections (List[Section]):
+            Sections defined in the experiment.
+            Default: `[]`.
     """
 
     uid: str = field(default_factory=experiment_id_generator)
@@ -75,7 +87,7 @@ class Experiment:
     ) -> ExperimentSignal:
         """Add an experiment signal to the experiment.
 
-        Args:
+        Arguments:
             uid:
                 The unique id of the new experiment signal (optional).
             connect_to:
@@ -97,14 +109,20 @@ class Experiment:
     def add(self, section: Section):
         """Add a sweep, a section or an acquire loop to the experiment.
 
-        Args:
+        Arguments:
             section: The object to add.
         """
         self._add_section_to_current_section(section)
 
     @property
-    def experiment_signals_uids(self):
-        """A list of experiment signal uids defined in this experiment."""
+    def experiment_signals_uids(self) -> List[str]:
+        """A list of experiment signal UIDs defined in this experiment.
+
+        Returns:
+            signal_uids:
+                A list of the UIDs for the signals defined in this
+                experiment.
+        """
         return self.signals.keys
 
     def list_experiment_signals(self) -> List[ExperimentSignal]:
@@ -118,7 +136,7 @@ class Experiment:
     def is_experiment_signal(self, uid: str) -> bool:
         """Check if an experiment signal is defined for this experiment.
 
-        Args:
+        Arguments:
             uid:
                 The unique id of the experiment signal to check for.
 
@@ -136,7 +154,7 @@ class Experiment:
         device setup ([DeviceSetup][laboneq.dsl.device.device_setup.DeviceSetup]),
         you need to make a connection between these two types of signals.
 
-        Args:
+        Arguments:
             experiment_signal_uid:
                 The unique id of the experiment signal to be connected.
             logical_signal:
@@ -157,7 +175,7 @@ class Experiment:
         """Reset, i.e. disconnect, all defined signal connections and
         apply a new signal map if provided.
 
-        Args:
+        Arguments:
             signal_map: The new signal map to apply.
         """
 
@@ -201,6 +219,18 @@ class Experiment:
         }
 
     def get_signal_map(self) -> Dict[str, str]:
+        """Return a dictionary of mapped experiment signals.
+
+        Signals that have not yet been mapped are excluded from
+        the returned dictionary.
+
+        Returns:
+            signals:
+                A dictionary of mapped signals. The keys
+                are the experiment signal UIDs. The values
+                are the logical signal path that the
+                experiment signal is mapped to.
+        """
         return {
             signal.uid: signal.mapped_logical_signal_path
             for signal in self.signals.values()
@@ -208,6 +238,14 @@ class Experiment:
         }
 
     def set_signal_map(self, signal_map: Dict[str, LogicalSignalRef]):
+        """Map experiment signals.
+
+        Arguments:
+            signal_map:
+                A dictionary of mappings to apply. The keys are
+                experiment signal UIDs and the values are
+                logical signal references to map them to.
+        """
         for signal_uid, logical_signal_ref in signal_map.items():
             if signal_uid not in self.signals.keys():
                 self._signal_not_found_error(signal_uid, "Cannot apply signal map.")
@@ -224,6 +262,15 @@ class Experiment:
         )
 
     def set_calibration(self, calibration: Calibration):
+        """Applies the given calibration to the experiment.
+
+        Arguments:
+            calibration:
+                The calibration to set. Each item within the
+                calibration is applied to the corresponding
+                elements of the device setup the experiment
+                will be executed on.
+        """
         for signal_uid, calib_item in calibration.calibration_items.items():
             if calib_item is not None:
                 if signal_uid not in self.signals.keys():
@@ -232,7 +279,16 @@ class Experiment:
                     )
                 self.signals[signal_uid].calibration = calib_item
 
-    def get_calibration(self):
+    def get_calibration(self) -> Calibration:
+        """Return the current calibration of the experiment.
+
+        Returns:
+            calibration:
+                The calibration of the experiment. The return
+                calibration is built up from the calibration
+                items of the device setup the experiment was or
+                will be executed on.
+        """
         from ..calibration import Calibration
 
         experiment_signals_calibration = dict()
@@ -244,7 +300,18 @@ class Experiment:
         calibration = Calibration(calibration_items=experiment_signals_calibration)
         return calibration
 
-    def reset_calibration(self, calibration=None):
+    def reset_calibration(self, calibration: Calibration | None = None):
+        """Reset the experiment calibration.
+
+        Resets the signal calibration for all device setup signals
+        mapped in this experiment.
+
+        Parameters:
+            calibration:
+                The calibration to apply after resetting the
+                experiment calibration.
+                Default: `None`.
+        """
         try:
             signals = self.signals.values()
         except AttributeError:
@@ -254,7 +321,25 @@ class Experiment:
         if calibration:
             self.set_calibration(calibration)
 
-    def list_calibratables(self):
+    def list_calibratables(self) -> Dict[str, dict]:
+        """Return a dictionary of calibration creation information
+        for the device setup signals mapped to this experiment.
+
+        This may be used to introspect an experiment to see the
+        full list of items that may be calibrated.
+
+        Returns:
+            calibratables:
+                Return a dictionary of calibratable signal UIDs
+                and their corresponding creation information.
+                Each value is itself a dictionary with the keys:
+
+                - type ([str][]):
+                    which specifies the type of signal.
+                - is_calibrated ([bool][]):
+                    which specified whether the signal is currently
+                    calibrated.
+        """
         from ..calibration import Calibratable
 
         calibratables = dict()
@@ -268,7 +353,7 @@ class Experiment:
     def set_node(self, path: str, value: Any):
         """Set the value of an instrument node.
 
-        Args:
+        Arguments:
             path: Path to the node whose value should be set.
             value: Value that should be set.
 
@@ -294,7 +379,7 @@ class Experiment:
     ):
         """Play a pulse on a signal line.
 
-        Args:
+        Arguments:
             signal (str):
                 The unique id of the signal to play the pulse on.
             pulse (Pulse):
@@ -349,7 +434,7 @@ class Experiment:
     ):
         """Delay execution of next operation on the given experiment signal.
 
-        Args:
+        Arguments:
             signal:
                 The unique id of the signal to delay execution of next operation.
             time:
@@ -363,14 +448,14 @@ class Experiment:
             signal=signal, time=time, precompensation_clear=precompensation_clear
         )
 
-    def reserve(self, signal):
+    def reserve(self, signal: str):
         """Reserves an experiment signal for the duration of the active section.
 
         Reserving an experiment signal in a section means that if there is no
         operation defined on that signal, it is not available for other sections
         as long as the active section is scoped.
 
-        Args:
+        Arguments:
             signal:
                 The unique id of the signal to be reserved in the active
                 section.
@@ -388,7 +473,7 @@ class Experiment:
     ):
         """Acquire a signal and make it available in [Result][laboneq.dsl.result.results.Results].
 
-        Args:
+        Arguments:
             signal: The input signal to acquire data on.
             handle:
                 A unique identifier string that allows to retrieve the
@@ -434,7 +519,7 @@ class Experiment:
         For multistate discrimination, use lists of equal length for integration_kernel and integration_kernel_parameters.
         For all other measurements, set either length or pulse for both the measure pulse and integration kernel.
 
-        Args:
+        Arguments:
 
             acquire_signal: A string that specifies the signal for the data acquisition.
             handle: A string that specifies the handle of the acquired results.
@@ -469,15 +554,17 @@ class Experiment:
             reset_delay=reset_delay,
         )
 
-    def call(self, func_name, **kwargs):
+    def call(self, func_name: str, **kwargs):
         """Add a callback function in the execution of the experiment.
 
         The callback is called by the LabOne Q software as part of executing the
         experiment and in sequence with the other experiment operations.
 
-        Args:
-            func_name: The callback function.
-            kwargs: These arguments are passed to the callback function as is.
+        Arguments:
+            func_name:
+                The callback function.
+            kwargs (dict):
+                These arguments are passed to the callback function as is.
         """
         current_section = self._peek_section()
         current_section.call(func_name=func_name, **kwargs)
@@ -486,12 +573,12 @@ class Experiment:
 
     def sweep(
         self,
-        parameter,
-        execution_type=None,
-        uid=None,
-        alignment=None,
-        reset_oscillator_phase=False,
-        chunk_count=1,
+        parameter: Parameter | List[Parameter],
+        execution_type: ExecutionType = None,
+        uid: str | None = None,
+        alignment: SectionAlignment | None = None,
+        reset_oscillator_phase: bool = False,
+        chunk_count: int = 1,
     ):
         """Define a sweep section.
 
@@ -506,20 +593,26 @@ class Experiment:
             A near time section cannot be defined in the scope of a real
             time section.
 
-        Args:
-            uid: The unique ID for this section.
-            parameter: The sweep parameter(s) that is used in this section.
+        Arguments:
+            uid:
+                The unique ID for this section.
+            parameter:
+                The sweep parameter(s) that is used in this section.
                 The argument can be given as a single sweep parameter or a list
                 of sweep parameters of equal length. If multiple sweep parameters are given, the
                 parameters are executed in parallel in this sweep loop.
-            execution_type: Defines if the sweep is executed in near time or
+            execution_type:
+                Defines if the sweep is executed in near time or
                 real time. Defaults to
                 [ExecutionType.NEAR_TIME][laboneq.core.types.enums.execution_type.ExecutionType.NEAR_TIME].
-            alignment: Alignment of the operations in the section. Defaults to
+            alignment:
+                Alignment of the operations in the section. Defaults to
                 [SectionAlignment.LEFT][laboneq.core.types.enums.section_alignment.SectionAlignment.LEFT].
-            reset_oscillator_phase: When True, reset all oscillators at the start of
+            reset_oscillator_phase:
+                When True, reset all oscillators at the start of
                 each step.
-            chunk_count: The number of chunks to split the sweep into. Defaults to 1.
+            chunk_count:
+                The number of chunks to split the sweep into. Defaults to 1.
 
         """
         parameters = parameter if isinstance(parameter, list) else [parameter]
@@ -580,24 +673,44 @@ class Experiment:
         def __exit__(self, exc_type, exc_val, exc_tb):
             self.exp._pop_and_add_section()
 
-    def acquire_loop_nt(self, count, averaging_mode=AveragingMode.CYCLIC, uid=None):
+    def acquire_loop_nt(
+        self,
+        count: int,
+        averaging_mode: AveragingMode = AveragingMode.CYCLIC,
+        uid: str | None = None,
+    ):
         """Define an acquire section with averaging in near time.
+
+        !!! version-changed "Deprecated in 2.14"
+            Use `.sweep` outside of an `acquire_loop_rt` instead.
+            For example:
+
+            ``` py
+            param = SweepParameter(values=[1, 2, 3])
+            with exp.sweep(param):  # <-- outer near-time sweep
+                with exp.acquire_loop_rt(count=2):  # <-- inner real-time sweep
+                    ...
+            ```
 
         Sections need to open a scope in the following way:
 
         ``` py
-            with exp.acquire_loop_nt(...):
-                # here come the operations that shall be executed in the acquire_loop_nt section
+        with exp.acquire_loop_nt(...):
+            # here come the operations that shall be executed in
+            # the acquire_loop_nt section
         ```
 
         !!! note
             A near time section cannot be defined in the scope of a real
             time section.
 
-        Args:
-            uid: The unique ID for this section.
-            count: The number of acquire iterations.
-            averaging_mode: The mode of how to average the acquired data.
+        Arguments:
+            uid:
+                The unique ID for this section.
+            count:
+                The number of acquire iterations.
+            averaging_mode:
+                The mode of how to average the acquired data.
                 Defaults to [AveragingMode.CYCLIC][laboneq.core.types.enums.averaging_mode.AveragingMode.CYCLIC].
         """
         return Experiment._AcquireLoopNtSectionContext(
@@ -620,13 +733,13 @@ class Experiment:
 
     def acquire_loop_rt(
         self,
-        count,
-        averaging_mode=AveragingMode.CYCLIC,
-        repetition_mode=RepetitionMode.FASTEST,
-        repetition_time=None,
-        acquisition_type=AcquisitionType.INTEGRATION,
-        uid=None,
-        reset_oscillator_phase=False,
+        count: int,
+        averaging_mode: AveragingMode = AveragingMode.CYCLIC,
+        repetition_mode: RepetitionMode = RepetitionMode.FASTEST,
+        repetition_time: float | None = None,
+        acquisition_type: AcquisitionType = AcquisitionType.INTEGRATION,
+        uid: str | None = None,
+        reset_oscillator_phase: bool = False,
     ):
         """Define an acquire section with averaging in real time.
 
@@ -641,31 +754,38 @@ class Experiment:
             A near time section cannot be defined in the scope of a real
             time section.
 
-        Args:
-            uid: The unique ID for this section.
-            count: The number of acquire iterations.
-            averaging_mode: The mode of how to average the acquired data.
+        Arguments:
+            uid:
+                The unique ID for this section.
+            count:
+                The number of acquire iterations.
+            averaging_mode:
+                The mode of how to average the acquired data.
                 Defaults to [AveragingMode.CYCLIC][laboneq.core.types.enums.averaging_mode.AveragingMode.CYCLIC].
                 Further options: [AveragingMode.SEQUENTIAL][laboneq.core.types.enums.averaging_mode.AveragingMode.SEQUENTIAL]
                 and [AveragingMode.SINGLE_SHOT][laboneq.core.types.enums.averaging_mode.AveragingMode.SINGLE_SHOT].
                 Single shot measurements are always averaged in cyclic mode.
-            repetition_mode: Defines the shot repetition mode. Defaults to
+            repetition_mode:
+                Defines the shot repetition mode. Defaults to
                 [RepetitionMode.FASTEST][laboneq.core.types.enums.repetition_mode.RepetitionMode.FASTEST].
                 Further options are
                 [RepetitionMode.CONSTANT][laboneq.core.types.enums.repetition_mode.RepetitionMode.CONSTANT]
                 and [RepetitionMode.AUTO][laboneq.core.types.enums.repetition_mode.RepetitionMode.AUTO].
-            repetition_time: This is the shot repetition time in sec. This
+            repetition_time:
+                This is the shot repetition time in seconds. This
                 argument is only required and valid if `repetition_mode` is
                 [RepetitionMode.CONSTANT][laboneq.core.types.enums.repetition_mode.RepetitionMode.CONSTANT].
                 The parameter can either be given as a float or as a sweep parameter
                 ([Parameter][laboneq.dsl.parameter.Parameter]).
-            acquisition_type: This is the acquisition type.
+            acquisition_type:
+                This is the acquisition type.
                 Defaults to [AcquisitionType.INTEGRATION][laboneq.core.types.enums.acquisition_type.AcquisitionType.INTEGRATION].
                 Further options are
                 [AcquisitionType.SPECTROSCOPY][laboneq.core.types.enums.acquisition_type.AcquisitionType.SPECTROSCOPY],
                 [AcquisitionType.DISCRIMINATION][laboneq.core.types.enums.acquisition_type.AcquisitionType.DISCRIMINATION]
                 and [AcquisitionType.RAW][laboneq.core.types.enums.acquisition_type.AcquisitionType.RAW].
-            reset_oscillator_phase: When True, the phase of every oscillator is reset at
+            reset_oscillator_phase:
+                When True, the phase of every oscillator is reset at
                 the start of the each step of the acquire loop.
         """
         return Experiment._AcquireLoopRtSectionContext(
@@ -713,10 +833,10 @@ class Experiment:
 
     def section(
         self,
-        length=None,
-        alignment=None,
-        uid=None,
-        on_system_grid=None,
+        length: float | None = None,
+        alignment: SectionAlignment | None = None,
+        uid: str | None = None,
+        on_system_grid: bool | None = None,
         play_after: Optional[Union[str, Section, List[Union[str, Section]]]] = None,
         trigger: Optional[Dict[str, Dict[str, int]]] = None,
     ):
@@ -733,22 +853,28 @@ class Experiment:
             A near time section cannot be defined in the scope of a real
             time section.
 
-        Args:
-            uid: The unique ID for this section.
-            length: The minimal duration of the section in seconds. The
+        Arguments:
+            uid:
+                The unique ID for this section.
+            length:
+                The minimal duration of the section in seconds. The
                 scheduled section might be slightly longer, as its length is
                 rounded to the next multiple of the section timing grid.
                 Defaults to `None` which means that the section length is
                 derived automatically from the contained operations.
                 The parameter can either be given as a float or as a sweep
                 parameter ([Parameter][laboneq.dsl.parameter.Parameter]).
-            alignment: Alignment of the operations in the section. Defaults to
+            alignment:
+                Alignment of the operations in the section. Defaults to
                 [SectionAlignment.LEFT][laboneq.core.types.enums.section_alignment.SectionAlignment.LEFT].
-            play_after: Play this section after the end of the section(s) with the
+            play_after:
+                Play this section after the end of the section(s) with the
                 given ID(s). Defaults to None.
-            trigger: Play a pulse a trigger pulse for the duration of this section.
+            trigger:
+                Play a pulse a trigger pulse for the duration of this section.
                 See below for details.
-            on_system_grid: If True, the section boundaries are always rounded to the
+            on_system_grid:
+                If True, the section boundaries are always rounded to the
                 system grid, even if the signals would allow for tighter alignment.
 
         The individual trigger (a.k.a marker) ports on the device are addressed via the
@@ -900,7 +1026,7 @@ class Experiment:
         !!! note
             Only subsections of type `Case` are allowed.
 
-        Args:
+        Arguments:
             uid: The unique ID for this section.
             handle: A unique identifier string that allows to retrieve the
                 acquired data.
@@ -936,7 +1062,7 @@ class Experiment:
         !!! note
             Only subsections of type `Case` are allowed.
 
-        Args:
+        Arguments:
             uid: The unique ID for this section.
             handle: A unique identifier string that allows to retrieve the
                 acquired data.
@@ -1008,7 +1134,7 @@ class Experiment:
             and only a few user registers per AWG can be used due to the limited number of
             processor registers.
 
-        Args:
+        Arguments:
             uid: The unique ID for this section.
             handle: A unique identifier string that allows to retrieve the
                 acquired data.
@@ -1041,7 +1167,7 @@ class Experiment:
             No subsections are allowed, only [play][laboneq.dsl.experiment.experiment.Experiment.play]
             and [delay][laboneq.dsl.experiment.experiment.Experiment.delay].
 
-        Args:
+        Arguments:
             uid: The unique ID for this section.
             state: The state that this section is executed for.
         """
@@ -1075,26 +1201,55 @@ class Experiment:
             self.exp._pop_and_add_section()
 
     @staticmethod
-    def load(filename):
+    def load(filename: str) -> Experiment:
+        """Load an experiment from a JSON file.
+
+        Arguments:
+            filename:
+                The name of the file to load the experiment from.
+
+        Returns:
+            experiment:
+                The experiment loaded.
+        """
         from ..serialization import Serializer
 
         # TODO ErC: Error handling
         return Serializer.from_json_file(filename, Experiment)
 
-    def save(self, filename):
+    def save(self, filename: str):
+        """Save this experiment to a file.
+
+        Arguments:
+            filename:
+                The name of the file to save the experiment to.
+        """
         from ..serialization import Serializer
 
         # TODO ErC: Error handling
         Serializer.to_json_file(self, filename)
 
-    def load_signal_map(self, filename):
+    def load_signal_map(self, filename: str):
+        """Load a signal map from a file and apply it to this experiment.
+
+        Arguments:
+            filename:
+                The name of the file to load the signal map from.
+        """
         from ..serialization import Serializer
 
         # TODO ErC: Error handling
         signal_map = Serializer.from_json_file(filename, dict)
         self.set_signal_map(signal_map)
 
-    def save_signal_map(self, filename):
+    def save_signal_map(self, filename: str):
+        """Save this experiments current signal map to a file.
+
+        Arguments:
+            filename:
+                The name of the file to save the current signal map
+                to.
+        """
         from ..serialization import Serializer
 
         # TODO ErC: Error handling
@@ -1108,7 +1263,16 @@ class Experiment:
 
         return retval
 
-    def all_sections(self):
+    def all_sections(self) -> List[Section]:
+        """Return a list of all sections contained within this experiment.
+
+        The list includes sections recursively, so all subsections are
+        included to.
+
+        Returns:
+            sections:
+                A list of all sections from this experiment.
+        """
         retval = []
         for s in self.sections:
             retval.extend(Experiment._all_subsections(s))

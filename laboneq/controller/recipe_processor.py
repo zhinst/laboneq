@@ -7,7 +7,7 @@ import math
 from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Set, Tuple, Union
+from typing import TYPE_CHECKING, Any, Iterator
 
 import numpy as np
 from numpy import typing as npt
@@ -37,14 +37,14 @@ if TYPE_CHECKING:
 
 @dataclass
 class HandleResultShape:
-    base_shape: List[int]
-    base_axis_name: List[Union[str, List[str]]]
-    base_axis: List[Union[npt.ArrayLike, List[npt.ArrayLike]]]
+    base_shape: list[int]
+    base_axis_name: list[str | list[str]]
+    base_axis: list[npt.ArrayLike | list[npt.ArrayLike]]
     additional_axis: int = 1
 
 
 AcquireHandle = str
-HandleResultShapes = Dict[AcquireHandle, HandleResultShape]
+HandleResultShapes = dict[AcquireHandle, HandleResultShape]
 
 
 @dataclass(frozen=True)
@@ -58,7 +58,7 @@ class AwgConfig:
     # QA
     raw_acquire_length: int | None = None
     result_length: int | None = None
-    acquire_signals: Set[str] = field(default_factory=set)
+    acquire_signals: set[str] = field(default_factory=set)
     target_feedback_register: int | None = None
     # SG
     qa_signal_id: str | None = None
@@ -67,23 +67,23 @@ class AwgConfig:
     readout_result_index: int | None = None
     readout_result_nbits: int = 2
     register_selector_index: int | None = None
-    register_selector_bitmask: int = 0b1
+    register_selector_bitmask: int = 0b11
 
     @property
     def register_selector_shift(self):
         return self.readout_result_nbits * self.register_selector_index
 
 
-AwgConfigs = Dict[AwgKey, AwgConfig]
+AwgConfigs = dict[AwgKey, AwgConfig]
 
 
 @dataclass
 class DeviceRecipeData:
-    iq_settings: Dict[int, npt.ArrayLike] = field(default_factory=dict)
+    iq_settings: dict[int, npt.ArrayLike] = field(default_factory=dict)
 
 
 DeviceId = str
-DeviceSettings = Dict[DeviceId, DeviceRecipeData]
+DeviceSettings = dict[DeviceId, DeviceRecipeData]
 
 
 @dataclass
@@ -95,11 +95,11 @@ class RtExecutionInfo:
     pipeliner_repetitions: int
 
     # signal id -> set of section ids
-    acquire_sections: Dict[str, Set[str]] = field(default_factory=dict)
+    acquire_sections: dict[str, set[str]] = field(default_factory=dict)
 
     # signal -> flat list of result handles
     # TODO(2K): to be replaced by event-based calculation in the compiler
-    signal_result_map: Dict[str, List[str]] = field(default_factory=dict)
+    signal_result_map: dict[str, list[str]] = field(default_factory=dict)
 
     def add_acquire_section(self, signal_id: str, section_id: str):
         self.acquire_sections.setdefault(signal_id, set()).add(section_id)
@@ -120,7 +120,7 @@ class RtExecutionInfo:
             else rt_execution_info.acquisition_type
         )
 
-    def signal_by_handle(self, handle: str) -> Optional[str]:
+    def signal_by_handle(self, handle: str) -> str | None:
         return next(
             (
                 signal
@@ -132,7 +132,7 @@ class RtExecutionInfo:
 
 
 RtSectionId = str
-RtExecutionInfos = Dict[RtSectionId, RtExecutionInfo]
+RtExecutionInfos = dict[RtSectionId, RtExecutionInfo]
 
 
 @dataclass
@@ -157,12 +157,12 @@ class RecipeData:
             if initialization.device_uid == device_uid:
                 return initialization
 
-    def awgs_producing_results(self) -> Iterator[Tuple[AwgKey, AwgConfig]]:
+    def awgs_producing_results(self) -> Iterator[tuple[AwgKey, AwgConfig]]:
         for awg_key, awg_config in self.awg_configs.items():
             if awg_config.result_length is not None:
                 yield awg_key, awg_config
 
-    def awg_config_by_acquire_signal(self, signal_id: str) -> Optional[AwgConfig]:
+    def awg_config_by_acquire_signal(self, signal_id: str) -> AwgConfig | None:
         return next(
             (
                 awg_config
@@ -232,15 +232,15 @@ def _pre_process_iq_settings_hdawg(initialization: Initialization):
 class _LoopStackEntry:
     count: int
     is_averaging: bool
-    axis_names: List[str] = field(default_factory=list)
-    axis_points: List[npt.ArrayLike] = field(default_factory=list)
+    axis_names: list[str] = field(default_factory=list)
+    axis_points: list[npt.ArrayLike] = field(default_factory=list)
 
     @property
-    def axis_name(self) -> Union[str, List[str]]:
+    def axis_name(self) -> str | list[str]:
         return self.axis_names[0] if len(self.axis_names) == 1 else self.axis_names
 
     @property
-    def axis(self) -> Union[npt.ArrayLike, List[npt.ArrayLike]]:
+    def axis(self) -> npt.ArrayLike | list[npt.ArrayLike]:
         return self.axis_points[0] if len(self.axis_points) == 1 else self.axis_points
 
 
@@ -253,7 +253,7 @@ class _LoopsPreprocessor(ExecutorBase):
         self.pipeliner_chunk_count: int = None
         self.pipeliner_repetitions: int = None
 
-        self._loop_stack: List[_LoopStackEntry] = []
+        self._loop_stack: list[_LoopStackEntry] = []
         self._current_rt_uid: str = None
         self._current_rt_info: RtExecutionInfo = None
 
@@ -337,7 +337,6 @@ class _LoopsPreprocessor(ExecutorBase):
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
     ):
-
         if averaging_mode != AveragingMode.SINGLE_SHOT:
             max_hw_averages = (
                 pow(2, 15) if acquisition_type == AcquisitionType.RAW else pow(2, 17)
@@ -415,7 +414,7 @@ def _calculate_awg_configs(
             awg_config.command_table_match_offset = awg.command_table_match_offset
             awg_config.target_feedback_register = awg.feedback_register
 
-    zsync_reg_selector_allocation: Dict[str, int] = defaultdict(int)
+    zsync_reg_selector_allocation: dict[str, int] = defaultdict(int)
     for awg_key, awg_config in awg_configs.items():
         if awg_config.qa_signal_id is not None:
             qa_awg_key = awg_key_by_acquire_signal(awg_config.qa_signal_id)
@@ -433,34 +432,24 @@ def _calculate_awg_configs(
 
     # As currently just a single RT execution per experiment is supported,
     # AWG configs are not cloned per RT execution. May need to be changed in the future.
-    for rt_execution_uid, rt_execution_info in rt_execution_infos.items():
-        # Determine / check the raw acquisition lengths across various acquire events.
-        # Must match for a single device.
+    for rt_execution_info in rt_execution_infos.values():
+        # Determine the raw acquisition lengths across various acquire events.
+        # Will use the maximum length, as scope / monitor can only be configured for one.
         # device_id -> set of raw acquisition lengths
-        raw_acquire_lengths: Dict[str, Set[int]] = {}
-        for signal, sections in rt_execution_info.acquire_sections.items():
-            awg_key = awg_key_by_acquire_signal(signal)
-            for section in sections:
-                for acquire_length_info in recipe.acquire_lengths:
-                    if (
-                        acquire_length_info.signal_id == signal
-                        and acquire_length_info.section_id == section
-                    ):
-                        raw_acquire_lengths.setdefault(awg_key.device_uid, set()).add(
-                            acquire_length_info.acquire_length
-                        )
-        for device_id, awg_raw_acquire_lengths in raw_acquire_lengths.items():
-            if len(awg_raw_acquire_lengths) > 1:
-                raise LabOneQControllerException(
-                    f"Can't determine unique acquire length for the device '{device_id}' in "
-                    f"acquire_loop_rt(uid='{rt_execution_uid}') section. Ensure all 'acquire' "
-                    f"statements within this section mapping to this device use the same kernel "
-                    f"length."
-                )
+        raw_acquire_lengths: dict[str, set[int]] = defaultdict(set)
+        if rt_execution_info.acquisition_type == AcquisitionType.RAW:
+            for signal, sections in rt_execution_info.acquire_sections.items():
+                awg_key = awg_key_by_acquire_signal(signal)
+                for section in sections:
+                    for al in recipe.acquire_lengths:
+                        if al.signal_id == signal and al.section_id == section:
+                            raw_acquire_lengths[awg_key.device_uid].add(
+                                al.acquire_length
+                            )
         for awg_key, awg_config in awg_configs.items():
             # Use dummy raw_acquire_length 4096 if there's no acquire statements in experiment
-            awg_config.raw_acquire_length = next(
-                iter(raw_acquire_lengths.get(awg_key.device_uid, {4096}))
+            awg_config.raw_acquire_length = max(
+                raw_acquire_lengths.get(awg_key.device_uid, {4096})
             )
 
             # signal_id -> sequence of handle/None for each result vector entry.
@@ -468,7 +457,7 @@ def _calculate_awg_configs(
             # All integrators occupy an entry in the respective result vectors per startQA event,
             # regardless of the given integrators mask. Masked-out integrators just leave the
             # value at NaN (corresponds to None in the map).
-            awg_result_map: Dict[str, List[str]] = defaultdict(list)
+            awg_result_map: dict[str, list[str]] = defaultdict(list)
             for acquires in recipe.simultaneous_acquires:
                 if any(signal in acquires for signal in awg_config.acquire_signals):
                     for signal in awg_config.acquire_signals:
@@ -565,7 +554,7 @@ def pre_process_compiled(
     return recipe_data
 
 
-def get_wave(wave_name, waves: List[Dict[str, Any]]):
+def get_wave(wave_name, waves: list[dict[str, Any]]):
     wave = next(
         (wave for wave in waves if wave.get("filename", None) == wave_name), None
     )

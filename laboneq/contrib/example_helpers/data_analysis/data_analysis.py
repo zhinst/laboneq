@@ -4,6 +4,8 @@
 """Collection of functions for data analysis in a quantum computing tuneup experiment
 """
 
+import warnings
+
 # matplotlib for plotting
 import matplotlib.pyplot as plt
 
@@ -13,7 +15,14 @@ import numpy as np
 # scipy optimize for curve fitting
 import scipy.optimize as opt
 
-## Definitions for fitting experimental data - needed to extract qubit paramters
+warnings.warn(
+    "The laboneq.contrib.example_helpers.data_analysis package was"
+    " deprecated in LabOne Q 2.15. Please use laboneq.analysis.fitting"
+    " instead.",
+    FutureWarning,
+)
+
+# Definitions for fitting experimental data - needed to extract qubit paramters
 
 
 # oscillations - Rabi

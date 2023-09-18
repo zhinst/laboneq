@@ -8,7 +8,6 @@ from laboneq.core.types.enums.repetition_mode import RepetitionMode as Repetitio
 from laboneq.core.types.enums.section_alignment import (
     SectionAlignment as SectionAlignmentDSL,
 )
-from laboneq.data.calibration import SignalCalibration as SignalCalibrationDATA
 from laboneq.data.experiment_description import Acquire as AcquireDATA
 from laboneq.data.experiment_description import AcquireLoopNt as AcquireLoopNtDATA
 from laboneq.data.experiment_description import AcquireLoopRt as AcquireLoopRtDATA
@@ -35,9 +34,6 @@ from laboneq.data.experiment_description import Sweep as SweepDATA
 from laboneq.data.parameter import LinearSweepParameter as LinearSweepParameterDATA
 from laboneq.data.parameter import Parameter as ParameterDATA
 from laboneq.data.parameter import SweepParameter as SweepParameterDATA
-from laboneq.dsl.calibration.signal_calibration import (
-    SignalCalibration as SignalCalibrationDSL,
-)
 from laboneq.dsl.experiment.acquire import Acquire as AcquireDSL
 from laboneq.dsl.experiment.call import Call as CallDSL
 from laboneq.dsl.experiment.delay import Delay as DelayDSL
@@ -342,34 +338,6 @@ def convert_Set(orig: SetDSL):
     return post_process(orig, retval, converter_function_directory)
 
 
-def convert_SignalCalibration(orig: SignalCalibrationDSL):
-    if orig is None:
-        return None
-    retval = SignalCalibrationDATA()
-    retval.amplitude = convert_dynamic(orig.amplitude, converter_function_directory)
-    retval.delay_signal = convert_dynamic(
-        orig.delay_signal, converter_function_directory
-    )
-    retval.local_oscillator = convert_dynamic(
-        orig.local_oscillator, converter_function_directory
-    )
-    retval.mixer_calibration = convert_dynamic(
-        orig.mixer_calibration, converter_function_directory
-    )
-    retval.oscillator = convert_dynamic(orig.oscillator, converter_function_directory)
-    retval.port_delay = convert_dynamic(orig.port_delay, converter_function_directory)
-    retval.port_mode = convert_dynamic(orig.port_mode, converter_function_directory)
-    retval.precompensation = convert_dynamic(
-        orig.precompensation, converter_function_directory
-    )
-    retval.range = convert_dynamic(orig.range, converter_function_directory)
-    retval.threshold = convert_dynamic(orig.threshold, converter_function_directory)
-    retval.voltage_offset = convert_dynamic(
-        orig.voltage_offset, converter_function_directory
-    )
-    return post_process(orig, retval, converter_function_directory)
-
-
 def convert_Sweep(orig: SweepDSL):
     if orig is None:
         return None
@@ -424,7 +392,6 @@ converter_function_directory = {
     ReserveDSL: convert_Reserve,
     SectionDSL: convert_Section,
     SetDSL: convert_Set,
-    SignalCalibrationDSL: convert_SignalCalibration,
     SweepDSL: convert_Sweep,
     SweepParameterDSL: convert_SweepParameter,
 }

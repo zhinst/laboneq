@@ -101,7 +101,7 @@ class WaveformSignature:
                         new_part = (
                             separator
                             + sign
-                            + str(abs(round(scale * value))).zfill(fill)
+                            + str(round(np.abs(scale * value))).zfill(fill)
                         )
                         if len(retval + new_part) > 56:
                             break

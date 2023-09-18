@@ -155,9 +155,10 @@ def convert_calibration(
         else:
             new = calibration.SignalCalibration()
             new.oscillator = convert_oscillator(legacy_ls.oscillator)
-            new.local_oscillator_frequency = convert_maybe_parameter(
-                getattr(legacy_ls.local_oscillator, "frequency", None)
-            )
+            if legacy_ls.local_oscillator is not None:
+                new.local_oscillator_frequency = convert_maybe_parameter(
+                    legacy_ls.local_oscillator.frequency
+                )
             new.mixer_calibration = convert_mixer_calibration(
                 legacy_ls.mixer_calibration
             )

@@ -11,7 +11,7 @@ import re
 @functools.lru_cache()
 def string_sanitize(input):
     """Sanitize the input string, so it can be safely used as (part of) an identifier
-    in seqC."""
+    in SeqC."""
 
     # strip non-ascii characters
     s = input.encode("ascii", "ignore").decode()

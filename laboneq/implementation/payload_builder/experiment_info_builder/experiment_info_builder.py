@@ -7,11 +7,12 @@ import copy
 import itertools
 import logging
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, Tuple
+from typing import Any, Dict, Tuple
 
 from laboneq._utils import ensure_list, id_generator
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import AveragingMode
+from laboneq.core.types.units import Quantity
 from laboneq.data.calibration import (
     AmplifierPump,
     MixerCalibration,
@@ -56,7 +57,6 @@ from laboneq.data.setup_description import (
     Setup,
 )
 from laboneq.data.setup_description.setup_helper import SetupHelper
-from laboneq.dsl.calibration.units import Quantity
 from laboneq.implementation.payload_builder.experiment_info_builder.device_info_builder import (
     DeviceInfoBuilder,
 )
@@ -94,53 +94,28 @@ class ExperimentInfoBuilder:
         for signal in self._experiment.signals:
             self._load_signal(signal)
 
-        seq_avg_section, sweep_sections = find_sequential_averaging(self._experiment)
-        if seq_avg_section is not None and len(sweep_sections) > 0:
-            if len(sweep_sections) > 1:
-                raise LabOneQException(
-                    f"Sequential averaging section {seq_avg_section.uid} has multiple "
-                    f"sweeping subsections: {[s.uid for s in sweep_sections]}. There "
-                    f"must be at most one."
-                )
-
-            def exchanger_map(section):
-                if section is sweep_sections[0]:
-                    return seq_avg_section
-                if section is seq_avg_section:
-                    return sweep_sections[0]
-                return section
-
-        else:
-
-            def identity(section):
-                return section
-
-            exchanger_map = identity
-
         section_uid_map = {}
         acquisition_type_map = {}
         root_sections = [
-            self._walk_sections(
-                section, None, section_uid_map, acquisition_type_map, exchanger_map
-            )
+            self._walk_sections(section, None, section_uid_map, acquisition_type_map)
             for section in self._experiment.sections
         ]
 
         # Need to defer the insertion of section operations. In sequential averaging mode,
         # the tree-walking order might otherwise make us visit operations which depend on parameters
         # we haven't seen the sweep of yet.
+        # todo (Pol): this is no longer required, load operations together with sections
         for (
             section,
             section_info,
             acquisition_type,
         ) in self._section_operations_to_add:
-            self._load_section_operations(
-                section, section_info, acquisition_type, exchanger_map
-            )
+            self._load_section_operations(section, section_info, acquisition_type)
 
         self._sweep_all_derived_parameters(root_sections)
+        self._validate_realtime(root_sections)
 
-        return ExperimentInfo(
+        experiment_info = ExperimentInfo(
             uid=self._experiment.uid,
             devices=list(self._device_info.device_mapping.values()),
             signals=sorted(self._signal_infos.values(), key=lambda s: s.uid),
@@ -148,6 +123,8 @@ class ExperimentInfoBuilder:
             global_leader_device=self._device_info.global_leader,
             pulse_defs=sorted(self._pulse_defs.values(), key=lambda s: s.uid),
         )
+        self._resolve_seq_averaging(experiment_info)
+        return experiment_info
 
     def _check_physical_channel_calibration_conflict(self):
         PHYSICAL_CHANNEL_CALIBRATION_FIELDS = (
@@ -431,7 +408,6 @@ class ExperimentInfoBuilder:
         acquisition_type,
         section_uid_map: Dict[str, Tuple[Any, int]],
         acquisition_type_map,
-        exchanger_map,
     ) -> SectionInfo:
         assert section.uid is not None
         if (
@@ -449,9 +425,8 @@ class ExperimentInfoBuilder:
         acquisition_type_map[section.uid] = current_acquisition_type
 
         section_info = self._load_section(
-            exchanger_map(section),
+            section,
             current_acquisition_type,
-            exchanger_map,
             section_uid_map,
         )
 
@@ -464,7 +439,6 @@ class ExperimentInfoBuilder:
                     current_acquisition_type,
                     section_uid_map,
                     acquisition_type_map,
-                    exchanger_map,
                 )
             )
         return section_info
@@ -662,11 +636,10 @@ class ExperimentInfoBuilder:
         section: Section,
         section_info: SectionInfo,
         acquisition_type,
-        exchanger_map: Callable[[Any], Any],
     ):
         _auto_pulse_id = (f"{section.uid}__auto_pulse_{i}" for i in itertools.count())
 
-        for operation in exchanger_map(section).children:
+        for operation in section.children:
             if not isinstance(operation, SignalOperation):
                 continue
             signal_info = self._signal_infos[operation.signal]
@@ -682,7 +655,6 @@ class ExperimentInfoBuilder:
         self,
         section: Section,
         exp_acquisition_type,
-        exchanger_map: Callable[[Any], Any],
         section_uid_map: Dict[str, Tuple[Any, int]],
     ) -> SectionInfo:
 
@@ -723,8 +695,8 @@ class ExperimentInfoBuilder:
                     )
 
         execution_type = section.execution_type
-        align = exchanger_map(section).alignment
-        on_system_grid = exchanger_map(section).on_system_grid
+        align = section.alignment
+        on_system_grid = section.on_system_grid
         length = section.length
         averaging_mode = getattr(section, "averaging_mode", None)
         repetition_mode = getattr(section, "repetition_mode", None)
@@ -743,10 +715,7 @@ class ExperimentInfoBuilder:
         chunk_count = getattr(section, "chunk_count", 1)
 
         this_acquisition_type = None
-        if any(
-            isinstance(operation, Acquire)
-            for operation in exchanger_map(section).children
-        ):
+        if any(isinstance(operation, Acquire) for operation in section.children):
             # an acquire event - add acquisition_types
             this_acquisition_type = exp_acquisition_type
 
@@ -857,33 +826,163 @@ class ExperimentInfoBuilder:
         for child in self._parameter_parents.keys():
             self._sweep_derived_parameter(self._params[child], sweeps_by_parameter)
 
+    def _validate_realtime(self, root_sections: list[SectionInfo]):
+        """Verify that:
+        - no near-time section is located inside a real-time section
+        - there can be at most one AcquireLoopRt
+        - if there is one, it must be the real-time boundary.
 
-def find_sequential_averaging(section: Section | Experiment) -> Tuple[Any, Tuple]:
-    avg_section, sweep_sections = None, ()
+        With these conditions, execution_type=None is resolved to either NT or RT.
+        """
 
-    for child_section in (
-        section.sections if isinstance(section, Experiment) else section.children
-    ):
-        if not isinstance(child_section, Section):
-            continue  # skip operations
+        acquire_loop = None
 
-        if getattr(child_section, "averaging_mode", None) == AveragingMode.SEQUENTIAL:
-            avg_section = child_section
+        def traverse_set_execution_type_and_check_rt_loop(
+            section: SectionInfo, in_realtime: bool
+        ):
+            if section.execution_type == ExecutionType.NEAR_TIME and in_realtime:
+                raise LabOneQException(
+                    f"Near-time section '{section.uid}' is nested inside a RT section"
+                )
+            elif section.execution_type == ExecutionType.REAL_TIME:
+                in_realtime = True
+            else:
+                section.execution_type = (
+                    ExecutionType.REAL_TIME if in_realtime else ExecutionType.NEAR_TIME
+                )
 
-        parameters = getattr(child_section, "parameters", None)
-        if parameters is not None and len(parameters) > 0:
-            sweep_sections = (child_section,)
+            if section.averaging_mode is not None:
+                nonlocal acquire_loop
+                if acquire_loop is not None:
+                    raise LabOneQException("Found multiple AcquireLoopRt")
+                acquire_loop = section
+            for child in section.children:
+                traverse_set_execution_type_and_check_rt_loop(child, in_realtime)
 
-        child_avg_section, child_sweep_sections = find_sequential_averaging(
-            child_section
-        )
-        if avg_section is not None and child_avg_section is not None:
-            raise LabOneQException(
-                "Illegal nesting of sequential averaging loops detected."
+        for root_section in root_sections:
+            traverse_set_execution_type_and_check_rt_loop(
+                root_section, in_realtime=False
             )
-        sweep_sections = (*sweep_sections, *child_sweep_sections)
 
-    return avg_section, sweep_sections
+        def traverse_check_all_rt_inside_rt_loop(section: SectionInfo):
+            if section.averaging_mode is not None:
+                return
+            assert (
+                section.execution_type is not None
+            ), "should have been set in first traverse"
+            if section.execution_type == ExecutionType.REAL_TIME:
+                raise LabOneQException(
+                    f"Section '{section.uid}' is marked as real-time, but it is"
+                    f" located outside the RT averaging loop"
+                )
+            if section.execution_type is None:
+                section.execution_type = ExecutionType.NEAR_TIME
+            for child in section.children:
+                traverse_check_all_rt_inside_rt_loop(child)
+
+        for root_section in root_sections:
+            traverse_check_all_rt_inside_rt_loop(root_section)
+
+    @staticmethod
+    def _find_acquire_loop_with_parent(
+        parent: SectionInfo | ExperimentInfo,
+    ) -> tuple[SectionInfo | ExperimentInfo, SectionInfo] | None:
+        """DFS for the acquire loop"""
+        if isinstance(parent, SectionInfo):
+            children = parent.children
+        else:
+            children = parent.sections
+        for child in children:
+            if child.averaging_mode is not None:
+                return parent, child
+            if acquire_loop := ExperimentInfoBuilder._find_acquire_loop_with_parent(
+                child
+            ):
+                return acquire_loop
+        return None
+
+    @staticmethod
+    def _find_innermost_sweep_for_seq_averaging(
+        parent: SectionInfo,
+    ) -> SectionInfo | None:
+        innermost_sweep = None
+        for child in parent.children:
+            this_innermost_sweep = (
+                ExperimentInfoBuilder._find_innermost_sweep_for_seq_averaging(child)
+            )
+            if innermost_sweep is not None and this_innermost_sweep is not None:
+                raise LabOneQException(
+                    f"Section '{parent.uid}' has multiple sweeping subsections."
+                    f" This is illegal in sequential averaging mode."
+                )
+            innermost_sweep = this_innermost_sweep
+        if innermost_sweep is not None:
+            return innermost_sweep
+        if parent.count is not None and parent.averaging_mode is None:
+            # this section is a sweep (aka loop but not averaging)
+            return parent
+        return None
+
+    def _resolve_seq_averaging(self, experiment_info: ExperimentInfo):
+        acquire_loop_with_parent = self._find_acquire_loop_with_parent(experiment_info)
+        if acquire_loop_with_parent is None:
+            return  # no acquire loop
+        parent, acquire_loop = acquire_loop_with_parent
+
+        if acquire_loop.averaging_mode != AveragingMode.SEQUENTIAL:
+            return
+
+        innermost_sweep = self._find_innermost_sweep_for_seq_averaging(acquire_loop)
+        if innermost_sweep is None:
+            _logger.debug("Sequential averaging but no real-time sweep")
+            return
+
+        current_section = acquire_loop
+        while current_section is not innermost_sweep:
+            if len(current_section.children) != 1:
+                raise LabOneQException(
+                    f"Section '{current_section.uid}' has multiple children."
+                    " With sequential averaging, the section graph from acquire loop to"
+                    " inner-most sweep must be a linear chain, with only a single"
+                    " subsection at each level. "
+                )
+            [current_section] = current_section.children
+
+        # We now know where the acquire loop _should_ go. Let's graft it there.
+        # First, remove it from its original location...
+        if not isinstance(parent, ExperimentInfo):
+            parent.children = acquire_loop.children
+        else:
+            parent.sections = acquire_loop.children
+        # ... and then re-insert it into the bottom of the tree.
+        acquire_loop.children = innermost_sweep.children
+        innermost_sweep.children = [acquire_loop]
+
+        # Similarly, move the pulses (also children) of the loops. Here, the added
+        # caveat is that any pulses directly in the acquire loop have nowhere to go, so
+        # we forbid them.
+        if acquire_loop.pulses or acquire_loop.signals:
+            raise LabOneQException(
+                "Pulses directly in the acquire loop are not allowed in sequential "
+                "averaging mode. Place them inside the sweep instead."
+            )
+        acquire_loop.pulses, innermost_sweep.pulses = innermost_sweep.pulses, []
+        acquire_loop.signals, innermost_sweep.signals = innermost_sweep.signals, []
+
+        # The acquire loop inherits the sweep's alignment; this is required for
+        # fixed-repetition-time shots to be right-aligned.
+        #
+        # [----------------- sweep iteration 1 ------------------][--- sweep iteration 2 ...
+        # [-- shot 1 --][-- shot 2 --][-- shot 3 --][-- shot 4 --][-- shot 1 --][...
+        #     [==body==]    [==body==]    [==body==]    [==body==]    [...
+        #               |<---------->|
+        #               repetition time
+        acquire_loop.alignment = innermost_sweep.alignment
+
+        # todo(PW): What about repetition time?
+        #  Should repetition time be associated with the outermost sweep?
+        #  Currently the scheduler appears to handle this just fine; it picks up the
+        #  correct repetition time no matter where it is located in the tree.
 
 
 class AttributeOverrider(object):

@@ -45,11 +45,12 @@ class SignalCalibration(Observable):
             Implemented by setting delay nodes on the instruments, and will
             not be visible in the pulse sheet.
             Not currently supported on SHFSG output channels.
+            Units: seconds.
             Default: `None`.
         port_mode (PortMode | None):
-            On SHFSG output channels, the port mode may be set to select
-            either amplified high-frequency mode (PortMode.RF) and
-            direct low frequency mode (PortMode.LF).
+            On SHFSG, SHFQA and SHFQC, the port mode may be set to select
+            either amplified high-frequency mode (PortMode.RF, default) or
+            baseband mode (PortMode.LF).
             Default: `None`.
         delay_signal (float | None):
             Defines an additional global delay on this signal line.
@@ -62,14 +63,12 @@ class SignalCalibration(Observable):
         range (int | float | None):
             The output or input range setting for the signal.
         threshold (float | list[float] | None):
-            Specify the state discrimation threshold.
+            Specify the state discrimination threshold.
             Only supported for acquisition signals on the UHFQA, SHFQA
             and SHFQC.
         amplitude (float | Parameter | None):
             Amplitude multiplying all waveforms played on the signal line.
-
-            !!! warning
-                This feature is not implemented!
+            Only supported by the SHFQA.
         amplifier_pump (AmplifierPump | None):
             Parametric Pump Controller settings.
     """

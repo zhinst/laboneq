@@ -20,7 +20,10 @@ from laboneq.controller.communication import (
     DaqNodeSetAction,
 )
 from laboneq.controller.devices.device_shf_base import DeviceSHFBase
-from laboneq.controller.devices.device_zi import SequencerPaths
+from laboneq.controller.devices.device_zi import (
+    SequencerPaths,
+    delay_to_rounded_samples,
+)
 from laboneq.controller.devices.zi_node_monitor import NodeControlBase
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.controller.util import LabOneQControllerException
@@ -28,6 +31,10 @@ from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.data.recipe import IO, Initialization, TriggeringMode
 
 _logger = logging.getLogger(__name__)
+
+SAMPLE_FREQUENCY_HZ = 2.0e9
+DELAY_NODE_GRANULARITY_SAMPLES = 1
+DELAY_NODE_MAX_SAMPLES = round(124e-9 * SAMPLE_FREQUENCY_HZ)
 
 
 class DeviceSHFSG(DeviceSHFBase):
@@ -286,19 +293,6 @@ class DeviceSHFSG(DeviceSHFBase):
                 conditions[f"/{self.serial}/sgchannels/{awg_index}/awg/enable"] = 0
         return conditions
 
-    def _validate_initialization(self, initialization: Initialization):
-        super()._validate_initialization(initialization)
-        outputs = initialization.outputs or []
-        for output in outputs:
-            if output.port_delay is not None:
-                if output.port_delay != 0:
-                    raise LabOneQControllerException(
-                        f"{self.dev_repr}'s output does not support port delay"
-                    )
-                _logger.info(
-                    "%s's output port delay should be set to None, not 0", self.dev_repr
-                )
-
     def pre_process_attributes(
         self,
         initialization: Initialization,
@@ -332,7 +326,7 @@ class DeviceSHFSG(DeviceSHFBase):
                     f"{self.dev_repr}: Local oscillator for channel {io.channel} is required, "
                     f"but is not provided."
                 )
-            if io.port_mode is None or io.port_mode == "RF":
+            if io.port_mode is None or io.port_mode == "rf":
                 yield DeviceAttribute(
                     name=AttributeName.SG_SYNTH_CENTER_FREQ,
                     index=get_synth_idx(io),
@@ -432,7 +426,7 @@ class DeviceSHFSG(DeviceSHFBase):
                     self._daq,
                     f"/{self.serial}/sgchannels/{output.channel}/output/rflfpath",
                     1  # RF
-                    if output.port_mode is None or output.port_mode == "RF"
+                    if output.port_mode is None or output.port_mode == "rf"
                     else 0,  # LF
                 )
             )
@@ -492,6 +486,34 @@ class DeviceSHFSG(DeviceSHFBase):
                         self._daq,
                         f"/{self.serial}/sgchannels/{ch}/digitalmixer/centerfreq",
                         dig_mixer_cf,
+                    )
+                )
+
+            [scheduler_port_delay, port_delay], updated = attributes.resolve(
+                keys=[
+                    (AttributeName.OUTPUT_SCHEDULER_PORT_DELAY, ch),
+                    (AttributeName.OUTPUT_PORT_DELAY, ch),
+                ]
+            )
+            if updated and scheduler_port_delay is not None:
+                output_delay = scheduler_port_delay + (port_delay or 0.0)
+                output_delay_rounded = (
+                    delay_to_rounded_samples(
+                        channel=ch,
+                        dev_repr=self.dev_repr,
+                        delay=output_delay,
+                        sample_frequency_hz=SAMPLE_FREQUENCY_HZ,
+                        granularity_samples=DELAY_NODE_GRANULARITY_SAMPLES,
+                        max_node_delay_samples=DELAY_NODE_MAX_SAMPLES,
+                    )
+                    / SAMPLE_FREQUENCY_HZ
+                )
+
+                nodes_to_set.append(
+                    DaqNodeSetAction(
+                        daq=self.daq,
+                        path=f"/{self.serial}/sgchannels/{ch}/output/delay",
+                        value=output_delay_rounded,
                     )
                 )
 

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import itertools
 import logging
 import time
 from typing import Any, Iterator
@@ -38,6 +39,7 @@ from laboneq.controller.recipe_processor import (
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType, is_spectroscopy
 from laboneq.core.types.enums.averaging_mode import AveragingMode
+from laboneq.data.calibration import PortMode
 from laboneq.data.recipe import (
     IO,
     Initialization,
@@ -57,6 +59,50 @@ DELAY_NODE_GENERATOR_MAX_SAMPLES = round(131.058e-6 * SAMPLE_FREQUENCY_HZ)
 DELAY_NODE_READOUT_INTEGRATION_MAX_SAMPLES = round(131.07e-6 * SAMPLE_FREQUENCY_HZ)
 DELAY_NODE_SPECTROSCOPY_ENVELOPE_MAX_SAMPLES = round(131.07e-6 * SAMPLE_FREQUENCY_HZ)
 DELAY_NODE_SPECTROSCOPY_MAX_SAMPLES = round(131.066e-6 * SAMPLE_FREQUENCY_HZ)
+
+
+def node_generator(daq, l: list):
+    def append(path, value, filename=None, cache=True):
+        l.append(
+            DaqNodeSetAction(
+                daq=daq,
+                path=path,
+                value=value,
+                filename=filename,
+                caching_strategy=(
+                    CachingStrategy.CACHE if cache else CachingStrategy.NO_CACHE
+                ),
+            )
+        )
+
+    return append
+
+
+def calc_theoretical_assignment_vec(num_weights: int) -> np.ndarray:
+    """Calculates the theoretical assignment vector, assuming that
+    zhinst.utils.QuditSettings ws used to calculate the weights
+    and the first d-1 weights were selected as kernels.
+
+    The theoretical assignment vector is determined by the majority vote
+    (winner takes all) principle.
+
+    see zhinst/utils/shfqa/multistate.py
+    """
+    num_states = num_weights + 1
+    weight_indices = list(itertools.combinations(range(num_states), 2))
+    assignment_len = 2 ** len(weight_indices)
+    assignment_vec = np.zeros(assignment_len, dtype=int)
+
+    for assignment_idx in range(assignment_len):
+        state_counts = np.zeros(num_states, dtype=int)
+        for weight_idx, weight in enumerate(weight_indices):
+            above_threshold = (assignment_idx & (2**weight_idx)) != 0
+            state_idx = weight[0] if above_threshold else weight[1]
+            state_counts[state_idx] += 1
+        winner_state = np.argmax(state_counts)
+        assignment_vec[assignment_idx] = winner_state
+
+    return assignment_vec
 
 
 class DeviceSHFQA(DeviceSHFBase):
@@ -108,7 +154,8 @@ class DeviceSHFQA(DeviceSHFBase):
         if io.range is None:
             return
         input_ranges = np.array(
-            [-50, -30, -25, -20, -15, -10, -5, 0, 5, 10], dtype=np.float64
+            [-50, -45, -40, -35, -30, -25, -20, -15, -10, -5, 0, 5, 10],
+            dtype=np.float64,
         )
         output_ranges = np.array(
             [-30, -25, -20, -15, -10, -5, 0, 5, 10], dtype=np.float64
@@ -197,7 +244,6 @@ class DeviceSHFQA(DeviceSHFBase):
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
     ) -> list[DaqNodeAction]:
-
         average_mode = 0 if averaging_mode == AveragingMode.CYCLIC else 1
         nodes = [
             *self._configure_readout(
@@ -495,6 +541,24 @@ class DeviceSHFQA(DeviceSHFBase):
                 ] = 0
         return conditions
 
+    def _validate_initialization(self, initialization: Initialization):
+        super()._validate_initialization(initialization)
+        for input in initialization.inputs or []:
+            output = next(
+                (
+                    output
+                    for output in initialization.outputs or []
+                    if output.channel == input.channel
+                ),
+                None,
+            )
+            if output is None:
+                continue
+            assert input.port_mode == output.port_mode, (
+                f"{self.dev_repr}: Port mode mismatch between input and output of"
+                f" channel {input.channel}."
+            )
+
     def pre_process_attributes(
         self,
         initialization: Initialization,
@@ -569,6 +633,17 @@ class DeviceSHFQA(DeviceSHFBase):
                     self._daq,
                     f"/{self.serial}/qachannels/{output.channel}/generator/single",
                     1,
+                )
+            )
+
+        for input in initialization.inputs or []:
+            nodes_to_initialize_output.append(
+                DaqNodeSetAction(
+                    self._daq,
+                    f"/{self.serial}/qachannels/{output.channel}/input/rflfpath",
+                    1  # RF
+                    if input.port_mode is None or input.port_mode == PortMode.RF.value
+                    else 0,  # LF
                 )
             )
 
@@ -851,47 +926,34 @@ class DeviceSHFQA(DeviceSHFBase):
         measurement: Measurement.Data,
         max_len: int,
     ):
-        ret_nodes = []
+        ret_nodes: list[DaqNodeSetAction] = []
         num_states = len(integrator_allocation.weights) + 1
         assert self._integrator_has_consistent_msd_num_state(integrator_allocation)
-
-        # Note: copying this from grimsel_multistate_demo jupyter notebook
-        ret_nodes.append(
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/qachannels/{measurement.channel}/readout/multistate/qudits/*/enable",
-                0,
-                caching_strategy=CachingStrategy.NO_CACHE,
-            )
-        )
-        ret_nodes.append(
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/qachannels/{measurement.channel}/readout/multistate/enable",
-                1,
-                caching_strategy=CachingStrategy.CACHE,
-            )
-        )
 
         assert len(integrator_allocation.channels) == 1, (
             f"{self.dev_repr}: Internal error - expected 1 integrator for "
             f"signal '{integrator_allocation.signal_id}', "
             f"got {integrator_allocation.channels}"
         )
+        integration_unit_index = integrator_allocation.channels[0]
+
+        # Note: copying this from grimsel_multistate_demo jupyter notebook
+        base_path = (
+            f"/{self.serial}/qachannels/{measurement.channel}/readout/multistate"
+        )
+        qudit_path = f"{base_path}/qudits/{integration_unit_index}"
+
+        node = node_generator(self._daq, ret_nodes)
+        node(f"{base_path}/enable", 1)
+        node(f"{base_path}/zsync/packed", 1)
+        node(f"{qudit_path}/numstates", num_states)
+        node(f"{qudit_path}/enable", 1, cache=False)
+        node(
+            f"{qudit_path}/assignmentvec",
+            calc_theoretical_assignment_vec(num_states - 1),
+        )
+
         for state_i in range(0, num_states - 1):
-            integration_unit_index = integrator_allocation.channels[0]
-            node_path = (
-                f"/{self.serial}/qachannels/{measurement.channel}/readout/multistate/qudits/"
-                f"{integration_unit_index}/numstates"
-            )
-            ret_nodes.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    node_path,
-                    num_states,
-                    caching_strategy=CachingStrategy.CACHE,
-                )
-            )
             wave_name = integrator_allocation.weights[state_i] + ".wave"
             weight_vector = np.conjugate(
                 get_wave(wave_name, recipe_data.scheduled_experiment.waves)
@@ -905,38 +967,27 @@ class DeviceSHFQA(DeviceSHFBase):
                     f"maximum of {max_len} samples. Ensure length of acquire kernels don't "
                     f"exceed {max_pulse_len * 1e6:.3f} us."
                 )
-            node_path = (
-                f"/{self.serial}/qachannels/{measurement.channel}/readout/multistate/qudits/{integration_unit_index}"
-                f"/weights/{state_i}/wave"
-            )
-            ret_nodes.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    node_path,
-                    weight_vector,
-                    filename=wave_name,
-                    caching_strategy=CachingStrategy.CACHE,
-                )
-            )
+            node(f"{qudit_path}/weights/{state_i}/wave", weight_vector, wave_name)
+
         return ret_nodes
 
     def _configure_readout_mode_nodes(
         self,
-        dev_input: IO,
-        dev_output: IO,
+        _dev_input: IO,
+        _dev_output: IO,
         measurement: Measurement | None,
         device_uid: str,
         recipe_data: RecipeData,
     ):
         _logger.debug("%s: Setting measurement mode to 'Readout'.", self.dev_repr)
+        assert measurement is not None
 
-        nodes_to_set_for_readout_mode = [
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/qachannels/{measurement.channel}/readout/integration/length",
-                measurement.length,
-            ),
-        ]
+        nodes_to_set_for_readout_mode: list[DaqNodeSetAction] = []
+
+        base_path = f"/{self.serial}/qachannels/{measurement.channel}/readout"
+        node = node_generator(self._daq, nodes_to_set_for_readout_mode)
+        node(f"{base_path}/integration/length", measurement.length)
+        node(f"{base_path}/multistate/qudits/*/enable", 0, cache=False)
 
         max_len = 4096
         for integrator_allocation in recipe_data.recipe.integrator_allocations:
@@ -1216,6 +1267,14 @@ class DeviceSHFQA(DeviceSHFBase):
                 self._daq,
                 f"/{self.serial}/qachannels/*/spectroscopy/result/enable",
                 0,
+                caching_strategy=CachingStrategy.NO_CACHE,
+            )
+        )
+        reset_nodes.append(
+            DaqNodeSetAction(
+                self._daq,
+                f"/{self.serial}/qachannels/*/output/rflfinterlock",
+                1,
                 caching_strategy=CachingStrategy.NO_CACHE,
             )
         )

@@ -7,9 +7,8 @@ from enum import Enum, auto
 class HighPassCompensationClearing(Enum):
     """High-pass compensation clearing.
 
-    .. deprecated:: 2.8
-
-        This has no functionality.
+    !!! version-changed "Deprecated in version 2.8"
+        This has no effect.
     """
 
     LEVEL = auto()

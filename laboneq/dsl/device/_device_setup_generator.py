@@ -8,8 +8,9 @@ import copy
 import itertools
 import logging
 import warnings
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Dict, Iterator, List, Optional, Tuple, Union
+
+import jsonschema
 
 import laboneq.core.path as qct_path
 from laboneq.core.exceptions import LabOneQException
@@ -1036,58 +1037,71 @@ def _create_physical_channel(
     return physical_channel
 
 
-@dataclass
-class DescriptorQubit:
-    name: str
-    type: str
-    signals: list[dict[str]]
-    quantum_element: QuantumElement = field(init=False)
-
-    def __post_init__(self):
-        from laboneq.dsl import quantum
-
-        supported_types = {
-            "qubit": quantum.Qubit,
-            "transmon": quantum.Transmon,
-        }
-        if self.type not in supported_types:
-            raise LabOneQException(
-                f"Invalid qubit type '{self.type}'. Supported: {list(supported_types.keys())}."
-            )
-        self.quantum_element = supported_types[self.type]
-
-        req_signals_keys = {"name", "role"}
-        for sig in self.signals:
-            diff_sigs = req_signals_keys.difference(sig.keys())
-            if diff_sigs:
-                raise LabOneQException(
-                    f"Missing 'qubit' 'signals' keyword(s): '{list(diff_sigs)}'."
-                )
-
-    def as_qubit(
-        self, logical_signal_groups: list[LogicalSignalGroup]
-    ) -> QuantumElement:
-        return self.quantum_element.from_logical_signal_group(
-            self.name, lsg=logical_signal_groups[self.name]
-        )
-
-    @classmethod
-    def from_descriptor(cls, data: dict) -> DescriptorQubit:
-        req_keys = {"name", "type", "signals"}
-        diff_keys = req_keys.difference(data.keys())
-        if diff_keys:
-            raise LabOneQException(f"Missing 'qubit' keyword(s): '{list(diff_keys)}'.")
-        return DescriptorQubit(**data)
-
-
 def make_qubits(
-    qubit_descriptor, logical_signal_groups: list[LogicalSignalGroup]
+    qubit_descriptor: list[dict],
+    logical_signal_groups: list[LogicalSignalGroup],
+    types: dict[str, QuantumElement],
 ) -> dict[str, QuantumElement]:
+    """Make qubits from their descriptor in Device Setup descriptor.
+
+    Args:
+        qubit_descriptor: `qubits` section the descriptor.
+        logical_signal_groups: Logical signal groups.
+        types: Mapping of types.
+            Mapping keys are used to select the correct `QuantumElement` to make
+            qubit `type`.
+
+    Returns:
+        Dictionary of `QuantumElements`, with their `uid` as key.
+            The keys are sorted.
+
+    Raises:
+        LabOneQException: If the qubits are defined incorrectly.
+    """
+    if not isinstance(qubit_descriptor, list):
+        msg = "Invalid 'qubits' definition: Must be a list of qubits."
+        raise LabOneQException(msg)
+    schema = {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": ["string", "array"],
+                "items": {
+                    "type": "string",
+                },
+                "uniqueItems": True,
+            },
+            "type": {"type": "string"},
+        },
+        "required": ["name", "type"],
+        "additionalProperties": False,
+    }
     qubits = {}
-    for qubit in qubit_descriptor:
-        q = DescriptorQubit.from_descriptor(qubit)
-        qubits[q.name] = q.as_qubit(logical_signal_groups)
-    return qubits
+    for desc in qubit_descriptor:
+        try:
+            jsonschema.validate(desc, schema=schema)
+        except jsonschema.exceptions.ValidationError as error:
+            msg = error.message
+            raise LabOneQException(f"Invalid 'qubit' definition: {msg}") from error
+        q_type = desc["type"]
+        try:
+            quantum_element = types[q_type]
+        except KeyError:
+            msg = f"'type': '{q_type}' not one of {list(types.keys())}."
+            raise LabOneQException(f"Invalid 'qubit' definition: {msg}")
+        q_defs = desc["name"] if isinstance(desc["name"], list) else [desc["name"]]
+        for q_def in q_defs:
+            if q_def in qubits:
+                msg = f"Qubit '{q_def}' has multiple definitions."
+                raise LabOneQException(f"Invalid 'qubit' definition: {msg}")
+            q_type = desc["type"]
+            try:
+                lsg = logical_signal_groups[q_def]
+            except KeyError:
+                msg = f"Qubit '{q_def}' has no connections."
+                raise LabOneQException(f"Invalid 'qubit' definition: {msg}")
+            qubits[q_def] = quantum_element.from_logical_signal_group(q_def, lsg=lsg)
+    return {key: qubits[key] for key in sorted(qubits)}
 
 
 class _DeviceSetupGenerator:
@@ -1161,6 +1175,9 @@ class _DeviceSetupGenerator:
         server_port: str = None,
         setup_name: str = None,
     ):
+        # To avoid circular imports
+        from laboneq.dsl import quantum
+
         if instrument_list is not None:
             if instruments is None:
                 warnings.warn(
@@ -1316,11 +1333,19 @@ class _DeviceSetupGenerator:
             )
             for device, channels in physical_signals.items()
         }
+
         device_setup_constructor_args = {
             "uid": setup_name,
             "servers": {server.uid: server for server, _ in servers},
             "instruments": out_instruments,
-            "qubits": make_qubits(qubits, logical_signal_groups),
+            "qubits": make_qubits(
+                qubits,
+                logical_signal_groups,
+                types={
+                    "qubit": quantum.Qubit,
+                    "transmon": quantum.Transmon,
+                },
+            ),
             "logical_signal_groups": logical_signal_groups,
             "physical_channel_groups": physical_channel_groups,
         }

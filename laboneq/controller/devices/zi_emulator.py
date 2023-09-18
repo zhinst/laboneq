@@ -16,8 +16,10 @@ from typing import Any, Callable, overload
 
 import numpy as np
 from numpy import typing as npt
+from zhinst.core import __version__
 
-from laboneq.controller.versioning import LabOneVersion
+_major, _minor, DS_REVISION = __version__.split(".")
+DS_VERSION = f"{_major}.{_minor}"
 
 
 @dataclass
@@ -234,10 +236,10 @@ class DevEmuZI(DevEmu):
     def _node_def(self) -> dict[str, NodeInfo]:
         return {
             "about/version": NodeInfo(
-                type=NodeType.STR, default=LabOneVersion.LATEST.value, read_only=True
+                type=NodeType.STR, default=DS_VERSION, read_only=True
             ),
             "about/revision": NodeInfo(
-                type=NodeType.STR, default="99999", read_only=True
+                type=NodeType.STR, default=DS_REVISION, read_only=True
             ),
             "about/dataserver": NodeInfo(
                 type=NodeType.STR, default="Emulated", read_only=True

@@ -3,11 +3,14 @@
 
 from __future__ import annotations
 
+import typing
 from typing import Any
 
 from laboneq.controller.util import LabOneQControllerException, SimpleProxy
 from laboneq.data.experiment_results import ExperimentResults
-from laboneq.dsl.result.results import Results
+
+if typing.TYPE_CHECKING:
+    from laboneq.dsl.result.results import Results
 
 
 class ProtectedSession(SimpleProxy):
@@ -23,6 +26,7 @@ class ProtectedSession(SimpleProxy):
     # Backwards compatibility after migration to the new architecture
     @property
     def _last_results(self) -> Results:
+        from laboneq.dsl.result.results import Results
 
         return Results(
             acquired_results=self._experiment_results.acquired_results,

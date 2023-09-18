@@ -61,7 +61,7 @@ def _compute_start_with_latency(
     grid: int,
 ) -> int:
     acquire_pulse = schedule_data.acquire_pulses.get(handle)
-    if not acquire_pulse:
+    if not acquire_pulse or len(acquire_pulse) == 0:
         raise LabOneQException(
             f"No acquire found for Match section '{section}' with handle"
             f" '{handle}'."
@@ -88,7 +88,11 @@ def _compute_start_with_latency(
     # - The sum of the settings of the port_delay parameter for the acquisition device
     #   for measure and acquire pulse
 
-    qa_signal_obj = schedule_data.signal_objects[acquire_pulse.pulse.signal.uid]
+    if hasattr(acquire_pulse, "pulses"):
+        p = acquire_pulse.pulses[0]
+    else:
+        p = acquire_pulse.pulse
+    qa_signal_obj = schedule_data.signal_objects[p.signal.uid]
 
     qa_device_type = qa_signal_obj.awg.device_type
     qa_sampling_rate = qa_signal_obj.awg.sampling_rate

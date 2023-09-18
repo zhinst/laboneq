@@ -1,7 +1,6 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-import warnings
 from typing import Any, Callable, Dict
 
 import numpy as np
@@ -102,17 +101,27 @@ def register_pulse_functional(sampler: Callable, name: str = None):
 
 
 @register_pulse_functional
-def gaussian(x, sigma=1 / 3, order=2, x_0=0.0, zero_boundaries=False, **_):
+def gaussian(
+    x,
+    sigma=1 / 3,
+    order=2,
+    zero_boundaries=False,
+    **_,
+):
     """Create a Gaussian pulse.
 
-    Args:
-        uid (str): Unique identifier of the pulse
-        length (float): Length of the pulse in seconds
-        amplitude (float): Amplitude of the pulse
-        sigma (float): Std. deviation, relative to pulse length, default is 1/3
-        order (int): Order of the Gaussian pulse, must be even and positive, default is 2
-        x_0 (float): Center of the Gaussian pulse, relative to pulse length, default is 0.0
-        zero_boundaries (bool): Whether to zero the pulse at the boundaries, default is False
+    Arguments:
+        **_ (Any):
+            All pulses accept the following keyword arguments:
+            - uid ([str][]): Unique identifier of the pulse
+            - length ([float][]): Length of the pulse in seconds
+            - amplitude ([float][]): Amplitude of the pulse
+        sigma (float):
+            Std. deviation, relative to pulse length, default is 1/3
+        order (int):
+            Order of the Gaussian pulse, must be even and positive, default is 2
+        zero_boundaries (bool):
+            Whether to zero the pulse at the boundaries, default is False
 
     Returns:
         pulse (Pulse): Gaussian pulse.
@@ -122,11 +131,11 @@ def gaussian(x, sigma=1 / 3, order=2, x_0=0.0, zero_boundaries=False, **_):
     if order <= 0 or order % 2 != 0:
         raise ValueError("The order must be positive and even.")
 
-    gauss = np.exp(-(((x - x_0) ** order) / (2 * sigma**2)))
+    gauss = np.exp(-((x**order) / (2 * sigma**2)))
 
     if zero_boundaries:
         dt = x[0] - (x[1] - x[0])
-        delta = np.exp(-(((dt - x_0) ** order) / (2 * sigma**2)))
+        delta = np.exp(-((dt**order) / (2 * sigma**2)))
         gauss -= delta
         gauss /= 1 - delta
 
@@ -140,23 +149,22 @@ def gaussian_square(
     """Create a gaussian square waveform with a square portion of length
     ``width`` and Gaussian shaped sides.
 
-    Args:
-        uid (str): Unique identifier of the pulse.
-        length (float): Length of the pulse in seconds
-        width (float): Width of the flat portion of the pulse in seconds
-        amplitude (float): Amplitude of the pulse
-        sigma (float): Std. deviation of the Gaussian rise/fall portion of the pulse
-        zero_boundaries (bool): Whether to zero the pulse at the boundaries
+    Arguments:
+        **_ (Any):
+            All pulses accept the following keyword arguments:
+            - uid ([str][]): Unique identifier of the pulse
+            - length ([float][]): Length of the pulse in seconds
+            - amplitude ([float][]): Amplitude of the pulse
+        width (float):
+            Width of the flat portion of the pulse in seconds
+        sigma (float):
+            Std. deviation of the Gaussian rise/fall portion of the pulse
+        zero_boundaries (bool):
+            Whether to zero the pulse at the boundaries
 
     Returns:
         pulse (Pulse): Gaussian square pulse.
     """
-
-    warnings.warn(
-        "gaussian_square is deprecated and will be removed in future versions. "
-        "Use the `gaussian` function with a higher order instead.",
-        DeprecationWarning,
-    )
 
     risefall_in_samples = round(len(x) * (1 - width / length) / 2)
     flat_in_samples = len(x) - 2 * risefall_in_samples
@@ -179,12 +187,14 @@ def gaussian_square(
 
 @register_pulse_functional
 def const(x, **_):
-    """Create a const pulse
+    """Create a constant pulse.
 
     Args:
-        uid (str): Unique identifier of the pulse
-        length (float): Length of the pulse in seconds
-        amplitude (float): Amplitude of the pulse
+        **_ (Any):
+            All pulses accept the following keyword arguments:
+            - uid ([str][]): Unique identifier of the pulse
+            - length ([float][]): Length of the pulse in seconds
+            - amplitude ([float][]): Amplitude of the pulse
 
     Returns:
         pulse (Pulse): Constant pulse.
@@ -194,12 +204,18 @@ def const(x, **_):
 
 @register_pulse_functional
 def triangle(x, **_):
-    """Create a triangle pulse
+    """Create a triangle pulse.
 
-    Args:
-        uid (str): Unique identifier of the pulse
-        length (float): Length of the pulse in seconds
-        amplitude (float): Amplitude of the pulse
+    A triangle pulse varies linearly from a starting amplitude of
+    zero, to a maximum amplitude of one in the middle of the pulse,
+    and then back to a final amplitude of zero.
+
+    Arguments:
+        **_ (Any):
+            All pulses accept the following keyword arguments:
+            - uid ([str][]): Unique identifier of the pulse
+            - length ([float][]): Length of the pulse in seconds
+            - amplitude ([float][]): Amplitude of the pulse
 
     Returns:
         pulse (Pulse): Triangle pulse.
@@ -209,12 +225,14 @@ def triangle(x, **_):
 
 @register_pulse_functional
 def sawtooth(x, **_):
-    """Create a sawtooth pulse
+    """Create a sawtooth pulse.
 
-    Args:
-        uid (str): Unique identifier of the pulse
-        length (float): Length of the pulse in seconds
-        amplitude (float): Amplitude of the pulse
+    Arguments:
+        **_ (Any):
+            All pulses accept the following keyword arguments:
+            - uid ([str][]): Unique identifier of the pulse
+            - length ([float][]): Length of the pulse in seconds
+            - amplitude ([float][]): Amplitude of the pulse
 
     Returns:
         pulse (Pulse): Sawtooth pulse.
@@ -225,15 +243,20 @@ def sawtooth(x, **_):
 
 @register_pulse_functional
 def drag(x, sigma=1 / 3, beta=0.2, zero_boundaries=False, **_):
-    """Create a DRAG pulse
+    """Create a DRAG pulse.
 
-    Args:
-        uid (str): Unique identifier of the pulse
-        length (float): Length of the pulse in seconds.
-        amplitude (float): Amplitude of the pulse
-        sigma (float): Std. deviation, relative to pulse length
-        beta (float): Relative amplitude of the quadrature component
-        zero_boundaries (bool): Whether to zero the pulse at the boundaries
+    Arguments:
+        **_ (Any):
+            All pulses accept the following keyword arguments:
+            - uid ([str][]): Unique identifier of the pulse
+            - length ([float][]): Length of the pulse in seconds
+            - amplitude ([float][]): Amplitude of the pulse
+        sigma (float):
+            Std. deviation, relative to pulse length
+        beta (float):
+            Relative amplitude of the quadrature component
+        zero_boundaries (bool):
+            Whether to zero the pulse at the boundaries
 
     Returns:
         pulse (Pulse): DRAG pulse.
@@ -250,12 +273,14 @@ def drag(x, sigma=1 / 3, beta=0.2, zero_boundaries=False, **_):
 
 @register_pulse_functional
 def cos2(x, **_):
-    """Create a raised cosine pulse
+    """Create a raised cosine pulse.
 
-    Args:
-        uid (str): Unique identifier of the pulse
-        length (float): Length of the pulse in seconds.
-        amplitude (float): Amplitude of the pulse
+    Arguments:
+        **_ (Any):
+            All pulses accept the following keyword arguments:
+            - uid ([str][]): Unique identifier of the pulse
+            - length ([float][]): Length of the pulse in seconds
+            - amplitude ([float][]): Amplitude of the pulse
 
     Returns:
         pulse (Pulse): Raised cosine pulse.
@@ -266,7 +291,7 @@ def cos2(x, **_):
 def sampled_pulse_real(samples, uid=None, can_compress=False):
     """Create a pulse based on a array of real values.
 
-    Args:
+    Arguments:
         samples (numpy.ndarray): Real valued data.
         uid (str): Unique identifier of the created pulse.
 

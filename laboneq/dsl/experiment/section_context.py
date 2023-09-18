@@ -220,6 +220,7 @@ class MatchSectionContextManager(SectionContextManagerBase):
         user_register: int | None = None,
         uid=None,
         play_after=None,
+        local=None,
     ):
         kwargs = {}
         if uid is not None:
@@ -230,6 +231,8 @@ class MatchSectionContextManager(SectionContextManagerBase):
             kwargs["handle"] = handle
         if user_register is not None:
             kwargs["user_register"] = user_register
+        if local is not None:
+            kwargs["local"] = local
         super().__init__(kwargs=kwargs)
 
 

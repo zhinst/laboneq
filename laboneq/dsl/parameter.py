@@ -103,7 +103,7 @@ class SweepParameter(_ParameterArithmeticMixin, Parameter):
             If this argument is not defined, the uid of the parameter will be
             used. Default `None`.
         driven_by (list[SweepParameter]):
-            Optional and usually abset. If given, specifies the list of
+            Optional and usually absent. If given, specifies the list of
             [SweepParameter][laboneq.dsl.parameter.SweepParameter] objects that
             this one is derived from. See the notes below for an example.
             Parameters should have the same shape as the ones they are driven

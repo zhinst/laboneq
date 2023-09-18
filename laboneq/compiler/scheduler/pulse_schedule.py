@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterator, List, Optional
 
+import numpy as np
 from attrs import define
 
 from laboneq.compiler.common.compiler_settings import CompilerSettings
@@ -53,7 +54,9 @@ class PulseSchedule(IntervalSchedule):
         amplitude_resolution = pow(
             2, getattr(settings, "AMPLITUDE_RESOLUTION_BITS", 24)
         )
-        amplitude = round(self.amplitude * amplitude_resolution) / amplitude_resolution
+        amplitude = (
+            np.round(self.amplitude * amplitude_resolution) / amplitude_resolution
+        )
 
         start_id = next(id_tracker)
         d = {

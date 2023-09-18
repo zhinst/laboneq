@@ -82,7 +82,6 @@ class Measurement:
 class Config:
     repetitions: int = 1
     reference_clock: RefClkType = RefClkType._100MHZ
-    holdoff: float = 0
     triggering_mode: TriggeringMode = TriggeringMode.DIO_FOLLOWER
     sampling_rate: float | None = None
 

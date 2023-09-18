@@ -34,6 +34,17 @@ _logger = logging.getLogger(__name__)
 
 
 class ConnectionState:
+    """Session connection state.
+
+    Attributes:
+        connected (bool):
+            True if the session is connected to instruments.
+            False otherwise.
+        emulated (bool):
+            True if the session is running in emulation mode.
+            False otherwise.
+    """
+
     connected: bool = False
     emulated: bool = False
 
@@ -70,8 +81,8 @@ class Session:
         performance_log: bool = False,
         configure_logging: bool = True,
         _last_results=None,
-        compiled_experiment=None,
-        experiment=None,
+        compiled_experiment: CompiledExperiment | None = None,
+        experiment: Experiment | None = None,
     ):
         """Constructor of the session.
 
@@ -84,7 +95,12 @@ class Session:
                 Other possible levels refer to the logging python package.
             performance_log: Flag to enable performance logging.
                 When True, the system creates a separate logfile containing logs aimed to analyze system performance.
-            configure_logging: Whether to configure logger. Can be disabled for custom logging use cases.
+            configure_logging:
+                Whether to configure logger. Can be disabled for custom logging use cases.
+            compiled_experiment:
+                If specified, set the current compiled experiment.
+            experiment:
+                If specified, set the current experiment.
 
         !!! version-changed "Changed in version 2.0"
             - Removed `pass_v3_to_compiler` argument.
@@ -205,6 +221,9 @@ class Session:
 
             reset_devices (bool): Load the factory preset after connecting for device which support it.
 
+        Returns:
+            connection_state:
+                The connection state of the session.
         """
         self._ignore_version_mismatch = ignore_version_mismatch
         self._reset_devices = reset_devices
@@ -219,7 +238,12 @@ class Session:
         return self._connection_state
 
     def disconnect(self) -> ConnectionState:
-        """Disconnects the session from the devices."""
+        """Disconnects the session from the devices.
+
+        Returns:
+            connection_state:
+                The connection state of the session.
+        """
         self._connection_state.connected = False
         LabOneQFacade.disconnect(self)
         return self._connection_state
@@ -233,14 +257,17 @@ class Session:
         """Turns off / disables the device outputs.
 
         Args:
-            devices (list): Optional. Device or list of devices, if not specified - all devices.
-                            All or unused (see 'unused_only') outputs of these devices will be
-                            disabled. Can't be used together with 'signals'.
-            signals (list): Optional. Logical signal or a list of logical signals. Outputs mapped
-                            by these logical signals will be disabled. Can't be used together
-                            with 'devices' or 'unused_only'.
-            unused_only (bool): Optional. If set to True, only outputs not mapped by any logical
-                            signals will be disabled. Can't be used together with 'signals'.
+            devices:
+                Optional. Device or list of devices, if not specified - all devices.
+                All or unused (see 'unused_only') outputs of these devices will be
+                disabled. Can't be used together with 'signals'.
+            signals:
+                Optional. Logical signal or a list of logical signals. Outputs mapped
+                by these logical signals will be disabled. Can't be used together
+                with 'devices' or 'unused_only'.
+            unused_only:
+                Optional. If set to True, only outputs not mapped by any logical
+                signals will be disabled. Can't be used together with 'signals'.
         """
         if devices is not None and signals is not None:
             raise LabOneQException(
@@ -262,7 +289,7 @@ class Session:
 
     @property
     def connection_state(self) -> ConnectionState:
-        """State of the connection."""
+        """Session connection state."""
         return self._connection_state
 
     @trace("session.compile()")
@@ -326,11 +353,12 @@ class Session:
                 is used.
 
         Returns:
-            A `Results` object in case of success. `None` if the session is not
-            connected.
+            results:
+                A `Results` object in case of success. `None` if the session is not
+                connected.
 
         !!! version-changed "Changed in version 2.4"
-            Raises error if `Session` is not connected.
+            Raises error if session is not connected.
         """
         self._assert_connected(fail=True)
         if experiment:
@@ -372,10 +400,10 @@ class Session:
                 which returns an object with which users can query results.
 
         Returns:
-            An object with which users can query results. Details depend on the
-            implementation of the queue.
+            results:
+                An object with which users can query results. Details depend on the
+                implementation of the queue.
         """
-
         if experiment:
             if isinstance(experiment, CompiledExperiment):
                 self._compiled_experiment = experiment
@@ -400,7 +428,13 @@ class Session:
 
     def get_results(self) -> Results:
         """
-        Object holding the result of the last experiment execution. Referencing the results creates a deep copy.
+        Returns a deep copy of the result of the last experiment execution.
+
+        Raises an exception if no experiment results are available.
+
+        Returns:
+            results:
+                A deep copy of the results of the last experiment.
         """
         if not self._last_results:
             raise LabOneQException(
@@ -478,11 +512,13 @@ class Session:
         self._device_setup.set_calibration(value)
 
     @property
-    def log_level(self):
+    def log_level(self) -> int:
+        """The current log level."""
         return self._logger.level
 
     @property
     def logger(self):
+        """The current logger instance used by the session."""
         return self._logger
 
     @logger.setter
@@ -502,12 +538,16 @@ class Session:
         }
 
     @staticmethod
-    def load(filename):
+    def load(filename: str) -> Session:
         """Loads the session from a serialized file.
         A restored session from a loaded file will end up in the same state of the session that saved the file in the first place.
 
         Args:
-            filename (str): Filename (full path) of the file that should be loaded into the session.
+            filename: Filename (full path) of the file that should be loaded into the session.
+
+        Returns:
+            session:
+                A new session loaded from the file.
         """
 
         import json
@@ -522,12 +562,12 @@ class Session:
 
         return Session(**constructor_args)
 
-    def save(self, filename):
+    def save(self, filename: str):
         """Stores the session from a serialized file.
         A restored session from a loaded file will end up in the same state of the session that saved the file in the first place.
 
         Args:
-            filename (str): Filename (full path) of the file where the session should be stored in.
+            filename: Filename (full path) of the file where the session should be stored in.
         """
         # TODO ErC: Error handling
 
@@ -542,39 +582,39 @@ class Session:
         except IOError as e:
             raise LabOneQException() from e
 
-    def load_device_setup(self, filename):
+    def load_device_setup(self, filename: str):
         """Loads a device setup from a given file into the session.
 
         Args:
-            filename (str): Filename (full path) of the setup should be loaded into the session.
+            filename: Filename (full path) of the setup should be loaded into the session.
         """
         self._device_setup = DeviceSetup.load(filename)
 
-    def save_device_setup(self, filename):
+    def save_device_setup(self, filename: str):
         """Saves the device setup from the session into a given file.
 
         Args:
-            filename (str): Filename (full path) of the file where the setup should be stored in.
+            filename: Filename (full path) of the file where the setup should be stored in.
         """
         if self._device_setup is None:
             self.logger.info("No device setup set in this session.")
         else:
             self._device_setup.save(filename)
 
-    def load_device_calibration(self, filename):
+    def load_device_calibration(self, filename: str):
         """Loads a device calibration from a given file into the session.
 
         Args:
-            filename (str): Filename (full path) of the calibration should be loaded into the session.
+            filename: Filename (full path) of the calibration should be loaded into the session.
         """
         calibration = Calibration.load(filename)
         self._device_setup.set_calibration(calibration)
 
-    def save_device_calibration(self, filename):
+    def save_device_calibration(self, filename: str):
         """Saves the device calibration from the session into a given file.
 
         Args:
-            filename (str): Filename (full path) of the file where the calibration should be stored in.
+            filename: Filename (full path) of the file where the calibration should be stored in.
         """
         if self._device_setup is None:
             self.logger.info("No device setup set in this session.")
@@ -582,19 +622,19 @@ class Session:
             calibration = self._device_setup.get_calibration()
             calibration.save(filename)
 
-    def load_experiment(self, filename):
+    def load_experiment(self, filename: str):
         """Loads an experiment from a given file into the session.
 
         Args:
-            filename (str): Filename (full path) of the experiment should be loaded into the session.
+            filename: Filename (full path) of the experiment should be loaded into the session.
         """
         self._experiment_definition = Experiment.load(filename)
 
-    def save_experiment(self, filename):
+    def save_experiment(self, filename: str):
         """Saves the experiment from the session into a given file.
 
         Args:
-            filename (str): Filename (full path) of the file where the experiment should be stored in.
+            filename: Filename (full path) of the file where the experiment should be stored in.
         """
         if self._experiment_definition is None:
             self.logger.info(
@@ -603,22 +643,22 @@ class Session:
         else:
             self._experiment_definition.save(filename)
 
-    def load_compiled_experiment(self, filename):
+    def load_compiled_experiment(self, filename: str):
         """Loads a compiled experiment from a given file into the session.
 
         Args:
-            filename (str):
+            filename:
                 Filename (full path) of the experiment should be loaded
                 into the session.
         """
 
         self._compiled_experiment = CompiledExperiment.load(filename)
 
-    def save_compiled_experiment(self, filename):
+    def save_compiled_experiment(self, filename: str):
         """Saves the compiled experiment from the session into a given file.
 
         Args:
-            filename (str):
+            filename:
                 Filename (full path) of the file where the experiment
                 should be stored in.
         """
@@ -630,20 +670,20 @@ class Session:
         else:
             self._compiled_experiment.save(filename)
 
-    def load_experiment_calibration(self, filename):
+    def load_experiment_calibration(self, filename: str):
         """Loads a experiment calibration from a given file into the session.
 
         Args:
-            filename (str): Filename (full path) of the calibration should be loaded into the session.
+            filename: Filename (full path) of the calibration should be loaded into the session.
         """
         calibration = Calibration.load(filename)
         self._experiment_definition.set_calibration(calibration)
 
-    def save_experiment_calibration(self, filename):
+    def save_experiment_calibration(self, filename: str):
         """Saves the experiment calibration from the session into a given file.
 
         Args:
-            filename (str): Filename (full path) of the file where the calibration should be stored in.
+            filename: Filename (full path) of the file where the calibration should be stored in.
         """
         if self._experiment_definition is None:
             self.logger.info("No experiment set in this session.")
@@ -651,19 +691,19 @@ class Session:
             calibration = self._experiment_definition.get_calibration()
             calibration.save(filename)
 
-    def load_signal_map(self, filename):
+    def load_signal_map(self, filename: str):
         """Loads a signal map from a given file and sets it to the experiment in the session.
 
         Args:
-            filename (str): Filename (full path) of the mapping that should be loaded into the session.
+            filename: Filename (full path) of the mapping that should be loaded into the session.
         """
         self._experiment_definition.load_signal_map(filename)
 
-    def save_signal_map(self, filename):
+    def save_signal_map(self, filename: str):
         """Saves the signal mapping from experiment in the session into a given file.
 
         Args:
-            filename (str): Filename (full path) of the file where the mapping should be stored in.
+            filename: Filename (full path) of the file where the mapping should be stored in.
         """
         if self._experiment_definition is None:
             self.logger.info("No experiment set in this session.")
@@ -671,11 +711,11 @@ class Session:
             signal_map = self._experiment_definition.get_signal_map()
             Serializer.to_json_file(signal_map, filename)
 
-    def save_results(self, filename):
+    def save_results(self, filename: str):
         """Saves the result from the session into a given file.
 
         Args:
-            filename (str): Filename (full path) of the file where the result should be stored in.
+            filename: Filename (full path) of the file where the result should be stored in.
         """
         if self._last_results is None:
             self.logger.info(

@@ -33,8 +33,16 @@ def _compare_nested(a, b):
 
 
 class Pulse:
+    """A pulse for playing during an experiment."""
+
     # TODO this should be checked on the pulse itself.
-    def is_complex(self):
+    def is_complex(self) -> bool:
+        """Return whether this pulse contains complex or real amplitudes.
+
+        Returns:
+            is_complex:
+                True if the amplitudes are complex. False if they are real.
+        """
         return False
 
 

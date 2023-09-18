@@ -69,11 +69,7 @@ class DevicePQSC(DeviceZI):
         return []
 
     def configure_feedback(self, recipe_data: RecipeData) -> list[DaqNodeAction]:
-        # TODO(2K): Code duplication with Controller._wait_execution_to_stop
-        # Make this mandatory in the recipe instead.
         min_wait_time = recipe_data.recipe.max_step_execution_time
-        if min_wait_time is None:
-            min_wait_time = 10.0
         # This is required because PQSC is only receiving the feedback events
         # during the holdoff time, even for a single trigger.
         feedback_actions = [
@@ -218,31 +214,7 @@ class DevicePQSC(DeviceZI):
                 f"/{self.serial}/{port.lower()}/connection/status", 2, timeout=10
             )
 
-        _logger.debug(
-            "%s: Configuring holdoff time: %f s.",
-            self.dev_repr,
-            initialization.config.holdoff,
-        )
-        _logger.debug(
-            "%s: Configuring repetitions: %d.",
-            self.dev_repr,
-            initialization.config.repetitions,
-        )
         nodes_to_configure_triggers = []
-
-        # TODO(2K): 'recipe.initialization.config.holdoff' is hard-coded to 0 in the compiler,
-        # but the PQSC hold-off needs to be set for the feedback, see 'configure_feedback()'.
-        # Resolve this uncertainty by either dropping 'recipe.initialization.config.holdoff',
-        # or setting it to the right value in the compiler, but then it may duplicate
-        # 'recipe.experiment.total_execution_time'.
-
-        # nodes_to_configure_triggers.append(
-        #     DaqNodeSetAction(
-        #         self._daq,
-        #         f"/{self.serial}/execution/holdoff",
-        #         initialization.config.holdoff,
-        #     )
-        # )
 
         nodes_to_configure_triggers.append(
             DaqNodeSetAction(

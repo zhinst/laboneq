@@ -6,9 +6,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from laboneq.core.types.enums import PortMode
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration import MixerCalibration, SignalCalibration
 from laboneq.dsl.calibration.amplifier_pump import AmplifierPump
+from laboneq.dsl.calibration.oscillator import Oscillator
+from laboneq.dsl.calibration.precompensation import Precompensation
 from laboneq.dsl.device.io_units.logical_signal import (
     LogicalSignalRef,
     resolve_logical_signal_ref,
@@ -27,7 +30,85 @@ def experiment_signal_id_generator():
 @classformatter
 @dataclass(init=False, repr=True, order=True)
 class ExperimentSignal:
-    """Class representing a signal within an experiment. Experiment signals are connected to logical signals."""
+    """A signal within an experiment.
+
+    Experiment signals are mapped to logical signals before an
+    experiment is executed.
+
+    The experiment signal calibration maybe specified here either
+    by passing the `calibration` parameter or by specifying the
+    parts of the calibration as they would be passed to
+    [SignalCalibration][laboneq.dsl.calibration.signal_calibration.SignalCalibration].
+    See the documentation of
+    [SignalCalibration][laboneq.dsl.calibration.signal_calibration.SignalCalibration]
+    for details of the individual calibration options.
+
+    Parameters:
+        uid:
+            The unique identifier for the signal. If not specified,
+            one will be automatically generated.
+        map_to:
+            The logical signal to map to this experiment signal to.
+            If not specified, it should be set before the experiment
+            is compiled. If both this and `mapped_logical_signal_path`,
+            the `mapped_logical_signal_path` value is used.
+        calibration:
+            The signal calibration. If provided, the
+            values of the other calibration parameters are ignored.
+            If the signal calibration is not specified via either
+            this parameter or the other parameters,
+            it should be set before the experiment is compiled.
+        oscillator:
+            The oscillator assigned to the signal calibration.
+            Ignored if the `calibration` parameter is set.
+        amplitude:
+            The signal calibration amplitude.
+            Only supported by the SHFQA.
+            The amplitude setting applies to all signals on the same channel.
+            Ignored if the `calibration` parameter is set.
+        port_delay:
+            The signal calibration port delay.
+            Ignored if the `calibration` parameter is set.
+        mixer_calibration:
+            The signal mixer calibration.
+            Ignored if the `calibration` parameter is set.
+        precompensation:
+            The signal calibration precompenstation settings.
+            Ignored if the `calibration` parameter is set.
+            Only supported by HDAWG signals.
+        local_oscillator:
+            The local oscillator assigned to the signal calibration.
+            Only supported by SHFSG, SHFQA and SHFQC signals.
+            Ignored if the `calibration` parameter is set.
+        range:
+            The output or input range setting for the signal calibration.
+            Ignored if the `calibration` parameter is set.
+        port_mode:
+            The SHFSG, SHFQA and SHFQC port mode signal calibration.
+            Ignored if the `calibration` parameter is set.
+        threshold:
+            The sginal calibration state discrimation threshold.
+            Only supported for acquisition signals on the UHFQA, SHFQA
+            and SHFQC.
+            Ignored if the `calibration` parameter is set.
+        mapped_logical_signal_path:
+            The path of the logical signal to map this experiment
+            signal to. If not specified, it should be set before
+            the experiment is compiled. If both this and `map_to`
+            are specified, this value is used.
+
+    Attributes:
+        uid (str):
+            The unique identifier for the signal.
+        calibration (SignalCalibration | None):
+            The signal calibration. Must be set before the experiment
+            is executed if the calibration for this signal is
+            used by the experiment.
+        mapped_logical_signal_path (str | None):
+            The path of the logical signal mapped to this
+            experiment signal. Must be set before the experiment
+            is executed.
+    """
 
     uid: str
     calibration: Optional[SignalCalibration]
@@ -35,20 +116,20 @@ class ExperimentSignal:
 
     def __init__(
         self,
-        uid=None,
-        map_to: LogicalSignalRef = None,
-        calibration=None,
-        oscillator=None,
-        amplitude: float = None,
-        port_delay: float = None,
-        delay_signal: float = None,
-        mixer_calibration=None,
-        precompensation=None,
-        local_oscillator=None,
-        range: float = None,
-        port_mode=None,
-        threshold: float = None,
-        mapped_logical_signal_path=None,
+        uid: str | None = None,
+        map_to: LogicalSignalRef | None = None,
+        calibration: SignalCalibration | None = None,
+        oscillator: Oscillator | None = None,
+        amplitude: float | None = None,
+        port_delay: float | None = None,
+        delay_signal: float | None = None,
+        mixer_calibration: MixerCalibration | None = None,
+        precompensation: Precompensation | None = None,
+        local_oscillator: Oscillator | None = None,
+        range: float | None = None,
+        port_mode: PortMode | None = None,
+        threshold: float | None = None,
+        mapped_logical_signal_path: str | None = None,
     ):
         if uid is None:
             self.uid = experiment_signal_id_generator()
@@ -86,10 +167,22 @@ class ExperimentSignal:
         if mapped_logical_signal_path is not None:
             self.map(mapped_logical_signal_path)
 
-    def is_mapped(self):
+    def is_mapped(self) -> bool:
+        """Return true if the signal is mapped to a logical signal path.
+
+        Returns:
+            is_mapped:
+                True if this experiment signal is mapped to a logical signal.
+        """
         return self.mapped_logical_signal_path is not None
 
     def map(self, to: LogicalSignalRef):
+        """Map this signal to a logical signal.
+
+        Parameters:
+            to:
+                The logical signal to map this experiment signal to.
+        """
         self.mapped_logical_signal_path = resolve_logical_signal_ref(to)
 
     def disconnect(self):
@@ -97,7 +190,10 @@ class ExperimentSignal:
         self.mapped_logical_signal_path = None
 
     @property
-    def mixer_calibration(self):
+    def mixer_calibration(self) -> MixerCalibration | None:
+        """The mixer calibration assigned to this experiment signal or
+        `None` if none is assigned.
+        """
         return self.calibration.mixer_calibration if self.is_calibrated() else None
 
     @mixer_calibration.setter
@@ -108,7 +204,10 @@ class ExperimentSignal:
             self.calibration = SignalCalibration(mixer_calibration=value)
 
     @property
-    def precompensation(self):
+    def precompensation(self) -> Precompensation | None:
+        """The calibration precompensation assigned to this experiment signal
+        or `None` if none is assigned.
+        """
         return self.calibration.precompensation if self.is_calibrated() else None
 
     @precompensation.setter
@@ -119,7 +218,10 @@ class ExperimentSignal:
             self.calibration = SignalCalibration(precompensation=value)
 
     @property
-    def oscillator(self):
+    def oscillator(self) -> Oscillator | None:
+        """The oscillator assigned to this experiment signal or `None` if
+        none is assigned.
+        """
         return self.calibration.oscillator if self.is_calibrated() else None
 
     @oscillator.setter
@@ -130,7 +232,15 @@ class ExperimentSignal:
             self.calibration = SignalCalibration(oscillator=value)
 
     @property
-    def amplitude(self):
+    def amplitude(self) -> float | None:
+        """The amplitude to multiply all waveforms played on this signal by,
+        or `None` to not modify the amplitude.
+
+        Only supported by the SHFQA.
+
+        !!! note
+            The amplitude setting applies to all signals on the same channel.
+        """
         return self.calibration.amplitude if self.is_calibrated() else None
 
     @amplitude.setter
@@ -141,7 +251,10 @@ class ExperimentSignal:
             self.calibration.amplitude = value
 
     @property
-    def port_delay(self):
+    def port_delay(self) -> float | None:
+        """The port delay (in seconds) set on this signal,
+        or `None` if none is set.
+        """
         return self.calibration.port_delay if self.is_calibrated() else None
 
     @port_delay.setter
@@ -153,6 +266,9 @@ class ExperimentSignal:
 
     @property
     def delay_signal(self):
+        """The signal delay (in seconds) set on this signal,
+        or `None` if none is set.
+        """
         return self.calibration.delay_signal if self.is_calibrated() else None
 
     @delay_signal.setter
@@ -163,7 +279,12 @@ class ExperimentSignal:
             self.calibration.delay_signal = value
 
     @property
-    def voltage_offset(self):
+    def voltage_offset(self) -> float | None:
+        """The voltage offset set for this signal or `None` if none
+        is set.
+
+        Only supported by HDAWG lines.
+        """
         return self.calibration.voltage_offset if self.is_calibrated() else None
 
     @voltage_offset.setter
@@ -174,33 +295,10 @@ class ExperimentSignal:
             self.calibration = SignalCalibration(voltage_offset=value)
 
     @property
-    def voltage_offsets(self):
-        return self.calibration.voltage_offsets if self.is_calibrated() else None
-
-    @voltage_offsets.setter
-    def voltage_offsets(self, value):
-        if not self.is_calibrated():
-            self.calibration = SignalCalibration(
-                mixer_calibration=MixerCalibration(voltage_offsets=value)
-            )
-        else:
-            self.calibration.voltage_offsets = value
-
-    @property
-    def correction_matrix(self):
-        return self.calibration.correction_matrix if self.is_calibrated() else None
-
-    @correction_matrix.setter
-    def correction_matrix(self, value):
-        if not self.is_calibrated():
-            self.calibration = SignalCalibration(
-                mixer_calibration=MixerCalibration(correction_matrix=value)
-            )
-        else:
-            self.calibration.correction_matrix = value
-
-    @property
     def local_oscillator(self):
+        """The local oscillator settings assigned to this signal
+        or `None` if none is assigned.
+        """
         return self.calibration.local_oscillator if self.is_calibrated() else None
 
     @local_oscillator.setter
@@ -211,7 +309,10 @@ class ExperimentSignal:
             self.calibration = SignalCalibration(local_oscillator=value)
 
     @property
-    def range(self):
+    def range(self) -> float | None:
+        """The output or input range setting for the signal if set
+        or `None` if not set.
+        """
         return self.calibration.range if self.is_calibrated() else None
 
     @range.setter
@@ -222,7 +323,8 @@ class ExperimentSignal:
             self.calibration = SignalCalibration(range=value)
 
     @property
-    def port_mode(self):
+    def port_mode(self) -> PortMode | None:
+        """The port mode for the signal if set or `None` if not set."""
         return self.calibration.port_mode if self.is_calibrated() else None
 
     @port_mode.setter
@@ -233,7 +335,12 @@ class ExperimentSignal:
             self.calibration = SignalCalibration(port_mode=value)
 
     @property
-    def threshold(self):
+    def threshold(self) -> float | list[float] | None:
+        """The state discrimination threshold if set or `None` if not set.
+
+        Only supported for acquisition signals on the UHFQA, SHFQA and
+        SHFQC.
+        """
         return self.calibration.threshold if self.is_calibrated() else None
 
     @threshold.setter
@@ -245,6 +352,9 @@ class ExperimentSignal:
 
     @property
     def amplifier_pump(self) -> AmplifierPump | None:
+        """The amplifier pump settings assigned to this signal
+        or `None` if none is assigned.
+        """
         return self.calibration.amplifier_pump if self.is_calibrated() else None
 
     @amplifier_pump.setter
@@ -254,8 +364,23 @@ class ExperimentSignal:
         else:
             self.calibration.amplifier_pump = value
 
-    def is_calibrated(self):
+    def is_calibrated(self) -> bool:
+        """True if calibration has been set for this experiment signal.
+        False otherwise.
+
+        Returns:
+            is_calibrated:
+                True if the signal has calibration set. False otherwise.
+        """
         return self.calibration is not None
 
-    def reset_calibration(self, calibration=None):
+    def reset_calibration(self, calibration: SignalCalibration | None = None):
+        """Reset the calibration and apply the specified new calibration
+        if provided.
+
+        Parameters:
+            calibration:
+                The new calibration to apply or `None` if this signal
+                is to be left uncalibrated after the reset.
+        """
         self.calibration = calibration

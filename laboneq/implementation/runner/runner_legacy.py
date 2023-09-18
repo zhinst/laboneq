@@ -28,7 +28,7 @@ class RunnerLegacy(RunnerAPI, RunnerControlAPI):
         _logger.debug(f"Connecting to TargetSetup {setup.uid}")
         run_parameters = ctrl.ControllerRunParameters()
         run_parameters.dry_run = do_emulation
-        run_parameters.ignore_version_mismatch = False
+        run_parameters.ignore_version_mismatch = do_emulation
 
         controller = ctrl.Controller(
             run_parameters=run_parameters,

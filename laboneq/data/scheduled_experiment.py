@@ -67,7 +67,7 @@ class ScheduledExperiment:
     #: Instructions to the controller for running the experiment.
     recipe: Recipe = None
 
-    #: The seqC source code, per device.
+    #: The SeqC source code, per device.
     src: list[dict[str, str]] = None
 
     #: The waveforms that will be uploaded to the devices.

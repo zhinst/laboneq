@@ -101,9 +101,14 @@ def match(
     user_register: int | None = None,
     uid: str = None,
     play_after: str | list[str] | None = None,
+    local: bool | None = None,
 ):
     return MatchSectionContextManager(
-        handle=handle, user_register=user_register, uid=uid, play_after=play_after
+        handle=handle,
+        user_register=user_register,
+        uid=uid,
+        play_after=play_after,
+        local=local,
     )
 
 

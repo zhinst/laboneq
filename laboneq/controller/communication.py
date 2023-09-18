@@ -11,7 +11,7 @@ from enum import Enum
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Dict, List
 
-import zhinst.core as zi
+import zhinst.core
 from zhinst.toolkit import Session as TKSession
 
 from laboneq.controller.devices.zi_emulator import ziDAQServerEmulator
@@ -207,7 +207,9 @@ class DaqWrapper(ZiApiWrapperBase):
         self._vector_counter = 0
         self.node_monitor = None
 
-        ZiApiClass = ziDAQServerEmulator if server_qualifier.dry_run else zi.ziDAQServer
+        ZiApiClass = (
+            ziDAQServerEmulator if server_qualifier.dry_run else zhinst.core.ziDAQServer
+        )
 
         try:
             self._zi_api_object = ZiApiClass(
@@ -231,10 +233,10 @@ class DaqWrapper(ZiApiWrapperBase):
             else:
                 raise LabOneQControllerException(err_msg) from e
 
-        [major, minor] = zi.__version__.split(".")[0:2]
-        zi_python_version = f"{major}.{minor}"
-        if zi_python_version != version_str:
-            err_msg = f"Version of dataserver ({version_str}) and zi python ({zi_python_version}) do not match."
+        [major, minor] = zhinst.core.__version__.split(".")[0:2]
+        zhinst_core_version_str = f"{major}.{minor}"
+        if zhinst_core_version_str != version_str:
+            err_msg = f"Version of LabOne Data Server ({version_str}) and Python API ({zhinst_core_version_str}) do not match."
             if self.server_qualifier.ignore_version_mismatch:
                 _logger.warning("Ignoring that %s", err_msg)
             else:

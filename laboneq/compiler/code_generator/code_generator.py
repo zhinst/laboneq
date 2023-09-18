@@ -463,6 +463,8 @@ class CodeGenerator:
                 for signature_key, sampled_signature in self._sampled_signatures[
                     virtual_signal_id
                 ].items():
+                    if not sampled_signature:
+                        continue
                     sig_string = signature_key.signature_string()
                     if signal_obj.awg.device_type.supports_binary_waves:
                         self._save_wave_bin(
@@ -711,7 +713,7 @@ class CodeGenerator:
                         pulse_defs[id].can_compress
                         for id in ensure_list(event.params["play_wave_id"])
                     ):
-                        _logger.warn(
+                        _logger.warning(
                             "Compression for integration pulses is not supported. %s, for which compression has been requested, will not be compressed.",
                             event.params["play_wave_id"],
                         )
@@ -737,7 +739,7 @@ class CodeGenerator:
                             for pulse in wave_form.pulses
                             if pulse_defs[pulse.pulse].can_compress
                         ]
-                        _logger.warn(
+                        _logger.warning(
                             "Requested to compress pulse(s) %s which are to be played on a QA device, which does not support playHold",
                             ",".join(pulse_names),
                         )

@@ -3,10 +3,10 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
-from laboneq import dsl
 from laboneq._utils import id_generator
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import SectionAlignment
@@ -40,37 +40,78 @@ class Section:
     at the same time). Operations within a section can be aligned in various ways (left, right). Sections can have a offset
     and/or a predefined length, and they can be specified to play after another section.
 
+    Attributes:
+        uid (str | None):
+            Unique identifier for the section. Maybe be omitted if one
+            is not required. Default: `None`.
+        alignment (SectionAlignment):
+            Specifies the time alignment of operations and sections within
+            this section. Left alignment positions operations and sections
+            as early in time as possible, right alignment positions them
+            as late as possible.
+            Default: [SectionAlignment.LEFT][laboneq.core.types.enums.section_alignment.SectionAlignment].
+        execution_type (ExecutionType | None):
+            Whether the section is near-time or real-time.
+            If `None` the section infers its execution type from its
+            parent.
+            Default: `None`.
+        length (float | None):
+            Minimum length of the section in seconds. The scheduled section
+            length will be the greater of this minimum length and the
+            length of the section contents, plus a small extra amount of
+            times so that the section length is a multiple of the section
+            timing grid.
+            If `None`, the section has no minimum length and will be as
+            short as possible.
+            Default: `None`.
+        play_after (str | Section | List[Union[str, Section]] | None):
+            A list of sections that must complete before this section
+            may be played.
+            If `None`, the section is played as soon as allowed by the
+            signal lines required.
+            Default: `None`.
+        children (List[Union[Section, Operation]]):
+            List of children. Each child may be another section or an
+            operation.
+            Default: `[]`.
+        trigger (Dict[str, Dict]):
+            Optional trigger pulses to play during this section.
+            See [Experiment.section][laboneq.dsl.experiment.experiment.Experiment.section].
+            Default: `{}`.
+        on_system_grid (bool):
+            If True, the section boundaries are always rounded to the system grid,
+            even if the contained signals would allow for tighter alignment.
+            Default: `False`.
+
     !!! version-changed "Changed in version 2.0.0"
         Removed `offset` member variable.
     """
 
-    #: Unique identifier of the section.
-    uid: str = field(default=None)
+    # Unique identifier of the section.
+    uid: str | None = field(default=None)
 
-    #: Alignment of operations and subsections within this section.
+    # Alignment of operations and subsections within this section.
     alignment: SectionAlignment = field(default=SectionAlignment.LEFT)
 
     execution_type: Optional[ExecutionType] = field(default=None)
 
-    #: Minimal length of the section in seconds. The scheduled section might be slightly longer, as its length is rounded to the next multiple of the section timing grid.
+    # Minimal length of the section in seconds. The scheduled section might be slightly longer, as its length is rounded to the next multiple of the section timing grid.
     length: Optional[float] = field(default=None)
 
-    #: Play after the section with the given ID.
+    # Play after the section with the given ID.
     play_after: Optional[Union[str, Section, List[Union[str, Section]]]] = field(
         default=None
     )
 
-    #: List of children. Each child may be another section or an operation.
-    children: List[Union[Section, dsl.experiment.operation.Operation]] = field(
-        default_factory=list
-    )
+    # List of children. Each child may be another section or an operation.
+    children: List[Union[Section, Operation]] = field(default_factory=list)
 
-    #: Optional trigger pulses to play during this section.
-    #: See [Experiment.section][laboneq.dsl.experiment.experiment.Experiment.section].
+    # Optional trigger pulses to play during this section.
+    # See [Experiment.section][laboneq.dsl.experiment.experiment.Experiment.section].
     trigger: Dict[str, Dict] = field(default_factory=dict)
 
-    #: Whether to escalate to the system grid even if tighter alignment is possible.
-    #: See [Experiment.section][laboneq.dsl.experiment.experiment.Experiment.section].
+    # Whether to escalate to the system grid even if tighter alignment is possible.
+    # See [Experiment.section][laboneq.dsl.experiment.experiment.Experiment.section].
     on_system_grid: Optional[bool] = field(default=False)
 
     def __post_init__(self):
@@ -80,14 +121,14 @@ class Section:
     def add(self, section: Union[Section, Operation, SetNode]):
         """Add a subsection or operation to the section.
 
-        Args:
+        Arguments:
             section: Item that is added.
         """
         self.children.append(section)
 
     @property
     def sections(self) -> Tuple[Section, ...]:
-        """A list of subsections of this section"""
+        """A list of subsections of this section."""
         return tuple([s for s in self.children if isinstance(s, Section)])
 
     @property
@@ -101,7 +142,7 @@ class Section:
     def set_node(self, path: str, value: Any):
         """Set the value of an instrument node.
 
-        Args:
+        Arguments:
             path: Path to the node whose value should be set.
             value: Value that should be set.
         """
@@ -109,10 +150,10 @@ class Section:
 
     def play(
         self,
-        signal,
-        pulse,
-        amplitude=None,
-        phase=None,
+        signal: str,
+        pulse: Pulse,
+        amplitude: Union[float, complex, Parameter] = None,
+        phase: float = None,
         increment_oscillator_phase=None,
         set_oscillator_phase=None,
         length=None,
@@ -122,7 +163,7 @@ class Section:
     ):
         """Play a pulse on a signal.
 
-        Args:
+        Arguments:
             signal: Signal the pulse should be played on.
             pulse: Pulse that should be played on the signal.
             amplitude: Amplitude of the pulse that should be played.
@@ -146,13 +187,14 @@ class Section:
             )
         )
 
-    def reserve(self, signal):
+    def reserve(self, signal: str):
         """Operation to reserve a signal for the active section.
+
         Reserving an experiment signal in a section means that if there is no
-        operation defined on that signal, it is not available for other sections
+        osperation defined on that signal, it is not available for other sections
         as long as the active section is scoped.
 
-        Args:
+        Arguments:
             signal: Signal that should be reserved.
         """
         self.add(Reserve(signal))
@@ -167,7 +209,7 @@ class Section:
     ):
         """Acquisition of results of a signal.
 
-        Args:
+        Arguments:
             signal: Unique identifier of the signal where the result should be acquired.
             handle: Unique identifier of the handle that will be used to access the acquired result.
             kernel: Pulse base used for the acquisition. In case of multistate discrimination, a list of kernels.
@@ -210,8 +252,7 @@ class Section:
         For CW spectroscopy, set only `integration_length` and do not specify the measure signal.
         For all other measurements, set either length or pulse for both the measure pulse and integration kernel.
 
-        Args:
-
+        Arguments:
             acquire_signal: A string that specifies the signal for the data acquisition.
             handle: A string that specifies the handle of the acquired results.
             integration_kernel: An optional Pulse object that specifies the kernel for integration. In case of multistate discrimination, a list of kernels.
@@ -276,7 +317,7 @@ class Section:
     ):
         """Adds a delay on the signal with a specified time.
 
-        Args:
+        Arguments:
             signal: Unique identifier of the signal where the delay should be applied.
             time: Duration of the delay.
             precompensation_clear: Clear the precompensation filter during the delay.
@@ -288,7 +329,7 @@ class Section:
     def call(self, func_name, **kwargs):
         """Function call.
 
-        Args:
+        Arguments:
             func_name (Union[str, Callable]): Function that should be called.
             kwargs (dict): Arguments of the function call.
         """
@@ -298,33 +339,100 @@ class Section:
 @classformatter
 @dataclass(init=True, repr=True, order=True)
 class AcquireLoopNt(Section):
-    """Near time acquire loop."""
+    """Near time acquire loop.
 
-    #: Averaging method. One of sequential, cyclic and single_shot.
+    !!! version-changed "Deprecated in 2.14"
+        Use `.sweep` outside of an `acquire_loop_rt` instead.
+        For example:
+
+        ``` py
+        param = SweepParameter(values=[1, 2, 3])
+        with exp.sweep(param):  # <-- outer near-time sweep
+            with exp.acquire_loop_rt(count=2):  # <-- inner real-time sweep
+                ...
+        ```
+
+    Attributes:
+        averaging_mode (AveragingMode):
+            Averaging method. One of sequential, cyclic or single shot.
+            Default: [AveragingMode.CYCLIC][laboneq.core.types.enums.averaging_mode.AveragingMode].
+        count (int):
+            Number of loops to perform.
+
+    [AcquireLoopNt][laboneq.dsl.experiment.section.AcquireLoopNt] inherits
+    all the attributes of
+    [Section][laboneq.dsl.experiment.section.Section].
+
+    The execution type of [AcquireLoopNt][laboneq.dsl.experiment.section.AcquireLoopNt]
+    sections is always
+    [ExecutionType.NEAR_TIME][laboneq.core.types.enums.execution_type.ExecutionType]
+    and should not be altered.
+    """
+
+    # Averaging method. One of sequential, cyclic and single_shot.
     averaging_mode: AveragingMode = field(default=AveragingMode.CYCLIC)
-    #: Number of loops.
+    # Number of loops.
     count: int = field(default=None)
     execution_type: ExecutionType = field(default=ExecutionType.NEAR_TIME)
+
+    def __post_init__(self):
+        warnings.warn(
+            "AcquireLoopNt and acquire_loop_nt are deprecated and may be"
+            " removed in a future version of LabOne Q. Use a sweep outside"
+            " of the acquire_loop_rt instead.",
+            FutureWarning,
+        )
+        super().__post_init__()
 
 
 @classformatter
 @dataclass(init=True, repr=True, order=True)
 class AcquireLoopRt(Section):
-    """Real time acquire loop."""
+    """Real time acquire loop.
 
-    #: Type of the acquisition. One of integration trigger, spectroscopy, discrimination, demodulation and RAW. The default acquisition type is INTEGRATION.
+    Attributes:
+        acquisition_type (AcquisitionType):
+            Type of the acquisition. One of integration trigger, spectroscopy,
+            discrimination, demodulation and RAW.
+            Default: [AcquisitionType.INTEGRATION][laboneq.core.types.enums.AcquisitionType.INTEGRATION].
+        averaging_mode (AveragingMode):
+            Averaging method. One of sequential, cyclic or single shot.
+            Default: [AveragingMode.CYCLIC][laboneq.core.types.enums.averaging_mode.AveragingMode].
+        count (int):
+            Number of loops to perform.
+        repetition_mode (RepetitionMode):
+            Repetition method. One of fastest, constant and auto.
+            Default: [RepetitionMode.FASTEST][laboneq.core.types.enums.repetition_mode.RepetitionMode]
+        repetition_time (float | None):
+            The repetition time, when `repetition_mode` is
+            [RepetitionMode.CONSTANT][laboneq.core.types.enums.repetition_mode.RepetitionMode].
+        reset_oscillator_phase (bool):
+            When true, reset all oscillators at the start of every step.
+            Default: `False`.
+
+    [AcquireLoopRt][laboneq.dsl.experiment.section.AcquireLoopRt] inherits
+    all the attributes of
+    [Section][laboneq.dsl.experiment.section.Section].
+
+    The execution type of [AcquireLoopRt][laboneq.dsl.experiment.section.AcquireLoopNt]
+    sections is always
+    [ExecutionType.REAL_TIME][laboneq.core.types.enums.execution_type.ExecutionType]
+    and should not be altered.
+    """
+
+    # Type of the acquisition. One of integration trigger, spectroscopy, discrimination, demodulation and RAW. The default acquisition type is INTEGRATION.
     acquisition_type: AcquisitionType = field(default=AcquisitionType.INTEGRATION)
-    #: Averaging method. One of sequential, cyclic and single_shot.
+    # Averaging method. One of sequential, cyclic and single_shot.
     averaging_mode: AveragingMode = field(default=AveragingMode.CYCLIC)
-    #: Number of loops.
+    # Number of loops.
     count: int = field(default=None)
     execution_type: ExecutionType = field(default=ExecutionType.REAL_TIME)
-    #: Repetition method. One of fastest, constant and auto.
+    # Repetition method. One of fastest, constant and auto.
     repetition_mode: RepetitionMode = field(default=RepetitionMode.FASTEST)
-    #: The repetition time, when `repetition_mode` is
-    #: [RepetitionMode.CONSTANT][laboneq.core.types.enums.repetition_mode.RepetitionMode.CONSTANT].
+    # The repetition time, when `repetition_mode` is
+    # [RepetitionMode.CONSTANT][laboneq.core.types.enums.repetition_mode.RepetitionMode.CONSTANT].
     repetition_time: float = field(default=None)
-    #: When True, reset all oscillators at the start of every step.
+    # When True, reset all oscillators at the start of every step.
     reset_oscillator_phase: bool = field(default=False)
 
     def __post_init__(self):
@@ -339,13 +447,31 @@ class AcquireLoopRt(Section):
 @classformatter
 @dataclass(init=True, repr=True, order=True)
 class Sweep(Section):
-    """Sweep loops. Sweeps are used to sample through a range of parameter values."""
+    """Sweep loops.
 
-    #: Parameters that should be swept.
+    Sweeps are used to sample through a range of parameter values.
+
+    Attributes:
+        parameters (List[Parameter]):
+            Parameters that should be swept.
+            Default: `[]`.
+        reset_oscillator_phase (bool):
+            When True, reset all oscillators at the start of every step.
+            Default: `False`.
+        chunk_count (int):
+            Split the sweep into N chunks.
+            Default: `1`.
+
+    [Sweep][laboneq.dsl.experiment.section.Sweep] inherits
+    all the attributes of
+    [Section][laboneq.dsl.experiment.section.Section].
+    """
+
+    # Parameters that should be swept.
     parameters: List[Parameter] = field(default_factory=list)
-    #: When True, reset all oscillators at the start of every step.
+    # When True, reset all oscillators at the start of every step.
     reset_oscillator_phase: bool = field(default=False)
-    #: When non-zero, split the sweep into N chunks.
+    # When non-zero, split the sweep into N chunks.
     chunk_count: int = field(default=1)
 
 
@@ -358,21 +484,43 @@ class Sweep(Section):
 @classformatter
 @dataclass(init=True, repr=True, order=True)
 class Match(Section):
-    """Execute one of the child branches depending on feedback result."""
+    """Execute one of the child branches depending on feedback result.
 
-    #: Handle from which to obtain results
+    Attributes:
+        handle (str | None):
+            Handle from which to obtain results.
+            See [Section.measure][laboneq.dsl.experiment.section.Section.measure]
+            and [Section.acquire][laboneq.dsl.experiment.section.Section.acquire]
+            for where handles are specified.
+        user_register (int | None):
+            User register on which to match.
+        local (bool):
+            Whether to fetch the codeword via the PQSC (`False`),
+            SHFQC-internal bus (`True`) or automatic (`None`).
+            Default: `None`.
+
+    [Match][laboneq.dsl.experiment.section.Match] inherits
+    all the attributes of
+    [Section][laboneq.dsl.experiment.section.Section].
+
+    Only subsections of type [Case][laboneq.dsl.experiment.section.Case]
+    may be added to a [Match][laboneq.dsl.experiment.section.Match]
+    section.
+    """
+
+    # Handle from which to obtain results
     handle: Optional[str] = None
 
-    #: User register on which to match
+    # User register on which to match
     user_register: Optional[int] = None
 
-    #: Whether to fetch the codeword via the PQSC (False), SHFQC-internal bus (True) or automatic (None)
+    # Whether to fetch the codeword via the PQSC (False), SHFQC-internal bus (True) or automatic (None)
     local: bool | None = None
 
     def add(self, case: Case):
         """Add a branch to which to switch.
 
-        Args:
+        Arguments:
             case: Branch that is added.
         """
         if not isinstance(case, Case):
@@ -395,11 +543,35 @@ class Match(Section):
 @classformatter
 @dataclass(init=True, repr=True, order=True)
 class Case(Section):
-    """Branch in a match/case statement"""
+    """Branch in a match section.
+
+    Attributes:
+        state (int):
+            Which state value this case is for.
+            Default: `0`.
+
+    [Case][laboneq.dsl.experiment.section.Case] inherits
+    all the attributes of
+    [Section][laboneq.dsl.experiment.section.Section].
+
+    A [Case][laboneq.dsl.experiment.section.Case]
+    may only be added to a [Match][laboneq.dsl.experiment.section.Match]
+    section and not to any other kind of section.
+
+    A [Case][laboneq.dsl.experiment.section.Case] may only contain
+    `PlayPulse` and `Delay` operations and not other kinds of operations
+    or sections.
+    """
 
     state: int = 0
 
-    def add(self, obj):
+    def add(self, obj: Operation):
+        """Add an operation the Case section.
+
+        Arguments:
+            obj:
+                The `PlayPulse` or `Delay` operation to be added.
+        """
         if not isinstance(obj, (PlayPulse, Delay)):
             raise LabOneQException(
                 f"Trying to add object to section {self.uid}. Only ``play`` and ``delay`` are allowed."
@@ -407,6 +579,23 @@ class Case(Section):
         super().add(obj)
 
     @classmethod
-    def from_section(cls, section, state):
-        """Down-cast from Section."""
+    def from_section(cls, section: Section, state: int) -> Case:
+        """Convert a section to a case section.
+
+        Arguments:
+            section:
+                The section to convert.
+            state:
+                The state the generated case is for.
+
+        Returns:
+            case:
+                A case section for the specified state with the same
+                contents as the original section.
+
+        !!! note
+            This method may only be used with sections that are
+            of the base [Section][laboneq.dsl.experiment.section.Section].
+            type. Sub-classes may not be used.
+        """
         return cls(**section.__dict__, state=state)  # type: ignore

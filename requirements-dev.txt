@@ -13,6 +13,8 @@ pytest-benchmark[aspect,elasticsearch] @ git+https://github.com/ckutlu/pytest-be
 jsonschema
 requests
 nbconvert
+nbmake
+nbqa
 RsInstrument
 flaky==3.7.0
 pyvisa-py==0.5.3

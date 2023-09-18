@@ -480,12 +480,7 @@ class Controller:
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
     ):
         min_wait_time = self._recipe_data.recipe.max_step_execution_time
-        if min_wait_time is None:
-            _logger.warning(
-                "No estimation available for the execution time, assuming 10 sec."
-            )
-            min_wait_time = 10.0
-        elif min_wait_time > 5:  # Only inform about RT executions taking longer than 5s
+        if min_wait_time > 5:  # Only inform about RT executions taking longer than 5s
             _logger.info("Estimated RT execution time: %.2f s.", min_wait_time)
         guarded_wait_time = round(
             min_wait_time * 1.1 + 1
@@ -641,6 +636,8 @@ class Controller:
                 device.check_errors()
         finally:
             self._devices.stop_monitor()
+            # Ensure that the experiment run time is not included in the idle timeout for the connection check.
+            self._last_connect_check_ts = time.time()
 
         self._devices.on_experiment_end()
 
@@ -782,12 +779,6 @@ class Controller:
         rt_info = next(iter(self._recipe_data.rt_execution_infos.values()))
         for handle, shape_info in self._recipe_data.result_shapes.items():
             if rt_info.acquisition_type == AcquisitionType.RAW:
-                if len(self._recipe_data.result_shapes) > 1:
-                    raise LabOneQControllerException(
-                        "Multiple raw acquire events with handles "
-                        f"{list(self._recipe_data.result_shapes.keys())}. "
-                        "Only single raw acquire per experiment allowed."
-                    )
                 signal_id = rt_info.signal_by_handle(handle)
                 awg_config = self._recipe_data.awg_config_by_acquire_signal(signal_id)
                 # Use default length 4096, in case AWG config is not available
@@ -801,28 +792,30 @@ class Controller:
                 )
                 empty_res.data[:] = np.nan
                 self._results.acquired_results[handle] = empty_res
-                return  # Only one result supported in RAW mode
-            axis_name = deepcopy(shape_info.base_axis_name)
-            axis = deepcopy(shape_info.base_axis)
-            shape = deepcopy(shape_info.base_shape)
-            if shape_info.additional_axis > 1:
-                axis_name.append(handle)
-                axis.append(
-                    np.linspace(
-                        0, shape_info.additional_axis - 1, shape_info.additional_axis
-                    )
-                )
-                shape.append(shape_info.additional_axis)
-            empty_res = make_acquired_result(
-                data=np.empty(shape=tuple(shape), dtype=np.complex128),
-                axis_name=axis_name,
-                axis=axis,
-            )
-            if len(shape) == 0:
-                empty_res.data = np.nan
             else:
-                empty_res.data[:] = np.nan
-            self._results.acquired_results[handle] = empty_res
+                axis_name = deepcopy(shape_info.base_axis_name)
+                axis = deepcopy(shape_info.base_axis)
+                shape = deepcopy(shape_info.base_shape)
+                if shape_info.additional_axis > 1:
+                    axis_name.append(handle)
+                    axis.append(
+                        np.linspace(
+                            0,
+                            shape_info.additional_axis - 1,
+                            shape_info.additional_axis,
+                        )
+                    )
+                    shape.append(shape_info.additional_axis)
+                empty_res = make_acquired_result(
+                    data=np.empty(shape=tuple(shape), dtype=np.complex128),
+                    axis_name=axis_name,
+                    axis=axis,
+                )
+                if len(shape) == 0:
+                    empty_res.data = np.nan
+                else:
+                    empty_res.data[:] = np.nan
+                self._results.acquired_results[handle] = empty_res
 
     def _read_one_step_results(self, nt_step: NtStepKey, rt_section_uid: str):
         if rt_section_uid is None:
@@ -839,6 +832,8 @@ class Controller:
                     mapping = rt_execution_info.signal_result_map.get(signal, [])
                     unique_handles = set(mapping)
                     for handle in unique_handles:
+                        if handle is None:
+                            continue  # Ignore unused acquire signal if any
                         result = self._results.acquired_results[handle]
                         for raw_result_idx, raw_result in enumerate(raw_results):
                             result.data[raw_result_idx] = raw_result
