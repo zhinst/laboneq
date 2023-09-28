@@ -17,6 +17,12 @@ import pybase64 as base64
 from numpy.lib.format import read_array, write_array
 from sortedcontainers import SortedDict
 
+from laboneq.core.serialization.externals import (
+    XarrayDataArrayDeserializer,
+    XarrayDatasetDeserializer,
+    serialize_maybe_xarray,
+)
+
 _logger = logging.getLogger(__name__)
 
 ID_KEY = "__id"
@@ -213,6 +219,10 @@ def class_argnames(cls):
 def construct_object(content, mapped_class):
     if len(content.keys()) == 1 and _issubclass(mapped_class, Enum):
         return mapped_class(list(content.values())[0])
+    if _issubclass(mapped_class, XarrayDataArrayDeserializer):
+        return mapped_class(content)
+    if _issubclass(mapped_class, XarrayDatasetDeserializer):
+        return mapped_class(content)
     arg_names = class_argnames(mapped_class)
     has_kwargs = "kwargs" in arg_names
     filtered_args = {}
@@ -330,6 +340,19 @@ def serialize_to_dict_with_entities(
             sub_dict["__contents"] = sorted(sub_dict["__contents"])
         return sub_dict
 
+    # Optional dependency `xarray` object serialization
+    if (
+        xarr := serialize_maybe_xarray(
+            obj=to_serialize,
+            serializer_function=serialize_to_dict_with_entities,
+            entity_classes=entity_classes,
+            entities_collector=entities_collector,
+            emit_enum_types=emit_enum_types,
+            omit_none_fields=omit_none_fields,
+        )
+    ) is not None:
+        return xarr
+
     mapping = {}
     sub_dict = {}
     dir_list = _dir(to_serialize.__class__)
@@ -337,6 +360,7 @@ def serialize_to_dict_with_entities(
 
     if _issubclass(cls, Mapping):
         mapping = to_serialize
+
     elif hasattr(to_serialize, "__dict__") or hasattr(to_serialize, "__slots__"):
         is_object = True
         item_is_entity, item_entity_class = is_entity_class(
@@ -598,6 +622,8 @@ def deserialize_from_dict_with_ref_recursor(
 
 def deserialize_from_dict_with_ref(data, class_mapping, entity_classes, entity_map):
     class_mapping[NumpyArrayRepr.__name__] = NumpyArrayRepr
+    class_mapping[XarrayDataArrayDeserializer._type_] = XarrayDataArrayDeserializer
+    class_mapping[XarrayDatasetDeserializer._type_] = XarrayDatasetDeserializer
     entity_pool = {}
 
     for _, entity_list in data.get("entities", {}).items():

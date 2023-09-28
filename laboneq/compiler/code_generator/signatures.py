@@ -19,20 +19,32 @@ from laboneq.core.utilities.string_sanitize import string_sanitize
 class PulseSignature:
     """Signature of a single pulse, part of a sampled waveform"""
 
-    start: int  #: the offset of the pulse in the waveform
-    pulse: str  #: the pulse function
-    length: int  #: the length of the pulse in samples
-    amplitude: Optional[float]  #: the amplitude of the pulse
-    phase: Optional[float]  #: the phase of the pulse
-    #: the oscillator phase of the pulse (for SW oscillators)
+    # the offset of the pulse in the waveform
+    start: int
+    # the pulse function
+    pulse: str
+    # the length of the pulse in samples
+    length: int
+    # the amplitude of the pulse
+    amplitude: Optional[float]
+    # the phase of the pulse
+    phase: Optional[float]
+    # the oscillator phase of the pulse (for SW oscillators)
     oscillator_phase: Optional[float]
-    #: the oscillator frequency of the pulse (for SW oscillators)
+    # the oscillator frequency of the pulse (for SW oscillators)
     oscillator_frequency: Optional[float]
-    baseband_phase: Optional[float]  #: phase offsets from `set_oscillator_phase`
-    channel: Optional[int]  #: the channel of the pulse (for HDAWG)
-    sub_channel: Optional[int]  #: the sub-channel of the pulse (for SHFQA)
-    pulse_parameters: FrozenSet[Tuple[str, str]]  #: additional user pulse parameters
-    markers: Any  #: markers played during this pulse
+    # phase offsets from `set_oscillator_phase`
+    baseband_phase: Optional[float]
+    # the channel of the pulse (for HDAWG)
+    channel: Optional[int]
+    # the sub-channel of the pulse (for SHFQA)
+    sub_channel: Optional[int]
+    # additional user pulse parameters
+    pulse_parameters: FrozenSet[Tuple[str, str]]
+    # markers played during this pulse
+    markers: Any
+    # the preferred amplitude register for this pulse, will be aggregated into PlaybackSignature
+    preferred_amplitude_register: Optional[int]
 
 
 @dataclass(frozen=True)
@@ -86,12 +98,12 @@ class WaveformSignature:
                 retval += pulse_entry.pulse or ""
                 for key, separator, scale, fill in (
                     ("start", "_", 1, 2),
-                    ("amplitude", "_a", 1e9, 10),
+                    ("amplitude", "_a", 1e3, 4),
                     ("length", "_l", 1, 3),
-                    ("baseband_phase", "_bb", 1, 7),
+                    ("baseband_phase", "_bb", 1e3 / 2 / math.pi, 4),
                     ("channel", "_c", 1, 0),
                     ("sub_channel", "_sc", 1, 0),
-                    ("phase", "_ap", 1, 0),
+                    ("phase", "_ap", 1e3 / 2 / math.pi, 4),
                 ):
                     value = getattr(pulse_entry, key)
                     if value is not None:
@@ -165,6 +177,8 @@ class PlaybackSignature:
     set_phase: Optional[float] = None
     increment_phase: Optional[float] = None
     set_amplitude: Optional[float] = None
+    increment_amplitude: Optional[float] = None
+    amplitude_register: int = 0
     clear_precompensation: bool = False
 
     def quantize_phase(self, phase_resolution_range: int):
@@ -172,33 +186,56 @@ class PlaybackSignature:
 
         For the phase that is baked into the samples, we can quantize to the precision
         given by `phase_resolution_range`. For the phase specified by registers on the
-        device (e.g. command table) we quantize to a fixed precision of 32 bits. This
+        device (e.g. command table) we quantize to a fixed precision of 24 bits. This
         serves to avoid rounding errors leading to multiple command table entries."""
 
-        PHASE_RESOLUTION_CT = 1 << 32
+        PHASE_RESOLUTION_CT = (1 << 24) / (2 * math.pi)
+        phase_resolution_range /= 2 * math.pi
 
         for pulse in self.waveform.pulses:
             if pulse.phase is not None:
                 pulse.phase = normalize_phase(
-                    round(pulse.phase / 2 / math.pi * phase_resolution_range)
-                    / phase_resolution_range
-                    * 2
-                    * math.pi
+                    round(pulse.phase * phase_resolution_range) / phase_resolution_range
                 )
         if self.set_phase is not None:
             self.set_phase = normalize_phase(
-                round(self.set_phase / 2 / math.pi * PHASE_RESOLUTION_CT)
-                / PHASE_RESOLUTION_CT
-                * 2
-                * math.pi
+                round(self.set_phase * PHASE_RESOLUTION_CT) / PHASE_RESOLUTION_CT
             )
         if self.increment_phase is not None:
             self.increment_phase = normalize_phase(
-                round(self.increment_phase / 2 / math.pi * PHASE_RESOLUTION_CT)
-                / PHASE_RESOLUTION_CT
-                * 2
-                * math.pi
+                round(self.increment_phase * PHASE_RESOLUTION_CT) / PHASE_RESOLUTION_CT
             )
+
+    def quantize_amplitude(self, amplitude_resolution_range: int):
+        """Quantize the amplitude of all pulses in the waveform.
+
+        For the amplitude that is baked into the samples, we can quantize to the precision
+        given by `amplitude_resolution_range`. For the amplitude specified by registers on the
+        device (e.g. command table) we quantize to a fixed precision of 18 bits. This
+        serves to avoid rounding errors leading to multiple command table entries."""
+
+        AMPLITUDE_RESOLUTION_CT = 1 << 18
+
+        if self.waveform is not None:
+            for pulse in self.waveform.pulses:
+                if pulse.amplitude is not None:
+                    pulse.amplitude = (
+                        round(pulse.amplitude * amplitude_resolution_range)
+                        / amplitude_resolution_range
+                    )
+        if self.set_amplitude is not None:
+            self.set_amplitude = (
+                round(self.set_amplitude * AMPLITUDE_RESOLUTION_CT)
+                / AMPLITUDE_RESOLUTION_CT
+            )
+        if self.increment_amplitude is not None:
+            self.increment_amplitude = (
+                round(self.increment_amplitude * AMPLITUDE_RESOLUTION_CT)
+                / AMPLITUDE_RESOLUTION_CT
+            )
+
+            if self.increment_amplitude == 0 and not self.amplitude_register:
+                self.increment_amplitude = None
 
 
 def reduce_signature_phase(
@@ -239,26 +276,126 @@ def reduce_signature_phase(
     return signature
 
 
-def reduce_signature_amplitude(signature: PlaybackSignature) -> PlaybackSignature:
-    """Reduces the amplitude of the signature.
+def reduce_signature_amplitude_register(
+    signature: PlaybackSignature,
+) -> PlaybackSignature:
+    """Determine the amplitude register
 
-    Modifies the passed in `signature` object in-place.
+    Modifies the passed `signature` object in-place.
+
+    Aggregate the preferred amplitude register of the individual pulses into the base
+    `PlaybackSignature.amplitude_register`.
+    Any waveforms that include two or more pulses that prefer different registers, the
+    result will also fall-back to register 0.
+    """
+    if signature.waveform is None:
+        return signature
+
+    requested_registers = set(
+        p.preferred_amplitude_register for p in signature.waveform.pulses
+    )
+    register = 0
+    try:
+        [register] = requested_registers
+    except ValueError:
+        # too many registers -> fall-back to R0
+        pass
+
+    # set the base register, and clear the per-pulse register
+    for pulse in signature.waveform.pulses:
+        pulse.preferred_amplitude_register = None
+    signature.amplitude_register = register
+
+    return signature
+
+
+def _split_complex_amplitude(signature):
+    if signature.waveform is None:
+        return signature
+    for pulse in signature.waveform.pulses:
+        if isinstance(pulse.amplitude, complex):
+            theta = float(np.angle(pulse.amplitude))
+            pulse.phase = normalize_phase((pulse.phase or 0.0) - theta)
+            pulse.amplitude = abs(pulse.amplitude)
+
+    return signature
+
+
+def _aggregate_ct_amplitude(signature) -> PlaybackSignature:
+    if signature.set_amplitude is None:
+        signature.set_amplitude = 1.0
+
+    if signature.waveform is not None and len(signature.waveform.pulses) > 0:
+        if any(pulse.amplitude is None for pulse in signature.waveform.pulses):
+            return signature
+
+        ct_amplitude = max(abs(pulse.amplitude) for pulse in signature.waveform.pulses)
+        ct_amplitude = min(ct_amplitude, +1.0)
+        if ct_amplitude != 0:
+            for pulse in signature.waveform.pulses:
+                pulse.amplitude /= ct_amplitude
+
+        signature.set_amplitude = ct_amplitude
+    return signature
+
+
+def _make_ct_amplitude_incremental(
+    signature, previous_amplitude_registers: list[float] | None
+) -> PlaybackSignature:
+    if signature.state is not None:
+        # For branches, we _must_ emit the same signature every time, and cannot depend
+        # what came before. So using the increment is not valid.
+        return signature
+    if signature.amplitude_register > 0:
+        previous_amplitude = None
+        if previous_amplitude_registers is not None:
+            previous_amplitude = previous_amplitude_registers[
+                signature.amplitude_register
+            ]
+        if previous_amplitude is not None:
+            signature.increment_amplitude = signature.set_amplitude - previous_amplitude
+            signature.set_amplitude = None
+
+    return signature
+
+
+def reduce_signature_amplitude(
+    signature: PlaybackSignature,
+    use_command_table: bool = True,
+    previous_amplitude_registers: list[float] | None = None,
+) -> PlaybackSignature:
+    """Reduce (simplify) the amplitude of the signature.
+
+    Modifies the passed `signature` object in-place.
+
+    Split complex amplitudes into a real amplitude and a phase.
 
     Absorb the pulse amplitude into the command table. Whenever possible, the
     waveforms will be sampled at unit amplitude, making waveform reuse more likely.
+
+    If the current value of the amplitude register is known, the new amplitude is
+    expressed as an _increment_ of the old value. This way, amplitude sweeps can be
+    modelled with very few command table entries.
+
+    Args:
+        signature: The signature to mutate
+        use_command_table: Whether to lump the waveform's amplitude into the command table
+        previous_amplitude_registers: The current values of the amplitude registers
+          These values are not mutated. To express an unknown amplitude register, pass
+          `None` in the relevant element. If the entire register file is `None`, all the
+          values are assumed unknown.
     """
-    if len(signature.waveform.pulses) == 0:
-        return signature
-    signature.set_amplitude = 1.0
-    if any(pulse.amplitude is None for pulse in signature.waveform.pulses):
-        return signature
+    signature = _split_complex_amplitude(signature)
 
-    ct_amplitude = max(abs(pulse.amplitude) for pulse in signature.waveform.pulses)
-    ct_amplitude = min(ct_amplitude, +1.0)
-    if ct_amplitude != 0:
-        for pulse in signature.waveform.pulses:
-            pulse.amplitude /= ct_amplitude
+    if use_command_table:
+        signature = _aggregate_ct_amplitude(signature)
 
-    signature.set_amplitude = ct_amplitude
+        # Next, we attempt to make the amplitude relative to the previous value.
+        # The idea is that if there is a linear sweep, the increment is constant
+        # (especially if the register is reserved for a sweep parameter). The same command
+        # table entry can then be reused for every step of the sweep.
+        signature = _make_ct_amplitude_incremental(
+            signature, previous_amplitude_registers
+        )
 
     return signature

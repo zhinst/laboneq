@@ -40,12 +40,18 @@ class Oscillator:
             oscillator on the instrument will be used to modulate the output signal,
             while the choice SOFTWARE will lead to waveform being modulated in software
             before upload to the instruments.
-            The default, `ModulationType.AUTO`, falls back to `ModulationType.Software`.
+            The default, `ModulationType.AUTO`, resolves to `HARDWARE` in most situations,
+            except for QA instruments in integration mode, where it resolves to
+            `SOFTWARE`.
         carrier_type (CarrierType):
             Deprecated. The carrier type is no longer used. Default: `CarrierType.RF`.
 
             !!! version-changed "Deprecated in 2.7"
                 The `carrier_type` has no effect.
+
+            !!! version-changed "Changed in 2.16"
+                `ModulationType.AUTO` now is more sensibly resolved. Previously it would
+                 always fall back to `SOFTWARE`.
     """
 
     uid: str = field(default_factory=oscillator_uid_generator)

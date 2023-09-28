@@ -46,3 +46,6 @@ click==8.0.4
 toml
 build
 python-gitlab
+
+# Package optional dependencies
+-r requirements-optional.txt

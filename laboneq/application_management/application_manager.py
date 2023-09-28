@@ -4,7 +4,7 @@
 import logging
 from dataclasses import dataclass
 
-from lagom import Container, Singleton
+from lagom import ExplicitContainer, Singleton
 
 from laboneq.implementation.compilation_service.compilation_service_legacy import (
     CompilationServiceLegacy,
@@ -48,19 +48,31 @@ class ApplicationManager:
         if self._experimenter_api is not None:
             _logger.warning("ApplicationManager already started.")
             return
-        container = Container(log_undefined_deps=True)
-        container[LabOneQSettings] = LaboneQDefaultSettings
-        container[RunnerControlAPI] = Singleton(RunnerLegacy)
+        container = ExplicitContainer(log_undefined_deps=True)
+        container[LabOneQSettings] = lambda: LaboneQDefaultSettings()
+        container[RunnerControlAPI] = Singleton(lambda: RunnerLegacy())
         # RunnerControlAPI and the RunnerAPI are currently implemented by the same object:
-        container[RunnerAPI] = container[RunnerControlAPI]
-        container[CompilationServiceAPI] = CompilationServiceLegacy
-        container[PayloadBuilderAPI] = PayloadBuilder
-        container[ExperimentAPI] = ExperimentWorkflow
+        container[RunnerAPI] = lambda c: c[RunnerControlAPI]
+        container[CompilationServiceAPI] = Singleton(lambda: CompilationServiceLegacy())
+        container[PayloadBuilderAPI] = Singleton(
+            lambda c: PayloadBuilder(compilation_service=c[CompilationServiceAPI])
+        )
+        container[ExperimentAPI] = Singleton(
+            lambda c: ExperimentWorkflow(
+                runner=c[RunnerAPI],
+                payload_builder=c[PayloadBuilderAPI],
+                runner_control=c[RunnerControlAPI],
+                settings=c[LabOneQSettings],
+            )
+        )
         self._experimenter_api = container[ExperimentAPI]
         self._payload_builder = container[PayloadBuilderAPI]
 
     def laboneq(self) -> ExperimentAPI:
         return self._experimenter_api
+
+    def payload_builder(self) -> PayloadBuilder:
+        return self._payload_builder
 
     @staticmethod
     def instance() -> "ApplicationManager":

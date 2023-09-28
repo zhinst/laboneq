@@ -148,7 +148,7 @@ def calculate_intervals(
     cut_points: List[int],
     granularity: int = 16,
     force_command_table_intervals: Iterable[MutableInterval] = {},
-) -> IntervalTree:
+) -> list[Interval]:
     """
     Compute intervals (corresponding to eventual playWave statements in the code) from
     pulses. Merge pulses into waveforms.
@@ -284,4 +284,4 @@ def calculate_intervals(
 
     assert are_cut_points_valid(retval, cut_points)
 
-    return retval
+    return sorted(retval.items())

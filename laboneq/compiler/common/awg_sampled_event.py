@@ -27,6 +27,7 @@ class AWGEventType(Enum):
     MATCH = auto()
     PLAY_WAVE = auto()
     PLAY_HOLD = auto()
+    INIT_AMPLITUDE_REGISTER = auto()
 
 
 @dataclass

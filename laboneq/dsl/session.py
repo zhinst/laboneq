@@ -12,7 +12,7 @@ from numpy import typing as npt
 
 from laboneq._observability.tracing import trace
 from laboneq.controller.toolkit_adapter import ToolkitDevices
-from laboneq.core.exceptions import LabOneQException
+from laboneq.core.exceptions import AbortExecution, LabOneQException
 from laboneq.core.types import CompiledExperiment
 from laboneq.dsl.calibration import Calibration
 from laboneq.dsl.device import DeviceSetup
@@ -723,3 +723,17 @@ class Session:
             )
         else:
             self._last_results.save(filename)
+
+    def abort_execution(self):
+        """Abort the execution of an experiment.
+
+        !!! note
+
+            This currently exclusively works when called from within a user function.
+            The function does not return, and instead passes control directly back to the
+            LabOne Q runtime.
+
+        """
+        raise AbortExecution(
+            "Experiment execution can only be aborted from within a user function"
+        )

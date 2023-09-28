@@ -10,6 +10,12 @@ from laboneq.data.compilation_job import DeviceInfoType
 
 @dataclass(eq=True, frozen=True)
 class DeviceTraits:
+    """Device specific traits.
+
+    Args:
+        max_ct_entries: Maximum number of command table entries.
+    """
+
     str_value: str
     sampling_rate: float
     min_play_wave: int
@@ -21,6 +27,8 @@ class DeviceTraits:
     supports_digital_iq_modulation: bool
     supports_precompensation: bool
     channels_per_awg: int
+    is_qa_device: bool
+    amplitude_register_count: int = 1
     sampling_rate_2GHz: float = None
     num_integration_units_per_acquire_signal: int = None
     oscillator_set_latency: float = 0.0
@@ -29,6 +37,7 @@ class DeviceTraits:
     lo_frequency_granularity: Optional[float] = None
     min_lo_frequency: Optional[float] = None
     max_lo_frequency: Optional[float] = None
+    max_ct_entries: Optional[int] = None
 
 
 class DeviceType(DeviceTraits, Enum):
@@ -53,6 +62,7 @@ class DeviceType(DeviceTraits, Enum):
         sampling_rate_2GHz=2.0e9,
         min_play_wave=32,
         sample_multiple=16,
+        amplitude_register_count=4,
         supports_zsync=True,
         supports_reset_osc_phase=True,
         supports_binary_waves=True,
@@ -70,6 +80,9 @@ class DeviceType(DeviceTraits, Enum):
         # Verified by PW (2022-10-13) on dev8047, proc. FPGA 68603. Observed ~77 ns.
         reset_osc_duration=80e-9,
         supports_oscillator_switching=False,
+        # Schema v.1.1.0
+        max_ct_entries=1024,
+        is_qa_device=False,
     )
 
     UHFQA = DeviceTraits(
@@ -88,6 +101,7 @@ class DeviceType(DeviceTraits, Enum):
         # Verified by PW (2022-10-13) on dev2086, rev 68366. Observed ~25 ns.
         reset_osc_duration=40e-9,
         supports_oscillator_switching=False,
+        is_qa_device=True,
     )
 
     SHFQA = DeviceTraits(
@@ -110,6 +124,7 @@ class DeviceType(DeviceTraits, Enum):
         supports_oscillator_switching=False,
         min_lo_frequency=1e9,
         max_lo_frequency=8.5e9,
+        is_qa_device=True,
     )
     SHFSG = DeviceTraits(
         str_value="shfsg",
@@ -131,6 +146,9 @@ class DeviceType(DeviceTraits, Enum):
         supports_oscillator_switching=True,
         min_lo_frequency=1e9,
         max_lo_frequency=8.5e9,
+        # Schema v.1.2.0
+        max_ct_entries=4096,
+        is_qa_device=False,
     )
 
     def __repr__(self):

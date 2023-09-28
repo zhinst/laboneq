@@ -644,20 +644,20 @@ class Scheduler:
 
         def resolve_value_or_parameter(name, default):
             if (value := getattr(pulse, name)) is None:
-                return default
+                return default, None
 
             if isinstance(value, ParameterInfo):
                 try:
-                    value = current_parameters[value.uid]
+                    return current_parameters[value.uid], value.uid
                 except KeyError as e:
                     raise LabOneQException(
                         f"Parameter '{name}' requested outside of sweep. "
                         "Note that only RT sweep parameters are currently supported here."
                     ) from e
-            return value
+            return value, None
 
-        offset = resolve_value_or_parameter("offset", 0.0)
-        length = resolve_value_or_parameter("length", None)
+        offset, _ = resolve_value_or_parameter("offset", 0.0)
+        length, _ = resolve_value_or_parameter("length", None)
         if length is None and (pulse_def := pulse.pulse) is not None:
             if pulse_def.length is not None:
                 length = pulse_def.length
@@ -673,15 +673,17 @@ class Scheduler:
             assert offset is not None
             length = 0.0
 
-        amplitude = resolve_value_or_parameter("amplitude", 1.0)
+        amplitude, amp_param_name = resolve_value_or_parameter("amplitude", 1.0)
         if abs(amplitude) > 1.0 + 1e-9:
             raise LabOneQException(
                 f"Magnitude of amplitude {amplitude} exceeding unity for pulse "
                 f"'{pulse.pulse.uid}' on signal '{pulse.signal.uid}' in section '{section}'"
             )
-        phase = resolve_value_or_parameter("phase", 0.0)
-        set_oscillator_phase = resolve_value_or_parameter("set_oscillator_phase", None)
-        increment_oscillator_phase = resolve_value_or_parameter(
+        phase, _ = resolve_value_or_parameter("phase", 0.0)
+        set_oscillator_phase, _ = resolve_value_or_parameter(
+            "set_oscillator_phase", None
+        )
+        increment_oscillator_phase, _ = resolve_value_or_parameter(
             "increment_oscillator_phase", None
         )
 
@@ -740,6 +742,7 @@ class Scheduler:
             pulse=pulse,
             section=section,
             amplitude=amplitude,
+            amp_param_name=amp_param_name,
             phase=phase,
             offset=offset_int,
             set_oscillator_phase=set_oscillator_phase,

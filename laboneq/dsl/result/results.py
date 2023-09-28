@@ -11,7 +11,7 @@ from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 
 from ..calibration import Calibration
 from ..serialization import Serializer
-from .acquired_result import AcquiredResult
+from .acquired_result import AcquiredResult, AcquiredResults
 
 if TYPE_CHECKING:
     from numpy.typing import ArrayLike
@@ -24,27 +24,27 @@ if TYPE_CHECKING:
 @classformatter
 @dataclass(init=True, repr=True, order=True)
 class Results:
-    #: The source experiment
+    """Results of an LabOne Q experiment.
+
+    Attributes:
+        experiment (Experiment): The source experiment.
+        device_setup (DeviceSetup): The device setup on which the experiment was run.
+        compiled_experiment (CompiledExperiment): Compiled experiment.
+        acquired_results (AcquiredResults): The acquired results, organized by handle.
+        user_func_results (dict[str, list[Any]]): List of the results of each user function, by name of the function.
+        execution_errors (list[tuple[list[int], str, str]]): Any exceptions that occurred during the execution of the experiment.
+            Entries are tuples of:
+
+                * the indices of the loops where the error occurred
+                * the experiment section uid
+                * the error message
+    """
+
     experiment: Experiment = field(default=None)
-
-    #: The device setup on which the experiment was run.
     device_setup: DeviceSetup = field(default=None)
-
-    #: The compiled experiment.
     compiled_experiment: CompiledExperiment = field(default=None)
-
-    #: The acquired results, organized by handle.
-    acquired_results: dict[str, AcquiredResult] = field(default=None)
-
-    #: List of the results of each user user function, by name of the function.
+    acquired_results: AcquiredResults = field(default=AcquiredResults)
     user_func_results: dict[str, list[Any]] = field(default=None)
-
-    #: Any exceptions that occurred during the execution of the experiment. Entries are
-    #: tuples of
-    #:
-    #: * the indices of the loops where the error occurred,
-    #: * the section uid,
-    #: * the error message.
     execution_errors: list[tuple[list[int], str, str]] = field(default=None)
 
     def __eq__(self, other):

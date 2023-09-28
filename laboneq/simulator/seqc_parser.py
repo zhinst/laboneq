@@ -332,6 +332,8 @@ class CommandTableEntryInfo:
     abs_phase: float | None = None
     rel_phase: float | None = None
     abs_amplitude: float | None = None
+    rel_amplitude: float | None = None
+    amp_register: int | None = None
 
     @classmethod
     def from_ct_entry(cls, ct_entry: dict):
@@ -363,26 +365,34 @@ class CommandTableEntryInfo:
 
         if "amplitude0" in ct_entry:
             # HDAWG
-            assert not ct_entry["amplitude0"].get(
-                "increment", False
-            ), "Amplitude increment via command table not supported by simulator"
-            assert (
-                ct_entry["amplitude0"].get("register") is None
-            ), "Amplitude registers not supported by simulator"
-
+            increment = ct_entry["amplitude0"].get("increment", False)
+            amp_register = ct_entry["amplitude0"].get("register")
             amplitude = ct_entry["amplitude0"]["value"]
             assert ct_entry["amplitude1"]["value"] == amplitude
-            d["abs_amplitude"] = amplitude
+            assert ct_entry["amplitude1"].get("register") == amp_register
+            assert ct_entry["amplitude1"].get("increment", False) == increment
+            if increment:
+                d["rel_amplitude"] = amplitude
+            else:
+                d["abs_amplitude"] = amplitude
+            d["amp_register"] = amp_register
         elif "amplitude00" in ct_entry:
             # SHFSG
-            assert not ct_entry["amplitude00"].get(
-                "increment", False
-            ), "Amplitude increment via command table not supported by simulator"
+            increment = ct_entry["amplitude00"].get("increment", False)
+            amp_register = ct_entry["amplitude00"].get("register")
             amplitude = ct_entry["amplitude00"]["value"]
+            for amp_field in ["amplitude01", "amplitude10", "amplitude11"]:
+                ct_amp = ct_entry[amp_field]
+                assert ct_amp.get("register") == amp_register
+                assert ct_amp.get("increment", False) == increment
             assert ct_entry["amplitude01"]["value"] == -amplitude
             assert ct_entry["amplitude10"]["value"] == amplitude
             assert ct_entry["amplitude11"]["value"] == amplitude
-            d["abs_amplitude"] = amplitude
+            if increment:
+                d["rel_amplitude"] = amplitude
+            else:
+                d["abs_amplitude"] = amplitude
+            d["amp_register"] = amp_register
 
         return cls(**d)
 
@@ -585,27 +595,36 @@ class SimpleRuntime:
 
     def _append_wave_event(
         self,
-        wave_names: list[str],
-        known_wave: WaveRefInfo,
+        wave_names: list[str] | None,
+        known_wave: WaveRefInfo | None,
         ct_info: CommandTableEntryInfo | None,
     ):
-        self._update_wave_refs(wave_names, known_wave)
+        if wave_names is not None:
+            assert known_wave is not None
+            self._update_wave_refs(wave_names, known_wave)
 
-        uses_marker_1 = any(
-            ["marker1" in wave for wave in wave_names if wave is not None]
-        )
-        uses_marker_2 = any(
-            ["marker2" in wave for wave in wave_names if wave is not None]
-        )
+            uses_marker_1 = any(
+                ["marker1" in wave for wave in wave_names if wave is not None]
+            )
+            uses_marker_2 = any(
+                ["marker2" in wave for wave in wave_names if wave is not None]
+            )
+            length_samples = known_wave.length_samples
+            wave_data_indices = known_wave.wave_data_idx
+        else:
+            uses_marker_1 = False
+            uses_marker_2 = False
+            length_samples = 0
+            wave_data_indices = None
 
         time_samples = self._last_played_sample()
         self.seqc_simulation.events.append(
             SeqCEvent(
                 start_samples=time_samples,
-                length_samples=known_wave.length_samples,
+                length_samples=length_samples,
                 operation=Operation.PLAY_WAVE,
                 args=[
-                    known_wave.wave_data_idx,
+                    wave_data_indices,
                     ct_info,
                     {"marker1": uses_marker_1, "marker2": uses_marker_2},
                 ],
@@ -676,23 +695,11 @@ class SimpleRuntime:
                 )
             )
 
-    def executeTableEntry(self, ct_index, latency=None):
-        QA_DATA_PROCESSED_SG = 0b1000000000100
-        ZSYNC_DATA_PQSC_REGISTER_SG = 0b1000000000001
-        ZSYNC_DATA_PQSC_REGISTER_HD = 0b10000000001
-        if ct_index == QA_DATA_PROCESSED_SG or ct_index == ZSYNC_DATA_PQSC_REGISTER_SG:
-            assert self.descriptor.device_type == "SHFSG"
-            # todo(JL): Find a better index via the command table offset; take last for now
-            ct_index = self.descriptor.command_table[-1]["index"]
-        elif ct_index == ZSYNC_DATA_PQSC_REGISTER_HD:
-            assert self.descriptor.device_type == "HDAWG"
-            # todo(JL): Find a better index via the command table offset; take last for now
-            ct_index = self.descriptor.command_table[-1]["index"]
-
-        ct_entry = self._command_table_by_index[ct_index]
+    def _waves_from_command_table_entry(self, ct_entry):
         if "waveform" not in ct_entry:
-            return  # todo: simulator does not yet support playZero via command table
-
+            return None, None
+        if "index" not in ct_entry["waveform"]:
+            return None, None
         wave_index = ct_entry["waveform"]["index"]
         known_wave = WaveRefInfo(assigned_index=wave_index)
 
@@ -714,6 +721,25 @@ class SimpleRuntime:
             if wave["wave_name"] in candidate_wave and "marker" in candidate_wave:
                 wave_names.append(candidate_wave)
 
+        return wave_names, known_wave
+
+    def executeTableEntry(self, ct_index, latency=None):
+        QA_DATA_PROCESSED_SG = 0b1000000000100
+        ZSYNC_DATA_PQSC_REGISTER_SG = 0b1000000000001
+        ZSYNC_DATA_PQSC_REGISTER_HD = 0b10000000001
+        if ct_index == QA_DATA_PROCESSED_SG or ct_index == ZSYNC_DATA_PQSC_REGISTER_SG:
+            assert self.descriptor.device_type == "SHFSG"
+            # todo(JL): Find a better index via the command table offset; take last for now
+            ct_index = self.descriptor.command_table[-1]["index"]
+        elif ct_index == ZSYNC_DATA_PQSC_REGISTER_HD:
+            assert self.descriptor.device_type == "HDAWG"
+            # todo(JL): Find a better index via the command table offset; take last for now
+            ct_index = self.descriptor.command_table[-1]["index"]
+
+        ct_entry = self._command_table_by_index[ct_index]
+
+        wave_names, known_wave = self._waves_from_command_table_entry(ct_entry)
+
         ct_info = CommandTableEntryInfo.from_ct_entry(ct_entry)
 
         if latency is not None:
@@ -728,7 +754,7 @@ class SimpleRuntime:
                     f"Play queue starved at current time {time_samples} for ExecuteTableEntry scheduled with latency {latency}"
                 )
 
-        if ct_entry["waveform"].get("precompClear", False):
+        if ct_entry.get("waveform", {}).get("precompClear", False):
             self.setPrecompClear(1)
             self._append_wave_event(wave_names, known_wave, ct_info)
             self.setPrecompClear(0)

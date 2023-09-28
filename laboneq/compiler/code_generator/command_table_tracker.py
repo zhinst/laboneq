@@ -10,6 +10,18 @@ from laboneq.compiler.code_generator.signatures import PlaybackSignature
 from laboneq.compiler.common.device_type import DeviceType
 
 
+class InvalidCommandTableError(Exception):
+    """Base class for invalid command table errors."""
+
+    pass
+
+
+class EntryLimitExceededError(InvalidCommandTableError):
+    """Too many entries are being set to the command table."""
+
+    pass
+
+
 class CommandTableTracker:
     def __init__(self, device_type: DeviceType):
         self._command_table: Dict[PlaybackSignature, Dict] = {}
@@ -37,8 +49,22 @@ class CommandTableTracker:
     def create_entry(
         self, signature: PlaybackSignature, wave_index: Optional[int]
     ) -> int:
+        """Create command table entry.
+
+        Args:
+            signature: Playback signature.
+            wave_index: Wave index.
+
+        Raises:
+            AssertionError: Signature already exists in the command table.
+            EntryLimitExceededError: If the entries exceed the command table entry limit.
+        """
         assert signature not in self._command_table
         index = len(self._command_table)
+        if index > self._device_type.max_ct_entries:
+            raise EntryLimitExceededError(
+                f"Invalid command table index: '{index}' for device {self._device_type}."
+            )
         ct_entry = {"index": index}
         if wave_index is None:
             if signature.waveform is not None:
@@ -96,15 +122,33 @@ class CommandTableTracker:
 
     def _amplitude_config(self, signature: PlaybackSignature):
         d = {}
-        ct_amplitude = signature.set_amplitude
-        if ct_amplitude is not None:
-            if self._device_type == DeviceType.HDAWG:
-                d["amplitude0"] = d["amplitude1"] = {"value": ct_amplitude}
-            elif self._device_type == DeviceType.SHFSG:
-                d["amplitude00"] = d["amplitude10"] = d["amplitude11"] = {
-                    "value": ct_amplitude
-                }
-                d["amplitude01"] = {"value": -ct_amplitude}
+
+        assert signature.set_amplitude is None or signature.increment_amplitude is None
+        if signature.set_amplitude is not None:
+            increment = False
+            amplitude = signature.set_amplitude
+        elif signature.increment_amplitude is not None:
+            increment = True
+            amplitude = signature.increment_amplitude
+        else:
+            return d
+        if self._device_type == DeviceType.HDAWG:
+            dd = {"value": amplitude}
+            if increment:
+                dd["increment"] = True
+            if signature.amplitude_register is not None:
+                dd["register"] = signature.amplitude_register
+            d["amplitude0"] = d["amplitude1"] = dd
+
+        elif self._device_type == DeviceType.SHFSG:
+            dd = {"value": amplitude}
+            if increment:
+                dd["increment"] = True
+            d["amplitude00"] = d["amplitude10"] = d["amplitude11"] = dd
+            d["amplitude01"] = {"value": -amplitude}
+            if increment:
+                d["amplitude01"]["increment"] = True
+
         return d
 
     def command_table(self) -> List[Dict]:

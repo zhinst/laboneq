@@ -7,12 +7,10 @@ import json
 import logging
 import math
 import re
-import time
 from abc import ABC
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
-from math import floor
 from typing import Any, Iterator
 from weakref import ReferenceType, ref
 
@@ -287,6 +285,10 @@ class DeviceZI(ABC):
         self._downlinks.clear()
         self._uplinks.clear()
 
+    def downlinks(self) -> Iterator[tuple[str, str, DeviceZI]]:
+        for port, (uid, dev_ref) in self._downlinks.items():
+            yield port, uid, dev_ref()
+
     def is_leader(self):
         # Check also downlinks, to exclude standalone devices
         return len(self._uplinks) == 0 and len(self._downlinks) > 0
@@ -419,6 +421,7 @@ class DeviceZI(ABC):
         nodes.extend([node.path for node in self.clock_source_control_nodes()])
         nodes.extend([node.path for node in self.system_freq_control_nodes()])
         nodes.extend([node.path for node in self.rf_offset_control_nodes()])
+        nodes.extend([node.path for node in self.zsync_link_control_nodes()])
         return nodes
 
     def update_clock_source(self, force_internal: bool | None):
@@ -437,6 +440,9 @@ class DeviceZI(ABC):
         return []
 
     def rf_offset_control_nodes(self) -> list[NodeControlBase]:
+        return []
+
+    def zsync_link_control_nodes(self) -> list[NodeControlBase]:
         return []
 
     def nodes_to_monitor(self) -> list[str]:
@@ -534,58 +540,6 @@ class DeviceZI(ABC):
         self, channel, acquisition_type: AcquisitionType, result_length, hw_averages
     ):
         pass
-
-    def _wait_for_node(
-        self, path: str, expected: Any, timeout: float, guard_time: float = 0
-    ):
-        retries = 0
-        start_time = time.time()
-        guard_start = None
-        last_report = start_time
-        last_val = None
-
-        while True:
-            if retries > 0:
-                now = time.time()
-                elapsed = floor(now - start_time)
-                if now - start_time > timeout:
-                    raise LabOneQControllerException(
-                        f"{self.dev_repr}: Node '{path}' didn't switch to '{expected}' "
-                        f"within {timeout}s. Last value: {last_val}"
-                    )
-                if now - last_report > 5:
-                    _logger.debug(
-                        "Waiting for node '%s' switching to '%s', %f s remaining "
-                        "until %f s timeout...",
-                        path,
-                        expected,
-                        timeout - elapsed,
-                        timeout,
-                    )
-                    last_report = now
-                time.sleep(0.1)
-            retries += 1
-
-            daq_reply = self._daq.batch_get(
-                [
-                    DaqNodeGetAction(
-                        self._daq, path, caching_strategy=CachingStrategy.NO_CACHE
-                    )
-                ]
-            )
-            last_val = daq_reply[path.lower()]
-
-            if self.dry_run:
-                break
-
-            if last_val != expected:
-                guard_start = None  # Start over the guard time waiting
-                continue
-
-            if guard_start is None:
-                guard_start = time.time()
-            if time.time() - guard_start >= guard_time:
-                break
 
     def _adjust_frequency(self, freq):
         return freq

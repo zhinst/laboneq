@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterator, List, Optional
 
-import numpy as np
 from attrs import define
 
 from laboneq.compiler.common.compiler_settings import CompilerSettings
@@ -20,6 +19,7 @@ from laboneq.data.compilation_job import ParameterInfo, SectionSignalPulse
 class PulseSchedule(IntervalSchedule):
     pulse: SectionSignalPulse
     amplitude: float
+    amp_param_name: str | None = None
     phase: float
     offset: int
     oscillator_frequency: Optional[float] = None
@@ -51,13 +51,6 @@ class PulseSchedule(IntervalSchedule):
         else:
             play_wave_id = "delay"
 
-        amplitude_resolution = pow(
-            2, getattr(settings, "AMPLITUDE_RESOLUTION_BITS", 24)
-        )
-        amplitude = (
-            np.round(self.amplitude * amplitude_resolution) / amplitude_resolution
-        )
-
         start_id = next(id_tracker)
         d = {
             "section_name": self.section,
@@ -65,9 +58,12 @@ class PulseSchedule(IntervalSchedule):
             "play_wave_id": play_wave_id,
             "parametrized_with": params_list,
             "phase": self.phase,
-            "amplitude": amplitude,
+            "amplitude": self.amplitude,
             "chain_element_id": start_id,
         }
+
+        if self.amp_param_name:
+            d["amplitude_parameter"] = self.amp_param_name
 
         if self.markers is not None:
             d["markers"] = [vars(m) for m in self.markers]

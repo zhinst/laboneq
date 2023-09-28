@@ -7,6 +7,7 @@ import typing
 from typing import Any
 
 from laboneq.controller.util import LabOneQControllerException, SimpleProxy
+from laboneq.core.exceptions import AbortExecution
 from laboneq.data.experiment_results import ExperimentResults
 
 if typing.TYPE_CHECKING:
@@ -38,3 +39,9 @@ class ProtectedSession(SimpleProxy):
         raise LabOneQControllerException(
             "'disconnect' is not allowed from the user function."
         )
+
+    def abort_execution(self):
+        """Abort the execution of an experiment.
+
+        Note: This currently exclusively works when called from within a user function."""
+        raise AbortExecution

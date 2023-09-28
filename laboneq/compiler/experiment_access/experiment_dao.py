@@ -10,6 +10,7 @@ from typing import Any, List, Optional
 from jsonschema import ValidationError
 
 from laboneq._utils import cached_method
+from laboneq.compiler import DeviceType
 from laboneq.compiler.experiment_access import json_dumper
 from laboneq.compiler.experiment_access.experiment_info_loader import (
     ExperimentInfoLoader,
@@ -324,8 +325,9 @@ class ExperimentDAO:
                     pulse_id = section_pulse.pulse.uid
 
                     if (
-                        section_pulse.signal.device.device_type
-                        in (DeviceInfoType.SHFQA, DeviceInfoType.UHFQA)
+                        DeviceType.from_device_info_type(
+                            section_pulse.signal.device.device_type
+                        ).is_qa_device
                     ) and not len(section_pulse.markers) == 0:
                         raise RuntimeError(
                             f"Pulse {pulse_id} referenced in section {section_id}"

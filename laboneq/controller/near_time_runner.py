@@ -17,6 +17,7 @@ from laboneq.controller.communication import (
 )
 from laboneq.controller.protected_session import ProtectedSession
 from laboneq.controller.util import LabOneQControllerException, SweepParamsTracker
+from laboneq.core.exceptions import AbortExecution
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.data.recipe import NtStepKey
@@ -54,9 +55,14 @@ class NearTimeRunner(ExecutorBase):
             raise LabOneQControllerException(
                 f"User function '{func_name}' is not registered."
             )
-        res = func(
-            ProtectedSession(self.controller._session, self.controller._results), **args
-        )
+        try:
+            res = func(
+                ProtectedSession(self.controller._session, self.controller._results),
+                **args,
+            )
+        except AbortExecution:
+            _logger.warning(f"Execution aborted by user function '{func_name}'")
+            raise
         user_func_results = self.controller._results.user_func_results.setdefault(
             func_name, []
         )

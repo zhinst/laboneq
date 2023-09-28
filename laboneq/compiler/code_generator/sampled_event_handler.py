@@ -40,8 +40,9 @@ _logger = logging.getLogger(__name__)
 def sort_events(events: List[AWGEvent]) -> List[AWGEvent]:
     later = {
         AWGEventType.SEQUENCER_START: -100,
-        AWGEventType.INITIAL_RESET_PHASE: -4,
-        AWGEventType.LOOP_STEP_START: -3,
+        AWGEventType.INITIAL_RESET_PHASE: -5,
+        AWGEventType.LOOP_STEP_START: -4,
+        AWGEventType.INIT_AMPLITUDE_REGISTER: -3,
         AWGEventType.PUSH_LOOP: -2,
         AWGEventType.RESET_PHASE: -1,
         AWGEventType.RESET_PRECOMPENSATION_FILTERS: -1,
@@ -236,9 +237,7 @@ class SampledEventHandler:
                 ct_index = self.command_table_tracker.create_entry(
                     signature, wave_index
                 )
-            comment = sig_string
-            if signature.hw_oscillator is not None:
-                comment += f", osc={signature.hw_oscillator}"
+            comment = self._make_command_table_comment(signature)
             self.seqc_tracker.add_command_table_execution(ct_index, comment=comment)
         else:
             self.seqc_tracker.add_play_wave_statement(
@@ -281,6 +280,39 @@ class SampledEventHandler:
             self.match_parent_event.params["handle"], FeedbackConnection(None)
         ).drive.add(signal_id)
 
+    @staticmethod
+    def _make_command_table_comment(signature: PlaybackSignature):
+        parts = []
+
+        if signature.hw_oscillator is not None:
+            parts.append(f"osc={signature.hw_oscillator}")
+
+        if signature.set_phase is not None:
+            parts.append(f"phase ={signature.set_phase:.2g}")
+        elif signature.increment_phase is not None:
+            parts.append(f"phase+={signature.increment_phase:.2g}")
+
+        if signature.amplitude_register is not None:
+            ampl_register = f"amp_{signature.amplitude_register}"
+        else:
+            ampl_register = "amp"
+
+        if signature.set_amplitude is not None:
+            parts.append(f"{ampl_register}={signature.set_amplitude:.2g}")
+        elif signature.increment_amplitude is not None:
+            increment = signature.increment_amplitude
+            if increment >= 0:
+                parts.append(f"{ampl_register}+={increment:.2g}")
+            else:
+                parts.append(f"{ampl_register}-={-increment:.2g}")
+        elif signature.amplitude_register is not None:
+            parts.append(ampl_register)
+
+        if signature.waveform is not None:
+            parts.append(signature.waveform.signature_string())
+
+        return "; ".join(parts)
+
     def handle_playwave_on_user_register(
         self,
         signature: PlaybackSignature,
@@ -300,9 +332,7 @@ class SampledEventHandler:
                 ct_index = self.command_table_tracker.create_entry(
                     signature, wave_index
                 )
-            comment = sig_string
-            if signature.hw_oscillator is not None:
-                comment += f", osc={signature.hw_oscillator}"
+            comment = self._make_command_table_comment(signature)
             branch_generator.add_command_table_execution(ct_index, comment=comment)
         else:
             branch_generator.add_play_wave_statement(
@@ -321,6 +351,16 @@ class SampledEventHandler:
             sampled_event.end - sampled_event.start
         )
         self.seqc_tracker.current_time = sampled_event.end
+
+    def handle_amplitude_register_init(self, sampled_event):
+        self.seqc_tracker.add_required_playzeros(sampled_event)
+        assert self.use_command_table
+        signature = sampled_event.params["playback_signature"]
+        ct_index = self.command_table_tracker.lookup_index_by_signature(signature)
+        if ct_index is None:
+            ct_index = self.command_table_tracker.create_entry(signature, None)
+        comment = self._make_command_table_comment(signature)
+        self.seqc_tracker.add_command_table_execution(ct_index, comment=comment)
 
     def handle_acquire(self, sampled_event: AWGEvent):
         _logger.debug("  Processing ACQUIRE EVENT %s", sampled_event)
@@ -789,6 +829,8 @@ class SampledEventHandler:
                 return
         if signature == AWGEventType.PLAY_HOLD:
             self.handle_playhold(sampled_event)
+        elif signature == AWGEventType.INIT_AMPLITUDE_REGISTER:
+            self.handle_amplitude_register_init(sampled_event)
         elif signature == AWGEventType.ACQUIRE:
             self.handle_acquire(sampled_event)
         elif signature == AWGEventType.QA_EVENT:

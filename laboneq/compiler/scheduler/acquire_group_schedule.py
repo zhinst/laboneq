@@ -49,14 +49,6 @@ class AcquireGroupSchedule(IntervalSchedule):
             == len(self.pulse_pulse_params)
         )
 
-        amplitude_resolution = pow(
-            2, getattr(settings, "AMPLITUDE_RESOLUTION_BITS", 24)
-        )
-        amplitudes = [
-            round(amplitude * amplitude_resolution) / amplitude_resolution
-            for amplitude in self.amplitudes
-        ]
-
         assert all(
             self.pulses[0].acquire_params.handle == p.acquire_params.handle
             for p in self.pulses
@@ -75,7 +67,7 @@ class AcquireGroupSchedule(IntervalSchedule):
             "play_wave_id": [p.pulse.uid for p in self.pulses],
             "parametrized_with": [],
             "phase": self.phases,
-            "amplitude": amplitudes,
+            "amplitude": self.amplitudes,
             "chain_element_id": start_id,
             "acquisition_type": [self.pulses[0].acquire_params.acquisition_type],
             "acquire_handle": self.pulses[0].acquire_params.handle,

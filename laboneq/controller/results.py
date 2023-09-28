@@ -16,8 +16,9 @@ def make_acquired_result(
     data: ArrayLike,
     axis_name: list[str | list[str]],
     axis: list[ArrayLike | list[ArrayLike]],
+    handle: str,
 ) -> AcquiredResult:
-    return AcquiredResult(data, axis_name, axis)
+    return AcquiredResult(data, axis_name, axis, handle=handle)
 
 
 def build_partial_result(

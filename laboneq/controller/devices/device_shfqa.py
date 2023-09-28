@@ -640,7 +640,7 @@ class DeviceSHFQA(DeviceSHFBase):
             nodes_to_initialize_output.append(
                 DaqNodeSetAction(
                     self._daq,
-                    f"/{self.serial}/qachannels/{output.channel}/input/rflfpath",
+                    f"/{self.serial}/qachannels/{input.channel}/input/rflfpath",
                     1  # RF
                     if input.port_mode is None or input.port_mode == PortMode.RF.value
                     else 0,  # LF
@@ -858,7 +858,7 @@ class DeviceSHFQA(DeviceSHFBase):
         if num_thresholds != num_expected_thresholds:
             raise LabOneQControllerException(
                 f"Multi discrimination configuration of experiment is not consistent. "
-                f"Received num weights={len(integrator_allocation.weights)}, num thresholds={len(integrator_allocation.threshold)}, "
+                f"Received num weights={len(integrator_allocation.weights)}, num thresholds={len(integrator_allocation.thresholds)}, "
                 f"where num_weights should be n-1 and num_thresholds should be (n-1)*n/2 with n the number of states."
             )
         return True

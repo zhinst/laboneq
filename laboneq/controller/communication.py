@@ -221,6 +221,15 @@ class DaqWrapper(ZiApiWrapperBase):
         except RuntimeError as exp:
             raise LabOneQControllerException(str(exp))
 
+        [major, minor] = zhinst.core.__version__.split(".")[0:2]
+        zhinst_core_version_str = f"{major}.{minor}"
+
+        if server_qualifier.dry_run:
+            # Ensure emulated data server version matches installed zhinst.core
+            self._zi_api_object.set_option(
+                "ZI", "about/version", zhinst_core_version_str
+            )
+
         path = "/zi/about/version"
         version_str = self.batch_get([DaqNodeGetAction(self, path)])[path]
         try:
@@ -233,8 +242,6 @@ class DaqWrapper(ZiApiWrapperBase):
             else:
                 raise LabOneQControllerException(err_msg) from e
 
-        [major, minor] = zhinst.core.__version__.split(".")[0:2]
-        zhinst_core_version_str = f"{major}.{minor}"
         if zhinst_core_version_str != version_str:
             err_msg = f"Version of LabOne Data Server ({version_str}) and Python API ({zhinst_core_version_str}) do not match."
             if self.server_qualifier.ignore_version_mismatch:

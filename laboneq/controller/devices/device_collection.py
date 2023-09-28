@@ -23,6 +23,7 @@ from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.devices.zi_node_monitor import (
     ConditionsChecker,
     NodeControlBase,
+    NodeControlKind,
     ResponseWaiter,
     filter_commands,
     filter_conditions,
@@ -56,6 +57,7 @@ class DeviceCollection:
         self._reset_devices = reset_devices
         self._daqs: dict[str, DaqWrapper] = {}
         self._devices: dict[str, DeviceZI] = {}
+        self._monitor_started = False
 
     @property
     def all(self) -> Iterator[tuple[str, DeviceZI]]:
@@ -102,7 +104,6 @@ class DeviceCollection:
         self.load_factory_preset()
         self.start_monitor()
         self.configure_device_setup()
-        self.stop_monitor()
 
     def _configure_parallel(
         self,
@@ -111,7 +112,7 @@ class DeviceCollection:
         config_name: str,
     ):
         response_waiter = ResponseWaiter()
-        set_nodes: list[DaqNodeSetAction] = []
+        set_nodes: list[DaqNodeSetAction] | None = None
         for device in devices:
             dev_nodes = control_nodes_getter(device)
 
@@ -120,10 +121,25 @@ class DeviceCollection:
                 target=device.daq.node_monitor,
                 conditions={n.path: n.value for n in filter_conditions(dev_nodes)},
             )
-            failed_path, _ = conditions_checker.check_all()
-            if failed_path is None:
+            failed = conditions_checker.check_all()
+            if not failed:
                 continue
 
+            failed_paths = [path for path, _ in failed]
+            wait_conditions = {
+                node.path: node.value
+                for node in dev_nodes
+                if node.kind == NodeControlKind.WaitCondition
+                and node.path in failed_paths
+            }
+            if wait_conditions:
+                response_waiter.add(
+                    target=device.daq.node_monitor,
+                    conditions=wait_conditions,
+                )
+
+            if set_nodes is None:
+                set_nodes = []
             set_nodes.extend(
                 [
                     DaqNodeSetAction(
@@ -140,10 +156,12 @@ class DeviceCollection:
                 conditions={n.path: n.value for n in filter_responses(dev_nodes)},
             )
 
-        if not set_nodes:
+        if set_nodes is None:
             return
 
-        batch_set(set_nodes)
+        if set_nodes:
+            batch_set(set_nodes)
+
         timeout = 10
         if not response_waiter.wait_all(timeout=timeout):
             raise LabOneQControllerException(
@@ -152,11 +170,12 @@ class DeviceCollection:
                 f"Not fulfilled:\n{response_waiter.remaining_str()}"
             )
 
-        failed_path, expected = conditions_checker.check_all()
-        if failed_path is not None:
+        failed = conditions_checker.check_all()
+        if failed:
             raise LabOneQControllerException(
                 f"Internal error: {config_name} for devices "
-                f"{[d.dev_repr for d in devices]} failed at {failed_path} != {expected}."
+                f"{[d.dev_repr for d in devices]} failed. "
+                f"Errors:\n{conditions_checker.failed_str(failed)}"
             )
 
     def configure_device_setup(self):
@@ -171,43 +190,33 @@ class DeviceCollection:
             "Setting RF channel offsets": lambda d: cast(
                 DeviceZI, d
             ).rf_offset_control_nodes(),
+            "Establishing ZSync link": lambda d: cast(
+                DeviceZI, d
+            ).zsync_link_control_nodes(),
         }
-        # Wait until clock status is available for all devices
-        response_waiter = ResponseWaiter()
-        for device in self._devices.values():
-            target_node_monitor = device.daq.node_monitor
-            control_nodes = []
-            for control_nodes_getter in configs.values():
-                control_nodes.extend(
-                    [node.path for node in control_nodes_getter(device)]
-                )
-            target_node_monitor.fetch(control_nodes)
-            response_waiter.add(
-                target=target_node_monitor,
-                conditions={path: None for path in control_nodes},
-            )
 
-        if not response_waiter.wait_all(timeout=2):
-            raise LabOneQControllerException(
-                f"Internal error: Didn't get all the clock status node values within 2s. "
-                f"Missing:\n{response_waiter.remaining_str()}"
-            )
+        self.flush_monitor()  # Ensure status is up-to-date
 
-        # Begin switching extrefs from the leaders, and then by downstream links,
-        # as downstream device may get its extref from the upstream one.
-        parents = [dev for _, dev in self.leaders]
-        if len(parents) == 0:  # Happens for standalone devices
-            parents = [dev for _, dev in self.followers]
-        while len(parents) > 0:
-            for config_name, control_nodes_getter in configs.items():
-                self._configure_parallel(parents, control_nodes_getter, config_name)
-            children = []
-            for parent_dev in parents:
-                for _, dev_ref in parent_dev._downlinks.values():
-                    dev = dev_ref()
-                    if dev is not None:
-                        children.append(dev)
-            parents = children
+        leaders = [dev for _, dev in self.leaders]
+        if len(leaders) == 0:  # Happens for standalone devices
+            leaders = [dev for _, dev in self.followers]
+        for config_name, control_nodes_getter in configs.items():
+            # Begin by applying a config step from the leader(s), and then proceed with
+            # the downstream devices. This is because downstream devices may rely on the
+            # settings of upstream devices, such as an external reference supply. If there
+            # are any dependencies in the reverse direction, such as the status of a ZSync
+            # link, they should be resolved by moving the dependent settings to a later
+            # configuration step.
+            targets = leaders
+            while len(targets) > 0:
+                self._configure_parallel(targets, control_nodes_getter, config_name)
+                children = []
+                for parent_dev in targets:
+                    for _, dev_ref in parent_dev._downlinks.values():
+                        dev = dev_ref()
+                        if dev is not None:
+                            children.append(dev)
+                targets = children
         _logger.info("The device setup is configured")
 
     def disconnect(self):
@@ -270,21 +279,33 @@ class DeviceCollection:
         batch_set(all_actions)
 
     def start_monitor(self):
+        if self._monitor_started:
+            return
+
+        response_waiter = ResponseWaiter()
         for daq in self._daqs.values():
-            daq.node_monitor.stop()
             daq.node_monitor.start()
+            response_waiter.add(
+                target=daq.node_monitor,
+                conditions={path: None for path in daq.node_monitor._nodes},
+            )
+
+        if not response_waiter.wait_all(timeout=2):
+            raise LabOneQControllerException(
+                f"Internal error: Didn't get all the status node values within 2s. "
+                f"Missing:\n{response_waiter.remaining_str()}"
+            )
+
+        self._monitor_started = True
 
     def flush_monitor(self):
         for daq in self._daqs.values():
             daq.node_monitor.flush()
 
-    def stop_monitor(self):
-        for daq in self._daqs.values():
-            daq.node_monitor.stop()
-
     def reset_monitor(self):
         for daq in self._daqs.values():
             daq.node_monitor.reset()
+        self._monitor_started = False
 
     def load_factory_preset(self):
         if self._reset_devices:
@@ -317,8 +338,7 @@ class DeviceCollection:
             daq = self._daqs.get(device_qualifier.server_uid)
 
             if device_qualifier.dry_run:
-                dry_run_daq: DaqWrapperDryRun = daq
-                dry_run_daq.map_device_type(device_qualifier)
+                cast(DaqWrapperDryRun, daq).map_device_type(device_qualifier)
             device = self._devices.get(device_qualifier.uid)
             if device is None or device.device_qualifier != device_qualifier:
                 device = DeviceFactory.create(device_qualifier, daq)
@@ -341,6 +361,17 @@ class DeviceCollection:
                 if not to_dev.is_secondary:
                     from_dev.add_downlink(from_port, to_dev_uid, to_dev)
                 to_dev.add_uplink(from_dev)
+
+        # Make emulated PQSC aware of the downlinked devices
+        for device_qualifier in self._ds.instruments:
+            if device_qualifier.dry_run and device_qualifier.driver == "PQSC":
+                from_dev = self._devices[device_qualifier.uid]
+                for port, _, to_dev in from_dev.downlinks():
+                    cast(DaqWrapperDryRun, daq).set_emulation_option(
+                        serial=device_qualifier.options.serial,
+                        option=f"{port.lower()}/connection/serial",
+                        value=to_dev.serial[3:],
+                    )
 
         # Move various device settings from device setup
         for device_qualifier in self._ds.instruments:
@@ -368,7 +399,6 @@ class DeviceCollection:
         for server_uid, server_qualifier in self._ds.servers:
             existing = self._daqs.get(server_uid)
             if existing is not None and existing.server_qualifier == server_qualifier:
-                existing.node_monitor.reset()
                 updated_daqs[server_uid] = existing
                 continue
 

@@ -10,8 +10,9 @@ from types import SimpleNamespace
 from typing import Any, Dict, Tuple
 
 from laboneq._utils import ensure_list, id_generator
+from laboneq.compiler import DeviceType
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types.enums import AveragingMode
+from laboneq.core.types.enums import AcquisitionType, AveragingMode
 from laboneq.core.types.units import Quantity
 from laboneq.data.calibration import (
     AmplifierPump,
@@ -89,15 +90,16 @@ class ExperimentInfoBuilder:
 
         self._parameter_parents: dict[str, list[str]] = {}
 
+        self._acquisition_type = None
+
     def load_experiment(self) -> ExperimentInfo:
         self._check_physical_channel_calibration_conflict()
         for signal in self._experiment.signals:
             self._load_signal(signal)
 
         section_uid_map = {}
-        acquisition_type_map = {}
         root_sections = [
-            self._walk_sections(section, None, section_uid_map, acquisition_type_map)
+            self._walk_sections(section, section_uid_map)
             for section in self._experiment.sections
         ]
 
@@ -124,6 +126,7 @@ class ExperimentInfoBuilder:
             pulse_defs=sorted(self._pulse_defs.values(), key=lambda s: s.uid),
         )
         self._resolve_seq_averaging(experiment_info)
+        self._resolve_oscillator_modulation_type(experiment_info)
         return experiment_info
 
     def _check_physical_channel_calibration_conflict(self):
@@ -220,7 +223,18 @@ class ExperimentInfoBuilder:
         return calibration
 
     def _load_oscillator(self, oscillator: Oscillator) -> OscillatorInfo:
-        is_hw = oscillator.modulation_type == ModulationType.HARDWARE
+        if oscillator.modulation_type == ModulationType.HARDWARE:
+            is_hw = True
+        elif oscillator.modulation_type == ModulationType.SOFTWARE:
+            is_hw = False
+        else:
+            if oscillator.modulation_type not in (None, ModulationType.AUTO):
+                raise LabOneQException(
+                    f"Invalid modulation type '{oscillator.modulation_type}' for"
+                    f" oscillator '{oscillator.uid}'"
+                )
+            is_hw = None  # Unspecified for now, will resolve later
+
         frequency = self.opt_param(oscillator.frequency, nt_only=False)
         oscillator_info = OscillatorInfo(oscillator.uid, frequency, is_hw)
         if oscillator.uid in self._oscillators:
@@ -405,9 +419,7 @@ class ExperimentInfoBuilder:
     def _walk_sections(
         self,
         section: Section,
-        acquisition_type,
         section_uid_map: Dict[str, Tuple[Any, int]],
-        acquisition_type_map,
     ) -> SectionInfo:
         assert section.uid is not None
         if (
@@ -417,16 +429,17 @@ class ExperimentInfoBuilder:
             raise LabOneQException(
                 f"Duplicate section uid '{section.uid}' found in experiment"
             )
-        current_acquisition_type = acquisition_type
 
         if hasattr(section, "acquisition_type"):
-            current_acquisition_type = section.acquisition_type
-
-        acquisition_type_map[section.uid] = current_acquisition_type
+            if self._acquisition_type is not None:
+                raise LabOneQException(
+                    "Experiment must not contain multiple real-time averaging loops"
+                )
+            self._acquisition_type = section.acquisition_type
 
         section_info = self._load_section(
             section,
-            current_acquisition_type,
+            self._acquisition_type,
             section_uid_map,
         )
 
@@ -436,9 +449,7 @@ class ExperimentInfoBuilder:
             section_info.children.append(
                 self._walk_sections(
                     child_section,
-                    current_acquisition_type,
                     section_uid_map,
-                    acquisition_type_map,
                 )
             )
         return section_info
@@ -853,8 +864,9 @@ class ExperimentInfoBuilder:
 
             if section.averaging_mode is not None:
                 nonlocal acquire_loop
-                if acquire_loop is not None:
-                    raise LabOneQException("Found multiple AcquireLoopRt")
+                # Note: this should have been checked earlier already, so we make it an
+                # assertion rather than a LabOneQException.
+                assert acquire_loop is None, "multiple AcquireLoopRt not permitted"
                 acquire_loop = section
             for child in section.children:
                 traverse_set_execution_type_and_check_rt_loop(child, in_realtime)
@@ -983,6 +995,30 @@ class ExperimentInfoBuilder:
         #  Should repetition time be associated with the outermost sweep?
         #  Currently the scheduler appears to handle this just fine; it picks up the
         #  correct repetition time no matter where it is located in the tree.
+
+    def _resolve_oscillator_modulation_type(self, experiment_info: ExperimentInfo):
+        for signal in experiment_info.signals:
+            if (osc := signal.oscillator) is None:
+                continue
+            if osc.is_hardware is not None:
+                continue
+            is_qa_device = DeviceType.from_device_info_type(
+                signal.device.device_type
+            ).is_qa_device
+            is_spectroscopy_mode = self._acquisition_type in (
+                AcquisitionType.SPECTROSCOPY,
+                AcquisitionType.SPECTROSCOPY_IQ,
+                AcquisitionType.SPECTROSCOPY_PSD,
+            )
+            if is_qa_device:
+                osc.is_hardware = is_spectroscopy_mode
+            else:
+                osc.is_hardware = True
+
+            _logger.info(
+                f"Resolved modulation type of oscillator '{osc.uid}' on signal"
+                f" '{signal.uid}' to {'HARDWARE' if osc.is_hardware else 'SOFTWARE'}"
+            )
 
 
 class AttributeOverrider(object):

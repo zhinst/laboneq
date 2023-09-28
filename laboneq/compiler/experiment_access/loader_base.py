@@ -47,7 +47,6 @@ class LoaderBase:
 
         self._signals: dict[str, SignalInfo] = {}
         self._signal_markers = {}
-        self._signal_oscillator = {}
         self._signal_trigger = {}
         self._root_sections = []
         self._handle_acquires: dict[str, str] = {}
@@ -66,7 +65,6 @@ class LoaderBase:
             "section_signal_pulses": self._section_signal_pulses,
             "signals": self._signals,
             "signal_markers": self._signal_markers,
-            "signal_oscillator": self._signal_oscillator,
             "signal_trigger": self._signal_trigger,
             "handle_acquires": self._handle_acquires,
             "global_leader_device_id": self.global_leader_device_id,

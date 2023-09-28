@@ -34,13 +34,25 @@ class Node:
     def get_last(self) -> Any | None:
         return self.last
 
-    def append(self, val: dict[str, Any]):
-        self.values.extend(val["value"])
+    def append(self, val: dict[str, Any] | list[dict[str, Any]]):
+        if isinstance(val, dict):
+            self.values.extend(val["value"])
+        else:
+            self.values.append(val[0]["vector"])
         self.last = self.values[-1]
 
 
-def _is_expected(val: Any, expected: list[Any | None]) -> bool:
-    for e in expected:
+def _is_expected(val: Any, expected: Any | None | list[Any | None]) -> bool:
+    if val is None:
+        return False
+
+    all_expected = (
+        expected
+        if isinstance(expected, Iterable) and not isinstance(expected, str)
+        else [expected]
+    )
+
+    for e in all_expected:
         if e is None:
             # No specific value expected, any update matches
             return True
@@ -83,10 +95,8 @@ class NodeMonitor:
         all_paths = [p for p in self._nodes.keys()]
         if len(all_paths) > 0:
             self._daq.subscribe(all_paths)
-
-    def fetch(self, paths: list[str]):
-        for path in paths:
-            self._daq.getAsEvent(path)
+            for path in all_paths:
+                self._daq.getAsEvent(path)
 
     def stop(self):
         self._daq.unsubscribe("*")
@@ -101,7 +111,7 @@ class NodeMonitor:
                 self._get_node(path).append(val)
 
     def flush(self):
-        self._daq.sync()
+        self.poll()
         for node in self._nodes.values():
             node.flush()
 
@@ -114,25 +124,22 @@ class NodeMonitor:
     def get_last(self, path: str) -> Any | None:
         return self._get_node(path).get_last()
 
-    def check_last_for_conditions(self, conditions: dict[str, Any]) -> str:
+    def check_last_for_conditions(
+        self, conditions: dict[str, Any]
+    ) -> list[tuple[str, Any]]:
+        failed: list[tuple[str, Any]] = []
         for path, expected in conditions.items():
             self._fail_on_missing_node(path)
-            # expected may be None, single value or a list
-            all_expected = expected if isinstance(expected, Iterable) else [expected]
             val = self.get_last(path)
-            if val is None:
-                return path
-            if not _is_expected(val, all_expected):
-                return path
-        return None
+            if not _is_expected(val, expected):
+                failed.append((path, val))
+        return failed
 
     def poll_and_check_conditions(self, conditions: dict[str, Any]) -> dict[str, Any]:
         self.poll()
         remaining = {}
         for path, expected in conditions.items():
             self._fail_on_missing_node(path)
-            # expected may be None, single value or a list
-            all_expected = expected if isinstance(expected, Iterable) else [expected]
             while True:
                 val = self.pop(path)
                 if val is None:
@@ -140,7 +147,7 @@ class NodeMonitor:
                     # keep condition as is for the next check iteration
                     remaining[path] = expected
                     break
-                if _is_expected(val, all_expected):
+                if _is_expected(val, expected):
                     break
         return remaining
 
@@ -159,16 +166,24 @@ class ConditionsChecker(MultiDeviceHandlerBase):
     devices are fulfilled. Uses the last known node values, no additional
     polling for updates!
 
-    This class must be prepared in same way as the AllRepliesWaiter,
-    see AllRepliesWaiter for details.
+    This class must be prepared in same way as the ResponseWaiter,
+    see ResponseWaiter for details.
     """
 
-    def check_all(self) -> tuple[str, Any]:
+    def check_all(self) -> list[tuple[str, Any]]:
+        failed: list[tuple[str, Any]] = []
         for node_monitor, daq_conditions in self._conditions.items():
-            failed_path = node_monitor.check_last_for_conditions(daq_conditions)
-            if failed_path is not None:
-                return failed_path, daq_conditions[failed_path]
-        return None, None
+            failed.extend(node_monitor.check_last_for_conditions(daq_conditions))
+        return failed
+
+    def failed_str(self, failed: list[tuple[str, Any]]) -> str:
+        def _find_condition(path: str) -> Any | None | list[Any | None]:
+            for daq_conds in self._conditions.values():
+                cond = daq_conds.get(path)
+                if cond is not None:
+                    return cond
+
+        return "\n".join([f"{p}: {v} != {_find_condition(p)}" for p, v in failed])
 
 
 class ResponseWaiter(MultiDeviceHandlerBase):
@@ -222,7 +237,7 @@ class ResponseWaiter(MultiDeviceHandlerBase):
 
     def __init__(self):
         super().__init__()
-        self._timer = time.time
+        self._timer = time.monotonic
 
     @trace("wait-for-all-nodes", disable_tracing_during=True)
     def wait_all(self, timeout: float) -> bool:
@@ -251,6 +266,7 @@ class ResponseWaiter(MultiDeviceHandlerBase):
 
 class NodeControlKind(Enum):
     Condition = auto()
+    WaitCondition = auto()
     Command = auto()
     Response = auto()
     Prepare = auto()
@@ -284,6 +300,16 @@ class Condition(NodeControlBase):
 
     def __post_init__(self):
         self.kind = NodeControlKind.Condition
+
+
+@dataclass
+class WaitCondition(NodeControlBase):
+    """Represents a condition to be fulfilled. Unlike plain Condition requiring a command if not fulfilled, the WaitCondition
+    must get fulfilled on its own as a result of some previous actions (ZSync status on PQSC after switching the follower to
+    ZSync)."""
+
+    def __post_init__(self):
+        self.kind = NodeControlKind.WaitCondition
 
 
 @dataclass
@@ -331,5 +357,10 @@ def filter_responses(nodes: list[NodeControlBase]) -> list[NodeControlBase]:
 def filter_conditions(nodes: list[NodeControlBase]) -> list[NodeControlBase]:
     return _filter_nodes(
         nodes,
-        [NodeControlKind.Condition, NodeControlKind.Command, NodeControlKind.Response],
+        [
+            NodeControlKind.Condition,
+            NodeControlKind.WaitCondition,
+            NodeControlKind.Command,
+            NodeControlKind.Response,
+        ],
     )

@@ -9,17 +9,13 @@ import re
 import sched
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from enum import Enum
 from functools import partial
 from typing import Any, Callable, overload
 
 import numpy as np
 from numpy import typing as npt
-from zhinst.core import __version__
-
-_major, _minor, DS_REVISION = __version__.split(".")
-DS_VERSION = f"{_major}.{_minor}"
 
 
 @dataclass
@@ -28,6 +24,15 @@ class NodeBase:
     read_only: bool = False
     subscribed: bool = False
     handler: Callable[[NodeBase], None] = None
+    _value: Any = field(init=False, repr=False)
+
+    @property
+    def value(self) -> Any:
+        return self._value
+
+    @value.setter
+    def value(self, value: Any):
+        self._value = value
 
     def node_value(self) -> Any:
         return {"value": [self.value]}
@@ -65,6 +70,11 @@ class NodeVectorInt(NodeVectorBase):
 
 
 @dataclass
+class NodeVectorStr(NodeVectorBase):
+    value: str = ""
+
+
+@dataclass
 class NodeVectorComplex(NodeVectorBase):
     value: npt.ArrayLike = field(
         default_factory=lambda: np.array([], dtype=np.complex128)
@@ -73,16 +83,21 @@ class NodeVectorComplex(NodeVectorBase):
 
 @dataclass
 class NodeDynamic(NodeBase):
+    value: InitVar[Any]
     getter: Callable[[], Any] = None
     setter: Callable[[Any], None] = None
 
+    def __post_init__(self, value: Any):
+        if self.setter is not None and value is not None:
+            self.value = value
+
     @property
     def value(self) -> Any:
-        return self.getter()
+        return None if self.getter is None else self.getter()
 
     @value.setter
-    def value(self, v: Any):
-        self.setter(v)
+    def value(self, value: Any):
+        self.setter(value)
 
 
 class NodeType(Enum):
@@ -91,6 +106,7 @@ class NodeType(Enum):
     STR = NodeStr
     VECTOR_FLOAT = NodeVectorFloat
     VECTOR_INT = NodeVectorInt
+    VECTOR_STR = NodeVectorStr
     VECTOR_COMPLEX = NodeVectorComplex
     DYNAMIC = NodeDynamic
 
@@ -109,15 +125,13 @@ class NodeInfo:
     def make_node(self) -> NodeBase:
         "Constructs concrete node instance from a node descriptor."
         if self.type == NodeType.DYNAMIC:
-            node = NodeType.DYNAMIC.value(
+            return NodeType.DYNAMIC.value(
                 read_only=self.read_only,
+                value=self.default,
                 handler=self.handler,
                 getter=self.getter,
                 setter=self.setter,
             )
-            if self.setter is not None and self.default is not None:
-                node.value = self.default
-            return node
 
         if self.default is None:
             return self.type.value(
@@ -143,7 +157,10 @@ class PollEvent:
 class DevEmu(ABC):
     "Base class emulating a device, specialized per device type."
 
-    def __init__(self, scheduler: sched.scheduler, dev_opts: dict[str, Any]):
+    def __init__(
+        self, serial: str, scheduler: sched.scheduler, dev_opts: dict[str, Any]
+    ):
+        self._serial = serial
         self._scheduler = scheduler
         self._dev_opts = dev_opts
         self._node_tree: dict[str, NodeBase] = {}
@@ -151,9 +168,8 @@ class DevEmu(ABC):
         self._total_subscribed: int = 0
         self._cached_node_def = functools.lru_cache(maxsize=None)(self._node_def)
 
-    @abstractmethod
     def serial(self) -> str:
-        ...
+        return self._serial
 
     @abstractmethod
     def _node_def(self) -> dict[str, NodeInfo]:
@@ -220,9 +236,6 @@ class DevEmu(ABC):
 
 
 class DevEmuZI(DevEmu):
-    def serial(self) -> str:
-        return "ZI"
-
     @property
     def server(self) -> ziDAQServerEmulator:
         return self._dev_opts["emu_server"]
@@ -236,10 +249,14 @@ class DevEmuZI(DevEmu):
     def _node_def(self) -> dict[str, NodeInfo]:
         return {
             "about/version": NodeInfo(
-                type=NodeType.STR, default=DS_VERSION, read_only=True
+                type=NodeType.STR,
+                default=self._dev_opts.get("about/version", "99.99"),
+                read_only=True,
             ),
             "about/revision": NodeInfo(
-                type=NodeType.STR, default=DS_REVISION, read_only=True
+                type=NodeType.STR,
+                default=self._dev_opts.get("about/revision", "99999"),
+                read_only=True,
             ),
             "about/dataserver": NodeInfo(
                 type=NodeType.STR, default="Emulated", read_only=True
@@ -250,23 +267,12 @@ class DevEmuZI(DevEmu):
         }
 
 
-class DevEmuHW(DevEmu):
-    def __init__(
-        self, serial: str, scheduler: sched.scheduler, dev_opts: dict[str, Any]
-    ):
-        super().__init__(scheduler, dev_opts)
-        self._serial = serial
-
-    def serial(self) -> str:
-        return self._serial
-
-
-class DevEmuDummy(DevEmuHW):
+class DevEmuDummy(DevEmu):
     def _node_def(self) -> dict[str, NodeInfo]:
         return {}
 
 
-class DevEmuHDAWG(DevEmuHW):
+class DevEmuHDAWG(DevEmu):
     def _awg_stop(self, awg_idx):
         self._set_val(f"awgs/{awg_idx}/enable", 0)
 
@@ -337,7 +343,7 @@ class DevEmuHDAWG(DevEmuHW):
         return nd
 
 
-class DevEmuUHFQA(DevEmuHW):
+class DevEmuUHFQA(DevEmu):
     """Emulated UHFQA.
 
     Supported emulation options:
@@ -415,7 +421,7 @@ class DevEmuUHFQA(DevEmuHW):
         return nd
 
 
-class Gen2Base(DevEmuHW):
+class Gen2Base(DevEmu):
     def _ref_clock_switched(self, requested_source: int):
         # 0 - INTERNAL
         # 1 - EXTERNAL
@@ -459,12 +465,21 @@ class DevEmuPQSC(Gen2Base):
         self._scheduler.enter(delay=0.001, priority=0, action=self._trig_stop)
 
     def _node_def(self) -> dict[str, NodeInfo]:
-        return {
+        nd = {
             **self._node_def_gen2(),
             "execution/enable": NodeInfo(
                 type=NodeType.INT, default=0, handler=DevEmuPQSC._trig_execute
             ),
         }
+        for zsync in range(18):
+            nd[f"zsyncs/{zsync}/connection/status"] = NodeInfo(
+                type=NodeType.INT, default=2
+            )
+            nd[f"zsyncs/{zsync}/connection/serial"] = NodeInfo(
+                type=NodeType.VECTOR_STR,
+                default=self._dev_opts.get(f"zsyncs/{zsync}/connection/serial", ""),
+            )
+        return nd
 
 
 class DevEmuSHFQABase(Gen2Base):
@@ -686,7 +701,7 @@ class DevEmuSHFQC(DevEmuSHFQABase, DevEmuSHFSGBase):
         return nd
 
 
-class DevEmuNONQC(DevEmuHW):
+class DevEmuNONQC(DevEmu):
     def _node_def(self) -> dict[str, NodeInfo]:
         return {}
 
@@ -731,12 +746,9 @@ class ziDAQServerEmulator:
         assert isinstance(port, int)
         super().__init__()
         self._scheduler = sched.scheduler()
-        self._device_type_map: dict[str, str] = {}
-        # TODO(2K): Defer "ZI" device initialization to allow passing options
-        self._devices: dict[str, DevEmu] = {
-            "ZI": DevEmuZI(self._scheduler, {"emu_server": self})
-        }
-        self._options: dict[str, dict[str, Any]] = {}
+        self._device_type_map: dict[str, str] = {"ZI": "ZI"}
+        self._devices: dict[str, DevEmu] = {}
+        self._options: dict[str, dict[str, Any]] = {"ZI": {"emu_server": self}}
 
     def map_device_type(self, serial: str, type: str):
         self._device_type_map[serial.upper()] = type.upper()
@@ -747,7 +759,9 @@ class ziDAQServerEmulator:
 
     def _device_factory(self, serial: str) -> DevEmu:
         dev_type_str = self._device_type_map.get(serial.upper())
-        if dev_type_str == "HDAWG":
+        if dev_type_str == "ZI":
+            dev_type = DevEmuZI
+        elif dev_type_str == "HDAWG":
             dev_type = DevEmuHDAWG
         elif dev_type_str == "UHFQA":
             dev_type = DevEmuUHFQA

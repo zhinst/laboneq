@@ -17,6 +17,7 @@ from laboneq.controller.devices.zi_node_monitor import (
     Condition,
     NodeControlBase,
     Response,
+    WaitCondition,
 )
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.controller.versioning import SUPPORT_PRE_V23_06, LabOneVersion
@@ -62,6 +63,21 @@ class DevicePQSC(DeviceZI):
             ),
             Response(f"/{self.serial}/system/clocks/referenceclock/in/status", 0),
         ]
+
+    def zsync_link_control_nodes(self) -> list[NodeControlBase]:
+        nodes = []
+        for port, dev_ref in self._downlinks.items():
+            dev = dev_ref[1]()
+            # No command, these nodes will respond to the follower device switching to ZSync
+            nodes.append(
+                WaitCondition(f"/{self.serial}/{port.lower()}/connection/status", 2),
+            )
+            nodes.append(
+                WaitCondition(
+                    f"/{self.serial}/{port.lower()}/connection/serial", dev.serial[3:]
+                ),
+            )
+        return nodes
 
     def collect_initialization_nodes(
         self, device_recipe_data: DeviceRecipeData, initialization: Initialization
@@ -204,15 +220,6 @@ class DevicePQSC(DeviceZI):
                 )
             ]
         )
-
-        # Ensure ZSync links are established
-        # TODO(2K): This is rather a hotfix, waiting to be done in parallel for all devices with
-        # subscription / poll
-        # TODO(2K): Verify also the downlink device serial (.../connection/serial) matches
-        for port in self._downlinks:
-            self._wait_for_node(
-                f"/{self.serial}/{port.lower()}/connection/status", 2, timeout=10
-            )
 
         nodes_to_configure_triggers = []
 

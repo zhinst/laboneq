@@ -40,6 +40,7 @@ from laboneq.controller.recipe_processor import (
 from laboneq.controller.results import build_partial_result, make_acquired_result
 from laboneq.controller.util import LabOneQControllerException, SweepParamsTracker
 from laboneq.controller.versioning import LabOneVersion
+from laboneq.core.exceptions import AbortExecution
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.core.utilities.replace_pulse import ReplacementType, calc_wave_replacements
@@ -545,7 +546,7 @@ class Controller:
         _logger.debug("Execution stopped")
 
     def connect(self):
-        now = time.time()
+        now = time.monotonic()
         if (
             self._last_connect_check_ts is None
             or now - self._last_connect_check_ts > CONNECT_CHECK_HOLDOFF
@@ -622,22 +623,24 @@ class Controller:
         self.connect()  # Ensure all connect configurations are still valid!
         self._prepare_result_shapes()
         try:
-            self._devices.start_monitor()
             self._initialize_devices()
 
             # Ensure no side effects from the previous execution in the same session
             self._current_waves = []
             self._nodes_from_user_functions = []
             _logger.info("Starting near-time execution...")
-            with tracing.get_tracer().start_span("near-time-execution"):
-                NearTimeRunner(controller=self).run(self._recipe_data.execution)
+            try:
+                with tracing.get_tracer().start_span("near-time-execution"):
+                    NearTimeRunner(controller=self).run(self._recipe_data.execution)
+            except AbortExecution:
+                # eat the exception
+                pass
             _logger.info("Finished near-time execution.")
             for _, device in self._devices.all:
                 device.check_errors()
         finally:
-            self._devices.stop_monitor()
             # Ensure that the experiment run time is not included in the idle timeout for the connection check.
-            self._last_connect_check_ts = time.time()
+            self._last_connect_check_ts = time.monotonic()
 
         self._devices.on_experiment_end()
 
@@ -789,6 +792,7 @@ class Controller:
                     data=np.empty(shape=[raw_acquire_length], dtype=np.complex128),
                     axis_name=["samples"],
                     axis=[np.arange(raw_acquire_length)],
+                    handle=handle,
                 )
                 empty_res.data[:] = np.nan
                 self._results.acquired_results[handle] = empty_res
@@ -810,6 +814,7 @@ class Controller:
                     data=np.empty(shape=tuple(shape), dtype=np.complex128),
                     axis_name=axis_name,
                     axis=axis,
+                    handle=handle,
                 )
                 if len(shape) == 0:
                     empty_res.data = np.nan

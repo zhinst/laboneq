@@ -8,7 +8,6 @@ import copy
 import logging
 import math
 from collections import namedtuple
-from contextlib import suppress
 from itertools import groupby
 from numbers import Number
 from typing import Any, Dict, List, NamedTuple, Tuple
@@ -27,7 +26,10 @@ from laboneq.compiler.code_generator.analyze_events import (
     analyze_trigger_events,
 )
 from laboneq.compiler.code_generator.analyze_playback import analyze_play_wave_times
-from laboneq.compiler.code_generator.command_table_tracker import CommandTableTracker
+from laboneq.compiler.code_generator.command_table_tracker import (
+    CommandTableTracker,
+    EntryLimitExceededError,
+)
 from laboneq.compiler.code_generator.feedback_register_allocator import (
     FeedbackRegisterAllocator,
 )
@@ -305,7 +307,6 @@ class CodeGenerator:
         self._wave_compressor = WaveCompressor()
 
         self.EMIT_TIMING_COMMENTS = self._settings.EMIT_TIMING_COMMENTS
-        self.PHASE_RESOLUTION_BITS = self._settings.PHASE_RESOLUTION_BITS
 
     def integration_weights(self):
         return self._integration_weights
@@ -730,10 +731,13 @@ class CodeGenerator:
                     )
                     if len(pulses_not_in_pulsedef) > 0:
                         continue
-                    if any(
-                        pulse_defs[pulse.pulse].can_compress
-                        for pulse in wave_form.pulses
-                    ) and device_type in [DeviceType.UHFQA, DeviceType.SHFQA]:
+                    if (
+                        any(
+                            pulse_defs[pulse.pulse].can_compress
+                            for pulse in wave_form.pulses
+                        )
+                        and device_type.is_qa_device
+                    ):
                         pulse_names = [
                             pulse.pulse
                             for pulse in wave_form.pulses
@@ -1024,8 +1028,10 @@ class CodeGenerator:
                 delay=delay,
                 other_events=sampled_events,
                 phase_resolution_range=self.phase_resolution_range(),
+                amplitude_resolution_range=self.amplitude_resolution_range(),
                 waveform_size_hints=self.waveform_size_hints(device_type),
                 use_command_table=use_command_table,
+                use_amplitude_increment=self._settings.USE_AMPLITUDE_INCREMENT,
             )
 
             sampled_signatures = self._sample_pulses(
@@ -1087,11 +1093,13 @@ class CodeGenerator:
                     delay=signal_obj.total_delay,
                     other_events=sampled_events,
                     phase_resolution_range=self.phase_resolution_range(),
+                    amplitude_resolution_range=self.amplitude_resolution_range(),
                     waveform_size_hints=self.waveform_size_hints(
                         signal_obj.awg.device_type
                     ),
                     sub_channel=sub_channel,
                     use_command_table=use_command_table,
+                    use_amplitude_increment=self._settings.USE_AMPLITUDE_INCREMENT,
                 )
 
                 sampled_signatures = self._sample_pulses(
@@ -1154,6 +1162,7 @@ class CodeGenerator:
                 delay=signal_a.total_delay,
                 other_events=sampled_events,
                 phase_resolution_range=self.phase_resolution_range(),
+                amplitude_resolution_range=self.amplitude_resolution_range(),
                 waveform_size_hints=self.waveform_size_hints(signal_a.awg.device_type),
                 use_command_table=False,  # do not set amplitude/oscillator phase via CT
             )
@@ -1240,8 +1249,18 @@ class CodeGenerator:
         setup_sine_phase(awg, command_table_tracker, init_generator, use_command_table)
 
         add_wait_trigger_statements(awg, init_generator, deferred_function_calls)
+        try:
+            handler.handle_sampled_events(sampled_events)
+        except EntryLimitExceededError as error:
+            msg = (
+                f"Device '{awg.device_id}', AWG({awg.awg_number}): "
+                "Exceeded maximum number of command table entries.\n"
+                "Try the following:\n"
+                "- Reduce the number of sweep steps\n"
+                "- Reduce the number of variations in the pulses that are being played\n"
+            )
+            raise LabOneQException(f"Compiler error. {msg}") from error
 
-        handler.handle_sampled_events(sampled_events)
         self._command_table_match_offsets[awg.key] = handler.command_table_match_offset
 
         seq_c_generators = []
@@ -1329,15 +1348,16 @@ class CodeGenerator:
         signatures = set()
         for interval_event_list in interval_events.sequence.values():
             for interval_event in interval_event_list:
-                with suppress(KeyError):
-                    signature: PlaybackSignature = interval_event.params[
-                        "playback_signature"
-                    ]
-                    _logger.debug("Signature found %s in %s", signature, interval_event)
-                    if any(p.pulse for p in signature.waveform.pulses):
-                        signatures.add(signature)
-                    else:
-                        sampled_signatures[signature.waveform] = None
+                if interval_event.type != AWGEventType.PLAY_WAVE:
+                    continue
+                signature: PlaybackSignature = interval_event.params[
+                    "playback_signature"
+                ]
+                _logger.debug("Signature found %s in %s", signature, interval_event)
+                if any(p.pulse for p in signature.waveform.pulses):
+                    signatures.add(signature)
+                else:
+                    sampled_signatures[signature.waveform] = None
         _logger.debug("Signatures: %s", signatures)
 
         needs_conjugate = device_type == DeviceType.SHFSG
@@ -1661,10 +1681,16 @@ class CodeGenerator:
             )
 
     def phase_resolution_range(self) -> int:
-        if self.PHASE_RESOLUTION_BITS < 0:
+        if self._settings.PHASE_RESOLUTION_BITS < 0:
             # disable quantization
             return 0
-        return 1 << self.PHASE_RESOLUTION_BITS
+        return 1 << self._settings.PHASE_RESOLUTION_BITS
+
+    def amplitude_resolution_range(self) -> int:
+        if self._settings.AMPLITUDE_RESOLUTION_BITS < 0:
+            # disable quantization
+            return 0
+        return 1 << self._settings.AMPLITUDE_RESOLUTION_BITS
 
     @staticmethod
     def post_process_sampled_events(

@@ -67,12 +67,13 @@ class LabOneQFacade:
         new_experiment = convert_Experiment(session.experiment)
         signal_mapping = convert_signal_map(session.experiment)
 
-        api = ApplicationManager.instance().laboneq()
-        api.set_current_setup(new_setup)
-        api.set_current_experiment(new_experiment)
-        api.map_signals(signal_mapping)
-
-        payload = api.build_payload_for_current_experiment(compiler_settings)
+        payload_builder = ApplicationManager.instance().payload_builder()
+        payload = payload_builder.build_payload(
+            new_setup,
+            new_experiment,
+            signal_mapping,
+            compiler_settings,
+        )
 
         compiled_experiment = CompiledExperiment(
             device_setup=session.device_setup,

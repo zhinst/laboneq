@@ -167,6 +167,10 @@ class WaveScroller:
         self.last_played_value = 0
         self.oscillator_phase: Optional[float] = None
 
+        # Only Hirzel supports 4 registers, for other devices, the simulator simply does
+        # not use the extra registers.
+        self.amplitude_registers = [1.0 for _ in range(4)]
+
         self.processors = {
             Operation.PLAY_WAVE: self._process_play_wave,
             Operation.PLAY_HOLD: self._process_play_hold,
@@ -222,12 +226,10 @@ class WaveScroller:
         return target_ops
 
     def _process_play_wave(self, event: SeqCEvent, snippet_start_samples: int):
-        channels = event.args[0]
+        wave_data_indices = event.args[0]
         ct_info: CommandTableEntryInfo = event.args[1]
-        if channels[self.ch[0] % 2] is None:
-            # A None for the first channel represents a FUNCTIONAL pulse
-            # which is not yet supported by the simulator
-            return
+
+        wave = None
 
         if len(self.ch) > 1:
             ct_abs_phase = ct_info.abs_phase if ct_info is not None else None
@@ -239,30 +241,46 @@ class WaveScroller:
                     self.oscillator_phase or 0.0
                 ) + ct_rel_phase / (180 / math.pi)
 
-            wave = 1j * self.sim.waves[channels[self.ch[1] % 2]]
-            wave += self.sim.waves[channels[self.ch[0] % 2]]
+            if wave_data_indices is not None:
+                wave = 1j * self.sim.waves[wave_data_indices[self.ch[1] % 2]]
+                wave += self.sim.waves[wave_data_indices[self.ch[0] % 2]]
 
-            # If the command table phase is set, assume that the signal is complex
-            # (rather than 2x real)
-            if self.oscillator_phase is not None:
-                wave *= np.exp(-1j * self.oscillator_phase)
+                # If the command table phase is set, assume that the signal is complex
+                # (rather than 2x real)
+                if self.oscillator_phase is not None:
+                    wave *= np.exp(-1j * self.oscillator_phase)
 
         else:
-            wave = self.sim.waves[channels[self.ch[0] % 2]]
-            # Note: CT phase not implemented on RF signals
+            if wave_data_indices is not None:
+                wave_data_index = wave_data_indices[self.ch[0] % 2]
+                if wave_data_index is None:
+                    # the requested channel is the first half of a pair of real channels,
+                    # but it is unused.
+                    return
+                wave = self.sim.waves[wave_data_index]
+                wave = (
+                    wave.copy()
+                )  # so amplitude below does not mutate original waveform
+                # Note: CT phase not implemented on RF signals
 
-        ct_abs_amplitude = ct_info.abs_amplitude if ct_info is not None else None
-        if ct_abs_amplitude is not None:
-            wave = wave * ct_abs_amplitude
+        if ct_info is not None:
+            amp_register = ct_info.amp_register or 0
+            if (abs_amp := ct_info.abs_amplitude) is not None:
+                self.amplitude_registers[amp_register] = abs_amp
+            elif (rel_amp := ct_info.rel_amplitude) is not None:
+                self.amplitude_registers[amp_register] += rel_amp
+            if wave is not None:
+                wave *= self.amplitude_registers[amp_register]
 
-        _slice_copy(
-            self.wave_snippet,
-            snippet_start_samples,
-            wave,
-            event.start_samples,
-            event.length_samples,
-        )
-        self.last_played_value = wave[event.length_samples - 1]
+        if wave is not None:
+            _slice_copy(
+                self.wave_snippet,
+                snippet_start_samples,
+                wave,
+                event.start_samples,
+                event.length_samples,
+            )
+            self.last_played_value = wave[event.length_samples - 1]
 
         markers = event.args[2] if len(event.args) > 2 else {}
 
