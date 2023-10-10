@@ -766,8 +766,6 @@ class Scheduler:
         lengths_int = []
         amplitudes = []
         phases = []
-        set_oscillator_phases = []
-        increment_oscillator_phases = []
         play_pulse_params = []
         pulse_pulse_params = []
         freqs = []
@@ -779,16 +777,14 @@ class Scheduler:
             offsets_int.append(pulse_schedule.offset)
             amplitudes.append(pulse_schedule.amplitude)
             phases.append(pulse_schedule.phase)
-            set_oscillator_phases.append(pulse_schedule.set_oscillator_phase)
-            increment_oscillator_phases.append(
-                pulse_schedule.increment_oscillator_phase
-            )
             pulse_pulse_params.append(pulse_schedule.pulse_pulse_params)
             play_pulse_params.append(pulse_schedule.play_pulse_params)
             freqs.append(pulse_schedule.oscillator_frequency)
 
             assert pulse_schedule.is_acquire
             assert not pulse.markers
+            assert pulse.set_oscillator_phase is None
+            assert pulse.increment_oscillator_phase is None
 
         assert (
             len(set(offsets_int)) == 1
@@ -806,8 +802,6 @@ class Scheduler:
             amplitudes=amplitudes,
             phases=phases,
             offset=offsets_int[0],
-            set_oscillator_phases=set_oscillator_phases,
-            increment_oscillator_phases=increment_oscillator_phases,
             oscillator_frequencies=freqs,
             play_pulse_params=play_pulse_params,
             pulse_pulse_params=pulse_pulse_params,

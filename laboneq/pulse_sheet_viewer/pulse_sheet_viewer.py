@@ -96,12 +96,10 @@ class PulseSheetViewer:
     @staticmethod
     def generate_viewer_html_text(events, title, interactive: bool = False):
         events_json = json.dumps(events["event_list"], indent=2)
-        section_graph_json = json.dumps(events["section_graph"], indent=2)
         section_info_json = json.dumps(events["section_info"], indent=2)
         section_signals_with_children_json = json.dumps(
             events["section_signals_with_children"], indent=2
         )
-        subsection_map_json = json.dumps(events["subsection_map"], indent=2)
         sampling_rates_json = json.dumps(events["sampling_rates"], indent=2)
         interactive_json = json.dumps(interactive, indent=2)
 
@@ -109,9 +107,7 @@ class PulseSheetViewer:
             """
             window.qccs_pulse_sheet_title = {};
             window.qccs_current_events = {};
-            window.qccs_current_section_graph = {};
             window.qccs_current_section_info = {};
-            window.qccs_current_subsection_map = {};
             window.qccs_current_section_signals_with_children = {};
             window.qccs_current_sampling_rates = {};
             window.qccs_interactive = {};
@@ -119,9 +115,7 @@ class PulseSheetViewer:
         ).format(
             repr(title),
             events_json,
-            section_graph_json,
             section_info_json,
-            subsection_map_json,
             section_signals_with_children_json,
             sampling_rates_json,
             interactive_json,
@@ -165,15 +159,13 @@ def show_pulse_sheet(
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     filename = f"{name}_{timestamp}.html"
 
-    if (
-        compiled_experiment.schedule is not None
-        and len(compiled_experiment.schedule["event_list"]) >= max_events_to_publish
-    ):
-        schedule = compiled_experiment.schedule
-        compiled_experiment_for_psv = compiled_experiment
-    else:
+    schedule = compiled_experiment.scheduled_experiment.schedule
+
+    if (schedule is None) or (len(schedule["event_list"]) < max_events_to_publish):
         _logger.info(
-            "Requesting more events for the PSV than currently published, recompiling experiment"
+            "Recompiling the experiment due to missing extra information in the compiled experiment. "
+            f"Compile with `OUTPUT_EXTRAS=True` and `MAX_EVENTS_TO_PUBLISH={max_events_to_publish}` "
+            "to bypass this step with a small impact on the compilation time."
         )
         dummy_session = SimpleNamespace()
         dummy_session.experiment = compiled_experiment.experiment
@@ -184,13 +176,14 @@ def show_pulse_sheet(
             _logger,
             {
                 "MAX_EVENTS_TO_PUBLISH": max_events_to_publish,
-                "PREPARE_PSV_DATA": True,
+                "OUTPUT_EXTRAS": True,
                 "LOG_REPORT": False,
             },
         )
-        schedule = compiled_experiment_for_psv.schedule
         compiled_experiment_for_psv.experiment = compiled_experiment.experiment
-        compiled_experiment.scheduled_experiment.schedule = schedule
+
+        compiled_experiment = compiled_experiment_for_psv
+        schedule = compiled_experiment_for_psv.scheduled_experiment.schedule
 
     if not interactive:
         PulseSheetViewer.generate_viewer_html_file(schedule, name, filename)

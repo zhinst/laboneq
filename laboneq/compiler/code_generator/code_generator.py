@@ -879,13 +879,7 @@ class CodeGenerator:
                 f"{awg.device_type}/{awg.awg_number} global delay {EngNumber(global_delay)} sampling_rate: {EngNumber(global_sampling_rate)}Sa/s "
             )
 
-        use_command_table = (
-            awg.device_type == DeviceType.HDAWG
-            and self._settings.HDAWG_FORCE_COMMAND_TABLE
-        ) or (
-            awg.device_type == DeviceType.SHFSG
-            and self._settings.SHFSG_FORCE_COMMAND_TABLE
-        )
+        use_command_table = awg.device_type in (DeviceType.HDAWG, DeviceType.SHFSG)
         signal_ids = set(signal.id for signal in awg.signals)
         own_sections = set(
             event["section_name"]

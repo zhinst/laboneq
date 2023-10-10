@@ -5,6 +5,7 @@
 # For tests
 pytest
 pytest-assume
+pytest-asyncio
 pytest-cov
 pytest_mock
 pytest-httpserver

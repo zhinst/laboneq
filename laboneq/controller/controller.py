@@ -43,6 +43,7 @@ from laboneq.controller.versioning import LabOneVersion
 from laboneq.core.exceptions import AbortExecution
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
+from laboneq.core.utilities.async_helpers import run_async
 from laboneq.core.utilities.replace_pulse import ReplacementType, calc_wave_replacements
 from laboneq.data.execution_payload import TargetSetup
 from laboneq.data.experiment_results import ExperimentResults
@@ -137,13 +138,13 @@ class Controller:
         for osc_param in sorted(osc_params, key=lambda p: p.id):
             self._devices.find_by_uid(osc_param.device_id).allocate_osc(osc_param)
 
-    def _reset_to_idle_state(self):
+    async def _reset_to_idle_state(self):
         reset_nodes = []
         for _, device in self._devices.all:
             reset_nodes.extend(device.collect_reset_nodes())
-        batch_set(reset_nodes)
+        await batch_set(reset_nodes)
 
-    def _apply_recipe_initializations(self):
+    async def _apply_recipe_initializations(self):
         nodes_to_initialize: list[DaqNodeAction] = []
         for initialization in self._recipe_data.initializations:
             device = self._devices.find_by_uid(initialization.device_uid)
@@ -155,9 +156,9 @@ class Controller:
             )
             nodes_to_initialize.extend(device.collect_osc_initialization_nodes())
 
-        batch_set(nodes_to_initialize)
+        await batch_set(nodes_to_initialize)
 
-    def _set_nodes_before_awg_program_upload(self):
+    async def _set_nodes_before_awg_program_upload(self):
         nodes_to_initialize = []
         for initialization in self._recipe_data.initializations:
             device = self._devices.find_by_uid(initialization.device_uid)
@@ -166,10 +167,10 @@ class Controller:
                     initialization, self._recipe_data
                 )
             )
-        batch_set(nodes_to_initialize)
+        await batch_set(nodes_to_initialize)
 
     @tracing.trace("awg-program-handler")
-    def _upload_awg_programs(self, nt_step: NtStepKey, rt_section_uid: str):
+    async def _upload_awg_programs(self, nt_step: NtStepKey, rt_section_uid: str):
         # Mise en place:
         awg_data: dict[DeviceZI, list[_UploadItem]] = defaultdict(list)
         awgs_used: dict[DeviceZI, set[int]] = defaultdict(set)
@@ -321,7 +322,7 @@ class Controller:
         _logger.debug("Started upload of AWG programs...")
         with tracing.get_tracer().start_span("upload-awg-programs") as _:
             for daq, nodes in elf_node_settings.items():
-                daq.batch_set(nodes)
+                await daq.batch_set(nodes)
 
             if len(elf_upload_conditions) > 0:
                 _logger.debug("Waiting for devices...")
@@ -340,7 +341,7 @@ class Controller:
                 _logger.debug("Started upload of waveforms...")
                 with tracing.get_tracer().start_span("upload-waveforms") as _:
                     for daq, nodes in wf_node_settings.items():
-                        daq.batch_set(nodes)
+                        await daq.batch_set(nodes)
         _logger.debug("Finished upload.")
 
     @classmethod
@@ -376,7 +377,7 @@ class Controller:
                     )
         _logger.debug("Finished compilation.")
 
-    def _set_nodes_after_awg_program_upload(self):
+    async def _set_nodes_after_awg_program_upload(self):
         nodes_to_initialize = []
         for initialization in self._recipe_data.initializations:
             device = self._devices.find_by_uid(initialization.device_uid)
@@ -384,14 +385,14 @@ class Controller:
                 device.collect_awg_after_upload_nodes(initialization)
             )
 
-        batch_set(nodes_to_initialize)
+        await batch_set(nodes_to_initialize)
 
-    def _initialize_awgs(self, nt_step: NtStepKey, rt_section_uid: str):
-        self._set_nodes_before_awg_program_upload()
-        self._upload_awg_programs(nt_step=nt_step, rt_section_uid=rt_section_uid)
-        self._set_nodes_after_awg_program_upload()
+    async def _initialize_awgs(self, nt_step: NtStepKey, rt_section_uid: str):
+        await self._set_nodes_before_awg_program_upload()
+        await self._upload_awg_programs(nt_step=nt_step, rt_section_uid=rt_section_uid)
+        await self._set_nodes_after_awg_program_upload()
 
-    def _configure_triggers(self):
+    async def _configure_triggers(self):
         nodes_to_configure_triggers = []
 
         for uid, device in itertools.chain(
@@ -401,10 +402,12 @@ class Controller:
             if init is None:
                 continue
             nodes_to_configure_triggers.extend(
-                device.collect_trigger_configuration_nodes(init, self._recipe_data)
+                await device.collect_trigger_configuration_nodes(
+                    init, self._recipe_data
+                )
             )
 
-        batch_set(nodes_to_configure_triggers)
+        await batch_set(nodes_to_configure_triggers)
 
     def _prepare_nt_step(
         self, sweep_params_tracker: SweepParamsTracker
@@ -427,12 +430,12 @@ class Controller:
 
         return nt_sweep_nodes
 
-    def _initialize_devices(self):
-        self._reset_to_idle_state()
+    async def _initialize_devices(self):
+        await self._reset_to_idle_state()
         self._allocate_resources()
-        self._apply_recipe_initializations()
+        await self._apply_recipe_initializations()
 
-    def _execute_one_step_followers(self, with_pipeliner: bool):
+    async def _execute_one_step_followers(self, with_pipeliner: bool):
         _logger.debug("Settings nodes to start on followers")
 
         nodes_to_execute = []
@@ -441,7 +444,7 @@ class Controller:
                 device.collect_execution_nodes(with_pipeliner=with_pipeliner)
             )
 
-        batch_set(nodes_to_execute)
+        await batch_set(nodes_to_execute)
 
         response_waiter = ResponseWaiter()
         for _, device in self._devices.followers:
@@ -465,9 +468,9 @@ class Controller:
         for _, device in self._devices.followers:
             nodes_to_execute.extend(device.collect_internal_start_execution_nodes())
 
-        batch_set(nodes_to_execute)
+        await batch_set(nodes_to_execute)
 
-    def _execute_one_step_leaders(self, with_pipeliner: bool):
+    async def _execute_one_step_leaders(self, with_pipeliner: bool):
         _logger.debug("Settings nodes to start on leaders")
         nodes_to_execute = []
 
@@ -475,7 +478,7 @@ class Controller:
             nodes_to_execute.extend(
                 device.collect_execution_nodes(with_pipeliner=with_pipeliner)
             )
-        batch_set(nodes_to_execute)
+        await batch_set(nodes_to_execute)
 
     def _wait_execution_to_stop(
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
@@ -507,23 +510,25 @@ class Controller:
                 response_waiter.remaining_str(),
             )
 
-    def _setup_one_step_execution(self, with_pipeliner: bool):
+    async def _setup_one_step_execution(self, with_pipeliner: bool):
         nodes_to_execute = []
         for _, device in self._devices.all:
             nodes_to_execute.extend(
                 device.collect_execution_setup_nodes(with_pipeliner=with_pipeliner)
             )
-        batch_set(nodes_to_execute)
+        await batch_set(nodes_to_execute)
 
-    def _teardown_one_step_execution(self, with_pipeliner: bool):
+    async def _teardown_one_step_execution(self, with_pipeliner: bool):
         nodes_to_execute = []
         for _, device in self._devices.all:
             nodes_to_execute.extend(
                 device.collect_execution_teardown_nodes(with_pipeliner=with_pipeliner)
             )
-        batch_set(nodes_to_execute)
+        await batch_set(nodes_to_execute)
 
-    def _execute_one_step(self, acquisition_type: AcquisitionType, rt_section_uid: str):
+    async def _execute_one_step(
+        self, acquisition_type: AcquisitionType, rt_section_uid: str
+    ):
         _logger.debug("Step executing")
 
         self._devices.flush_monitor()
@@ -531,27 +536,30 @@ class Controller:
         rt_execution_info = self._recipe_data.rt_execution_infos.get(rt_section_uid)
         with_pipeliner = rt_execution_info.pipeliner_chunk_count is not None
 
-        self._setup_one_step_execution(with_pipeliner=with_pipeliner)
+        await self._setup_one_step_execution(with_pipeliner=with_pipeliner)
 
         # Can't batch everything together, because PQSC needs to be executed after HDs
         # otherwise it can finish before AWGs are started, and the trigger is lost
-        self._execute_one_step_followers(with_pipeliner=with_pipeliner)
-        self._execute_one_step_leaders(with_pipeliner=with_pipeliner)
+        await self._execute_one_step_followers(with_pipeliner=with_pipeliner)
+        await self._execute_one_step_leaders(with_pipeliner=with_pipeliner)
 
         _logger.debug("Execution started")
 
         self._wait_execution_to_stop(acquisition_type, with_pipeliner=with_pipeliner)
-        self._teardown_one_step_execution(with_pipeliner=with_pipeliner)
+        await self._teardown_one_step_execution(with_pipeliner=with_pipeliner)
 
         _logger.debug("Execution stopped")
 
     def connect(self):
+        run_async(self.connect_async())
+
+    async def connect_async(self):
         now = time.monotonic()
         if (
             self._last_connect_check_ts is None
             or now - self._last_connect_check_ts > CONNECT_CHECK_HOLDOFF
         ):
-            self._devices.connect()
+            await self._devices.connect()
 
         try:
             self._dataserver_version = next(self._devices.leaders)[
@@ -570,14 +578,28 @@ class Controller:
         logical_signals: list[str] = None,
         unused_only: bool = False,
     ):
-        self._devices.disable_outputs(device_uids, logical_signals, unused_only)
+        run_async(self.disable_outputs_async(device_uids, logical_signals, unused_only))
+
+    async def disable_outputs_async(
+        self,
+        device_uids: list[str] = None,
+        logical_signals: list[str] = None,
+        unused_only: bool = False,
+    ):
+        await self._devices.disable_outputs(device_uids, logical_signals, unused_only)
 
     def shut_down(self):
+        run_async(self.shut_down_async())
+
+    async def shut_down_async(self):
         _logger.info("Shutting down all devices...")
         self._devices.shut_down()
         _logger.info("Successfully Shut down all devices.")
 
     def disconnect(self):
+        run_async(self.disconnect_async())
+
+    async def disconnect_async(self):
         _logger.info("Disconnecting from all devices and servers...")
         self._devices.disconnect()
         self._last_connect_check_ts = None
@@ -585,6 +607,11 @@ class Controller:
 
     # TODO(2K): remove legacy code
     def execute_compiled_legacy(
+        self, compiled_experiment: CompiledExperiment, session: Session = None
+    ):
+        run_async(self.execute_compiled_legacy_async(compiled_experiment, session))
+
+    async def execute_compiled_legacy_async(
         self, compiled_experiment: CompiledExperiment, session: Session = None
     ):
         execution: Statement
@@ -603,13 +630,16 @@ class Controller:
         )
 
         self._session = session
-        self._execute_compiled_impl()
+        await self._execute_compiled_impl()
         if session and session._last_results:
             session._last_results.acquired_results = self._results.acquired_results
             session._last_results.user_func_results = self._results.user_func_results
             session._last_results.execution_errors = self._results.execution_errors
 
     def execute_compiled(self, job: ExecutionPayload):
+        run_async(self.execute_compiled_async(job))
+
+    async def execute_compiled_async(self, job: ExecutionPayload):
         self._recipe_data = pre_process_compiled(
             job.scheduled_experiment,
             self._devices,
@@ -617,13 +647,13 @@ class Controller:
             self._dataserver_version,
         )
         self._session = None
-        self._execute_compiled_impl()
+        await self._execute_compiled_impl()
 
-    def _execute_compiled_impl(self):
-        self.connect()  # Ensure all connect configurations are still valid!
+    async def _execute_compiled_impl(self):
+        await self.connect_async()  # Ensure all connect configurations are still valid!
         self._prepare_result_shapes()
         try:
-            self._initialize_devices()
+            await self._initialize_devices()
 
             # Ensure no side effects from the previous execution in the same session
             self._current_waves = []
@@ -631,7 +661,9 @@ class Controller:
             _logger.info("Starting near-time execution...")
             try:
                 with tracing.get_tracer().start_span("near-time-execution"):
-                    NearTimeRunner(controller=self).run(self._recipe_data.execution)
+                    await NearTimeRunner(controller=self).run(
+                        self._recipe_data.execution
+                    )
             except AbortExecution:
                 # eat the exception
                 pass
@@ -642,13 +674,13 @@ class Controller:
             # Ensure that the experiment run time is not included in the idle timeout for the connection check.
             self._last_connect_check_ts = time.monotonic()
 
-        self._devices.on_experiment_end()
+        await self._devices.on_experiment_end()
 
         if self._run_parameters.shut_down is True:
-            self.shut_down()
+            await self.shut_down_async()
 
         if self._run_parameters.disconnect is True:
-            self.disconnect()
+            await self.disconnect_async()
 
     def _find_awg(self, seqc_name: str) -> tuple[str, int]:
         # TODO(2K): Do this in the recipe preprocessor, or even modify the compiled experiment
@@ -822,9 +854,7 @@ class Controller:
                     empty_res.data[:] = np.nan
                 self._results.acquired_results[handle] = empty_res
 
-    def _read_one_step_results(self, nt_step: NtStepKey, rt_section_uid: str):
-        if rt_section_uid is None:
-            return  # Old recipe-based execution - skip partial result processing
+    async def _read_one_step_results(self, nt_step: NtStepKey, rt_section_uid: str):
         rt_execution_info = self._recipe_data.rt_execution_infos[rt_section_uid]
         for awg_key, awg_config in self._recipe_data.awgs_producing_results():
             device = self._devices.find_by_uid(awg_key.device_uid)
@@ -847,7 +877,7 @@ class Controller:
                     effective_averages = 1
                 else:
                     effective_averages = rt_execution_info.averages
-                device.check_results_acquired_status(
+                await device.check_results_acquired_status(
                     awg_key.awg_index,
                     rt_execution_info.acquisition_type,
                     awg_config.result_length,

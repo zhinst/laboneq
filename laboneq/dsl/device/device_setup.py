@@ -32,26 +32,26 @@ if TYPE_CHECKING:
 @classformatter
 @dataclass(init=True, repr=True, order=True)
 class DeviceSetup:
-    """Data object describing the device setup of a QCCS system."""
+    """Data object describing the device setup of a QCCS system.
 
-    #: Unique identifier.
+    Attributes:
+        uid (Optional[str]): Unique identifier of the setup.
+        servers (Optional[dict[str, DataServer]]): Servers of the device setup.
+        instruments (Optional[list[Instrument]]): Instruments of the device setup.
+            Instruments must have unique UIDs.
+        physical_channel_groups (Optional[dict[str, PhysicalChannelGroup]]): Physical channels of this device setup, by name of the device.
+        logical_signal_groups (Optional[dict[str, LogicalSignalGroup]]): Logical signal groups of this device setup, by name of the group.
+        qubits (Optional[dict[str, quantum.QuantumElement]]): Experimental: Qubits of this device setup, by the name of the qubit.
+            Qubits are generated from the descriptor `qubits` section.
+    """
+
     uid: str = field(default=None)
-
-    #: Servers of the device setup.
     servers: Dict[str, DataServer] = field(default_factory=dict)
-
-    #: Instruments of the device setup.
-    #: Instruments must have unique UIDs.
     instruments: List[Instrument] = field(default_factory=list)
-
-    #: Physical channels of this device setup, by name of the device.
     physical_channel_groups: Dict[str, PhysicalChannelGroup] = field(
         default_factory=dict
     )
-    #: Logical signal groups of this device setup, by name of the group.
     logical_signal_groups: Dict[str, LogicalSignalGroup] = field(default_factory=dict)
-    #: Experimental: Qubits of this device setup, by the name of the qubit.
-    #: Qubits are generated from the descriptor `qubits` section.
     qubits: Dict[str, "quantum.QuantumElement"] = field(default_factory=dict)
 
     def instrument_by_uid(self, uid: str) -> Instrument | None:
@@ -67,7 +67,7 @@ class DeviceSetup:
         Raises:
             KeyError: Logical signal UID was not found.
 
-        .. versionadded:: 2.5.0
+        !!! version-added "Added in version 2.5.0"
         """
         for grp in self.logical_signal_groups.values():
             for sig in grp.logical_signals.values():
@@ -196,12 +196,13 @@ class DeviceSetup:
             return self._get_phyiscal_channel_calibration(rest, path)
         raise LabOneQException(f"No calibration found at {path}.")
 
-    def get_calibration(self, path=None) -> Calibration:
+    def get_calibration(self, path: str | None = None) -> Calibration:
         """Retrieve the calibration of a specific path.
 
         Args:
             path (str):
                 Path of the calibration information.
+                If `path` is not given, full calibration is returned.
 
         Returns:
             calibration:
@@ -250,18 +251,18 @@ class DeviceSetup:
             }
         return calibratables
 
-    @staticmethod
-    def load(filename):
-        """Serialize the device setup into a specified filename.
+    @classmethod
+    def load(cls, filename: str) -> DeviceSetup:
+        """Load the device setup from a specified file.
 
         Args:
             filename (str): Filename.
         """
         # TODO ErC: Error handling
-        return Serializer.from_json_file(filename, DeviceSetup)
+        return Serializer.from_json_file(filename, cls)
 
-    def save(self, filename):
-        """Load the device setup from a specified filename.
+    def save(self, filename: str):
+        """Save the device setup to a specified file.
 
         Args:
             filename (str): Filename.
@@ -269,17 +270,19 @@ class DeviceSetup:
         # TODO ErC: Error handling
         Serializer.to_json_file(self, filename)
 
-    def dumps(self):
+    def dumps(self) -> str:
+        """Serialize object into a JSON string."""
         # TODO ErC: Error handling
         return Serializer.to_json(self, omit_none_fields=True)
 
-    @staticmethod
+    @classmethod
     def from_descriptor(
+        cls,
         yaml_text: str,
         server_host: str = None,
         server_port: str = None,
         setup_name: str = None,
-    ):
+    ) -> DeviceSetup:
         """Construct the device setup from a YAML descriptor.
 
         Args:
@@ -288,19 +291,20 @@ class DeviceSetup:
             server_port (str): Port of the server that should be created.
             setup_name (str): Name of the setup that should be created.
         """
-        return DeviceSetup(
+        return cls(
             **_DeviceSetupGenerator.from_descriptor(
                 yaml_text, server_host, server_port, setup_name
             )
         )
 
-    @staticmethod
+    @classmethod
     def from_yaml(
+        cls,
         filepath,
         server_host: str = None,
         server_port: str = None,
         setup_name: str = None,
-    ):
+    ) -> DeviceSetup:
         """Construct the device setup from a YAML file.
 
         Args:
@@ -309,7 +313,7 @@ class DeviceSetup:
             server_port (str): Port of the server that should be created.
             setup_name (str): Name of the setup that should be created.
         """
-        return DeviceSetup(
+        return cls(
             **_DeviceSetupGenerator.from_yaml(
                 filepath, server_host, server_port, setup_name
             )
@@ -322,7 +326,7 @@ class DeviceSetup:
         server_host: Optional[str] = None,
         server_port: Optional[Union[str, int]] = None,
         setup_name: Optional[str] = None,
-    ) -> "DeviceSetup":
+    ) -> DeviceSetup:
         """Construct the device setup from a Python dictionary.
 
         Args:
@@ -331,7 +335,7 @@ class DeviceSetup:
             server_port: Port of the server that should be created.
             setup_name: Name of the setup that should be created.
 
-        .. versionadded:: 2.5.0
+        !!! version-added "Added in version 2.5.0"
         """
         return cls(
             **_DeviceSetupGenerator.from_dicts(
@@ -345,8 +349,9 @@ class DeviceSetup:
             )
         )
 
-    @staticmethod
+    @classmethod
     def from_dicts(
+        cls,
         *,
         instrument_list: InstrumentsType = None,
         instruments: InstrumentsType = None,
@@ -355,7 +360,7 @@ class DeviceSetup:
         server_host: str = None,
         server_port: str = None,
         setup_name: str = None,
-    ):
+    ) -> DeviceSetup:
         """Construct the device setup from Python dicts, same structure as yaml
 
         Args:
@@ -373,7 +378,7 @@ class DeviceSetup:
             setup_name:
                 Name of the setup that should be created.
         """
-        return DeviceSetup(
+        return cls(
             **_DeviceSetupGenerator.from_dicts(
                 instrument_list=instrument_list,
                 instruments=instruments,

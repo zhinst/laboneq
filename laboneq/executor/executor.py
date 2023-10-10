@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from contextlib import contextmanager
+from dataclasses import dataclass
 from enum import Enum, Flag, auto
 from typing import Any, Iterator
 
@@ -67,10 +67,27 @@ class ExecutionScope:
         return self._root
 
 
+class StatementType(Enum):
+    Set = auto()
+    UserFunc = auto()
+    Acquire = auto()
+    SetSwParam = auto()
+    ForLoopEntry = auto()
+    ForLoopExit = auto()
+    RTEntry = auto()
+    RTExit = auto()
+
+
+@dataclass
+class Notification:
+    statement_type: StatementType
+    args: dict[str, Any]
+
+
 class Statement(ABC):
     @abstractmethod
-    def run(self, scope: ExecutionScope):
-        pass
+    def run(self, scope: ExecutionScope) -> Iterator[Notification]:
+        ...
 
 
 class Sequence(Statement):
@@ -80,9 +97,9 @@ class Sequence(Statement):
     def append_statement(self, statement: Statement):
         self.sequence.append(statement)
 
-    def run(self, scope: ExecutionScope):
+    def run(self, scope: ExecutionScope) -> Iterator[Notification]:
         for statement in self.sequence:
-            statement.run(scope)
+            yield from statement.run(scope)
 
     def __eq__(self, other):
         if other is self:
@@ -96,8 +113,8 @@ class Sequence(Statement):
 
 
 class Nop(Statement):
-    def run(self, scope: ExecutionScope):
-        pass
+    def run(self, scope: ExecutionScope) -> Iterator[Notification]:
+        yield from ()
 
     def __eq__(self, other):
         if other is self:
@@ -115,11 +132,13 @@ class ExecSet(Statement):
         self.path = path
         self.val = val
 
-    def run(self, scope: ExecutionScope):
+    def run(self, scope: ExecutionScope) -> Iterator[Notification]:
         val = (
             scope.resolve_variable(self.val) if isinstance(self.val, str) else self.val
         )
-        scope.root.set_handler(self.path, val)
+        yield Notification(
+            statement_type=StatementType.Set, args=dict(path=self.path, value=val)
+        )
 
     def __eq__(self, other):
         if other is self:
@@ -137,13 +156,16 @@ class ExecUserCall(Statement):
         self.func_name = func_name
         self.args = args
 
-    def run(self, scope: ExecutionScope):
+    def run(self, scope: ExecutionScope) -> Iterator[Notification]:
         resolved_args = {}
         for name, val in self.args.items():
             resolved_args[name] = (
                 scope.resolve_variable(val) if type(val) is str else val
             )
-        scope.root.user_func_handler(self.func_name, resolved_args)
+        yield Notification(
+            statement_type=StatementType.UserFunc,
+            args=dict(func_name=self.func_name, args=resolved_args),
+        )
 
     def __eq__(self, other):
         if other is self:
@@ -162,8 +184,13 @@ class ExecAcquire(Statement):
         self.signal = min(signal) if isinstance(signal, list) else signal
         self.parent_uid = parent_uid
 
-    def run(self, scope: ExecutionScope):
-        scope.root.acquire_handler(self.handle, self.signal, self.parent_uid)
+    def run(self, scope: ExecutionScope) -> Iterator[Notification]:
+        yield Notification(
+            statement_type=StatementType.Acquire,
+            args=dict(
+                handle=self.handle, signal=self.signal, parent_uid=self.parent_uid
+            ),
+        )
 
     def __eq__(self, other):
         if other is self:
@@ -187,11 +214,20 @@ class SetSoftwareParamLinear(Statement):
         self.step = step
         self.axis_name = axis_name
 
-    def run(self, scope: ExecutionScope):
+    def run(self, scope: ExecutionScope) -> Iterator[Notification]:
         index = scope.resolve_variable(LOOP_INDEX)
         value = self.start + self.step * index
         scope.set_variable(self.name, value)
-        scope.root.set_sw_param_handler(self.name, index, value, self.axis_name, None)
+        yield Notification(
+            statement_type=StatementType.SetSwParam,
+            args=dict(
+                name=self.name,
+                index=index,
+                value=value,
+                axis_name=self.axis_name,
+                values=None,
+            ),
+        )
 
     def __eq__(self, other):
         if other is self:
@@ -215,12 +251,19 @@ class SetSoftwareParam(Statement):
         self.values = values
         self.axis_name = axis_name
 
-    def run(self, scope: ExecutionScope):
+    def run(self, scope: ExecutionScope) -> Iterator[Notification]:
         index = max(0, min(scope.resolve_variable(LOOP_INDEX), len(self.values) - 1))
         value = self.values[index]
         scope.set_variable(self.name, value)
-        scope.root.set_sw_param_handler(
-            self.name, index, value, self.axis_name, self.values
+        yield Notification(
+            statement_type=StatementType.SetSwParam,
+            args=dict(
+                name=self.name,
+                index=index,
+                value=value,
+                axis_name=self.axis_name,
+                values=self.values,
+            ),
         )
 
     def __eq__(self, other):
@@ -261,12 +304,19 @@ class ForLoop(Statement):
         else:
             raise LabOneQException(f"Unknown looping mode '{scope.root.looping_mode}'")
 
-    def run(self, scope: ExecutionScope):
+    def run(self, scope: ExecutionScope) -> Iterator[Notification]:
         sub_scope = scope.make_sub_scope()
         for i in self._loop_iterator(scope):
-            with scope.root.for_loop_handler(self.count, i, self.loop_flags):
-                sub_scope.set_variable(LOOP_INDEX, i)
-                self.body.run(sub_scope)
+            yield Notification(
+                statement_type=StatementType.ForLoopEntry,
+                args=dict(count=self.count, index=i, loop_flags=self.loop_flags),
+            )
+            sub_scope.set_variable(LOOP_INDEX, i)
+            yield from self.body.run(sub_scope)
+            yield Notification(
+                statement_type=StatementType.ForLoopExit,
+                args=dict(count=self.count, index=i, loop_flags=self.loop_flags),
+            )
 
     def __eq__(self, other):
         if other is self:
@@ -297,20 +347,33 @@ class ExecRT(ForLoop):
         self.averaging_mode = averaging_mode
         self.acquisition_type = acquisition_type
 
-    def run(self, scope: ExecutionScope):
-        with scope.root.rt_handler(
-            self.count, self.uid, self.averaging_mode, self.acquisition_type
-        ):
-            if scope.root.looping_mode == LoopingMode.NEAR_TIME_ONLY:
-                pass
-            elif scope.root.looping_mode == LoopingMode.ONCE:
-                sub_scope = scope.make_sub_scope()
-                sub_scope.enter_real_time()
-                super().run(sub_scope)
-            else:
-                raise LabOneQException(
-                    f"Unknown looping mode '{scope.root.looping_mode}'"
-                )
+    def run(self, scope: ExecutionScope) -> Iterator[Notification]:
+        yield Notification(
+            statement_type=StatementType.RTEntry,
+            args=dict(
+                count=self.count,
+                uid=self.uid,
+                averaging_mode=self.averaging_mode,
+                acquisition_type=self.acquisition_type,
+            ),
+        )
+        if scope.root.looping_mode == LoopingMode.NEAR_TIME_ONLY:
+            pass
+        elif scope.root.looping_mode == LoopingMode.ONCE:
+            sub_scope = scope.make_sub_scope()
+            sub_scope.enter_real_time()
+            yield from super().run(sub_scope)
+        else:
+            raise LabOneQException(f"Unknown looping mode '{scope.root.looping_mode}'")
+        yield Notification(
+            statement_type=StatementType.RTExit,
+            args=dict(
+                count=self.count,
+                uid=self.uid,
+                averaging_mode=self.averaging_mode,
+                acquisition_type=self.acquisition_type,
+            ),
+        )
 
     def __eq__(self, other):
         if other is self:
@@ -356,6 +419,16 @@ class ExecutorBase:
 
     def __init__(self, looping_mode: LoopingMode = LoopingMode.NEAR_TIME_ONLY):
         self.looping_mode: LoopingMode = looping_mode
+        self._handlers_map = {
+            StatementType.Set: self.set_handler,
+            StatementType.UserFunc: self.user_func_handler,
+            StatementType.Acquire: self.acquire_handler,
+            StatementType.SetSwParam: self.set_sw_param_handler,
+            StatementType.ForLoopEntry: self.for_loop_entry_handler,
+            StatementType.ForLoopExit: self.for_loop_exit_handler,
+            StatementType.RTEntry: self.rt_entry_handler,
+            StatementType.RTExit: self.rt_exit_handler,
+        }
 
     def set_handler(self, path: str, value):
         pass
@@ -371,24 +444,100 @@ class ExecutorBase:
     ):
         pass
 
-    @contextmanager
-    def for_loop_handler(self, count: int, index: int, loop_flags: LoopFlags):
-        yield
+    def for_loop_entry_handler(self, count: int, index: int, loop_flags: LoopFlags):
+        pass
 
-    @contextmanager
-    def rt_handler(
+    def for_loop_exit_handler(self, count: int, index: int, loop_flags: LoopFlags):
+        pass
+
+    def rt_entry_handler(
         self,
         count: int,
         uid: str,
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
     ):
-        yield
+        pass
+
+    def rt_exit_handler(
+        self,
+        count: int,
+        uid: str,
+        averaging_mode: AveragingMode,
+        acquisition_type: AcquisitionType,
+    ):
+        pass
 
     def run(self, root_sequence: Statement):
         """Start execution of the provided sequence."""
         scope = ExecutionScope(None, self)
-        root_sequence.run(scope)
+        for notification in root_sequence.run(scope):
+            self._handlers_map[notification.statement_type](**notification.args)
+
+
+class AsyncExecutorBase:
+    """Async version of ExecutorBase. See ExecutorBase for details."""
+
+    def __init__(self, looping_mode: LoopingMode = LoopingMode.NEAR_TIME_ONLY):
+        self.looping_mode: LoopingMode = looping_mode
+        self._handlers_map = {
+            StatementType.Set: self.set_handler,
+            StatementType.UserFunc: self.user_func_handler,
+            StatementType.Acquire: self.acquire_handler,
+            StatementType.SetSwParam: self.set_sw_param_handler,
+            StatementType.ForLoopEntry: self.for_loop_entry_handler,
+            StatementType.ForLoopExit: self.for_loop_exit_handler,
+            StatementType.RTEntry: self.rt_entry_handler,
+            StatementType.RTExit: self.rt_exit_handler,
+        }
+
+    async def set_handler(self, path: str, value):
+        pass
+
+    async def user_func_handler(self, func_name: str, args: dict[str, Any]):
+        pass
+
+    async def acquire_handler(self, handle: str, signal: str, parent_uid: str):
+        pass
+
+    async def set_sw_param_handler(
+        self, name: str, index: int, value: float, axis_name: str, values: npt.ArrayLike
+    ):
+        pass
+
+    async def for_loop_entry_handler(
+        self, count: int, index: int, loop_flags: LoopFlags
+    ):
+        pass
+
+    async def for_loop_exit_handler(
+        self, count: int, index: int, loop_flags: LoopFlags
+    ):
+        pass
+
+    async def rt_entry_handler(
+        self,
+        count: int,
+        uid: str,
+        averaging_mode: AveragingMode,
+        acquisition_type: AcquisitionType,
+    ):
+        pass
+
+    async def rt_exit_handler(
+        self,
+        count: int,
+        uid: str,
+        averaging_mode: AveragingMode,
+        acquisition_type: AcquisitionType,
+    ):
+        pass
+
+    async def run(self, root_sequence: Statement):
+        """Start execution of the provided sequence."""
+        scope = ExecutionScope(None, self)
+        for notification in root_sequence.run(scope):
+            await self._handlers_map[notification.statement_type](**notification.args)
 
 
 class ExecutionFactory:

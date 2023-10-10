@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from builtins import frozenset
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
@@ -92,23 +91,20 @@ class NtCompilerExecutor(ExecutorBase):
         super().set_sw_param_handler(name, index, value, axis_name, values)
         self._iteration_stack.set_parameter_value(name, value)
 
-    @contextmanager
-    def for_loop_handler(self, count: int, index: int, loop_flags: LoopFlags):
+    def for_loop_entry_handler(self, count: int, index: int, loop_flags: LoopFlags):
         self._iteration_stack.push(index, {})
         if loop_flags.is_pipeline:
             self._iteration_stack.set_parameter_value("__pipeline_index", index)
 
-        yield
-
+    def for_loop_exit_handler(self, count: int, index: int, loop_flags: LoopFlags):
         self._iteration_stack.pop()
 
-    @contextmanager
-    def rt_handler(
+    def rt_entry_handler(
         self,
-        _count: int,
-        _uid: str,
-        _averaging_mode,
-        _acquisition_type,
+        count: int,
+        uid: str,
+        averaging_mode,
+        acquisition_type,
     ):
         if self._required_parameters is not None:
             # We already know what subset of the near-time parameters are required
@@ -124,7 +120,6 @@ class NtCompilerExecutor(ExecutorBase):
                 self._combined_compiler_output.total_execution_time += (
                     new_compiler_output.total_execution_time
                 )
-                yield
                 return
 
         # We don't have a compiler output for this state yet, so we need to compile
@@ -161,8 +156,6 @@ class NtCompilerExecutor(ExecutorBase):
             )
         self._compiler_report_generator.update(new_compiler_output, nt_step_indices)
         self._last_compiler_output = new_compiler_output
-
-        yield
 
     def _frozen_required_parameters(self):
         return frozenset(

@@ -96,16 +96,16 @@ class DeviceCollection:
                 return dev
         raise LabOneQControllerException(f"Could not find device for the path '{path}'")
 
-    def connect(self):
-        self._prepare_daqs()
+    async def connect(self):
+        await self._prepare_daqs()
         self._prepare_devices()
         for device in self._devices.values():
-            device.connect()
-        self.load_factory_preset()
+            await device.connect()
+        await self.load_factory_preset()
         self.start_monitor()
-        self.configure_device_setup()
+        await self.configure_device_setup()
 
-    def _configure_parallel(
+    async def _configure_parallel(
         self,
         devices: list[DeviceZI],
         control_nodes_getter: Callable[[DeviceZI], list[NodeControlBase]],
@@ -160,7 +160,7 @@ class DeviceCollection:
             return
 
         if set_nodes:
-            batch_set(set_nodes)
+            await batch_set(set_nodes)
 
         timeout = 10
         if not response_waiter.wait_all(timeout=timeout):
@@ -178,7 +178,7 @@ class DeviceCollection:
                 f"Errors:\n{conditions_checker.failed_str(failed)}"
             )
 
-    def configure_device_setup(self):
+    async def configure_device_setup(self):
         _logger.info("Configuring the device setup")
         configs = {
             "Reference clock switching": lambda d: cast(
@@ -209,13 +209,15 @@ class DeviceCollection:
             # configuration step.
             targets = leaders
             while len(targets) > 0:
-                self._configure_parallel(targets, control_nodes_getter, config_name)
+                await self._configure_parallel(
+                    targets, control_nodes_getter, config_name
+                )
                 children = []
                 for parent_dev in targets:
-                    for _, dev_ref in parent_dev._downlinks.values():
-                        dev = dev_ref()
-                        if dev is not None:
-                            children.append(dev)
+                    for down_stream_devices in parent_dev._downlinks.values():
+                        for _, dev_ref in down_stream_devices:
+                            if (dev := dev_ref()) is not None:
+                                children.append(dev)
                 targets = children
         _logger.info("The device setup is configured")
 
@@ -226,7 +228,7 @@ class DeviceCollection:
         self._devices = {}
         self._daqs = {}
 
-    def disable_outputs(
+    async def disable_outputs(
         self,
         device_uids: list[str] = None,
         logical_signals: list[str] = None,
@@ -262,7 +264,7 @@ class DeviceCollection:
         for device_uid, outputs in outputs_per_device.items():
             device = self.find_by_uid(device_uid)
             all_actions.extend(device.disable_outputs(outputs, invert))
-        batch_set(all_actions)
+        await batch_set(all_actions)
 
     def shut_down(self):
         for device in self._devices.values():
@@ -272,11 +274,11 @@ class DeviceCollection:
         for device in self._devices.values():
             device.free_allocations()
 
-    def on_experiment_end(self):
+    async def on_experiment_end(self):
         all_actions: list[DaqNodeSetAction] = []
         for device in self._devices.values():
             all_actions.extend(device.on_experiment_end())
-        batch_set(all_actions)
+        await batch_set(all_actions)
 
     def start_monitor(self):
         if self._monitor_started:
@@ -307,12 +309,12 @@ class DeviceCollection:
             daq.node_monitor.reset()
         self._monitor_started = False
 
-    def load_factory_preset(self):
+    async def load_factory_preset(self):
         if self._reset_devices:
             reset_nodes = []
             for device in self._devices.values():
                 reset_nodes += device.collect_load_factory_preset_nodes()
-            batch_set(reset_nodes)
+            await batch_set(reset_nodes)
 
     def _validate_dataserver_device_fw_compatibility(self):
         """Validate dataserver and device firmware compatibility."""
@@ -358,15 +360,18 @@ class DeviceCollection:
                         f"Could not find destination device '{to_dev_uid}' for "
                         f"the port '{from_port}' of the device '{device_qualifier.uid}'"
                     )
-                if not to_dev.is_secondary:
-                    from_dev.add_downlink(from_port, to_dev_uid, to_dev)
+                from_dev.add_downlink(from_port, to_dev_uid, to_dev)
                 to_dev.add_uplink(from_dev)
 
-        # Make emulated PQSC aware of the downlinked devices
+        # Make emulated PQSC aware of the down-stream devices
         for device_qualifier in self._ds.instruments:
             if device_qualifier.dry_run and device_qualifier.driver == "PQSC":
+                enabled_zsyncs = {}
                 from_dev = self._devices[device_qualifier.uid]
                 for port, _, to_dev in from_dev.downlinks():
+                    if enabled_zsyncs.get(port.lower()) == to_dev.serial:
+                        continue
+                    enabled_zsyncs[port.lower()] = to_dev.serial
                     cast(DaqWrapperDryRun, daq).set_emulation_option(
                         serial=device_qualifier.options.serial,
                         option=f"{port.lower()}/connection/serial",
@@ -394,7 +399,7 @@ class DeviceCollection:
                 self._ds.get_device_rf_voltage_offsets(device_qualifier.uid)
             )
 
-    def _prepare_daqs(self):
+    async def _prepare_daqs(self):
         updated_daqs: dict[str, DaqWrapper] = {}
         for server_uid, server_qualifier in self._ds.servers:
             existing = self._daqs.get(server_uid)
@@ -411,5 +416,6 @@ class DeviceCollection:
                 daq = DaqWrapperDryRun(server_uid, server_qualifier)
             else:
                 daq = DaqWrapper(server_uid, server_qualifier)
+            await daq.validate_connection()
             updated_daqs[server_uid] = daq
         self._daqs = updated_daqs

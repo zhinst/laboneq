@@ -6,142 +6,141 @@
     - Functionality to calculate the recovery gate
 """
 
+from __future__ import annotations
 
-# additional imports for Clifford gate calculation
+from typing import Callable
+
 import numpy as np
+from numpy import random as nprnd
 from scipy.linalg import expm as matrix_exponential
+from typing_extensions import (
+    ParamSpec,  # FIXME: Reconsider when python>=3.10 is enforced.
+)
 
-from laboneq.dsl.experiment import pulse_library
+from laboneq.dsl.experiment.pulse import Pulse
+from laboneq.dsl.experiment.pulse_library import PulseFunctional, gaussian
+from laboneq.simple import Experiment
 
-
-def pulse_envelope(amplitude, pulse_length, phase, sigma, sample_rate):
-    """Samples a Gaussian pulse
-
-    Args:
-        amplitude: scaling of the pulse, between 0 and 1
-        pulse_length: length of the pulse in seconds
-        phase: phase of the pulse in degree.
-        sigma: ratio between standard deviation and pulse length
-        sample_rate: sampling rate of the instrument playing the pulse
-
-    Returns:
-        A numpy array of lists of real and complex samples.
-    """
-    # length in samples, rounded to the waveform granularity of 16 samples
-    length = round(sample_rate * pulse_length / 16) * 16
-    x = np.linspace(-1, 1, length)
-    # output is complex, where phase later determines the gate rotation axis
-    y = amplitude * np.exp(-(x**2) / sigma**2 + 1j * np.deg2rad(phase))
-
-    return np.transpose(np.array([y.real, y.imag]))
+P = ParamSpec("P")
 
 
-# basic gate pulse set as complex 2D arrays
-def basic_gate_set(pi_amp, pi_2_amp, gate_time, sigma, sample_rate):
-    """Creates and returns the basic gate pulse set.
+class PauliGateMap(dict[str, PulseFunctional]):
+    """Mapping from gate label to a sequence of `PulseFunctional`s.
 
-    The gate set consists of identity, X and Y pi gates, as well as +-X/2 and +-Y/2 gates.
-    Gaussian pulses are sampled for each of these fundamental gates.
-
-    Args:
-        pi_amp: Amplitude of the pi gates
-        pi_2_amp: Amplitude of the pi/2 gates
-        gate_time: length of a clifford gate
-        sigma: ratio of the standard deviation to the gate length
-        sample_rate: sampling rate of the instrument playing the pulse
-
-    Returns:
-        gate_set: Dictionary of gate names and sampled pulses with given parameters and sampling rates
+    Use `.make` to construct this object.
     """
 
-    gate_set = {
-        "I": pulse_envelope(0, gate_time, 0, sigma=sigma, sample_rate=sample_rate),
-        "X": pulse_envelope(pi_amp, gate_time, 0, sigma=sigma, sample_rate=sample_rate),
-        "Y": pulse_envelope(
-            pi_amp, gate_time, 90, sigma=sigma, sample_rate=sample_rate
-        ),
-        "X/2": pulse_envelope(
-            pi_2_amp, gate_time, 0, sigma=sigma, sample_rate=sample_rate
-        ),
-        "Y/2": pulse_envelope(
-            pi_2_amp, gate_time, 90, sigma=sigma, sample_rate=sample_rate
-        ),
-        "-X/2": pulse_envelope(
-            -pi_2_amp, gate_time, 0, sigma=sigma, sample_rate=sample_rate
-        ),
-        "-Y/2": pulse_envelope(
-            -pi_2_amp, gate_time, 90, sigma=sigma, sample_rate=sample_rate
-        ),
-    }
-    return gate_set
+    @classmethod
+    def make(
+        cls,
+        excitation_length: float,
+        pi_pulse_amp: float,
+        pi_half_pulse_amp: float,
+        pulse_factory: Callable[P, PulseFunctional] = gaussian,
+        pulse_kwargs: P.kwargs | None = None,
+    ):
+        """Construct a mapping from Pauli gate names to gate representations as
+        `PulseFunctional`s.
+
+        The gate set consists of identity, X and Y pi gates, as well as +-X/2 and +-Y/2 gates.
+        Gaussian pulses are sampled for each of these fundamental gates.
+
+        The pulses obtained via `pulse_factory` will be rotated in complex plane to
+        implement the gates.
+
+        Args:
+            pi_pulse_amp:  Amplitude of the pi gates.
+            pi_half_pulse_amp:  Amplitude of the pi/2 gates.
+            excitation_length:  Duration of a gate.
+            pulse_factory:  A callable to generate `PulseFunctional`s.  Typically,
+                functions marked with `pulse_library.register_pulse_functional` should be
+                provided here.
+            pulse_kwargs: A dictionary of arguments to pass into `pulse_factory` as
+                keyword arguments.  Must not contain "amplitude" or "length" in keys.
+
+        Returns:
+            gate_map: Dictionary of gates mapping gate labels to their pulse representations.
+        """
+        pulse_kwargs = {} if pulse_kwargs is None else pulse_kwargs
+
+        forbidden_kws = "amplitude", "length"
+        found_forbidden_kws = [k for k in forbidden_kws if k in pulse_kwargs]
+        if found_forbidden_kws != []:
+            raise ValueError(
+                f"Any of {forbidden_kws} can not be used in the keyword arguments to "
+                f"`pulse_factory` (found {found_forbidden_kws})."
+            )
+
+        pi = np.pi
+        gate_amp_phase_alist = (
+            ("I", 0, 0),
+            ("X", pi_pulse_amp, 0),
+            ("Y", pi_pulse_amp, pi / 2),
+            ("X/2", pi_half_pulse_amp, 0),
+            ("Y/2", pi_half_pulse_amp, pi / 2),
+            ("-X/2", -pi_half_pulse_amp, 0),
+            ("-Y/2", -pi_half_pulse_amp, pi / 2),
+        )
+        mapping = {
+            gate: pulse_factory(
+                amplitude=amp * np.exp(1j * phase),
+                length=excitation_length,
+                **pulse_kwargs,
+            )
+            for gate, amp, phase in gate_amp_phase_alist
+        }
+        return cls(mapping)
 
 
-def basic_pulse_set(gate_set):
-    """Creates and returns the basic gate set as sampled complex pulses.
-
-    Args:
-        gate_set: the basic gate set as dictionary
-
-    Returns:
-        pulse_set: Dictionary of gate names and sampled complex pulse objects derived from the gate_set
-    """
-    pulse_set = {}
-    for key in gate_set.keys():
-        pulse_set[key] = pulse_library.sampled_pulse_complex(gate_set[key])
-
-    return pulse_set
+make_pauli_gate_map = PauliGateMap.make
 
 
-### Clifford gate definitions
-
-# definition of all gates in the Clifford group in terms of Pauli gates
-clifford_parametrized = [
-    ["I"],
-    ["Y/2", "X/2"],
-    ["-X/2", "-Y/2"],
-    ["X"],
-    ["-Y/2", "-X/2"],
-    ["X/2", "-Y/2"],
-    ["Y"],
-    ["-Y/2", "X/2"],
-    ["X/2", "Y/2"],
-    ["X", "Y"],
-    ["Y/2", "-X/2"],
-    ["-X/2", "Y/2"],
-    ["Y/2", "X"],
-    ["-X/2"],
-    ["X/2", "-Y/2", "-X/2"],
-    ["-Y/2"],
-    ["X/2"],
-    ["X/2", "Y/2", "X/2"],
-    ["-Y/2", "X"],
-    ["X/2", "Y"],
-    ["X/2", "-Y/2", "X/2"],
-    ["Y/2"],
-    ["-X/2", "Y"],
-    ["X/2", "Y/2", "-X/2"],
-]
-
-#### basic definitions to manipulate Clifford gates - needed for recovery gate calculation
+# Definition of all gates in the Clifford group in terms of Pauli gates
+clifford_parametrized = (
+    ("I",),
+    ("Y/2", "X/2"),
+    ("-X/2", "-Y/2"),
+    ("X",),
+    ("-Y/2", "-X/2"),
+    ("X/2", "-Y/2"),
+    ("Y",),
+    ("-Y/2", "X/2"),
+    ("X/2", "Y/2"),
+    ("X", "Y"),
+    ("Y/2", "-X/2"),
+    ("-X/2", "Y/2"),
+    ("Y/2", "X"),
+    ("-X/2",),
+    ("X/2", "-Y/2", "-X/2"),
+    ("-Y/2",),
+    ("X/2",),
+    ("X/2", "Y/2", "X/2"),
+    ("-Y/2", "X"),
+    ("X/2", "Y"),
+    ("X/2", "-Y/2", "X/2"),
+    ("Y/2",),
+    ("-X/2", "Y"),
+    ("X/2", "Y/2", "-X/2"),
+)
 
 
-def pauli(axis):
+_pauli_matrices = {
+    "x": np.array([[0, 1], [1, 0]]),
+    "y": np.array([[0, -1j], [1j, 0]]),
+    "z": np.array([[1, 0], [0, -1]]),
+}
+
+
+def pauli(axis: str):
     """Returns the Pauli matrix for a given axis
 
     Args:
-        axis: string, either "x", "y", or "z"
+        axis: One of "x", "y", "z"
 
     Returns:
         Respective Pauli matrix
     """
-    if axis == "x":
-        res = np.array([[0, 1], [1, 0]])
-    if axis == "y":
-        res = np.array([[0, -1j], [1j, 0]])
-    if axis == "z":
-        res = np.array([[1, 0], [0, -1]])
-
-    return res
+    return _pauli_matrices[axis]
 
 
 def rot_matrix(angle=np.pi, axis="x"):
@@ -157,30 +156,22 @@ def rot_matrix(angle=np.pi, axis="x"):
     return matrix_exponential(-1j * angle / 2 * pauli(axis))
 
 
-def mult_gates(gate_list, use_linalg=False):
+def mult_gates(gate_list):
     """Multiply a variable number of gates / matrices
-
-    Recursive definition fastest for simple 2x2 matrices
 
     Args:
         gate_list: List of gates that shall be multiplied
-        use_linalg: If true, the numpy.linalg library is used. Otherwise: Recursive
 
     Returns:
         Result of the matrix multiplication
     """
-    if len(gate_list) > 1:
-        if use_linalg:
-            res = np.linalg.multi_dot(gate_list)
-        else:
-            res = np.matmul(gate_list[0], mult_gates(gate_list[1:], use_linalg=False))
-    elif len(gate_list) == 1:
-        res = gate_list[0]
-
-    return res
+    if len(gate_list) == 1:
+        return gate_list[0]
+    else:
+        return np.linalg.multi_dot(gate_list)
 
 
-# generate matrix representation of all elementary gates used to generate the Clifford gates
+# Matrix representation of all elementary gates used to generate the Clifford gates
 elem_gates = {
     "I": np.array([[1, 0], [0, 1]]),
     "X": rot_matrix(np.pi, "x"),
@@ -191,12 +182,12 @@ elem_gates = {
     "-Y/2": rot_matrix(-np.pi / 2, "y"),
 }
 
-# set of Clifford gates, specified as list of gates in matrix form
+# Set of Clifford gates, specified as sequence of gates in matrix form
 clifford_matrices = [
-    [elem_gates[gate] for gate in gates] for gates in clifford_parametrized
+    tuple(elem_gates[gate] for gate in gates) for gates in clifford_parametrized
 ]
 
-# set of Clifford gates, specified as single matrix per Clifford
+# Set of Clifford gates, specified as single matrix per Clifford gate
 clifford_gates = [mult_gates(matrices) for matrices in clifford_matrices]
 
 
@@ -240,48 +231,78 @@ def match_up_to_phase(target, gate_list, dim=2):
     return match_index
 
 
-#### function to calculate the last gate in the sequence - recovery gate which leads back to initial state (up to global phase)
-def calculate_inverse_clifford(seq_list, clifford_list=clifford_gates):
-    """Calculates the final recovery gate in a sequence of Clifford gates
+def calculate_inverse_clifford_index(
+    index_list, clifford_gates: list[np.ndarray] = clifford_gates
+):
+    """Given a set of gates indexed with integers in `index_list`, calculate the
+    inverse of the cascaded gates and return the index corresponding to the result.  The
+    calculated matrix is searched up to a global phase in `clifford_gates` and the index of
+    the matching entry is returned.
 
     Args:
-        seq_list: a list containing the indices of the clifford sequence to be inverted
+        index_list: a list containing the indices of the clifford sequence to be inverted
         clifford_list: a list containing the set of clifford gates
 
     Returns:
         recovery: index of the recovery gate
     """
     # matrix representation of the full Clifford sequence
-    seq_gate = mult_gates([clifford_list[ind] for ind in seq_list])
+    seq_gate = mult_gates([clifford_gates[ind] for ind in index_list])
     # recovery gate - inverse of full sequence
     rec_gate = np.linalg.inv(seq_gate)
     # index of recovery gate (up to global phase)
-    recovery = int(match_up_to_phase(rec_gate, clifford_list))
+    recovery = int(match_up_to_phase(rec_gate, clifford_gates))
 
     return recovery
 
 
-### random sequences of Clifford gates
+def generate_play_rb_pulses(
+    exp: Experiment,
+    signal: str,
+    seq_length: int,
+    cliffords: tuple[tuple[str]],
+    gate_map: dict[str, Pulse],
+    elementary_gates: dict[str, np.ndarray] = elem_gates,
+    rng: nprnd.Generator | None = None,
+):
+    """Generate a RB sequence using the experiment handle `exp`.
 
-
-def generate_play_rb_pulses(exp, signal, seq_length, cliffords, pulse_set):
-    """Generate and play RB sequence
-
-    Generates random RB sequence, calculates recovery gate,
-    samples pulses and plays them
+    A RB sequence consist of randomly chosen `seq_length` number of Clifford gates
+    and a final recovery gate.
 
     Args:
-        exp: LabOne Q SW experiment
-        signal: Experiment signal line where pulses are played
-        seq_length: Length of the RB sequence, excluding recovery gate
-        cliffords: List of basic Clifford gates
-        pulse_set: basic pulse set
+        exp:  LabOne Q SW experiment.
+        signal:  Experiment signal line where pulses are played.
+        seq_length:  Length of the RB sequence, excluding recovery gate.
+        gate_map:  Dictionary of gates represented as pulses to construct the Clifford gates from.
+        cliffords:  Sequence of basic Clifford gates.  Each Clifford gate is represented as
+            a tuple of strings referring to a basic gate in `gate_map`.
+        elementary_gates: Matrix representations of the elementary gates.
+        rng:  A `numpy.random.Generator` object to use when selecting the clifford gates.
+            If `None` a new one will be created via `numpy.random.default_rng(42)`.
     """
 
-    seq_list = np.random.randint(0, 23, size=seq_length)
-    rec_gate = calculate_inverse_clifford(seq_list)
-    np.append(seq_list, [rec_gate])
+    assert elementary_gates.keys() == gate_map.keys()
+    rng = nprnd.default_rng(42) if rng is None else rng
 
-    for it in seq_list:
-        for jt in range(len(cliffords[it])):
-            exp.play(signal, pulse_set[cliffords[it][jt]])
+    clifford_indices = rng.integers(0, 23, size=seq_length + 1)
+
+    if cliffords is clifford_parametrized:
+        # shortcut for precomputed defaults
+        computed_gates = clifford_gates
+    else:
+        computed_gates = [
+            mult_gates([elementary_gates[gate] for gate in gates])
+            for gates in clifford_parametrized
+        ]
+
+    # Last gate is the recovery gate
+    clifford_indices[-1] = calculate_inverse_clifford_index(
+        clifford_indices, clifford_gates=computed_gates
+    )
+
+    for it in clifford_indices:
+        clifford = cliffords[it]
+        for basic_gate_name in clifford:
+            basic_gate_as_pulse = gate_map[basic_gate_name]
+            exp.play(signal, basic_gate_as_pulse)

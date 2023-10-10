@@ -150,7 +150,7 @@ def delay_to_rounded_samples(
 class DeviceZI(ABC):
     def __init__(self, device_qualifier: DeviceQualifier, daq: DaqWrapper):
         self._device_qualifier: DeviceQualifier = device_qualifier
-        self._downlinks: dict[str, tuple[str, ReferenceType[DeviceZI]]] = {}
+        self._downlinks: dict[str, list[tuple[str, ReferenceType[DeviceZI]]]] = {}
         self._uplinks: list[ReferenceType[DeviceZI]] = []
         self._rf_offsets: dict[int, float] = {}
 
@@ -274,7 +274,9 @@ class DeviceZI(ABC):
         )
 
     def add_downlink(self, port: str, linked_device_uid: str, linked_device: DeviceZI):
-        self._downlinks[port] = (linked_device_uid, ref(linked_device))
+        self._downlinks.setdefault(port, []).append(
+            (linked_device_uid, ref(linked_device))
+        )
 
     def add_uplink(self, linked_device: DeviceZI):
         dev_ref = ref(linked_device)
@@ -286,8 +288,9 @@ class DeviceZI(ABC):
         self._uplinks.clear()
 
     def downlinks(self) -> Iterator[tuple[str, str, DeviceZI]]:
-        for port, (uid, dev_ref) in self._downlinks.items():
-            yield port, uid, dev_ref()
+        for port, downstream_devices in self._downlinks.items():
+            for uid, dev_ref in downstream_devices:
+                yield port, uid, dev_ref()
 
     def is_leader(self):
         # Check also downlinks, to exclude standalone devices
@@ -339,12 +342,14 @@ class DeviceZI(ABC):
     ) -> list[DaqNodeAction]:
         return []
 
-    def collect_trigger_configuration_nodes(
+    # TODO(2K): Routine collecting nodes does not need to be asynchronous
+    # (caused by PQSC doing batch_set inside).
+    async def collect_trigger_configuration_nodes(
         self, initialization: Initialization, recipe_data: RecipeData
     ) -> list[DaqNodeAction]:
         return []
 
-    def _connect_to_data_server(self):
+    async def _connect_to_data_server(self):
         if self._connected:
             return
 
@@ -360,7 +365,7 @@ class DeviceZI(ABC):
 
         dev_type_path = f"/{self.serial}/features/devtype"
         dev_opts_path = f"/{self.serial}/features/options"
-        dev_traits = self._daq.batch_get(
+        dev_traits = await self._daq.batch_get(
             [
                 DaqNodeGetAction(self._daq, dev_type_path),
                 DaqNodeGetAction(self._daq, dev_opts_path),
@@ -376,8 +381,8 @@ class DeviceZI(ABC):
 
         self._connected = True
 
-    def connect(self):
-        self._connect_to_data_server()
+    async def connect(self):
+        await self._connect_to_data_server()
         self._daq.node_monitor.add_nodes(self.nodes_to_monitor())
 
     def disconnect(self):
@@ -536,7 +541,7 @@ class DeviceZI(ABC):
     ) -> list[DaqNodeAction]:
         return []
 
-    def check_results_acquired_status(
+    async def check_results_acquired_status(
         self, channel, acquisition_type: AcquisitionType, result_length, hw_averages
     ):
         pass
@@ -815,31 +820,6 @@ class DeviceZI(ABC):
             json.dumps(command_table, sort_keys=True),
             caching_strategy=CachingStrategy.NO_CACHE,
         )
-
-    def upload_command_table(self, awg_index, command_table: dict):
-        command_table_path = self.command_table_path(awg_index)
-        self._daq.batch_set(
-            [self.prepare_upload_command_table(awg_index, command_table)]
-        )
-
-        status_path = command_table_path + "status"
-
-        status = int(
-            self._daq.batch_get(
-                [
-                    DaqNodeGetAction(
-                        self._daq,
-                        status_path,
-                    )
-                ]
-            )[status_path]
-        )
-
-        if status & 0b1000 != 0:
-            raise LabOneQControllerException("Failed to parse command table JSON")
-        if not self.dry_run:
-            if status & 0b0001 == 0:
-                raise LabOneQControllerException("Failed to upload command table")
 
     def compile_seqc(self, code: str, awg_index: int, filename_hint: str = None):
         _logger.debug(

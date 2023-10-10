@@ -206,6 +206,8 @@ def analyze_precomp_reset_times(
             and event.get("signal_id", None) in signals
         )
     ]
+    chain_ids = (e.get("chain_element_id", 0) for e in events)
+    chain_id = max((i for i in chain_ids if isinstance(i, int)), default=0) + 1
     precomp_reset_events = AWGSampledEventSequence()
     fake_play_events = []
     for event in precomp_events:
@@ -231,7 +233,9 @@ def analyze_precomp_reset_times(
             "section_name": event["section_name"],
             "play_wave_id": "dummy_precomp_reset",
             "amplitude": 1.0,  # non-zero amplitude to avoid being ignored
+            "chain_element_id": chain_id,
         }
+        chain_id += 1
 
         fake_play_events.extend(
             [

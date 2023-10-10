@@ -612,7 +612,7 @@ class DeviceUHFQA(DeviceZI):
 
         return nodes_to_initialize_measurement
 
-    def collect_trigger_configuration_nodes(
+    async def collect_trigger_configuration_nodes(
         self, initialization: Initialization, recipe_data: RecipeData
     ) -> list[DaqNodeAction]:
         _logger.debug("Configuring triggers...")
@@ -730,11 +730,11 @@ class DeviceUHFQA(DeviceZI):
         ch1 = data[result_path_ch1][0]["vector"][0:num_results]
         return [complex(real, imag) for real, imag in zip(ch0, ch1)]
 
-    def check_results_acquired_status(
+    async def check_results_acquired_status(
         self, channel, acquisition_type: AcquisitionType, result_length, hw_averages
     ):
         results_acquired_path = f"/{self.serial}/qas/0/result/acquired"
-        batch_get_results = self._daq.batch_get(
+        batch_get_results = await self._daq.batch_get(
             [
                 DaqNodeGetAction(
                     self._daq,

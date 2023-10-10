@@ -9,7 +9,7 @@ import inspect
 import logging
 from collections.abc import Mapping
 from enum import Enum
-from io import BytesIO
+from io import BytesIO, StringIO
 from typing import Dict
 
 import numpy as np
@@ -26,6 +26,10 @@ from laboneq.core.serialization.externals import (
 _logger = logging.getLogger(__name__)
 
 ID_KEY = "__id"
+
+
+class SerializerException(Exception):
+    pass
 
 
 class NumpyArrayRepr:
@@ -245,6 +249,7 @@ def create_ref(item, item_ref_type):
 def serialize_to_dict_with_entities(
     to_serialize,
     entity_classes,
+    whitelist,
     entities_collector,
     emit_enum_types=False,
     omit_none_fields=False,
@@ -275,6 +280,7 @@ def serialize_to_dict_with_entities(
         return serialize_to_dict_with_entities(
             NumpyArrayRepr(array_data=to_serialize),
             entity_classes,
+            whitelist,
             entities_collector,
             emit_enum_types,
             omit_none_fields,
@@ -302,6 +308,7 @@ def serialize_to_dict_with_entities(
                     ] = serialize_to_dict_with_entities(
                         item,
                         entity_classes,
+                        whitelist,
                         entities_collector,
                         emit_enum_types,
                         omit_none_fields,
@@ -315,6 +322,7 @@ def serialize_to_dict_with_entities(
                     serialize_to_dict_with_entities(
                         item,
                         entity_classes,
+                        whitelist,
                         entities_collector,
                         emit_enum_types,
                         omit_none_fields,
@@ -331,6 +339,7 @@ def serialize_to_dict_with_entities(
                 serialize_to_dict_with_entities(
                     cotent,
                     entity_classes,
+                    whitelist,
                     entities_collector,
                     emit_enum_types,
                     omit_none_fields,
@@ -372,7 +381,12 @@ def serialize_to_dict_with_entities(
 
         all_attrs_slots = get_fields_and_slots(to_serialize)
         mapping = {a_or_s: getattr(to_serialize, a_or_s) for a_or_s in all_attrs_slots}
-        sub_dict["__type"] = short_typename(to_serialize)
+        type_name = short_typename(to_serialize)
+
+        if type_name not in whitelist:
+            _logger.warning(f"instance of class {type_name} may not serialize properly")
+
+        sub_dict["__type"] = type_name
 
     for k, v in mapping.items():
         item_class = v.__class__
@@ -403,6 +417,7 @@ def serialize_to_dict_with_entities(
                 ] = serialize_to_dict_with_entities(
                     v,
                     entity_classes,
+                    whitelist,
                     entities_collector,
                     emit_enum_types,
                     omit_none_fields,
@@ -420,13 +435,19 @@ def serialize_to_dict_with_entities(
                 NumpyArrayRepr(array_data=outvalue),
                 entity_classes,
                 entities_collector,
+                whitelist,
                 emit_enum_types,
                 omit_none_fields,
             )
 
         elif _issubclass(item_class, Mapping):
             sub_dict[outkey] = serialize_to_dict_with_entities(
-                v, entity_classes, entities_collector, emit_enum_types, omit_none_fields
+                v,
+                entity_classes,
+                whitelist,
+                entities_collector,
+                emit_enum_types,
+                omit_none_fields,
             )
         elif _issubclass(item_class, list):
             sub_dict[outkey] = []
@@ -450,6 +471,7 @@ def serialize_to_dict_with_entities(
                         ] = serialize_to_dict_with_entities(
                             item,
                             entity_classes,
+                            whitelist,
                             entities_collector,
                             emit_enum_types,
                             omit_none_fields,
@@ -471,6 +493,7 @@ def serialize_to_dict_with_entities(
                         serialize_to_dict_with_entities(
                             item,
                             entity_classes,
+                            whitelist,
                             entities_collector,
                             emit_enum_types,
                             omit_none_fields,
@@ -480,6 +503,7 @@ def serialize_to_dict_with_entities(
             sub_dict[outkey] = serialize_to_dict_with_entities(
                 outvalue,
                 entity_classes,
+                whitelist,
                 entities_collector,
                 emit_enum_types,
                 omit_none_fields,
@@ -494,6 +518,7 @@ def serialize_to_dict_with_entities(
 def serialize_to_dict_with_ref(
     to_serialize,
     entity_classes,
+    whitelist,
     entity_mapper=None,
     emit_enum_types=False,
     omit_none_fields=False,
@@ -501,13 +526,29 @@ def serialize_to_dict_with_ref(
     if entity_mapper is None:
         entity_mapper = {}
     entities_collector = {}
-    root_object = serialize_to_dict_with_entities(
-        to_serialize,
-        entity_classes,
-        entities_collector,
-        emit_enum_types=emit_enum_types,
-        omit_none_fields=omit_none_fields,
+
+    log_stream = StringIO()
+    log_handler = logging.StreamHandler(log_stream)
+    logging.getLogger("laboneq.core.serialization.simple_serialization").addHandler(
+        log_handler
     )
+    try:
+        root_object = serialize_to_dict_with_entities(
+            to_serialize,
+            entity_classes,
+            whitelist,
+            entities_collector,
+            emit_enum_types=emit_enum_types,
+            omit_none_fields=omit_none_fields,
+        )
+    except Exception as ex:
+        unique_log_msgs = "\n".join({l for l in log_stream.getvalue().splitlines()})
+        if len(unique_log_msgs) > 0:
+            raise SerializerException(
+                f"The following warning(s) were encountered during serialization:\n{unique_log_msgs}"
+            ) from ex
+        else:
+            raise ex
 
     for k, v in entities_collector.items():
         for uid, entity in v.items():

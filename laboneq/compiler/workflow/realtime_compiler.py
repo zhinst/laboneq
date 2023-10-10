@@ -6,7 +6,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from itertools import groupby
+from typing import Any, Dict, Optional, TypedDict
 
 from laboneq._observability.tracing import trace
 from laboneq.compiler import CodeGenerator, CompilerSettings
@@ -22,6 +23,22 @@ from laboneq.compiler.scheduler.scheduler import Scheduler
 from laboneq.data.scheduled_experiment import PulseMapEntry
 
 _logger = logging.getLogger(__name__)
+
+
+class Schedule(TypedDict):
+    event_list: list[str]
+    section_info: dict[str, dict]
+    section_signals_with_children: dict[str, list[str]]
+    sampling_rates: list[tuple[list[str], float]]
+
+    @classmethod
+    def empty(cls):
+        return cls(
+            event_list=[],
+            section_info={},
+            section_signals_with_children={},
+            sampling_rates=[],
+        )
 
 
 @dataclass
@@ -88,6 +105,8 @@ class RealtimeCompiler:
         self._scheduler.run(near_time_parameters)
         self._generate_code()
 
+        schedule = self.prepare_schedule() if self._settings.OUTPUT_EXTRAS else None
+
         compiler_output = RealtimeCompilerOutput(
             command_table_match_offsets=self._code_generator.command_table_match_offsets(),
             feedback_connections=self._code_generator.feedback_connections(),
@@ -102,15 +121,12 @@ class RealtimeCompiler:
             wave_indices=self._code_generator.wave_indices(),
             command_tables=self._code_generator.command_tables(),
             pulse_map=self._code_generator.pulse_map(),
-            schedule=self.prepare_schedule(),
+            schedule=schedule,
         )
 
         return compiler_output
 
     def prepare_schedule(self):
-        if not self._settings.PREPARE_PSV_DATA:
-            return None
-
         event_list = self._scheduler.event_timing(
             expand_loops=self._settings.EXPAND_LOOPS_FOR_SCHEDULE,
             max_events=self._settings.MAX_EVENTS_TO_PUBLISH,
@@ -123,14 +139,7 @@ class RealtimeCompiler:
         try:
             root_section = self._experiment_dao.root_rt_sections()[0]
         except IndexError:
-            return {
-                "event_list": [],
-                "section_graph": {},
-                "section_info": {},
-                "subsection_map": {},
-                "section_signals_with_children": {},
-                "sampling_rates": [],
-            }
+            return Schedule.empty()
 
         preorder_map = self._scheduler.preorder_map()
 
@@ -166,18 +175,19 @@ class RealtimeCompiler:
                 )
             )
 
+        # Group devices by sampling rate and create a backward compatible alist of those.
         sampling_rates = [
-            [list({d[0] for d in sampling_rate_tuples if d[1] == r}), r]
-            for r in {t[1] for t in sampling_rate_tuples}
+            (list({tpl[0] for tpl in grouped_tuples}), sampling_rate)
+            for sampling_rate, grouped_tuples in groupby(
+                sampling_rate_tuples, lambda tpl: tpl[1]
+            )
         ]
 
         _logger.debug("Pulse sheet generation completed")
 
-        return {
-            "event_list": event_list,
-            "section_graph": [],  # deprecated: not needed by PSV
-            "section_info": section_info_out,
-            "subsection_map": {},  # deprecated: not needed by PSV
-            "section_signals_with_children": section_signals_with_children,
-            "sampling_rates": sampling_rates,
-        }
+        return Schedule(
+            event_list=event_list,
+            section_info=section_info_out,
+            section_signals_with_children=section_signals_with_children,
+            sampling_rates=sampling_rates,
+        )

@@ -434,25 +434,29 @@ class DeviceSHFSG(DeviceSHFBase):
         osc_selects = {
             ch: osc.index for osc in self._allocated_oscs for ch in osc.channels
         }
+        # SHFSG has only one "sine" per channel, therefore "sines" index is hard-coded to 0.
+        # If multiple oscillators are assigned to a channel, it indicates oscillator switching
+        # via the command table, and the oscselect node is ignored. Therefore it can be set to
+        # any oscillator.
         for ch, osc_idx in osc_selects.items():
             nodes_to_initialize_output.append(
                 DaqNodeSetAction(
                     self._daq,
-                    f"/{self.serial}/sgchannels/{ch}/sines/{osc_idx}/oscselect",
+                    f"/{self.serial}/sgchannels/{ch}/sines/0/oscselect",
                     osc_idx,
                 )
             )
             nodes_to_initialize_output.append(
                 DaqNodeSetAction(
                     self._daq,
-                    f"/{self.serial}/sgchannels/{ch}/sines/{osc_idx}/harmonic",
+                    f"/{self.serial}/sgchannels/{ch}/sines/0/harmonic",
                     1,
                 )
             )
             nodes_to_initialize_output.append(
                 DaqNodeSetAction(
                     self._daq,
-                    f"/{self.serial}/sgchannels/{ch}/sines/{osc_idx}/phaseshift",
+                    f"/{self.serial}/sgchannels/{ch}/sines/0/phaseshift",
                     0,
                 )
             )
@@ -535,7 +539,7 @@ class DeviceSHFSG(DeviceSHFBase):
             caching_strategy=CachingStrategy.NO_CACHE,
         )
 
-    def collect_trigger_configuration_nodes(
+    async def collect_trigger_configuration_nodes(
         self, initialization: Initialization, recipe_data: RecipeData
     ) -> list[DaqNodeAction]:
         _logger.debug("Configuring triggers...")

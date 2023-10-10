@@ -124,17 +124,12 @@ class ZiApiWrapperBase(ABC):
         for daq_action in daq_actions:
             self._log_get(method_name, daq_action.path)
 
-    def get(self, daq_action):
-        self._log_get("get", daq_action.path)
-        daq_reply = self._api_wrapper("get", daq_action.path, flat=True)
-        return self._api_reply_to_val_history_dict(daq_reply)[daq_action.path][-1]
-
     def _actions_to_set_api_input(
         self, daq_actions: list[DaqNodeSetAction]
     ) -> list[list[Any]]:
         return [[action.path, action.value] for action in daq_actions]
 
-    def batch_set(self, daq_actions: list[DaqNodeAction]):
+    async def batch_set(self, daq_actions: list[DaqNodeAction]):
         """Set the list of nodes in one call to API
 
         Parameters:
@@ -184,9 +179,6 @@ class ZiApiWrapperBase(ABC):
             res[path] = daq_reply[path]["value"]
         return res
 
-    def execute(self):
-        return self._api_wrapper("execute")
-
 
 @dataclass
 class ServerQualifier:
@@ -202,7 +194,6 @@ class DaqWrapper(ZiApiWrapperBase):
     def __init__(self, name, server_qualifier: ServerQualifier):
         super().__init__(name)
         self._server_qualifier = server_qualifier
-        self._is_valid = False
         self._dataserver_version = LabOneVersion.LATEST
         self._vector_counter = 0
         self.node_monitor = None
@@ -221,24 +212,25 @@ class DaqWrapper(ZiApiWrapperBase):
         except RuntimeError as exp:
             raise LabOneQControllerException(str(exp))
 
+    async def validate_connection(self):
         [major, minor] = zhinst.core.__version__.split(".")[0:2]
         zhinst_core_version_str = f"{major}.{minor}"
 
-        if server_qualifier.dry_run:
+        if self._server_qualifier.dry_run:
             # Ensure emulated data server version matches installed zhinst.core
             self._zi_api_object.set_option(
                 "ZI", "about/version", zhinst_core_version_str
             )
 
         path = "/zi/about/version"
-        version_str = self.batch_get([DaqNodeGetAction(self, path)])[path]
+        result = await self.batch_get([DaqNodeGetAction(self, path)])
+        version_str = result[path]
         try:
             self._dataserver_version = LabOneVersion.cast_if_supported(version_str)
         except ValueError as e:
             err_msg = e.args[0]
-            if server_qualifier.ignore_version_mismatch:
+            if self._server_qualifier.ignore_version_mismatch:
                 _logger.warning("Ignoring that %s", err_msg)
-                self._dataserver_version = LabOneVersion.LATEST
             else:
                 raise LabOneQControllerException(err_msg) from e
 
@@ -255,8 +247,6 @@ class DaqWrapper(ZiApiWrapperBase):
             self.server_qualifier.host,
             self.server_qualifier.port,
         )
-
-        self._is_valid = True
 
     def __str__(self):
         return f"DAQ - {self._server_qualifier.host}:{self._server_qualifier.port}"
@@ -300,9 +290,6 @@ class DaqWrapper(ZiApiWrapperBase):
     @property
     def server_qualifier(self):
         return self._server_qualifier
-
-    def is_valid(self):
-        return self._is_valid
 
     @property
     def dataserver_version(self):
@@ -359,7 +346,7 @@ class DaqWrapper(ZiApiWrapperBase):
 
         return result
 
-    def batch_get(self, daq_actions):
+    async def batch_get(self, daq_actions):
         if not isinstance(daq_actions, list):
             raise LabOneQControllerException("Paths must be a list")
 
@@ -431,10 +418,10 @@ class DaqWrapperDryRun(DaqWrapper):
         self._zi_api_object.set_option(serial, option, value)
 
 
-def batch_set(all_actions: List[DaqNodeAction]):
+async def batch_set(all_actions: List[DaqNodeAction]):
     split_actions: Dict[DaqWrapper, List[DaqNodeAction]] = {}
     for daq_action in all_actions:
         daq_actions = split_actions.setdefault(daq_action.daq, [])
         daq_actions.append(daq_action)
     for daq, daq_actions in split_actions.items():
-        daq.batch_set(daq_actions)
+        await daq.batch_set(daq_actions)

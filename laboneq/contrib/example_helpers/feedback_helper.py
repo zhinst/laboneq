@@ -6,15 +6,13 @@
 
 import numpy as np
 
-from laboneq.core.types.enums import AcquisitionType, AveragingMode
-from laboneq.dsl.calibration import SignalCalibration
+from laboneq.core.types.enums import AcquisitionType
 from laboneq.dsl.experiment import pulse_library
 from laboneq.dsl.experiment.builtins import (
     acquire,
     acquire_loop_rt,
     delay,
     experiment,
-    experiment_calibration,
     for_each,
     map_signal,
     play,
@@ -22,82 +20,148 @@ from laboneq.dsl.experiment.builtins import (
 )
 
 
-## create readout pulse waveform with IQ encoded phase and optional software modulation
-def complex_freq_phase(
-    sampling_rate: float,
-    length: float,
-    freq: float,
-    amplitude: float = 1.0,
-    phase: float = 0.0,
-) -> np.typing.ArrayLike:
-    time_axis = np.linspace(0, length, int(length * sampling_rate))
-    return amplitude * np.exp(1j * 2 * np.pi * freq * time_axis + 1j * phase)
+class state_emulation_pulse:
+    """Class containing parameters for a pulse that can be used to emulate different qubit states"""
 
-
-@experiment(signals=["measure", "acquire"])
-def exp_raw(measure_pulse, q0, pulse_len):
-    """Experiment for raw signal acquisition from measure pulse"""
-    map_signal("measure", q0["measure_line"])
-    map_signal("acquire", q0["acquire_line"])
-
-    with acquire_loop_rt(count=1024, acquisition_type=AcquisitionType.RAW):
-        play(signal="measure", pulse=measure_pulse)
-        acquire(signal="acquire", handle="raw", length=pulse_len)
-        delay(signal="measure", time=10e-6)
-
-
-@experiment(signals=["measure0", "measure1", "acquire"])
-def exp_integration(measure0, measure1, q0, q1, samples_kernel, rotation_angle=0):
-    """Experiment that plays two different measure pulses one after another and acquire
-    results in single shot integration mode use custom integration kernel for data
-    acquisition.
-    """
-    kernel = pulse_library.sampled_pulse_complex(
-        samples_kernel * np.exp(1j * rotation_angle)
-    )
-
-    map_signal("measure0", q0["measure_line"])
-    map_signal("measure1", q1["measure_line"])
-    map_signal("acquire", q0["acquire_line"])
-
-    with acquire_loop_rt(
-        count=1024,
-        averaging_mode=AveragingMode.SINGLE_SHOT,
-        acquisition_type=AcquisitionType.INTEGRATION,
+    def __init__(
+        self,
+        # qubit_state=0,
+        pulse_length=400e-9,
+        amplitude_increment=0.2,
+        phase_increment=np.pi / 2.5,
     ):
-        with section():
-            play(signal="measure0", pulse=measure0)
-            acquire(signal="acquire", handle="data0", kernel=kernel)
-            delay(signal="measure0", time=10e-6)
-        with section():
-            play(signal="measure1", pulse=measure1)
-            acquire(signal="acquire", handle="data1", kernel=kernel)
-            delay(signal="measure1", time=10e-6)
+        self.pulse_length = pulse_length
+        self.pulse = pulse_library.const(length=pulse_length)
+        self.amplitude_increment = amplitude_increment
+        self.phase_increment = phase_increment
+
+    def pulse_phase(self, qubit_state=0):
+        return qubit_state * self.phase_increment
+
+    def pulse_amplitude(self, qubit_state=0):
+        return self.amplitude_increment * (qubit_state + 1)
 
 
-@experiment(signals=["measure0", "measure1", "acquire"])
-def exp_discrimination(
-    measure0, measure1, q0, q1, samples_kernel, threshold=0, rotation_angle=0, num=50
+def create_calibration_experiment(
+    state_emulation_pulse,
+    qubit_state,
+    measure_signal,
+    acquire_signal,
 ):
-    """Experiment to test state discrimination by playing two different measure pulses
+    """Experiment to calibrate state discrimination by playing a measurement pulse
+    that emulates a certain qubit state response and acquiring the raw trace of the returned signal.
+    """
+
+    @experiment(signals=["measure", "acquire"])
+    def exp():
+        map_signal("measure", measure_signal)
+        map_signal("acquire", acquire_signal)
+
+        with acquire_loop_rt(count=1024, acquisition_type=AcquisitionType.RAW):
+            play(
+                signal="measure",
+                pulse=state_emulation_pulse.pulse,
+                phase=state_emulation_pulse.pulse_phase(qubit_state),
+                amplitude=state_emulation_pulse.pulse_amplitude(qubit_state),
+            )
+            acquire(
+                signal="acquire",
+                handle="raw",
+                length=state_emulation_pulse.pulse_length,
+            )
+            delay(signal="measure", time=1e-6)
+
+    return exp()
+
+
+def create_discrimination_experiment(
+    measure_lines,
+    acquire_line,
+    kernels,
+    state_emulation_pulse,
+    num=10,
+):
+    """Experiment to test state discrimination by playing a number of different measure pulses
     one ofter the other and acquiring the state readout.
     """
-    kernel = pulse_library.sampled_pulse_complex(
-        samples_kernel * np.exp(1j * rotation_angle)
+
+    all_signals = [f"measure_{it}" for it in range(len(measure_lines))]
+    all_signals.append("acquire")
+
+    @experiment(signals=all_signals)
+    def exp():
+        for it, line in enumerate(measure_lines):
+            map_signal(f"measure_{it}", line)
+        map_signal("acquire", acquire_line)
+
+        measure_pulse = state_emulation_pulse()
+
+        with acquire_loop_rt(
+            count=1024, acquisition_type=AcquisitionType.DISCRIMINATION
+        ):
+            with for_each(range(num)):
+                for it, _ in enumerate(measure_lines):
+                    with section(
+                        uid=f"measure_{it}",
+                        play_after=None if it == 0 else f"measure_{it-1}",
+                    ):
+                        play(
+                            signal=f"measure_{it}",
+                            pulse=measure_pulse.pulse,
+                            phase=measure_pulse.pulse_phase(qubit_state=it),
+                            amplitude=measure_pulse.pulse_amplitude(qubit_state=it),
+                        )
+                        acquire(signal="acquire", handle=f"data_{it}", kernel=kernels)
+                        delay(signal=f"measure_{it}", time=0.5e-6)
+
+    return exp()
+
+
+def gaussian_envelope(
+    centre=50e-9, sigma=20e-9, start_time=0, stop_time=100e-9, sampling_rate=2e9
+):
+    """Gaussian waveform envelope, to be used to construct piecewise modualted pulses"""
+    times = np.linspace(
+        start=start_time,
+        stop=stop_time,
+        num=int((stop_time - start_time) * sampling_rate),
     )
+    return np.exp(-((times - centre) ** 2) / (2 * sigma**2))
 
-    map_signal("measure0", q0["measure_line"])
-    map_signal("measure1", q1["measure_line"])
-    map_signal("acquire", q0["acquire_line"])
-    experiment_calibration()["acquire"] = SignalCalibration(threshold=threshold)
 
-    with acquire_loop_rt(count=1024, acquisition_type=AcquisitionType.DISCRIMINATION):
-        with for_each(range(num)):
-            with section():
-                play(signal="measure0", pulse=measure0)
-                acquire(signal="acquire", handle="data0", kernel=kernel)
-                delay(signal="measure0", time=1e-6)
-            with section():
-                play(signal="measure1", pulse=measure1)
-                acquire(signal="acquire", handle="data1", kernel=kernel)
-                delay(signal="measure1", time=1e-6)
+def piecewise_modulated(
+    piece_length=[100e-9, 100e-9],
+    piece_frequency=[-200e6, 0],
+    piece_amplitude=[0.6, 0.3],
+    waveform_envelope=gaussian_envelope,
+    sampling_rate=2e9,
+):
+    """Definition of a piecewise modulated sampled waveform.
+    Each section of the waveform has a length in time, a modualtion frequency and an amplitude.
+    All sections have the same envelope.
+    """
+    values = np.array([])
+    piece_start = 0
+
+    for amplitude, frequency, pulse_length in zip(
+        piece_amplitude, piece_frequency, piece_length
+    ):
+        times = np.linspace(
+            start=0,
+            stop=pulse_length,
+            num=int(pulse_length * sampling_rate),
+        )
+        values = np.append(
+            values,
+            amplitude
+            * np.exp(-1j * 2 * np.pi * frequency * times)
+            * waveform_envelope(
+                start_time=piece_start,
+                stop_time=piece_start + pulse_length,
+                centre=piece_start + pulse_length / 2,
+                sampling_rate=sampling_rate,
+            ),
+        )
+        piece_start += pulse_length
+
+    return values

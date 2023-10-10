@@ -70,6 +70,7 @@ class Serializer:
         json_struct = serialize_to_dict_with_ref(
             serializable_object,
             entity_classes,
+            Serializer._classes_by_short_name(),
             entity_mapper,
             emit_enum_types=True,
             omit_none_fields=omit_none_fields,
@@ -89,6 +90,7 @@ class Serializer:
                 json_struct = serialize_to_dict_with_ref(
                     serializable_object,
                     entity_classes,
+                    Serializer._classes_by_short_name(),
                     entity_mapper,
                     emit_enum_types=True,
                     omit_none_fields=omit_none_fields,
@@ -103,9 +105,11 @@ class Serializer:
     @staticmethod
     def to_dict(serializable_object, omit_none_fields=False) -> Dict:
         entity_classes, entity_mapper = Serializer._entity_config()
+
         return serialize_to_dict_with_ref(
             serializable_object,
             entity_classes,
+            Serializer._classes_by_short_name(),
             entity_mapper,
             emit_enum_types=True,
             omit_none_fields=omit_none_fields,

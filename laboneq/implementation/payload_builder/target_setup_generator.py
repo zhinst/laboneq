@@ -59,6 +59,8 @@ class TargetSetupGenerator:
                 with_calibration=with_calibration,
             )
         ]
+        cls._split_shfqc_zsync(devices, setup)
+
         return TargetSetup(
             uid=setup.uid,
             servers=servers,
@@ -223,6 +225,26 @@ class TargetSetupGenerator:
                 qc_with_qa=False,
                 reference_clock_source=instrument.reference_clock.source,
             )
+
+    @classmethod
+    def _split_shfqc_zsync(cls, instruments: list[TargetDevice], setup: Setup):
+        """After splitting any SHFQCs, also look for PQSC and updates its ZSync connection
+        to also represent both parts."""
+
+        split_qcs = {
+            i.uid.removesuffix("_sg") for i in instruments if i.is_qc and i.qc_with_qa
+        }
+
+        for d in instruments:
+            if d.device_type != TargetDeviceType.PQSC:
+                continue
+
+            extra_connections = []
+            for path, instr_uid in d.internal_connections:
+                if instr_uid in split_qcs:
+                    extra_connections.append((path, f"{instr_uid}_sg"))
+
+            d.internal_connections.extend(extra_connections)
 
     @classmethod
     def _connected_outputs_from_instrument(

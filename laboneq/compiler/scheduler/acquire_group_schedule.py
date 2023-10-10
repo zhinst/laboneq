@@ -11,7 +11,6 @@ from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.common.pulse_parameters import encode_pulse_parameters
 from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
-from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.data.compilation_job import ParameterInfo, SectionSignalPulse
 
 
@@ -22,8 +21,6 @@ class AcquireGroupSchedule(IntervalSchedule):
     phases: list[float]
     offset: int
     oscillator_frequencies: list[Optional[float]]
-    set_oscillator_phases: list[Optional[float]]
-    increment_oscillator_phases: list[Optional[float]]
     section: str
     play_pulse_params: list[Optional[Dict[str, Any]]]
     pulse_pulse_params: list[Optional[Dict[str, Any]]]
@@ -41,8 +38,6 @@ class AcquireGroupSchedule(IntervalSchedule):
         assert (
             len(self.pulses)
             == len(self.amplitudes)
-            == len(self.set_oscillator_phases)
-            == len(self.increment_oscillator_phases)
             == len(self.phases)
             == len(self.oscillator_frequencies)
             == len(self.play_pulse_params)
@@ -87,40 +82,6 @@ class AcquireGroupSchedule(IntervalSchedule):
                 for par in self.play_pulse_params
             ]
 
-        osc_events = []
-        osc_common = {
-            "time": start,
-            "section_name": self.section,
-            "signal": signal_id,
-        }
-        oscillator_phase_increments = set(self.increment_oscillator_phases)
-        if len(oscillator_phase_increments) > 1:
-            raise LabOneQException(
-                "Cannot handle multiple oscillator phase increments in one acquire group"
-            )
-        oscillator_phase_sets = set(self.set_oscillator_phases)
-        if len(oscillator_phase_sets) > 1:
-            raise LabOneQException(
-                "Cannot handle multiple oscillator phase sets in one acquire group"
-            )
-        if self.increment_oscillator_phases[0]:
-            osc_events.append(
-                {
-                    "event_type": EventType.INCREMENT_OSCILLATOR_PHASE,
-                    "increment_oscillator_phase": self.increment_oscillator_phases[0],
-                    "id": next(id_tracker),
-                    **osc_common,
-                }
-            )
-        if self.set_oscillator_phases[0] is not None:
-            osc_events.append(
-                {
-                    "event_type": EventType.SET_OSCILLATOR_PHASE,
-                    "set_oscillator_phase": self.set_oscillator_phases[0],
-                    "id": next(id_tracker),
-                    **osc_common,
-                }
-            )
         for pulse in self.pulses:
             params_list = []
             for f in ("length", "amplitude", "phase", "offset"):
@@ -128,7 +89,7 @@ class AcquireGroupSchedule(IntervalSchedule):
                     params_list.append(getattr(pulse, f).uid)
             d["parametrized_with"].append(params_list)
 
-        return osc_events + [
+        return [
             {
                 "event_type": EventType.ACQUIRE_START,
                 "time": start + self.offset,

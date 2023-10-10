@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Iterator
 
@@ -302,16 +301,12 @@ class _LoopsPreprocessor(ExecutorBase):
         self._loop_stack[-1].axis_names.append(name if axis_name is None else axis_name)
         self._loop_stack[-1].axis_points.append(values)
 
-    @contextmanager
-    def for_loop_handler(self, count: int, index: int, loop_flags: LoopFlags):
+    def for_loop_entry_handler(self, count: int, index: int, loop_flags: LoopFlags):
         if loop_flags.is_pipeline:
             self.pipeliner_chunk_count = count
             self.pipeliner_repetitions = math.prod(
                 len(l.axis_points) for l in self._loop_stack
             )
-            yield
-            self.pipeliner_chunk_count = None
-            self.pipeliner_repetitions = None
             return
 
         self._loop_stack.append(
@@ -325,12 +320,15 @@ class _LoopsPreprocessor(ExecutorBase):
                 self._loop_stack[-1].axis_names.append(self._current_rt_uid)
                 self._loop_stack[-1].axis_points.append(self._single_shot_axis())
 
-        yield
+    def for_loop_exit_handler(self, count: int, index: int, loop_flags: LoopFlags):
+        if loop_flags.is_pipeline:
+            self.pipeliner_chunk_count = None
+            self.pipeliner_repetitions = None
+            return
 
         self._loop_stack.pop()
 
-    @contextmanager
-    def rt_handler(
+    def rt_entry_handler(
         self,
         count: int,
         uid: str,
@@ -358,19 +356,19 @@ class _LoopsPreprocessor(ExecutorBase):
             ),
         )
 
-        yield
-
+    def rt_exit_handler(
+        self,
+        count: int,
+        uid: str,
+        averaging_mode: AveragingMode,
+        acquisition_type: AcquisitionType,
+    ):
         if self._current_rt_info is None:
             raise LabOneQControllerException(
                 "Nested 'acquire_loop_rt' are not allowed."
             )
         self._current_rt_uid = None
         self._current_rt_info = None
-
-    def run(self, root_sequence: Statement):
-        # Skip for recipe-only execution (used in older tests)
-        if root_sequence is not None:
-            super().run(root_sequence)
 
 
 def _calculate_awg_configs(
@@ -521,7 +519,7 @@ def _pre_process_attributes(
 def pre_process_compiled(
     scheduled_experiment: ScheduledExperiment,
     devices: DeviceCollection,
-    execution: Statement = None,
+    execution: Statement,
     labone_version: LabOneVersion = LabOneVersion.LATEST,
 ) -> RecipeData:
     recipe = scheduled_experiment.recipe

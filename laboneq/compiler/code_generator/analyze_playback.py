@@ -37,6 +37,7 @@ from laboneq.compiler.common.awg_sampled_event import (
 )
 from laboneq.compiler.common.awg_signal_type import AWGSignalType
 from laboneq.compiler.common.device_type import DeviceType
+from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.common.play_wave_type import PlayWaveType
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.core.exceptions import LabOneQException
@@ -140,100 +141,101 @@ def _analyze_branches(events, delay, sampling_rate, playwave_max_hint):
     return branching_intervals, states, cut_points
 
 
+def find_event_pairs(events, start_types, end_types):
+    start_events = {}
+    end_events = {}
+    for event in events:
+        if event["event_type"] in start_types:
+            start_events[event["chain_element_id"]] = event
+        elif event["event_type"] in end_types:
+            end_events[event["chain_element_id"]] = event
+
+    return [(start_events[id], end) for id, end in end_events.items()]
+
+
 def _interval_list(events, states, signal_ids, delay, sub_channel):
-    """Compute a flat list of (start, stop) intervals for tall the playback events"""
+    """Compute a flat list of (start, stop) intervals for all the playback events"""
 
     interval_zip: List[Tuple[_IntervalStartEvent, _IntervalEndEvent]] = []
-    for state in itertools.chain(set(states.values()), (None,)):
-        for index, cur_signal_id in enumerate(signal_ids):
-            interval_zip.extend(
-                zip(
-                    [
-                        _IntervalStartEvent(
-                            event_type=event["event_type"],
-                            signal_id=cur_signal_id,
-                            time=event["time"] + delay,
-                            play_wave_id=event["play_wave_id"],
-                            amplitude=event["amplitude"],
-                            index=index,
-                            oscillator_phase=event.get("oscillator_phase"),
-                            oscillator_frequency=event.get("oscillator_frequency"),
-                            phase=event.get("phase"),
-                            sub_channel=sub_channel,
-                            baseband_phase=event.get("baseband_phase"),
-                            play_pulse_parameters=event.get("play_pulse_parameters"),
-                            pulse_pulse_parameters=event.get("pulse_pulse_parameters"),
-                            state=states.get(event["section_name"], None),
-                            markers=event.get("markers"),
-                            amp_param=event.get("amplitude_parameter"),
-                        )
-                        for event in events
-                        if event["event_type"] in ["PLAY_START"]
-                        and event["signal"] == cur_signal_id
-                        and states.get(event["section_name"], None) == state
-                    ],
-                    [
-                        _IntervalEndEvent(
-                            event_type=event["event_type"],
-                            time=event["time"] + delay,
-                            play_wave_id=event["play_wave_id"],
-                            index=index,
-                        )
-                        for event in events
-                        if event["event_type"] in ["PLAY_END"]
-                        and event["signal"] == cur_signal_id
-                        and states.get(event["section_name"], None) == state
-                    ],
-                )
+
+    play_event_pairs = find_event_pairs(
+        events, [EventType.PLAY_START], [EventType.PLAY_END]
+    )
+    delay_event_pairs = find_event_pairs(
+        events, [EventType.DELAY_START], [EventType.DELAY_END]
+    )
+
+    interval_zip.extend(
+        (
+            (
+                _IntervalStartEvent(
+                    event_type=start["event_type"],
+                    signal_id=cur_signal_id,
+                    time=start["time"] + delay,
+                    play_wave_id=start["play_wave_id"],
+                    amplitude=start["amplitude"],
+                    index=index,
+                    oscillator_phase=start.get("oscillator_phase"),
+                    oscillator_frequency=start.get("oscillator_frequency"),
+                    phase=start.get("phase"),
+                    sub_channel=sub_channel,
+                    baseband_phase=start.get("baseband_phase"),
+                    play_pulse_parameters=start.get("play_pulse_parameters"),
+                    pulse_pulse_parameters=start.get("pulse_pulse_parameters"),
+                    state=states.get(start["section_name"], None),
+                    markers=start.get("markers"),
+                    amp_param=start.get("amplitude_parameter"),
+                ),
+                _IntervalEndEvent(
+                    event_type=end["event_type"],
+                    time=end["time"] + delay,
+                    play_wave_id=end["play_wave_id"],
+                    index=index,
+                ),
             )
-            interval_zip.extend(
-                zip(
-                    [
-                        _IntervalStartEvent(
-                            event_type="DELAY_START",
-                            signal_id=cur_signal_id,
-                            time=event["time"] + delay,
-                            play_wave_id=None,
-                            amplitude=None,
-                            index=index,
-                            oscillator_phase=None,
-                            oscillator_frequency=None,
-                            phase=None,
-                            sub_channel=sub_channel,
-                            baseband_phase=None,
-                            play_pulse_parameters=None,
-                            pulse_pulse_parameters=None,
-                            state=states.get(event["section_name"], None),
-                            markers=None,
-                            amp_param=None,
-                        )
-                        for event in events
-                        if (
-                            event["event_type"] == "DELAY_START"
-                            and event.get("play_wave_type")
-                            == PlayWaveType.EMPTY_CASE.name
-                        )
-                        and event["signal"] == cur_signal_id
-                        and states.get(event["section_name"], None) == state
-                    ],
-                    [
-                        _IntervalEndEvent(
-                            event_type="DELAY_END",
-                            time=event["time"] + delay,
-                            play_wave_id=None,
-                            index=index,
-                        )
-                        for event in events
-                        if (
-                            event["event_type"] == "DELAY_END"
-                            and event.get("play_wave_type")
-                            == PlayWaveType.EMPTY_CASE.name
-                        )
-                        and event["signal"] == cur_signal_id
-                        and states.get(event["section_name"], None) == state
-                    ],
-                )
+            for state in itertools.chain(set(states.values()), (None,))
+            for index, cur_signal_id in enumerate(signal_ids)
+            for start, end in play_event_pairs
+            if start["signal"] == cur_signal_id
+            and states.get(start["section_name"], None) == state
+        )
+    )
+    interval_zip.extend(
+        (
+            (
+                _IntervalStartEvent(
+                    event_type="DELAY_START",
+                    signal_id=cur_signal_id,
+                    time=start["time"] + delay,
+                    play_wave_id=None,
+                    amplitude=None,
+                    index=index,
+                    oscillator_phase=None,
+                    oscillator_frequency=None,
+                    phase=None,
+                    sub_channel=sub_channel,
+                    baseband_phase=None,
+                    play_pulse_parameters=None,
+                    pulse_pulse_parameters=None,
+                    state=states.get(start["section_name"], None),
+                    markers=None,
+                    amp_param=None,
+                ),
+                _IntervalEndEvent(
+                    event_type="DELAY_END",
+                    time=end["time"] + delay,
+                    play_wave_id=None,
+                    index=index,
+                ),
             )
+            for state in itertools.chain(set(states.values()), (None,))
+            for index, cur_signal_id in enumerate(signal_ids)
+            for start, end in delay_event_pairs
+            if start.get("play_wave_type") == PlayWaveType.EMPTY_CASE.name
+            and start["signal"] == cur_signal_id
+            and states.get(start["section_name"], None) == state
+        )
+    )
 
     if len(interval_zip) > 0:
         _logger.debug(

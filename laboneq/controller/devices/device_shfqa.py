@@ -329,25 +329,14 @@ class DeviceSHFQA(DeviceSHFBase):
                         continue
                     assert len(integrator.channels) == 1
                     integrator_idx = integrator.channels[0]
-                    if self._integrator_uses_multistate_discrimation(integrator):
-                        assert self._integrator_has_consistent_msd_num_state(integrator)
-                        for state_i, threshold in enumerate(integrator.thresholds):
-                            nodes_to_initialize_readout.append(
-                                DaqNodeSetAction(
-                                    self._daq,
-                                    f"/{self.serial}/qachannels/{channel}/readout/multistate/qudits/"
-                                    f"{integrator_idx}/thresholds/{state_i}/value",
-                                    threshold or 0.0,
-                                )
-                            )
-
-                    else:
+                    assert self._integrator_has_consistent_msd_num_state(integrator)
+                    for state_i, threshold in enumerate(integrator.thresholds):
                         nodes_to_initialize_readout.append(
                             DaqNodeSetAction(
                                 self._daq,
-                                f"/{self.serial}/qachannels/{channel}/readout/discriminators/"
-                                f"{integrator_idx}/threshold",
-                                integrator.thresholds[0] or 0.0,
+                                f"/{self.serial}/qachannels/{channel}/readout/multistate/qudits/"
+                                f"{integrator_idx}/thresholds/{state_i}/value",
+                                threshold or 0.0,
                             )
                         )
         nodes_to_initialize_readout.append(
@@ -863,62 +852,6 @@ class DeviceSHFQA(DeviceSHFBase):
             )
         return True
 
-    def _integrator_uses_multistate_discrimation(
-        self, integrator_allocation: IntegratorAllocation.Data
-    ):
-        weights_is_msd = len(integrator_allocation.weights) > 1
-        threshold_is_msd = len(integrator_allocation.thresholds) > 1
-        msd_state = [weights_is_msd, threshold_is_msd]
-        if len(set(msd_state)) != 1:
-            raise LabOneQControllerException(
-                f"Multi discrimination configuration of experiment is not consistent. "
-                f"Received weights={integrator_allocation.weights}, thresholds={integrator_allocation.threshold}, "
-                f"these two quantities need to either all be lists, or all be singular items"
-            )
-        return all(msd_state)
-
-    def _configure_readout_mode_nodes_single_state(
-        self,
-        integrator_allocation: IntegratorAllocation.Data,
-        recipe_data: RecipeData,
-        measurement: Measurement.Data,
-        max_len: int,
-    ):
-        if len(integrator_allocation.channels) != 1:
-            raise LabOneQControllerException(
-                f"{self.dev_repr}: Internal error - expected 1 integrator for "
-                f"signal '{integrator_allocation.signal_id}', "
-                f"got {len(integrator_allocation.channels)}"
-            )
-        integration_unit_index = integrator_allocation.channels[0]
-        wave_name = integrator_allocation.weights[0] + ".wave"
-        weight_vector = np.conjugate(
-            get_wave(wave_name, recipe_data.scheduled_experiment.waves)
-        )
-        wave_len = len(weight_vector)
-        if wave_len > max_len:
-            max_pulse_len = max_len / SAMPLE_FREQUENCY_HZ
-            raise LabOneQControllerException(
-                f"{self.dev_repr}: Length {wave_len} of the integration weight "
-                f"'{integration_unit_index}' of channel {measurement.channel} exceeds "
-                f"maximum of {max_len} samples. Ensure length of acquire kernels don't "
-                f"exceed {max_pulse_len * 1e6:.3f} us."
-            )
-        node_path = (
-            f"/{self.serial}/qachannels/{measurement.channel}/readout/integration/"
-            f"weights/{integration_unit_index}/wave"
-        )
-
-        return [
-            DaqNodeSetAction(
-                self._daq,
-                node_path,
-                weight_vector,
-                filename=wave_name,
-                caching_strategy=CachingStrategy.CACHE,
-            )
-        ]
-
     def _configure_readout_mode_nodes_multi_state(
         self,
         integrator_allocation: IntegratorAllocation.Data,
@@ -1000,16 +933,9 @@ class DeviceSHFQA(DeviceSHFBase):
                 # Skip configuration if no integration weights provided to keep same behavior
                 # TODO(2K): Consider not emitting the integrator allocation in this case.
                 continue
-
-            if self._integrator_uses_multistate_discrimation(integrator_allocation):
-                readout_nodes = self._configure_readout_mode_nodes_multi_state(
-                    integrator_allocation, recipe_data, measurement, max_len
-                )
-            else:
-                readout_nodes = self._configure_readout_mode_nodes_single_state(
-                    integrator_allocation, recipe_data, measurement, max_len
-                )
-
+            readout_nodes = self._configure_readout_mode_nodes_multi_state(
+                integrator_allocation, recipe_data, measurement, max_len
+            )
             nodes_to_set_for_readout_mode.extend(readout_nodes)
 
         return nodes_to_set_for_readout_mode
@@ -1125,7 +1051,7 @@ class DeviceSHFQA(DeviceSHFBase):
 
         return nodes_to_initialize_measurement
 
-    def collect_trigger_configuration_nodes(
+    async def collect_trigger_configuration_nodes(
         self, initialization: Initialization, recipe_data: RecipeData
     ) -> list[DaqNodeAction]:
         _logger.debug("Configuring triggers...")
@@ -1210,14 +1136,14 @@ class DeviceSHFQA(DeviceSHFBase):
         data = node_data[result_path_ch][0]["vector"][0:num_results]
         return data
 
-    def check_results_acquired_status(
+    async def check_results_acquired_status(
         self, channel, acquisition_type: AcquisitionType, result_length, hw_averages
     ):
         unit = "spectroscopy" if is_spectroscopy(acquisition_type) else "readout"
         results_acquired_path = (
             f"/{self.serial}/qachannels/{channel}/{unit}/result/acquired"
         )
-        batch_get_results = self._daq.batch_get(
+        batch_get_results = await self._daq.batch_get(
             [
                 DaqNodeGetAction(
                     self._daq,
