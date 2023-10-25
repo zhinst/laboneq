@@ -152,6 +152,7 @@ class Serializer:
         ]
         schedule_modules = [
             "laboneq.compiler.scheduler.scheduler",
+            "laboneq.compiler.ir.ir",
         ]
         _, classes_by_short_name = module_classes(dsl_modules + schedule_modules)
         # TODO: remove this after migration to new data types is complete (?)
@@ -180,6 +181,32 @@ class Serializer:
         )
 
     @staticmethod
+    # NOTE(mr): This can be removed after the legacy adapters have been removed, or, conversely after class names are unique in L1Q once more
+    def _classes_by_short_name_ir():
+        _, classes_by_short_name = module_classes(
+            [
+                "laboneq.compiler.ir.ir",
+                "laboneq.compiler.ir.acquire_group_ir",
+                "laboneq.compiler.ir.case_ir",
+                "laboneq.compiler.ir.interval_ir",
+                "laboneq.compiler.ir.loop_ir",
+                "laboneq.compiler.ir.loop_iteration_ir",
+                "laboneq.compiler.ir.match_ir",
+                "laboneq.compiler.ir.oscillator_ir",
+                "laboneq.compiler.ir.phase_reset_ir",
+                "laboneq.compiler.ir.pulse_ir",
+                "laboneq.compiler.ir.reserve_ir",
+                "laboneq.compiler.ir.root_ir",
+                "laboneq.compiler.ir.section_ir",
+                "laboneq.data.compilation_job",
+                "laboneq.data.calibration",
+                "laboneq.core.types.enums",
+                "laboneq._utils",
+            ]
+        )
+        return OrderedDict(classes_by_short_name.items())
+
+    @staticmethod
     def from_json(serialized_string: str, type_hint):
         if type_hint is dict:
             obj = orjson.loads(serialized_string)
@@ -189,7 +216,9 @@ class Serializer:
 
             obj = deserialize_from_dict_with_ref(
                 serialized_form,
-                Serializer._classes_by_short_name(),
+                Serializer._classes_by_short_name_ir()
+                if type_hint is not None and type_hint.__name__ == "IR"
+                else Serializer._classes_by_short_name(),
                 entity_classes,
                 entity_mapper,
             )

@@ -3,6 +3,7 @@
 
 from __future__ import annotations  # noqa: I001
 
+import math
 import operator
 from contextlib import contextmanager
 from typing import Any, Optional, TextIO, Union
@@ -13,7 +14,9 @@ from openpulse import ast
 import openqasm3.visitor
 from laboneq._utils import id_generator
 from laboneq.core.exceptions import LabOneQException
-from laboneq.dsl.experiment import Experiment, Section
+from laboneq.dsl import LinearSweepParameter, SweepParameter
+from laboneq.dsl.enums import AcquisitionType, AveragingMode, SectionAlignment
+from laboneq.dsl.experiment import Experiment, Section, Sweep
 from laboneq.dsl.quantum.quantum_element import SignalType
 from laboneq.dsl.quantum.qubit import Qubit
 from laboneq.dsl.quantum.transmon import Transmon
@@ -35,6 +38,7 @@ ALLOWED_NODE_TYPES = {
     # auxiliary
     ast.AliasStatement,
     ast.ClassicalDeclaration,
+    ast.ConstantDeclaration,
     ast.Concatenation,
     ast.DiscreteSet,
     ast.Identifier,
@@ -43,6 +47,7 @@ ALLOWED_NODE_TYPES = {
     ast.RangeDefinition,
     ast.Span,
     ast.ClassicalAssignment,
+    ast.ForInLoop,
     # expressions
     ast.BinaryExpression,
     ast.BinaryOperator,
@@ -60,6 +65,7 @@ ALLOWED_NODE_TYPES = {
     ast.IntegerLiteral,
     # types
     ast.IntType,
+    ast.UintType,
     ast.FloatType,
     ast.BoolType,
     ast.DurationType,
@@ -109,9 +115,13 @@ class OpenQasm3Importer:
         else:
             return self._import_text(text)
 
-    def _import_text(self, text) -> Section:
+    def _parse_valid_tree(self, text) -> ast.Program:
         tree = openpulse.parse(text)
         assert isinstance(tree, ast.Program)
+        return tree
+
+    def _import_text(self, text) -> Section:
+        tree = self._parse_valid_tree(text)
         _AllowedNodeTypesVisitor().visit(tree, None)
         try:
             root = self.transpile(tree, uid_hint="root")
@@ -126,13 +136,22 @@ class OpenQasm3Importer:
         yield
         self.scope.close()
 
-    def transpile(self, parent: Union[ast.Program, ast.Box], uid_hint="") -> Section:
+    def transpile(
+        self, parent: Union[ast.Program, ast.Box, ast.ForInLoop], uid_hint=""
+    ) -> Section:
         sect = Section(uid=id_generator(uid_hint))
 
-        try:
+        if isinstance(parent, ast.Program):
             body = parent.statements
-        except AttributeError:
+        elif isinstance(parent, ast.Box):
             body = parent.body
+        elif isinstance(parent, ast.ForInLoop):
+            body = parent.block
+        else:
+            raise OpenQasmException(
+                f"Unsupported block type {type(parent)!r}",
+                mark=parent.span,
+            )
 
         for child in body:
             subsect = None
@@ -141,6 +160,8 @@ class OpenQasm3Importer:
                     self._handle_qubit_declaration(child)
                 elif isinstance(child, ast.ClassicalDeclaration):
                     self._handle_classical_declaration(child)
+                elif isinstance(child, ast.ConstantDeclaration):
+                    self._handle_constant_declaration(child)
                 elif isinstance(child, ast.AliasStatement):
                     self._handle_alias_statement(child)
                 elif isinstance(child, ast.Include):
@@ -153,6 +174,8 @@ class OpenQasm3Importer:
                     subsect = self._handle_barrier(child)
                 elif isinstance(child, ast.DelayInstruction):
                     subsect = self._handle_delay_instruction(child)
+                elif isinstance(child, ast.ForInLoop):
+                    subsect = self._handle_for_in_loop(child)
                 elif isinstance(child, ast.ClassicalAssignment):
                     self._handle_assignment(child)
                 elif isinstance(child, ast.QuantumMeasurementStatement):
@@ -231,6 +254,11 @@ class OpenQasm3Importer:
             value = eval_expression(statement.init_expression, namespace=self.scope)
             self.scope.current.declare_classical_value(name, value)
 
+    def _handle_constant_declaration(self, statement: ast.ConstantDeclaration):
+        name = statement.identifier.name
+        value = eval_expression(statement.init_expression, namespace=self.scope)
+        self.scope.current.declare_classical_value(name, value)
+
     def _handle_alias_statement(self, statement: ast.AliasStatement):
         if not isinstance(statement.target, ast.Identifier):
             msg = "Alias target must be an identifier."
@@ -251,7 +279,9 @@ class OpenQasm3Importer:
             raise
 
     def _handle_quantum_gate(self, statement: ast.QuantumGate):
-        args = tuple(eval_expression(arg) for arg in statement.arguments)
+        args = tuple(
+            eval_expression(arg, namespace=self.scope) for arg in statement.arguments
+        )
         if statement.modifiers or statement.duration:
             msg = "Gate modifiers and duration not yet supported."
             raise OpenQasmException(msg, mark=statement.span)
@@ -309,17 +339,21 @@ class OpenQasm3Importer:
 
     def _handle_delay_instruction(self, statement: ast.DelayInstruction):
         qubits = statement.qubits
-        duration = eval_expression(statement.duration, namespace=self.scope, type=float)
+        duration = eval_expression(
+            statement.duration, namespace=self.scope, type=(float, SweepParameter)
+        )
         qubit_names = [
             eval_expression(qubit, namespace=self.scope).canonical_name
             for qubit in qubits
         ]
         qubits_str = "_".join(qubit_names)
-        delay_section = Section(
-            uid=id_generator(f"{qubits_str}_delay_{duration * 1e9:.0f}ns")
-        )
+        delay_section = Section(uid=id_generator(f"{qubits_str}_delay"))
         for qubit in qubit_names:
             dsl_qubit = self.dsl_qubits[qubit]
+            # TODO: I think we might be able to remove this loop with
+            #       the new qubit class.
+            # TODO: Is it correct to delay on only one line?
+            # TODO: What should happen for custom qubit types?
             for role, sig in dsl_qubit.experiment_signals(with_types=True):
                 if role != SignalType.DRIVE:
                     continue
@@ -331,6 +365,41 @@ class OpenQasm3Importer:
             raise OpenQasmException(msg, mark=statement.span)
 
         return delay_section
+
+    def _handle_for_in_loop(self, statement: ast.ForInLoop):
+        loop_var = statement.identifier.name
+        loop_set_decl = statement.set_declaration
+
+        if isinstance(loop_set_decl, ast.RangeDefinition):
+            start = eval_expression(loop_set_decl.start, namespace=self.scope)
+            stop = eval_expression(loop_set_decl.end, namespace=self.scope)
+            step = eval_expression(loop_set_decl.step, namespace=self.scope) or 1
+            count = math.floor(((stop - start) / step) + 1)
+            sweep_param = LinearSweepParameter(
+                uid=id_generator("sweep_parameter"),
+                start=start,
+                stop=stop,
+                count=count,
+            )
+        else:
+            raise OpenQasmException(
+                f"Loop set declaration type {type(loop_set_decl)!r} is not"
+                f" yet supported by the LabOne Q OpenQASM importer.",
+                mark=statement.set_declaration.span,
+            )
+
+        sweep = Sweep(
+            uid=id_generator("sweep"),
+            parameters=[sweep_param],
+            alignment=SectionAlignment.LEFT,
+        )
+
+        with self._new_scope():
+            self.scope.current.declare_classical_value(loop_var, sweep_param)
+            subsect = self.transpile(statement, uid_hint="block")
+            sweep.add(subsect)
+
+        return sweep
 
     def _handle_assignment(self, statement: ast.ClassicalAssignment):
         lvalue = eval_lvalue(statement.lvalue, namespace=self.scope)
@@ -409,7 +478,14 @@ class OpenQasm3Importer:
             raise OpenQasmException(msg, mark=statement.span) from e
 
 
-def exp_from_qasm(program: str, qubits: dict[str, Qubit], gate_store: GateStore):
+def exp_from_qasm(
+    program: str,
+    qubits: dict[str, Qubit],
+    gate_store: GateStore,
+    count: int = 1,
+    averaging_mode: AveragingMode = AveragingMode.CYCLIC,
+    acquisition_type: AcquisitionType = AcquisitionType.INTEGRATION,
+):
     """Create an experiment from an OpenQASM program.
 
     Args:
@@ -419,6 +495,12 @@ def exp_from_qasm(program: str, qubits: dict[str, Qubit], gate_store: GateStore)
             Map from OpenQASM qubit names to LabOne Q DSL Qubit objects
         gate_store:
             Map from OpenQASM gate names to LabOne Q DSL Gate objects
+        count:
+            The number of acquire iterations.
+        averaging_mode:
+            The mode of how to average the acquired data.
+        acquisition_type:
+            The type of acquisition to perform.
     """
     importer = OpenQasm3Importer(qubits=qubits, gate_store=gate_store)
     qasm_section = importer(text=program)
@@ -433,7 +515,11 @@ def exp_from_qasm(program: str, qubits: dict[str, Qubit], gate_store: GateStore)
 
     # TODO: feed qubits directly to experiment when feature is implemented
     exp = Experiment(signals=signals)
-    with exp.acquire_loop_rt(count=1) as loop:
+    with exp.acquire_loop_rt(
+        count=count,
+        averaging_mode=averaging_mode,
+        acquisition_type=acquisition_type,
+    ) as loop:
         loop.add(qasm_section)
 
     return exp

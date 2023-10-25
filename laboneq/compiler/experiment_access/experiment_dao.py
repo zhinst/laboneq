@@ -47,12 +47,26 @@ class ExperimentDAO:
             self._loader = loader
         elif isinstance(experiment, ExperimentInfo):
             self._loader = self._load_experiment_info(experiment)
+            self._uid = experiment.uid
         else:
             self._loader = self._load_experiment(experiment)
+            self._uid = "exp_from_json"
         self._data = self._loader.data()
         self._acquisition_type = self._loader.acquisition_type
 
         self.validate_experiment()
+
+    def to_experiment_info(self):
+        return ExperimentInfo(
+            uid=self._uid,
+            devices=list(self._data["devices"].values()),
+            signals=list(self._data["signals"].values()),
+            sections=list(self._data["sections"].values()),
+            global_leader_device=self._data["devices"][self.global_leader_device()]
+            if self.global_leader_device() is not None
+            else None,
+            pulse_defs=list(self._data["pulses"].values()),
+        )
 
     def __eq__(self, other):
         if not isinstance(other, ExperimentDAO):

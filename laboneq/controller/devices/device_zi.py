@@ -689,6 +689,8 @@ class DeviceZI(ABC):
         waves = scheduled_experiment.waves or []
         bin_waves: Waveforms = []
         for sig, [index, sig_type] in wave_indices.items():
+            if sig.startswith("precomp_reset"):
+                continue  # precomp reset waveform is bundled with ELF
             if sig_type in ("iq", "double", "multi"):
                 name, samples = self._prepare_wave_iq(waves, sig)
             elif sig_type == "single":

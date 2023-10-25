@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from functools import cmp_to_key
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set
 
 from laboneq._utils import flatten
@@ -12,7 +13,10 @@ from laboneq.compiler.code_generator.seq_c_generator import (
     SeqCGenerator,
     merge_generators,
 )
-from laboneq.compiler.code_generator.signatures import PlaybackSignature
+from laboneq.compiler.code_generator.signatures import (
+    PlaybackSignature,
+    WaveformSignature,
+)
 from laboneq.compiler.common.awg_sampled_event import (
     AWGEvent,
     AWGEventType,
@@ -29,7 +33,6 @@ if TYPE_CHECKING:
         CommandTableTracker,
     )
     from laboneq.compiler.code_generator.seqc_tracker import SeqCTracker
-    from laboneq.compiler.code_generator.signatures import WaveformSignature
     from laboneq.compiler.code_generator.wave_index_tracker import WaveIndexTracker
     from laboneq.compiler.common.awg_info import AWGInfo
 
@@ -38,18 +41,43 @@ _logger = logging.getLogger(__name__)
 
 
 def sort_events(events: List[AWGEvent]) -> List[AWGEvent]:
-    later = {
-        AWGEventType.SEQUENCER_START: -100,
-        AWGEventType.INITIAL_RESET_PHASE: -5,
-        AWGEventType.LOOP_STEP_START: -4,
-        AWGEventType.INIT_AMPLITUDE_REGISTER: -3,
-        AWGEventType.PUSH_LOOP: -2,
-        AWGEventType.RESET_PHASE: -1,
-        AWGEventType.RESET_PRECOMPENSATION_FILTERS: -1,
-        AWGEventType.ACQUIRE: -1,
-        AWGEventType.ITERATE: 2,
-    }
-    sampled_event_list = sorted(events, key=lambda x: later.get(x.type, 0))
+    KEEP_ORDER = -1
+    REVERSE_ORDER = 1  # noqa F841
+    DONT_CARE = 0  # noqa F841
+
+    def fixed_priorities(event1, event2) -> int | None:
+        """Extensible list of special cases for event ordering."""
+        if event1.type == AWGEventType.ACQUIRE:
+            if event2.type == AWGEventType.TRIGGER_OUTPUT:
+                return KEEP_ORDER
+
+    def cmp(event1, event2):
+        if (v := fixed_priorities(event1, event2)) is not None:
+            return v
+        if (v := fixed_priorities(event2, event1)) is not None:
+            return -v
+
+        try:
+            # Some events do not have a priority, notably PLAY_WAVE.
+            # This is required, play must happen after acquire for instance, something
+            # that is not captured by the event list.
+            return event1.priority - event2.priority
+        except TypeError:
+            # legacy ordering based on type only
+            later = {
+                AWGEventType.SEQUENCER_START: -100,
+                AWGEventType.INITIAL_RESET_PHASE: -5,
+                AWGEventType.LOOP_STEP_START: -4,
+                AWGEventType.INIT_AMPLITUDE_REGISTER: -3,
+                AWGEventType.PUSH_LOOP: -2,
+                AWGEventType.RESET_PHASE: -1,
+                AWGEventType.RESET_PRECOMPENSATION_FILTERS: -1,
+                AWGEventType.ACQUIRE: -1,
+                AWGEventType.ITERATE: 2,
+            }
+            return later.get(event1.type, 0) - later.get(event2.type, 0)
+
+    sampled_event_list = sorted(events, key=cmp_to_key(cmp))
 
     return sampled_event_list
 
@@ -222,6 +250,49 @@ class SampledEventHandler:
 
         return wave_index
 
+    def precomp_reset_ct_index(self) -> int:
+        length = 32
+        sig_string = "precomp_reset"
+        wave_index = self.wave_indices.lookup_index_by_wave_id(sig_string)
+
+        signature = PlaybackSignature(
+            waveform=WaveformSignature(
+                length=length,
+                pulses=None,
+                samples=None,  # not relevant for command table entry creation
+            ),
+            clear_precompensation=True,
+            hw_oscillator=None,
+            pulse_parameters=(),
+        )
+
+        if wave_index is None:
+            assert self.device_type.supports_binary_waves
+            signal_type_for_wave_index = self.awg.signal_type.value
+
+            self.declarations_generator.add_zero_wave_declaration(
+                self.device_type, signal_type_for_wave_index, sig_string, length
+            )
+            wave_index = self.wave_indices.create_index_for_wave(
+                sig_string, signal_type_for_wave_index
+            )
+            play_wave_channel = None
+            if len(self.channels) > 0:
+                play_wave_channel = self.channels[0] % 2
+            self.declarations_generator.add_assign_wave_index_statement(
+                self.device_type,
+                signal_type_for_wave_index,
+                sig_string,
+                wave_index,
+                play_wave_channel,
+            )
+
+            ct_index = self.command_table_tracker.create_entry(signature, wave_index)
+        else:
+            ct_index = self.command_table_tracker.lookup_index_by_signature(signature)
+
+        return ct_index
+
     def handle_regular_playwave(
         self,
         sampled_event: AWGEvent,
@@ -288,7 +359,7 @@ class SampledEventHandler:
             parts.append(f"osc={signature.hw_oscillator}")
 
         if signature.set_phase is not None:
-            parts.append(f"phase ={signature.set_phase:.2g}")
+            parts.append(f"phase={signature.set_phase:.2g}")
         elif signature.increment_phase is not None:
             parts.append(f"phase+={signature.increment_phase:.2g}")
 
@@ -490,15 +561,22 @@ class SampledEventHandler:
     def handle_reset_precompensation_filters(self, sampled_event: AWGEvent):
         if sampled_event.params["signal_id"] not in (s.id for s in self.awg.signals):
             return
+
+        self.seqc_tracker.add_required_playzeros(sampled_event)
+
         if self.use_command_table:
-            # pre-compensation reset already part of the command table entry
+            ct_index = self.precomp_reset_ct_index()
+            self.seqc_tracker.add_command_table_execution(
+                ct_index, comment="precomp_reset"
+            )
+            self.seqc_tracker.flush_deferred_function_calls()
+            self.seqc_tracker.current_time = sampled_event.end
             return
 
         _logger.debug(
             "  Processing RESET PRECOMPENSATION FILTERS event %s",
             sampled_event,
         )
-        self.seqc_tracker.add_required_playzeros(sampled_event)
         self.seqc_tracker.add_function_call_statement(
             name="setPrecompClear", args=[1], deferred=False
         )
@@ -721,6 +799,21 @@ class SampledEventHandler:
         self.match_parent_event = sampled_event
         self.match_seqc_generators = {}
 
+    def handle_change_oscillator_phase(self, sampled_event: AWGEvent):
+        signature = PlaybackSignature(
+            waveform=None,
+            hw_oscillator=sampled_event.params["oscillator"],
+            pulse_parameters=(),
+            increment_phase=sampled_event.params["phase"],
+        )
+
+        ct_index = self.command_table_tracker.lookup_index_by_signature(signature)
+        if ct_index is None:
+            ct_index = self.command_table_tracker.create_entry(signature, None)
+        self.seqc_tracker.add_command_table_execution(
+            ct_index, comment=self._make_command_table_comment(signature)
+        )
+
     def close_event_list(self):
         if self.match_parent_event is not None:
             if self.match_parent_event.params["handle"] is not None:
@@ -856,6 +949,8 @@ class SampledEventHandler:
             self.handle_iterate(sampled_event)
         elif signature == AWGEventType.MATCH:
             self.handle_match(sampled_event)
+        elif signature == AWGEventType.CHANGE_OSCILLATOR_PHASE:
+            self.handle_change_oscillator_phase(sampled_event)
         self.last_event = sampled_event
 
     def handle_sampled_event_list(self):

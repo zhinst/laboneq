@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import abc
-import copy
 import itertools
 import logging
 import warnings
@@ -22,6 +21,7 @@ from laboneq.dsl.device.instruments import (
     PQSC,
     SHFPPC,
     SHFQA,
+    SHFQC,
     SHFSG,
     UHFQA,
     NonQC,
@@ -523,7 +523,6 @@ class _SHFQAProcessor(_ProcessorBase):
                 device_options=options,
                 connections=device_connections,
                 reference_clock_source=external_clock_signal,
-                is_qc=is_qc,
             )
         )
 
@@ -582,7 +581,6 @@ class _SHFSGProcessor(_ProcessorBase):
         device_connections = []
         used_ports = set()
         external_clock_signal = None
-        qc_with_qa = False
         if uid in connections:
             signal_type_of_port = {}
             for port_desc in connections[uid]:
@@ -607,7 +605,6 @@ class _SHFSGProcessor(_ProcessorBase):
                     and len(local_ports) == 1
                     and local_ports[0].upper().startswith("QACHANNELS/")
                 ):
-                    qc_with_qa = True
                     continue  # Skip over QA ports for SG part of QC
                 else:
                     _SHFSGProcessor._validate_local_ports(local_ports, remote_path)
@@ -652,14 +649,12 @@ class _SHFSGProcessor(_ProcessorBase):
         return SHFSG(
             **_skip_nones(
                 server_uid=server_finder(uid),
-                uid=uid + ("_sg" if is_qc and qc_with_qa else ""),
+                uid=uid,
                 address=address,
                 interface=interface,
                 device_options=options,
                 connections=device_connections,
                 reference_clock_source=external_clock_signal,
-                is_qc=is_qc,
-                qc_with_qa=qc_with_qa,
             )
         )
 
@@ -692,7 +687,7 @@ class _SHFQCProcessor(_ProcessorBase):
         for uid, address, interface, options in _iterate_over_descriptors_of_type(
             instruments, T_SHFQC_DEVICE
         ):
-            sg_dev = _SHFSGProcessor.make_device(
+            maybe_sg = _SHFSGProcessor.make_device(
                 uid,
                 address,
                 interface,
@@ -703,10 +698,7 @@ class _SHFQCProcessor(_ProcessorBase):
                 physical_signals,
                 is_qc=True,
             )
-            if sg_dev is not None:
-                yield sg_dev
-            # QA must come second, since it takes control over the standalone execution
-            qa_dev = _SHFQAProcessor.make_device(
+            maybe_qa = _SHFQAProcessor.make_device(
                 uid,
                 address,
                 interface,
@@ -717,8 +709,25 @@ class _SHFQCProcessor(_ProcessorBase):
                 physical_signals,
                 is_qc=True,
             )
-            if qa_dev is not None:
-                yield qa_dev
+            conns = []
+            if maybe_qa is not None and maybe_qa.connections is not None:
+                conns += maybe_qa.connections
+            if maybe_sg is not None and maybe_sg.connections is not None:
+                conns += maybe_sg.connections
+            ref_clk_src = (
+                ReferenceClockSource.EXTERNAL if T_EXTCLK in connections[uid] else None
+            )
+            yield SHFQC(
+                **_skip_nones(
+                    uid=uid,
+                    interface=interface,
+                    server_uid=server_finder(uid),
+                    address=address,
+                    reference_clock_source=ref_clk_src,
+                    connections=conns,
+                    device_options=options,
+                )
+            )
 
 
 class _SHFPPCProcessor(_ProcessorBase):
@@ -829,27 +838,7 @@ class _PQSCProcessor:
                 logical_signals_candidates,
                 physical_signals,
             )
-
-            # Since SHFQCs may spawn both an SHFQA and SHFSG, we must connect the extra
-            # SHFSG to the PQSC as well:
-            my_device_ids = set(c.remote_path for c in dev.connections)
-            my_possible_shfsgs = set(
-                s["uid"] + "_sg"
-                for s in instruments.get("SHFQC", [])
-                if s["uid"] in my_device_ids
-            )
-            shfsg_uids = set(
-                instr.uid for instr in out_instrument_list if isinstance(instr, SHFSG)
-            )
-            shfsgs_to_add = my_possible_shfsgs.intersection(shfsg_uids)
-            new_connections = []
-            for c in dev.connections:
-                shfsg_uid = c.remote_path + "_sg"
-                if shfsg_uid in shfsgs_to_add:
-                    new_connection = copy.deepcopy(c)
-                    new_connection.remote_path = shfsg_uid
-                    new_connections.append(new_connection)
-            dev.connections += new_connections
+            dev.connections
             yield dev
 
     @staticmethod
@@ -1239,13 +1228,6 @@ class _DeviceSetupGenerator:
             )
             for server_uid, server_def in dataservers.items()
         ]
-
-        # TODO(2K): Remove, leader device must be determined from connections
-        # Keeping this only to satisfy the tests
-        if len(servers) == 1:
-            pqsc_dicts = instruments.get(T_PQSC_DEVICE, [])
-            if len(pqsc_dicts) > 0:
-                servers[0][0].leader_uid = pqsc_dicts[0][T_UID]
 
         def server_finder(device_uid: str) -> str:
             default_data_server: DataServer = None

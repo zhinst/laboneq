@@ -144,7 +144,14 @@ def get_fields_and_slots(obj):
     return slots + fields
 
 
-def serialize_to_dict(to_serialize, emit_enum_types=False, omit_none_fields=False):
+def serialize_to_dict(
+    to_serialize, emit_enum_types=False, omit_none_fields=False, depth=0, max_depth=100
+):
+    if depth == max_depth:
+        raise SerializerException(
+            f"Reached maximum recursion depth of {max_depth} in serialization"
+        )
+    depth += 1
     if to_serialize is None:
         return
     if isinstance(to_serialize, (str, float, int, np.int64, np.complex128, complex)):
@@ -164,13 +171,19 @@ def serialize_to_dict(to_serialize, emit_enum_types=False, omit_none_fields=Fals
         return NumpyArrayRepr(array_data=to_serialize)
 
     if isinstance(to_serialize, list):
-        return [serialize_to_dict(item, emit_enum_types) for item in to_serialize]
+        return [
+            serialize_to_dict(item, emit_enum_types, depth=depth, max_depth=max_depth)
+            for item in to_serialize
+        ]
 
     if isinstance(to_serialize, (tuple, set)):
         retval = {
             "__type": full_typename(to_serialize),
             "__content": [
-                serialize_to_dict(item, emit_enum_types) for item in to_serialize
+                serialize_to_dict(
+                    item, emit_enum_types, depth=depth, max_depth=max_depth
+                )
+                for item in to_serialize
             ],
         }
         if isinstance(to_serialize, set):
@@ -201,13 +214,21 @@ def serialize_to_dict(to_serialize, emit_enum_types=False, omit_none_fields=Fals
             else:
                 continue
         if isinstance(outvalue, Mapping):
-            sub_dict[outkey] = serialize_to_dict(v, emit_enum_types)
+            sub_dict[outkey] = serialize_to_dict(
+                v, emit_enum_types, depth=depth, max_depth=max_depth
+            )
         elif isinstance(outvalue, list):
             sub_dict[outkey] = []
             for item in outvalue:
-                sub_dict[outkey].append(serialize_to_dict(item, emit_enum_types))
+                sub_dict[outkey].append(
+                    serialize_to_dict(
+                        item, emit_enum_types, depth=depth, max_depth=max_depth
+                    )
+                )
         else:
-            sub_dict[outkey] = serialize_to_dict(outvalue, emit_enum_types)
+            sub_dict[outkey] = serialize_to_dict(
+                outvalue, emit_enum_types, depth=depth, max_depth=max_depth
+            )
 
     if is_object and omit_none_fields:
         sub_dict = {k: v for k, v in sub_dict.items() if v is not None}
@@ -253,7 +274,14 @@ def serialize_to_dict_with_entities(
     entities_collector,
     emit_enum_types=False,
     omit_none_fields=False,
+    depth=0,
+    max_depth=100,
 ):
+    if depth == max_depth:
+        raise SerializerException(
+            f"Reached maximum recursion depth of {max_depth} in serialization"
+        )
+    depth += 1
     cls = to_serialize.__class__
     if to_serialize is None:
         return None
@@ -284,6 +312,8 @@ def serialize_to_dict_with_entities(
             entities_collector,
             emit_enum_types,
             omit_none_fields,
+            depth,
+            max_depth,
         )
 
     if _issubclass(cls, list):
@@ -312,6 +342,8 @@ def serialize_to_dict_with_entities(
                         entities_collector,
                         emit_enum_types,
                         omit_none_fields,
+                        depth,
+                        max_depth,
                     )
                     entities_collector[entity_typename_short][item.uid][ID_KEY] = id(
                         item
@@ -326,6 +358,8 @@ def serialize_to_dict_with_entities(
                         entities_collector,
                         emit_enum_types,
                         omit_none_fields,
+                        depth,
+                        max_depth,
                     )
                 )
         return retval
@@ -343,6 +377,8 @@ def serialize_to_dict_with_entities(
                     entities_collector,
                     emit_enum_types,
                     omit_none_fields,
+                    depth,
+                    max_depth,
                 )
             )
         if _issubclass(cls, set):
@@ -421,6 +457,8 @@ def serialize_to_dict_with_entities(
                     entities_collector,
                     emit_enum_types,
                     omit_none_fields,
+                    depth,
+                    max_depth,
                 )
                 entities_collector[entity_typename_short][v.uid][ID_KEY] = id(v)
             else:
@@ -438,6 +476,8 @@ def serialize_to_dict_with_entities(
                 whitelist,
                 emit_enum_types,
                 omit_none_fields,
+                depth,
+                max_depth,
             )
 
         elif _issubclass(item_class, Mapping):
@@ -448,6 +488,8 @@ def serialize_to_dict_with_entities(
                 entities_collector,
                 emit_enum_types,
                 omit_none_fields,
+                depth,
+                max_depth,
             )
         elif _issubclass(item_class, list):
             sub_dict[outkey] = []
@@ -475,6 +517,8 @@ def serialize_to_dict_with_entities(
                             entities_collector,
                             emit_enum_types,
                             omit_none_fields,
+                            depth,
+                            max_depth,
                         )
                         entities_collector[entity_typename_short][item.uid][
                             ID_KEY
@@ -497,6 +541,8 @@ def serialize_to_dict_with_entities(
                             entities_collector,
                             emit_enum_types,
                             omit_none_fields,
+                            depth,
+                            max_depth,
                         )
                     )
         else:
@@ -507,6 +553,8 @@ def serialize_to_dict_with_entities(
                 entities_collector,
                 emit_enum_types,
                 omit_none_fields,
+                depth,
+                max_depth,
             )
 
     if is_object and omit_none_fields:
@@ -522,6 +570,7 @@ def serialize_to_dict_with_ref(
     entity_mapper=None,
     emit_enum_types=False,
     omit_none_fields=False,
+    max_depth=100,
 ):
     if entity_mapper is None:
         entity_mapper = {}
@@ -540,6 +589,8 @@ def serialize_to_dict_with_ref(
             entities_collector,
             emit_enum_types=emit_enum_types,
             omit_none_fields=omit_none_fields,
+            depth=0,
+            max_depth=max_depth,
         )
     except Exception as ex:
         unique_log_msgs = "\n".join({l for l in log_stream.getvalue().splitlines()})

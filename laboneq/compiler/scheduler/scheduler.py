@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import functools
 import itertools
 import logging
 from dataclasses import replace
@@ -24,11 +25,23 @@ from typing import (
 import numpy as np
 
 from laboneq._observability.tracing import trace
-from laboneq._utils import cached_method
+from laboneq._utils import UIDReference, cached_method
 from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
+from laboneq.compiler.ir.acquire_group_ir import AcquireGroupIR
+from laboneq.compiler.ir.case_ir import CaseIR, EmptyBranchIR
+from laboneq.compiler.ir.interval_ir import IntervalIR
+from laboneq.compiler.ir.loop_ir import LoopIR
+from laboneq.compiler.ir.loop_iteration_ir import LoopIterationIR
+from laboneq.compiler.ir.match_ir import MatchIR
+from laboneq.compiler.ir.oscillator_ir import OscillatorFrequencyStepIR
+from laboneq.compiler.ir.phase_reset_ir import PhaseResetIR
+from laboneq.compiler.ir.pulse_ir import PrecompClearIR, PulseIR
+from laboneq.compiler.ir.reserve_ir import ReserveIR
+from laboneq.compiler.ir.root_ir import RootIR
+from laboneq.compiler.ir.section_ir import SectionIR
 from laboneq.compiler.scheduler.acquire_group_schedule import AcquireGroupSchedule
 from laboneq.compiler.scheduler.case_schedule import CaseSchedule, EmptyBranch
 from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
@@ -67,13 +80,41 @@ from laboneq.data.compilation_job import (
     SectionInfo,
     SectionSignalPulse,
     SignalInfoType,
-    SweepParamRef,
 )
 
 if TYPE_CHECKING:
     from laboneq.compiler.common.signal_obj import SignalObj
 
 _logger = logging.getLogger(__name__)
+
+_schedule_to_ir = {
+    AcquireGroupSchedule: AcquireGroupIR,
+    CaseSchedule: CaseIR,
+    IntervalSchedule: IntervalIR,
+    LoopSchedule: LoopIR,
+    LoopIterationSchedule: LoopIterationIR,
+    MatchSchedule: MatchIR,
+    OscillatorFrequencyStepSchedule: OscillatorFrequencyStepIR,
+    PhaseResetSchedule: PhaseResetIR,
+    PulseSchedule: PulseIR,
+    ReserveSchedule: ReserveIR,
+    RootSchedule: RootIR,
+    SectionSchedule: SectionIR,
+    PrecompClearSchedule: PrecompClearIR,
+    EmptyBranch: EmptyBranchIR,
+}
+
+
+@functools.lru_cache()
+def _all_slots(cls):
+    slots = set()
+    for cls in cls.__mro__:
+        if isinstance(getattr(cls, "__slots__", []), str):
+            slots.add(getattr(cls, "__slots__", []))
+        else:
+            for attr in getattr(cls, "__slots__", []):
+                slots.add(attr)
+    return [s for s in slots if not s.startswith("__")]
 
 
 @dataclasses.dataclass
@@ -110,6 +151,7 @@ class Scheduler:
 
         self._system_grid = self.grid(*self._experiment_dao.signals())[1]
         self._root_schedule: Optional[IntervalSchedule] = None
+        self._root_ir: Optional[IntervalIR] = None
         self._scheduled_sections = {}
 
     @trace("scheduler.run()", {"version": "v2"})
@@ -124,13 +166,75 @@ class Scheduler:
         ) in self._schedule_data.combined_warnings.items():
             warning_generator(warning_data)
 
+    def _schedule_to_ir(self, ir_node: IntervalIR, schedule_node: IntervalSchedule):
+        ir_children = []
+        for c in schedule_node.children:
+            if hasattr(c, "to_ir"):
+                c_ir = c.to_ir()
+            else:
+                c_ir = _schedule_to_ir[c.__class__](
+                    **{
+                        s: getattr(c, s)
+                        for s in _all_slots(_schedule_to_ir[c.__class__])
+                    }
+                )
+            ir_children.append(c_ir)
+        ir_node.children = ir_children
+
+        for ir_c, schedule_c in zip(ir_node.children, schedule_node.children):
+            self._schedule_to_ir(ir_c, schedule_c)
+
+    def generate_ir(self):
+        if self._root_schedule is not None:
+            root_ir = RootIR(
+                **{s: getattr(self._root_schedule, s) for s in _all_slots(RootIR)}
+            )
+            self._schedule_to_ir(root_ir, self._root_schedule)
+            return root_ir
+
+    def generate_event_list_from_ir(
+        self, ir: RootIR, expand_loops: bool, max_events: int
+    ):
+        event_list = self._start_events()
+
+        if ir is not None:
+            id_tracker = itertools.count()
+            event_list.extend(
+                ir.generate_event_list(
+                    start=0,
+                    max_events=max_events,
+                    id_tracker=id_tracker,
+                    expand_loops=expand_loops,
+                    settings=self._schedule_data.settings,
+                )
+            )
+
+            # assign every event an id
+            for event in event_list:
+                if "id" not in event:
+                    event["id"] = next(id_tracker)
+
+        # convert time from units of tiny samples to seconds
+        for event in event_list:
+            event["time"] = event["time"] * self._TINYSAMPLE
+
+        calculate_osc_phase(event_list, self._experiment_dao)
+
+        return event_list
+
     def generate_event_list(self, expand_loops: bool, max_events: int):
         event_list = self._start_events()
 
         if self._root_schedule is not None:
+            root_ir = RootIR(
+                **{s: getattr(self._root_schedule, s) for s in _all_slots(RootIR)}
+            )
+            self._schedule_to_ir(root_ir, self._root_schedule)
+            self._root_ir = root_ir
+
             id_tracker = itertools.count()
             event_list.extend(
-                self._root_schedule.generate_event_list(
+                self._root_ir.generate_event_list(
                     start=0,
                     max_events=max_events,
                     id_tracker=id_tracker,
@@ -637,7 +741,6 @@ class Scheduler:
         section: str,
         current_parameters: ParameterStore[str, float],
     ) -> PulseSchedule:
-
         # todo: add memoization
 
         grid, _ = self.grid(pulse.signal.uid)
@@ -687,11 +790,19 @@ class Scheduler:
             "increment_oscillator_phase", None
         )
 
+        if set_oscillator_phase:
+            osc = pulse.signal.oscillator
+            if osc is not None and osc.is_hardware:
+                raise LabOneQException(
+                    f"Setting absolute phase via `set_oscillator_phase` of HW oscillator"
+                    f" '{osc.uid}' on signal '{pulse.signal.uid}' is not supported"
+                )
+
         def resolve_pulse_params(params: Dict[str, Any]):
             for param, value in params.items():
-                if isinstance(value, SweepParamRef):
+                if isinstance(value, UIDReference):
                     try:
-                        resolved = current_parameters[value.name]
+                        resolved = current_parameters[value.uid]
                     except KeyError as e:
                         raise LabOneQException(
                             f"Pulse '{pulse.pulse.uid}' in section '{section}' requires "
@@ -813,7 +924,6 @@ class Scheduler:
         section_info: SectionInfo,
         current_parameters: ParameterStore[str, float],
     ) -> MatchSchedule:
-
         assert section_info.handle is not None or section_info.user_register is not None
         handle: Optional[str] = section_info.handle
         user_register: Optional[int] = section_info.user_register
@@ -908,7 +1018,7 @@ class Scheduler:
 
         section_info = self._schedule_data.experiment_dao.section_info(section_id)
 
-        assert section_info.count is None  # case must not be a loop
+        assert section_info.count is None, "case must not be a loop"
         assert section_info.handle is None and section_info.user_register is None
         state = section_info.state
         assert state is not None
@@ -921,6 +1031,27 @@ class Scheduler:
                 raise LabOneQException(
                     "Only pulses, not sections, are allowed inside a case"
                 )
+            if cs.increment_oscillator_phase or cs.set_oscillator_phase:
+                for s in cs.signals:
+                    s = self._experiment_dao.signal_info(s)
+                    osc = s.oscillator
+                    if not osc.is_hardware:
+                        raise LabOneQException(
+                            f"Conditional 'increment_oscillator_phase' or"
+                            f" 'set_oscillator_phase' of software oscillator"
+                            f" '{osc.uid}' on signal '{s.uid}' not supported"
+                        )
+                    assert cs.set_oscillator_phase is None, "cannot set HW osc phase"
+                    dt = DeviceType.from_device_info_type(s.device.device_type)
+                    if dt.is_qa_device:
+                        # The _actual_ problem is that UHFQA and SHFQA do not support CT
+                        # phase registers. In practice, they don't because such a feature
+                        # is irrelevant on a QA.
+                        raise LabOneQException(
+                            f"Conditional 'increment_oscillator_phase' of signal"
+                            f"'{s.uid}' not supported on device type '{dt.name}'"
+                        )
+
         # We don't want any branches that are empty, but we don't know yet what signals
         # the placeholder should cover. So we defer the creation of placeholders to
         # `_schedule_match()`.
@@ -981,7 +1112,7 @@ class Scheduler:
                 pulse_schedules.append(
                     self._schedule_precomp_clear(pulse_schedules[-1])
                 )
-        for (group, group_pulses) in pulse_groups.items():
+        for group, group_pulses in pulse_groups.items():
             if group is not None:
                 pulse_schedules.append(
                     self._schedule_acquire_group(group_pulses, section_id, parameters)

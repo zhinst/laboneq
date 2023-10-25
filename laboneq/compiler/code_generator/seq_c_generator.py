@@ -80,6 +80,19 @@ class SeqCGenerator:
             }
         )
 
+    def add_zero_wave_declaration(
+        self, device_type: DeviceType, signal_type, wave_id, length
+    ):
+        self.add_statement(
+            {
+                "type": "zero_wave_declaration",
+                "device_type": device_type,
+                "signal_type": signal_type,
+                "wave_id": wave_id,
+                "length": length,
+            }
+        )
+
     def add_constant_definition(self, name: str, value, comment: str | None = None):
         statement = {"type": "constant", "name": name, "value": value}
         if comment is not None:
@@ -348,6 +361,9 @@ class SeqCGenerator:
             else:
                 return ""
 
+        elif statement["type"] == "zero_wave_declaration":
+            return self._gen_zero_wave_declaration(statement)
+
         elif statement["type"] == "function_def":
             return statement["text"]
 
@@ -449,6 +465,20 @@ class SeqCGenerator:
             )
         else:
             return f"wave w{sig_string} = placeholder({length}{makers_declaration1});\n"
+
+    def _gen_zero_wave_declaration(self, statement):
+        dual_channel = statement["signal_type"] in ["iq", "double", "multi"]
+        sig_string = statement["wave_id"]
+        length = statement["length"]
+        device_type = statement["device_type"]
+        assert length >= device_type.min_play_wave
+        if dual_channel:
+            return (
+                f"wave w{sig_string}_i = zeros({length});\n"
+                f"wave w{sig_string}_q = w{sig_string}_i;\n"
+            )
+        else:
+            return f"wave w{sig_string} = zeros({length});\n"
 
     def _build_wave_channel_assignment(self, statement) -> str:
         dual_channel = statement["signal_type"] in ["iq", "double", "multi"]

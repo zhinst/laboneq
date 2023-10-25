@@ -39,9 +39,10 @@ class ExperimentInfoLoader(LoaderBase):
         for pulse in job.pulse_defs:
             self._pulses[pulse.uid] = pulse
 
-        for section in job.sections:
-            self._root_sections.append(section.uid)
-            self.walk_sections(section)
+        if job.sections is not None:
+            for section in job.sections:
+                self._root_sections.append(section.uid)
+                self.walk_sections(section)
 
     def walk_sections(self, section: SectionInfo):
         self.add_section(section.uid, section)

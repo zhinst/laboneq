@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
+import numpy as np
 from numpy.typing import ArrayLike
 
 from laboneq.core.types.units import Quantity
@@ -52,6 +53,12 @@ class ExponentialCompensation:
 @dataclass
 class FIRCompensation:
     coefficients: ArrayLike = None
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, FIRCompensation):
+            return np.allclose(self.coefficients, other.coefficients)
+        else:
+            return NotImplemented
 
 
 @dataclass

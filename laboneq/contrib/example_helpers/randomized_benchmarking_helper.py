@@ -12,6 +12,7 @@ from typing import Callable
 
 import numpy as np
 from numpy import random as nprnd
+from numpy import typing as npt
 from scipy.linalg import expm as matrix_exponential
 from typing_extensions import (
     ParamSpec,  # FIXME: Reconsider when python>=3.10 is enforced.
@@ -49,10 +50,10 @@ class PauliGateMap(dict[str, PulseFunctional]):
         implement the gates.
 
         Args:
-            pi_pulse_amp:  Amplitude of the pi gates.
-            pi_half_pulse_amp:  Amplitude of the pi/2 gates.
-            excitation_length:  Duration of a gate.
-            pulse_factory:  A callable to generate `PulseFunctional`s.  Typically,
+            excitation_length: Duration of a gate.
+            pi_pulse_amp: Amplitude of the pi gates.
+            pi_half_pulse_amp: Amplitude of the pi/2 gates.
+            pulse_factory: A callable to generate `PulseFunctional`s.  Typically,
                 functions marked with `pulse_library.register_pulse_functional` should be
                 provided here.
             pulse_kwargs: A dictionary of arguments to pass into `pulse_factory` as
@@ -256,6 +257,45 @@ def calculate_inverse_clifford_index(
     return recovery
 
 
+def calculate_clifford_sequence_indices(
+    seq_length: int,
+    cliffords: tuple[tuple[str]],
+    elementary_gates: dict[str, np.ndarray] = elem_gates,
+    rng: nprnd.Generator | None = None,
+) -> npt.NDArray[int]:
+    """Generate a set of randomly selected indices and an index for a recovery Clifford
+    gate to use with RB sequence.
+
+    Args:
+        seq_length: Length of the RB sequence, excluding recovery gate.
+        cliffords: Sequence of Clifford gates represented by a list of elementary gate
+            names (∈ {'I', 'X', 'Y', '±X/2', '±Y/2'}).
+        elementary_gates: Mapping from elementary gate names to their matrix representations.
+        rng: A `numpy.random.Generator` object to use when selecting the clifford gates.
+            If `None` a new one will be created via `numpy.random.default_rng(42)`.
+    """
+    rng = nprnd.default_rng(42) if rng is None else rng
+
+    # +1 to allocate space for the recovery gate.
+    clifford_indices = np.empty(shape=seq_length + 1, dtype=int)
+    clifford_indices[:-1] = rng.integers(0, 23, size=seq_length)
+
+    if cliffords is clifford_parametrized:
+        # shortcut for precomputed defaults
+        computed_gates = clifford_gates
+    else:
+        computed_gates = [
+            mult_gates([elementary_gates[gate] for gate in gates])
+            for gates in cliffords  # "gate" ≡ pauli gate
+        ]
+
+    # Last gate is the recovery gate.
+    clifford_indices[-1] = calculate_inverse_clifford_index(
+        clifford_indices[:-1], clifford_gates=computed_gates
+    )
+    return clifford_indices
+
+
 def generate_play_rb_pulses(
     exp: Experiment,
     signal: str,
@@ -264,41 +304,27 @@ def generate_play_rb_pulses(
     gate_map: dict[str, Pulse],
     elementary_gates: dict[str, np.ndarray] = elem_gates,
     rng: nprnd.Generator | None = None,
-):
-    """Generate a RB sequence using the experiment handle `exp`.
+) -> None:
+    """Generate a RB sequence using the experiment handle `exp`.  Mutates `exp`.
 
     A RB sequence consist of randomly chosen `seq_length` number of Clifford gates
     and a final recovery gate.
 
     Args:
-        exp:  LabOne Q SW experiment.
-        signal:  Experiment signal line where pulses are played.
-        seq_length:  Length of the RB sequence, excluding recovery gate.
-        gate_map:  Dictionary of gates represented as pulses to construct the Clifford gates from.
-        cliffords:  Sequence of basic Clifford gates.  Each Clifford gate is represented as
+        exp: LabOne Q experiment.
+        signal: Experiment signal line where pulses are played.
+        seq_length: Length of the RB sequence, excluding recovery gate.
+        cliffords: Sequence of basic Clifford gates.  Each Clifford gate is represented as
             a tuple of strings referring to a basic gate in `gate_map`.
+        gate_map: Dictionary of gates represented as pulses to construct the Clifford gates from.
         elementary_gates: Matrix representations of the elementary gates.
-        rng:  A `numpy.random.Generator` object to use when selecting the clifford gates.
+        rng: A `numpy.random.Generator` object to use when selecting the clifford gates.
             If `None` a new one will be created via `numpy.random.default_rng(42)`.
     """
-
     assert elementary_gates.keys() == gate_map.keys()
-    rng = nprnd.default_rng(42) if rng is None else rng
 
-    clifford_indices = rng.integers(0, 23, size=seq_length + 1)
-
-    if cliffords is clifford_parametrized:
-        # shortcut for precomputed defaults
-        computed_gates = clifford_gates
-    else:
-        computed_gates = [
-            mult_gates([elementary_gates[gate] for gate in gates])
-            for gates in clifford_parametrized
-        ]
-
-    # Last gate is the recovery gate
-    clifford_indices[-1] = calculate_inverse_clifford_index(
-        clifford_indices, clifford_gates=computed_gates
+    clifford_indices = calculate_clifford_sequence_indices(
+        seq_length, cliffords, elementary_gates, rng
     )
 
     for it in clifford_indices:

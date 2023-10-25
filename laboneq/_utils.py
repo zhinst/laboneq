@@ -4,6 +4,7 @@
 """General utility functions for development."""
 import functools
 from collections import defaultdict
+from dataclasses import dataclass
 from itertools import count
 from typing import Any, Iterable
 
@@ -57,3 +58,14 @@ def id_generator(cat: str = "") -> str:
     """Incremental IDs for each category."""
     global _iid_map
     return f"_{cat}_{next(_iid_map[cat])}"
+
+
+@dataclass
+class UIDReference:
+    """Reference to an object with an UID.
+
+    Args:
+        uid: UID of the referenced object.
+    """
+
+    uid: str

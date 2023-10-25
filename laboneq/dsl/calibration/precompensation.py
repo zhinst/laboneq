@@ -125,6 +125,12 @@ class FIRCompensation(Observable):
     # FIR filter coefficients
     coefficients: ArrayLike = field(default_factory=lambda: np.zeros(40))
 
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, FIRCompensation):
+            return np.allclose(self.coefficients, other.coefficients)
+        else:
+            return NotImplemented
+
 
 @classformatter
 @dataclass

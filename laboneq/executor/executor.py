@@ -11,6 +11,7 @@ from typing import Any, Iterator
 import numpy as np
 import numpy.typing as npt
 
+from laboneq._utils import UIDReference
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
@@ -159,9 +160,10 @@ class ExecUserCall(Statement):
     def run(self, scope: ExecutionScope) -> Iterator[Notification]:
         resolved_args = {}
         for name, val in self.args.items():
-            resolved_args[name] = (
-                scope.resolve_variable(val) if type(val) is str else val
-            )
+            if isinstance(val, UIDReference):
+                resolved_args[name] = scope.resolve_variable(val.uid)
+            else:
+                resolved_args[name] = val
         yield Notification(
             statement_type=StatementType.UserFunc,
             args=dict(func_name=self.func_name, args=resolved_args),

@@ -544,7 +544,10 @@ class SimpleRuntime:
             if wave_name is None:
                 known_wave.wave_data_idx.append(None)
                 continue
-            wave_to_play = self.waves[wave_name]
+            if wave_name.startswith("precomp_reset"):
+                wave_to_play = np.zeros(32)
+            else:
+                wave_to_play = self.waves[wave_name]
             if np.ndim(wave_to_play) == 1:
                 wave_len = len(wave_to_play)
                 if np.iscomplexobj(wave_to_play):

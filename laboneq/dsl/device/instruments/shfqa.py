@@ -16,10 +16,8 @@ from .zi_standard_instrument import ZIStandardInstrument
 class SHFQA(ZIStandardInstrument):
     """Class representing a ZI SHFQA instrument."""
 
-    is_qc: bool = False
-
     def calc_options(self):
-        return {**super().calc_options(), "is_qc": self.is_qc}
+        return {**super().calc_options()}
 
     @property
     def ports(self):

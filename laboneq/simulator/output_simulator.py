@@ -10,6 +10,7 @@ from numpy.typing import ArrayLike
 from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.data.recipe import RealtimeExecutionInit
 from laboneq.dsl.device.device_setup import DeviceSetup
+from laboneq.dsl.device.instruments.shfqc import SHFQC
 from laboneq.dsl.device.io_units.physical_channel import PhysicalChannel
 from laboneq.simulator.seqc_parser import simulate
 from laboneq.simulator.wave_scroller import SimTarget, WaveScroller
@@ -76,8 +77,7 @@ class _AWG_ID:
         self.find_seqc(self._dev_uid, 0, realtime_inits)
 
     def _is_qc(self):
-        dev = self._device_setup.instrument_by_uid(self._dev_uid)
-        return dev.calc_driver() == "SHFQA" and dev.is_qc
+        return isinstance(self._device_setup.instrument_by_uid(self._dev_uid), SHFQC)
 
     def _decode_qachannels(
         self, chs: list[str], realtime_inits: list[RealtimeExecutionInit]

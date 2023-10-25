@@ -38,10 +38,11 @@ class Namespace:
         return self.local_scope[name]
 
     def declare_classical_value(
-        self, name: str, value: Any
+        self, name: str, value: Any, const: bool = False
     ) -> ClassicalRef | list[ClassicalRef]:
         # For now, classical values are not resources which we 'allocate'.
         # Instead we treat them as references (to Python objects).
+        # TODO: Enforce constantness of constants. Currently they are implemented as variables
         return self.declare_reference(name, value)
 
     def declare_reference(

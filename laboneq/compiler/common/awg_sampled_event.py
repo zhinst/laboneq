@@ -17,6 +17,7 @@ class AWGEventType(Enum):
     ITERATE = auto()
     SEQUENCER_START = auto()
     RESET_PRECOMPENSATION_FILTERS = auto()
+    RESET_PRECOMPENSATION_FILTERS_END = auto()
     INITIAL_RESET_PHASE = auto()
     RESET_PHASE = auto()
     SET_OSCILLATOR_FREQUENCY = auto()
@@ -28,6 +29,7 @@ class AWGEventType(Enum):
     PLAY_WAVE = auto()
     PLAY_HOLD = auto()
     INIT_AMPLITUDE_REGISTER = auto()
+    CHANGE_OSCILLATOR_PHASE = auto()
 
 
 @dataclass
@@ -35,6 +37,7 @@ class AWGEvent:
     type: AWGEventType
     start: int = None
     end: int = None
+    priority: int | None = None
     params: Dict[str, Any] = field(default_factory=dict)
 
     def frozen(self) -> frozenset:

@@ -9,7 +9,7 @@ import logging
 from types import SimpleNamespace
 from typing import Any, Dict, Tuple
 
-from laboneq._utils import ensure_list, id_generator
+from laboneq._utils import UIDReference, ensure_list, id_generator
 from laboneq.compiler import DeviceType
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import AcquisitionType, AveragingMode
@@ -37,7 +37,6 @@ from laboneq.data.compilation_job import (
     SignalInfo,
     SignalInfoType,
     SignalRange,
-    SweepParamRef,
 )
 from laboneq.data.experiment_description import (
     Acquire,
@@ -410,10 +409,10 @@ class ExperimentInfoBuilder:
 
     def opt_param_ref(
         self, value: float | int | complex | Parameter
-    ) -> float | int | complex | SweepParamRef:
+    ) -> float | int | complex | UIDReference:
         val_or_param_info = self.opt_param(value, False)
         if isinstance(val_or_param_info, ParameterInfo):
-            return SweepParamRef(val_or_param_info.uid)
+            return UIDReference(val_or_param_info.uid)
         return val_or_param_info
 
     def _walk_sections(

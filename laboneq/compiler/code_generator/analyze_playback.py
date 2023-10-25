@@ -62,7 +62,7 @@ class _IntervalStartEvent:
     oscillator_frequency: float | None
     phase: float | None
     sub_channel: int | None
-    baseband_phase: float | None
+    increment_oscillator_phase: float | None
     play_pulse_parameters: dict[str, Any] | None
     pulse_pulse_parameters: dict[str, Any] | None
     state: int | None
@@ -81,13 +81,12 @@ class _IntervalEndEvent:
 @dataclass
 class _PlayIntervalData:
     pulse: str | None
-    index: int
     signal_id: str
     amplitude: float
     channel: int
     oscillator_phase: float
     oscillator_frequency: float
-    baseband_phase: float
+    increment_oscillator_phase: float
     phase: float
     sub_channel: int
     play_pulse_parameters: dict[str, Any] | None
@@ -144,13 +143,16 @@ def _analyze_branches(events, delay, sampling_rate, playwave_max_hint):
 def find_event_pairs(events, start_types, end_types):
     start_events = {}
     end_events = {}
-    for event in events:
+    for index, event in enumerate(events):
         if event["event_type"] in start_types:
-            start_events[event["chain_element_id"]] = event
+            start_events[event["chain_element_id"]] = index, event
         elif event["event_type"] in end_types:
             end_events[event["chain_element_id"]] = event
 
-    return [(start_events[id], end) for id, end in end_events.items()]
+    return [
+        (index, (start, end_events[id]))
+        for (id, (index, start)) in start_events.items()
+    ]
 
 
 def _interval_list(events, states, signal_ids, delay, sub_channel):
@@ -179,7 +181,7 @@ def _interval_list(events, states, signal_ids, delay, sub_channel):
                     oscillator_frequency=start.get("oscillator_frequency"),
                     phase=start.get("phase"),
                     sub_channel=sub_channel,
-                    baseband_phase=start.get("baseband_phase"),
+                    increment_oscillator_phase=start.get("increment_oscillator_phase"),
                     play_pulse_parameters=start.get("play_pulse_parameters"),
                     pulse_pulse_parameters=start.get("pulse_pulse_parameters"),
                     state=states.get(start["section_name"], None),
@@ -195,7 +197,7 @@ def _interval_list(events, states, signal_ids, delay, sub_channel):
             )
             for state in itertools.chain(set(states.values()), (None,))
             for index, cur_signal_id in enumerate(signal_ids)
-            for start, end in play_event_pairs
+            for _, (start, end) in play_event_pairs
             if start["signal"] == cur_signal_id
             and states.get(start["section_name"], None) == state
         )
@@ -214,7 +216,7 @@ def _interval_list(events, states, signal_ids, delay, sub_channel):
                     oscillator_frequency=None,
                     phase=None,
                     sub_channel=sub_channel,
-                    baseband_phase=None,
+                    increment_oscillator_phase=None,
                     play_pulse_parameters=None,
                     pulse_pulse_parameters=None,
                     state=states.get(start["section_name"], None),
@@ -230,7 +232,7 @@ def _interval_list(events, states, signal_ids, delay, sub_channel):
             )
             for state in itertools.chain(set(states.values()), (None,))
             for index, cur_signal_id in enumerate(signal_ids)
-            for start, end in delay_event_pairs
+            for _, (start, end) in delay_event_pairs
             if start.get("play_wave_type") == PlayWaveType.EMPTY_CASE.name
             and start["signal"] == cur_signal_id
             and states.get(start["section_name"], None) == state
@@ -257,12 +259,14 @@ def _make_interval_tree(
 
     interval_tree = IntervalTree()
 
-    for index, (interval_start, interval_end) in enumerate(interval_zip):
+    for interval_start, interval_end in interval_zip:
         oscillator_phase = interval_start.oscillator_phase
 
-        baseband_phase: Optional[float] = None
-        if interval_start.baseband_phase is not None:
-            baseband_phase = interval_start.baseband_phase
+        increment_oscillator_phase: Optional[float] = None
+        if interval_start.increment_oscillator_phase is not None:
+            increment_oscillator_phase = interval_start.increment_oscillator_phase
+        # Note: the scheduler will already align all the pulses with the sample grid,
+        # and the rounding error should be 0 except for some floating point epsilon.
         (start_samples, end_samples), (
             start_rounding_error,
             _,
@@ -277,12 +281,11 @@ def _make_interval_tree(
                 _PlayIntervalData(
                     pulse=interval_start.play_wave_id,
                     signal_id=interval_start.signal_id,
-                    index=index,
                     amplitude=interval_start.amplitude,
                     channel=interval_start.index,
                     oscillator_phase=oscillator_phase,
                     oscillator_frequency=interval_start.oscillator_frequency,
-                    baseband_phase=baseband_phase,
+                    increment_oscillator_phase=increment_oscillator_phase,
                     phase=interval_start.phase,
                     sub_channel=interval_start.sub_channel,
                     play_pulse_parameters=interval_start.play_pulse_parameters,
@@ -308,6 +311,128 @@ def _make_interval_tree(
     return interval_tree
 
 
+@dataclass
+class _FrameChange:
+    time: int
+    phase: float | None
+    signal: str
+    priority: int
+    state: int | None = None
+
+
+def _find_frame_changes(events, delay, sampling_rate):
+    delays = find_event_pairs(events, [EventType.DELAY_START], [EventType.DELAY_END])
+    virtual_z_gates = []
+    for index, (delay_start, _) in delays:
+        incr_phase = delay_start.get("increment_oscillator_phase")
+        set_phase = delay_start.get("set_oscillator_phase")
+        assert set_phase is None, "should have been dissolved in scheduler"
+        if incr_phase is not None:
+            time = delay_start["time"] + delay
+            time_samples = length_to_samples(time, sampling_rate)
+            virtual_z_gates.append(
+                _FrameChange(
+                    time=time_samples,
+                    phase=incr_phase,
+                    signal=delay_start["signal"],
+                    state=delay_start.get("state"),
+                    priority=index,
+                )
+            )
+    return virtual_z_gates
+
+
+def _insert_frame_changes(
+    interval_events: AWGSampledEventSequence,
+    events,
+    delay,
+    sampling_rate,
+    signals: dict[str, SignalObj],
+):
+    frame_change_events = AWGSampledEventSequence()
+    frame_changes = _find_frame_changes(events, delay, sampling_rate)
+    frame_changes = [fc for fc in frame_changes if fc.signal in signals]
+
+    intervals = IntervalTree.from_tuples(
+        (ev.start, ev.end, ev)
+        for t, evl in interval_events.sequence.items()
+        for ev in evl
+        if ev.type == AWGEventType.PLAY_WAVE
+    )
+
+    for frame_change in frame_changes:
+        if frame_change.signal not in signals.keys():
+            continue
+
+        signal = signals[frame_change.signal]
+        # check if the frame change overlaps a (compacted) interval
+        play_ivs = [
+            iv
+            for iv in intervals[frame_change.time]
+            if iv.data.params["playback_signature"].state == frame_change.state
+        ]
+
+        if len(play_ivs) == 0:
+            if frame_change.state is not None:
+                raise LabOneQException(
+                    "Cannot handle free-standing oscillator phase change in conditional"
+                    " branch.\n"
+                    "A zero-length `increment_oscillator_phase` must not occur at the"
+                    " very end of a `case` block. Consider stretching the branch by"
+                    " adding a small delay after the phase increment."
+                )
+            frame_change_events.add(
+                frame_change.time,
+                AWGEvent(
+                    type=AWGEventType.CHANGE_OSCILLATOR_PHASE,
+                    start=frame_change.time,
+                    end=frame_change.time,
+                    priority=frame_change.priority,
+                    params={
+                        "signal": frame_change.signal,
+                        "phase": frame_change.phase,
+                        "oscillator": signal.hw_oscillator,
+                    },
+                ),
+            )
+            continue
+
+        # mutate the signature of the play interval, inserting the phase increment
+        [play_iv] = play_ivs
+
+        signature = play_iv.data.params["playback_signature"]
+        if (
+            signal.hw_oscillator != signature.hw_oscillator
+            and signature.hw_oscillator is not None
+        ):
+            raise LabOneQException(
+                f"Cannot increment oscillator '{signal.hw_oscillator}' of signal"
+                f" '{signal.id}': the line is occupied by '{signature.hw_oscillator}'."
+            )
+        assert signature.waveform is not None
+        assert len(signature.waveform.pulses)
+
+        # offset of the increment in the signature
+        offset = frame_change.time - play_iv.data.start
+
+        for pulse in signature.waveform.pulses:
+            if pulse.start < offset:
+                continue
+            pulse.increment_oscillator_phase = (
+                pulse.increment_oscillator_phase or 0.0
+            ) + frame_change.phase
+            break
+        else:
+            # Insert the phase increment into the last pulse anyway, and rewind its
+            # own phase by the same amount.
+            pulse = signature.waveform.pulses[-1]
+            pulse.increment_oscillator_phase = pulse.increment_oscillator_phase or 0.0
+            pulse.oscillator_phase = pulse.oscillator_phase or 0.0
+            pulse.increment_oscillator_phase += frame_change.phase
+            pulse.oscillator_phase -= frame_change.phase
+    return frame_change_events
+
+
 def _oscillator_switch_cut_points(
     interval_tree: IntervalTree,
     signals: Dict[str, SignalObj],
@@ -322,11 +447,10 @@ def _oscillator_switch_cut_points(
     hw_oscs_values = set(hw_oscillators.values())
     awg = next(iter(signals.values())).awg
     device_type = awg.device_type
-    if device_type == DeviceType.HDAWG:
-        if awg.signal_type == AWGSignalType.DOUBLE:
-            # Skip for now. In double mode, 2 oscillators may (?) be active.
-            # todo (PW): Do we support dual HW modulated RF signals?
-            return osc_switch_events, cut_points
+    if awg.signal_type == AWGSignalType.DOUBLE:
+        # Skip for now. In double mode, 2 oscillators may (?) be active.
+        # Still, oscillator switching is not supported on these instruments.
+        return osc_switch_events, cut_points
     if not device_type.supports_oscillator_switching:
         if len(hw_oscs_values) > 1:
             raise LabOneQException(
@@ -439,9 +563,7 @@ def _make_pulse_signature(
             oscillator_phase += correction
         oscillator_phase = normalize_phase(oscillator_phase)
 
-    baseband_phase = data.baseband_phase
-    if baseband_phase is not None:
-        baseband_phase = normalize_phase(baseband_phase)
+    increment_oscillator_phase = data.increment_oscillator_phase
 
     combined_pulse_parameters = combine_pulse_parameters(
         data.pulse_pulse_parameters, None, data.play_pulse_parameters
@@ -459,7 +581,7 @@ def _make_pulse_signature(
         phase=phase,
         oscillator_phase=oscillator_phase,
         oscillator_frequency=oscillator_frequency,
-        baseband_phase=baseband_phase,
+        increment_oscillator_phase=increment_oscillator_phase,
         channel=data.channel if len(signal_ids) > 1 else None,
         sub_channel=data.sub_channel,
         pulse_parameters=None
@@ -557,10 +679,10 @@ def analyze_play_wave_times(
         signals.values(), oscillator_switch_events, sequence_end
     )
     used_oscillators = {osc_iv.data["oscillator"] for osc_iv in oscillator_intervals}
-    if len(used_oscillators) > 1 and not use_command_table:
-        raise LabOneQException(
-            "HW oscillator switching only possible in command-table mode"
-        )
+    if len(used_oscillators) > 1:
+        assert (
+            use_command_table
+        ), "HW oscillator switching only possible in command-table mode"
 
     # Check whether any cut point is within a command table interval
     for cp in cut_points:
@@ -672,16 +794,12 @@ def analyze_play_wave_times(
             else:
                 ct_hw_oscillator = None
 
-            precomp_reset = any(
-                pulse.pulse == "dummy_precomp_reset" for pulse in signature_pulses
-            )
-
             signature = PlaybackSignature(
                 waveform=waveform_signature,
                 hw_oscillator=ct_hw_oscillator,
                 pulse_parameters=tuple(pulse_parameters),
                 state=state,
-                clear_precompensation=precomp_reset,
+                clear_precompensation=False,
             )
 
             if has_child:
@@ -697,28 +815,16 @@ def analyze_play_wave_times(
                 )
                 interval_events.add(start, interval_event)
 
-    # When the sequencer starts, the phase of all sine generators is initialized to 0
-    # (On HDAWG, we additionally use `setSinePhase()` to set the phase of the I channel
-    # to 90°)
-    if device_type == DeviceType.SHFSG:
-        hw_oscillator_phases = {
-            signal.hw_oscillator: 0.0
-            for signal in signals.values()
-            if signal.hw_oscillator is not None
-        }
-    else:
-        # On instruments that do not support oscillator multiplexing, the oscillator
-        # is not specified in the command table. We use `None` as a dummy value to
-        # represent the single oscillator available. This way the logic need not be
-        # duplicated.
-        hw_oscillator_phases = {None: 0.0}
-
     # A value of 'None' indicates that we do not know the current value (e.g. after a
     # match block, where we may conditionally have written to the register).
     amplitude_register_values: list[float | None] = [None] * amplitude_register_count
 
     use_ct_phase = use_command_table and all(s.hw_oscillator for s in signals.values())
     signatures = set()
+
+    frame_change_events = _insert_frame_changes(
+        interval_events, events, delay, sampling_rate, signals
+    )
 
     interval_events.merge(amplitude_register_set_events)
 
@@ -739,34 +845,14 @@ def analyze_play_wave_times(
                     amplitude_register_values if use_amplitude_increment else None,
                 )
 
-                hw_oscillator = signature.hw_oscillator
-                current_hw_oscillator_phase = hw_oscillator_phases.get(hw_oscillator)
-
-                if event.start in interval_start_after_oscillator_reset:
-                    # after a reset we force an absolute phase
-                    current_hw_oscillator_phase = None
+                # after a reset we force an absolute phase
+                after_phase_reset = event.start in interval_start_after_oscillator_reset
 
                 signature = reduce_signature_phase(
-                    signature, use_ct_phase, current_hw_oscillator_phase
+                    signature, use_ct_phase, after_phase_reset
                 )
-
-                # Note how we store phase increments _before_ quantizing and absolute
-                # phase _after_. In principle, for avoiding accumulation of rounding
-                # errors, we would store the quantized values in both cases. This way,
-                # the compiler can track the actual value with full precision. We do so
-                # for the amplitude, see below.
-                # However, we want phase increments to be independent, and specifically
-                # want to avoid the compiler magically dithering the phase based on the
-                # past. Unlike for amplitude, a virtual z gate sets a new reference.
-                # We do not attempt do work around errors in that new reference.
-                # See also HBAR-1656. This will need rework when implementing conditional
-                # virtual z gates.
-                if signature.increment_phase is not None:
-                    hw_oscillator_phases[hw_oscillator] += signature.increment_phase
                 if phase_resolution_range >= 1:
                     signature.quantize_phase(phase_resolution_range)
-                if signature.set_phase is not None:
-                    hw_oscillator_phases[hw_oscillator] = signature.set_phase
 
                 if amplitude_resolution_range >= 1:
                     signature.quantize_amplitude(amplitude_resolution_range)
@@ -816,5 +902,7 @@ def analyze_play_wave_times(
     for sig in signatures:
         _logger.debug(sig)
     _logger.debug("Interval events: %s", interval_events.sequence)
+
+    interval_events.merge(frame_change_events)
 
     return interval_events

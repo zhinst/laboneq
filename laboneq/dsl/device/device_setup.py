@@ -10,6 +10,7 @@ from laboneq.core import path as qct_path
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration import Calibratable, Calibration, CalibrationItem
+from laboneq.dsl.device.instruments import PQSC
 from laboneq.dsl.device.logical_signal_group import LogicalSignalGroup
 from laboneq.dsl.device.physical_channel_group import PhysicalChannelGroup
 from laboneq.dsl.serialization import Serializer
@@ -389,3 +390,10 @@ class DeviceSetup:
                 setup_name=setup_name,
             )
         )
+
+    def _server_leader_instrument(self, server_uid: str) -> Optional[str]:
+        """Return a leader instrument for the given Dataserver UID."""
+        for dev in self.instruments:
+            if isinstance(dev, PQSC):
+                if dev.server_uid == server_uid:
+                    return dev.uid

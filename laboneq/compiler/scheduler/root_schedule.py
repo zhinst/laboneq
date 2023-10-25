@@ -1,30 +1,12 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Dict, Iterator, List
 
-from laboneq.compiler import CompilerSettings
 from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
 from laboneq.compiler.scheduler.utils import ceil_to_grid
 
 
 class RootSchedule(IntervalSchedule):
-    def generate_event_list(
-        self,
-        start: int,
-        max_events: int,
-        id_tracker: Iterator[int],
-        expand_loops,
-        settings: CompilerSettings,
-    ) -> List[Dict]:
-        assert self.length is not None
-        assert self.absolute_start is not None
-        children_events = self.children_events(
-            start, max_events - 2, settings, id_tracker, expand_loops
-        )
-
-        return [e for l in children_events for e in l]
-
     def _calculate_timing(
         self,
         schedule_data,  # type: ignore # noqa: F821
@@ -41,4 +23,4 @@ class RootSchedule(IntervalSchedule):
         return start
 
     def __hash__(self):
-        super().__hash__()
+        return super().__hash__()

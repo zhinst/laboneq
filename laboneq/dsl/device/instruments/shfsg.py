@@ -16,14 +16,9 @@ from .zi_standard_instrument import ZIStandardInstrument
 class SHFSG(ZIStandardInstrument):
     """Class representing a ZI SHFSG instrument."""
 
-    is_qc: bool = False
-    qc_with_qa: bool = False
-
     def calc_options(self):
         return {
             **super().calc_options(),
-            "is_qc": self.is_qc,
-            "qc_with_qa": self.qc_with_qa,
         }
 
     @property

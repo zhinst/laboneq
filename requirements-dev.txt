@@ -27,6 +27,7 @@ pygsti
 ipykernel
 rustworkx
 ipython
+parse
 
 # Packaging test
 pydeps

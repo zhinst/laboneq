@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import TYPE_CHECKING, Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import TYPE_CHECKING, Iterable, List, Optional, Tuple
 
 from attrs import define
 from zhinst.utils.feedback_model import (
@@ -17,9 +17,7 @@ from zhinst.utils.feedback_model import (
     get_feedback_system_description,
 )
 
-from laboneq.compiler import CompilerSettings
 from laboneq.compiler.common.compiler_settings import EXECUTETABLEENTRY_LATENCY
-from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.scheduler.case_schedule import CaseSchedule
 from laboneq.compiler.scheduler.section_schedule import SectionSchedule
 from laboneq.compiler.scheduler.utils import ceil_to_grid
@@ -30,6 +28,7 @@ if TYPE_CHECKING:
     from laboneq.compiler.scheduler.schedule_data import ScheduleData
 
 _logger = logging.getLogger(__name__)
+
 
 # Copy from device_zi.py (without checks)
 def _get_total_rounded_delay_samples(
@@ -271,28 +270,5 @@ class MatchSchedule(SectionSchedule):
         self._calculate_length(schedule_data)
         return start
 
-    def generate_event_list(
-        self,
-        start: int,
-        max_events: int,
-        id_tracker: Iterator[int],
-        expand_loops,
-        settings: CompilerSettings,
-    ) -> List[Dict]:
-        assert self.length is not None
-        assert self.absolute_start is not None
-        events = super().generate_event_list(
-            start, max_events, id_tracker, expand_loops, settings
-        )
-        if len(events) == 0:
-            return []
-        section_start_event = events[0]
-        assert section_start_event["event_type"] == EventType.SECTION_START
-        section_start_event["handle"] = self.handle
-        section_start_event["user_register"] = self.user_register
-        section_start_event["local"] = self.local
-
-        return events
-
     def __hash__(self):
-        super().__hash__()
+        return super().__hash__()

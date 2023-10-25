@@ -51,6 +51,7 @@ from laboneq.data.calibration import PortMode
 from laboneq.data.compilation_job import (
     CompilationJob,
     DeviceInfo,
+    ExperimentInfo,
     ParameterInfo,
     PrecompensationInfo,
     SignalInfoType,
@@ -75,6 +76,7 @@ class Compiler:
     def __init__(self, settings: Optional[Dict] = None):
         self._osc_numbering = None
         self._experiment_dao: ExperimentDAO = None
+        self._experiment_info: ExperimentInfo = None
         self._execution: Statement = None
         self._settings = compiler_settings.from_dict(settings)
         self._sampling_rate_tracker: SamplingRateTracker = None
@@ -109,9 +111,12 @@ class Compiler:
     def use_experiment(self, experiment):
         if isinstance(experiment, CompilationJob):
             self._experiment_dao = ExperimentDAO(experiment.experiment_info)
+            self._experiment_info = experiment.experiment_info
             self._execution = experiment.execution
         else:  # legacy JSON
             self._experiment_dao = ExperimentDAO(experiment)
+            # NOTE(mr) work around for legacy JSON tests
+            self._experiment_info = self._experiment_dao.to_experiment_info()
             self._execution = legacy_execution_program()
 
     @staticmethod
@@ -121,7 +126,6 @@ class Compiler:
         )
 
     def _analyze_setup(self):
-
         device_infos = self._experiment_dao.device_infos()
         device_type_list = [i.device_type.value for i in device_infos]
         type_counter = Counter(device_type_list)
@@ -242,7 +246,13 @@ class Compiler:
         self._signal_objects = self._generate_signal_objects()
 
         rt_compiler = RealtimeCompiler(
-            self._experiment_dao,
+            self._experiment_info,
+            Scheduler(
+                self._experiment_dao,
+                self._sampling_rate_tracker,
+                self._signal_objects,
+                self._settings,
+            ),
             self._sampling_rate_tracker,
             self._signal_objects,
             self._settings,
@@ -519,7 +529,6 @@ class Compiler:
         delay_measure_acquire: Dict[AwgKey, DelayInfo] = {}
 
         for signal_id in self._experiment_dao.signals():
-
             signal_info = self._experiment_dao.signal_info(signal_id)
             delay_signal = signal_info.delay_signal
 
@@ -906,7 +915,6 @@ class Compiler:
 
         for info in section_measurement_infos:
             for device_awg_nr, v in info["devices"].items():
-
                 device_id, awg_nr = device_awg_nr
                 if (device_id, awg_nr) in measurements:
                     _logger.debug(
@@ -923,7 +931,6 @@ class Compiler:
                         info["section_name"]
                     )
                     if integration_time_info is not None:
-
                         _logger.debug(
                             "Found integration_time_info %s", integration_time_info
                         )

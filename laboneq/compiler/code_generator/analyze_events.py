@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from engineering_notation import EngNumber
 from sortedcontainers import SortedDict
@@ -63,30 +63,32 @@ def analyze_loop_times(
         return loop_events
 
     loop_step_start_events = [
-        event for event in events if event["event_type"] == "LOOP_STEP_START"
+        (index, event)
+        for index, event in enumerate(events)
+        if event["event_type"] == "LOOP_STEP_START"
     ]
     loop_step_end_events = [
-        event for event in events if event["event_type"] == "LOOP_STEP_END"
+        (index, event)
+        for index, event in enumerate(events)
+        if event["event_type"] == "LOOP_STEP_END"
     ]
     loop_iteration_events = [
-        event
-        for event in events
+        (index, event)
+        for index, event in enumerate(events)
         if event["event_type"] == "LOOP_ITERATION_END"
         and "compressed" in event
         and event["compressed"]
     ]
 
-    compressed_sections = set(
-        [event["section_name"] for event in loop_iteration_events]
-    )
+    compressed_sections = {event["section_name"] for _, event in loop_iteration_events}
     section_repeats = {}
-    for event in loop_iteration_events:
+    for _, event in loop_iteration_events:
         if "num_repeats" in event:
             section_repeats[event["section_name"]] = event["num_repeats"]
 
     _logger.debug("Found %d loop step start events", len(loop_step_start_events))
     events_already_added = set()
-    for event in loop_step_start_events:
+    for index, event in loop_step_start_events:
         _logger.debug("  loop timing: processing  %s", event)
 
         event_time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
@@ -94,6 +96,7 @@ def analyze_loop_times(
             type=AWGEventType.LOOP_STEP_START,
             start=event_time_in_samples,
             end=event_time_in_samples,
+            priority=index,
             params={
                 "nesting_level": event["nesting_level"],
                 "loop_id": event["section_name"],
@@ -113,6 +116,7 @@ def analyze_loop_times(
                 type=AWGEventType.PUSH_LOOP,
                 start=event_time_in_samples,
                 end=event_time_in_samples,
+                priority=index,
                 params={
                     "nesting_level": event["nesting_level"],
                     "loop_id": event["section_name"],
@@ -123,12 +127,13 @@ def analyze_loop_times(
             _logger.debug("Added %s", push_event)
 
     _logger.debug("Found %d loop step end events", len(loop_step_end_events))
-    for event in loop_step_end_events:
+    for index, event in loop_step_end_events:
         event_time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
         loop_event = AWGEvent(
             type=AWGEventType.LOOP_STEP_END,
             start=event_time_in_samples,
             end=event_time_in_samples,
+            priority=index,
             params={
                 "nesting_level": event["nesting_level"],
                 "loop_id": event["section_name"],
@@ -144,12 +149,13 @@ def analyze_loop_times(
             else:
                 _logger.debug("SKIP adding double %s", loop_event)
 
-    for event in loop_iteration_events:
+    for index, event in loop_iteration_events:
         event_time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
         iteration_event = AWGEvent(
             type=AWGEventType.ITERATE,
             start=event_time_in_samples,
             end=event_time_in_samples,
+            priority=index,
             params={
                 "nesting_level": event["nesting_level"],
                 "loop_id": event["section_name"],
@@ -184,6 +190,7 @@ def analyze_init_times(
             type=AWGEventType.SEQUENCER_START,
             start=delay_samples,
             end=delay_samples,
+            priority=-100,
             params={
                 "device_id": device_id,
             },
@@ -197,62 +204,46 @@ def analyze_precomp_reset_times(
     signals: List[str],
     sampling_rate: float,
     delay: float,
-) -> Tuple[AWGSampledEventSequence, List[Dict[str, Any]]]:
+) -> AWGSampledEventSequence:
     precomp_events = [
-        event
-        for event in events
+        (index, event)
+        for index, event in enumerate(events)
         if (
             event["event_type"] == EventType.RESET_PRECOMPENSATION_FILTERS
             and event.get("signal_id", None) in signals
         )
     ]
-    chain_ids = (e.get("chain_element_id", 0) for e in events)
-    chain_id = max((i for i in chain_ids if isinstance(i, int)), default=0) + 1
     precomp_reset_events = AWGSampledEventSequence()
-    fake_play_events = []
-    for event in precomp_events:
-        event_time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
 
+    # We clear the precompensation filters in a dedicated command table entry.
+    # Currently, a bug (HULK-1246) prevents us from doing so in a zero-length
+    # command, so instead we allocate 32 samples (minimum waveform length) for this, and
+    # register the end of this interval as a cut point.
+
+    PRECOMP_RESET_LENGTH = 32
+
+    for index, event in precomp_events:
+        event_time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
+        signal_id = event.get("signal_id")
         sampled_event = AWGEvent(
             type=AWGEventType.RESET_PRECOMPENSATION_FILTERS,
             start=event_time_in_samples,
-            params={
-                "signal_id": event.get("signal_id"),
-            },
+            end=event_time_in_samples + PRECOMP_RESET_LENGTH,
+            priority=index,
+            params={"signal_id": signal_id},
         )
         precomp_reset_events.add(event_time_in_samples, sampled_event)
 
-        # To force a playWave at the pre-compensation reset time, we add fake
-        # PLAY_START and PLAY_END events to the event list. The interval calculator
-        # will then pick these up and create a waveform that is all zeros at the reset.
-
-        # Todo: Remove when HULK-1246 is fixed.
-
-        common = {
-            "signal": event.get("signal_id"),
-            "section_name": event["section_name"],
-            "play_wave_id": "dummy_precomp_reset",
-            "amplitude": 1.0,  # non-zero amplitude to avoid being ignored
-            "chain_element_id": chain_id,
-        }
-        chain_id += 1
-
-        fake_play_events.extend(
-            [
-                {
-                    "event_type": EventType.PLAY_START,
-                    "time": event["time"],
-                    **common,
-                },
-                {
-                    "event_type": EventType.PLAY_END,
-                    "time": event["time"] + 32 / sampling_rate,
-                    **common,
-                },
-            ]
+        # Add end event to force a cut point
+        sampled_event = AWGEvent(
+            type=AWGEventType.RESET_PRECOMPENSATION_FILTERS_END,
+            start=event_time_in_samples + PRECOMP_RESET_LENGTH,
+            priority=-100,  # does not actually emit code, so irrelevant
+            params={"signal_id": signal_id},
         )
+        precomp_reset_events.add(event_time_in_samples, sampled_event)
 
-    return precomp_reset_events, fake_play_events
+    return precomp_reset_events
 
 
 def analyze_phase_reset_times(
@@ -262,8 +253,8 @@ def analyze_phase_reset_times(
     delay: float,
 ) -> AWGSampledEventSequence:
     reset_phase_events = [
-        event
-        for event in events
+        (index, event)
+        for index, event in enumerate(events)
         if event["event_type"]
         in (
             EventType.RESET_HW_OSCILLATOR_PHASE,
@@ -273,17 +264,18 @@ def analyze_phase_reset_times(
         and event["device_id"] == device_id
     ]
     phase_reset_events = AWGSampledEventSequence()
-    for event in reset_phase_events:
+    for index, event in reset_phase_events:
         event_time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
-        signature = (
+        event_type = (
             AWGEventType.RESET_PHASE
             if event["event_type"] == EventType.RESET_HW_OSCILLATOR_PHASE
             else AWGEventType.INITIAL_RESET_PHASE
         )
         init_event = AWGEvent(
-            type=signature,
+            type=event_type,
             start=event_time_in_samples,
             end=event_time_in_samples,
+            priority=index,
             params={
                 "device_id": device_id,
             },
@@ -300,8 +292,8 @@ def analyze_set_oscillator_times(
     device_type = signal_obj.awg.device_type
     sampling_rate = signal_obj.awg.sampling_rate
     set_oscillator_events = [
-        event
-        for event in events
+        (index, event)
+        for index, event in enumerate(events)
         if event["event_type"] == "SET_OSCILLATOR_FREQUENCY_START"
         and event.get("device_id") == device_id
         and event.get("signal") == signal_id
@@ -314,17 +306,18 @@ def analyze_set_oscillator_times(
             "Real-time frequency sweep only supported on SHF and HDAWG devices"
         )
 
-    iterations = [event["iteration"] for event in set_oscillator_events]
+    iterations = [event["iteration"] for _, event in set_oscillator_events]
 
-    start_frequency = set_oscillator_events[0]["value"]
+    start_frequency = set_oscillator_events[0][1]["value"]
     if len(iterations) > 1:
-        step_frequency = set_oscillator_events[1]["value"] - start_frequency
+        step_frequency = set_oscillator_events[1][1]["value"] - start_frequency
     else:
         step_frequency = 0
 
     retval = AWGSampledEventSequence()
 
-    for iteration, event in zip(iterations, set_oscillator_events):
+    for index, event in set_oscillator_events:
+        iteration = event["iteration"]
         if (
             abs(event["value"] - iteration * step_frequency - start_frequency)
             > 1e-3  # tolerance: 1 mHz
@@ -337,6 +330,7 @@ def analyze_set_oscillator_times(
         set_oscillator_event = AWGEvent(
             type=AWGEventType.SET_OSCILLATOR_FREQUENCY,
             start=event_time_in_samples,
+            priority=index,
             params={
                 "start_frequency": start_frequency,
                 "step_frequency": step_frequency,
@@ -381,6 +375,7 @@ def analyze_acquire_times(
         play_pulse_parameters: Optional[Dict[str, Any]]
         pulse_pulse_parameters: Optional[Dict[str, Any]]
         channels: list[int | list[int]]
+        priority: int
 
     @dataclass
     class IntervalEndEvent:
@@ -400,8 +395,9 @@ def analyze_acquire_times(
                     event.get("play_pulse_parameters"),
                     event.get("pulse_pulse_parameters"),
                     event.get("channel") or channels,
+                    priority=index,
                 )
-                for event in events
+                for index, event in enumerate(events)
                 if event["event_type"] in ["ACQUIRE_START"]
                 and event["signal"] == signal_id
             ],
@@ -443,6 +439,7 @@ def analyze_acquire_times(
             type=AWGEventType.ACQUIRE,
             start=start_samples,
             end=end_samples,
+            priority=interval_start.priority,
             params={
                 "signal_id": signal_id,
                 "play_wave_id": interval_start.play_wave_id,
@@ -464,8 +461,8 @@ def analyze_trigger_events(
     events: List[Dict], signal: SignalObj, loop_events: AWGSampledEventSequence
 ) -> AWGSampledEventSequence:
     digital_signal_change_events = [
-        event
-        for event in events
+        (index, event)
+        for index, event in enumerate(events)
         if event["event_type"] == EventType.DIGITAL_SIGNAL_STATE_CHANGE
         and signal.id == event["signal"]
     ]
@@ -476,10 +473,10 @@ def analyze_trigger_events(
     sampled_digital_signal_change_events = AWGSampledEventSequence()
 
     event: Dict[Any, Any]
-    for event in digital_signal_change_events:
+    for index, event in digital_signal_change_events:
         time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
         sampled_digital_signal_change_events.add(
-            time_in_samples, AWGEvent(type=None, params=event)
+            time_in_samples, AWGEvent(type=None, params=event, priority=index)
         )
 
     current_state = 0
@@ -511,6 +508,7 @@ def analyze_trigger_events(
             AWGEvent(
                 type=AWGEventType.TRIGGER_OUTPUT,
                 start=time_in_samples,
+                priority=event_list[0].priority,
                 params={
                     "state": current_state,
                 },
@@ -524,7 +522,7 @@ def analyze_trigger_events(
     # When the trigger is raised at the end of the averaging loop (which is not
     # unrolled), things get a bit dicey: the command to reset the trigger signal must
     # be deferred to the next iteration. Which means that the very first iteration must
-    # already include this tigger reset, and that we must issue it again after the loop.
+    # already include this trigger reset, and that we must issue it again after the loop.
 
     resampled_states = resample_state(loop_events.sequence.keys(), state_progression)
     if resampled_states:
@@ -535,9 +533,8 @@ def analyze_trigger_events(
                     AWGEvent(
                         type=AWGEventType.TRIGGER_OUTPUT,
                         start=time_in_samples,
-                        params={
-                            "state": resampled_states[time_in_samples][1],
-                        },
+                        priority=event_list[0].priority,
+                        params={"state": resampled_states[time_in_samples][1]},
                     ),
                 )
     return retval

@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import bisect
 import copy
 import logging
 import math
@@ -725,10 +724,7 @@ class CodeGenerator:
                         for pulse in wave_form.pulses
                         if pulse.pulse not in pulse_defs
                     ]
-                    assert all(
-                        pulse is None or pulse == "dummy_precomp_reset"
-                        for pulse in pulses_not_in_pulsedef
-                    )
+                    assert all(pulse is None for pulse in pulses_not_in_pulsedef)
                     if len(pulses_not_in_pulsedef) > 0:
                         continue
                     if (
@@ -938,14 +934,10 @@ class CodeGenerator:
         )
         sampled_events.merge(init_events)
 
-        precomp_reset_events, fake_play_events = analyze_precomp_reset_times(
+        precomp_reset_events = analyze_precomp_reset_times(
             events, [s.id for s in awg.signals], global_sampling_rate, global_delay
         )
         sampled_events.merge(precomp_reset_events)
-        # Todo: Remove when HULK-1246 is fixed, see analyze_precomp_reset_times for details.
-        for ev in fake_play_events:
-            index = bisect.bisect([event["time"] for event in events], ev["time"])
-            events.insert(index, ev)
 
         phase_reset_events = analyze_phase_reset_times(
             events, awg.device_id, global_sampling_rate, global_delay
@@ -1384,18 +1376,7 @@ class CodeGenerator:
                 signature.waveform.pulses, signature.pulse_parameters
             ):
                 _logger.debug(" Sampling pulse part %s", pulse_part)
-                pulse_def = pulse_defs.get(pulse_part.pulse)
-                if pulse_def is None:
-                    # Workaround HULK-1246: there is a special pulse "dummy_precomp_reset"
-                    # that is used to reset the precompensation. It is all zeros, but we
-                    # use it to force a playWave command to be generated.
-                    pulse_def = PulseDef(
-                        uid="dummy_precomp_reset",
-                        length=32,
-                        amplitude=1.0,
-                        samples=np.zeros(32),
-                        function=None,
-                    )
+                pulse_def = pulse_defs[pulse_part.pulse]
 
                 if pulse_def.amplitude is None:
                     pulse_def = copy.deepcopy(pulse_def)
@@ -1416,7 +1397,7 @@ class CodeGenerator:
 
                 oscillator_phase = pulse_part.oscillator_phase
 
-                baseband_phase = pulse_part.baseband_phase
+                baseband_phase = pulse_part.increment_oscillator_phase
                 used_oscillator_frequency = pulse_part.oscillator_frequency
 
                 _logger.debug(

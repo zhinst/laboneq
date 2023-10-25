@@ -25,7 +25,7 @@ class GateStore:
 
     def register_gate_section(self, name: str, qubit_names: list[str], section_factory):
         """Register a LabOne Q section factory as a gate."""
-        self.gates[(name, qubit_names)] = section_factory
+        self.gates[(name, tuple(qubit_names))] = section_factory
 
     @staticmethod
     def _gate_pulse(qubit_uid, signal, pulse, phase, gate_id):

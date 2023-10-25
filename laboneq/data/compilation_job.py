@@ -6,26 +6,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
+from typing import TYPE_CHECKING
 
 import numpy as np
-from numpy.typing import ArrayLike
 
-from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.data import EnumReprMixin
-from laboneq.data.calibration import (
-    BounceCompensation,
-    ExponentialCompensation,
-    FIRCompensation,
-    HighPassCompensation,
-    PortMode,
-)
 from laboneq.data.experiment_description import (
     AveragingMode,
     ExecutionType,
     RepetitionMode,
     SectionAlignment,
 )
-from laboneq.executor.executor import Statement
+
+if TYPE_CHECKING:
+    from numpy.typing import ArrayLike
+
+    from laboneq.core.types.enums.acquisition_type import AcquisitionType
+    from laboneq.data.calibration import (
+        BounceCompensation,
+        ExponentialCompensation,
+        FIRCompensation,
+        HighPassCompensation,
+        PortMode,
+    )
+    from laboneq.executor.executor import Statement
 
 
 #
@@ -290,14 +294,3 @@ class CompilationJob:
     experiment_info: ExperimentInfo = None
     execution: Statement = None
     compiler_settings: dict = None
-
-
-@dataclass
-class SweepParamRef:
-    """For use as a pulse parameter.
-
-    The pulse parameters will end up in the (serialized) event list, so a more
-    light-weight alternative to ParameterInfo is preferred.
-    """
-
-    name: str

@@ -3,13 +3,11 @@
 
 from __future__ import annotations
 
-import copy
 from functools import cached_property
 from typing import TYPE_CHECKING, Dict, List, Mapping, Optional, Tuple
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types import enums as legacy_enums
-from laboneq.data.execution_payload import VIRTUAL_SHFSG_UID_SUFFIX
 from laboneq.data.setup_description import (
     ChannelMapEntry,
     DeviceType,
@@ -71,11 +69,11 @@ def convert_logical_signal_groups_with_ls_mapping(
     return mapping, legacy_to_new
 
 
-def convert_dataserver(target: legacy_servers.DataServer) -> Server:
+def convert_dataserver(target: legacy_servers.DataServer, leader_uid: str) -> Server:
     return Server(
         uid=target.uid,
         host=target.host,
-        leader_uid=target.leader_uid,
+        leader_uid=leader_uid,
         port=int(target.port),
     )
 
@@ -253,14 +251,6 @@ class InstrumentConverter:
         legacy_ls_to_new_map: Mapping[legacy_lsg.LogicalSignal, LogicalSignal],
         server: Server,
     ) -> None:
-        if isinstance(src, legacy_instruments.SHFSG) and src.is_qc:
-            raise AssertionError(
-                "SHFSGs with .is_qc=True should have been converted back to an SHFQC"
-            )
-        if isinstance(src, legacy_instruments.SHFQA) and src.is_qc:
-            raise AssertionError(
-                "SHFQAs with .is_qc=True should have been converted back to an SHFQC"
-            )
         self._src = src
         self._legacy_ls_to_new_map = legacy_ls_to_new_map
         self.port_converter = PortConverter(src)
@@ -488,99 +478,6 @@ def combine_shfqa_and_shfsg(
     )
 
 
-def recombine_shfqcs(
-    instruments: list[ZIStandardInstrument],
-    logical_signal_groups: dict[str, legacy_lsg.LogicalSignalGroup],
-) -> list[ZIStandardInstrument]:
-    """Recombine SHFQCs that have been split into virtual SHFSGs and SHFQAs."""
-    instruments = copy.deepcopy(instruments)
-    virtual_shfsgs = {
-        instr.uid: instr
-        for instr in instruments
-        if isinstance(instr, legacy_instruments.SHFSG) and instr.is_qc
-    }
-
-    virtual_shfqas = {
-        instr.uid: instr
-        for instr in instruments
-        if isinstance(instr, legacy_instruments.SHFQA) and instr.is_qc
-    }
-    extra_virtual_shfqas = {}
-    for instr in virtual_shfsgs.values():
-        if not instr.uid.endswith(VIRTUAL_SHFSG_UID_SUFFIX) and instr.qc_with_qa:
-            raise AssertionError(
-                f"Virtual SHFSG {instr.uid} has .uid which does not end with '{VIRTUAL_SHFSG_UID_SUFFIX}'."
-                " This is not currently supported."
-            )
-        expected_shfqa_uid = instr.uid.removesuffix(VIRTUAL_SHFSG_UID_SUFFIX)
-        if expected_shfqa_uid not in virtual_shfqas:
-            assert not instr.qc_with_qa, "Missing the QA half of SHFQC"
-            extra_virtual_shfqas[expected_shfqa_uid] = legacy_instruments.SHFQA(
-                uid=expected_shfqa_uid,
-                server_uid=instr.server_uid,
-                interface=instr.interface,
-                address=instr.address,
-                reference_clock_source=instr.reference_clock_source,
-                is_qc=True,
-            )
-        else:
-            assert (
-                instr.qc_with_qa
-            ), "qc_with_qa is not set, but a matching QA instrument is present"
-
-    for instr in extra_virtual_shfqas.values():
-        expected_shfsg_uid = instr.uid + VIRTUAL_SHFSG_UID_SUFFIX
-        virtual_shfsgs[expected_shfsg_uid] = virtual_shfsgs[instr.uid]
-        del virtual_shfsgs[instr.uid]
-
-    for instr in virtual_shfqas.values():
-        expected_shfsg_uid = instr.uid + VIRTUAL_SHFSG_UID_SUFFIX
-        if expected_shfsg_uid not in virtual_shfsgs:
-            virtual_shfsgs[expected_shfsg_uid] = legacy_instruments.SHFSG(
-                uid=expected_shfsg_uid,
-                server_uid=instr.server_uid,
-                interface=instr.interface,
-                address=instr.address,
-                reference_clock_source=instr.reference_clock_source,
-                is_qc=True,
-            )
-
-    shfqcs = {
-        uid: combine_shfqa_and_shfsg(
-            shfqa, virtual_shfsgs[uid + VIRTUAL_SHFSG_UID_SUFFIX]
-        )
-        for uid, shfqa in (virtual_shfqas | extra_virtual_shfqas).items()
-    }
-
-    # replace SHFQAs with their SHFQC and drop SHFSGs:
-    instruments = [
-        shfqcs.get(instr.uid, instr)
-        for instr in instruments
-        if instr.uid not in virtual_shfsgs
-    ]
-
-    for instr in instruments:
-        # drop any connections that still refer to the old "_sg" ID (e.g. PQSC's zsync)
-        instr.connections = [
-            conn for conn in instr.connections if conn.remote_path not in virtual_shfsgs
-        ]
-
-    # replace SHFSG physical channel paths used in logical
-    # signals by their new references:
-    logical_signal_groups = copy.deepcopy(logical_signal_groups)
-    for lsg in logical_signal_groups.values():
-        for ls in lsg.logical_signals.values():
-            pc_path = utils.LogicalSignalPhysicalChannelUID(ls.physical_channel.path)
-            if pc_path.group in virtual_shfsgs:
-                new_path = pc_path.replace(
-                    group=pc_path.group.removesuffix(VIRTUAL_SHFSG_UID_SUFFIX),
-                )
-                ls.physical_channel.path = new_path.path
-                ls.physical_channel.uid = new_path.uid
-
-    return instruments, logical_signal_groups
-
-
 def convert_device_setup_to_setup(
     device_setup: legacy_device.device_setup.DeviceSetup,
 ) -> Setup:
@@ -590,19 +487,17 @@ def convert_device_setup_to_setup(
     #       the logical signal groups.
     servers = {}
     for name, server in device_setup.servers.items():
-        servers[name] = convert_dataserver(server)
+        servers[name] = convert_dataserver(
+            server, device_setup._server_leader_instrument(name)
+        )
 
     calibration = calibration_converter.convert_calibration(
         device_setup.get_calibration(),
         uid_formatter=calibration_converter.format_ls_pc_uid,
     )
-    (legacy_instruments, legacy_logical_signal_groups) = recombine_shfqcs(
-        device_setup.instruments,
-        device_setup.logical_signal_groups,
-    )
 
     lsgs, ls_legacy_to_new_map = convert_logical_signal_groups_with_ls_mapping(
-        legacy_logical_signal_groups
+        device_setup.logical_signal_groups
     )
 
     converters = [
@@ -611,7 +506,7 @@ def convert_device_setup_to_setup(
             ls_legacy_to_new_map,
             servers[instr.server_uid],
         )
-        for instr in legacy_instruments
+        for instr in device_setup.instruments
     ]
 
     instruments = [converter.instrument for converter in converters]

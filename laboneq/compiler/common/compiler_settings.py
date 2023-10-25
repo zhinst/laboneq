@@ -28,6 +28,7 @@ _USER_ENABLED_SETTINGS = [
     "SHFSG_FORCE_COMMAND_TABLE",
     "USE_AMPLITUDE_INCREMENT",
     "OUTPUT_EXTRAS",
+    "FORCE_IR_ROUNDTRIP",
     "LOG_REPORT",
 ]
 
@@ -61,6 +62,7 @@ class CompilerSettings:
     MAX_EVENTS_TO_PUBLISH: int = 1000
     EXPAND_LOOPS_FOR_SCHEDULE: bool = True
     OUTPUT_EXTRAS: bool = False
+    FORCE_IR_ROUNDTRIP: bool = False
     TINYSAMPLE: float = 1 / 3600000e6
 
     HDAWG_MIN_PLAYWAVE_HINT: int = 128

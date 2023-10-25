@@ -62,6 +62,12 @@ class CompilationReportGenerator:
     def _count_samples(self, waves, wave_index):
         multiplier = 1
         wave_name, (_, wave_type) = wave_index
+        if wave_name == "precomp_reset":
+            # for precomp reset we use an all-zero waveform that is not explicitly
+            # listed in the waveform table
+            if wave_type in ("iq", "double", "multi"):
+                return 64
+            return 32
         if wave_type in ("iq", "double", "multi"):
             waveform_name = f"{wave_name}_i.wave"
             multiplier = 2  # two samples per clock cycle

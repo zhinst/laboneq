@@ -505,7 +505,7 @@ class DevEmuSHFQABase(Gen2Base):
             for integrator in range(16):
                 self._set_val(
                     f"qachannels/{channel}/readout/result/data/{integrator}/wave",
-                    42 + integrator + 1j * np.arange(length),
+                    (42 + integrator + 1j * np.arange(length)) / averages,
                 )
         if spectroscopy_enable != 0:
             length = self._get_node(

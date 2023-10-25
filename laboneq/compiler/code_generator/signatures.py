@@ -33,8 +33,8 @@ class PulseSignature:
     oscillator_phase: Optional[float]
     # the oscillator frequency of the pulse (for SW oscillators)
     oscillator_frequency: Optional[float]
-    # phase offsets from `set_oscillator_phase`
-    baseband_phase: Optional[float]
+    # if present, the pulse increments the HW oscillator phase
+    increment_oscillator_phase: Optional[float]
     # the channel of the pulse (for HDAWG)
     channel: Optional[int]
     # the sub-channel of the pulse (for SHFQA)
@@ -100,7 +100,7 @@ class WaveformSignature:
                     ("start", "_", 1, 2),
                     ("amplitude", "_a", 1e3, 4),
                     ("length", "_l", 1, 3),
-                    ("baseband_phase", "_bb", 1e3 / 2 / math.pi, 4),
+                    ("increment_oscillator_phase", "_ip", 1e3 / 2 / math.pi, 4),
                     ("channel", "_c", 1, 0),
                     ("sub_channel", "_sc", 1, 0),
                     ("phase", "_ap", 1e3 / 2 / math.pi, 4),
@@ -241,34 +241,37 @@ class PlaybackSignature:
 def reduce_signature_phase(
     signature: PlaybackSignature,
     use_ct_phase: bool,
-    prev_hw_oscillator_phase: Optional[float],
+    after_phase_reset: bool = False,
 ) -> PlaybackSignature:
     """Reduces the phase of the signature.
 
     Modifies the passed in `signature` object in-place.
     """
-    if use_ct_phase:
-        this_hw_oscillator_phase = signature.waveform.pulses[-1].baseband_phase or 0.0
-        if prev_hw_oscillator_phase is not None:
-            increment = (this_hw_oscillator_phase - prev_hw_oscillator_phase) % (
-                2 * math.pi
-            )
-            if increment != 0:
-                signature.increment_phase = increment
-        else:
-            # oscillator phase from previous phase unknown, set it directly instead of
-            # incrementing
-            signature.set_phase = this_hw_oscillator_phase
-        for pulse in signature.waveform.pulses:
-            pulse.baseband_phase = (
-                (pulse.baseband_phase or 0.0) - this_hw_oscillator_phase
-            ) % (2 * math.pi)
+    total_phase_increment = sum(
+        pulse.increment_oscillator_phase or 0.0 for pulse in signature.waveform.pulses
+    )
+    if total_phase_increment:
+        assert use_ct_phase, "cannot increment oscillator phase w/o command table"
 
-    # absorb the baseband phase into the pulse phase (ie the phase baked into the samples)
+        if after_phase_reset:
+            signature.set_phase = total_phase_increment
+        else:
+            signature.increment_phase = total_phase_increment
+
+    # absorb the partial phase increment into the pulse phase (ie the phase baked into the samples)
+    running_increment = 0
     for pulse in signature.waveform.pulses:
-        if pulse.baseband_phase is not None:
-            pulse.phase = (pulse.phase or 0.0) + pulse.baseband_phase
-            pulse.baseband_phase = None
+        running_increment += pulse.increment_oscillator_phase or 0.0
+        pulse.increment_oscillator_phase = None
+
+        if running_increment - total_phase_increment:
+            pulse.oscillator_phase = (
+                (pulse.oscillator_phase or 0.0)
+                + running_increment
+                - total_phase_increment
+            )
+
+        # todo: this seems wrong - it will break pulse replacement
         if pulse.oscillator_phase is not None:
             pulse.phase = (pulse.phase or 0.0) + pulse.oscillator_phase
             pulse.oscillator_phase = None

@@ -17,9 +17,11 @@ from laboneq.compiler.code_generator.sampled_event_handler import FeedbackConnec
 from laboneq.compiler.common.awg_info import AwgKey
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.experiment_access import ExperimentDAO
+from laboneq.compiler.ir.ir import IR
 from laboneq.compiler.scheduler.parameter_store import ParameterStore
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.scheduler.scheduler import Scheduler
+from laboneq.data.compilation_job import ExperimentInfo
 from laboneq.data.scheduled_experiment import PulseMapEntry
 
 _logger = logging.getLogger(__name__)
@@ -62,44 +64,63 @@ class RealtimeCompilerOutput:
 class RealtimeCompiler:
     def __init__(
         self,
-        experiment_dao: ExperimentDAO,
+        experiment_info: ExperimentInfo,
+        scheduler: Scheduler,
         sampling_rate_tracker: SamplingRateTracker,
         signal_objects: Dict[str, SignalObj],
         settings: Optional[CompilerSettings] = None,
     ):
-        self._experiment_dao = experiment_dao
+        self._experiment_info = experiment_info
+        self._ir = None
+        self._scheduler = scheduler
         self._sampling_rate_tracker = sampling_rate_tracker
         self._signal_objects = signal_objects
         self._settings = settings
 
-        self._scheduler = Scheduler(
-            self._experiment_dao,
-            self._sampling_rate_tracker,
-            self._signal_objects,
-            self._settings,
-        )
-
         self._code_generator = None
 
-    @trace("compiler.generate-code()")
-    def _generate_code(self):
+    def _lower_to_ir(self):
+        root = self._scheduler.generate_ir()
+        return IR(
+            devices=self._experiment_info.devices,
+            signals=self._experiment_info.signals,
+            root=root,
+            global_leader_device=self._experiment_info.global_leader_device,
+            pulse_defs=self._experiment_info.pulse_defs,
+        )
+
+    def _lower_ir_to_code(self, ir: IR):
         code_generator = CodeGenerator(self._settings)
         self._code_generator = code_generator
 
         for signal_obj in self._signal_objects.values():
             code_generator.add_signal(signal_obj)
 
-        _logger.debug("Preparing events for code generator")
-        events = self._scheduler.event_timing(expand_loops=False)
+        events = self._scheduler.generate_event_list_from_ir(
+            ir=ir.root, expand_loops=False, max_events=float("inf")
+        )
 
         code_generator.gen_acquire_map(events)
         code_generator.gen_seq_c(
             events,
-            {k: self._experiment_dao.pulse(k) for k in self._experiment_dao.pulses()},
+            {p.uid: p for p in self._experiment_info.pulse_defs},
         )
         code_generator.gen_waves()
 
         _logger.debug("Code generation completed")
+
+    @trace("compiler.generate-code()")
+    def _generate_code(self):
+        ir = self._lower_to_ir()
+        _logger.debug("IR lowering complete")
+
+        self._ir = ir
+
+        if self._settings.FORCE_IR_ROUNDTRIP:
+            ir.round_trip()
+
+        self._lower_ir_to_code(ir)
+        _logger.debug("lowering IR to code complete")
 
     def run(self, near_time_parameters: Optional[ParameterStore] = None):
         self._scheduler.run(near_time_parameters)
@@ -126,8 +147,9 @@ class RealtimeCompiler:
 
         return compiler_output
 
-    def prepare_schedule(self):
-        event_list = self._scheduler.event_timing(
+    def _lower_ir_to_schedule(self, ir: IR):
+        event_list = self._scheduler.generate_event_list_from_ir(
+            ir=ir.root,
             expand_loops=self._settings.EXPAND_LOOPS_FOR_SCHEDULE,
             max_events=self._settings.MAX_EVENTS_TO_PUBLISH,
         )
@@ -136,8 +158,10 @@ class RealtimeCompiler:
             {k: v for k, v in event.items() if v is not None} for event in event_list
         ]
 
+        experiment_dao = ExperimentDAO(self._experiment_info)
+
         try:
-            root_section = self._experiment_dao.root_rt_sections()[0]
+            root_section = experiment_dao.root_rt_sections()[0]
         except IndexError:
             return Schedule.empty()
 
@@ -149,12 +173,12 @@ class RealtimeCompiler:
 
         for section in [
             root_section,
-            *self._experiment_dao.all_section_children(root_section),
+            *experiment_dao.all_section_children(root_section),
         ]:
-            section_info = self._experiment_dao.section_info(section)
+            section_info = experiment_dao.section_info(section)
             section_display_name = section_info.uid
             section_signals_with_children[section] = list(
-                self._experiment_dao.section_signals_with_children(section)
+                experiment_dao.section_signals_with_children(section)
             )
             section_info_out[section] = {
                 "section_display_name": section_display_name,
@@ -162,8 +186,8 @@ class RealtimeCompiler:
             }
 
         sampling_rate_tuples = []
-        for signal_id in self._experiment_dao.signals():
-            signal_info = self._experiment_dao.signal_info(signal_id)
+        for signal_id in experiment_dao.signals():
+            signal_info = experiment_dao.signal_info(signal_id)
             device_id = signal_info.device.uid
             device_type = signal_info.device.device_type.value
             sampling_rate_tuples.append(
@@ -191,3 +215,8 @@ class RealtimeCompiler:
             section_signals_with_children=section_signals_with_children,
             sampling_rates=sampling_rates,
         )
+
+    def prepare_schedule(self):
+        if self._ir is None:
+            self._ir = self._lower_to_ir()
+        return self._lower_ir_to_schedule(self._ir)
