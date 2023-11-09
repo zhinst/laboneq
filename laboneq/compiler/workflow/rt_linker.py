@@ -9,9 +9,10 @@ from typing import Any
 import numpy as np
 
 from laboneq.compiler.code_generator import IntegrationTimes
+from laboneq.compiler.common.feedback_register_config import FeedbackRegisterConfig
 from laboneq.compiler.code_generator.measurement_calculator import SignalDelays
-from laboneq.compiler.code_generator.sampled_event_handler import FeedbackConnection
 from laboneq.compiler.common.awg_info import AwgKey
+from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.workflow.realtime_compiler import RealtimeCompilerOutput
 from laboneq.core.exceptions import LabOneQException
 from laboneq.data.scheduled_experiment import PulseMapEntry
@@ -47,9 +48,10 @@ class RealtimeStep:
 @dataclass
 class CombinedRealtimeCompilerOutput:
     realtime_steps: list[RealtimeStep] = field(default_factory=list)
-    command_table_match_offsets: dict[AwgKey, int] = field(default_factory=dict)
     feedback_connections: dict[str, FeedbackConnection] = field(default_factory=dict)
-    feedback_registers: dict[AwgKey, int] = field(default_factory=dict)
+    feedback_register_configurations: dict[AwgKey, FeedbackRegisterConfig] = field(
+        default_factory=dict
+    )
     signal_delays: SignalDelays = field(default_factory=dict)
     integration_weights: dict = field(default_factory=dict)
     integration_times: IntegrationTimes = None
@@ -97,9 +99,7 @@ def from_single_run(
         )
     return CombinedRealtimeCompilerOutput(
         realtime_steps=realtime_steps,
-        command_table_match_offsets=rt_compiler_output.command_table_match_offsets,
         feedback_connections=rt_compiler_output.feedback_connections,
-        feedback_registers=rt_compiler_output.feedback_registers,
         signal_delays=rt_compiler_output.signal_delays,
         integration_weights=rt_compiler_output.integration_weights,
         integration_times=rt_compiler_output.integration_times,
@@ -112,6 +112,7 @@ def from_single_run(
         wave_indices=wave_indices,
         pulse_map=rt_compiler_output.pulse_map,
         schedule=rt_compiler_output.schedule,
+        feedback_register_configurations=rt_compiler_output.feedback_register_configurations,
     )
 
 
@@ -121,17 +122,9 @@ def merge_compiler_runs(
     previous: RealtimeCompilerOutput,
     step_indices: list[int],
 ):
-    if this.command_table_match_offsets != new.command_table_match_offsets:
-        raise LabOneQException(
-            "Command table match offsets do not match between real-time iterations"
-        )
     if this.feedback_connections != new.feedback_connections:
         raise LabOneQException(
             "Feedback connections do not match between real-time iterations"
-        )
-    if this.feedback_registers != new.feedback_registers:
-        raise LabOneQException(
-            "Feedback registers do not match between real-time iterations"
         )
     if this.signal_delays != new.signal_delays:
         raise LabOneQException(
@@ -149,6 +142,10 @@ def merge_compiler_runs(
     if this.simultaneous_acquires != new.simultaneous_acquires:
         raise LabOneQException(
             "Simultaneous acquires do not match between real-time iterations"
+        )
+    if this.feedback_register_configurations != new.feedback_register_configurations:
+        raise LabOneQException(
+            "Feedback register configurations do not match between real-time iterations"
         )
 
     for awg, awg_src in new.src.items():

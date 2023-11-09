@@ -135,7 +135,6 @@ class MeasurementCalculator:
                     for event in sorted(
                         events_for_signal_and_section, key=lambda x: x["time"]
                     ):
-
                         if not event["shadow"]:
                             if event["event_type"] == "ACQUIRE_START":
                                 signal_integration_info.is_play = False
@@ -193,7 +192,6 @@ class MeasurementCalculator:
 
         delays_per_awg = {}
         for section_name, section_info in integration_times.items():
-
             for signal, signal_integration_info in section_info.items():
                 signal_info = signal_info_map[signal]
                 device_type = DeviceType.from_device_info_type(
@@ -346,7 +344,6 @@ class MeasurementCalculator:
                     )
 
                     for signal in play["signals"]:
-
                         signal_delays[signal] = SignalDelay(
                             code_generation=0,
                             on_device=0,

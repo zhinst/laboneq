@@ -351,7 +351,6 @@ def analyze_acquire_times(
     signal_obj: SignalObj,
     feedback_register_allocator: FeedbackRegisterAllocator,
 ) -> AWGSampledEventSequence:
-
     signal_id = signal_obj.id
     sampling_rate = signal_obj.awg.sampling_rate
     delay = signal_obj.total_delay

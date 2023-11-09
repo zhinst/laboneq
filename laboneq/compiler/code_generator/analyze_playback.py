@@ -267,9 +267,9 @@ def _make_interval_tree(
             increment_oscillator_phase = interval_start.increment_oscillator_phase
         # Note: the scheduler will already align all the pulses with the sample grid,
         # and the rounding error should be 0 except for some floating point epsilon.
-        (start_samples, end_samples), (
-            start_rounding_error,
-            _,
+        (
+            (start_samples, end_samples),
+            (start_rounding_error, _),
         ) = interval_to_samples_with_errors(
             interval_start.time, interval_end.time, sampling_rate
         )
@@ -391,7 +391,9 @@ def _insert_frame_changes(
                     params={
                         "signal": frame_change.signal,
                         "phase": frame_change.phase,
-                        "oscillator": signal.hw_oscillator,
+                        "oscillator": signal.hw_oscillator
+                        if signal.awg.device_type.supports_oscillator_switching
+                        else None,
                     },
                 ),
             )

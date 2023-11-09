@@ -252,7 +252,6 @@ class DeviceHDAWG(DeviceZI):
 
         outputs = initialization.outputs or []
         for output in outputs:
-
             awg_idx = output.channel // 2
             self._allocated_awgs.add(awg_idx)
 
@@ -515,7 +514,7 @@ class DeviceHDAWG(DeviceZI):
                         if (
                             awg_key.device_uid == initialization.device_uid
                             and awg_key.awg_index == awg_index
-                            and awg_config.qa_signal_id is not None
+                            and awg_config.source_feedback_register is not None
                         )
                     ),
                     None,
@@ -541,7 +540,6 @@ class DeviceHDAWG(DeviceZI):
                         ]
                     )
         elif triggering_mode == TriggeringMode.DESKTOP_LEADER:
-
             nodes_to_configure_triggers.append(
                 DaqNodeSetAction(
                     self._daq,
@@ -587,7 +585,6 @@ class DeviceHDAWG(DeviceZI):
             for awg_index in (
                 self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
             ):
-
                 nodes_to_configure_triggers.append(
                     DaqNodeSetAction(
                         self._daq,

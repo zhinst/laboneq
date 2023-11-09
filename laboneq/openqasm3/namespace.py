@@ -22,6 +22,16 @@ class ClassicalRef:
     canonical_name: str
 
 
+@dataclass
+class Frame:
+    """A frame data structure"""
+
+    canonical_name: str
+    port: str
+    frequency: float
+    phase: float
+
+
 class Namespace:
     def __init__(self, toplevel: Optional[bool] = True):
         self.toplevel = toplevel
@@ -34,7 +44,8 @@ class Namespace:
         if name not in self.local_scope:
             self.local_scope[name] = QubitRef(name)
         else:
-            raise OpenQasmException(f"Name '{name}' already exists")
+            msg = f"Name '{name}' already exists"
+            raise OpenQasmException(msg)
         return self.local_scope[name]
 
     def declare_classical_value(
@@ -44,6 +55,19 @@ class Namespace:
         # Instead we treat them as references (to Python objects).
         # TODO: Enforce constantness of constants. Currently they are implemented as variables
         return self.declare_reference(name, value)
+
+    def declare_frame(
+        self, name: str, port: str, frequency: float, phase: float
+    ) -> Frame:
+        if name not in self.local_scope:
+            if phase != 0:
+                msg = "Nonzero frame phase is not supported yet"
+                raise OpenQasmException(msg)
+            self.local_scope[name] = Frame(name, port, frequency, phase)
+        else:
+            msg = f"Name '{name}' already exists"
+            raise OpenQasmException(msg)
+        return self.local_scope[name]
 
     def declare_reference(
         self, name: str, value: Any = None
@@ -55,7 +79,8 @@ class Namespace:
             else:
                 self.local_scope[name] = ClassicalRef(value, name)
         else:
-            raise OpenQasmException(f"Name '{name}' already exists")
+            msg = f"Name '{name}' already exists"
+            raise OpenQasmException(msg)
         return self.local_scope[name]
 
 

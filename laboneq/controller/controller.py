@@ -104,7 +104,7 @@ class Controller:
         self,
         run_parameters: ControllerRunParameters = None,
         target_setup: TargetSetup = None,
-        user_functions: dict[str, Callable] = None,
+        neartime_callbacks: dict[str, Callable] = None,
     ):
         self._run_parameters = run_parameters or ControllerRunParameters()
         self._devices = DeviceCollection(
@@ -120,8 +120,8 @@ class Controller:
 
         # Waves which are uploaded to the devices via pulse replacements
         self._current_waves = []
-        self._user_functions: dict[str, Callable] = user_functions
-        self._nodes_from_user_functions: list[DaqNodeAction] = []
+        self._neartime_callbacks: dict[str, Callable] = neartime_callbacks
+        self._nodes_from_neartime_callbacks: list[DaqNodeAction] = []
         self._recipe_data: RecipeData = None
         self._session: Any = None
         self._results = ExperimentResults()
@@ -626,14 +626,15 @@ class Controller:
             compiled_experiment.scheduled_experiment,
             self._devices,
             execution,
-            self._dataserver_version,
         )
 
         self._session = session
         await self._execute_compiled_impl()
         if session and session._last_results:
             session._last_results.acquired_results = self._results.acquired_results
-            session._last_results.user_func_results = self._results.user_func_results
+            session._last_results.neartime_callback_results = (
+                self._results.neartime_callback_results
+            )
             session._last_results.execution_errors = self._results.execution_errors
 
     def execute_compiled(self, job: ExecutionPayload):
@@ -644,7 +645,6 @@ class Controller:
             job.scheduled_experiment,
             self._devices,
             job.scheduled_experiment.execution,
-            self._dataserver_version,
         )
         self._session = None
         await self._execute_compiled_impl()
@@ -657,7 +657,7 @@ class Controller:
 
             # Ensure no side effects from the previous execution in the same session
             self._current_waves = []
-            self._nodes_from_user_functions = []
+            self._nodes_from_neartime_callbacks = []
             _logger.info("Starting near-time execution...")
             try:
                 with tracing.get_tracer().start_span("near-time-execution"):
@@ -695,8 +695,9 @@ class Controller:
     ):
         """Replaces specific pulse with the new sample data on the device.
 
-        This is useful when called from the user function, allows fast waveform replacement within
-        near-time loop without experiment recompilation.
+        This is useful when called from the near-time callback, allows fast
+        waveform replacement within near-time loop without experiment
+        recompilation.
 
         Args:
             pulse_uid: pulse to replace, can be Pulse object or uid of the pulse
@@ -751,7 +752,7 @@ class Controller:
             if repl.replacement_type == ReplacementType.I_Q:
                 clipped = np.clip(repl.samples, -1.0, 1.0)
                 bin_wave = zhinst.utils.convert_awg_waveform(*clipped)
-                self._nodes_from_user_functions.append(
+                self._nodes_from_neartime_callbacks.append(
                     device.prepare_upload_binary_wave(
                         filename=repl.sig_string + " (repl)",
                         waveform=bin_wave,
@@ -763,7 +764,7 @@ class Controller:
             elif repl.replacement_type == ReplacementType.COMPLEX:
                 np.clip(repl.samples.real, -1.0, 1.0, out=repl.samples.real)
                 np.clip(repl.samples.imag, -1.0, 1.0, out=repl.samples.imag)
-                self._nodes_from_user_functions.append(
+                self._nodes_from_neartime_callbacks.append(
                     device.prepare_upload_binary_wave(
                         filename=repl.sig_string + " (repl)",
                         waveform=repl.samples,
@@ -777,9 +778,9 @@ class Controller:
         if rt_section_uid is None:
             return [], []  # Old recipe-based execution - skip RT preparation
         rt_execution_info = self._recipe_data.rt_execution_infos[rt_section_uid]
-        self._nodes_from_user_functions.sort(key=lambda v: v.path)
-        nodes_to_prepare_rt = [*self._nodes_from_user_functions]
-        self._nodes_from_user_functions.clear()
+        self._nodes_from_neartime_callbacks.sort(key=lambda v: v.path)
+        nodes_to_prepare_rt = [*self._nodes_from_neartime_callbacks]
+        self._nodes_from_neartime_callbacks.clear()
         for _, device in self._devices.leaders:
             nodes_to_prepare_rt.extend(device.configure_feedback(self._recipe_data))
         for awg_key, awg_config in self._recipe_data.awgs_producing_results():

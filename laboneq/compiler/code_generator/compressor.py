@@ -40,55 +40,60 @@ def compressor_core(
     cost_function: Callable = default_cost_function,
     recurse=False,
 ):
-    if len(plaintext) <= 1:
-        return plaintext
-    next_seen_map = {}
-    offsets = []
-    for i, c in list(enumerate(plaintext))[::-1]:
-        next_seen_index = next_seen_map.get(c)
-        if next_seen_index is None:
-            offsets.append(None)
-        else:
-            offsets.append(next_seen_index - i)
-        next_seen_map[c] = i
+    output = []
+    while True:
+        if len(plaintext) <= 1:
+            output.extend(plaintext)
+            return output
+        next_seen_map = {}
+        offsets = []
+        for i, c in list(enumerate(plaintext))[::-1]:
+            next_seen_index = next_seen_map.get(c)
+            if next_seen_index is None:
+                offsets.append(None)
+            else:
+                offsets.append(next_seen_index - i)
+            next_seen_map[c] = i
 
-    offsets = reversed(offsets)
+        offsets = reversed(offsets)
 
-    runs = defaultdict(list)  # word -> List[(start, Run)]
-    best_run = None
-    best_run_start, best_run_end = None, None
-    best_cost = 0
-    for index, offset in enumerate(offsets):
-        if best_run_end is not None and index > best_run_end:
-            # the remainder of the plaintext will be handled in tail recursion below
-            break
-        if offset is None:
-            continue
-        word = tuple(plaintext[index : index + offset])
-        if any(start < index <= start + r.span for start, r in runs[word]):
-            continue
+        runs = defaultdict(list)  # word -> List[(start, Run)]
+        best_run = None
+        best_run_start, best_run_end = None, None
+        best_cost = 0
+        for index, offset in enumerate(offsets):
+            if best_run_end is not None and index > best_run_end:
+                # the remainder of the plaintext will be handled in the next iteration
+                # of the outer loop
+                break
+            if offset is None:
+                continue
+            word = tuple(plaintext[index : index + offset])
+            if any(start < index <= start + r.span for start, r in runs[word]):
+                continue
 
-        run_length = 1
-        while index + (run_length + 1) * offset <= len(plaintext) and word == tuple(
-            plaintext[index + run_length * offset : index + (run_length + 1) * offset]
-        ):
-            run_length += 1
-        this_run = Run(word, run_length)
-        runs[word].append((index, this_run))
-        this_cost = cost_function(this_run)
-        if this_cost < best_cost:
-            best_run = this_run
-            best_cost = this_cost
-            best_run_start, best_run_end = index, index + best_run.span
+            run_length = 1
+            while index + (run_length + 1) * offset <= len(plaintext) and word == tuple(
+                plaintext[
+                    index + run_length * offset : index + (run_length + 1) * offset
+                ]
+            ):
+                run_length += 1
+            this_run = Run(word, run_length)
+            runs[word].append((index, this_run))
+            this_cost = cost_function(this_run)
+            if this_cost < best_cost:
+                best_run = this_run
+                best_cost = this_cost
+                best_run_start, best_run_end = index, index + best_run.span
 
-    if best_run is None:
-        return plaintext
+        if best_run is None:
+            output.extend(plaintext)
+            return output
 
-    if recurse:
-        best_run.word = compressor_core(best_run.word, cost_function, recurse)
+        if recurse:
+            best_run.word = compressor_core(best_run.word, cost_function, recurse)
 
-    return [
-        *plaintext[:best_run_start],
-        best_run,
-        *compressor_core(plaintext[best_run_end:], cost_function, recurse),
-    ]
+        output.extend(plaintext[:best_run_start])
+        output.append(best_run)
+        plaintext = plaintext[best_run_end:]

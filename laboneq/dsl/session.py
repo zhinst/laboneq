@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import warnings
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
@@ -120,7 +121,7 @@ class Session:
             self._logger.setLevel(log_level)
         else:
             self._logger = logging.getLogger("null")
-        self._user_functions: Dict[str, Callable] = {}
+        self._neartime_callbacks: Dict[str, Callable] = {}
         self._toolkit_devices = ToolkitDevices()
 
     @property
@@ -151,7 +152,7 @@ class Session:
             and self._experiment_definition == other._experiment_definition
             and self._compiled_experiment == other._compiled_experiment
             and self._last_results == other._last_results
-            and self._user_functions == other._user_functions
+            and self._neartime_callbacks == other._neartime_callbacks
         )
 
     def _assert_connected(self, fail=True, message=None) -> bool:
@@ -178,18 +179,36 @@ class Session:
         self.logger.error(message)
         return False
 
-    def register_user_function(self, func, name: str = None):
-        """Registers a user function to be referred from the experiment's `call` operation.
+    def register_neartime_callback(self, func, name: str = None):
+        """Registers a near-time callback to be referred from the experiment's `call` operation.
 
         Args:
-            func (function): User function that is registered.
+            func (function): Near-time callback that is registered.
             name (str):     Optional name to use as the argument to experiment's `call` operation to refer to this
                             function. If not provided, function name will be used.
         """
 
         if name is None:
             name = func.__name__
-        self._user_functions[name] = func
+        self._neartime_callbacks[name] = func
+
+    def register_user_function(self, func, name: str = None):
+        """Registers a near-time callback to be referred from the experiment's `call` operation.
+
+        Args:
+            func (function): Near-time callback that is registered.
+            name (str):     Optional name to use as the argument to experiment's `call` operation to refer to this
+                            function. If not provided, function name will be used.
+
+        !!! version-changed "Deprecated in version 2.19.0"
+            The `register_user_function` method was deprecated in version 2.19.0.
+            Use `register_neartime_callback` instead.
+        """
+        warnings.warn(
+            "The 'register_user_function' method is deprecated. Use 'register_neartime_callback' instead.",
+            FutureWarning,
+        )
+        self.register_neartime_callback(func, name)
 
     @trace("session.connect()")
     def connect(
@@ -372,7 +391,7 @@ class Session:
             device_setup=self.device_setup,
             compiled_experiment=self.compiled_experiment,
             acquired_results={},
-            user_func_results={},
+            neartime_callback_results={},
             execution_errors=[],
         )
         LabOneQFacade.run(self)
@@ -729,11 +748,11 @@ class Session:
 
         !!! note
 
-            This currently exclusively works when called from within a user function.
+            This currently exclusively works when called from within a near-time callback.
             The function does not return, and instead passes control directly back to the
             LabOne Q runtime.
 
         """
         raise AbortExecution(
-            "Experiment execution can only be aborted from within a user function"
+            "Experiment execution can only be aborted from within a near-time callback"
         )

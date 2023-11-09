@@ -24,7 +24,6 @@ def pulse_update(
     spectral_window: Optional[float] = None,
     pulse_parameters: Optional[dict] = None,
 ):
-
     """
     Updates a pulse object with new properties and returns the updated object.
 
@@ -114,7 +113,6 @@ def pulse_inspector(
         print("Nothing has been specified; iq flag was set to True.")
 
     if iq and amp_phi:
-
         plot_pulse(pulse)
 
     if iq:

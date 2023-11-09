@@ -33,7 +33,7 @@ class RunnerLegacy(RunnerAPI, RunnerControlAPI):
         controller = ctrl.Controller(
             run_parameters=run_parameters,
             target_setup=setup,
-            user_functions={},
+            neartime_callbacks={},
         )
         controller.connect()
         self._controller = controller
@@ -54,7 +54,7 @@ class RunnerLegacy(RunnerAPI, RunnerControlAPI):
         controller_results = self._controller._results
         self._job_results[job_id] = ExperimentResults(
             acquired_results=controller_results.acquired_results,
-            user_func_results=controller_results.user_func_results,
+            neartime_callback_results=controller_results.neartime_callback_results,
             execution_errors=controller_results.execution_errors,
         )
 

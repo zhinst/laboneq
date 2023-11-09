@@ -10,23 +10,26 @@ from laboneq.core import path as qct_path
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration import Calibratable, Calibration, CalibrationItem
+from laboneq.dsl.device import _device_setup_modifier as setup_modifier
+from laboneq.dsl.device._device_setup_modifier import DeviceSetupInternalException
+from laboneq.dsl.device.connection import InternalConnection, SignalConnection
 from laboneq.dsl.device.instruments import PQSC
 from laboneq.dsl.device.logical_signal_group import LogicalSignalGroup
 from laboneq.dsl.device.physical_channel_group import PhysicalChannelGroup
+from laboneq.dsl.device.servers import DataServer
 from laboneq.dsl.serialization import Serializer
 
-from ._device_setup_generator import (
-    ConnectionsType,
-    DataServersType,
-    InstrumentsType,
-    _DeviceSetupGenerator,
-)
+from ._device_setup_generator import _DeviceSetupGenerator
 
 if TYPE_CHECKING:
     from laboneq.dsl import quantum
     from laboneq.dsl.device.logical_signal_group import LogicalSignal
-    from laboneq.dsl.device.servers import DataServer
 
+    from ._device_setup_generator import (
+        ConnectionsType,
+        DataServersType,
+        InstrumentsType,
+    )
     from .instrument import Instrument
 
 
@@ -44,9 +47,16 @@ class DeviceSetup:
         logical_signal_groups (Optional[dict[str, LogicalSignalGroup]]): Logical signal groups of this device setup, by name of the group.
         qubits (Optional[dict[str, quantum.QuantumElement]]): Experimental: Qubits of this device setup, by the name of the qubit.
             Qubits are generated from the descriptor `qubits` section.
+
+    !!! version-changed "Changed in version 2.19.0"
+        `DeviceSetup` can now be created by using the following methods:
+
+            - `DeviceSetup.add_dataserver()`
+            - `DeviceSetup.add_instruments()`
+            - `DeviceSetup.add_connections()`
     """
 
-    uid: str = field(default=None)
+    uid: str = field(default="unknown")
     servers: Dict[str, DataServer] = field(default_factory=dict)
     instruments: List[Instrument] = field(default_factory=list)
     physical_channel_groups: Dict[str, PhysicalChannelGroup] = field(
@@ -54,6 +64,82 @@ class DeviceSetup:
     )
     logical_signal_groups: Dict[str, LogicalSignalGroup] = field(default_factory=dict)
     qubits: Dict[str, "quantum.QuantumElement"] = field(default_factory=dict)
+
+    def add_dataserver(
+        self, host: str, port: int | str, uid: str = "zi_server", api_level: int = 6
+    ):
+        """Add a dataserver to the DeviceSetup.
+
+        Args:
+            host: Hostname of the dataserver.
+            port: Port of the dataserver.
+            uid: UID of the dataserver.
+            api_level: API level of the dataserver.
+
+        Raises:
+            LabOneQException: Dataserver already exists.
+
+        !!! version-added "Added in version 2.19.0"
+        """
+        try:
+            setup_modifier.add_dataserver(
+                self, DataServer(uid=uid, host=host, port=port, api_level=api_level)
+            )
+        except DeviceSetupInternalException as e:
+            raise LabOneQException(str(e)) from e
+
+    def add_instruments(self, *instruments: Instrument):
+        """Add instruments to the device setup.
+
+        Instruments must have an unique UID and Zurich Instruments instruments
+        must have an address.
+
+        At least one dataserver must be defined and if only one dataserver exists,
+        instruments are automatically connected to it, otherwise the respective dataserver UID
+        must be defined in the instrument class itself.
+
+        Args:
+            instruments: Instruments to add to the setup.
+
+        Raises:
+            LabOneQException:
+                - If an instrument with the same UID already exists.
+                - No dataservers are defined in the setup.
+                - Instrument is missing `uid` or `address`.
+
+        !!! version-added "Added in version 2.19.0"
+        """
+        try:
+            for instrument in instruments:
+                setup_modifier.add_instrument(self, instrument)
+        except DeviceSetupInternalException as e:
+            raise LabOneQException(str(e)) from e
+
+    def add_connections(
+        self,
+        instrument: str,
+        *connections: SignalConnection | InternalConnection,
+    ):
+        """Add connections to the instrument.
+
+        Instrument ports cannot have two different type of signals.
+        Signal names must be unique.
+
+        Args:
+            instrument: UID of the instrument to add the connections to.
+            connections: Connections to add.
+
+        Raises:
+            LabOneQException: Connection information is wrong or the given
+                instrument does not support the connection.
+
+        !!! version-added "Added in version 2.19.0"
+        """
+        try:
+            for connection in connections:
+                setup_modifier.add_connection(self, instrument, connection)
+        except DeviceSetupInternalException as e:
+            raise LabOneQException(str(e)) from e
 
     def instrument_by_uid(self, uid: str) -> Instrument | None:
         return next((i for i in self.instruments if i.uid == uid), None)
@@ -292,10 +378,8 @@ class DeviceSetup:
             server_port (str): Port of the server that should be created.
             setup_name (str): Name of the setup that should be created.
         """
-        return cls(
-            **_DeviceSetupGenerator.from_descriptor(
-                yaml_text, server_host, server_port, setup_name
-            )
+        return _DeviceSetupGenerator.from_descriptor(
+            yaml_text, server_host, server_port, setup_name
         )
 
     @classmethod
@@ -314,10 +398,8 @@ class DeviceSetup:
             server_port (str): Port of the server that should be created.
             setup_name (str): Name of the setup that should be created.
         """
-        return cls(
-            **_DeviceSetupGenerator.from_yaml(
-                filepath, server_host, server_port, setup_name
-            )
+        return _DeviceSetupGenerator.from_yaml(
+            filepath, server_host, server_port, setup_name
         )
 
     @classmethod
@@ -338,16 +420,14 @@ class DeviceSetup:
 
         !!! version-added "Added in version 2.5.0"
         """
-        return cls(
-            **_DeviceSetupGenerator.from_dicts(
-                instrument_list=data.get("instrument_list"),
-                instruments=data.get("instruments"),
-                connections=data.get("connections"),
-                dataservers=data.get("dataservers"),
-                server_host=server_host,
-                server_port=server_port,
-                setup_name=setup_name,
-            )
+        return _DeviceSetupGenerator.from_dicts(
+            instrument_list=data.get("instrument_list"),
+            instruments=data.get("instruments"),
+            connections=data.get("connections"),
+            dataservers=data.get("dataservers"),
+            server_host=server_host,
+            server_port=server_port,
+            setup_name=setup_name,
         )
 
     @classmethod
@@ -379,16 +459,14 @@ class DeviceSetup:
             setup_name:
                 Name of the setup that should be created.
         """
-        return cls(
-            **_DeviceSetupGenerator.from_dicts(
-                instrument_list=instrument_list,
-                instruments=instruments,
-                connections=connections,
-                dataservers=dataservers,
-                server_host=server_host,
-                server_port=server_port,
-                setup_name=setup_name,
-            )
+        return _DeviceSetupGenerator.from_dicts(
+            instrument_list=instrument_list,
+            instruments=instruments,
+            connections=connections,
+            dataservers=dataservers,
+            server_host=server_host,
+            server_port=server_port,
+            setup_name=setup_name,
         )
 
     def _server_leader_instrument(self, server_uid: str) -> Optional[str]:

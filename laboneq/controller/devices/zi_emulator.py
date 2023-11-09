@@ -21,6 +21,7 @@ from numpy import typing as npt
 @dataclass
 class NodeBase:
     "A class modeling a single node. Specialized for specific node types."
+
     read_only: bool = False
     subscribed: bool = False
     handler: Callable[[NodeBase], None] = None
@@ -114,6 +115,7 @@ class NodeType(Enum):
 @dataclass
 class NodeInfo:
     "Node descriptor to use in node definitions."
+
     type: NodeType = NodeType.FLOAT
     default: Any | None = None
     read_only: bool = False
@@ -149,6 +151,7 @@ class NodeInfo:
 @dataclass
 class PollEvent:
     "A class representing a single poll event"
+
     path: str = None
     timestamp: int = None
     value: Any = None

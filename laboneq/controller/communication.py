@@ -263,7 +263,8 @@ class DaqWrapper(ZiApiWrapperBase):
                 if (
                     attempt < 2
                     and method_name == "set"
-                    and str(ex) == "ZIAPIServerException with status code: 32782 - "
+                    and str(ex)
+                    == "ZIAPIServerException with status code: 32782 - "
                     "Command failed internally. Extended information: Inconsistency "
                     "during vector write: sum of numBlockElements doesn't match "
                     "numTotalElements"

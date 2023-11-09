@@ -555,10 +555,11 @@ class Experiment:
         )
 
     def call(self, func_name: str, **kwargs):
-        """Add a callback function in the execution of the experiment.
+        """Add a near-time callback function in the execution of the experiment.
 
-        The callback is called by the LabOne Q software as part of executing the
-        experiment and in sequence with the other experiment operations.
+        The near-time callback is called by the LabOne Q software as part of
+        executing the experiment and in sequence with the other experiment
+        operations.
 
         Arguments:
             func_name:

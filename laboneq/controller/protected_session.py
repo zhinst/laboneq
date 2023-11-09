@@ -31,17 +31,17 @@ class ProtectedSession(SimpleProxy):
 
         return Results(
             acquired_results=self._experiment_results.acquired_results,
-            user_func_results=self._experiment_results.user_func_results,
+            neartime_callback_results=self._experiment_results.neartime_callback_results,
             execution_errors=self._experiment_results.execution_errors,
         )
 
     def disconnect(self):
         raise LabOneQControllerException(
-            "'disconnect' is not allowed from the user function."
+            "'disconnect' is not allowed from the near-time callback."
         )
 
     def abort_execution(self):
         """Abort the execution of an experiment.
 
-        Note: This currently exclusively works when called from within a user function."""
+        Note: This currently exclusively works when called from within a near-time callback."""
         raise AbortExecution

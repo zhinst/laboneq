@@ -117,7 +117,13 @@ def _compute_start_with_latency(
         )
 
     qa_total_port_delay = _get_total_rounded_delay_samples(
-        (qa_base_port_delay, qa_port_delay),
+        (
+            qa_base_port_delay,
+            qa_port_delay,
+            # The controller may offset the integration delay node to compensate the DSP
+            # latency, thereby aligning measure and acquire for port_delay=0.
+            qa_device_type.integration_dsp_latency or 0.0,
+        ),
         qa_sampling_rate,
         qa_device_type.sample_multiple,
     )
@@ -182,7 +188,9 @@ def _compute_start_with_latency(
             latency_in_ts = time_of_pulse_played * sg_seq_dt_for_latency_in_ts
         else:
             # gen 1 system
-            latency = 900e-9  # https://www.zhinst.com/ch/en/blogs/practical-active-qubit-reset
+            latency = (
+                900e-9
+            )  # https://www.zhinst.com/ch/en/blogs/practical-active-qubit-reset
             latency_in_ts = int(
                 (
                     latency

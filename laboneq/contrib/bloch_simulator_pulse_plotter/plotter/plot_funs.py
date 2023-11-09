@@ -18,7 +18,6 @@ plt.rcParams.update(
 
 
 def plot_pulse(pulse):
-
     """
     Plots I, Q, amplitude, and phase of a pulse waveform.
 
@@ -55,7 +54,6 @@ def plot_pulse(pulse):
 
 
 def plot_pulse_iq(pulse):
-
     """
     Plots I and Q components of a pulse waveform.
 
@@ -88,7 +86,6 @@ def plot_pulse_iq(pulse):
 
 
 def plot_pulse_amp_phi(pulse):
-
     """
     Plots the amplitude and phase of a pulse waveform.
 
@@ -121,7 +118,6 @@ def plot_pulse_amp_phi(pulse):
 
 
 def plot_excitation_profile(state_mat, offs):
-
     """
     Plots the excitation profile of a pulse on a range of qubits of different frequencies
 

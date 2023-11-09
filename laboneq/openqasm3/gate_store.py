@@ -4,6 +4,7 @@
 from typing import Callable, Dict, Optional, Tuple
 
 from laboneq._utils import id_generator
+from laboneq.dsl.device.io_units import LogicalSignal
 from laboneq.dsl.experiment import Section
 from laboneq.dsl.experiment.pulse import Pulse
 
@@ -12,6 +13,8 @@ class GateStore:
     def __init__(self):
         self.gates: Dict[Tuple[str, Tuple[str, ...]], Callable[..., Section]] = {}
         self.gate_map: Dict[str, str] = {}
+        self.waveforms: Dict[str, Callable] = {}
+        self.ports = {}
 
     def lookup_gate(
         self, name: str, qubits: Tuple[str, ...], args=(), kwargs=None
@@ -22,6 +25,9 @@ class GateStore:
     def map_gate(self, qasm_name: str, labone_q_name: str):
         """Define mapping from qasm gate name to LabOne Q gate name."""
         self.gate_map[qasm_name] = labone_q_name
+
+    def register_port(self, qasm_port: str, signal_line: LogicalSignal) -> None:
+        self.ports[qasm_port] = signal_line
 
     def register_gate_section(self, name: str, qubit_names: list[str], section_factory):
         """Register a LabOne Q section factory as a gate."""
@@ -56,3 +62,9 @@ class GateStore:
             (qubit_name,),
             self._gate_pulse(qubit_name, signal, pulse, phase, id),
         )
+
+    def lookup_waveform(self, name: str) -> Pulse:
+        return self.waveforms[name]
+
+    def register_waveform(self, name: str, pulse: Pulse):
+        self.waveforms[name] = pulse

@@ -4,9 +4,8 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
 from functools import cmp_to_key
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional
 
 from laboneq._utils import flatten
 from laboneq.compiler.code_generator.seq_c_generator import (
@@ -24,6 +23,7 @@ from laboneq.compiler.common.awg_sampled_event import (
 )
 from laboneq.compiler.common.compiler_settings import EXECUTETABLEENTRY_LATENCY
 from laboneq.compiler.common.device_type import DeviceType
+from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import AcquisitionType
 from laboneq.core.utilities.string_sanitize import string_sanitize
@@ -80,12 +80,6 @@ def sort_events(events: List[AWGEvent]) -> List[AWGEvent]:
     sampled_event_list = sorted(events, key=cmp_to_key(cmp))
 
     return sampled_event_list
-
-
-@dataclass
-class FeedbackConnection:
-    acquire: Optional[str]
-    drive: Set[str] = field(default_factory=set)
 
 
 def generate_if_else_tree(

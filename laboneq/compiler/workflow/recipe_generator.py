@@ -8,6 +8,9 @@ import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from laboneq._utils import ensure_list
+from laboneq.compiler.common.feedback_register_config import (
+    FeedbackRegisterConfig,
+)
 from laboneq.compiler.code_generator.measurement_calculator import IntegrationTimes
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
@@ -71,9 +74,7 @@ class RecipeGenerator:
         experiment_dao: ExperimentDAO,
         integration_weights,
     ):
-        def _make_integrator_allocation(
-            signal_id: str, integrator
-        ) -> IntegratorAllocation:
+        for signal_id, integrator in integration_unit_allocation.items():
             thresholds = experiment_dao.threshold(signal_id)
             weights: list[dict[str, Any]] = (
                 list(integration_weights[signal_id].values())
@@ -91,12 +92,7 @@ class RecipeGenerator:
                 weights=[w.get("basename") for w in weights] if weights else [None],
                 thresholds=ensure_list(thresholds),
             )
-            return integrator_allocation
-
-        for signal_id, integrator in integration_unit_allocation.items():
-            self._recipe.integrator_allocations.append(
-                _make_integrator_allocation(signal_id, integrator)
-            )
+            self._recipe.integrator_allocations.append(integrator_allocation)
 
     def add_acquire_lengths(self, integration_times: IntegrationTimes):
         self._recipe.acquire_lengths.extend(
@@ -217,8 +213,6 @@ class RecipeGenerator:
         off_diagonal=0.0,
         precompensation=None,
         modulation=False,
-        oscillator=None,
-        oscillator_frequency=None,
         lo_frequency=None,
         port_mode=None,
         output_range=None,
@@ -328,16 +322,29 @@ class RecipeGenerator:
         awg_number: int,
         signal_type: str,
         qa_signal_id: Optional[str],
-        command_table_match_offset: Optional[int],
-        feedback_register: Optional[int],
+        feedback_register_config: FeedbackRegisterConfig | None,
     ):
         awg = AWG(
             awg=awg_number,
             signal_type=SignalType(signal_type),
             qa_signal_id=qa_signal_id,
-            command_table_match_offset=command_table_match_offset,
-            feedback_register=feedback_register,
         )
+        if feedback_register_config is not None:
+            awg.command_table_match_offset = (
+                feedback_register_config.command_table_offset
+            )
+            awg.source_feedback_register = (
+                feedback_register_config.source_feedback_register
+            )
+            awg.codeword_bitmask = feedback_register_config.codeword_bitmask
+            awg.codeword_bitshift = feedback_register_config.codeword_bitshift
+            awg.feedback_register_index_select = (
+                feedback_register_config.register_index_select
+            )
+            awg.target_feedback_register = (
+                feedback_register_config.target_feedback_register
+            )
+
         initialization = self._find_initialization(device_id)
         initialization.awgs.append(awg)
 

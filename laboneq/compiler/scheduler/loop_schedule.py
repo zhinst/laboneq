@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from attrs import asdict, define
 
@@ -13,6 +13,9 @@ from laboneq.compiler.scheduler.utils import ceil_to_grid, lcm
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.core.types.enums.repetition_mode import RepetitionMode
 from laboneq.data.compilation_job import ParameterInfo
+
+if TYPE_CHECKING:
+    from laboneq.compiler.scheduler.schedule_data import ScheduleData
 
 
 @define(kw_only=True, slots=True)
@@ -24,7 +27,7 @@ class LoopSchedule(SectionSchedule):
     repetition_time: Optional[int]
 
     def _calculate_timing(
-        self, schedule_data: ScheduleData, loop_start: int, start_may_change: bool  # type: ignore # noqa: F821
+        self, schedule_data: ScheduleData, loop_start: int, start_may_change: bool
     ) -> int:
         adjusted_rep_time = (
             None

@@ -3,4 +3,4 @@
 
 
 class AbortExecution(Exception):
-    """Raised in a user function to gracefully abort the near-time execution"""
+    """Raised in a near-time callback to gracefully abort the near-time execution"""

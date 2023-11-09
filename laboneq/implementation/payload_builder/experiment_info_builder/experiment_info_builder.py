@@ -296,7 +296,6 @@ class ExperimentInfoBuilder:
         calibration = self._get_signal_calibration(signal, mapped_ls)
 
         if calibration is not None:
-
             signal_info.port_delay = self.opt_param(
                 calibration.port_delay, nt_only=True
             )
@@ -328,7 +327,6 @@ class ExperimentInfoBuilder:
             signal_info.threshold = calibration.threshold
             signal_info.amplitude = self.opt_param(calibration.amplitude, nt_only=True)
             if (amp_pump := calibration.amplifier_pump) is not None:
-
                 if physical_channel.direction != IODirection.IN:
                     _logger.warning(
                         "'amplifier_pump' calibration for logical signal %s will be ignored - "
@@ -519,6 +517,13 @@ class ExperimentInfoBuilder:
 
         if hasattr(operation, "kernel"):
             pulses = ensure_list(getattr(operation, "kernel") or [])
+            kernel_count = len(pulses)
+            if signal_info.kernel_count is None:
+                signal_info.kernel_count = kernel_count
+            elif signal_info.kernel_count != kernel_count:
+                raise LabOneQException(
+                    f"Inconsistent count of integration kernels on signal {signal_info.uid}"
+                )
         if len(pulses) == 0 and length is not None:
             # TODO: generate a proper constant pulse here
             pulses = [pulse] = [SimpleNamespace()]
@@ -667,7 +672,6 @@ class ExperimentInfoBuilder:
         exp_acquisition_type,
         section_uid_map: Dict[str, Tuple[Any, int]],
     ) -> SectionInfo:
-
         if section.uid not in section_uid_map:
             section_uid_map[section.uid] = (section, 0)
             instance_id = section.uid

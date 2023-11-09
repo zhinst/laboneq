@@ -236,7 +236,6 @@ def calculate_intervals(
     )
 
     for cut_interval in cut_intervals:
-
         # We may merge intervals inside this chunk, but they must not extend past it.
         chunk = [
             MutableInterval(i.begin, i.end, i.data)

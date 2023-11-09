@@ -125,6 +125,4 @@ class ScheduledExperiment:
             self.execution,
             self.compilation_job_hash,
             self.experiment_hash,
-        ) and dicts_equal(
-            other.waves, self.waves
-        )
+        ) and dicts_equal(other.waves, self.waves)

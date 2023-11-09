@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, List
 
 from laboneq.compiler.common.awg_signal_type import AWGSignalType
 from laboneq.core.types.enums.mixer_type import MixerType
@@ -41,15 +41,14 @@ class SignalObj:
     start_delay: float
     delay_signal: float
     signal_type: AWGSignalType | str
-    base_delay_signal: Optional[float] = None
+    base_delay_signal: float | None = None
     oscillator_frequency: float = None  # for software modulation only
-    pulses: List = field(default_factory=list)
     channels: List = field(default_factory=list)
     awg: AWGInfo = None
     total_delay: float = None
     on_device_delay: float = 0
     port_delay: float = 0
-    base_port_delay: Optional[float] = None
-    mixer_type: Optional[MixerType] = None
-    hw_oscillator: Optional[str] = None
-    is_qc: Optional[bool] = None
+    base_port_delay: float | None = None
+    mixer_type: MixerType | None = None
+    hw_oscillator: str | None = None
+    is_qc: bool | None = None

@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 
 
 @classformatter
-@dataclass(init=True, repr=True, order=True)
+@dataclass(init=False, repr=True, order=True)
 class Results:
     """Results of an LabOne Q experiment.
 
@@ -31,21 +32,61 @@ class Results:
         device_setup (DeviceSetup): The device setup on which the experiment was run.
         compiled_experiment (CompiledExperiment): Compiled experiment.
         acquired_results (AcquiredResults): The acquired results, organized by handle.
-        user_func_results (dict[str, list[Any]]): List of the results of each user function, by name of the function.
+        neartime_callback_results (dict[str, list[Any]]): List of the results of near-time callbacks by their name.
+        user_func_results (dict[str, list[Any]]): Deprecated. Alias for neartime_callback_results.
         execution_errors (list[tuple[list[int], str, str]]): Any exceptions that occurred during the execution of the experiment.
             Entries are tuples of:
 
                 * the indices of the loops where the error occurred
                 * the experiment section uid
                 * the error message
+
+    !!! version-changed "Deprecated in version 2.19.0"
+        The `user_func_results` attribute was deprecated in version 2.19.0.
+        Use `neartime_callback_results` instead.
     """
 
     experiment: Experiment = field(default=None)
     device_setup: DeviceSetup = field(default=None)
     compiled_experiment: CompiledExperiment = field(default=None)
     acquired_results: AcquiredResults = field(default=AcquiredResults)
-    user_func_results: dict[str, list[Any]] = field(default=None)
+    neartime_callback_results: dict[str, list[Any]] = field(default=None)
     execution_errors: list[tuple[list[int], str, str]] = field(default=None)
+
+    def __init__(
+        self,
+        experiment: Experiment = None,
+        device_setup: DeviceSetup = None,
+        compiled_experiment: CompiledExperiment = None,
+        acquired_results: AcquiredResults = None,
+        neartime_callback_results: Optional[dict[str, list[Any]]] = None,
+        execution_errors: list[tuple[list[int], str, str]] = None,
+        user_func_results: Optional[dict[str, list[Any]]] = None,
+    ):
+        self.experiment = experiment
+        self.device_setup = device_setup
+        self.compiled_experiment = compiled_experiment
+        self.acquired_results = (
+            acquired_results if acquired_results is not None else AcquiredResults()
+        )
+        self.neartime_callback_results = neartime_callback_results
+        self.execution_errors = execution_errors
+
+        if user_func_results is not None:
+            if neartime_callback_results is not None:
+                raise LabOneQException(
+                    "Results can only be initialized with either 'neartime_callback_results' or 'user_func_results', not both."
+                )
+            self.neartime_callback_results = user_func_results
+
+    @property
+    def user_func_results(self):
+        """Deprecated. Alias for neartime_callback_results."""
+        warnings.warn(
+            "The 'user_func_results' attribute is deprecated. Use 'neartime_callback_results' instead.",
+            FutureWarning,
+        )
+        return self.neartime_callback_results
 
     def __eq__(self, other):
         if self is other:
@@ -55,7 +96,7 @@ class Results:
             and self.device_setup == other.device_setup
             and self.compiled_experiment == other.compiled_experiment
             and self.acquired_results == other.acquired_results
-            and self.user_func_results == other.user_func_results
+            and self.neartime_callback_results == other.neartime_callback_results
         )
 
     def _check_handle(self, handle: str) -> None:

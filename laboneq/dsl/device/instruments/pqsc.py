@@ -17,7 +17,7 @@ class PQSC(ZIStandardInstrument):
     """Class representing a ZI PQSC instrument."""
 
     #: The reference clock frequency
-    reference_clock: float = field(default=None)
+    reference_clock: float = field(default=10e6)
 
     @property
     def ports(self):

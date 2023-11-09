@@ -95,7 +95,7 @@ class ExecutionFactoryFromNewExperiment(executor.ExecutionFactory):
 
     def _statement_from_operation(self, operation, parent_uid: str):
         if isinstance(operation, Call):
-            return executor.ExecUserCall(operation.func_name, operation.args)
+            return executor.ExecNeartimeCall(operation.func_name, operation.args)
         if isinstance(operation, SetNode):
             return executor.ExecSet(operation.path, operation.value)
         if isinstance(operation, PlayPulse):

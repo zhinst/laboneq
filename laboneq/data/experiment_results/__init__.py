@@ -174,8 +174,8 @@ class ExperimentResults:
     #: The acquired results, organized by handle.
     acquired_results: AcquiredResults = field(default_factory=AcquiredResults)
 
-    #: List of the results of each user user function, by name of the function.
-    user_func_results: dict[str, list[Any]] = field(default_factory=dict)
+    #: List of the results of each near-time callback, by name of the function.
+    neartime_callback_results: dict[str, list[Any]] = field(default_factory=dict)
 
     #: Any exceptions that occurred during the execution of the experiment. Entries are
     #: tuples of

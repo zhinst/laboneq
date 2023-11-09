@@ -552,16 +552,16 @@ class DeviceSHFSG(DeviceSHFBase):
             if awg_key.device_uid != initialization.device_uid:
                 continue
 
-            if awg_config.qa_signal_id is None:
+            if awg_config.source_feedback_register is None:
                 continue
 
-            if awg_config.source_feedback_register is None and self.is_secondary:
+            if awg_config.source_feedback_register == "local" and self.is_secondary:
                 # local feedback
                 ntc.extend(
                     [
                         (
                             f"sgchannels/{awg_key.awg_index}/awg/intfeedback/direct/shift",
-                            awg_config.readout_result_index,
+                            awg_config.register_selector_shift,
                         ),
                         (
                             f"sgchannels/{awg_key.awg_index}/awg/intfeedback/direct/mask",

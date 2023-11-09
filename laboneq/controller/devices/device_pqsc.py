@@ -20,7 +20,6 @@ from laboneq.controller.devices.zi_node_monitor import (
     WaitCondition,
 )
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
-from laboneq.controller.versioning import SUPPORT_PRE_V23_06, LabOneVersion
 from laboneq.data.recipe import Initialization
 
 _logger = logging.getLogger(__name__)
@@ -114,17 +113,11 @@ class DevicePQSC(DeviceZI):
                 for awg_key, awg_config in recipe_data.awg_configs.items():
                     if (
                         awg_key.device_uid != follower_uid
-                        or awg_config.source_feedback_register is None
+                        or awg_config.source_feedback_register in (None, "local")
                     ):
-                        continue
+                        continue  # Only consider devices receiving feedback from PQSC
                     if p_addr in enabled_zsyncs:
                         actions_to_enable_feedback = []
-                    elif SUPPORT_PRE_V23_06 and (
-                        self.daq._dataserver_version < LabOneVersion.V_23_06
-                    ):
-                        actions_to_enable_feedback = [
-                            DaqNodeSetAction(self.daq, f"{zsync_base}/enable", 1)
-                        ]
                     else:
                         actions_to_enable_feedback = [
                             DaqNodeSetAction(self.daq, f"{zsync_output}/enable", 1),
@@ -134,7 +127,7 @@ class DevicePQSC(DeviceZI):
                     feedback_actions.extend(actions_to_enable_feedback)
 
                     reg_selector_base = (
-                        f"{zsync_base}/sources/{awg_config.register_selector_index}"
+                        f"{zsync_base}/sources/{awg_config.fb_reg_target_index}"
                     )
                     feedback_actions.extend(
                         [
@@ -149,7 +142,7 @@ class DevicePQSC(DeviceZI):
                             DaqNodeSetAction(
                                 self.daq,
                                 f"{reg_selector_base}/index",
-                                awg_config.readout_result_index,
+                                awg_config.fb_reg_source_index,
                             ),
                         ]
                     )

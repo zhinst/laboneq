@@ -37,10 +37,16 @@ ALLOWED_NODE_TYPES = {
     ast.QuantumMeasurement,
     # auxiliary
     ast.AliasStatement,
+    ast.CalibrationGrammarDeclaration,
+    ast.CalibrationStatement,
     ast.ClassicalDeclaration,
     ast.ConstantDeclaration,
     ast.Concatenation,
     ast.DiscreteSet,
+    ast.ExpressionStatement,
+    ast.ExternDeclaration,
+    ast.FrameType,
+    ast.FunctionCall,
     ast.Identifier,
     ast.Include,
     ast.Program,
@@ -120,7 +126,18 @@ class OpenQasm3Importer:
         assert isinstance(tree, ast.Program)
         return tree
 
+    def _workaround_extern_port(self, text: str) -> str:
+        new_text = ""
+        for line in text.splitlines():
+            if line.strip().startswith("extern port "):
+                name = line.strip().split(" ")[2]
+                self.scope.current.declare_classical_value(name, 0)
+            else:
+                new_text += line + "\n"
+        return new_text
+
     def _import_text(self, text) -> Section:
+        text = self._workaround_extern_port(text)
         tree = self._parse_valid_tree(text)
         _AllowedNodeTypesVisitor().visit(tree, None)
         try:
@@ -143,15 +160,13 @@ class OpenQasm3Importer:
 
         if isinstance(parent, ast.Program):
             body = parent.statements
-        elif isinstance(parent, ast.Box):
+        elif isinstance(parent, (ast.Box, ast.CalibrationStatement)):
             body = parent.body
         elif isinstance(parent, ast.ForInLoop):
             body = parent.block
         else:
-            raise OpenQasmException(
-                f"Unsupported block type {type(parent)!r}",
-                mark=parent.span,
-            )
+            msg = f"Unsupported block type {type(parent)!r}"
+            raise OpenQasmException(msg, mark=parent.span)
 
         for child in body:
             subsect = None
@@ -162,10 +177,18 @@ class OpenQasm3Importer:
                     self._handle_classical_declaration(child)
                 elif isinstance(child, ast.ConstantDeclaration):
                     self._handle_constant_declaration(child)
+                elif isinstance(child, ast.ExternDeclaration):
+                    self._handle_extern_declaration(child)
                 elif isinstance(child, ast.AliasStatement):
                     self._handle_alias_statement(child)
                 elif isinstance(child, ast.Include):
                     self._handle_include(child)
+                elif isinstance(child, ast.CalibrationGrammarDeclaration):
+                    self._handle_calibration_grammar(child)
+                elif isinstance(child, ast.CalibrationStatement):
+                    subsect = self._handle_calibration(child)
+                elif isinstance(child, ast.ExpressionStatement):
+                    subsect = self._handle_cal_expression(child)
                 elif isinstance(child, ast.QuantumGate):
                     subsect = self._handle_quantum_gate(child)
                 elif isinstance(child, ast.Box):
@@ -196,7 +219,7 @@ class OpenQasm3Importer:
 
         return sect
 
-    def _handle_qubit_declaration(self, statement: ast.QubitDeclaration):
+    def _handle_qubit_declaration(self, statement: ast.QubitDeclaration) -> None:
         name = statement.qubit.name
         try:
             if statement.size is not None:
@@ -223,7 +246,9 @@ class OpenQasm3Importer:
             e.mark = statement.span
             raise
 
-    def _handle_classical_declaration(self, statement: ast.ClassicalDeclaration):
+    def _handle_classical_declaration(
+        self, statement: ast.ClassicalDeclaration
+    ) -> None:
         name = statement.identifier.name
         if isinstance(statement.type, ast.BitType):
             if statement.init_expression is not None:
@@ -250,11 +275,27 @@ class OpenQasm3Importer:
                 self.scope.current.declare_reference(name, bits)
             else:
                 self.scope.current.declare_classical_value(name, value)
+        elif isinstance(statement.type, ast.FrameType):
+            init = statement.init_expression
+            if not isinstance(init, ast.FunctionCall) or init.name.name != "newframe":
+                msg = "Frame type initializer must be a 'newframe' function call."
+                raise OpenQasmException(msg, mark=statement.span)
+            name = statement.identifier.name
+            port = statement.init_expression.arguments[0].name
+            freq = statement.init_expression.arguments[1].value
+            phase = statement.init_expression.arguments[2].value
+            self.scope.current.declare_frame(name, port, freq, phase)
         else:
             value = eval_expression(statement.init_expression, namespace=self.scope)
             self.scope.current.declare_classical_value(name, value)
 
-    def _handle_constant_declaration(self, statement: ast.ConstantDeclaration):
+    def _handle_constant_declaration(self, statement: ast.ConstantDeclaration) -> None:
+        name = statement.identifier.name
+        value = eval_expression(statement.init_expression, namespace=self.scope)
+        self.scope.current.declare_classical_value(name, value)
+
+    # TODO: currently unused due to 'extern port' workaround
+    def _handle_extern_declaration(self, statement: ast.ExternDeclaration) -> None:
         name = statement.identifier.name
         value = eval_expression(statement.init_expression, namespace=self.scope)
         self.scope.current.declare_classical_value(name, value)
@@ -336,6 +377,49 @@ class OpenQasm3Importer:
         if statement.filename != "stdgates.inc":
             msg = f"Only 'stdgates.inc' is supported for include, found '{statement.filename}'."
             raise OpenQasmException(msg, mark=statement.span)
+
+    def _handle_calibration_grammar(
+        self, statement: ast.CalibrationGrammarDeclaration
+    ) -> None:
+        if statement.name != "openpulse":
+            msg = f"Only 'openpulse' is supported for defcalgrammar, found '{statement.name}'."
+            raise OpenQasmException(msg, mark=statement.span)
+
+    def _handle_calibration(self, statement: ast.CalibrationStatement):
+        return self.transpile(statement, uid_hint="calibration")
+
+    def _handle_cal_expression(self, statement: ast.ExpressionStatement):
+        expr = statement.expression
+        if isinstance(expr, ast.FunctionCall) and expr.name.name == "play":
+            return self._handle_play(expr)
+        else:
+            msg = "Currently only 'play' is supported as a calibration expression."
+            raise OpenQasmException(msg, mark=statement.span)
+
+    def _handle_play(self, expr: ast.FunctionCall):
+        frame = eval_expression(expr.arguments[0], namespace=self.scope)
+        arg1 = expr.arguments[1]
+        if isinstance(arg1, ast.FunctionCall):
+            if arg1.name.name == "scale":
+                waveform = arg1.arguments[1].name
+                amplitude = eval_expression(arg1.arguments[0], namespace=self.scope)
+            else:
+                msg = "Currently only 'scale' is supported as a play waveform modifier function."
+                raise OpenQasmException(msg, mark=expr.span)
+        else:
+            waveform = arg1.name
+            amplitude = None
+
+        pulse = self.gate_store.lookup_waveform(waveform)
+        drive_line = self.gate_store.ports[frame.port]
+
+        sect = Section(uid=id_generator(f"play_{frame.port}"))
+        sect.play(
+            signal=drive_line,
+            pulse=pulse,
+            amplitude=amplitude,
+        )
+        return sect
 
     def _handle_delay_instruction(self, statement: ast.DelayInstruction):
         qubits = statement.qubits

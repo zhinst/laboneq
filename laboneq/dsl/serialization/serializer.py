@@ -140,6 +140,7 @@ class Serializer:
             "laboneq.dsl.quantum.transmon",
             "laboneq.dsl.device.server",
             "laboneq.dsl.device.servers.data_server",
+            "laboneq.core.serialization.simple_serialization",
             "laboneq.core.types.enums",
             "laboneq.core.types.compiled_experiment",
             "laboneq.data.scheduled_experiment",

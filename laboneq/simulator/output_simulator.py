@@ -176,11 +176,16 @@ class OutputSimulator:
 
     def _uid_to_channel(self, uid: str) -> PhysicalChannel:
         pcg = self._compiled_experiment.device_setup.physical_channel_groups
-        for g in pcg.values():
-            for ch in g.channels.values():
-                if ch.uid == uid:
-                    return ch
-        raise RuntimeError(f"Can't find physical channel with uid '{uid}'")
+        channel_by_uids = {
+            ch.uid: ch for g in pcg.values() for ch in g.channels.values()
+        }
+        try:
+            return channel_by_uids[uid]
+        except KeyError as e:
+            raise RuntimeError(
+                f"Can't find physical channel with uid '{uid}'."
+                f" Available channels: {', '.join(channel_by_uids.keys())}"
+            ) from e
 
     def get_snippet(
         self,

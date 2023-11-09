@@ -8,7 +8,6 @@ import requests
 
 
 class RemoteCompiler:
-
     host = "localhost"
     port = 5000
 

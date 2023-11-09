@@ -81,15 +81,6 @@ laboneq = [
     "VERSION.txt"
 ]
 
-[tool.black]
-line-length = 88
-target-version = ["py39"]
-include = "\\.pyi?$"
-
-[tool.isort]
-profile = "black"
-src_paths = ["laboneq", "tests"]
-
 [tool.ruff]
 select = [
     # pyflakes
@@ -101,7 +92,9 @@ select = [
     "YTT",
     # flake8-quotes
     "Q",
-    "B019"
+    "B019",
+    # isort
+    "I002"
 ]
 
 ignore = [
@@ -115,7 +108,7 @@ ignore = [
 ]
 
 # Allow autofix for all enabled rules (when `--fix`) is provided.
-fixable = ["A", "B", "C", "D", "E", "F", "G", "I", "N", "Q", "S", "T", "W", "ANN", "ARG", "BLE", "COM", "DJ", "DTZ", "EM", "ERA", "EXE", "FBT", "ICN", "INP", "ISC", "NPY", "PD", "PGH", "PIE", "PL", "PT", "PTH", "PYI", "RET", "RSE", "RUF", "SIM", "SLF", "TCH", "TID", "TRY", "UP", "YTT"]
+fixable = ["ALL"]
 unfixable = []
 
 exclude = [
@@ -144,3 +137,9 @@ max-complexity = 10
 # Ignore star import, mainly from laboneq.simple (TODO: Fix this)
 "tests/system/*" = ["F403", "F405"]
 "tests/integration/dsl_v3/*" = ["F403", "F405"]
+
+[tool.nbqa.addopts]
+# Notebooks utilize `from laboneq.simple import *`, therefore ignore F403
+ruff = [
+    "--ignore=F403"
+]

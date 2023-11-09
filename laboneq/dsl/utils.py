@@ -23,7 +23,7 @@ def has_onboard_lo(device_setup: DeviceSetup, line: str) -> str:
     _line = _canonical_line(line)
     for instrument in device_setup.instruments:
         device_type = instrument.calc_driver()
-        if device_type in ["SHFQA", "SHFSG"]:
+        if device_type in ["SHFQA", "SHFSG", "SHFQC"]:
             for connection in instrument.connections:
                 if connection.remote_path == _line:
                     return True

@@ -4,13 +4,10 @@
 from enum import Enum
 from functools import total_ordering
 
-SUPPORT_PRE_V23_06 = True
-
 
 @total_ordering
 class LabOneVersion(Enum):
     UNKNOWN = "unknown"
-    V_23_02 = "23.02"
     V_23_06 = "23.06"
     LATEST = V_23_06
 
@@ -24,9 +21,7 @@ class LabOneVersion(Enum):
     def cast_if_supported(cls, version: str) -> "LabOneVersion":
         try:
             labone_version = LabOneVersion(version)
-            if (labone_version < cls.V_23_06) and (not SUPPORT_PRE_V23_06):
-                raise ValueError
-        except ValueError:
+        except ValueError as e:
             err_msg = f"Version {version} is not supported by LabOne Q."
-            raise ValueError(err_msg)
+            raise ValueError(err_msg) from e
         return labone_version

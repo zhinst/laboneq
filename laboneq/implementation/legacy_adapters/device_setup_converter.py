@@ -401,9 +401,7 @@ def make_device_to_device_connections(
         for (
             logical_signal,
             port,
-        ) in (
-            converter.connection_converter.connections_from_port_to_remote_logical_signal()
-        ):
+        ) in converter.connection_converter.connections_from_port_to_remote_logical_signal():
             from_port = converter.port_converter.ports_by_legacy_uid(port.uid)[0]
             remote_ls_pc_uid = logical_signal.physical_channel.uid
             to_instrument = instrument_lookup.get_instrument(remote_ls_pc_uid)

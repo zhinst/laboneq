@@ -9,7 +9,7 @@ from typing import Iterable, Optional, Type
 
 from openqasm3 import ast
 
-from .namespace import ClassicalRef, NamespaceNest, QubitRef
+from .namespace import ClassicalRef, Frame, NamespaceNest, QubitRef
 from .openqasm_error import OpenQasmException
 
 binary_ops = {
@@ -98,6 +98,8 @@ def _eval_expression(
         if isinstance(value, ClassicalRef):
             # in an expression (rvalue), we can safely dereference classical values
             return value.value
+        if isinstance(value, Frame):
+            return value
         else:  # value is a list; dereference classical references
             return [v.value if isinstance(v, ClassicalRef) else v for v in value]
     if isinstance(expression, ast.RangeDefinition):

@@ -70,7 +70,7 @@ class ExecutionScope:
 
 class StatementType(Enum):
     Set = auto()
-    UserFunc = auto()
+    NTCallback = auto()
     Acquire = auto()
     SetSwParam = auto()
     ForLoopEntry = auto()
@@ -152,7 +152,7 @@ class ExecSet(Statement):
         return f"ExecSet({repr(self.path)}, {repr(self.val)})"
 
 
-class ExecUserCall(Statement):
+class ExecNeartimeCall(Statement):
     def __init__(self, func_name: str, args: dict[str, Any]):
         self.func_name = func_name
         self.args = args
@@ -165,19 +165,19 @@ class ExecUserCall(Statement):
             else:
                 resolved_args[name] = val
         yield Notification(
-            statement_type=StatementType.UserFunc,
+            statement_type=StatementType.NTCallback,
             args=dict(func_name=self.func_name, args=resolved_args),
         )
 
     def __eq__(self, other):
         if other is self:
             return True
-        if type(other) is ExecUserCall:
+        if type(other) is ExecNeartimeCall:
             return (self.func_name, self.args) == (other.func_name, other.args)
         return NotImplemented
 
     def __repr__(self):
-        return f"ExecUserCall({repr(self.func_name)}, {repr(self.args)})"
+        return f"ExecNeartimeCall({repr(self.func_name)}, {repr(self.args)})"
 
 
 class ExecAcquire(Statement):
@@ -423,7 +423,7 @@ class ExecutorBase:
         self.looping_mode: LoopingMode = looping_mode
         self._handlers_map = {
             StatementType.Set: self.set_handler,
-            StatementType.UserFunc: self.user_func_handler,
+            StatementType.NTCallback: self.nt_callback_handler,
             StatementType.Acquire: self.acquire_handler,
             StatementType.SetSwParam: self.set_sw_param_handler,
             StatementType.ForLoopEntry: self.for_loop_entry_handler,
@@ -435,7 +435,7 @@ class ExecutorBase:
     def set_handler(self, path: str, value):
         pass
 
-    def user_func_handler(self, func_name: str, args: dict[str, Any]):
+    def nt_callback_handler(self, func_name: str, args: dict[str, Any]):
         pass
 
     def acquire_handler(self, handle: str, signal: str, parent_uid: str):
@@ -484,7 +484,7 @@ class AsyncExecutorBase:
         self.looping_mode: LoopingMode = looping_mode
         self._handlers_map = {
             StatementType.Set: self.set_handler,
-            StatementType.UserFunc: self.user_func_handler,
+            StatementType.NTCallback: self.nt_callback_handler,
             StatementType.Acquire: self.acquire_handler,
             StatementType.SetSwParam: self.set_sw_param_handler,
             StatementType.ForLoopEntry: self.for_loop_entry_handler,
@@ -496,7 +496,7 @@ class AsyncExecutorBase:
     async def set_handler(self, path: str, value):
         pass
 
-    async def user_func_handler(self, func_name: str, args: dict[str, Any]):
+    async def nt_callback_handler(self, func_name: str, args: dict[str, Any]):
         pass
 
     async def acquire_handler(self, handle: str, signal: str, parent_uid: str):

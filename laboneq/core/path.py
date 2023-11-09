@@ -67,3 +67,15 @@ def starts_with(path: str, prefix: str, ignore_abs_path: bool = False):
         prefix = prefix[1:]
 
     return path.startswith(prefix)
+
+
+def insert_logical_signal_prefix(path: str) -> str:
+    return Separator.join(["", LogicalSignalGroups_Path, path])
+
+
+def remove_logical_signal_prefix(path: str) -> str:
+    if Separator in path:
+        split_path = path.split(Separator)
+        if split_path[1] == LogicalSignalGroups_Path:
+            path = ("/").join([split_path[2], split_path[3]])
+    return path

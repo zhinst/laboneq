@@ -77,7 +77,7 @@ class ParameterInfo:
             values_equal = (
                 self.values is None and other.values is None
             ) or np.allclose(self.values, other.values)
-            return (self.uid, self.start, self.step, self.axis_name,) == (
+            return (self.uid, self.start, self.step, self.axis_name) == (
                 other.uid,
                 other.start,
                 other.step,
@@ -242,6 +242,7 @@ class SignalInfo:
     threshold: float | list[float] | None = None
     amplitude: float | ParameterInfo | None = None
     amplifier_pump: AmplifierPumpInfo | None = None
+    kernel_count: int | None = None
 
 
 @dataclass

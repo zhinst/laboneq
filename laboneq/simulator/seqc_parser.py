@@ -1096,10 +1096,10 @@ def run_single_source(descriptor: SeqCDescriptor, waves, max_time) -> SeqCSimula
 def preprocess_source(text):
     parts = text.split("/* === END-OF-FUNCTION-DEFS === */\n")
     if len(parts) > 1:
-        user_functions = parts[0]
+        neartime_callbacks = parts[0]
         main = parts[1]
     else:
-        user_functions = ""
+        neartime_callbacks = ""
         main = parts[0]
     # Strip-off comments
     pattern = r"(\".*?\"|\'.*?\')|(/\*.*?\*/|//[^\r\n]*$)"
@@ -1111,7 +1111,7 @@ def preprocess_source(text):
         else:
             return match.group(1)
 
-    user_functions = regex.sub(_replacer, user_functions)
+    neartime_callbacks = regex.sub(_replacer, neartime_callbacks)
     main = regex.sub(_replacer, main)
 
     # repeat(n) {...} is not valid C, and topples the parser. Replace it with `for(n;;) {...}`.
@@ -1139,7 +1139,7 @@ def preprocess_source(text):
             f"typedef int var;\n"
             f"typedef const char* wave;\n"
             f"typedef const char* string;\n"
-            f"{user_functions}\n"
+            f"{neartime_callbacks}\n"
             f"void f(void){{\n{main}\n}}"
         )
 

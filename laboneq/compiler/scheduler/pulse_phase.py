@@ -64,9 +64,7 @@ def calculate_osc_phase(event_list, experiment_dao: ExperimentDAO):
             # if both "increment_oscillator_phase" and "set_oscillator_phase" are specified,
             # the absolute phase overwrites the increment.
             if (osc_phase := event.get("set_oscillator_phase")) is not None:
-                assert (
-                    not oscillator_info.is_hardware
-                ), "cannot set phase of HW oscillators (should have been caught earlier)"
+                assert not oscillator_info.is_hardware, "cannot set phase of HW oscillators (should have been caught earlier)"
 
                 oscillator_phase_cumulative[signal_id] = osc_phase
                 oscillator_phase_sets[signal_id] = event["time"]

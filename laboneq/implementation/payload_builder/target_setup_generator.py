@@ -134,7 +134,6 @@ class TargetSetupGenerator:
         setup: Setup,
         with_calibration: bool,
     ) -> Iterator[TargetDevice]:
-
         if instrument.device_type == DeviceType.SHFQC:
             shfsg, shfqa = cls.split_shfqc(instrument)
 

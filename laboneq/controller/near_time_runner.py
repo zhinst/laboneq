@@ -49,11 +49,11 @@ class NearTimeRunner(AsyncExecutorBase):
             )
         )
 
-    async def user_func_handler(self, func_name: str, args: dict[str, Any]):
-        func = self.controller._user_functions.get(func_name)
+    async def nt_callback_handler(self, func_name: str, args: dict[str, Any]):
+        func = self.controller._neartime_callbacks.get(func_name)
         if func is None:
             raise LabOneQControllerException(
-                f"User function '{func_name}' is not registered."
+                f"Near-time callback '{func_name}' is not registered."
             )
         try:
             if iscoroutinefunction(func):
@@ -71,12 +71,12 @@ class NearTimeRunner(AsyncExecutorBase):
                     **args,
                 )
         except AbortExecution:
-            _logger.warning(f"Execution aborted by user function '{func_name}'")
+            _logger.warning(f"Execution aborted by near-time callback '{func_name}'")
             raise
-        user_func_results = self.controller._results.user_func_results.setdefault(
-            func_name, []
+        neartime_callback_results = (
+            self.controller._results.neartime_callback_results.setdefault(func_name, [])
         )
-        user_func_results.append(res)
+        neartime_callback_results.append(res)
 
     async def set_sw_param_handler(
         self,
@@ -138,7 +138,8 @@ class NearTimeRunner(AsyncExecutorBase):
                     nt_step=self.nt_step(), rt_section_uid=uid
                 )
                 break
-            except LabOneQControllerException:  # TODO(2K): introduce "hard" controller exceptions
+            except LabOneQControllerException:
+                # TODO(2K): introduce "hard" controller exceptions
                 self.controller._report_step_error(
                     nt_step=self.nt_step(),
                     rt_section_uid=uid,

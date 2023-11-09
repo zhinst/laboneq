@@ -33,10 +33,8 @@ parse
 pydeps
 
 # Formatting (must match version in CI)
-black[jupyter]==22.10
 pre-commit
-isort>=5.12.0
-ruff==0.0.264
+ruff==0.1.3
 
 # packaging/deployment
 wheel

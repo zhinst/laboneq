@@ -38,6 +38,8 @@ class DeviceTraits:
     min_lo_frequency: Optional[float] = None
     max_lo_frequency: Optional[float] = None
     max_ct_entries: Optional[int] = None
+    integration_dsp_latency: Optional[float] = None
+    spectroscopy_dsp_latency: Optional[float] = None
 
 
 class DeviceType(DeviceTraits, Enum):
@@ -125,6 +127,8 @@ class DeviceType(DeviceTraits, Enum):
         min_lo_frequency=1e9,
         max_lo_frequency=8.5e9,
         is_qa_device=True,
+        integration_dsp_latency=212e-9,
+        spectroscopy_dsp_latency=220e-9,
     )
     SHFSG = DeviceTraits(
         str_value="shfsg",

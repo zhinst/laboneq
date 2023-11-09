@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 
 class SignalType(Enum):
@@ -67,9 +67,17 @@ class IO:
 class AWG:
     awg: int
     signal_type: SignalType = SignalType.SINGLE
-    qa_signal_id: str | None = None
+    qa_signal_id: str | None = None  # todo: can be removed?
+
+    # receiver (SG instruments)
+    source_feedback_register: int | Literal["local"] | None = None
+    codeword_bitshift: int | None = None
+    codeword_bitmask: int = None
+    feedback_register_index_select: int | None = None
     command_table_match_offset: int | None = None
-    feedback_register: int | None = None
+
+    # transmitter (QA instruments)
+    target_feedback_register: int | None = None
 
 
 @dataclass

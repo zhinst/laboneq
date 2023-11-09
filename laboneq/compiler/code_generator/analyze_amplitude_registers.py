@@ -54,7 +54,6 @@ def analyze_amplitude_register_set_events(
     delay: float,
     use_command_table: bool,
 ) -> tuple[AWGSampledEventSequence, dict[str, int]]:
-
     event_sequence = AWGSampledEventSequence()
     if not use_command_table:
         return event_sequence, {}

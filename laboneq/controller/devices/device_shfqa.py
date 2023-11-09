@@ -61,6 +61,12 @@ DELAY_NODE_SPECTROSCOPY_ENVELOPE_MAX_SAMPLES = round(131.07e-6 * SAMPLE_FREQUENC
 DELAY_NODE_SPECTROSCOPY_MAX_SAMPLES = round(131.066e-6 * SAMPLE_FREQUENCY_HZ)
 
 
+# Offsets to align {integration, spectroscopy, scope} delays with playback
+INTEGRATION_DELAY_OFFSET = 212e-9  # LabOne Q calibrated value
+SPECTROSCOPY_DELAY_OFFSET = 220e-9  # LabOne Q calibrated value
+SCOPE_DELAY_OFFSET = INTEGRATION_DELAY_OFFSET  # Equality tested at FW level
+
+
 def node_generator(daq, l: list):
     def append(path, value, filename=None, cache=True):
         l.append(
@@ -449,10 +455,11 @@ class DeviceSHFQA(DeviceSHFBase):
                         f"/{self.serial}/scopes/0/trigger/channel",
                         64 + channel,
                     ),  # channelN_sequencer_monitor0
-                    # TODO(2K): 200ns input-to-output delay was taken from one of the example
-                    # notebooks, what value to use?
+                    # TODO(caglark): HBAR-1779
                     DaqNodeSetAction(
-                        self._daq, f"/{self.serial}/scopes/0/trigger/delay", 200e-9
+                        self._daq,
+                        f"/{self.serial}/scopes/0/trigger/delay",
+                        SCOPE_DELAY_OFFSET,
                     ),
                     DaqNodeSetAction(
                         self._daq, f"/{self.serial}/scopes/0/trigger/enable", 1
@@ -672,10 +679,10 @@ class DeviceSHFQA(DeviceSHFBase):
                     )
                 )
 
-            [
-                output_scheduler_port_delay,
-                output_port_delay,
-            ], output_updated = attributes.resolve(
+            (
+                [output_scheduler_port_delay, output_port_delay],
+                output_updated,
+            ) = attributes.resolve(
                 keys=[
                     (AttributeName.OUTPUT_SCHEDULER_PORT_DELAY, ch),
                     (AttributeName.OUTPUT_PORT_DELAY, ch),
@@ -688,10 +695,10 @@ class DeviceSHFQA(DeviceSHFBase):
             )
             set_output = output_updated and output_scheduler_port_delay is not None
 
-            [
-                input_scheduler_port_delay,
-                input_port_delay,
-            ], input_updated = attributes.resolve(
+            (
+                [input_scheduler_port_delay, input_port_delay],
+                input_updated,
+            ) = attributes.resolve(
                 keys=[
                     (AttributeName.INPUT_SCHEDULER_PORT_DELAY, ch),
                     (AttributeName.INPUT_PORT_DELAY, ch),
@@ -708,12 +715,14 @@ class DeviceSHFQA(DeviceSHFBase):
             if is_spectroscopy(acquisition_type):
                 output_delay_path = f"{base_channel_path}/spectroscopy/envelope/delay"
                 meas_delay_path = f"{base_channel_path}/spectroscopy/delay"
+                measurement_delay += SPECTROSCOPY_DELAY_OFFSET
                 max_generator_delay = DELAY_NODE_SPECTROSCOPY_ENVELOPE_MAX_SAMPLES
                 max_integrator_delay = DELAY_NODE_SPECTROSCOPY_MAX_SAMPLES
             else:
                 output_delay_path = f"{base_channel_path}/generator/delay"
                 meas_delay_path = f"{base_channel_path}/readout/integration/delay"
                 measurement_delay += output_delay
+                measurement_delay += INTEGRATION_DELAY_OFFSET
                 set_input = set_input or set_output
                 max_generator_delay = DELAY_NODE_GENERATOR_MAX_SAMPLES
                 max_integrator_delay = DELAY_NODE_READOUT_INTEGRATION_MAX_SAMPLES

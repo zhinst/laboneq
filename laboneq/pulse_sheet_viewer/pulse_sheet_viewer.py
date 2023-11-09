@@ -181,9 +181,9 @@ def show_pulse_sheet(
             },
         )
         compiled_experiment_for_psv.experiment = compiled_experiment.experiment
-
         compiled_experiment = compiled_experiment_for_psv
-        schedule = compiled_experiment_for_psv.scheduled_experiment.schedule
+
+    schedule = compiled_experiment.scheduled_experiment.schedule
 
     if not interactive:
         PulseSheetViewer.generate_viewer_html_file(schedule, name, filename)
@@ -194,4 +194,4 @@ def show_pulse_sheet(
         except ImportError:
             return filename
     else:
-        interactive_psv(compiled_experiment=compiled_experiment_for_psv)
+        interactive_psv(compiled_experiment=compiled_experiment)

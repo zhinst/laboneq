@@ -17,7 +17,6 @@ from laboneq.controller.attribute_value_tracker import (
     DeviceAttribute,
 )
 from laboneq.controller.util import LabOneQControllerException
-from laboneq.controller.versioning import SUPPORT_PRE_V23_06, LabOneVersion
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.data.recipe import IO, Initialization, Recipe, SignalType
@@ -60,17 +59,12 @@ class AwgConfig:
     acquire_signals: set[str] = field(default_factory=set)
     target_feedback_register: int | None = None
     # SG
-    qa_signal_id: str | None = None
     command_table_match_offset: int | None = None
     source_feedback_register: int | None = None
-    readout_result_index: int | None = None
-    readout_result_nbits: int = 2
-    register_selector_index: int | None = None
+    fb_reg_source_index: int | None = None
+    fb_reg_target_index: int | None = None
     register_selector_bitmask: int = 0b11
-
-    @property
-    def register_selector_shift(self):
-        return self.readout_result_nbits * self.register_selector_index
+    register_selector_shift: int | None = None
 
 
 AwgConfigs = dict[AwgKey, AwgConfig]
@@ -372,7 +366,7 @@ class _LoopsPreprocessor(ExecutorBase):
 
 
 def _calculate_awg_configs(
-    rt_execution_infos: RtExecutionInfos, recipe: Recipe, labone_version: LabOneVersion
+    rt_execution_infos: RtExecutionInfos, recipe: Recipe
 ) -> AwgConfigs:
     awg_configs: AwgConfigs = defaultdict(AwgConfig)
 
@@ -382,15 +376,6 @@ def _calculate_awg_configs(
             for awg_key, awg_config in awg_configs.items()
             if signal_id in awg_config.acquire_signals
         )
-
-    def readout_result_index_by_acquire_signal(signal_id: str, is_local: bool) -> int:
-        integrator = next(
-            ia for ia in recipe.integrator_allocations if ia.signal_id == signal_id
-        )
-        # Only relevant for discrimination mode, where only one channel should
-        # be assigned (no multi-state as of now)
-        # TODO(2K): Check if HBAR-1359 affects also SHFQA / global feedback
-        return integrator.channels[0] * (2 if is_local else 1)
 
     for a in recipe.integrator_allocations:
         if isinstance(a.signal_id, str):
@@ -405,28 +390,14 @@ def _calculate_awg_configs(
         for awg in initialization.awgs or []:
             awg_config = awg_configs[AwgKey(device_id, awg.awg)]
 
-            if (labone_version < LabOneVersion.V_23_06) and SUPPORT_PRE_V23_06:
-                awg_config.readout_result_nbits = 1
-
-            awg_config.qa_signal_id = awg.qa_signal_id
+            awg_config.target_feedback_register = awg.target_feedback_register
+            awg_config.source_feedback_register = awg.source_feedback_register
+            if awg_config.source_feedback_register not in (None, "local"):
+                awg_config.fb_reg_source_index = awg.feedback_register_index_select
+                awg_config.fb_reg_target_index = awg.awg
+            awg_config.register_selector_shift = awg.codeword_bitshift
+            awg_config.register_selector_bitmask = awg.codeword_bitmask
             awg_config.command_table_match_offset = awg.command_table_match_offset
-            awg_config.target_feedback_register = awg.feedback_register
-
-    zsync_reg_selector_allocation: dict[str, int] = defaultdict(int)
-    for awg_key, awg_config in awg_configs.items():
-        if awg_config.qa_signal_id is not None:
-            qa_awg_key = awg_key_by_acquire_signal(awg_config.qa_signal_id)
-            feedback_register = awg_configs[qa_awg_key].target_feedback_register
-            is_local = feedback_register is None
-            awg_config.readout_result_index = readout_result_index_by_acquire_signal(
-                awg_config.qa_signal_id, is_local
-            )
-            if not is_local:
-                awg_config.source_feedback_register = feedback_register
-                awg_config.register_selector_index = zsync_reg_selector_allocation[
-                    awg_key.device_uid
-                ]
-                zsync_reg_selector_allocation[awg_key.device_uid] += 1
 
     # As currently just a single RT execution per experiment is supported,
     # AWG configs are not cloned per RT execution. May need to be changed in the future.
@@ -520,7 +491,6 @@ def pre_process_compiled(
     scheduled_experiment: ScheduledExperiment,
     devices: DeviceCollection,
     execution: Statement,
-    labone_version: LabOneVersion = LabOneVersion.LATEST,
 ) -> RecipeData:
     recipe = scheduled_experiment.recipe
 
@@ -534,7 +504,7 @@ def pre_process_compiled(
     lp.run(execution)
     rt_execution_infos = lp.rt_execution_infos
 
-    awg_configs = _calculate_awg_configs(rt_execution_infos, recipe, labone_version)
+    awg_configs = _calculate_awg_configs(rt_execution_infos, recipe)
     attribute_value_tracker, oscillator_ids = _pre_process_attributes(recipe, devices)
 
     recipe_data = RecipeData(

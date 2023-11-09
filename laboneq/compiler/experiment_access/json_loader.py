@@ -50,7 +50,6 @@ def find_value_or_parameter_dict(
 
 
 class JsonLoader(LoaderBase):
-
     _validator = None
 
     def load(self, experiment: Dict):

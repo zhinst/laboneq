@@ -12,9 +12,10 @@ from typing import Any, Dict, Optional, TypedDict
 from laboneq._observability.tracing import trace
 from laboneq.compiler import CodeGenerator, CompilerSettings
 from laboneq.compiler.code_generator import IntegrationTimes
+from laboneq.compiler.common.feedback_register_config import FeedbackRegisterConfig
 from laboneq.compiler.code_generator.measurement_calculator import SignalDelays
-from laboneq.compiler.code_generator.sampled_event_handler import FeedbackConnection
 from laboneq.compiler.common.awg_info import AwgKey
+from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.experiment_access import ExperimentDAO
 from laboneq.compiler.ir.ir import IR
@@ -45,9 +46,8 @@ class Schedule(TypedDict):
 
 @dataclass
 class RealtimeCompilerOutput:
-    command_table_match_offsets: Dict[AwgKey, int]
     feedback_connections: Dict[str, FeedbackConnection]
-    feedback_registers: Dict[AwgKey, int]
+    feedback_register_configurations: Dict[AwgKey, FeedbackRegisterConfig]
     signal_delays: SignalDelays
     integration_weights: Dict
     integration_times: IntegrationTimes
@@ -128,10 +128,9 @@ class RealtimeCompiler:
 
         schedule = self.prepare_schedule() if self._settings.OUTPUT_EXTRAS else None
 
+        assert self._code_generator is not None
         compiler_output = RealtimeCompilerOutput(
-            command_table_match_offsets=self._code_generator.command_table_match_offsets(),
             feedback_connections=self._code_generator.feedback_connections(),
-            feedback_registers=self._code_generator.feedback_registers(),
             signal_delays=self._code_generator.signal_delays(),
             integration_weights=self._code_generator.integration_weights(),
             integration_times=self._code_generator.integration_times(),
@@ -143,6 +142,7 @@ class RealtimeCompiler:
             command_tables=self._code_generator.command_tables(),
             pulse_map=self._code_generator.pulse_map(),
             schedule=schedule,
+            feedback_register_configurations=self._code_generator.feedback_register_config(),
         )
 
         return compiler_output
@@ -199,7 +199,7 @@ class RealtimeCompiler:
                 )
             )
 
-        # Group devices by sampling rate and create a backward compatible alist of those.
+        # Group devices by sampling rate and create a backward compatible list of those.
         sampling_rates = [
             (list({tpl[0] for tpl in grouped_tuples}), sampling_rate)
             for sampling_rate, grouped_tuples in groupby(

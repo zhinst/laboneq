@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
-from typing import List, Optional, Set
+from typing import List, Optional, Set, TYPE_CHECKING
 
 from attrs import define, field
-
 from laboneq.compiler.scheduler.utils import lcm
+
+if TYPE_CHECKING:
+    from laboneq.compiler.scheduler.schedule_data import ScheduleData
 
 # A deferred value is not really optional, but will initialized later; using this alias,
 # we can still use None as sentinel, but express that this property shall not be seen
@@ -98,10 +100,7 @@ class IntervalSchedule:
                 self.cacheable = False
 
     def calculate_timing(
-        self,
-        schedule_data: ScheduleData,  # type: ignore # noqa: F821
-        start: int,
-        start_may_change: bool,
+        self, schedule_data: ScheduleData, start: int, start_may_change: bool
     ) -> int:
         if self.children_start is not None:
             # We have already calculated the timing.
@@ -117,9 +116,7 @@ class IntervalSchedule:
     def _calculate_timing(self, *_, **__) -> int:
         raise NotImplementedError()
 
-    def on_absolute_start_time_fixed(
-        self, start: int, schedule_data: ScheduleData  # type: ignore # noqa: F821
-    ):
+    def on_absolute_start_time_fixed(self, start: int, schedule_data: ScheduleData):
         """Notify schedule that its absolute start time has been determined, for
         example for a child of a right-aligned section"""
         if self.absolute_start is not None:

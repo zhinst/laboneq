@@ -6,7 +6,7 @@ from __future__ import annotations
 import copy
 import logging
 import math
-from collections import namedtuple
+from collections import defaultdict, namedtuple
 from itertools import groupby
 from numbers import Number
 from typing import Any, Dict, List, NamedTuple, Tuple
@@ -32,15 +32,13 @@ from laboneq.compiler.code_generator.command_table_tracker import (
 from laboneq.compiler.code_generator.feedback_register_allocator import (
     FeedbackRegisterAllocator,
 )
+from laboneq.compiler.common.feedback_register_config import FeedbackRegisterConfig
 from laboneq.compiler.code_generator.measurement_calculator import (
     IntegrationTimes,
     MeasurementCalculator,
     SignalDelays,
 )
-from laboneq.compiler.code_generator.sampled_event_handler import (
-    FeedbackConnection,
-    SampledEventHandler,
-)
+from laboneq.compiler.code_generator.sampled_event_handler import SampledEventHandler
 from laboneq.compiler.code_generator.seq_c_generator import (
     SeqCGenerator,
     merge_generators,
@@ -71,6 +69,7 @@ from laboneq.compiler.common.compiler_settings import (
 )
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.event_type import EventList, EventType
+from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.pulse_parameters import decode_pulse_parameters
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.common.trigger_mode import TriggerMode
@@ -177,11 +176,12 @@ def calculate_integration_weights(
 ):
     integration_weights = {}
     signal_id = signal_obj.id
+    nr_of_weights_per_event = None
     for event_list in acquire_events.sequence.values():
         for event in event_list:
             _logger.debug("For weights, look at %s", event)
 
-            assert (event.params.get("signal_id") or signal_id) == signal_id
+            assert event.params.get("signal_id", signal_id) == signal_id
             play_wave_ids = ensure_list(event.params.get("play_wave_id"))
             n = len(play_wave_ids)
             play_pars = ensure_list(
@@ -190,25 +190,32 @@ def calculate_integration_weights(
             pulse_pars = ensure_list(
                 event.params.get("pulse_pulse_parameters") or [None] * n
             )
+
+            filtered_pulses = [
+                (play_wave_id, play_par, pulse_par)
+                for play_wave_id, play_par, pulse_par in zip(
+                    play_wave_ids, play_pars, pulse_pars
+                )
+                if play_wave_id is not None
+                and (pulse_def := pulse_defs.get(play_wave_id)) is not None
+                # Not a real pulse, just a placeholder for the length - skip
+                and (pulse_def.samples is not None or pulse_def.function is not None)
+            ]
+
             assert n == len(play_pars) == len(pulse_pars)
-            for play_wave_id, play_par, pulse_par in zip(
-                play_wave_ids, play_pars, pulse_pars
-            ):
-                if play_wave_id is None:
-                    continue
-                _logger.debug("Event %s has play wave id %s", event, play_wave_id)
-                if (
-                    play_wave_id not in pulse_defs
-                    or play_wave_id in integration_weights
-                ):
-                    continue
+            if nr_of_weights_per_event is None:
+                nr_of_weights_per_event = n
+            else:
+                assert n == nr_of_weights_per_event
+                if any(w not in integration_weights for w, _, _ in filtered_pulses):
+                    # Event uses different pulse UIDs than earlier event
+                    raise LabOneQException(
+                        f"Using different integration kernels on a single signal"
+                        f" ({signal_id}) is unsupported. Weights: {play_wave_ids} vs"
+                        f" {list(integration_weights.keys())}"
+                    )
+            for play_wave_id, play_par, pulse_par in filtered_pulses:
                 pulse_def = pulse_defs[play_wave_id]
-                _logger.debug("Pulse def: %s", pulse_def)
-
-                if None is pulse_def.samples and None is pulse_def.function:
-                    # Not a real pulse, just a placeholder for the length - skip
-                    continue
-
                 samples = pulse_def.samples
                 pulse_amplitude: Number | ParameterInfo = pulse_def.amplitude
                 if pulse_amplitude is None:
@@ -251,15 +258,22 @@ def calculate_integration_weights(
                 )
 
                 integration_weight["basename"] = (
-                    signal_obj.awg.device_id
-                    + "_"
-                    + str(signal_obj.awg.awg_number)
-                    + "_"
-                    + str(min(signal_obj.channels))
-                    + "_"
-                    + play_wave_id
+                    f"{signal_obj.awg.device_id}"
+                    f"_{signal_obj.awg.awg_number}"
+                    f"_{min(signal_obj.channels)}"
+                    f"_{play_wave_id}"
                 )
+                if existing_weight := integration_weights.get(play_wave_id):
+                    for key in ["samples_i", "samples_q"]:
+                        if np.any(existing_weight[key] != integration_weight[key]):
+                            # Kernel differs even though pulse ID is the same
+                            # (e.g. affected by pulse parameters)
+                            raise LabOneQException(
+                                f"Using different integration kernels on a single signal"
+                                f" ({signal_id}) is unsupported."
+                            )
                 integration_weights[play_wave_id] = integration_weight
+
     return integration_weights
 
 
@@ -276,7 +290,7 @@ class CodeGenerator:
 
     _measurement_calculator = MeasurementCalculator
 
-    def __init__(self, settings: CompilerSettings = None):
+    def __init__(self, settings: CompilerSettings | dict | None = None):
         if settings is not None:
             if isinstance(settings, CompilerSettings):
                 self._settings = settings
@@ -299,11 +313,12 @@ class CodeGenerator:
         self._signal_delays: SignalDelays = None
         self._integration_weights = None
         self._simultaneous_acquires: Dict[float, Dict[str, str]] = None
-        self._command_table_match_offsets: Dict[AwgKey, int] = {}
+        self._feedback_register_config: Dict[
+            AwgKey, FeedbackRegisterConfig
+        ] = defaultdict(FeedbackRegisterConfig)
         self._feedback_connections: Dict[str, FeedbackConnection] = {}
         self._feedback_register_allocator: FeedbackRegisterAllocator = None
         self._total_execution_time = None
-        self._wave_compressor = WaveCompressor()
 
         self.EMIT_TIMING_COMMENTS = self._settings.EMIT_TIMING_COMMENTS
 
@@ -357,6 +372,7 @@ class CodeGenerator:
         for awg in self._awgs.values():
             # Handle integration weights separately
             for signal_obj in awg.signals:
+                assert self._integration_weights is not None
                 if signal_obj.id in self._integration_weights:
                     signal_weights = self._integration_weights[signal_obj.id]
                     for weight in signal_weights.values():
@@ -573,7 +589,13 @@ class CodeGenerator:
         ):
             self._gen_seq_c_per_awg(awg, events, pulse_defs)
 
-        return self._signal_delays
+        for (
+            awg,
+            target_fb_register,
+        ) in self._feedback_register_allocator.target_feedback_registers.items():
+            self._feedback_register_config[
+                awg
+            ].target_feedback_register = target_fb_register
 
     @staticmethod
     def _calc_global_awg_params(awg: AWGInfo) -> Tuple[float, float]:
@@ -704,6 +726,7 @@ class CodeGenerator:
         pulse_defs,
         device_type,
     ):
+        wave_compressor = WaveCompressor()
         compressed_waveform_signatures = set()
         for event_group in sampled_events.sequence.values():
             event_replacement = {}
@@ -782,7 +805,7 @@ class CodeGenerator:
                     ]
                     # remove duplicates, keep order
                     compressible_segments = [*dict.fromkeys(compressible_segments)]
-                    new_events = self._wave_compressor.compress_wave(
+                    new_events = wave_compressor.compress_wave(
                         sample_dict, min_play_wave, compressible_segments
                     )
                     pulse_names = [pulse.pulse for pulse in wave_form.pulses]
@@ -844,9 +867,9 @@ class CodeGenerator:
                                 new_name
                             ] = new_signature_pulse_map.pop(old_name)
 
-                        for map in new_signature_pulse_map.values():
-                            map.length_samples = new_length
-                            for signature in map.instances:
+                        for sp_map in new_signature_pulse_map.values():
+                            sp_map.length_samples = new_length
+                            for signature in sp_map.instances:
                                 signature.length = new_length
 
                         self._sampled_signatures[signal_id][
@@ -976,6 +999,7 @@ class CodeGenerator:
                 )
 
             if signal_obj.signal_type == "integration":
+                assert self._integration_weights is not None
                 _logger.debug(
                     "Calculating integration weights for signal %s. There are %d acquire events.",
                     signal_obj.id,
@@ -1247,7 +1271,9 @@ class CodeGenerator:
             )
             raise LabOneQException(f"Compiler error. {msg}") from error
 
-        self._command_table_match_offsets[awg.key] = handler.command_table_match_offset
+        self._feedback_register_config[
+            awg.key
+        ].command_table_offset = handler.command_table_match_offset
 
         seq_c_generators = []
         _logger.debug(
@@ -1622,14 +1648,12 @@ class CodeGenerator:
     def signal_delays(self) -> SignalDelays:
         return self._signal_delays
 
-    def command_table_match_offsets(self) -> Dict[AwgKey, int]:
-        return self._command_table_match_offsets
+    def feedback_register_config(self) -> Dict[AwgKey, FeedbackRegisterConfig]:
+        # convert defaultdict to dict
+        return dict(self._feedback_register_config)
 
     def feedback_connections(self) -> Dict[str, FeedbackConnection]:
         return self._feedback_connections
-
-    def feedback_registers(self) -> Dict[AwgKey, int]:
-        return self._feedback_register_allocator.feedback_registers
 
     @staticmethod
     def stencil_samples(start, source, target):

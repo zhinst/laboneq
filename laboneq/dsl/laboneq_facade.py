@@ -40,7 +40,7 @@ class LabOneQFacade:
         controller = ctrl.Controller(
             run_parameters=run_parameters,
             target_setup=target_setup,
-            user_functions=session._user_functions,
+            neartime_callbacks=session._neartime_callbacks,
         )
         controller.connect()
         session._controller = controller
