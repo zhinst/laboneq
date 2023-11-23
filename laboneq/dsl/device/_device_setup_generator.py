@@ -27,6 +27,7 @@ from laboneq.dsl.device.instruments import (
     SHFQA,
     SHFQC,
     SHFSG,
+    PRETTYPRINTERDEVICE,
     UHFQA,
     NonQC,
 )
@@ -43,6 +44,7 @@ _logger = logging.getLogger(__name__)
 
 # Terminal Symbols
 T_HDAWG_DEVICE = "HDAWG"
+T_PRETTYPRINTER_DEVICE = "PRETTYPRINTERDEVICE"
 T_UHFQA_DEVICE = "UHFQA"
 T_SHFQA_DEVICE = "SHFQA"
 T_SHFSG_DEVICE = "SHFSG"
@@ -51,6 +53,7 @@ T_SHFPPC_DEVICE = "SHFPPC"
 T_PQSC_DEVICE = "PQSC"
 T_ALL_DEVICE_TYPES = [
     T_HDAWG_DEVICE,
+    T_PRETTYPRINTER_DEVICE,
     T_UHFQA_DEVICE,
     T_SHFQA_DEVICE,
     T_SHFSG_DEVICE,
@@ -230,6 +233,7 @@ def make_zi_devices(
         T_SHFQA_DEVICE: (SHFQA, T_EXTCLK, _make_connection),
         T_SHFSG_DEVICE: (SHFSG, T_EXTCLK, _make_connection),
         T_SHFQC_DEVICE: (SHFQC, T_EXTCLK, _make_connection),
+        T_PRETTYPRINTER_DEVICE: (PRETTYPRINTERDEVICE, T_EXTCLK, _make_connection),
         T_SHFPPC_DEVICE: (SHFPPC, T_EXTCLK, _make_ppc_connection),
         T_PQSC_DEVICE: (PQSC, T_INTCLK, _make_connection),
     }
@@ -341,7 +345,7 @@ def make_qubits(
             quantum_element = types[q_type]
         except KeyError:
             msg = f"'type': '{q_type}' not one of {list(types.keys())}."
-            raise LabOneQException(f"Invalid 'qubit' definition: {msg}")
+            raise LabOneQException(f"Invalid 'qubit' definition: {msg}") from None
         q_defs = desc["name"] if isinstance(desc["name"], list) else [desc["name"]]
         for q_def in q_defs:
             if q_def in qubits:
@@ -352,7 +356,7 @@ def make_qubits(
                 lsg = logical_signal_groups[q_def]
             except KeyError:
                 msg = f"Qubit '{q_def}' has no connections."
-                raise LabOneQException(f"Invalid 'qubit' definition: {msg}")
+                raise LabOneQException(f"Invalid 'qubit' definition: {msg}") from None
             qubits[q_def] = quantum_element.from_logical_signal_group(q_def, lsg=lsg)
     return {key: qubits[key] for key in sorted(qubits)}
 
@@ -361,9 +365,9 @@ class _DeviceSetupGenerator:
     @staticmethod
     def from_descriptor(
         yaml_text: str,
-        server_host: str = None,
-        server_port: str = None,
-        setup_name: str = None,
+        server_host: str | None = None,
+        server_port: str | None = None,
+        setup_name: str | None = None,
     ):
         setup_desc = load(yaml_text, Loader=Loader)
 
@@ -383,9 +387,9 @@ class _DeviceSetupGenerator:
     @staticmethod
     def from_yaml(
         filepath,
-        server_host: str = None,
-        server_port: str = None,
-        setup_name: str = None,
+        server_host: str | None = None,
+        server_port: str | None = None,
+        setup_name: str | None = None,
     ):
         with open(filepath) as fp:
             setup_desc = load(fp, Loader=Loader)
@@ -405,30 +409,34 @@ class _DeviceSetupGenerator:
 
     @staticmethod
     def from_dicts(
-        instrument_list: InstrumentsType = None,
-        instruments: InstrumentsType = None,
-        connections: ConnectionsType = None,
-        dataservers: DataServersType = None,
-        qubits: list = [],
-        server_host: str = None,
-        server_port: str = None,
-        setup_name: str = None,
+        instrument_list: InstrumentsType | None = None,
+        instruments: InstrumentsType | None = None,
+        connections: ConnectionsType | None = None,
+        dataservers: DataServersType | None = None,
+        qubits: list | None = None,
+        server_host: str | None = None,
+        server_port: str | None = None,
+        setup_name: str | None = None,
     ):
         # To avoid circular imports
         from laboneq.dsl import quantum
         from laboneq.dsl.device.device_setup import DeviceSetup
 
+        if qubits is None:
+            qubits = []
         if instrument_list is not None:
             if instruments is None:
                 warnings.warn(
                     "'instrument_list' section is deprecated in setup descriptor, use 'instruments' instead.",
                     FutureWarning,
+                    stacklevel=2,
                 )
                 instruments = instrument_list
             else:
                 warnings.warn(
                     "Both 'instrument_list' and 'instruments' are present in the setup descriptor, deprecated 'instrument_list' ignored.",
                     FutureWarning,
+                    stacklevel=2,
                 )
 
         if instruments is None:

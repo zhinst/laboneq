@@ -1,7 +1,8 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Callable, Dict, Optional, Tuple
+from __future__ import annotations
+from typing import Callable, Dict, Tuple
 
 from laboneq._utils import id_generator
 from laboneq.dsl.device.io_units import LogicalSignal
@@ -51,7 +52,7 @@ class GateStore:
         self,
         name: str,
         qubit_name: str,
-        pulse: Optional[Pulse],
+        pulse: Pulse | None,
         signal: str,
         phase=None,
         id=None,

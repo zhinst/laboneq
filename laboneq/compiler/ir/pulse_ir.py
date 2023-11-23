@@ -40,10 +40,11 @@ class PulseIR(IntervalIR):
         settings: CompilerSettings,
     ) -> List[Dict]:
         assert self.length is not None
-        params_list = []
-        for f in ("length", "amplitude", "phase", "offset"):
-            if isinstance(getattr(self.pulse, f), ParameterInfo):
-                params_list.append(getattr(self.pulse, f).uid)
+        params_list = [
+            getattr(self.pulse, f).uid
+            for f in ("length", "amplitude", "phase", "offset")
+            if isinstance(getattr(self.pulse, f), ParameterInfo)
+        ]
 
         if self.pulse.pulse is not None:
             play_wave_id = self.pulse.pulse.uid

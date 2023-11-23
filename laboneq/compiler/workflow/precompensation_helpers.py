@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import copy
 import math
-from math import ceil
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -18,7 +17,7 @@ from laboneq.data.calibration import (
     ExponentialCompensation,
     FIRCompensation,
 )
-from laboneq.data.compilation_job import DeviceInfoType, PrecompensationInfo
+from laboneq.data.compilation_job import PrecompensationInfo
 
 if TYPE_CHECKING:
     from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
@@ -135,67 +134,6 @@ def compute_precompensations_and_delays(dao: ExperimentDAO):
         else:
             pc.computed_delay_samples = delay
     return precompensations
-
-
-def compute_precompensation_delays_on_grid(
-    precompensations: dict[str, PrecompensationInfo], dao: ExperimentDAO, use_2GHz: bool
-):
-    """Compute delay_signal and port_delay contributions for each signal so that delays
-    are commensurable with the grid"""
-    signals = dao.signals()
-    if not signals:
-        return
-    signal_infos = {
-        signal_id: dao.signal_info(signal_id) for signal_id in dao.signals()
-    }
-    unique_sequencer_rates = set()
-    sampling_rates_and_multiples = {}
-    for signal_id in signals:
-        devtype = DeviceType.from_device_info_type(
-            signal_infos[signal_id].device.device_type
-        )
-        sampling_rate = (
-            devtype.sampling_rate_2GHz
-            if use_2GHz and devtype == DeviceType.HDAWG
-            else devtype.sampling_rate
-        )
-        sequencer_rate = sampling_rate / devtype.sample_multiple
-        sampling_rates_and_multiples[signal_id] = (
-            sampling_rate,
-            devtype.sample_multiple,
-        )
-        unique_sequencer_rates.add(int(sequencer_rate))
-
-    common_sequencer_rate = np.gcd.reduce(list(unique_sequencer_rates))
-    system_grid = 1.0 / common_sequencer_rate
-
-    max_delay = 0
-    for signal_id, pc in precompensations.items():
-        delay = (
-            precompensations[signal_id].computed_delay_samples
-            / sampling_rates_and_multiples[signal_id][0]
-        )
-        if max_delay < delay:
-            max_delay = delay
-    max_delay = ceil(max_delay / system_grid) * system_grid
-
-    for signal_id in signals:
-        pc = precompensations.setdefault(signal_id, PrecompensationInfo())
-        try:
-            delay_samples = pc.computed_delay_samples
-        except KeyError:
-            delay_samples = 0
-        sampling_rate, multiple = sampling_rates_and_multiples[signal_id]
-        max_delay_samples = max_delay * sampling_rate
-        compensation = max_delay_samples - delay_samples
-        delay_signal = (compensation // multiple) / sampling_rate * multiple
-        port_delay = (compensation % multiple) / sampling_rate
-        assert (
-            port_delay == 0
-            or signal_infos[signal_id].device.device_type != DeviceInfoType.UHFQA
-        )
-        pc.computed_delay_signal = delay_signal if abs(delay_signal) > 1e-12 else 0
-        pc.computed_port_delay = port_delay if abs(port_delay) > 1e-12 else 0
 
 
 def _round_to_FPGA(coef):

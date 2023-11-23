@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 import copy
+from functools import singledispatchmethod
 import logging
 import math
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Set, Tuple, Union, TYPE_CHECKING
 
 from sortedcollections import SortedDict
 
@@ -27,16 +28,20 @@ from laboneq.compiler.common.device_type import (
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.common.trigger_mode import TriggerMode
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
-from laboneq.compiler.feedback_router.feedback_router import FeedbackRouter
+from laboneq.compiler.feedback_router.feedback_router import compute_feedback_routing
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.scheduler.scheduler import Scheduler
 from laboneq.compiler.workflow import rt_linker
+from laboneq.compiler.workflow.compiler_output import (
+    CombinedRealtimeCompilerOutputCode,
+    CombinedRealtimeCompilerOutputPrettyPrinter,
+)
 from laboneq.compiler.workflow.neartime_execution import (
     NtCompilerExecutor,
     legacy_execution_program,
 )
+from laboneq.compiler.workflow import on_device_delays
 from laboneq.compiler.workflow.precompensation_helpers import (
-    compute_precompensation_delays_on_grid,
     compute_precompensations_and_delays,
     precompensation_is_nonzero,
     verify_precompensation_parameters,
@@ -55,10 +60,15 @@ from laboneq.data.compilation_job import (
     ExperimentInfo,
     ParameterInfo,
     PrecompensationInfo,
+    SignalInfo,
     SignalInfoType,
+    DeviceInfoType,
 )
 from laboneq.data.scheduled_experiment import ScheduledExperiment
 from laboneq.executor.executor import Statement
+
+if TYPE_CHECKING:
+    from laboneq.compiler.workflow.on_device_delays import OnDeviceDelayCompensation
 
 _logger = logging.getLogger(__name__)
 
@@ -74,7 +84,7 @@ _AWGMapping = Dict[str, Dict[int, AWGInfo]]
 
 
 class Compiler:
-    def __init__(self, settings: Optional[Dict] = None):
+    def __init__(self, settings: dict | None = None):
         self._experiment_dao: ExperimentDAO = None
         self._experiment_info: ExperimentInfo = None
         self._execution: Statement = None
@@ -88,6 +98,7 @@ class Compiler:
         self._integration_unit_allocation = None
         self._shfqa_generator_allocation = None
         self._awgs: _AWGMapping = {}
+        self._delays_by_signal: dict[str, OnDeviceDelayCompensation] = {}
         self._precompensations: dict[str, PrecompensationInfo] | None = None
         self._signal_objects: Dict[str, SignalObj] = {}
 
@@ -158,6 +169,7 @@ class Compiler:
         )
         self._leader_properties.is_desktop_setup = not has_pqsc and (
             used_devices == {"hdawg"}
+            or used_devices == {"prettyprinterdevice"}
             or used_devices == {"shfsg"}
             or used_devices == {"shfqa"}
             or used_devices == {"shfqa", "shfsg"}
@@ -170,6 +182,7 @@ class Compiler:
             and not self._leader_properties.is_desktop_setup
             and used_devices != {"uhfqa"}
             and bool(used_devices)  # Allow empty experiment (used in tests)
+            and "prettyprinterdevice" not in used_devices
         ):
             raise RuntimeError(
                 f"Unsupported device combination {used_devices} for small setup"
@@ -241,11 +254,15 @@ class Compiler:
         self._awgs = self._calc_awgs(dao)
         self._shfqa_generator_allocation = self._calc_shfqa_generator_allocation(dao)
         self._integration_unit_allocation = self._calc_integration_unit_allocation(dao)
-        self._precompensations = self._calc_precompensations(dao, self._clock_settings)
+        self._precompensations = compute_precompensations_and_delays(dao)
+        self._delays_by_signal = self._adjust_signals_for_on_device_delays(
+            signal_infos=[dao.signal_info(uid) for uid in dao.signals()],
+            use_2ghz_for_hdawg=self._clock_settings["use_2GHz_for_HDAWG"],
+        )
         self._signal_objects = self._generate_signal_objects()
 
         rt_compiler = RealtimeCompiler(
-            self._experiment_info,
+            self._experiment_dao,
             Scheduler(
                 self._experiment_dao,
                 self._sampling_rate_tracker,
@@ -268,7 +285,12 @@ class Compiler:
             self._combined_compiler_output = rt_linker.from_single_run(
                 rt_compiler_output, [0]
             )
-        self._calc_feedback_routing()
+
+        compute_feedback_routing(
+            signal_objs=self._signal_objects,
+            integration_unit_allocation=self._integration_unit_allocation,
+            combined_compiler_output=self._combined_compiler_output,
+        )
 
         if self._settings.LOG_REPORT:
             executor.report()
@@ -415,6 +437,7 @@ class Compiler:
                         awg_number=awg_number,
                         device_type=device_type,
                         sampling_rate=None,
+                        device_class=device_type.device_class,
                     )
                     device_awgs[awg_number] = awg
 
@@ -480,15 +503,41 @@ class Compiler:
             awg_number = 0
         return self._awgs[device_id][awg_number]
 
-    @staticmethod
-    def _calc_precompensations(dao: ExperimentDAO, clock_settings):
-        precompensations = compute_precompensations_and_delays(dao)
-        compute_precompensation_delays_on_grid(
-            precompensations,
-            dao,
-            clock_settings["use_2GHz_for_HDAWG"],
+    def _adjust_signals_for_on_device_delays(
+        self, signal_infos: list[SignalInfo], use_2ghz_for_hdawg: bool
+    ) -> dict[str, OnDeviceDelayCompensation]:
+        """Adjust signals for on device delays.
+
+        Returns:
+            Signal and device port delays which are adjusted to delays on device.
+        """
+        signal_infos: list[SignalInfo] = {info.uid: info for info in signal_infos}
+        delay_from_output_router = on_device_delays.calculate_output_router_delays(
+            {uid: sig.output_routing for uid, sig in signal_infos.items()}
         )
-        return precompensations
+        signal_grid = {}
+        for info in signal_infos.values():
+            devtype = DeviceType.from_device_info_type(info.device.device_type)
+            sampling_rate = (
+                devtype.sampling_rate_2GHz
+                if use_2ghz_for_hdawg and devtype == DeviceType.HDAWG
+                else devtype.sampling_rate
+            )
+            initial_delay = 0
+            initial_delay += (
+                self._precompensations[info.uid].computed_delay_samples or 0
+            )
+            initial_delay += delay_from_output_router[info.uid]
+            signal_grid[info.uid] = on_device_delays.OnDeviceDelayInfo(
+                sampling_rate=sampling_rate,
+                sample_multiple=devtype.sample_multiple,
+                delay_samples=initial_delay,
+            )
+        compensated_values = on_device_delays.compensate_on_device_delays(signal_grid)
+        for key, values in compensated_values.items():
+            if signal_infos[key].device.device_type == DeviceInfoType.UHFQA:
+                assert values.on_port == 0
+        return compensated_values
 
     def _generate_signal_objects(self):
         signal_objects: dict[str, SignalObj] = {}
@@ -518,7 +567,7 @@ class Compiler:
                 self._leader_properties.is_desktop_setup,
                 self._clock_settings["use_2GHz_for_HDAWG"],
             )
-            start_delay += self._precompensations[signal_id].computed_delay_signal
+            start_delay += self._delays_by_signal[signal_id].on_signal
 
             if delay_signal is not None:
                 delay_signal = self._get_total_rounded_delay(
@@ -603,12 +652,12 @@ class Compiler:
             )
             signal_objects[signal_id] = signal_obj
         for s in signal_objects.values():
-            try:
-                delay_info = delay_measure_acquire[s.awg.key]
-                s.base_port_delay = delay_info.port_delay_gen
-                s.base_delay_signal = delay_info.delay_signal_gen
-            except KeyError:
+            delay_info = delay_measure_acquire.get(s.awg.key, None)
+            if delay_info is None:
                 _logger.debug("No measurement pulse signal for acquire signal %s", s.id)
+                continue
+            s.base_port_delay = delay_info.port_delay_gen
+            s.base_delay_signal = delay_info.delay_signal_gen
         return signal_objects
 
     def calc_outputs(self, signal_delays: SignalDelays):
@@ -617,7 +666,7 @@ class Compiler:
         flipper = [1, 0]
 
         for signal_id in self._experiment_dao.signals():
-            signal_info = self._experiment_dao.signal_info(signal_id)
+            signal_info: SignalInfo = self._experiment_dao.signal_info(signal_id)
             if signal_info.type == SignalInfoType.INTEGRATION:
                 continue
             oscillator_frequency = None
@@ -642,10 +691,7 @@ class Compiler:
             scheduler_port_delay: float = 0.0
             if signal_id in signal_delays:
                 scheduler_port_delay += signal_delays[signal_id].on_device
-            precompensation = self._precompensations[signal_id]
-            pc_port_delay = precompensation.computed_port_delay
-            if pc_port_delay:
-                scheduler_port_delay += pc_port_delay
+            scheduler_port_delay += self._delays_by_signal[signal_id].on_port
 
             base_channel = min(signal_info.channels)
 
@@ -665,7 +711,7 @@ class Compiler:
                     raise LabOneQException(
                         f"Error on signal line '{signal_id}': {error}"
                     ) from error
-
+            precompensation = self._precompensations[signal_id]
             for channel in signal_info.channels:
                 output = {
                     "device_id": signal_info.device.uid,
@@ -679,6 +725,11 @@ class Compiler:
                     "port_delay": port_delay,
                     "scheduler_port_delay": scheduler_port_delay,
                     "amplitude": self._experiment_dao.amplitude(signal_id),
+                    "output_routers": [
+                        router
+                        for router in signal_info.output_routing
+                        if router.to_channel == channel
+                    ],
                 }
                 signal_is_modulated = signal_info.oscillator is not None
 
@@ -882,7 +933,7 @@ class Compiler:
         measurements = {}
 
         for info in section_measurement_infos:
-            for device_awg_nr, v in info["devices"].items():
+            for device_awg_nr in info["devices"]:
                 device_id, awg_nr = device_awg_nr
                 if (device_id, awg_nr) in measurements:
                     _logger.debug(
@@ -932,21 +983,29 @@ class Compiler:
 
         return retval
 
-    def _calc_feedback_routing(self):
-        FeedbackRouter(
-            self._signal_objects,
-            self._integration_unit_allocation,
-            self._combined_compiler_output.feedback_connections,
-            self._combined_compiler_output.feedback_register_configurations,
-        ).calculate_feedback_routing()
+    @singledispatchmethod
+    def _add_io_to_recipe(self, output, recipe_generator: RecipeGenerator):
+        ...
 
-    def _generate_recipe(self):
-        recipe_generator = RecipeGenerator()
-        recipe_generator.from_experiment(
-            self._experiment_dao, self._leader_properties, self._clock_settings
-        )
+    @singledispatchmethod
+    def _add_acquire_info_to_recipe(self, output, recipe_generator: RecipeGenerator):
+        ...
 
-        for output in self.calc_outputs(self._combined_compiler_output.signal_delays):
+    @_add_io_to_recipe.register
+    def _(
+        self,
+        output: CombinedRealtimeCompilerOutputPrettyPrinter,
+        recipe_generator: RecipeGenerator,
+    ):
+        ...
+
+    @_add_io_to_recipe.register
+    def _(
+        self,
+        combined_output: CombinedRealtimeCompilerOutputCode,
+        recipe_generator: RecipeGenerator,
+    ):
+        for output in self.calc_outputs(combined_output.signal_delays):
             _logger.debug("Adding output %s", output)
             recipe_generator.add_output(
                 output["device_id"],
@@ -964,9 +1023,10 @@ class Compiler:
                 scheduler_port_delay=output["scheduler_port_delay"],
                 marker_mode=output.get("marker_mode"),
                 amplitude=output["amplitude"],
+                output_routers=output["output_routers"],
             )
 
-        for input in self.calc_inputs(self._combined_compiler_output.signal_delays):
+        for input in self.calc_inputs(combined_output.signal_delays):
             _logger.debug("Adding input %s", input)
             recipe_generator.add_input(
                 input["device_id"],
@@ -979,74 +1039,75 @@ class Compiler:
                 port_mode=input["port_mode"],
             )
 
+    @_add_acquire_info_to_recipe.register
+    def _(
+        self,
+        output: CombinedRealtimeCompilerOutputPrettyPrinter,
+        recipe_generator: RecipeGenerator,
+    ):
+        ...
+
+    @_add_acquire_info_to_recipe.register
+    def _(
+        self,
+        output: CombinedRealtimeCompilerOutputCode,
+        recipe_generator: RecipeGenerator,
+    ):
+        recipe_generator.add_integrator_allocations(
+            self._integration_unit_allocation,
+            self._experiment_dao,
+            output.integration_weights,
+        )
+
+        recipe_generator.add_acquire_lengths(integration_times=output.integration_times)
+
+        recipe_generator.add_measurements(
+            self.calc_measurement_map(integration_times=output.integration_times)
+        )
+
+        recipe_generator.add_simultaneous_acquires(output.simultaneous_acquires)
+
+    def _drive_recipe_generator(
+        self,
+        combined_outputs: CombinedRealtimeCompilerOutput,
+        recipe_generator: RecipeGenerator,
+    ):
+        recipe_generator.add_oscillator_params(self._experiment_dao)
+
+        for output in combined_outputs.combined_output.values():
+            self._add_io_to_recipe(output, recipe_generator)
         for device in self._experiment_dao.device_infos():
             recipe_generator.validate_and_postprocess_ios(device)
 
         for device_id, awgs in self._awgs.items():
             for awg in awgs.values():
-                # todo: clean-up
                 signal_type = awg.signal_type
                 if signal_type == AWGSignalType.DOUBLE:
-                    awg_signals = {
-                        f"{awg.signal_channels[0][0]}_{awg.signal_channels[1][0]}"
-                    }
                     signal_type = AWGSignalType.SINGLE
-                else:
-                    awg_signals = {c for c, _ in awg.signal_channels}
-                if signal_type == AWGSignalType.MULTI:
+                elif signal_type == AWGSignalType.MULTI:
                     signal_type = AWGSignalType.IQ
-                # Find the acquire signal from which we read the feedback and which
-                # is used via a match/state construct for the drive signals of this awg
-                qa_signal_ids = {
-                    h.acquire
-                    for h in self._combined_compiler_output.feedback_connections.values()
-                    if h.drive.intersection(awg_signals)
-                }
-                if len(qa_signal_ids) > 1:
-                    raise LabOneQException(
-                        f"The drive signal(s) ({set(awg_signals)}) can only react to "
-                        f"one acquire signal for feedback, got {qa_signal_ids}."
-                    )
                 recipe_generator.add_awg(
                     device_id=device_id,
                     awg_number=awg.awg_number,
                     signal_type=signal_type.value,
-                    qa_signal_id=next(iter(qa_signal_ids), None),
-                    feedback_register_config=self._combined_compiler_output.feedback_register_configurations.get(
+                    feedback_register_config=combined_outputs.get_feedback_register_configurations(
                         awg.key
                     ),
                 )
 
-        for step in self._combined_compiler_output.realtime_steps:
-            recipe_generator.add_realtime_step(
-                device_id=step.device_id,
-                awg_id=step.awg_id,
-                seqc_filename=step.seqc_ref,
-                wave_indices_name=step.wave_indices_ref,
-                nt_loop_indices=step.nt_step,
-            )
+        for step in combined_outputs.realtime_steps:
+            recipe_generator.add_realtime_step(step)
 
-        assert self._combined_compiler_output is not None
-        recipe_generator.add_oscillator_params(self._experiment_dao)
-        recipe_generator.add_integrator_allocations(
-            self._integration_unit_allocation,
-            self._experiment_dao,
-            self._combined_compiler_output.integration_weights,
+        for output in combined_outputs.combined_output.values():
+            self._add_acquire_info_to_recipe(output, recipe_generator)
+
+    def _generate_recipe(self):
+        recipe_generator = RecipeGenerator()
+        recipe_generator.from_experiment(
+            self._experiment_dao, self._leader_properties, self._clock_settings
         )
 
-        recipe_generator.add_acquire_lengths(
-            integration_times=self._combined_compiler_output.integration_times
-        )
-
-        recipe_generator.add_measurements(
-            self.calc_measurement_map(
-                integration_times=self._combined_compiler_output.integration_times
-            )
-        )
-
-        recipe_generator.add_simultaneous_acquires(
-            self._combined_compiler_output.simultaneous_acquires
-        )
+        self._drive_recipe_generator(self._combined_compiler_output, recipe_generator)
 
         recipe_generator.add_total_execution_time(
             self._combined_compiler_output.total_execution_time
@@ -1063,13 +1124,9 @@ class Compiler:
             experiment_dict=ExperimentDAO.dump(self._experiment_dao),
             scheduled_experiment=ScheduledExperiment(
                 recipe=self._recipe,
-                src=self._combined_compiler_output.src,
-                waves=list(self._combined_compiler_output.waves.values()),
-                wave_indices=self._combined_compiler_output.wave_indices,
-                command_tables=self._combined_compiler_output.command_tables,
-                schedule=self._combined_compiler_output.schedule,
-                pulse_map=self._combined_compiler_output.pulse_map,
+                artifacts=self._combined_compiler_output.get_artifacts(),
                 execution=self._execution,
+                schedule=self._combined_compiler_output.schedule,
             ),
         )
 
@@ -1124,6 +1181,8 @@ def get_lead_delay(
                 return settings.HDAWG_LEAD_DESKTOP_SETUP_2GHz
             else:
                 return settings.HDAWG_LEAD_DESKTOP_SETUP
+    if device_type == DeviceType.PRETTYPRINTERDEVICE:
+        return settings.PRETTYPRINTERDEVICE_LEAD
     elif device_type == DeviceType.UHFQA:
         return settings.UHFQA_LEAD_PQSC
     elif device_type == DeviceType.SHFQA:

@@ -35,6 +35,9 @@ class ZIStandardInstrument(Instrument):
                 self.reference_clock_source.lower()
             )
 
+    #: Device class
+    device_class: int = field(default=0x0)
+
     def calc_options(self):
         return {
             **super().calc_options(),

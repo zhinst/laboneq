@@ -22,6 +22,7 @@ from laboneq.dsl.experiment.pulse import Pulse
 
 if typing.TYPE_CHECKING:
     from laboneq.dsl.experiment import Experiment, Section
+    from laboneq.dsl.prng import PRNG
 
 __all__ = [
     "acquire",
@@ -53,6 +54,8 @@ from laboneq.dsl.experiment.section_context import (
     SectionContextManager,
     SweepSectionContextManager,
     active_section,
+    PRNGSetupContextManager,
+    PRNGLoopContextManager,
 )
 
 
@@ -99,7 +102,7 @@ def acquire_loop_nt(*args, **kwargs):
 def match(
     handle: str | None = None,
     user_register: int | None = None,
-    uid: str = None,
+    uid: str | None = None,
     play_after: str | list[str] | None = None,
     local: bool | None = None,
 ):
@@ -112,7 +115,7 @@ def match(
     )
 
 
-def case(state: int, uid: str = None):
+def case(state: int, uid: str | None = None):
     return CaseSectionContextManager(state=state, uid=uid)
 
 
@@ -268,3 +271,17 @@ def experiment_calibration():
 
 def map_signal(experiment_signal_uid: str, logical_signal: LogicalSignal):
     _active_experiment().map_signal(experiment_signal_uid, logical_signal)
+
+
+def prng_setup(range: int, seed=1, uid=None):
+    from laboneq.dsl.prng import PRNG
+
+    prng = PRNG(range, seed)
+    return PRNGSetupContextManager(prng=prng, uid=uid)
+
+
+def prng_loop(prng: PRNG, count=1, uid=None):
+    from laboneq.dsl.prng import PRNGSample
+
+    prng_sample = PRNGSample(uid=uid, prng=prng, count=count)
+    return PRNGLoopContextManager(prng_sample, uid)

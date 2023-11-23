@@ -82,10 +82,11 @@ class AcquireGroupIR(IntervalIR):
             ]
 
         for pulse in self.pulses:
-            params_list = []
-            for f in ("length", "amplitude", "phase", "offset"):
-                if isinstance(getattr(pulse, f), ParameterInfo):
-                    params_list.append(getattr(pulse, f).uid)
+            params_list = [
+                getattr(pulse, f).uid
+                for f in ("length", "amplitude", "phase", "offset")
+                if isinstance(getattr(pulse, f), ParameterInfo)
+            ]
             d["parametrized_with"].append(params_list)
 
         return [

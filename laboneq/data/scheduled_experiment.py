@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -60,13 +61,12 @@ class PulseMapEntry:
     waveforms: dict[str, PulseWaveformMap] = field(default_factory=dict)
 
 
+class CompilerArtifact:
+    pass
+
+
 @dataclass
-class ScheduledExperiment:
-    uid: str = None
-
-    #: Instructions to the controller for running the experiment.
-    recipe: Recipe = None
-
+class ArtifactsCodegen(CompilerArtifact):
     #: The SeqC source code, per device.
     src: list[dict[str, str]] = None
 
@@ -80,12 +80,55 @@ class ScheduledExperiment:
     #: Data structure for storing the command table data
     command_tables: list[dict[str, Any]] = field(default_factory=list)
 
-    #: list of events as scheduled by the compiler.
-    schedule: dict[str, Any] = None
-
     #: Data structure for mapping pulses (in the experiment) to waveforms (on the
     #: device).
     pulse_map: dict[str, PulseMapEntry] = None
+
+
+@dataclass
+class ArtifactsPrettyPrinter(CompilerArtifact):
+    #: Outline of the IR
+    src: list[dict[str, str]] = None
+
+    #: Pulse uids
+    waves: list[dict[str, str]] = None
+
+    #: Section names
+    sections: list[dict[str, str]] = None
+
+
+@dataclass
+class ScheduledExperiment:
+    uid: str = None
+
+    #: Instructions to the controller for running the experiment.
+    recipe: Recipe = None
+
+    #: Compiler arteficts specific to backend(s)
+    artifacts: CompilerArtifact | dict[int, CompilerArtifact] = None
+
+    def __getattr__(self, attr):
+        if hasattr(self.artifacts, attr):
+            return getattr(self.artifacts, attr)
+        else:
+            raise AttributeError(
+                f"{self.artifacts.__class__.__name__} does not have attribute {attr}"
+            )
+
+    def __copy__(self):
+        new_artefacts = copy.copy(self.artifacts)
+        new_scheduled_experiment = self.__class__(
+            uid=self.uid,
+            artifacts=new_artefacts,
+            schedule=self.schedule,
+            execution=self.execution,
+            compilation_job_hash=self.compilation_job_hash,
+            experiment_hash=self.experiment_hash,
+        )
+        return new_scheduled_experiment
+
+    #: list of events as scheduled by the compiler.
+    schedule: dict[str, Any] = None
 
     #: Experiment execution model
     execution: Any = None  # TODO(2K): 'Statement' type after refactoring
@@ -105,24 +148,12 @@ class ScheduledExperiment:
 
         return (
             other.uid,
-            other.recipe,
-            other.src,
-            other.wave_indices,
-            other.command_tables,
-            other.schedule,
-            other.pulse_map,
-            other.execution,
+            other.artifacts,
             other.compilation_job_hash,
             other.experiment_hash,
         ) == (
             self.uid,
-            self.recipe,
-            self.src,
-            self.wave_indices,
-            self.command_tables,
-            self.schedule,
-            self.pulse_map,
-            self.execution,
+            other.artifacts,
             self.compilation_job_hash,
             self.experiment_hash,
         ) and dicts_equal(other.waves, self.waves)

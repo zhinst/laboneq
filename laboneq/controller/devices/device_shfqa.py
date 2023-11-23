@@ -22,6 +22,7 @@ from laboneq.controller.communication import (
     DaqNodeGetAction,
     DaqNodeSetAction,
 )
+from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
 from laboneq.controller.devices.device_shf_base import DeviceSHFBase
 from laboneq.controller.devices.device_zi import (
     SequencerPaths,
@@ -111,7 +112,7 @@ def calc_theoretical_assignment_vec(num_weights: int) -> np.ndarray:
     return assignment_vec
 
 
-class DeviceSHFQA(DeviceSHFBase):
+class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.dev_type = "SHFQA4"
@@ -119,6 +120,7 @@ class DeviceSHFQA(DeviceSHFBase):
         self._channels = 4
         self._wait_for_awgs = True
         self._emit_trigger = False
+        self.pipeliner_set_node_base(f"/{self.serial}/qachannels")
 
     @property
     def dev_repr(self) -> str:
@@ -153,7 +155,7 @@ class DeviceSHFQA(DeviceSHFBase):
             ready=f"/{self.serial}/qachannels/{index}/generator/ready",
         )
 
-    def _get_num_awgs(self):
+    def _get_num_awgs(self) -> int:
         return self._channels
 
     def _validate_range(self, io: IO, is_out: bool):
@@ -201,17 +203,16 @@ class DeviceSHFQA(DeviceSHFBase):
     def disable_outputs(
         self, outputs: set[int], invert: bool
     ) -> list[DaqNodeSetAction]:
-        channels_to_disable: list[DaqNodeSetAction] = []
-        for ch in range(self._channels):
-            if (ch in outputs) != invert:
-                channels_to_disable.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/qachannels/{ch}/output/on",
-                        0,
-                        caching_strategy=CachingStrategy.NO_CACHE,
-                    )
-                )
+        channels_to_disable: list[DaqNodeSetAction] = [
+            DaqNodeSetAction(
+                self._daq,
+                f"/{self.serial}/qachannels/{ch}/output/on",
+                0,
+                caching_strategy=CachingStrategy.NO_CACHE,
+            )
+            for ch in range(self._channels)
+            if (ch in outputs) != invert
+        ]
         return channels_to_disable
 
     def on_experiment_end(self):
@@ -239,6 +240,7 @@ class DeviceSHFQA(DeviceSHFBase):
                     f"/{self.serial}/qachannels/{awg}/readout/result/enable",
                 ]
             )
+            nodes.extend(self.pipeliner_control_nodes(awg))
         return nodes
 
     def configure_acquisition(
@@ -480,8 +482,10 @@ class DeviceSHFQA(DeviceSHFBase):
         )
         return nodes_to_initialize_scope
 
-    def collect_execution_nodes(self, with_pipeliner: bool):
-        _logger.debug("Starting execution...")
+    def collect_execution_nodes(self, with_pipeliner: bool) -> list[DaqNodeAction]:
+        if with_pipeliner:
+            return self.pipeliner_collect_execution_nodes()
+
         return [
             DaqNodeSetAction(
                 self._daq,
@@ -491,6 +495,29 @@ class DeviceSHFQA(DeviceSHFBase):
             )
             for awg_index in self._allocated_awgs
         ]
+
+    def collect_execution_setup_nodes(
+        self, with_pipeliner: bool, has_awg_in_use: bool
+    ) -> list[DaqNodeAction]:
+        hw_sync = with_pipeliner and has_awg_in_use
+        nodes = []
+        if hw_sync and self._emit_trigger:
+            nodes.append(
+                DaqNodeSetAction(
+                    self._daq,
+                    f"/{self.serial}/system/internaltrigger/synchronization/enable",
+                    1,  # enable
+                )
+            )
+        if hw_sync and not self._emit_trigger:
+            nodes.append(
+                DaqNodeSetAction(
+                    self._daq,
+                    f"/{self.serial}/system/synchronization/source",
+                    1,  # external
+                )
+            )
+        return nodes
 
     def collect_internal_start_execution_nodes(self):
         if self._emit_trigger:
@@ -507,23 +534,33 @@ class DeviceSHFQA(DeviceSHFBase):
         return []
 
     def conditions_for_execution_ready(self, with_pipeliner: bool) -> dict[str, Any]:
-        # TODO(janl): Not sure whether we need this condition this on the SHFQA (including SHFQC)
-        # as well. The state of the generator enable wasn't always pickup up reliably, so we
+        if with_pipeliner:
+            return self.pipeliner_conditions_for_execution_ready()
+
+        # TODO(janl): Not sure whether we need this condition on the SHFQA (including SHFQC)
+        # as well. The state of the generator enable wasn't always picked up reliably, so we
         # only check in cases where we rely on external triggering mechanisms.
-        conditions: dict[str, Any] = {}
-        if self._wait_for_awgs:
-            for awg_index in self._allocated_awgs:
-                conditions[
-                    f"/{self.serial}/qachannels/{awg_index}/generator/enable"
-                ] = 1
-        return conditions
+        return {
+            f"/{self.serial}/qachannels/{awg_index}/generator/enable": 1
+            for awg_index in self._allocated_awgs
+        }
 
     def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
     ) -> dict[str, Any]:
         conditions: dict[str, Any] = {}
+
+        if with_pipeliner:
+            conditions.update(self.pipeliner_conditions_for_execution_done())
+        else:
+            conditions.update(
+                {
+                    f"/{self.serial}/qachannels/{awg_index}/generator/enable": 0
+                    for awg_index in self._allocated_awgs
+                }
+            )
+
         for awg_index in self._allocated_awgs:
-            conditions[f"/{self.serial}/qachannels/{awg_index}/generator/enable"] = 0
             if is_spectroscopy(acquisition_type):
                 conditions[
                     f"/{self.serial}/qachannels/{awg_index}/spectroscopy/result/enable"
@@ -590,7 +627,10 @@ class DeviceSHFQA(DeviceSHFBase):
                 )
 
     def collect_initialization_nodes(
-        self, device_recipe_data: DeviceRecipeData, initialization: Initialization
+        self,
+        device_recipe_data: DeviceRecipeData,
+        initialization: Initialization,
+        recipe_data: RecipeData,
     ) -> list[DaqNodeSetAction]:
         _logger.debug("%s: Initializing device...", self.dev_repr)
 
@@ -632,16 +672,16 @@ class DeviceSHFQA(DeviceSHFBase):
                 )
             )
 
-        for input in initialization.inputs or []:
-            nodes_to_initialize_output.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/qachannels/{input.channel}/input/rflfpath",
-                    1  # RF
-                    if input.port_mode is None or input.port_mode == PortMode.RF.value
-                    else 0,  # LF
-                )
+        nodes_to_initialize_output += [
+            DaqNodeSetAction(
+                self._daq,
+                f"/{self.serial}/qachannels/{input.channel}/input/rflfpath",
+                1  # RF
+                if input.port_mode is None or input.port_mode == PortMode.RF.value
+                else 0,  # LF
             )
+            for input in initialization.inputs or []
+        ]
 
         return nodes_to_initialize_output
 
@@ -1173,6 +1213,8 @@ class DeviceSHFQA(DeviceSHFBase):
 
     def collect_reset_nodes(self) -> list[DaqNodeAction]:
         reset_nodes = super().collect_reset_nodes()
+        # Reset pipeliner first, attempt to set generator enable leads to FW error if pipeliner was enabled.
+        reset_nodes.extend(self.pipeliner_reset_nodes())
         reset_nodes.append(
             DaqNodeSetAction(
                 self._daq,
@@ -1181,6 +1223,23 @@ class DeviceSHFQA(DeviceSHFBase):
                 caching_strategy=CachingStrategy.NO_CACHE,
             )
         )
+        reset_nodes.append(
+            DaqNodeSetAction(
+                self._daq,
+                f"/{self.serial}/system/synchronization/source",
+                0,  # internal
+                caching_strategy=CachingStrategy.NO_CACHE,
+            )
+        )
+        if self.options.is_qc:
+            reset_nodes.append(
+                DaqNodeSetAction(
+                    self._daq,
+                    f"/{self.serial}/system/internaltrigger/synchronization/enable",
+                    0,
+                    caching_strategy=CachingStrategy.NO_CACHE,
+                )
+            )
         reset_nodes.append(
             DaqNodeSetAction(
                 self._daq,

@@ -22,6 +22,15 @@ class AttributeName(Enum):
     QA_CENTER_FREQ = auto()
     SG_SYNTH_CENTER_FREQ = auto()
     SG_DIG_MIXER_CENTER_FREQ = auto()
+    OUTPUT_ROUTE_1 = auto()
+    OUTPUT_ROUTE_2 = auto()
+    OUTPUT_ROUTE_3 = auto()
+    OUTPUT_ROUTE_1_AMPLITUDE = auto()
+    OUTPUT_ROUTE_2_AMPLITUDE = auto()
+    OUTPUT_ROUTE_3_AMPLITUDE = auto()
+    OUTPUT_ROUTE_1_PHASE = auto()
+    OUTPUT_ROUTE_2_PHASE = auto()
+    OUTPUT_ROUTE_3_PHASE = auto()
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}.{self.name}"

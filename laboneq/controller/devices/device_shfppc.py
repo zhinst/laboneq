@@ -68,7 +68,10 @@ class DeviceSHFPPC(DeviceZI):
         return []
 
     def collect_initialization_nodes(
-        self, device_recipe_data: DeviceRecipeData, initialization: Initialization
+        self,
+        device_recipe_data: DeviceRecipeData,
+        initialization: Initialization,
+        recipe_data: RecipeData,
     ) -> list[DaqNodeAction]:
         nodes_to_set: list[DaqNodeAction] = []
         ppchannels = initialization.ppchannels or []

@@ -4,6 +4,8 @@
 """ Collection of helper functions for plotting simulated output and results data from LabOne Q
 """
 
+from __future__ import annotations
+
 # regular expressions
 import re
 from typing import List
@@ -43,7 +45,7 @@ def plot_simulation(
     save: bool = False,
     filename: str = "filename",
     filetype: str = "svg",
-    signals: List[str] = None,
+    signals: List[str] | None = None,
 ):
     """Plot the signals that would be played by a compiled experiment.
 
@@ -242,7 +244,13 @@ def plot_simulation(
             axes.ticklabel_format(axis="both", style="sci", scilimits=(0, 0))
             axes.grid(True)
 
+    # enforce same x-axis scale for all plots
+    if hasattr(axes, "__iter__"):
+        for ax in axes:
+            ax.set_xlim(start_time, length)
+
     fig.tight_layout()
+
     if save is True:
         fig.savefig(f"{filename}.{filetype}", format=f"{filetype}")
     # fig.legend(loc="upper left")

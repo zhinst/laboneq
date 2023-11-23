@@ -67,12 +67,12 @@ def sample_pulse(
     sampling_rate: float,
     length: float,
     amplitude: Complex,
-    pulse_function: Optional[str],
-    modulation_frequency: Optional[float] = None,
-    phase: Optional[float] = None,
-    samples: Optional[np.ndarray] = None,
+    pulse_function: str | None,
+    modulation_frequency: float | None = None,
+    phase: float | None = None,
+    samples: np.ndarray | None = None,
     mixer_type: Optional[MixerType] = MixerType.IQ,
-    pulse_parameters: Optional[Dict[str, Any]] = None,
+    pulse_parameters: Dict[str, Any] | None = None,
     markers=None,
 ):
     """Create a waveform from a pulse definition.
@@ -203,7 +203,7 @@ pulse_function_library = dict()
 
 
 def verify_amplitude_no_clipping(
-    samples, pulse_id: Optional[str], mixer_type: MixerType, signal_id: Optional[str]
+    samples, pulse_id: str | None, mixer_type: MixerType, signal_id: str | None
 ):
     max_amplitude = np.max(
         np.abs(samples["samples_i"] + 1j * samples.get("samples_j", 0))

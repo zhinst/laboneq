@@ -23,10 +23,10 @@ from laboneq.dsl.device.io_units.physical_channel import (
 @dataclass(init=False, repr=False, order=True)
 class LogicalSignal(Calibratable):
     uid: str
-    name: Optional[str]
+    name: str | None
     _calibration: Optional[SignalCalibration]
     _physical_channel: Optional[PhysicalChannel]
-    path: Optional[str]
+    path: str | None
     direction: Optional[IODirection]
 
     def __init__(
@@ -36,7 +36,7 @@ class LogicalSignal(Calibratable):
         name=None,
         calibration=None,
         path=None,
-        physical_channel: PhysicalChannel = None,
+        physical_channel: PhysicalChannel | None = None,
     ):
         super().__init__()
         self.uid = uid

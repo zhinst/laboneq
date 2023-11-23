@@ -33,6 +33,7 @@ from laboneq.dsl.device.instruments import (
     SHFQC,
     SHFSG,
     UHFQA,
+    PRETTYPRINTERDEVICE,
 )
 from laboneq.dsl.device.instruments.zi_standard_instrument import ZIStandardInstrument
 from laboneq.dsl.device.io_units.physical_channel import (
@@ -179,6 +180,49 @@ class _HDAWGGenerator(_InstrumentGenerator):
                 signal_type=IOSignalType.DIO,
             )
             connections.append(conn)
+        return connections
+
+    @staticmethod
+    def make_logical_signal(connection, pc):
+        ls = LogicalSignal(
+            uid=connection.uid,
+            name=connection.name,
+            direction=IODirection.OUT,
+            path=qct_path.Separator.join(
+                [
+                    qct_path.LogicalSignalGroups_Path_Abs,
+                    connection.uid,
+                ]
+            ),
+            physical_channel=pc,
+        )
+        return ls
+
+
+class _PRETTYPRINTERDEVICEGenerator(_InstrumentGenerator):
+    @staticmethod
+    def determine_signal_type(ports: list[str]) -> str:
+        return "rf"
+
+    @staticmethod
+    def make_connections(connection: InternalConnection | SignalConnection):
+        connections = []
+        if isinstance(connection, SignalConnection):
+            if connection.type != "rf" or len(connection.ports) != 1:
+                raise DeviceSetupInternalException(
+                    "Pretty printer devices are required to have one rf signal on exactly one port."
+                )
+            conn = Connection(
+                local_port=connection.ports[0],
+                remote_path=qct_path.insert_logical_signal_prefix(connection.uid),
+                remote_port="0",
+                signal_type=IOSignalType.RF,
+            )
+            connections.append(conn)
+        else:
+            raise DeviceSetupInternalException(
+                "Pretty printer devices do not feature a DIO port"
+            )
         return connections
 
     @staticmethod
@@ -539,6 +583,7 @@ def add_connection(
         SHFQC: _SHFQCGenerator,
         SHFSG: _SHFSGGenerator,
         PQSC: _PQSCGenerator,
+        PRETTYPRINTERDEVICE: _PRETTYPRINTERDEVICEGenerator,
     }
     if dev := setup.instrument_by_uid(instrument):
         handler: _InstrumentGenerator = HANDLERS[dev.__class__]

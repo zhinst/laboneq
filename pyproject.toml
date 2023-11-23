@@ -27,6 +27,7 @@ classifiers = [
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering",
 ]
 dependencies = [
@@ -53,9 +54,9 @@ dependencies = [
     "attrs",
     "sortedcontainers",
     "typing_extensions",
-    "zhinst-core~=23.6.46756",
+    "zhinst-core~=23.10.49450",
     "zhinst-toolkit~=0.6.0",
-    "zhinst-utils==0.3.3",
+    "zhinst-utils==0.3.5",
     "nest_asyncio",
 ]
 
@@ -83,6 +84,10 @@ laboneq = [
 
 [tool.ruff]
 select = [
+    # flake8-bugbear
+    "B",
+    # perflint
+    "PERF",
     # pyflakes
     "F",
     # pycodestyle
@@ -94,7 +99,9 @@ select = [
     "Q",
     "B019",
     # isort
-    "I002"
+    "I002",
+    # future annotations
+    "FA"
 ]
 
 ignore = [
@@ -137,6 +144,10 @@ max-complexity = 10
 # Ignore star import, mainly from laboneq.simple (TODO: Fix this)
 "tests/system/*" = ["F403", "F405"]
 "tests/integration/dsl_v3/*" = ["F403", "F405"]
+
+"tests/*" = ["B008", "B011", "B017", "B904", "PERF"]
+"resources/examples/*" = ["B015", "B018", "PERF"]
+"examples/*" = ["B018", "PERF"]
 
 [tool.nbqa.addopts]
 # Notebooks utilize `from laboneq.simple import *`, therefore ignore F403

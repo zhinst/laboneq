@@ -88,8 +88,8 @@ DEFAULT_CONFIG_YML = """
 
 def initialize_logging(
     performance_log: bool = False,
-    logging_config_dict: dict = None,
-    log_level: int | str = None,
+    logging_config_dict: dict | None = None,
+    log_level: int | str | None = None,
 ):
     """Configure logging.
 

@@ -102,9 +102,9 @@ class _UploadItem:
 class Controller:
     def __init__(
         self,
-        run_parameters: ControllerRunParameters = None,
-        target_setup: TargetSetup = None,
-        neartime_callbacks: dict[str, Callable] = None,
+        run_parameters: ControllerRunParameters | None = None,
+        target_setup: TargetSetup | None = None,
+        neartime_callbacks: dict[str, Callable] | None = None,
     ):
         self._run_parameters = run_parameters or ControllerRunParameters()
         self._devices = DeviceCollection(
@@ -152,6 +152,7 @@ class Controller:
                 device.collect_initialization_nodes(
                     self._recipe_data.device_settings[initialization.device_uid],
                     initialization,
+                    self._recipe_data,
                 )
             )
             nodes_to_initialize.extend(device.collect_osc_initialization_nodes())
@@ -233,13 +234,16 @@ class Controller:
                         continue
 
                     seqc_code = device.prepare_seqc(
-                        recipe_data.scheduled_experiment, rt_exec_step.seqc_ref
+                        recipe_data.scheduled_experiment.artifacts,
+                        rt_exec_step.seqc_ref,
                     )
                     waves = device.prepare_waves(
-                        recipe_data.scheduled_experiment, rt_exec_step.wave_indices_ref
+                        recipe_data.scheduled_experiment.artifacts,
+                        rt_exec_step.wave_indices_ref,
                     )
                     command_table = device.prepare_command_table(
-                        recipe_data.scheduled_experiment, rt_exec_step.wave_indices_ref
+                        recipe_data.scheduled_experiment.artifacts,
+                        rt_exec_step.wave_indices_ref,
                     )
 
                     seqc_item = _SeqCCompileItem(
@@ -335,7 +339,8 @@ class Controller:
                 timeout_s = 10
                 if not response_waiter.wait_all(timeout=timeout_s):
                     raise LabOneQControllerException(
-                        f"AWGs not in ready state within timeout ({timeout_s} s)."
+                        f"AWGs not in ready state within timeout ({timeout_s} s). "
+                        f"Not fulfilled:\n{response_waiter.remaining_str()}"
                     )
             if len(wf_node_settings) > 0:
                 _logger.debug("Started upload of waveforms...")
@@ -512,9 +517,15 @@ class Controller:
 
     async def _setup_one_step_execution(self, with_pipeliner: bool):
         nodes_to_execute = []
-        for _, device in self._devices.all:
+        for device_uid, device in self._devices.all:
+            has_awg_in_use = any(
+                init.device_uid == device_uid and len(init.awgs) > 0
+                for init in self._recipe_data.initializations
+            )
             nodes_to_execute.extend(
-                device.collect_execution_setup_nodes(with_pipeliner=with_pipeliner)
+                device.collect_execution_setup_nodes(
+                    with_pipeliner=with_pipeliner, has_awg_in_use=has_awg_in_use
+                )
             )
         await batch_set(nodes_to_execute)
 
@@ -574,16 +585,16 @@ class Controller:
 
     def disable_outputs(
         self,
-        device_uids: list[str] = None,
-        logical_signals: list[str] = None,
+        device_uids: list[str] | None = None,
+        logical_signals: list[str] | None = None,
         unused_only: bool = False,
     ):
         run_async(self.disable_outputs_async(device_uids, logical_signals, unused_only))
 
     async def disable_outputs_async(
         self,
-        device_uids: list[str] = None,
-        logical_signals: list[str] = None,
+        device_uids: list[str] | None = None,
+        logical_signals: list[str] | None = None,
         unused_only: bool = False,
     ):
         await self._devices.disable_outputs(device_uids, logical_signals, unused_only)
@@ -607,12 +618,12 @@ class Controller:
 
     # TODO(2K): remove legacy code
     def execute_compiled_legacy(
-        self, compiled_experiment: CompiledExperiment, session: Session = None
+        self, compiled_experiment: CompiledExperiment, session: Session | None = None
     ):
         run_async(self.execute_compiled_legacy_async(compiled_experiment, session))
 
     async def execute_compiled_legacy_async(
-        self, compiled_experiment: CompiledExperiment, session: Session = None
+        self, compiled_experiment: CompiledExperiment, session: Session | None = None
     ):
         execution: Statement
         if hasattr(compiled_experiment.scheduled_experiment, "execution"):
@@ -668,8 +679,13 @@ class Controller:
                 # eat the exception
                 pass
             _logger.info("Finished near-time execution.")
-            for _, device in self._devices.all:
-                device.check_errors()
+            self._devices.check_errors()
+        except LabOneQControllerException:
+            # Report device errors if any - it maybe useful to diagnose the original exception
+            device_errors = self._devices.check_errors(raise_on_error=False)
+            if device_errors is not None:
+                _logger.warning(device_errors)
+            raise
         finally:
             # Ensure that the experiment run time is not included in the idle timeout for the connection check.
             self._last_connect_check_ts = time.monotonic()
@@ -709,24 +725,16 @@ class Controller:
                 pulse_uid
             ].waveforms.values():
                 if any([instance.can_compress for instance in waveform.instances]):
-                    _logger.error(
-                        (
-                            "Pulse replacement on pulses that allow compression not"
-                            " allowed. Pulse %s"
-                        ),
-                        pulse_uid,
+                    raise LabOneQControllerException(
+                        f"Pulse replacement on pulses that allow compression not "
+                        f"allowed. Pulse {pulse_uid}"
                     )
-                    return
 
-        if hasattr(pulse_uid, "can_compress") and pulse_uid.can_compress:
-            _logger.error(
-                (
-                    "Pulse replacement on pulses that allow compression not allowed."
-                    " Pulse %s"
-                ),
-                pulse_uid.uid,
+        if getattr(pulse_uid, "can_compress", False):
+            raise LabOneQControllerException(
+                f"Pulse replacement on pulses that allow compression not allowed. "
+                f"Pulse {pulse_uid.uid}"
             )
-            return
 
         acquisition_type = RtExecutionInfo.get_acquisition_type(
             self._recipe_data.rt_execution_infos

@@ -1,10 +1,11 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from itertools import groupby
-from typing import Any, Dict, Iterator, Optional, Tuple
+from typing import Any, Dict, Iterator, Tuple
 
 from engineering_notation import EngNumber
 
@@ -63,7 +64,7 @@ class IntegrationTimes:
             self.section_infos[section_name] = SectionIntegrationInfo()
         return self.section_infos[section_name]
 
-    def section_info(self, section_name) -> Optional[SectionIntegrationInfo]:
+    def section_info(self, section_name) -> SectionIntegrationInfo | None:
         return self.section_infos.get(section_name)
 
     def items(self) -> Iterator[Tuple[str, SectionIntegrationInfo]]:
@@ -91,6 +92,13 @@ class MeasurementCalculator:
         acquire_and_play_events = cls._filter_event_types(
             events, {"ACQUIRE_START", "ACQUIRE_END", "PLAY_START", "PLAY_END"}
         )
+
+        acquire_and_play_events = [
+            event
+            for event in acquire_and_play_events
+            if event["signal"] in signal_info_map.keys()
+        ]
+
         signals_on_awg = {}
 
         def calc_awg_key(signal_id):

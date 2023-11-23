@@ -159,6 +159,7 @@ class TargetSetupGenerator:
                     is_qc=True,
                     qc_with_qa=True,
                     reference_clock_source=instrument.reference_clock.source,
+                    device_class=instrument.device_class,
                 )
                 if shfqa.connections
                 else None
@@ -193,6 +194,7 @@ class TargetSetupGenerator:
                 is_qc=True,
                 qc_with_qa=target_device_qa is not None,
                 reference_clock_source=instrument.reference_clock.source,
+                device_class=instrument.device_class,
             )
             yield target_device_sg
             return
@@ -223,6 +225,7 @@ class TargetSetupGenerator:
                 is_qc=False,
                 qc_with_qa=False,
                 reference_clock_source=instrument.reference_clock.source,
+                device_class=instrument.device_class,
             )
 
     @classmethod
@@ -255,10 +258,11 @@ class TargetSetupGenerator:
         for c in instrument.connections:
             if c.physical_channel.direction != IODirection.OUT:
                 continue
-            ports = []
-            for port in c.physical_channel.ports:
-                if any(port.path.startswith(s) for s in port_path_filter):
-                    ports.append(int(port.path.split("/")[1]))
+            ports = [
+                int(port.path.split("/")[1])
+                for port in c.physical_channel.ports
+                if any(port.path.startswith(s) for s in port_path_filter)
+            ]
             if ports:
                 ls_ports.setdefault(
                     f"/logical_signal_groups/{c.logical_signal.group}/{c.logical_signal.name}",

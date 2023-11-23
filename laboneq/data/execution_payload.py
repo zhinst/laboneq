@@ -28,6 +28,7 @@ class TargetDeviceType(EnumReprMixin, Enum):
     SHFPPC = auto()
     PQSC = auto()
     NONQC = auto()
+    PRETTYPRINTERDEVICE = auto()
 
 
 #
@@ -68,6 +69,7 @@ class TargetDevice:
     is_qc: bool = False
     qc_with_qa: bool = False
     reference_clock_source: ReferenceClockSource | None = None
+    device_class: int = 0x0
 
 
 @dataclass

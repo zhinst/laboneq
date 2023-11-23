@@ -59,7 +59,7 @@ class LabOneQFacade:
 
     @staticmethod
     def compile(
-        session: Session, logger, compiler_settings: dict = None
+        session: Session, logger, compiler_settings: dict | None = None
     ) -> CompiledExperiment:
         logger.debug("Calling LabOne Q Compiler...")
 

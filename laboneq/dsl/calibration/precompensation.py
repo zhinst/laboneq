@@ -89,6 +89,7 @@ class HighPassCompensation(Observable):
             warnings.warn(
                 "`HighPassCompensation` argument `clearing` will be removed in the future versions. It has no functionality.",
                 FutureWarning,
+                stacklevel=2,
             )
         else:
             self.clearing = HighPassCompensationClearing.RISE

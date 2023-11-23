@@ -46,6 +46,9 @@ class LinearSweepParameter(Parameter):
     count: int | None = None
     axis_name: str | None = None
 
+    def __len__(self):
+        return self.count
+
 
 @dataclass
 class SweepParameter(Parameter):
@@ -70,3 +73,6 @@ class SweepParameter(Parameter):
     values: ArrayLike = None
     axis_name: str = None
     driven_by: list[Parameter] = field(default_factory=list)
+
+    def __len__(self):
+        return len(self.values)

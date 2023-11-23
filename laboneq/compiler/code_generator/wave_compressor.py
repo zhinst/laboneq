@@ -1,9 +1,10 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
 from dataclasses import dataclass
 from itertools import groupby
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Tuple, Union
 
 import numpy as np
 
@@ -196,11 +197,10 @@ class WaveCompressor:
                     num_samples += hi - lo
                 events.append(PlayHold(num_samples=num_samples))
             else:
-                play_samples = []
-                for frame_idx in sequence:
-                    play_samples.append(
-                        self._get_frame(samples, sample_multiple, frame_idx, num_frames)
-                    )
+                play_samples = [
+                    self._get_frame(samples, sample_multiple, frame_idx, num_frames)
+                    for frame_idx in sequence
+                ]
                 events.append(
                     PlaySamples(
                         samples=self._merge_samples(samples=play_samples),
@@ -215,7 +215,7 @@ class WaveCompressor:
         self,
         samples: Dict[str, np.array],
         sample_multiple: int,
-        compressible_segments: Optional[List[Tuple[int, int]]] = None,
+        compressible_segments: List[Tuple[int, int]] | None = None,
     ) -> Union[List[Union[PlayHold, PlaySamples]], None]:
         ref_length = len(list(samples.values())[0])
         num_sample_channles = len(list(samples.values()))

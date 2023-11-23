@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import dataclasses
-import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from functools import singledispatchmethod
+from typing import TYPE_CHECKING, Any, Dict
 
 from laboneq._utils import ensure_list
 from laboneq.compiler.common.feedback_register_config import (
@@ -14,6 +14,10 @@ from laboneq.compiler.common.feedback_register_config import (
 from laboneq.compiler.code_generator.measurement_calculator import IntegrationTimes
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
+from laboneq.compiler.workflow.compiler_output import (
+    RealtimeStep,
+    RealtimeStepPrettyPrinter,
+)
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums.acquisition_type import is_spectroscopy
 from laboneq.data.calibration import PortMode
@@ -33,12 +37,12 @@ from laboneq.data.recipe import (
     RefClkType,
     SignalType,
     TriggeringMode,
+    RoutedOutput,
 )
 
 if TYPE_CHECKING:
     from laboneq.compiler.workflow.compiler import LeaderProperties
-
-_logger = logging.getLogger(__name__)
+    from laboneq.data.compilation_job import OutputRoute as CompilerOutputRoute
 
 
 class RecipeGenerator:
@@ -221,7 +225,24 @@ class RecipeGenerator:
         scheduler_port_delay=0.0,
         marker_mode=None,
         amplitude=None,
+        output_routers: list[CompilerOutputRoute] | None = None,
     ):
+        if output_routers is None:
+            output_routers = []
+        else:
+            output_routers = [
+                RoutedOutput(
+                    from_channel=route.from_channel,
+                    amplitude=route.amplitude
+                    if not isinstance(route.amplitude, ParameterInfo)
+                    else route.amplitude.uid,
+                    phase=route.phase
+                    if not isinstance(route.phase, ParameterInfo)
+                    else route.phase.uid,
+                )
+                for route in output_routers
+            ]
+
         if precompensation is not None:
             precomp_dict = {
                 k: v
@@ -253,6 +274,7 @@ class RecipeGenerator:
             scheduler_port_delay=scheduler_port_delay,
             marker_mode=marker_mode,
             amplitude=amplitude,
+            routed_outputs=output_routers,
         )
         if diagonal is not None and off_diagonal is not None:
             output.gains = Gains(diagonal=diagonal, off_diagonal=off_diagonal)
@@ -321,13 +343,11 @@ class RecipeGenerator:
         device_id: str,
         awg_number: int,
         signal_type: str,
-        qa_signal_id: Optional[str],
         feedback_register_config: FeedbackRegisterConfig | None,
     ):
         awg = AWG(
             awg=awg_number,
             signal_type=SignalType(signal_type),
-            qa_signal_id=qa_signal_id,
         )
         if feedback_register_config is not None:
             awg.command_table_match_offset = (
@@ -348,23 +368,25 @@ class RecipeGenerator:
         initialization = self._find_initialization(device_id)
         initialization.awgs.append(awg)
 
-    def add_realtime_step(
-        self,
-        device_id: str,
-        awg_id: int,
-        seqc_filename: str,
-        wave_indices_name: str,
-        nt_loop_indices: List[int],
-    ):
+    @singledispatchmethod
+    def add_realtime_step(self, rt_step):
+        raise NotImplementedError()
+
+    @add_realtime_step.register
+    def _(self, rt_step: RealtimeStep):
         self._recipe.realtime_execution_init.append(
             RealtimeExecutionInit(
-                device_id=device_id,
-                awg_id=awg_id,
-                seqc_ref=seqc_filename,
-                wave_indices_ref=wave_indices_name,
-                nt_step=NtStepKey(indices=tuple(nt_loop_indices)),
+                device_id=rt_step.device_id,
+                awg_id=rt_step.awg_id,
+                seqc_ref=rt_step.seqc_ref,
+                wave_indices_ref=rt_step.wave_indices_ref,
+                nt_step=NtStepKey(indices=tuple(rt_step.nt_step)),
             )
         )
+
+    @add_realtime_step.register
+    def _(self, rt_step: RealtimeStepPrettyPrinter):
+        ...
 
     def from_experiment(
         self,

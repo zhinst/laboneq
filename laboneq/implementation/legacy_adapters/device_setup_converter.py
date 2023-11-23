@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from functools import cached_property
-from typing import TYPE_CHECKING, Dict, List, Mapping, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Mapping, Tuple
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types import enums as legacy_enums
@@ -79,8 +79,8 @@ def convert_dataserver(target: legacy_servers.DataServer, leader_uid: str) -> Se
 
 
 def convert_reference_clock_source(
-    target: Optional[legacy_enums.ReferenceClockSource],
-) -> Optional[ReferenceClockSource]:
+    target: legacy_enums.ReferenceClockSource | None,
+) -> ReferenceClockSource | None:
     if target is None:
         return None
     if target == legacy_enums.ReferenceClockSource.EXTERNAL:
@@ -105,14 +105,16 @@ def convert_device_type(target: ZIStandardInstrument) -> DeviceType:
         return DeviceType.SHFPPC
     if isinstance(target, legacy_instruments.SHFSG):
         return DeviceType.SHFSG
+    if isinstance(target, legacy_instruments.PRETTYPRINTERDEVICE):
+        return DeviceType.PRETTYPRINTERDEVICE
     if isinstance(target, legacy_instruments.NonQC):
         return DeviceType.UNMANAGED
     raise_not_implemented(target)
 
 
 def convert_physical_channel_type(
-    target: Optional[legacy_io_units.PhysicalChannelType],
-) -> Optional[PhysicalChannelType]:
+    target: legacy_io_units.PhysicalChannelType | None,
+) -> PhysicalChannelType | None:
     if target == legacy_io_units.PhysicalChannelType.IQ_CHANNEL:
         return PhysicalChannelType.IQ_CHANNEL
     if target == legacy_io_units.PhysicalChannelType.RF_CHANNEL:
@@ -163,6 +165,8 @@ class PortConverter:
             return devices.shfsg_ports()
         elif isinstance(target, legacy_instruments.PQSC):
             return devices.pqsc_ports()
+        elif isinstance(target, legacy_instruments.PRETTYPRINTERDEVICE):
+            return devices.test_device_ports()
         elif isinstance(target, legacy_instruments.NonQC):
             return devices.nonqc_ports()
         else:
@@ -338,6 +342,7 @@ class InstrumentConverter:
             physical_channels=self.physical_channels,
             connections=self.channel_map_entries,
             server=self._server,
+            device_class=self._src.device_class,
         )
         return obj
 

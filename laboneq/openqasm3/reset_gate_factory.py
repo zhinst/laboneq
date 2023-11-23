@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Callable
 
 from laboneq._utils import id_generator
 from laboneq.dsl.experiment.acquire import Acquire
@@ -36,7 +36,7 @@ def create_measure_gate(
     qubit: str,
     measure_pulse: Pulse,
     acquire_kernel: Pulse,
-    handle: Optional[str] = None,
+    handle: str | None = None,
     signal_mapper: Callable[[SignalLineType, str], str] = default_signal_mapper,
 ) -> Callable[[], Section]:
     """Creates a measure gate factory.

@@ -27,7 +27,7 @@ class CommandTableTracker:
         self._command_table: Dict[PlaybackSignature, Dict] = {}
         self._device_type = device_type
 
-    def lookup_index_by_signature(self, signature: PlaybackSignature) -> Optional[int]:
+    def lookup_index_by_signature(self, signature: PlaybackSignature) -> int | None:
         table_entry = self._command_table.get(signature)
         if table_entry is None:
             return

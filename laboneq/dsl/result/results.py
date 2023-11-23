@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
@@ -55,13 +55,13 @@ class Results:
 
     def __init__(
         self,
-        experiment: Experiment = None,
-        device_setup: DeviceSetup = None,
-        compiled_experiment: CompiledExperiment = None,
-        acquired_results: AcquiredResults = None,
-        neartime_callback_results: Optional[dict[str, list[Any]]] = None,
-        execution_errors: list[tuple[list[int], str, str]] = None,
-        user_func_results: Optional[dict[str, list[Any]]] = None,
+        experiment: Experiment | None = None,
+        device_setup: DeviceSetup | None = None,
+        compiled_experiment: CompiledExperiment | None = None,
+        acquired_results: AcquiredResults | None = None,
+        neartime_callback_results: dict[str, list[Any]] | None = None,
+        execution_errors: list[tuple[list[int], str, str]] | None = None,
+        user_func_results: dict[str, list[Any]] | None = None,
     ):
         self.experiment = experiment
         self.device_setup = device_setup
@@ -85,6 +85,7 @@ class Results:
         warnings.warn(
             "The 'user_func_results' attribute is deprecated. Use 'neartime_callback_results' instead.",
             FutureWarning,
+            stacklevel=2,
         )
         return self.neartime_callback_results
 

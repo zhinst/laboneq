@@ -1,13 +1,16 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
 import dataclasses
 import logging
 from typing import Any, Iterable, List, Optional
 
 from intervaltree import Interval, IntervalTree
 
-from laboneq.compiler.fastlogging import NullLogger
+from laboneq.compiler.fastlogging import NullLogger, LoggingProtocol
+
+_dlogger: LoggingProtocol
 
 _logger = logging.getLogger(__name__)
 if _logger.getEffectiveLevel() == logging.DEBUG:
@@ -111,11 +114,11 @@ def _pass_right_to_left(
     play_zero_size_hint: int,
 ) -> List[MutableInterval]:
     new_intervals = []
+    previous_iv: MutableInterval
     for iv, previous_iv in zip(
         chunk[::-1],
         [*chunk[-2::-1], MutableInterval(-float("inf"), cut_interval.begin)],
     ):
-        previous_iv: MutableInterval
         playback_length = iv.end - iv.begin
         if playback_length < play_wave_size_hint:
             iv.begin = max(iv.end - play_wave_size_hint, cut_interval.begin)

@@ -25,9 +25,9 @@ class DeviceSetupGenerator:
     @staticmethod
     def from_descriptor(
         yaml_text: str,
-        server_host: str = None,
-        server_port: int | str = None,
-        setup_name: str = None,
+        server_host: str | None = None,
+        server_port: int | str | None = None,
+        setup_name: str | None = None,
     ) -> Setup:
         setup_desc = load(yaml_text, Loader=Loader)
 
@@ -46,9 +46,9 @@ class DeviceSetupGenerator:
     @staticmethod
     def from_yaml(
         filepath,
-        server_host: str = None,
-        server_port: str = None,
-        setup_name: str = None,
+        server_host: str | None = None,
+        server_port: str | None = None,
+        setup_name: str | None = None,
     ) -> Setup:
         with open(filepath) as fp:
             setup_desc = load(fp, Loader=Loader)
@@ -67,13 +67,13 @@ class DeviceSetupGenerator:
 
     @staticmethod
     def from_dicts(
-        instrument_list: InstrumentsType = None,
-        instruments: InstrumentsType = None,
-        connections: ConnectionsType = None,
-        dataservers: DataServersType = None,
-        server_host: str = None,
-        server_port: int | str = None,
-        setup_name: str = None,
+        instrument_list: InstrumentsType | None = None,
+        instruments: InstrumentsType | None = None,
+        connections: ConnectionsType | None = None,
+        dataservers: DataServersType | None = None,
+        server_host: str | None = None,
+        server_port: int | str | None = None,
+        setup_name: str | None = None,
     ) -> Setup:
         # Go though legacy DeviceSetup for legacy descriptor to avoid duplicate `DeviceSetupGenerator`
         from laboneq.dsl.device import DeviceSetup

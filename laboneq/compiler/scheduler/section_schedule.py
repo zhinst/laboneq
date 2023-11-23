@@ -11,6 +11,7 @@ from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
 from laboneq.compiler.scheduler.pulse_schedule import PrecompClearSchedule
 from laboneq.compiler.scheduler.utils import ceil_to_grid, floor_to_grid
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
+from laboneq.data.compilation_job import PRNGInfo
 
 if TYPE_CHECKING:
     from laboneq.compiler.scheduler.schedule_data import ScheduleData
@@ -20,14 +21,17 @@ if TYPE_CHECKING:
 class SectionSchedule(IntervalSchedule):
     right_aligned: bool
 
-    #: The id of the section
+    # The id of the section
     section: str
 
-    #: Tuple of section IDs that must be scheduled before this interval.
+    # Tuple of section IDs that must be scheduled before this interval.
     play_after: List[str] = field(factory=list)
 
-    #: Trigger info: signal, bit
+    # Trigger info: signal, bit
     trigger_output: Set[Tuple[str, int]] = field(factory=set)
+
+    # PRNG setup & seed
+    prng_setup: PRNGInfo | None = None
 
     def adjust_length(self, new_length: int):
         """Adjust length to the new value.
@@ -72,7 +76,7 @@ class SectionSchedule(IntervalSchedule):
             )
             pa_names = getattr(c, "play_after", None)
             if pa_names:
-                pa_section = getattr(c, "section")
+                pa_section = c.section
                 for pa_name in pa_names:
                     if pa_name not in children_index_by_name:
                         raise LabOneQException(
@@ -102,7 +106,7 @@ class SectionSchedule(IntervalSchedule):
                     raise RuntimeError(
                         "The precompensation clear refers to a pulse that could not be "
                         "found."
-                    )
+                    ) from None
             start = ceil_to_grid(start, c.grid)
             start = (
                 c.calculate_timing(
@@ -126,7 +130,7 @@ class SectionSchedule(IntervalSchedule):
         for c in self.children:
             pa_names = getattr(c, "play_after", None)
             if pa_names:
-                pa_section = getattr(c, "section")
+                pa_section = c.section
                 for pa_name in pa_names:
                     play_before.setdefault(pa_name, []).append(pa_section)
         for i, c in reversed(list(enumerate(self.children))):

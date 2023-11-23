@@ -103,7 +103,7 @@ def module_classes(modules_list, class_names=None):
     classes_by_short_name = SortedDict()
     for x in modules_list:
         module = importlib.import_module(x)
-        for name, member in inspect.getmembers(module):
+        for _name, member in inspect.getmembers(module):
             if inspect.isclass(member):
                 if class_names is None or member.__name__ in class_names:
                     classes_by_fullname[full_classname(member)] = member
@@ -114,11 +114,11 @@ def module_classes(modules_list, class_names=None):
 @functools.lru_cache()
 def all_slots(cls):
     slots = set()
-    for cls in cls.__mro__:
-        if isinstance(getattr(cls, "__slots__", []), str):
-            slots.add(getattr(cls, "__slots__", []))
+    for base in cls.__mro__:
+        if isinstance(getattr(base, "__slots__", []), str):
+            slots.add(getattr(base, "__slots__", []))
         else:
-            for attr in getattr(cls, "__slots__", []):
+            for attr in getattr(base, "__slots__", []):
                 slots.add(attr)
     return list(slots)
 
@@ -472,8 +472,8 @@ def serialize_to_dict_with_entities(
             sub_dict[outkey] = serialize_to_dict_with_entities(
                 NumpyArrayRepr(array_data=outvalue),
                 entity_classes,
-                entities_collector,
                 whitelist,
+                entities_collector,
                 emit_enum_types,
                 omit_none_fields,
                 depth,
@@ -601,8 +601,8 @@ def serialize_to_dict_with_ref(
         else:
             raise ex
 
-    for k, v in entities_collector.items():
-        for uid, entity in v.items():
+    for v in entities_collector.values():
+        for entity in v.values():
             if ID_KEY in entity:
                 # remove memory id from serialization - only required during serialization to identify non-unique uids
                 del entity[ID_KEY]
@@ -718,7 +718,7 @@ def deserialize_from_dict_with_ref(data, class_mapping, entity_classes, entity_m
     class_mapping[XarrayDatasetDeserializer._type_] = XarrayDatasetDeserializer
     entity_pool = {}
 
-    for _, entity_list in data.get("entities", {}).items():
+    for entity_list in data.get("entities", {}).values():
         for entity in entity_list:
             type_name = entity["__type"]
             type_name_short = type_name.split(".")[-1]

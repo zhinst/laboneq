@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Union
 
 from laboneq.core import path as qct_path
 from laboneq.core.exceptions import LabOneQException
@@ -311,7 +311,7 @@ class DeviceSetup:
         )
         return calibration
 
-    def reset_calibration(self, calibration: Calibration = None):
+    def reset_calibration(self, calibration: Calibration | None = None):
         """Reset the calibration of all logical signals and instruments."""
         for logical_signal_group in self.logical_signal_groups.values():
             logical_signal_group.reset_calibration()
@@ -366,9 +366,9 @@ class DeviceSetup:
     def from_descriptor(
         cls,
         yaml_text: str,
-        server_host: str = None,
-        server_port: str = None,
-        setup_name: str = None,
+        server_host: str | None = None,
+        server_port: str | None = None,
+        setup_name: str | None = None,
     ) -> DeviceSetup:
         """Construct the device setup from a YAML descriptor.
 
@@ -386,9 +386,9 @@ class DeviceSetup:
     def from_yaml(
         cls,
         filepath,
-        server_host: str = None,
-        server_port: str = None,
-        setup_name: str = None,
+        server_host: str | None = None,
+        server_port: str | None = None,
+        setup_name: str | None = None,
     ) -> DeviceSetup:
         """Construct the device setup from a YAML file.
 
@@ -406,9 +406,9 @@ class DeviceSetup:
     def from_dict(
         cls,
         data: Dict[str, Any],
-        server_host: Optional[str] = None,
-        server_port: Optional[Union[str, int]] = None,
-        setup_name: Optional[str] = None,
+        server_host: str | None = None,
+        server_port: Union[str, int] | None = None,
+        setup_name: str | None = None,
     ) -> DeviceSetup:
         """Construct the device setup from a Python dictionary.
 
@@ -434,13 +434,13 @@ class DeviceSetup:
     def from_dicts(
         cls,
         *,
-        instrument_list: InstrumentsType = None,
-        instruments: InstrumentsType = None,
-        connections: ConnectionsType = None,
-        dataservers: DataServersType = None,
-        server_host: str = None,
-        server_port: str = None,
-        setup_name: str = None,
+        instrument_list: InstrumentsType | None = None,
+        instruments: InstrumentsType | None = None,
+        connections: ConnectionsType | None = None,
+        dataservers: DataServersType | None = None,
+        server_host: str | None = None,
+        server_port: str | None = None,
+        setup_name: str | None = None,
     ) -> DeviceSetup:
         """Construct the device setup from Python dicts, same structure as yaml
 
@@ -469,7 +469,7 @@ class DeviceSetup:
             setup_name=setup_name,
         )
 
-    def _server_leader_instrument(self, server_uid: str) -> Optional[str]:
+    def _server_leader_instrument(self, server_uid: str) -> str | None:
         """Return a leader instrument for the given Dataserver UID."""
         for dev in self.instruments:
             if isinstance(dev, PQSC):

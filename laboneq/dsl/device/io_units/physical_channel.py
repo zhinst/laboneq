@@ -26,6 +26,7 @@ PHYSICAL_CHANNEL_CALIBRATION_FIELDS = (
     "mixer_calibration",
     "precompensation",
     "amplitude",
+    "added_outputs",
 )
 
 
@@ -40,23 +41,23 @@ class PhysicalChannel(Calibratable):
     # Computed from the HW channel ids like:
     # [SIGOUTS/0, SIGOUTS/1] -> "sigouts_0_1"
     # [SIGOUTS/2] -> "sigouts_2"
-    name: Optional[str]
+    name: str | None
 
     #: The type of the channel.
     type: Optional[PhysicalChannelType]
 
     #: Logical path to the channel. Typically of the form
     # ``/<device uid>/<channel name>``.
-    path: Optional[str]
+    path: str | None
     _calibration: Optional[SignalCalibration]
 
     def __init__(
         self,
         uid,
-        name: str = None,
-        type: PhysicalChannelType = None,
-        path: str = None,
-        calibration: SignalCalibration = None,
+        name: str | None = None,
+        type: PhysicalChannelType | None = None,
+        path: str | None = None,
+        calibration: SignalCalibration | None = None,
     ):
         self.uid = uid
         self.name = name

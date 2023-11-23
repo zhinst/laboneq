@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 from collections import deque
-from typing import Any, List, Optional
+from typing import Any, List
 
 from jsonschema import ValidationError
 
@@ -120,7 +120,7 @@ class ExperimentDAO:
     def global_leader_device(self) -> str:
         return self._data["global_leader_device_id"]
 
-    def device_info(self, device_id) -> Optional[DeviceInfo]:
+    def device_info(self, device_id) -> DeviceInfo | None:
         return self._data["devices"].get(device_id)
 
     def device_infos(self) -> List[DeviceInfo]:
@@ -147,7 +147,7 @@ class ExperimentDAO:
         return self._data["root_sections"]
 
     @cached_method()
-    def _has_near_time_child(self, section_id) -> Optional[str]:
+    def _has_near_time_child(self, section_id) -> str | None:
         children = self.direct_section_children(section_id)
         for child in children:
             child_info = self.section_info(child)
@@ -349,5 +349,5 @@ class ExperimentDAO:
                             f" devices do not support markers."
                         )
 
-    def acquisition_signal(self, handle: str) -> Optional[str]:
+    def acquisition_signal(self, handle: str) -> str | None:
         return self._data["handle_acquires"][handle]

@@ -39,4 +39,4 @@ class PlayPulse(Operation):
     #: Clear the precompensation filter of the signal while playing the pulse.
     precompensation_clear: Optional[bool] = field(default=None)
     #: Instructions for playing marker signals while playing the pulse.
-    marker: Optional[Dict] = field(default=None)
+    marker: dict | None = field(default=None)

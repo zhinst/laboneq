@@ -14,7 +14,7 @@ from laboneq.compiler.ir.section_ir import SectionIR
 
 @define(kw_only=True, slots=True)
 class MatchIR(SectionIR):
-    handle: Optional[str]
+    handle: str | None
     user_register: Optional[int]
     local: Optional[bool]
 

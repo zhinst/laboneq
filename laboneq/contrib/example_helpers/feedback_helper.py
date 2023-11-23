@@ -130,9 +130,9 @@ def gaussian_envelope(
 
 
 def piecewise_modulated(
-    piece_length=[100e-9, 100e-9],
-    piece_frequency=[-200e6, 0],
-    piece_amplitude=[0.6, 0.3],
+    piece_length=(100e-9, 100e-9),
+    piece_frequency=(-200e6, 0),
+    piece_amplitude=(0.6, 0.3),
     waveform_envelope=gaussian_envelope,
     sampling_rate=2e9,
 ):

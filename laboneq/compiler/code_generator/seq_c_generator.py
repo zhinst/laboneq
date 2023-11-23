@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 import textwrap
 from enum import Enum
-from typing import Any, Dict, List, Optional, Sequence, Set
+from typing import Any, Dict, List, Sequence, Set
 
 from laboneq.compiler.code_generator.compressor import Run, compressor_core
 from laboneq.compiler.common.device_type import DeviceType
@@ -51,7 +51,9 @@ class SeqCGenerator:
         statement = {"type": "comment", "text": comment_text}
         self.add_statement(statement)
 
-    def add_function_call_statement(self, name, args=[], assign_to=None):
+    def add_function_call_statement(self, name, args=None, assign_to=None):
+        if args is None:
+            args = []
         statement = {"type": "generic_statement", "function": name}
         if args is not None and len(args) > 0:
             statement["args"] = args
@@ -136,9 +138,7 @@ class SeqCGenerator:
             }
         )
 
-    def add_if(
-        self, conditions: Sequence[Optional[str]], bodies: Sequence[SeqCGenerator]
-    ):
+    def add_if(self, conditions: Sequence[str | None], bodies: Sequence[SeqCGenerator]):
         assert len(conditions) == len(bodies)
         assert all(b is not None for b in bodies)
         assert all(c for c in conditions[:-1])
@@ -224,7 +224,7 @@ class SeqCGenerator:
         num_samples,
         device_type,
         fname: str,
-        deferred_calls: Optional[SeqCGenerator] = None,
+        deferred_calls: SeqCGenerator | None = None,
     ):
         if deferred_calls is None:
             deferred_calls = SeqCGenerator()
@@ -304,7 +304,7 @@ class SeqCGenerator:
         self,
         num_samples,
         device_type,
-        deferred_calls: Optional[SeqCGenerator] = None,
+        deferred_calls: SeqCGenerator | None = None,
     ):
         """Add a playZero command
 
@@ -322,7 +322,7 @@ class SeqCGenerator:
         self,
         num_samples,
         device_type,
-        deferred_calls: Optional[SeqCGenerator] = None,
+        deferred_calls: SeqCGenerator | None = None,
     ):
         """Add a playHold command
 

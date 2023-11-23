@@ -26,10 +26,10 @@ _logger = logging.getLogger(__name__)
 class ExperimentWorkflow(ExperimentAPI):
     def __init__(
         self,
-        runner: RunnerAPI = None,
-        payload_builder: PayloadBuilderAPI = None,
-        runner_control: RunnerControlAPI = None,
-        settings: LabOneQSettings = None,
+        runner: RunnerAPI,
+        payload_builder: PayloadBuilderAPI,
+        runner_control: RunnerControlAPI,
+        settings: LabOneQSettings,
     ):
         self._current_setup = None
         self._experiment_counter = 0
@@ -97,7 +97,7 @@ class ExperimentWorkflow(ExperimentAPI):
         return self._runner.run_job_result(job_id)
 
     def build_payload_for_current_experiment(
-        self, compiler_settings: dict = None
+        self, compiler_settings: dict | None = None
     ) -> ExecutionPayload:
         """
         Compose the current experiment with a setup.
@@ -125,9 +125,9 @@ class ExperimentWorkflow(ExperimentAPI):
     def device_setup_from_descriptor(
         self,
         yaml_text: str,
-        server_host: str = None,
-        server_port: str | int = None,
-        setup_name: str = None,
+        server_host: str | None = None,
+        server_port: str | int | None = None,
+        setup_name: str | None = None,
     ) -> Setup:
         """
         Create a device setup from a descriptor.

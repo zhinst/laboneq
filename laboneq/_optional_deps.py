@@ -59,4 +59,4 @@ def import_optional(
         msg = f"Optional dependency '{name}' is missing"
         if message:
             msg += f": {message}"
-        raise ModuleNotFoundError(msg)
+        raise ModuleNotFoundError(msg) from None

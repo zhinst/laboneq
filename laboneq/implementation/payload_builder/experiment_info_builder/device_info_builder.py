@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Mapping, Optional, Tuple
+from typing import Mapping, Tuple
 
 from laboneq.data.compilation_job import DeviceInfo, DeviceInfoType, FollowerInfo
 from laboneq.data.execution_payload import VIRTUAL_SHFSG_UID_SUFFIX
@@ -70,7 +70,7 @@ class DeviceInfoBuilder:
     def device_by_ls(self, ls: LogicalSignal) -> DeviceInfo:
         return self._device_by_ls[ls]
 
-    def _find_global_leader(self) -> Optional[DeviceInfo]:
+    def _find_global_leader(self) -> DeviceInfo | None:
         for server in self._setup.servers.values():
             if server.leader_uid is not None:
                 return (

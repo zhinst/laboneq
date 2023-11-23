@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import math
 import operator
-from typing import Iterable, Optional, Type
+from typing import Iterable, Type
 
 from openqasm3 import ast
 
@@ -126,8 +126,8 @@ def _eval_expression(
                     retval.extend([collection[i] for i in index])
                 else:
                     retval.append(collection[index])
-            except IndexError as e:
-                raise OpenQasmException(str(e), mark=expression.span)
+            except IndexError as e:  # noqa: PERF203
+                raise OpenQasmException(str(e), mark=expression.span) from None
         if len(retval) == 1:
             retval = retval[0]
         return retval
@@ -155,10 +155,10 @@ def _eval_expression(
 
 
 def eval_expression(
-    expression: Optional[ast.Expression],
+    expression: ast.Expression | None,
     *,
-    namespace: NamespaceNest = None,
-    type: Type = None,
+    namespace: NamespaceNest | None = None,
+    type: Type | None = None,
 ):
     if namespace is None:
         namespace = NamespaceNest()
@@ -235,10 +235,10 @@ def eval_lvalue(
     if isinstance(node, ast.Concatenation):
         lhs = eval_lvalue(node.lhs, namespace=namespace)
         rhs = eval_lvalue(node.rhs, namespace=namespace)
-        for node, lval in ((node.lhs, lhs), (node.rhs, rhs)):
+        for child, lval in ((node.lhs, lhs), (node.rhs, rhs)):
             if not isinstance(lval, list):
                 raise OpenQasmException(
-                    f"Array view expected, got {type(lval.__name__)}", node.span
+                    f"Array view expected, got {type(lval.__name__)}", child.span
                 )
         return [*lhs, *rhs]
     raise OpenQasmException("lvalue expected", node.span)

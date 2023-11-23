@@ -1,7 +1,7 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-
+from __future__ import annotations
 import uuid
 from os import PathLike
 from typing import Dict, Optional, Tuple, Union
@@ -18,7 +18,7 @@ class QuantumOperation:
 
     def __init__(
         self,
-        uid: Optional[str] = None,
+        uid: str | None = None,
         operation_map: Optional[
             Dict[Union[QuantumElement, QuantumElementTuple], Section]
         ] = None,
@@ -66,7 +66,9 @@ class QuantumOperation:
         try:
             section = self.operation_map[self._get_uids(elements)]
         except KeyError:
-            raise ValueError("No section defined for the given quantum elements")
+            raise ValueError(
+                "No section defined for the given quantum elements"
+            ) from None
         return section
 
     @classmethod

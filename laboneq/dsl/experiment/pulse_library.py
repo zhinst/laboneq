@@ -1,6 +1,8 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 from typing import Any, Callable, Dict
 
 import numpy as np
@@ -13,7 +15,7 @@ from laboneq.dsl.experiment.pulse import (
 )
 
 
-def register_pulse_functional(sampler: Callable, name: str = None):
+def register_pulse_functional(sampler: Callable, name: str | None = None):
     """Build & register a new pulse type from a sampler function.
 
     The sampler function must have the following signature:
@@ -66,7 +68,7 @@ def register_pulse_functional(sampler: Callable, name: str = None):
         function_name = name
 
     def factory(
-        uid: str = None,
+        uid: str | None = None,
         length: float = 100e-9,
         amplitude: float = 1.0,
         can_compress=False,

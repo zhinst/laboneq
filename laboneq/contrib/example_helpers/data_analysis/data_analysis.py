@@ -20,6 +20,7 @@ warnings.warn(
     " deprecated in LabOne Q 2.15. Please use laboneq.analysis.fitting"
     " instead.",
     FutureWarning,
+    stacklevel=2,
 )
 
 # Definitions for fitting experimental data - needed to extract qubit paramters

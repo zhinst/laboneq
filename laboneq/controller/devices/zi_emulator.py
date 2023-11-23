@@ -13,6 +13,7 @@ from dataclasses import InitVar, dataclass, field
 from enum import Enum
 from functools import partial
 from typing import Any, Callable, overload
+from weakref import ref
 
 import numpy as np
 from numpy import typing as npt
@@ -117,7 +118,7 @@ class NodeInfo:
     "Node descriptor to use in node definitions."
 
     type: NodeType = NodeType.FLOAT
-    default: Any | None = None
+    default: Any = None
     read_only: bool = False
     handler: Callable[[NodeBase], None] = None
     # For DYNAMIC nodes
@@ -152,8 +153,8 @@ class NodeInfo:
 class PollEvent:
     "A class representing a single poll event"
 
-    path: str = None
-    timestamp: int = None
+    path: str | None = None
+    timestamp: int | None = None
     value: Any = None
 
 
@@ -216,7 +217,7 @@ class DevEmu(ABC):
     def set(self, dev_path: str, value: Any):
         node = self._set_val(dev_path, value)
         if node.handler is not None:
-            node.handler(self, node)
+            node.handler(node)
 
     def subscribe(self, dev_path: str):
         node = self._get_node(dev_path)
@@ -236,6 +237,98 @@ class DevEmu(ABC):
         output = self._poll_queue[:]
         self._poll_queue.clear()
         return output
+
+
+class PipelinerEmu:
+    def __init__(
+        self,
+        parent: DevEmu,
+        pipeliner_base: str,
+        pipeliner_stop_hook: Callable[[int], None] | None = None,
+    ):
+        self._parent_ref = ref(parent)
+        self._pipeliner_base = pipeliner_base
+        self._pipeliner_stop_hook = pipeliner_stop_hook
+
+    @property
+    def _parent(self) -> DevEmu:
+        return self._parent_ref()
+
+    def _pipeliner_committed(self, channel: int):
+        avail_slots: int = self._parent._get_node(
+            f"{self._pipeliner_base}/{channel}/pipeliner/availableslots"
+        ).value
+        self._parent._set_val(
+            f"{self._pipeliner_base}/{channel}/pipeliner/availableslots",
+            avail_slots - 1,
+        )
+
+    def _pipeliner_commit(self, node: NodeBase, channel: int):
+        self._parent._scheduler.enter(
+            delay=0.001,
+            priority=0,
+            action=self._pipeliner_committed,
+            argument=(channel,),
+        )
+
+    def _pipeliner_reset(self, node: NodeBase, channel: int):
+        self._parent._set_val(f"{self._pipeliner_base}/{channel}/pipeliner/status", 0)
+        max_slots: int = self._parent._get_node(
+            f"{self._pipeliner_base}/{channel}/pipeliner/maxslots"
+        ).value
+        self._parent._set_val(
+            f"{self._pipeliner_base}/{channel}/pipeliner/availableslots", max_slots
+        )
+
+    def _pipeliner_stop(self, channel: int):
+        # idle
+        self._parent._set_val(f"{self._pipeliner_base}/{channel}/pipeliner/status", 0)
+        if self._pipeliner_stop_hook is not None:
+            self._pipeliner_stop_hook(channel)
+
+    def _pipeliner_enable(self, node: NodeBase, channel: int):
+        # exec
+        self._parent._set_val(f"{self._pipeliner_base}/{channel}/pipeliner/status", 1)
+        self._parent._scheduler.enter(
+            delay=0.001,
+            priority=0,
+            action=self._pipeliner_stop,
+            argument=(channel,),
+        )
+
+    def _node_def_pipeliner(self) -> dict[str, NodeInfo]:
+        nd = {}
+        for channel in range(8):
+            nd[f"{self._pipeliner_base}/{channel}/pipeliner/maxslots"] = NodeInfo(
+                type=NodeType.INT,
+                default=1024,
+                read_only=True,
+            )
+            nd[f"{self._pipeliner_base}/{channel}/pipeliner/availableslots"] = NodeInfo(
+                type=NodeType.INT,
+                default=1024,
+            )
+            nd[f"{self._pipeliner_base}/{channel}/pipeliner/commit"] = NodeInfo(
+                type=NodeType.INT,
+                default=0,
+                handler=partial(self._pipeliner_commit, channel=channel),
+            )
+            nd[f"{self._pipeliner_base}/{channel}/pipeliner/reset"] = NodeInfo(
+                type=NodeType.INT,
+                default=0,
+                handler=partial(self._pipeliner_reset, channel=channel),
+            )
+            nd[f"{self._pipeliner_base}/{channel}/pipeliner/status"] = NodeInfo(
+                type=NodeType.INT,
+                default=0,
+                read_only=True,
+            )
+            nd[f"{self._pipeliner_base}/{channel}/pipeliner/enable"] = NodeInfo(
+                type=NodeType.INT,
+                default=0,
+                handler=partial(self._pipeliner_enable, channel=channel),
+            )
+        return nd
 
 
 class DevEmuZI(DevEmu):
@@ -270,12 +363,77 @@ class DevEmuZI(DevEmu):
         }
 
 
-class DevEmuDummy(DevEmu):
+class DevEmuHW(DevEmu):
+    def _node_def_common(self) -> dict[str, NodeInfo]:
+        return {
+            # TODO(2K): Emulate errors. True response example (without whitespace):
+            # {
+            #     "sequence_nr": 14,
+            #     "new_errors": 0,
+            #     "first_timestamp": 26302580645225,
+            #     "timestamp": 26302580645225,
+            #     "timestamp_utc": "2023-11-07 15:38:51",
+            #     "messages": [
+            #         {
+            #             "code": "AWGOSCMODE",
+            #             "attribs": [
+            #                 0
+            #             ],
+            #             "module": "awg",
+            #             "severity": 2.0,
+            #             "params": [],
+            #             "cmd_id": 0,
+            #             "count": 1,
+            #             "timestamp": 19764071818932,
+            #             "message": "The AWG program of AWG 0 tries to control oscillators but the required oscillator mode is not active!"
+            #         },
+            #         {
+            #             "code": "AWGOSCMODE",
+            #             "attribs": [
+            #                 3
+            #             ],
+            #             "module": "awg",
+            #             "severity": 2.0,
+            #             "params": [],
+            #             "cmd_id": 0,
+            #             "count": 1,
+            #             "timestamp": 19764081128705,
+            #             "message": "The AWG program of AWG 3 tries to control oscillators but the required oscillator mode is not active!"
+            #         },
+            #         {
+            #             "code": "ELFTRGMODEZS",
+            #             "attribs": [
+            #                 3
+            #             ],
+            #             "module": "awg",
+            #             "severity": 2.0,
+            #             "params": [],
+            #             "cmd_id": 0,
+            #             "count": 3,
+            #             "timestamp": 19764619605502,
+            #             "message": "The AWG program (AWG 3) uses one or more ZSync instructions or triggers. Set the DIO mode to 'QCCS'."
+            #         }
+            #     ]
+            # }
+            "raw/error/json/errors": NodeInfo(
+                type=NodeType.VECTOR_STR, read_only=True, default='{"messages":[]}'
+            ),
+        }
+
+
+class DevEmuDummy(DevEmuHW):
     def _node_def(self) -> dict[str, NodeInfo]:
-        return {}
+        return self._node_def_common()
 
 
-class DevEmuHDAWG(DevEmu):
+class DevEmuHDAWG(DevEmuHW):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._hd_pipeliner = PipelinerEmu(
+            parent=self,
+            pipeliner_base="awgs",
+        )
+
     def _awg_stop(self, awg_idx):
         self._set_val(f"awgs/{awg_idx}/enable", 0)
 
@@ -315,6 +473,7 @@ class DevEmuHDAWG(DevEmu):
 
     def _node_def(self) -> dict[str, NodeInfo]:
         nd = {
+            **self._node_def_common(),
             "features/devtype": NodeInfo(
                 type=NodeType.STR,
                 default=self._dev_opts.get("features/devtype", "HDAWG8"),
@@ -325,10 +484,10 @@ class DevEmuHDAWG(DevEmu):
             ),
             "system/clocks/sampleclock/status": NodeInfo(type=NodeType.INT, default=0),
             "system/clocks/sampleclock/freq": NodeInfo(
-                type=NodeType.FLOAT, default=2.4e9, handler=DevEmuHDAWG._sample_clock
+                type=NodeType.FLOAT, default=2.4e9, handler=self._sample_clock
             ),
             "system/clocks/referenceclock/source": NodeInfo(
-                type=NodeType.INT, default=0, handler=DevEmuHDAWG._ref_clock
+                type=NodeType.INT, default=0, handler=self._ref_clock
             ),
             "system/clocks/referenceclock/status": NodeInfo(
                 type=NodeType.INT, default=0
@@ -337,16 +496,17 @@ class DevEmuHDAWG(DevEmu):
                 type=NodeType.FLOAT, default=100e6
             ),
         }
+        nd.update(self._hd_pipeliner._node_def_pipeliner())
         for awg_idx in range(4):
             nd[f"awgs/{awg_idx}/enable"] = NodeInfo(
                 type=NodeType.INT,
                 default=0,
-                handler=partial(DevEmuHDAWG._awg_execute, awg_idx=awg_idx),
+                handler=partial(self._awg_execute, awg_idx=awg_idx),
             )
         return nd
 
 
-class DevEmuUHFQA(DevEmu):
+class DevEmuUHFQA(DevEmuHW):
     """Emulated UHFQA.
 
     Supported emulation options:
@@ -399,6 +559,7 @@ class DevEmuUHFQA(DevEmu):
 
     def _node_def(self) -> dict[str, NodeInfo]:
         nd = {
+            **self._node_def_common(),
             "features/devtype": NodeInfo(
                 type=NodeType.STR,
                 default=self._dev_opts.get("features/devtype", "UHFQA"),
@@ -408,10 +569,10 @@ class DevEmuUHFQA(DevEmu):
                 default=self._dev_opts.get("features/options", "AWG\nDIG\nQA"),
             ),
             "awgs/0/enable": NodeInfo(
-                type=NodeType.INT, default=0, handler=DevEmuUHFQA._awg_execute
+                type=NodeType.INT, default=0, handler=self._awg_execute
             ),
             "awgs/0/elf/data": NodeInfo(
-                type=NodeType.VECTOR_INT, default=[], handler=DevEmuUHFQA._elf_upload
+                type=NodeType.VECTOR_INT, default=[], handler=self._elf_upload
             ),
             "awgs/0/ready": NodeInfo(type=NodeType.INT, default=0),
             "qas/0/monitor/inputs/0/wave": NodeInfo(type=NodeType.VECTOR_COMPLEX),
@@ -424,7 +585,7 @@ class DevEmuUHFQA(DevEmu):
         return nd
 
 
-class Gen2Base(DevEmu):
+class Gen2Base(DevEmuHW):
     def _ref_clock_switched(self, requested_source: int):
         # 0 - INTERNAL
         # 1 - EXTERNAL
@@ -445,8 +606,9 @@ class Gen2Base(DevEmu):
 
     def _node_def_gen2(self) -> dict[str, NodeInfo]:
         return {
+            **self._node_def_common(),
             "system/clocks/referenceclock/in/source": NodeInfo(
-                type=NodeType.INT, default=0, handler=DevEmuPQSC._ref_clock
+                type=NodeType.INT, default=0, handler=self._ref_clock
             ),
             "system/clocks/referenceclock/in/sourceactual": NodeInfo(
                 type=NodeType.INT, default=0
@@ -471,7 +633,7 @@ class DevEmuPQSC(Gen2Base):
         nd = {
             **self._node_def_gen2(),
             "execution/enable": NodeInfo(
-                type=NodeType.INT, default=0, handler=DevEmuPQSC._trig_execute
+                type=NodeType.INT, default=0, handler=self._trig_execute
             ),
         }
         for zsync in range(18):
@@ -486,7 +648,15 @@ class DevEmuPQSC(Gen2Base):
 
 
 class DevEmuSHFQABase(Gen2Base):
-    def _awg_stop_qa(self, channel: int):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._qa_pipeliner = PipelinerEmu(
+            parent=self,
+            pipeliner_base="qachannels",
+            pipeliner_stop_hook=self._measurement_done,
+        )
+
+    def _measurement_done(self, channel: int):
         readout_enable = self._get_node(
             f"qachannels/{channel}/readout/result/enable"
         ).value
@@ -494,7 +664,6 @@ class DevEmuSHFQABase(Gen2Base):
             f"qachannels/{channel}/spectroscopy/result/enable"
         ).value
         scope_enable = self._get_node("scopes/0/enable").value
-        self._set_val(f"qachannels/{channel}/generator/enable", 0)
         self._set_val(f"qachannels/{channel}/readout/result/enable", 0)
         self._set_val(f"qachannels/{channel}/spectroscopy/result/enable", 0)
         if readout_enable != 0:
@@ -537,18 +706,22 @@ class DevEmuSHFQABase(Gen2Base):
                     np.array([(52 + 52j)] * length),
                 )
 
+    def _awg_stop_qa(self, channel: int):
+        self._set_val(f"qachannels/{channel}/generator/enable", 0)
+        self._measurement_done(channel)
+
     def _awg_execute_qa(self, node: NodeBase, channel: int):
         self._scheduler.enter(
             delay=0.001, priority=0, action=self._awg_stop_qa, argument=(channel,)
         )
 
     def _node_def_qa(self) -> dict[str, NodeInfo]:
-        nd = {}
+        nd = self._qa_pipeliner._node_def_pipeliner()
         for channel in range(4):
             nd[f"qachannels/{channel}/generator/enable"] = NodeInfo(
                 type=NodeType.INT,
                 default=0,
-                handler=partial(DevEmuSHFQABase._awg_execute_qa, channel=channel),
+                handler=partial(self._awg_execute_qa, channel=channel),
             )
             nd[f"qachannels/{channel}/readout/result/enable"] = NodeInfo(
                 type=NodeType.INT, default=0
@@ -588,6 +761,10 @@ class DevEmuSHFQA(DevEmuSHFQABase):
 
 
 class DevEmuSHFSGBase(Gen2Base):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._sg_pipeliner = PipelinerEmu(parent=self, pipeliner_base="sgchannels")
+
     def _awg_stop_sg(self, channel: int):
         self._set_val(f"sgchannels/{channel}/awg/enable", 0)
 
@@ -596,75 +773,13 @@ class DevEmuSHFSGBase(Gen2Base):
             delay=0.001, priority=0, action=self._awg_stop_sg, argument=(channel,)
         )
 
-    def _pipeliner_committed(self, channel: int):
-        avail_slots: int = self._get_node(
-            f"sgchannels/{channel}/pipeliner/availableslots"
-        ).value
-        self._set_val(f"sgchannels/{channel}/pipeliner/availableslots", avail_slots - 1)
-
-    def _pipeliner_commit(self, node: NodeBase, channel: int):
-        self._scheduler.enter(
-            delay=0.001,
-            priority=0,
-            action=self._pipeliner_committed,
-            argument=(channel,),
-        )
-
-    def _pipeliner_reset(self, node: NodeBase, channel: int):
-        self._set_val(f"sgchannels/{channel}/pipeliner/status", 0)
-        max_slots: int = self._get_node(
-            f"sgchannels/{channel}/pipeliner/maxslots"
-        ).value
-        self._set_val(f"sgchannels/{channel}/pipeliner/availableslots", max_slots)
-
-    def _pipeliner_stop(self, channel: int):
-        self._set_val(f"sgchannels/{channel}/pipeliner/status", 3)
-
-    def _pipeliner_enable(self, node: NodeBase, channel: int):
-        self._set_val(f"sgchannels/{channel}/pipeliner/status", 1)
-        self._scheduler.enter(
-            delay=0.001,
-            priority=0,
-            action=self._pipeliner_stop,
-            argument=(channel,),
-        )
-
     def _node_def_sg(self) -> dict[str, NodeInfo]:
-        nd = {}
+        nd = self._sg_pipeliner._node_def_pipeliner()
         for channel in range(8):
             nd[f"sgchannels/{channel}/awg/enable"] = NodeInfo(
                 type=NodeType.INT,
                 default=0,
-                handler=partial(DevEmuSHFSGBase._awg_execute_sg, channel=channel),
-            )
-            nd[f"sgchannels/{channel}/pipeliner/maxslots"] = NodeInfo(
-                type=NodeType.INT,
-                default=1024,
-                read_only=True,
-            )
-            nd[f"sgchannels/{channel}/pipeliner/availableslots"] = NodeInfo(
-                type=NodeType.INT,
-                default=1024,
-            )
-            nd[f"sgchannels/{channel}/pipeliner/commit"] = NodeInfo(
-                type=NodeType.INT,
-                default=0,
-                handler=partial(DevEmuSHFSGBase._pipeliner_commit, channel=channel),
-            )
-            nd[f"sgchannels/{channel}/pipeliner/reset"] = NodeInfo(
-                type=NodeType.INT,
-                default=0,
-                handler=partial(DevEmuSHFSGBase._pipeliner_reset, channel=channel),
-            )
-            nd[f"sgchannels/{channel}/pipeliner/status"] = NodeInfo(
-                type=NodeType.INT,
-                default=0,
-                read_only=True,
-            )
-            nd[f"sgchannels/{channel}/pipeliner/enable"] = NodeInfo(
-                type=NodeType.INT,
-                default=0,
-                handler=partial(DevEmuSHFSGBase._pipeliner_enable, channel=channel),
+                handler=partial(self._awg_execute_sg, channel=channel),
             )
         return nd
 
@@ -704,9 +819,9 @@ class DevEmuSHFQC(DevEmuSHFQABase, DevEmuSHFSGBase):
         return nd
 
 
-class DevEmuNONQC(DevEmu):
+class DevEmuNONQC(DevEmuHW):
     def _node_def(self) -> dict[str, NodeInfo]:
-        return {}
+        return self._node_def_common()
 
 
 def _serial_to_device_type(serial: str):
@@ -781,7 +896,7 @@ class ziDAQServerEmulator:
         else:
             dev_type = _serial_to_device_type(serial)
         dev_opts = self._options.setdefault(serial.upper(), {})
-        return dev_type(serial, self._scheduler, dev_opts)
+        return dev_type(serial=serial, scheduler=self._scheduler, dev_opts=dev_opts)
 
     def _device_lookup(self, serial: str, create: bool = True) -> DevEmu:
         serial = serial.upper()
@@ -866,7 +981,7 @@ class ziDAQServerEmulator:
     def set(self, items: list[list[Any]]):
         ...
 
-    def set(self, path_or_items: str | list[list[Any]], value: Any | None = None):
+    def set(self, path_or_items: str | list[list[Any]], value: Any = None):
         self._progress_scheduler()
         if isinstance(path_or_items, str):
             pass

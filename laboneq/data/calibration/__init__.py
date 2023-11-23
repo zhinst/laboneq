@@ -95,6 +95,13 @@ class AmplifierPump:
 
 
 @dataclass
+class OutputRouting:
+    source_signal: str
+    amplitude: float
+    phase: float
+
+
+@dataclass
 class SignalCalibration:
     oscillator: Oscillator | None = None
     local_oscillator_frequency: float | Parameter | None = None
@@ -108,3 +115,4 @@ class SignalCalibration:
     threshold: float | list[float] | None = None
     amplitude: float | Parameter | None = None
     amplifier_pump: AmplifierPump | None = None
+    output_routing: list[OutputRouting] = field(default_factory=list)

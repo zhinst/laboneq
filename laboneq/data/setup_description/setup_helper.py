@@ -1,6 +1,7 @@
 # Copyright 2023 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
 import dataclasses
 from typing import List, Mapping, Tuple, Union
 
@@ -17,7 +18,8 @@ from laboneq.data.utils.calibration_helper import CalibrationHelper
 
 def split_path(path: str) -> Tuple[str, str]:
     """Split path into group and name."""
-    return path.split(Separator)
+    parts = path.split(Separator)
+    return parts[-2], parts[-1]
 
 
 class InstrumentHelper:

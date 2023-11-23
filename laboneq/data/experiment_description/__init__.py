@@ -18,6 +18,8 @@ from laboneq.core.types.enums import (
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.data.calibration import Calibration
 from laboneq.data.parameter import Parameter
+from laboneq.data.prng import PRNGSample, PRNG
+
 
 #
 # Enums
@@ -125,7 +127,7 @@ class Experiment:
 @dataclass
 class Match(Section):
     uid: str = None
-    handle: Optional[str] = None
+    handle: str | None = None
     user_register: Optional[int] = None
     local: Optional[bool] = None
 
@@ -178,3 +180,13 @@ class Sweep(Section):
     reset_oscillator_phase: bool = None
     execution_type: ExecutionType = None
     chunk_count: int = 1
+
+
+@dataclass
+class PrngSetup(Section):
+    prng: PRNG = None
+
+
+@dataclass
+class PrngLoop(Section):
+    prng_sample: PRNGSample = None

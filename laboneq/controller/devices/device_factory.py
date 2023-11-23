@@ -9,6 +9,7 @@ from laboneq.controller.devices.device_shfppc import DeviceSHFPPC
 from laboneq.controller.devices.device_shfqa import DeviceSHFQA
 from laboneq.controller.devices.device_shfsg import DeviceSHFSG
 from laboneq.controller.devices.device_uhfqa import DeviceUHFQA
+from laboneq.controller.devices.device_pretty_printer import DevicePRETTYPRINTER
 from laboneq.controller.devices.device_zi import DeviceQualifier, DeviceZI
 from laboneq.controller.util import LabOneQControllerException
 
@@ -24,6 +25,7 @@ class DeviceFactory:
             "SHFPPC": DeviceSHFPPC,
             "PQSC": DevicePQSC,
             "NONQC": DeviceNonQC,
+            "PRETTYPRINTERDEVICE": DevicePRETTYPRINTER,
         }.get(device_qualifier.driver.upper())
         if dev_class is None:
             raise LabOneQControllerException(

@@ -31,9 +31,12 @@ from laboneq.data.experiment_description import Section as SectionDATA
 from laboneq.data.experiment_description import SectionAlignment as SectionAlignmentDATA
 from laboneq.data.experiment_description import SetNode as SetDATA
 from laboneq.data.experiment_description import Sweep as SweepDATA
+from laboneq.data.experiment_description import PrngSetup as PRNGSetupDATA
+from laboneq.data.experiment_description import PrngLoop as PRNGLoopDATA
 from laboneq.data.parameter import LinearSweepParameter as LinearSweepParameterDATA
 from laboneq.data.parameter import Parameter as ParameterDATA
 from laboneq.data.parameter import SweepParameter as SweepParameterDATA
+from ...data.prng import PRNGSample as PRNGSampleDATA, PRNG as PRNGDATA
 from laboneq.dsl.experiment.acquire import Acquire as AcquireDSL
 from laboneq.dsl.experiment.call import Call as CallDSL
 from laboneq.dsl.experiment.delay import Delay as DelayDSL
@@ -52,10 +55,14 @@ from laboneq.dsl.experiment.section import Case as CaseDSL
 from laboneq.dsl.experiment.section import Match as MatchDSL
 from laboneq.dsl.experiment.section import Section as SectionDSL
 from laboneq.dsl.experiment.section import Sweep as SweepDSL
+from laboneq.dsl.experiment.section import PRNGSetup as PRNGSetupDSL
+from laboneq.dsl.experiment.section import PRNGLoop as PRNGLoopDSL
 from laboneq.dsl.experiment.set_node import SetNode as SetDSL
 from laboneq.dsl.parameter import LinearSweepParameter as LinearSweepParameterDSL
 from laboneq.dsl.parameter import Parameter as ParameterDSL
 from laboneq.dsl.parameter import SweepParameter as SweepParameterDSL
+from laboneq.dsl.prng import PRNG as PRNGDSL
+from laboneq.dsl.prng import PRNGSample as PRNGSampleDSL
 from laboneq.implementation.legacy_adapters.dynamic_converter import convert_dynamic
 
 from .calibration_converter import convert_calibration
@@ -373,6 +380,42 @@ def convert_signal_map(experiment: ExperimentDSL) -> dict:
     }
 
 
+def convert_PRNG(prng: PRNGDSL):
+    return PRNGDATA(seed=prng.seed, range=prng.range)
+
+
+def convert_PRNGSample(prng_sample: PRNGSampleDSL):
+    return PRNGSampleDATA(
+        uid=prng_sample.uid,
+        prng=convert_PRNG(prng_sample.prng),
+        count=convert_dynamic(prng_sample.count, converter_function_directory),
+    )
+
+
+def convert_PRNGSetup(prng_setup: PRNGSetupDSL):
+    return PRNGSetupDATA(
+        uid=prng_setup.uid,
+        alignment=convert_SectionAlignment(prng_setup.alignment),
+        execution_type=convert_ExecutionType(prng_setup.execution_type),
+        length=convert_dynamic(prng_setup.length, converter_function_directory),
+        play_after=convert_dynamic(prng_setup.play_after, converter_function_directory),
+        children=convert_dynamic(prng_setup.children, converter_function_directory),
+        prng=convert_PRNG(prng_setup.prng),
+    )
+
+
+def convert_PRNGLoop(prng_loop: PRNGLoopDSL):
+    return PRNGLoopDATA(
+        uid=prng_loop.uid,
+        alignment=convert_SectionAlignment(prng_loop.alignment),
+        execution_type=convert_ExecutionType(prng_loop.execution_type),
+        length=convert_dynamic(prng_loop.length, converter_function_directory),
+        play_after=convert_dynamic(prng_loop.play_after, converter_function_directory),
+        children=convert_dynamic(prng_loop.children, converter_function_directory),
+        prng_sample=convert_PRNGSample(prng_loop.prng_sample),
+    )
+
+
 converter_function_directory = {
     AcquireDSL: convert_Acquire,
     AcquireLoopNtDSL: convert_AcquireLoopNt,
@@ -386,6 +429,10 @@ converter_function_directory = {
     MatchDSL: convert_Match,
     ParameterDSL: convert_Parameter,
     PlayPulseDSL: convert_PlayPulse,
+    PRNGDSL: convert_PRNG,
+    PRNGSampleDSL: convert_PRNGSample,
+    PRNGSetupDSL: convert_PRNGSetup,
+    PRNGLoopDSL: convert_PRNGLoop,
     PulseFunctionalDSL: convert_PulseFunctional,
     PulseSampledComplexDSL: convert_PulseSampledComplex,
     PulseSampledRealDSL: convert_PulseSampledReal,

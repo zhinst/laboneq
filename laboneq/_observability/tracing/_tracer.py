@@ -1,8 +1,10 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-import typing as t
+from __future__ import annotations
+
 from functools import wraps
+from typing import Callable, Any
 
 from zhinst.core import _tracing as tracing
 
@@ -32,9 +34,9 @@ def get_tracer():
 
 
 def trace(
-    span_name: t.Optional[str] = None,
-    attributes: t.Optional[t.Dict[str, t.Any]] = None,
-    attribute_callback: t.Callable = None,
+    span_name: str | None = None,
+    attributes: dict[str, Any] | None = None,
+    attribute_callback: Callable | None = None,
     disable_tracing_during=False,
 ):
     """Decorator to turn function to a span.
@@ -45,7 +47,7 @@ def trace(
         attribute_callback: A callback function for getting attributes.
             The callback function must return a flat dictionary with keys as strings.
         disable_tracing_during: Disable tracing during the execution of the function.
-            This is to avoid creating unnecessasry spans.
+            This is to avoid creating unnecessary spans.
     """
 
     def outer_wrapper(func):

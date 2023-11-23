@@ -17,13 +17,25 @@ def install_token(token: str):
     Args:
         token: The access token to use. Ignored.
     """
-    warnings.warn("An access token is no longer required for LabOne Q.", FutureWarning)
+    warnings.warn(
+        "An access token is no longer required for LabOne Q.",
+        FutureWarning,
+        stacklevel=2,
+    )
 
 
 def is_valid_token(token):
-    warnings.warn("An access token is no longer required for LabOne Q.", FutureWarning)
+    warnings.warn(
+        "An access token is no longer required for LabOne Q.",
+        FutureWarning,
+        stacklevel=2,
+    )
     return True
 
 
 def token_check():
-    warnings.warn("An access token is no longer required for LabOne Q.", FutureWarning)
+    warnings.warn(
+        "An access token is no longer required for LabOne Q.",
+        FutureWarning,
+        stacklevel=2,
+    )

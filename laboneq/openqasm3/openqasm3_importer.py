@@ -95,7 +95,7 @@ class OpenQasm3Importer:
     def __init__(
         self,
         gate_store: GateStore,
-        qubits: dict[str, Qubit, Transmon] = None,
+        qubits: dict[str, Qubit, Transmon] | None = None,
     ):
         self.gate_store = gate_store
         self.dsl_qubits = qubits
@@ -103,10 +103,10 @@ class OpenQasm3Importer:
 
     def __call__(
         self,
-        text: Optional[str] = None,
-        file: Optional[TextIO] = None,
-        filename: Optional[str] = None,
-        stream: Optional[TextIO] = None,
+        text: str | None = None,
+        file: TextIO | None = None,
+        filename: str | None = None,
+        stream: TextIO | None = None,
     ) -> Section:
         if [arg is not None for arg in [text, file, filename, stream]].count(True) != 1:
             msg = "Must specify exactly one of text, file, filename, or stream"
@@ -229,7 +229,7 @@ class OpenQasm3Importer:
                     )
                 except Exception:
                     msg = "Qubit declaration size must evaluate to an integer."
-                    raise OpenQasmException(msg, mark=statement.span)
+                    raise OpenQasmException(msg, mark=statement.span) from None
 
                 # declare the individual qubits...
                 qubits = [

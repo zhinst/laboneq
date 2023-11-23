@@ -7,7 +7,7 @@ import json
 import logging
 import warnings
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Union
 
 from numpy import typing as npt
 
@@ -77,7 +77,7 @@ class Session:
 
     def __init__(
         self,
-        device_setup: DeviceSetup = None,
+        device_setup: DeviceSetup | None = None,
         log_level: int = logging.INFO,
         performance_log: bool = False,
         configure_logging: bool = True,
@@ -179,7 +179,7 @@ class Session:
         self.logger.error(message)
         return False
 
-    def register_neartime_callback(self, func, name: str = None):
+    def register_neartime_callback(self, func, name: str | None = None):
         """Registers a near-time callback to be referred from the experiment's `call` operation.
 
         Args:
@@ -192,7 +192,7 @@ class Session:
             name = func.__name__
         self._neartime_callbacks[name] = func
 
-    def register_user_function(self, func, name: str = None):
+    def register_user_function(self, func, name: str | None = None):
         """Registers a near-time callback to be referred from the experiment's `call` operation.
 
         Args:
@@ -207,6 +207,7 @@ class Session:
         warnings.warn(
             "The 'register_user_function' method is deprecated. Use 'register_neartime_callback' instead.",
             FutureWarning,
+            stacklevel=2,
         )
         self.register_neartime_callback(func, name)
 
@@ -269,8 +270,8 @@ class Session:
 
     def disable_outputs(
         self,
-        devices: Union[str, List[str]] = None,
-        signals: Union[LogicalSignalRef, List[LogicalSignalRef]] = None,
+        devices: str | list[str] | None = None,
+        signals: LogicalSignalRef | list[LogicalSignalRef] | None = None,
         unused_only: bool = False,
     ):
         """Turns off / disables the device outputs.
@@ -315,8 +316,8 @@ class Session:
     def compile(
         self,
         experiment: Experiment,
-        compiler_settings: Dict = None,
-    ) -> Optional[CompiledExperiment]:
+        compiler_settings: Dict | None = None,
+    ) -> CompiledExperiment | None:
         """Compiles the specified experiment and stores it in the compiled_experiment property.
 
         Requires connected LabOne Q session (`session.connect()`) either with or without emulation mode.
@@ -341,7 +342,7 @@ class Session:
         return self._compiled_experiment
 
     @property
-    def compiled_experiment(self) -> Optional[CompiledExperiment]:
+    def compiled_experiment(self) -> CompiledExperiment | None:
         """Access to the compiled experiment.
 
         The compiled experiment can be assigned to a different session if the device setup is matching.
@@ -351,8 +352,8 @@ class Session:
     @trace("session.run()")
     def run(
         self,
-        experiment: Optional[Union[Experiment, CompiledExperiment]] = None,
-    ) -> Optional[Results]:
+        experiment: Union[Experiment, CompiledExperiment] | None = None,
+    ) -> Results | None:
         """Executes the compiled experiment.
 
         Requires connected LabOne Q session (`session.connect()`) either with or without emulation mode.
@@ -399,8 +400,9 @@ class Session:
 
     def submit(
         self,
-        experiment: Optional[Union[Experiment, CompiledExperiment]] = None,
-        queue: Callable[[str, Optional[CompiledExperiment], DeviceSetup], Any] = None,
+        experiment: Experiment | CompiledExperiment | None = None,
+        queue: Callable[[str, CompiledExperiment | None, DeviceSetup], Any]
+        | None = None,
     ) -> Results:
         """Asynchronously submit experiment to the given queue.
 
@@ -415,7 +417,7 @@ class Session:
                 is used.
             queue: The name of connector to a queueing system which should do the actual
                 run on a setup. `queue` must be callable with the signature
-                ``(name: str, experiment: Optional[CompiledExperiment], device_setup: DeviceSetup)``
+                ``(name: str, experiment: CompiledExperiment | None, device_setup: DeviceSetup)``
                 which returns an object with which users can query results.
 
         Returns:

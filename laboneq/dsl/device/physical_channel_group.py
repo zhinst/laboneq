@@ -1,6 +1,7 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict
 
@@ -35,7 +36,7 @@ class PhysicalChannelGroup:
             assert isinstance(channel, Calibratable)
             channel.reset_calibration()
 
-    def list_calibratables(self, parent_path: str = None):
+    def list_calibratables(self, parent_path: str | None = None):
         current_path = (
             qct_path.concat(parent_path, self.uid)
             if parent_path is not None

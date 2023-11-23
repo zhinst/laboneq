@@ -30,6 +30,7 @@ class AWGEventType(Enum):
     PLAY_HOLD = auto()
     INIT_AMPLITUDE_REGISTER = auto()
     CHANGE_OSCILLATOR_PHASE = auto()
+    SEED_PRNG = auto()
 
 
 @dataclass

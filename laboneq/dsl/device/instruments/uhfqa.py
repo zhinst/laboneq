@@ -28,16 +28,16 @@ class UHFQA(ZIStandardInstrument):
                 connector_labels=["DIO"],
             )
         ]
-        for i in range(10):
-            inputs.append(
-                Port(
-                    IODirection.IN,
-                    uid=f"QAS/{i}",
-                    signal_type=IOSignalType.IQ,
-                    physical_port_ids=["0", "1"],
-                    connector_labels=["Signal Input 1", "Signal Input 2"],
-                )
+        inputs.extend(
+            Port(
+                IODirection.IN,
+                uid=f"QAS/{i}",
+                signal_type=IOSignalType.IQ,
+                physical_port_ids=["0", "1"],
+                connector_labels=["Signal Input 1", "Signal Input 2"],
             )
+            for i in range(10)
+        )
 
         outputs = [
             Port(

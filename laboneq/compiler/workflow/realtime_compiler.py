@@ -5,27 +5,27 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from itertools import groupby
-from typing import Any, Dict, Optional, TypedDict
+from typing import Dict, Optional, TypedDict
 
 from laboneq._observability.tracing import trace
 from laboneq.compiler import CodeGenerator, CompilerSettings
-from laboneq.compiler.code_generator import IntegrationTimes
-from laboneq.compiler.common.feedback_register_config import FeedbackRegisterConfig
-from laboneq.compiler.code_generator.measurement_calculator import SignalDelays
-from laboneq.compiler.common.awg_info import AwgKey
-from laboneq.compiler.common.feedback_connection import FeedbackConnection
+from laboneq.compiler.code_generator.ir_to_event_list import generate_event_list_from_ir
+from laboneq.compiler.code_generator.code_generator_pretty_printer import PrettyPrinter
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.experiment_access import ExperimentDAO
 from laboneq.compiler.ir.ir import IR
 from laboneq.compiler.scheduler.parameter_store import ParameterStore
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.scheduler.scheduler import Scheduler
-from laboneq.data.compilation_job import ExperimentInfo
-from laboneq.data.scheduled_experiment import PulseMapEntry
+from laboneq.compiler.workflow.compiler_output import RealtimeCompilerOutput
 
 _logger = logging.getLogger(__name__)
+
+_registered_codegens = {
+    0x0: CodeGenerator,
+    0x1: PrettyPrinter,
+}
 
 
 class Schedule(TypedDict):
@@ -44,68 +44,53 @@ class Schedule(TypedDict):
         )
 
 
-@dataclass
-class RealtimeCompilerOutput:
-    feedback_connections: Dict[str, FeedbackConnection]
-    feedback_register_configurations: Dict[AwgKey, FeedbackRegisterConfig]
-    signal_delays: SignalDelays
-    integration_weights: Dict
-    integration_times: IntegrationTimes
-    simultaneous_acquires: Dict[float, Dict[str, str]]
-    total_execution_time: float
-    src: Dict[AwgKey, Dict[str, Any]]
-    waves: Dict[str, Dict[str, Any]]
-    wave_indices: Dict[AwgKey, Dict[str, Any]]
-    command_tables: Dict[AwgKey, Dict[str, Any]]
-    pulse_map: Dict[str, PulseMapEntry]
-    schedule: Dict[str, Any]
-
-
 class RealtimeCompiler:
     def __init__(
         self,
-        experiment_info: ExperimentInfo,
+        experiment_dao: ExperimentDAO,
         scheduler: Scheduler,
         sampling_rate_tracker: SamplingRateTracker,
         signal_objects: Dict[str, SignalObj],
-        settings: Optional[CompilerSettings] = None,
+        settings: CompilerSettings | None = None,
     ):
-        self._experiment_info = experiment_info
+        self._experiment_dao = experiment_dao
         self._ir = None
         self._scheduler = scheduler
         self._sampling_rate_tracker = sampling_rate_tracker
         self._signal_objects = signal_objects
         self._settings = settings
 
-        self._code_generator = None
+        self._code_generators = {}
 
     def _lower_to_ir(self):
-        root = self._scheduler.generate_ir()
-        return IR(
-            devices=self._experiment_info.devices,
-            signals=self._experiment_info.signals,
-            root=root,
-            global_leader_device=self._experiment_info.global_leader_device,
-            pulse_defs=self._experiment_info.pulse_defs,
-        )
+        return self._scheduler.generate_ir()
 
     def _lower_ir_to_code(self, ir: IR):
-        code_generator = CodeGenerator(self._settings)
-        self._code_generator = code_generator
+        if len(self._signal_objects) == 0:
+            self._code_generators[0] = CodeGenerator(settings=self._settings, ir=ir)
+            self._code_generators[0].generate_code(self._signal_objects)
+            return
 
-        for signal_obj in self._signal_objects.values():
-            code_generator.add_signal(signal_obj)
+        awgs = [signal_obj.awg for signal_obj in self._signal_objects.values()]
+        device_classes = {awg.device_class for awg in awgs}
+        unknown_devices = [
+            awg for awg in awgs if awg.device_class not in _registered_codegens
+        ]
 
-        events = self._scheduler.generate_event_list_from_ir(
-            ir=ir.root, expand_loops=False, max_events=float("inf")
-        )
+        if len(unknown_devices) != 0:
+            raise Exception("Invalid device class encountered")
 
-        code_generator.gen_acquire_map(events)
-        code_generator.gen_seq_c(
-            events,
-            {p.uid: p for p in self._experiment_info.pulse_defs},
-        )
-        code_generator.gen_waves()
+        for device_class in device_classes:
+            self._code_generators[device_class] = _registered_codegens[device_class](
+                ir, settings=self._settings
+            )
+            self._code_generators[device_class].generate_code(
+                [
+                    s
+                    for s in self._signal_objects.values()
+                    if s.awg.device_class == device_class
+                ]
+            )
 
         _logger.debug("Code generation completed")
 
@@ -128,28 +113,22 @@ class RealtimeCompiler:
 
         schedule = self.prepare_schedule() if self._settings.OUTPUT_EXTRAS else None
 
-        assert self._code_generator is not None
+        outputs = {
+            device_class: code_generator.fill_output()
+            for device_class, code_generator in self._code_generators.items()
+        }
+
         compiler_output = RealtimeCompilerOutput(
-            feedback_connections=self._code_generator.feedback_connections(),
-            signal_delays=self._code_generator.signal_delays(),
-            integration_weights=self._code_generator.integration_weights(),
-            integration_times=self._code_generator.integration_times(),
-            simultaneous_acquires=self._code_generator.simultaneous_acquires(),
-            total_execution_time=self._code_generator.total_execution_time(),
-            src=self._code_generator.src(),
-            waves=self._code_generator.waves(),
-            wave_indices=self._code_generator.wave_indices(),
-            command_tables=self._code_generator.command_tables(),
-            pulse_map=self._code_generator.pulse_map(),
+            codegen_output=outputs,
             schedule=schedule,
-            feedback_register_configurations=self._code_generator.feedback_register_config(),
         )
 
         return compiler_output
 
     def _lower_ir_to_schedule(self, ir: IR):
-        event_list = self._scheduler.generate_event_list_from_ir(
-            ir=ir.root,
+        event_list = generate_event_list_from_ir(
+            ir=ir,
+            settings=self._settings,
             expand_loops=self._settings.EXPAND_LOOPS_FOR_SCHEDULE,
             max_events=self._settings.MAX_EVENTS_TO_PUBLISH,
         )
@@ -158,10 +137,8 @@ class RealtimeCompiler:
             {k: v for k, v in event.items() if v is not None} for event in event_list
         ]
 
-        experiment_dao = ExperimentDAO(self._experiment_info)
-
         try:
-            root_section = experiment_dao.root_rt_sections()[0]
+            root_section = self._experiment_dao.root_rt_sections()[0]
         except IndexError:
             return Schedule.empty()
 
@@ -173,12 +150,12 @@ class RealtimeCompiler:
 
         for section in [
             root_section,
-            *experiment_dao.all_section_children(root_section),
+            *self._experiment_dao.all_section_children(root_section),
         ]:
-            section_info = experiment_dao.section_info(section)
+            section_info = self._experiment_dao.section_info(section)
             section_display_name = section_info.uid
             section_signals_with_children[section] = list(
-                experiment_dao.section_signals_with_children(section)
+                self._experiment_dao.section_signals_with_children(section)
             )
             section_info_out[section] = {
                 "section_display_name": section_display_name,
@@ -186,8 +163,8 @@ class RealtimeCompiler:
             }
 
         sampling_rate_tuples = []
-        for signal_id in experiment_dao.signals():
-            signal_info = experiment_dao.signal_info(signal_id)
+        for signal_id in self._experiment_dao.signals():
+            signal_info = self._experiment_dao.signal_info(signal_id)
             device_id = signal_info.device.uid
             device_type = signal_info.device.device_type.value
             sampling_rate_tuples.append(

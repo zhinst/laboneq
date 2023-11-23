@@ -32,7 +32,7 @@ class CachingStrategy(Enum):
     NO_CACHE = "no_cache"
 
 
-class DaqNodeAction(ABC):
+class DaqNodeAction:
     def __init__(self, daq, path, caching_strategy):
         if daq is None:
             raise LabOneQControllerException("DaqNodeAction requires valid daq")
@@ -102,12 +102,7 @@ class ZiApiWrapperBase(ABC):
 
         # this is a hack to maintain compatibility with old ground truth files
         # @TODO(andreyk): remove compatibility hack and refactor the node logger to support lists and other types
-        if (
-            isinstance(value, int)
-            or isinstance(value, float)
-            or isinstance(value, complex)
-            or isinstance(value, str)
-        ):
+        if isinstance(value, (int, float, complex, str)):
             self._log_node(f"{method_name} {path} {value}")
 
         _logger.debug("%s - %s -> %s", method_name, path, value)
@@ -179,6 +174,9 @@ class ZiApiWrapperBase(ABC):
             res[path] = daq_reply[path]["value"]
         return res
 
+    def clear_cache(self):
+        self._node_cache_root.invalidate()
+
 
 @dataclass
 class ServerQualifier:
@@ -210,7 +208,7 @@ class DaqWrapper(ZiApiWrapperBase):
             )
             self.node_monitor = NodeMonitor(self._zi_api_object)
         except RuntimeError as exp:
-            raise LabOneQControllerException(str(exp))
+            raise LabOneQControllerException(str(exp)) from None
 
     async def validate_connection(self):
         [major, minor] = zhinst.core.__version__.split(".")[0:2]
@@ -259,7 +257,7 @@ class DaqWrapper(ZiApiWrapperBase):
                 api_method = getattr(self._zi_api_object, method_name)
                 retval = api_method(*args, **kwargs)
                 return retval
-            except Exception as ex:
+            except Exception as ex:  # noqa: PERF203
                 if (
                     attempt < 2
                     and method_name == "set"
@@ -277,7 +275,7 @@ class DaqWrapper(ZiApiWrapperBase):
                     )
                     raise LabOneQControllerException(
                         f"Exception {ex} when calling method {method_name} with {d_args} and {d_kwargs}"
-                    )
+                    ) from ex
 
     @cached_property
     def toolkit_session(self) -> TKSession:
@@ -375,7 +373,9 @@ class DaqWrapper(ZiApiWrapperBase):
 
 
 class DaqWrapperDryRun(DaqWrapper):
-    def __init__(self, name, server_qualifier: ServerQualifier = ServerQualifier()):
+    def __init__(self, name, server_qualifier: ServerQualifier = None):
+        if server_qualifier is None:
+            server_qualifier = ServerQualifier()
         assert server_qualifier.dry_run is True
         super().__init__(name, server_qualifier)
 

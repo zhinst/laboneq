@@ -64,6 +64,7 @@ class Oscillator:
             warnings.warn(
                 "`Oscillator` argument `carrier_type` will be removed in the future versions. It has no functionality.",
                 FutureWarning,
+                stacklevel=2,
             )
         else:
             self.carrier_type = CarrierType.RF

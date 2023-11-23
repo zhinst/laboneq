@@ -20,7 +20,6 @@ from laboneq.data.experiment_description import (
 
 if TYPE_CHECKING:
     from numpy.typing import ArrayLike
-
     from laboneq.core.types.enums.acquisition_type import AcquisitionType
     from laboneq.data.calibration import (
         BounceCompensation,
@@ -42,6 +41,7 @@ class DeviceInfoType(EnumReprMixin, Enum):
     SHFSG = "shfsg"
     PQSC = "pqsc"
     SHFPPC = "shfppc"
+    PRETTYPRINTERDEVICE = "prettyprinterdevice"
     NONQC = "nonqc"
 
 
@@ -152,6 +152,12 @@ class PulseDef:
 
 
 @dataclass
+class PRNGInfo:
+    range: int
+    seed: int
+
+
+@dataclass
 class SectionInfo:
     uid: str = None
     length: float = None
@@ -167,8 +173,10 @@ class SectionInfo:
     state: int | None = None
     local: bool | None = None
     user_register: int | None = None
+    prng: PRNGInfo | None = None
+    draw_prng: bool = False
 
-    count: int | None = None  # 'None' means 'not a  loop'
+    count: int | None = None  # 'None' means 'not a loop'
     chunk_count: int = 1
     execution_type: ExecutionType | None = None
     averaging_mode: AveragingMode | None = None
@@ -194,15 +202,33 @@ class MixerCalibrationInfo:
 
 
 @dataclass
+class OutputRoute:
+    """Output route of Output Router and Adder (RTR).
+
+    Attributes:
+        to_channel: Target channel of the Output Router.
+        from_channel: Source channel of the Output Router.
+        to_signal: Target channel's Experiment signal UID.
+        from_signal: Source channel's Experiment signal UID.
+        amplitude: Amplitude scaling of the source signal.
+        phase: Phase shift of the source signal.
+    """
+
+    to_channel: int
+    from_channel: int
+    to_signal: str
+    from_signal: str | None
+    amplitude: float | ParameterInfo
+    phase: float | ParameterInfo
+
+
+@dataclass
 class PrecompensationInfo:
     exponential: list[ExponentialCompensation] | None = None
     high_pass: HighPassCompensation | None = None
     bounce: BounceCompensation | None = None
     FIR: FIRCompensation | None = None
-
     computed_delay_samples: int | None = None
-    computed_port_delay: float | None = None
-    computed_delay_signal: float | None = None
 
 
 @dataclass
@@ -243,6 +269,7 @@ class SignalInfo:
     amplitude: float | ParameterInfo | None = None
     amplifier_pump: AmplifierPumpInfo | None = None
     kernel_count: int | None = None
+    output_routing: list[OutputRoute] | None = field(default_factory=list)
 
 
 @dataclass

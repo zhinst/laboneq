@@ -18,6 +18,7 @@ from laboneq.controller.communication import (
     DaqNodeAction,
     DaqNodeSetAction,
 )
+from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
 from laboneq.controller.devices.device_zi import DeviceZI, delay_to_rounded_samples
 from laboneq.controller.devices.zi_node_monitor import (
     Command,
@@ -58,7 +59,7 @@ class ModulationMode(IntEnum):
     MIXER_CAL = 6
 
 
-class DeviceHDAWG(DeviceZI):
+class DeviceHDAWG(AwgPipeliner, DeviceZI):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.dev_type = "HDAWG8"
@@ -71,6 +72,7 @@ class DeviceHDAWG(DeviceZI):
             if self.options.gen2
             else DEFAULT_SAMPLE_FREQUENCY_HZ
         )
+        self.pipeliner_set_node_base(f"/{self.serial}/awgs")
 
     def _process_dev_opts(self):
         self._check_expected_dev_opts()
@@ -88,7 +90,7 @@ class DeviceHDAWG(DeviceZI):
 
         self._multi_freq = "MF" in self.dev_opts
 
-    def _get_num_awgs(self):
+    def _get_num_awgs(self) -> int:
         return self._channels // 2
 
     def _osc_group_by_channel(self, channel: int) -> int:
@@ -110,17 +112,16 @@ class DeviceHDAWG(DeviceZI):
     def disable_outputs(
         self, outputs: set[int], invert: bool
     ) -> list[DaqNodeSetAction]:
-        channels_to_disable: list[DaqNodeSetAction] = []
-        for ch in range(self._channels):
-            if (ch in outputs) != invert:
-                channels_to_disable.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/sigouts/{ch}/on",
-                        0,
-                        caching_strategy=CachingStrategy.NO_CACHE,
-                    )
-                )
+        channels_to_disable: list[DaqNodeSetAction] = [
+            DaqNodeSetAction(
+                self._daq,
+                f"/{self.serial}/sigouts/{ch}/on",
+                0,
+                caching_strategy=CachingStrategy.NO_CACHE,
+            )
+            for ch in range(self._channels)
+            if (ch in outputs) != invert
+        ]
         return channels_to_disable
 
     def _nodes_to_monitor_impl(self) -> list[str]:
@@ -128,6 +129,7 @@ class DeviceHDAWG(DeviceZI):
         for awg in range(self._get_num_awgs()):
             nodes.append(f"/{self.serial}/awgs/{awg}/enable")
             nodes.append(f"/{self.serial}/awgs/{awg}/ready")
+            nodes.extend(self.pipeliner_control_nodes(awg))
         return nodes
 
     def update_clock_source(self, force_internal: bool | None):
@@ -171,14 +173,15 @@ class DeviceHDAWG(DeviceZI):
         ]
 
     def system_freq_control_nodes(self) -> list[NodeControlBase]:
-        nodes = []
         # If we do not turn all channels off, we get the following error message from
         # the server/device: 'An error happened on device dev8330 during the execution
         # of the experiment. Error message: Reinitialized signal output delay on
         # channel 0 (numbered from 0)'
         # See also https://zhinst.atlassian.net/browse/HBAR-1374?focusedCommentId=41373
-        for channel in range(self._channels):
-            nodes.append(Prepare(f"/{self.serial}/sigouts/{channel}/on", 0))
+        nodes = [
+            Prepare(f"/{self.serial}/sigouts/{channel}/on", 0)
+            for channel in range(self._channels)
+        ]
         nodes.extend(
             [
                 Command(
@@ -229,22 +232,51 @@ class DeviceHDAWG(DeviceZI):
 
         return nodes_to_configure_phase
 
+    def collect_execution_nodes(self, with_pipeliner: bool) -> list[DaqNodeAction]:
+        if with_pipeliner:
+            return self.pipeliner_collect_execution_nodes()
+
+        return super().collect_execution_nodes(with_pipeliner=with_pipeliner)
+
     def conditions_for_execution_ready(self, with_pipeliner: bool) -> dict[str, Any]:
-        conditions: dict[str, Any] = {}
-        for awg_index in self._allocated_awgs:
-            conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = 1
-        return conditions
+        if with_pipeliner:
+            return self.pipeliner_conditions_for_execution_ready()
+
+        return {
+            f"/{self.serial}/awgs/{awg_index}/enable": 1
+            for awg_index in self._allocated_awgs
+        }
 
     def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
     ) -> dict[str, Any]:
-        conditions: dict[str, Any] = {}
-        for awg_index in self._allocated_awgs:
-            conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = 0
-        return conditions
+        if with_pipeliner:
+            return self.pipeliner_conditions_for_execution_done()
+
+        return {
+            f"/{self.serial}/awgs/{awg_index}/enable": 0
+            for awg_index in self._allocated_awgs
+        }
+
+    def collect_execution_setup_nodes(
+        self, with_pipeliner: bool, has_awg_in_use: bool
+    ) -> list[DaqNodeAction]:
+        nodes = []
+        if with_pipeliner and has_awg_in_use:
+            nodes.append(
+                DaqNodeSetAction(
+                    self._daq,
+                    f"/{self.serial}/system/synchronization/source",
+                    1,  # external
+                )
+            )
+        return nodes
 
     def collect_initialization_nodes(
-        self, device_recipe_data: DeviceRecipeData, initialization: Initialization
+        self,
+        device_recipe_data: DeviceRecipeData,
+        initialization: Initialization,
+        recipe_data: RecipeData,
     ) -> list[DaqNodeAction]:
         _logger.debug("%s: Initializing device...", self.dev_repr)
 
@@ -411,7 +443,17 @@ class DeviceHDAWG(DeviceZI):
         for ch, osc_idx in osc_selects.items():
             nodes.append((f"sines/{ch}/oscselect", osc_idx))
 
-        return [DaqNodeSetAction(self._daq, f"/{self.serial}/{k}", v) for k, v in nodes]
+        set_actions = [
+            DaqNodeSetAction(self._daq, f"/{self.serial}/{k}", v) for k, v in nodes
+        ]
+        # Configure DIO/ZSync at init (previously was after AWG loading).
+        # This is a prerequisite for passing AWG checks in FW on the pipeliner commit.
+        # Without the pipeliner, these checks are only performed when the AWG is enabled,
+        # therefore DIO could be configured after the AWG loading.
+        set_actions.extend(
+            self.collect_dio_configuration_nodes(initialization, recipe_data)
+        )
+        return set_actions
 
     def collect_prepare_nt_step_nodes(
         self, attributes: DeviceAttributesView, recipe_data: RecipeData
@@ -473,6 +515,11 @@ class DeviceHDAWG(DeviceZI):
         return f"/{self.serial}/awgs/{awg_index}/commandtable/"
 
     async def collect_trigger_configuration_nodes(
+        self, initialization: Initialization, recipe_data: RecipeData
+    ) -> list[DaqNodeAction]:
+        return []
+
+    def collect_dio_configuration_nodes(
         self, initialization: Initialization, recipe_data: RecipeData
     ) -> list[DaqNodeAction]:
         _logger.debug("%s: Configuring trigger configuration nodes.", self.dev_repr)
@@ -618,3 +665,28 @@ class DeviceHDAWG(DeviceZI):
                 )
 
         return nodes_to_configure_triggers
+
+    def collect_reset_nodes(self) -> list[DaqNodeAction]:
+        reset_nodes = []
+        reset_nodes.extend(
+            [
+                # Reset pipeliner first, attempt to set AWG enable leads to FW error if pipeliner was enabled.
+                *self.pipeliner_reset_nodes(),
+                DaqNodeSetAction(
+                    self._daq,
+                    f"/{self.serial}/awgs/*/enable",
+                    0,
+                    caching_strategy=CachingStrategy.NO_CACHE,
+                ),
+                DaqNodeSetAction(
+                    self._daq,
+                    f"/{self.serial}/system/synchronization/source",
+                    0,  # internal
+                    caching_strategy=CachingStrategy.NO_CACHE,
+                ),
+            ]
+        )
+        # Reset errors must be the last operation, as above sets may cause errors.
+        # See https://zhinst.atlassian.net/browse/HULK-1606
+        reset_nodes.extend(super().collect_reset_nodes())
+        return reset_nodes

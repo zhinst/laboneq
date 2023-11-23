@@ -9,11 +9,13 @@ from laboneq.data.setup_description import Port, PortType
 def hdawg_ports() -> List[Port]:
     inputs = [Port(path="ZSYNCS/0", type=PortType.ZSYNC, channel=0)]
 
-    outputs = []
-    for i in range(8):
-        outputs += [Port(path=f"SIGOUTS/{i}", type=PortType.RF, channel=i)]
+    outputs = [Port(path=f"SIGOUTS/{i}", type=PortType.RF, channel=i) for i in range(8)]
     outputs.append(Port(path="DIOS/0", type=PortType.DIO, channel=0))
     return inputs + outputs
+
+
+def test_device_ports() -> List[Port]:
+    return [Port(path=f"SIGOUTS/{0}", type=PortType.RF, channel=0)]
 
 
 def pqsc_ports() -> List[Port]:
@@ -21,9 +23,9 @@ def pqsc_ports() -> List[Port]:
 
 
 def shfppc_ports() -> List[Port]:
-    outputs = []
-    for ch in range(4):
-        outputs.append(Port(path=f"PPCHANNELS/{ch}", type=PortType.RF, channel=ch))
+    outputs = [
+        Port(path=f"PPCHANNELS/{ch}", type=PortType.RF, channel=ch) for ch in range(4)
+    ]
     return outputs
 
 
@@ -32,20 +34,19 @@ def shfqa_ports() -> List[Port]:
         Port(path="DIOS/0", type=PortType.DIO, channel=0),
         Port(path="ZSYNCS/0", type=PortType.ZSYNC, channel=0),
     ]
-    for ch in range(4):
-        inputs.append(
-            Port(
-                path=f"QACHANNELS/{ch}/INPUT",
-                type=PortType.RF,
-                channel=ch,
-            )
+    inputs.extend(
+        Port(
+            path=f"QACHANNELS/{ch}/INPUT",
+            type=PortType.RF,
+            channel=ch,
         )
+        for ch in range(4)
+    )
 
-    outputs = []
-    for ch in range(4):
-        outputs.append(
-            Port(path=f"QACHANNELS/{ch}/OUTPUT", type=PortType.RF, channel=ch)
-        )
+    outputs = [
+        Port(path=f"QACHANNELS/{ch}/OUTPUT", type=PortType.RF, channel=ch)
+        for ch in range(4)
+    ]
     return inputs + outputs
 
 
@@ -54,24 +55,21 @@ def shfqc_ports() -> List[Port]:
         Port(path="DIOS/0", type=PortType.DIO, channel=0),
         Port(path="ZSYNCS/0", type=PortType.ZSYNC, channel=0),
     ]
-    for ch in range(4):
-        inputs.append(
-            Port(
-                path=f"QACHANNELS/{ch}/INPUT",
-                type=PortType.RF,
-                channel=ch,
-            )
+    inputs.extend(
+        Port(
+            path=f"QACHANNELS/{ch}/INPUT",
+            type=PortType.RF,
+            channel=ch,
         )
-    outputs = []
-    for ch in range(4):
-        outputs.append(
-            Port(path=f"QACHANNELS/{ch}/OUTPUT", type=PortType.RF, channel=ch)
-        )
+        for ch in range(4)
+    )
+    outputs = [
+        Port(path=f"QACHANNELS/{ch}/OUTPUT", type=PortType.RF, channel=ch)
+        for ch in range(4)
+    ]
     outputs.extend(
-        [
-            Port(path=f"SGCHANNELS/{ch}/OUTPUT", type=PortType.RF, channel=ch)
-            for ch in range(8)
-        ]
+        Port(path=f"SGCHANNELS/{ch}/OUTPUT", type=PortType.RF, channel=ch)
+        for ch in range(8)
     )
     return inputs + outputs
 
@@ -82,10 +80,8 @@ def shfsg_ports() -> List[Port]:
         Port(path="ZSYNCS/0", type=PortType.ZSYNC, channel=0),
     ]
     ports.extend(
-        [
-            Port(path=f"SGCHANNELS/{ch}/OUTPUT", type=PortType.RF, channel=ch)
-            for ch in range(8)
-        ]
+        Port(path=f"SGCHANNELS/{ch}/OUTPUT", type=PortType.RF, channel=ch)
+        for ch in range(8)
     )
     return ports
 

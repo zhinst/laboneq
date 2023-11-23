@@ -20,6 +20,7 @@ from laboneq.dsl.calibration import (
     MixerCalibration,
     Oscillator,
     Precompensation,
+    OutputRoute,
     SignalCalibration,
     units,
 )

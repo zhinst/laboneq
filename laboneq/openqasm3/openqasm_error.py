@@ -1,7 +1,7 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional
+from __future__ import annotations
 
 from openqasm3.ast import Span
 
@@ -28,9 +28,7 @@ class OpenQasmException(Exception):
     openqasm_error.OpenQasmException: Something went wrong
     """
 
-    def __init__(
-        self, msg=None, mark: Optional[Span] = None, source: Optional[str] = None
-    ):
+    def __init__(self, msg=None, mark: Span | None = None, source: str | None = None):
         self.mark = mark
         self.source = source
         super().__init__(msg)

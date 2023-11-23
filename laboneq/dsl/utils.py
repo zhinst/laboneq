@@ -1,7 +1,7 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Dict, List
+from __future__ import annotations
 
 from laboneq.core import path as qct_path
 from laboneq.core.types.enums import ModulationType
@@ -19,7 +19,7 @@ def _canonical_line(line: str) -> str:
     return _line
 
 
-def has_onboard_lo(device_setup: DeviceSetup, line: str) -> str:
+def has_onboard_lo(device_setup: DeviceSetup, line: str) -> bool:
     _line = _canonical_line(line)
     for instrument in device_setup.instruments:
         device_type = instrument.calc_driver()
@@ -32,10 +32,10 @@ def has_onboard_lo(device_setup: DeviceSetup, line: str) -> str:
 
 def calibrate_devices(
     device_setup: "DeviceSetup",
-    qubit_frequencies: Dict[str, float],
-    line_modulations: Dict[str, ModulationType],
-    local_oscillators: Dict[str, float] = None,
-    sharing_oscillator: List[str] = None,
+    qubit_frequencies: dict[str, float],
+    line_modulations: dict[str, ModulationType],
+    local_oscillators: dict[str, float] | None = None,
+    sharing_oscillator: list[str] | None = None,
 ):
     """Convenience function to create a typical signal calibration and map"""
     signals = []

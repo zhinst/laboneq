@@ -23,6 +23,7 @@ from laboneq.compiler.code_generator.analyze_events import (
     analyze_precomp_reset_times,
     analyze_set_oscillator_times,
     analyze_trigger_events,
+    analyze_prng_setup_times,
 )
 from laboneq.compiler.code_generator.analyze_playback import analyze_play_wave_times
 from laboneq.compiler.code_generator.command_table_tracker import (
@@ -33,6 +34,7 @@ from laboneq.compiler.code_generator.feedback_register_allocator import (
     FeedbackRegisterAllocator,
 )
 from laboneq.compiler.common.feedback_register_config import FeedbackRegisterConfig
+from laboneq.compiler.code_generator.ir_to_event_list import generate_event_list_from_ir
 from laboneq.compiler.code_generator.measurement_calculator import (
     IntegrationTimes,
     MeasurementCalculator,
@@ -73,6 +75,7 @@ from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.pulse_parameters import decode_pulse_parameters
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.common.trigger_mode import TriggerMode
+from laboneq.compiler.workflow.compiler_output import CodegenOutput
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.pulse_sampler import (
     combine_pulse_parameters,
@@ -290,7 +293,7 @@ class CodeGenerator:
 
     _measurement_calculator = MeasurementCalculator
 
-    def __init__(self, settings: CompilerSettings | dict | None = None):
+    def __init__(self, ir=None, settings: CompilerSettings | dict | None = None):
         if settings is not None:
             if isinstance(settings, CompilerSettings):
                 self._settings = settings
@@ -299,6 +302,7 @@ class CodeGenerator:
         else:
             self._settings = CompilerSettings()
 
+        self._ir = ir
         self._signals: dict[str, SignalObj] = {}
         self._code = {}
         self._src: dict[AwgKey, dict[str, str]] = {}
@@ -321,6 +325,35 @@ class CodeGenerator:
         self._total_execution_time = None
 
         self.EMIT_TIMING_COMMENTS = self._settings.EMIT_TIMING_COMMENTS
+
+    def generate_code(self, signal_objs: list[SignalObj]):
+        event_list = generate_event_list_from_ir(
+            self._ir, self._settings, expand_loops=False, max_events=float("inf")
+        )
+        for signal_obj in signal_objs:
+            self.add_signal(signal_obj)
+        self.gen_acquire_map(event_list)
+        self.gen_seq_c(
+            event_list,
+            {p.uid: p for p in self._ir.pulse_defs},
+        )
+        self.gen_waves()
+
+    def fill_output(self):
+        return CodegenOutput(
+            feedback_connections=self.feedback_connections(),
+            signal_delays=self.signal_delays(),
+            integration_weights=self.integration_weights(),
+            integration_times=self.integration_times(),
+            simultaneous_acquires=self.simultaneous_acquires(),
+            src=self.src(),
+            total_execution_time=self.total_execution_time(),
+            waves=self.waves(),
+            wave_indices=self.wave_indices(),
+            command_tables=self.command_tables(),
+            pulse_map=self.pulse_map(),
+            feedback_register_configurations=self.feedback_register_config(),
+        )
 
     def integration_weights(self):
         return self._integration_weights
@@ -972,6 +1005,11 @@ class CodeGenerator:
         )
         sampled_events.merge(loop_events)
 
+        prng_setup_events = analyze_prng_setup_times(
+            events, global_sampling_rate, global_delay
+        )
+        sampled_events.merge(prng_setup_events)
+
         for signal_obj in awg.signals:
             set_oscillator_events = analyze_set_oscillator_times(
                 events, signal_obj, global_delay
@@ -1275,14 +1313,13 @@ class CodeGenerator:
             awg.key
         ].command_table_offset = handler.command_table_match_offset
 
-        seq_c_generators = []
         _logger.debug(
             "***  Finished event processing, loop_stack_generators: %s",
             seqc_tracker.loop_stack_generators,
         )
+        seq_c_generators = []
         for part in seqc_tracker.loop_stack_generators:
-            for generator in part:
-                seq_c_generators.append(generator)
+            seq_c_generators.extend(part)
         _logger.debug(
             "***  collected generators, seq_c_generators: %s", seq_c_generators
         )

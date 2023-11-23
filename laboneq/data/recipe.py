@@ -6,6 +6,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal
+from typing_extensions import TypeAlias
+
+
+ParameterUID: TypeAlias = str
 
 
 class SignalType(Enum):
@@ -45,6 +49,15 @@ class Gains:
 
 
 @dataclass
+class RoutedOutput:
+    """Output route of Output Router and Adder (RTR)."""
+
+    from_channel: int
+    amplitude: float | ParameterUID
+    phase: float | ParameterUID
+
+
+@dataclass
 class IO:
     channel: int
     enable: bool | None = None
@@ -54,20 +67,20 @@ class IO:
     range: float | None = None
     range_unit: str | None = None
     precompensation: dict[str, dict] | None = None
-    lo_frequency: Any | None = None
+    lo_frequency: Any = None
     port_mode: str | None = None
-    port_delay: Any | None = None
+    port_delay: Any = None
     scheduler_port_delay: float = 0.0
     delay_signal: float | None = None
     marker_mode: str | None = None
-    amplitude: Any | None = None
+    amplitude: Any = None
+    routed_outputs: list[RoutedOutput] = field(default_factory=list)
 
 
 @dataclass
 class AWG:
     awg: int
     signal_type: SignalType = SignalType.SINGLE
-    qa_signal_id: str | None = None  # todo: can be removed?
 
     # receiver (SG instruments)
     source_feedback_register: int | Literal["local"] | None = None

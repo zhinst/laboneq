@@ -28,11 +28,11 @@ from laboneq._observability.tracing import trace
 from laboneq._utils import UIDReference, cached_method
 from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.device_type import DeviceType
-from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.ir.acquire_group_ir import AcquireGroupIR
 from laboneq.compiler.ir.case_ir import CaseIR, EmptyBranchIR
 from laboneq.compiler.ir.interval_ir import IntervalIR
+from laboneq.compiler.ir.ir import IR
 from laboneq.compiler.ir.loop_ir import LoopIR
 from laboneq.compiler.ir.loop_iteration_ir import LoopIterationIR
 from laboneq.compiler.ir.match_ir import MatchIR
@@ -55,7 +55,6 @@ from laboneq.compiler.scheduler.oscillator_schedule import (
 from laboneq.compiler.scheduler.parameter_store import ParameterStore
 from laboneq.compiler.scheduler.phase_reset_schedule import PhaseResetSchedule
 from laboneq.compiler.scheduler.preorder_map import calculate_preorder_map
-from laboneq.compiler.scheduler.pulse_phase import calculate_osc_phase
 from laboneq.compiler.scheduler.pulse_schedule import (
     PrecompClearSchedule,
     PulseSchedule,
@@ -108,11 +107,11 @@ _schedule_to_ir = {
 @functools.lru_cache()
 def _all_slots(cls):
     slots = set()
-    for cls in cls.__mro__:
-        if isinstance(getattr(cls, "__slots__", []), str):
-            slots.add(getattr(cls, "__slots__", []))
+    for base in cls.__mro__:
+        if isinstance(getattr(base, "__slots__", []), str):
+            slots.add(getattr(base, "__slots__", []))
         else:
-            for attr in getattr(cls, "__slots__", []):
+            for attr in getattr(base, "__slots__", []):
                 slots.add(attr)
     return [s for s in slots if not s.startswith("__")]
 
@@ -137,7 +136,7 @@ class Scheduler:
         experiment_dao: ExperimentDAO,
         sampling_rate_tracker: SamplingRateTracker,
         signal_objects: Dict[str, SignalObj],
-        settings: Optional[CompilerSettings] = None,
+        settings: CompilerSettings | None = None,
     ):
         self._schedule_data = ScheduleData(
             experiment_dao=experiment_dao,
@@ -149,7 +148,7 @@ class Scheduler:
         self._sampling_rate_tracker = sampling_rate_tracker
         self._TINYSAMPLE = self._schedule_data.TINYSAMPLE
 
-        self._system_grid = self.grid(*self._experiment_dao.signals())[1]
+        _, self._system_grid = self.grid(*self._experiment_dao.signals())
         self._root_schedule: Optional[IntervalSchedule] = None
         self._root_ir: Optional[IntervalIR] = None
         self._scheduled_sections = {}
@@ -160,10 +159,10 @@ class Scheduler:
             nt_parameters = ParameterStore()
         self._root_schedule = self._schedule_root(nt_parameters)
         _logger.info("Schedule completed")
-        for _, (
+        for (
             warning_generator,
             warning_data,
-        ) in self._schedule_data.combined_warnings.items():
+        ) in self._schedule_data.combined_warnings.values():
             warning_generator(warning_data)
 
     def _schedule_to_ir(self, ir_node: IntervalIR, schedule_node: IntervalSchedule):
@@ -185,109 +184,24 @@ class Scheduler:
             self._schedule_to_ir(ir_c, schedule_c)
 
     def generate_ir(self):
+        root_ir = None
         if self._root_schedule is not None:
             root_ir = RootIR(
                 **{s: getattr(self._root_schedule, s) for s in _all_slots(RootIR)}
             )
             self._schedule_to_ir(root_ir, self._root_schedule)
-            return root_ir
-
-    def generate_event_list_from_ir(
-        self, ir: RootIR, expand_loops: bool, max_events: int
-    ):
-        event_list = self._start_events()
-
-        if ir is not None:
-            id_tracker = itertools.count()
-            event_list.extend(
-                ir.generate_event_list(
-                    start=0,
-                    max_events=max_events,
-                    id_tracker=id_tracker,
-                    expand_loops=expand_loops,
-                    settings=self._schedule_data.settings,
-                )
-            )
-
-            # assign every event an id
-            for event in event_list:
-                if "id" not in event:
-                    event["id"] = next(id_tracker)
-
-        # convert time from units of tiny samples to seconds
-        for event in event_list:
-            event["time"] = event["time"] * self._TINYSAMPLE
-
-        calculate_osc_phase(event_list, self._experiment_dao)
-
-        return event_list
-
-    def generate_event_list(self, expand_loops: bool, max_events: int):
-        event_list = self._start_events()
-
-        if self._root_schedule is not None:
-            root_ir = RootIR(
-                **{s: getattr(self._root_schedule, s) for s in _all_slots(RootIR)}
-            )
-            self._schedule_to_ir(root_ir, self._root_schedule)
-            self._root_ir = root_ir
-
-            id_tracker = itertools.count()
-            event_list.extend(
-                self._root_ir.generate_event_list(
-                    start=0,
-                    max_events=max_events,
-                    id_tracker=id_tracker,
-                    expand_loops=expand_loops,
-                    settings=self._schedule_data.settings,
-                )
-            )
-
-            # assign every event an id
-            for event in event_list:
-                if "id" not in event:
-                    event["id"] = next(id_tracker)
-
-        # convert time from units of tiny samples to seconds
-        for event in event_list:
-            event["time"] = event["time"] * self._TINYSAMPLE
-
-        calculate_osc_phase(event_list, self._experiment_dao)
-
-        return event_list
-
-    def _start_events(self):
-        retval = []
-
-        # Add initial events to reset the NCOs.
-        # Todo (PW): Drop once system tests have been migrated from legacy behaviour.
-        for device_info in self._experiment_dao.device_infos():
-            try:
-                device_type = DeviceType.from_device_info_type(device_info.device_type)
-            except ValueError:
-                # Not every device has a corresponding DeviceType (e.g. PQSC)
-                continue
-            if not device_type.supports_reset_osc_phase:
-                continue
-            retval.append(
-                {
-                    "event_type": EventType.INITIAL_RESET_HW_OSCILLATOR_PHASE,
-                    "device_id": device_info.uid,
-                    "duration": device_type.reset_osc_duration,
-                    "time": 0,
-                }
-            )
-        return retval
-
-    def event_timing(self, expand_loops=False, max_events: Optional[int] = None):
-        if max_events is None:
-            # inf is not an int, but a good enough substitute!
-            max_events = float("inf")
-        return self.generate_event_list(expand_loops, max_events)
+        exp_info = self._experiment_dao.to_experiment_info()
+        return IR(
+            devices=exp_info.devices,
+            signals=exp_info.signals,
+            root=root_ir,
+            global_leader_device=exp_info.global_leader_device,
+            pulse_defs=exp_info.pulse_defs,
+        )
 
     def _schedule_root(
         self, nt_parameters: ParameterStore[str, float]
-    ) -> Optional[RootSchedule]:
+    ) -> RootSchedule | None:
         root_sections = self._experiment_dao.root_rt_sections()
         if len(root_sections) == 0:
             return None
@@ -357,6 +271,9 @@ class Scheduler:
             schedule = self._schedule_children(
                 section_id, section_info, children_schedules
             )
+            if section_info.prng is not None:
+                assert section_info.on_system_grid, "PRNG setup must be on system grid"
+                schedule.prng_setup = section_info.prng
 
         if schedule.cacheable:
             self._scheduled_sections[
@@ -636,13 +553,13 @@ class Scheduler:
                 if osc_info is not None and osc_info.is_hardware:
                     hw_osc_reset_signals.add(signal)
 
-        for _, osc in swept_hw_oscillators.items():
+        for osc in swept_hw_oscillators.values():
             signals.add(osc.signal)
 
-        # escalate the grid to sequencer grid
+        # escalate the grid to system grid
         # todo: Currently we do this unconditionally. This is something we might want to
         #  relax in the future
-        _, grid = self.grid(*signals)
+        grid = self._system_grid
 
         # Deepcopy here because of caching
         osc_phase_reset = copy.deepcopy(
@@ -925,19 +842,18 @@ class Scheduler:
         current_parameters: ParameterStore[str, float],
     ) -> MatchSchedule:
         assert section_info.handle is not None or section_info.user_register is not None
-        handle: Optional[str] = section_info.handle
+        handle: str | None = section_info.handle
         user_register: Optional[int] = section_info.user_register
         local: Optional[bool] = section_info.local
 
         dao = self._schedule_data.experiment_dao
-        children_schedules = []
         section_children = dao.direct_section_children(section_id)
         if len(section_children) == 0:
             raise LabOneQException("Must provide at least one branch option")
-        for case_section in section_children:
-            children_schedules.append(
-                self._schedule_case(case_section, current_parameters)
-            )
+        children_schedules = [
+            self._schedule_case(case_section, current_parameters)
+            for case_section in section_children
+        ]
 
         signals = set()
         for c in children_schedules:
@@ -1080,14 +996,13 @@ class Scheduler:
         self, section_id: str, parameters: ParameterStore[str, float]
     ):
         """Return a list of the schedules of the children"""
-        subsection_schedules = []
         section_children = self._schedule_data.experiment_dao.direct_section_children(
             section_id
         )
-        for child_section in section_children:
-            subsection_schedules.append(
-                self._schedule_section(child_section, parameters)
-            )
+        subsection_schedules = [
+            self._schedule_section(child_section, parameters)
+            for child_section in section_children
+        ]
 
         pulse_schedules = []
         section_signals = self._schedule_data.experiment_dao.section_signals(section_id)
@@ -1202,7 +1117,7 @@ class Scheduler:
 
     def _resolve_repetition_time(
         self, root_sections: Tuple[str]
-    ) -> Optional[RepetitionInfo]:
+    ) -> RepetitionInfo | None:
         """Locate the loop section which corresponds to the shot boundary.
 
         This section will be padded to the repetition length."""
@@ -1234,7 +1149,7 @@ class Scheduler:
         root_section = root_sections[0]
 
         def search_lowest_level_loop(section):
-            loop: Optional[str] = None
+            loop: str | None = None
             section_info = self._schedule_data.experiment_dao.section_info(section)
             if section_info.count is not None:
                 loop = section

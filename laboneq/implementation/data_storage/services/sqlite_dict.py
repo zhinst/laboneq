@@ -1,10 +1,11 @@
 # Copyright 2023 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
 import copy
 import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, Tuple, Union
 from uuid import uuid4
 
 from laboneq.dsl.serialization.serializer import Serializer
@@ -15,7 +16,7 @@ class DataStorageServiceSqliteDict(DataStorageAPI):
     METADATA_TABLE = "metadata"
     DATA_TABLE = "data"
 
-    def __init__(self, file_path: Optional[str] = None):
+    def __init__(self, file_path: str | None = None):
         from sqlitedict import SqliteDict
 
         if file_path is None:
@@ -54,8 +55,8 @@ class DataStorageServiceSqliteDict(DataStorageAPI):
     def store(
         self,
         data: Any,
-        key: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        key: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """
         Store data in the database. Only data that can be serialized with the LabOne Q serializer can be stored.
@@ -103,8 +104,8 @@ class DataStorageServiceSqliteDict(DataStorageAPI):
 
     def find(
         self,
-        metadata: Optional[Dict[str, Any]] = None,
-        condition: Optional[Callable[[Dict[str, Any]], bool]] = None,
+        metadata: dict[str, Any] | None = None,
+        condition: Callable[[dict[str, Any]], bool] | None = None,
     ) -> Iterable[str]:
         """
         Find data in the database.

@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, Set
+from typing import Set
 
 
 @dataclass
@@ -17,5 +17,5 @@ class FeedbackConnection:
         drive (Set[str]): A set of strings that specifies the reacting signals' names (targets).
     """
 
-    acquire: Optional[str]
+    acquire: str | None
     drive: Set[str] = field(default_factory=set)

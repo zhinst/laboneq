@@ -55,14 +55,13 @@ def dump(experiment_dao: ExperimentDAO):
 
     if reference_clock is not None:
         connectivity_object["reference_clock"] = reference_clock
-    dios = []
-    for dio_connection in experiment_dao.dio_connections():
-        dios.append(
-            {
-                "leader": {"$ref": dio_connection[0]},
-                "follower": {"$ref": dio_connection[1]},
-            }
-        )
+    dios = [
+        {
+            "leader": {"$ref": dio_connection[0]},
+            "follower": {"$ref": dio_connection[1]},
+        }
+        for dio_connection in experiment_dao.dio_connections()
+    ]
     if len(dios) > 0:
         connectivity_object["dios"] = dios
 
@@ -309,7 +308,7 @@ def dump(experiment_dao: ExperimentDAO):
                     section_signal_pulse_object[
                         "pulse_group"
                     ] = section_pulse.pulse_group
-                markers = getattr(section_pulse, "markers")
+                markers = section_pulse.markers
                 if markers is not None:
                     markers_object = {}
                     for m in markers:

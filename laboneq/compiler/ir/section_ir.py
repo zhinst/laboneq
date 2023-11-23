@@ -10,15 +10,19 @@ from attrs import define, field
 from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.event_type import EventType
 from laboneq.compiler.ir.interval_ir import IntervalIR
+from laboneq.data.compilation_job import PRNGInfo
 
 
 @define(kw_only=True, slots=True)
 class SectionIR(IntervalIR):
-    #: The id of the section
+    # The id of the section
     section: str
 
-    #: Trigger info: signal, bit
+    # Trigger info: signal, bit
     trigger_output: Set[Tuple[str, int]] = field(factory=set)
+
+    # PRNG setup & seed
+    prng_setup: PRNGInfo | None = None
 
     def generate_event_list(
         self,
@@ -55,6 +59,20 @@ class SectionIR(IntervalIR):
                 }
             )
 
+        prng_setup_events = []
+        if self.prng_setup is not None and max_events > 0:
+            max_events -= 1
+            prng_setup_events = [
+                {
+                    "event_type": EventType.SETUP_PRNG,
+                    "time": start,
+                    "section_name": self.section,
+                    "range": self.prng_setup.range,
+                    "seed": self.prng_setup.seed,
+                    "id": next(id_tracker),
+                }
+            ]
+
         children_events = self.children_events(
             start, max_events, settings, id_tracker, expand_loops
         )
@@ -74,6 +92,7 @@ class SectionIR(IntervalIR):
                 **d,
             },
             *trigger_set_events,
+            *prng_setup_events,
             *[e for l in children_events for e in l],
             *trigger_clear_events,
             {
@@ -107,7 +126,7 @@ class SectionIR(IntervalIR):
         # lists. This is necessary because the PSV requires the subsection events to be
         # present.
         # todo: investigate if this is a bug in the PSV.
-        for i in range(len(self.children) - len(children_events)):
+        for _ in range(len(self.children) - len(children_events)):
             children_events.append([])
 
         if subsection_events:

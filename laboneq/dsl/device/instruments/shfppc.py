@@ -19,15 +19,14 @@ class SHFPPC(ZIStandardInstrument):
     @property
     def ports(self):
         """Ports that are part of this instrument."""
-        outputs = []
-        for ch in range(4):
-            outputs.append(
-                Port(
-                    IODirection.OUT,
-                    uid=f"PPCHANNELS/{ch}",
-                    signal_type=IOSignalType.PPC,
-                    physical_port_ids=[f"{ch}"],
-                    connector_labels=[f"Signal Output {ch+1}"],
-                )
+        outputs = [
+            Port(
+                IODirection.OUT,
+                uid=f"PPCHANNELS/{ch}",
+                signal_type=IOSignalType.PPC,
+                physical_port_ids=[f"{ch}"],
+                connector_labels=[f"Signal Output {ch+1}"],
             )
+            for ch in range(4)
+        ]
         return outputs

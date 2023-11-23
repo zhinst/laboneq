@@ -1,6 +1,7 @@
 # Copyright 2023 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
 from dataclasses import asdict, is_dataclass
 from typing import Any, Callable, Optional
 
@@ -43,8 +44,8 @@ def convert_maybe_parameter(obj: Any) -> Any:
 
 
 def convert_modulation_type(
-    obj: Optional[legacy_enums.ModulationType],
-) -> Optional[calibration.ModulationType]:
+    obj: legacy_enums.ModulationType | None,
+) -> calibration.ModulationType | None:
     if obj is None:
         return None
     if obj == legacy_enums.ModulationType.AUTO:
@@ -57,7 +58,7 @@ def convert_modulation_type(
 
 
 def convert_oscillator(
-    obj: Optional[legacy_calibration.Oscillator],
+    obj: legacy_calibration.Oscillator | None,
 ) -> Optional[calibration.Oscillator]:
     if obj is None:
         return None
@@ -69,7 +70,7 @@ def convert_oscillator(
 
 
 def convert_mixer_calibration(
-    obj: Optional[legacy_calibration.MixerCalibration],
+    obj: legacy_calibration.MixerCalibration | None,
 ) -> Optional[calibration.MixerCalibration]:
     if obj is None:
         return None
@@ -79,7 +80,7 @@ def convert_mixer_calibration(
 
 
 def convert_exponential(
-    obj: Optional[legacy_calibration.ExponentialCompensation],
+    obj: legacy_calibration.ExponentialCompensation | None,
 ) -> Optional[calibration.ExponentialCompensation]:
     if obj is None:
         return None
@@ -91,7 +92,7 @@ def convert_exponential(
 
 
 def convert_highpass_compensation(
-    obj: Optional[legacy_calibration.HighPassCompensation],
+    obj: legacy_calibration.HighPassCompensation | None,
 ) -> Optional[calibration.HighPassCompensation]:
     if obj is None:
         return None
@@ -99,7 +100,7 @@ def convert_highpass_compensation(
 
 
 def convert_precompensation(
-    obj: Optional[legacy_calibration.Precompensation],
+    obj: legacy_calibration.Precompensation | None,
 ) -> Optional[calibration.Precompensation]:
     if obj is None:
         return obj
@@ -113,7 +114,7 @@ def convert_precompensation(
 
 
 def convert_amplifier_pump(
-    obj: Optional[legacy_calibration.AmplifierPump],
+    obj: legacy_calibration.AmplifierPump | None,
 ) -> Optional[calibration.AmplifierPump]:
     if obj is None:
         return obj
@@ -129,7 +130,7 @@ def convert_amplifier_pump(
 
 
 def convert_port_mode(
-    obj: Optional[legacy_enums.PortMode],
+    obj: legacy_enums.PortMode | None,
 ) -> Optional[calibration.PortMode]:
     if obj is None:
         return None
@@ -171,6 +172,14 @@ def convert_calibration(
             new.threshold = legacy_ls.threshold
             new.amplitude = convert_maybe_parameter(legacy_ls.amplitude)
             new.amplifier_pump = convert_amplifier_pump(legacy_ls.amplifier_pump)
+            if legacy_ls.added_outputs is not None:
+                for router in legacy_ls.added_outputs:
+                    routing = calibration.OutputRouting(
+                        source_signal=router.source,
+                        amplitude=convert_maybe_parameter(router.amplitude_scaling),
+                        phase=convert_maybe_parameter(router.phase_shift),
+                    )
+                    new.output_routing.append(routing)
         cals[uid_formatter(uid)] = new
 
     return calibration.Calibration(cals)

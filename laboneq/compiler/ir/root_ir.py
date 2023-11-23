@@ -3,7 +3,6 @@
 
 from typing import Dict, Iterator, List
 
-from laboneq.compiler import CompilerSettings
 from laboneq.compiler.ir.interval_ir import IntervalIR
 
 
@@ -14,7 +13,7 @@ class RootIR(IntervalIR):
         max_events: int,
         id_tracker: Iterator[int],
         expand_loops,
-        settings: CompilerSettings,
+        settings,
     ) -> List[Dict]:
         assert self.length is not None
         children_events = self.children_events(

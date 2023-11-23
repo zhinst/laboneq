@@ -26,6 +26,8 @@ from laboneq.dsl.experiment.section import (
     Match,
     Section,
     Sweep,
+    PRNGSetup,
+    PRNGLoop,
 )
 
 
@@ -239,11 +241,7 @@ class MatchSectionContextManager(SectionContextManagerBase):
 class CaseSectionContextManager(SectionContextManagerBase):
     section_class = Case
 
-    def __init__(
-        self,
-        uid,
-        state,
-    ):
+    def __init__(self, uid, state):
         kwargs = dict(state=state)
         if uid is not None:
             kwargs["uid"] = uid
@@ -253,6 +251,34 @@ class CaseSectionContextManager(SectionContextManagerBase):
         super()._section_post_create(section, parent)
         if not isinstance(parent, Match):
             raise LabOneQException("Case section must be inside a Match section")
+
+
+class PRNGSetupContextManager(SectionContextManagerBase):
+    section_class = PRNGSetup
+
+    def __init__(self, prng, uid):
+        kwargs = {"prng": prng}
+        if uid is not None:
+            kwargs["uid"] = uid
+        super().__init__(kwargs=kwargs)
+
+    def __enter__(self):
+        section = super().__enter__()
+        return section.prng
+
+
+class PRNGLoopContextManager(SectionContextManagerBase):
+    section_class = PRNGLoop
+
+    def __init__(self, prng_sample, uid):
+        kwargs = {"prng_sample": prng_sample}
+        if uid is not None:
+            kwargs["uid"] = uid
+        super().__init__(kwargs=kwargs)
+
+    def __enter__(self):
+        section = super().__enter__()
+        return section.prng_sample
 
 
 def active_section() -> Section:

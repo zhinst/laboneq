@@ -7,7 +7,6 @@ import json
 import logging
 import math
 import re
-from abc import ABC
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
@@ -44,7 +43,7 @@ from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.core.utilities.string_sanitize import string_sanitize
 from laboneq.data.recipe import Initialization, IntegratorAllocation, OscillatorParam
-from laboneq.data.scheduled_experiment import ScheduledExperiment
+from laboneq.data.scheduled_experiment import CompilerArtifact
 
 _logger = logging.getLogger(__name__)
 
@@ -147,7 +146,7 @@ def delay_to_rounded_samples(
     return delay_rounded
 
 
-class DeviceZI(ABC):
+class DeviceZI:
     def __init__(self, device_qualifier: DeviceQualifier, daq: DaqWrapper):
         self._device_qualifier: DeviceQualifier = device_qualifier
         self._downlinks: dict[str, list[tuple[str, ReferenceType[DeviceZI]]]] = {}
@@ -162,6 +161,7 @@ class DeviceZI(ABC):
         self._allocated_awgs: set[int] = set()
         self._nodes_to_monitor = None
         self._sampling_rate = None
+        self._device_class = 0x0
 
         if self._daq is None:
             raise LabOneQControllerException("ZI devices need daq")
@@ -338,7 +338,10 @@ class DeviceZI(ABC):
             )
 
     def collect_initialization_nodes(
-        self, device_recipe_data: DeviceRecipeData, initialization: Initialization
+        self,
+        device_recipe_data: DeviceRecipeData,
+        initialization: Initialization,
+        recipe_data: RecipeData,
     ) -> list[DaqNodeAction]:
         return []
 
@@ -532,7 +535,7 @@ class DeviceZI(ABC):
         return {}
 
     def collect_execution_setup_nodes(
-        self, with_pipeliner: bool
+        self, with_pipeliner: bool, has_awg_in_use: bool
     ) -> list[DaqNodeAction]:
         return []
 
@@ -560,14 +563,14 @@ class DeviceZI(ABC):
             )
             if updated:
                 osc_freq_adjusted = self._adjust_frequency(osc_freq)
-                for ch in osc.channels:
-                    nodes_to_set.append(
-                        DaqNodeSetAction(
-                            self._daq,
-                            self._make_osc_path(ch, osc.index),
-                            osc_freq_adjusted,
-                        )
+                nodes_to_set.extend(
+                    DaqNodeSetAction(
+                        self._daq,
+                        self._make_osc_path(ch, osc.index),
+                        osc_freq_adjusted,
                     )
+                    for ch in osc.channels
+                )
         return nodes_to_set
 
     @staticmethod
@@ -673,20 +676,20 @@ class DeviceZI(ABC):
         return sig, np.array(wave["samples"], dtype=np.complex128)
 
     def prepare_waves(
-        self, scheduled_experiment: ScheduledExperiment, wave_indices_ref: str
+        self,
+        artifacts: CompilerArtifact | dict[int, CompilerArtifact],
+        wave_indices_ref: str,
     ) -> Waveforms:
         if wave_indices_ref is None:
             return None
+        if isinstance(artifacts, dict):
+            artifacts = artifacts[self._device_class]
         wave_indices: dict[str, list[int | str]] = next(
-            (
-                i
-                for i in scheduled_experiment.wave_indices
-                if i["filename"] == wave_indices_ref
-            ),
+            (i for i in artifacts.wave_indices if i["filename"] == wave_indices_ref),
             {"value": {}},
         )["value"]
 
-        waves = scheduled_experiment.waves or []
+        waves = artifacts.waves or []
         bin_waves: Waveforms = []
         for sig, [index, sig_type] in wave_indices.items():
             if sig.startswith("precomp_reset"):
@@ -707,16 +710,15 @@ class DeviceZI(ABC):
         return bin_waves
 
     def prepare_command_table(
-        self, scheduled_experiment: ScheduledExperiment, ct_ref: str
+        self, artifacts: CompilerArtifact | dict[int, CompilerArtifact], ct_ref: str
     ) -> dict | None:
         if ct_ref is None:
             return None
+        if isinstance(artifacts, dict):
+            artifacts = artifacts[self._device_class]
+
         command_table_body = next(
-            (
-                ct["ct"]
-                for ct in scheduled_experiment.command_tables
-                if ct["seqc"] == ct_ref
-            ),
+            (ct["ct"] for ct in artifacts.command_tables if ct["seqc"] == ct_ref),
             None,
         )
 
@@ -734,14 +736,14 @@ class DeviceZI(ABC):
         return self.add_command_table_header(command_table_body)
 
     def prepare_seqc(
-        self, scheduled_experiment: ScheduledExperiment, seqc_ref: str
+        self, artifacts: CompilerArtifact | dict[int, CompilerArtifact], seqc_ref: str
     ) -> str | None:
         if seqc_ref is None:
             return None
+        if isinstance(artifacts, dict):
+            artifacts = artifacts[self._device_class]
 
-        seqc = next(
-            (s for s in scheduled_experiment.src if s["filename"] == seqc_ref), None
-        )
+        seqc = next((s for s in artifacts.src if s["filename"] == seqc_ref), None)
         if seqc is None:
             raise LabOneQControllerException(f"SeqC program '{seqc_ref}' not found")
 
@@ -823,7 +825,7 @@ class DeviceZI(ABC):
             caching_strategy=CachingStrategy.NO_CACHE,
         )
 
-    def compile_seqc(self, code: str, awg_index: int, filename_hint: str = None):
+    def compile_seqc(self, code: str, awg_index: int, filename_hint: str | None = None):
         _logger.debug(
             "%s: Compiling sequence for AWG #%d...",
             self.dev_repr,
@@ -843,9 +845,9 @@ class DeviceZI(ABC):
                 samplerate=self._sampling_rate,
             )
         except LabOneCoreError as exc:
-            raise LabOneQControllerException(  # pylint: disable=W0707
+            raise LabOneQControllerException(
                 f"{self.dev_repr}: AWG compilation failed.\n{str(exc)}"
-            )
+            ) from None
 
         compiler_warnings = extra["messages"]
         if compiler_warnings:
@@ -871,7 +873,7 @@ class DeviceZI(ABC):
     def pipeliner_ready_conditions(self, index: int) -> dict[str, Any]:
         return {}
 
-    def _get_num_awgs(self):
+    def _get_num_awgs(self) -> int:
         return 0
 
     def collect_osc_initialization_nodes(self) -> list[DaqNodeAction]:
@@ -897,7 +899,7 @@ class DeviceZI(ABC):
     def collect_awg_after_upload_nodes(self, initialization: Initialization):
         return []
 
-    def collect_execution_nodes(self, with_pipeliner: bool):
+    def collect_execution_nodes(self, with_pipeliner: bool) -> list[DaqNodeAction]:
         nodes_to_execute = []
         _logger.debug("%s: Executing AWGS...", self.dev_repr)
 
@@ -918,43 +920,17 @@ class DeviceZI(ABC):
     def collect_internal_start_execution_nodes(self):
         return []
 
-    def check_errors(self):
+    def fetch_errors(self):
         error_node = f"/{self.serial}/raw/error/json/errors"
         all_errors = self._daq.get_raw(error_node)
-        if not self.dry_run:
-            # for proper testing of the logic we have to mock the data server better.
-            # Currently is returns 0 for all nodes...
-            check_errors(all_errors[error_node], self.dev_repr)
+        return all_errors[error_node]
 
     def collect_reset_nodes(self) -> list[DaqNodeAction]:
-        return [DaqNodeSetAction(self._daq, f"/{self.serial}/raw/error/clear", 1)]
-
-
-class DeviceErrorSeverity(Enum):
-    info = 0
-    warning = 1
-    error = 2
-
-
-def check_errors(errors, serial):
-    collected_messages = []
-    for error in errors:
-        # the key in error["vector"] looks like a dict, but it's a string. so we have to use
-        # json.loads to convert it into a dict.
-        error_vector = json.loads(error["vector"])
-        for message in error_vector["messages"]:
-            if message["code"] == "AWGRUNTIMEERROR" and message["params"][0] == 1:
-                awg_core = int(message["attribs"][0])
-                program_counter = int(message["params"][1])
-                collected_messages.append(
-                    f"Gap detected on AWG core {awg_core}, program counter {program_counter}"
-                )
-            if message["severity"] >= DeviceErrorSeverity.error.value:
-                collected_messages.append(message["message"])
-    if len(collected_messages) > 0:
-        all_messages = "\n".join(collected_messages)
-        raise LabOneQControllerException(
-            f"An error happened on device {serial} during the execution of the experiment. "
-            f"Error messages:\n{all_messages}"
-        )
-        # should we return the warnings in the log?
+        return [
+            DaqNodeSetAction(
+                self._daq,
+                f"/{self.serial}/raw/error/clear",
+                1,
+                caching_strategy=CachingStrategy.NO_CACHE,
+            )
+        ]

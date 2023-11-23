@@ -1,8 +1,7 @@
 # Copyright 2020 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional
-
+from __future__ import annotations
 import numpy as np
 import scipy as sp
 
@@ -20,18 +19,18 @@ from laboneq.core.utilities.pulse_sampler import sample_pulse
 
 def pulse_update(
     my_pulse,
-    flip_angle: Optional[float] = None,
-    spectral_window: Optional[float] = None,
-    pulse_parameters: Optional[dict] = None,
+    flip_angle: float | None = None,
+    spectral_window: float | None = None,
+    pulse_parameters: dict | None = None,
 ):
     """
     Updates a pulse object with new properties and returns the updated object.
 
     Args:
         my_pulse (object): The input pulse object to be updated.
-        flip_angle (Optional[float], optional): The desired flip angle for the pulse in degrees. Defaults to None (if not specified, the flip angle will be set to 180 degrees, corresponding to a pi-pulse)
-        spectral_window (Optional[float], optional): The desired spectral window for the pulse in Hz. Defaults to None.
-        pulse_parameters (Optional[Dict[str, Union[float, int, str]]], optional): A dictionary containing any additional parameters for the pulse function. Defaults to None.
+        flip_angle (float | None, optional): The desired flip angle for the pulse in degrees. Defaults to None (if not specified, the flip angle will be set to 180 degrees, corresponding to a pi-pulse)
+        spectral_window (float | None, optional): The desired spectral window for the pulse in Hz. Defaults to None.
+        pulse_parameters (dict[str, float | int | str] | None, optional): A dictionary containing any additional parameters for the pulse function. Defaults to None.
 
     Returns:
         object: The updated pulse object.
@@ -83,20 +82,20 @@ def pulse_update(
 
 def pulse_inspector(
     pulse,
-    iq: Optional[bool] = None,
-    amp_phi: Optional[bool] = None,
-    response: Optional[bool] = None,
-    initial_state: Optional[np.ndarray] = None,
+    iq: bool | None = None,
+    amp_phi: bool | None = None,
+    response: bool | None = None,
+    initial_state: np.ndarray | None = None,
 ):
     """
     Plot the excitation profile of a virtual qubit after applying the pulse as a function of qubit frequency.
 
     Args:
         pulse (object): The input pulse waveform to be analyzed. Must be an object.
-        iq (Optional[bool], optional): If True, plot the I-Q diagram of the pulse. Defaults to None. If no flag is specified, this flag is set to True.
-        amp_phi (Optional[bool], optional): If True, plot the amplitude-phase diagram of the pulse. Defaults to None.
-        response (Optional[bool], optional): If True, plot the excitation profile of a qubit after applying the pulse. Defaults to None.
-        initial_state (Optional[np.ndarray], optional): The initial state of the virtual qubit as a Bloch vector. Must be a 1D numpy array of length 3. Defaults to None.
+        iq (bool | None, optional): If True, plot the I-Q diagram of the pulse. Defaults to None. If no flag is specified, this flag is set to True.
+        amp_phi (bool | None, optional): If True, plot the amplitude-phase diagram of the pulse. Defaults to None.
+        response (bool | None, optional): If True, plot the excitation profile of a qubit after applying the pulse. Defaults to None.
+        initial_state (np.ndarray | None, optional): The initial state of the virtual qubit as a Bloch vector. Must be a 1D numpy array of length 3. Defaults to None.
 
     Returns:
         None. This function only generates plots.

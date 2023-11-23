@@ -1,13 +1,14 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
 import os
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import MutableMapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Tuple, Union
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
@@ -28,7 +29,9 @@ class SignalType(Enum):
 
 class QuantumElementSignalMap(MutableMapping):
     def __init__(
-        self, items: Dict[str, str], key_validator: Callable[[str], SignalType] = None
+        self,
+        items: dict[str, str],
+        key_validator: Callable[[str], SignalType] | None = None,
     ) -> None:
         """A mapping between signal.
 
@@ -88,8 +91,8 @@ class QuantumElement(ABC):
 
     def __init__(
         self,
-        uid: str = None,
-        signals: Dict[str, LogicalSignal] = None,
+        uid: str | None = None,
+        signals: dict[str, LogicalSignal] | None = None,
     ):
         """
         Initializes a new QuantumElement object.
@@ -135,15 +138,15 @@ class QuantumElement(ABC):
         except ValueError:
             raise LabOneQException(
                 f"Signal {name} is not one of {[enum.value for enum in SignalType]}"
-            )
+            ) from None
 
     @classmethod
     def _from_logical_signal_group(
         cls,
         uid: str,
         lsg: LogicalSignalGroup,
-        parameters: Optional[Dict[str, Any]] = None,
-        signal_type_map: Dict[SignalType, List[str]] = None,
+        parameters: dict[str, Any] | None = None,
+        signal_type_map: dict[SignalType, List[str]] | None = None,
     ) -> "QuantumElement":
         """Quantum Element from logical signal group.
 

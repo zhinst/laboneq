@@ -1,6 +1,7 @@
 # Copyright 2023 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
 import copy
 import uuid
 
@@ -24,7 +25,7 @@ from laboneq.interfaces.payload_builder.payload_builder_api import PayloadBuilde
 
 
 class PayloadBuilder(PayloadBuilderAPI):
-    def __init__(self, compilation_service: CompilationServiceAPI = None):
+    def __init__(self, compilation_service: CompilationServiceAPI | None = None):
         self._compilation_service: CompilationServiceAPI = compilation_service
 
     def build_payload(
@@ -32,7 +33,7 @@ class PayloadBuilder(PayloadBuilderAPI):
         device_setup: Setup,
         experiment: Experiment,
         signal_mappings: dict[str, str],
-        compiler_settings: dict = None,
+        compiler_settings: dict | None = None,
     ) -> ExecutionPayload:
         """
         Compose an experiment from a setup descriptor and an experiment descriptor.
@@ -78,7 +79,7 @@ class PayloadBuilder(PayloadBuilderAPI):
         device_setup: Setup,
         experiment: Experiment,
         signal_mappings: dict[str, str],
-        compiler_settings: dict = None,
+        compiler_settings: dict | None = None,
     ):
         experiment_info = self._extract_experiment_info(
             experiment, device_setup, signal_mappings

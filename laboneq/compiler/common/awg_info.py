@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Tuple
 
 from laboneq.compiler.common.trigger_mode import TriggerMode
 
@@ -27,8 +27,9 @@ class AWGInfo:
     awg_number: int
     device_type: DeviceType
     sampling_rate: float
+    device_class: int = 0x0
     trigger_mode: TriggerMode = TriggerMode.NONE
-    reference_clock_source: Optional[str] = None
+    reference_clock_source: str | None = None
     signal_channels: List[Tuple[str, int]] = field(default_factory=list)
     signals: List[SignalObj] = field(default_factory=list)
 

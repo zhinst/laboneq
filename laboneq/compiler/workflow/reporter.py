@@ -2,30 +2,146 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+from functools import singledispatch
 
 import logging
 from dataclasses import dataclass
 from io import StringIO
+from typing import Optional
 
 from rich import box
 from rich.console import Console
 from rich.table import Table
 
 from laboneq.compiler.common.awg_info import AwgKey
-from laboneq.compiler.workflow.realtime_compiler import RealtimeCompilerOutput
-from laboneq.compiler.workflow.rt_linker import CombinedRealtimeCompilerOutput
+from laboneq.compiler.workflow.compiler_output import (
+    CodegenOutput,
+    CombinedRealtimeCompilerOutput,
+    CombinedRealtimeCompilerOutputCode,
+    CombinedRealtimeCompilerOutputPrettyPrinter,
+    PrettyPrinterOutput,
+    RealtimeCompilerOutput,
+)
 
 _logger = logging.getLogger(__name__)
+
+
+def _count_samples(waves, wave_index):
+    multiplier = 1
+    wave_name, (_, wave_type) = wave_index
+    if wave_name == "precomp_reset":
+        # for precomp reset we use an all-zero waveform that is not explicitly
+        # listed in the waveform table
+        if wave_type in ("iq", "double", "multi"):
+            return 64
+        return 32
+    if wave_type in ("iq", "double", "multi"):
+        waveform_name = f"{wave_name}_i.wave"
+        multiplier = 2  # two samples per clock cycle
+    elif wave_type == "complex":
+        waveform_name = f"{wave_name}.wave"
+        multiplier = 2  # two samples per clock cycle
+    elif wave_type == "single":
+        waveform_name = f"{wave_name}.wave"
+
+    waveform = waves[waveform_name]
+    return len(waveform["samples"]) * multiplier
 
 
 @dataclass(order=True)
 class ReportEntry:
     nt_step_indices: tuple[int, ...]
-    awg: AwgKey | None
+    awg: Optional[AwgKey]
     seqc_loc: int
     command_table_entries: int
     wave_indices: int
     waveform_samples: int
+
+
+@singledispatch
+def _do_calculate_total(compiler_output):
+    raise NotImplementedError()
+
+
+@singledispatch
+def _do_get_report(compiler_output, step_indices):
+    raise NotImplementedError()
+
+
+@_do_calculate_total.register
+def _(compiler_output: CombinedRealtimeCompilerOutputCode) -> ReportEntry:
+    total_seqc = sum(len(s["text"].splitlines()) for s in compiler_output.src)
+    total_ct = sum(len(ct["ct"]) for ct in compiler_output.command_tables)
+    total_wave_idx = sum(len(wi) for wi in compiler_output.wave_indices)
+    total_samples = sum(
+        _count_samples(compiler_output.waves, wi)
+        for wil in compiler_output.wave_indices
+        for wi in wil["value"].items()
+    )
+
+    return ReportEntry(
+        nt_step_indices=(),
+        awg=None,
+        seqc_loc=total_seqc,
+        command_table_entries=total_ct,
+        wave_indices=total_wave_idx,
+        waveform_samples=total_samples,
+    )
+
+
+@_do_calculate_total.register
+def _(compiler_output: CombinedRealtimeCompilerOutputPrettyPrinter) -> ReportEntry:
+    total_src = sum(len(s) for s in compiler_output.src.items())
+
+    return ReportEntry(
+        nt_step_indices=(),
+        awg=None,
+        seqc_loc=total_src,
+        command_table_entries=0,
+        wave_indices=0,
+        waveform_samples=0,
+    )
+
+
+@_do_get_report.register
+def _(
+    compiler_output: PrettyPrinterOutput, step_indices: list[int]
+) -> list[ReportEntry]:
+    return [
+        ReportEntry(
+            awg=AwgKey("pp", 0),
+            nt_step_indices=tuple(step_indices),
+            seqc_loc=1,
+            command_table_entries=0,
+            wave_indices=0,
+            waveform_samples=0,
+        )
+    ]
+
+
+@_do_get_report.register
+def _(compiler_output: CodegenOutput, step_indices: list[int]) -> list[ReportEntry]:
+    report = []
+    for awg, awg_src in compiler_output.src.items():
+        seqc_loc = len(awg_src["text"].splitlines())
+        ct = compiler_output.command_tables.get(awg, {"ct": []})["ct"]
+        ct_len = len(ct)
+        wave_indices = compiler_output.wave_indices[awg]["value"]
+        wave_indices_count = len(wave_indices)
+        sample_count = 0
+        for wave_index in wave_indices.items():
+            sample_count += _count_samples(compiler_output.waves, wave_index)
+        report.append(
+            ReportEntry(
+                awg=awg,
+                nt_step_indices=tuple(step_indices),
+                seqc_loc=seqc_loc,
+                command_table_entries=ct_len,
+                wave_indices=wave_indices_count,
+                waveform_samples=sample_count,
+            )
+        )
+    return report
 
 
 class CompilationReportGenerator:
@@ -36,68 +152,28 @@ class CompilationReportGenerator:
     def update(
         self, rt_compiler_output: RealtimeCompilerOutput, step_indices: list[int]
     ):
-        for awg, awg_src in rt_compiler_output.src.items():
-            seqc_loc = len(awg_src["text"].splitlines())
-            ct = rt_compiler_output.command_tables.get(awg, {"ct": []})["ct"]
-            ct_len = len(ct)
-            wave_indices = rt_compiler_output.wave_indices[awg]["value"]
-            wave_indices_count = len(wave_indices)
-            sample_count = 0
-            for wave_index in wave_indices.items():
-                sample_count += self._count_samples(
-                    rt_compiler_output.waves, wave_index
-                )
-
-            self._data.append(
-                ReportEntry(
-                    awg=awg,
-                    nt_step_indices=tuple(step_indices),
-                    seqc_loc=seqc_loc,
-                    command_table_entries=ct_len,
-                    wave_indices=wave_indices_count,
-                    waveform_samples=sample_count,
-                )
-            )
-
-    def _count_samples(self, waves, wave_index):
-        multiplier = 1
-        wave_name, (_, wave_type) = wave_index
-        if wave_name == "precomp_reset":
-            # for precomp reset we use an all-zero waveform that is not explicitly
-            # listed in the waveform table
-            if wave_type in ("iq", "double", "multi"):
-                return 64
-            return 32
-        if wave_type in ("iq", "double", "multi"):
-            waveform_name = f"{wave_name}_i.wave"
-            multiplier = 2  # two samples per clock cycle
-        elif wave_type == "complex":
-            waveform_name = f"{wave_name}.wave"
-            multiplier = 2  # two samples per clock cycle
-        elif wave_type == "single":
-            waveform_name = f"{wave_name}.wave"
-
-        waveform = waves[waveform_name]
-        return len(waveform["samples"]) * multiplier
+        for output in rt_compiler_output.codegen_output.values():
+            report = _do_get_report(output, step_indices=step_indices)
+            self._data += report
 
     def calculate_total(self, compiler_output: CombinedRealtimeCompilerOutput):
-        total_seqc = sum(len(s["text"].splitlines()) for s in compiler_output.src)
-        total_ct = sum(len(ct["ct"]) for ct in compiler_output.command_tables)
-        total_wave_idx = sum(len(wi) for wi in compiler_output.wave_indices)
-        total_samples = sum(
-            self._count_samples(compiler_output.waves, wi)
-            for wil in compiler_output.wave_indices
-            for wi in wil["value"].items()
+        totals = [
+            _do_calculate_total(tot) for tot in compiler_output.combined_output.values()
+        ]
+        tot = ReportEntry(
+            (),
+            None,
+            seqc_loc=0,
+            command_table_entries=0,
+            wave_indices=0,
+            waveform_samples=0,
         )
-
-        self._total = ReportEntry(
-            nt_step_indices=(),
-            awg=None,
-            seqc_loc=total_seqc,
-            command_table_entries=total_ct,
-            wave_indices=total_wave_idx,
-            waveform_samples=total_samples,
-        )
+        for t in totals:
+            tot.seqc_loc += t.seqc_loc
+            tot.command_table_entries += t.command_table_entries
+            tot.wave_indices += t.wave_indices
+            tot.waveform_samples += t.waveform_samples
+        self._total = tot
 
     def create_table(self) -> Table:
         entries = sorted(self._data)

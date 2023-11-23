@@ -4,6 +4,7 @@
 """Function to generate a descriptor from a list of instruments, making basic assumptions about the type of signals needed
 """
 
+from __future__ import annotations
 import time
 from pathlib import Path
 
@@ -13,17 +14,17 @@ from zhinst.toolkit.session import Session
 
 
 def generate_descriptor(
-    pqsc: list = None,  # ["DEV10XX0"]
-    hdawg_4: list = None,  # ["DEV8XX0", "DEV8XX1"],
-    hdawg_8: list = None,
-    uhfqa: list = None,
-    shfsg_4: list = None,  # ["DEV12XX0", "DEV12XX1"],
-    shfsg_8: list = None,
-    shfqc_2: list = None,
-    shfqc_4: list = None,
-    shfqc_6: list = None,  # ["DEV12XX2"],
-    shfqa_2: list = None,
-    shfqa_4: list = None,  # ["DEV12XX3"],
+    pqsc: list | None = None,  # ["DEV10XX0"]
+    hdawg_4: list | None = None,  # ["DEV8XX0", "DEV8XX1"],
+    hdawg_8: list | None = None,
+    uhfqa: list | None = None,
+    shfsg_4: list | None = None,  # ["DEV12XX0", "DEV12XX1"],
+    shfsg_8: list | None = None,
+    shfqc_2: list | None = None,
+    shfqc_4: list | None = None,
+    shfqc_6: list | None = None,  # ["DEV12XX2"],
+    shfqa_2: list | None = None,
+    shfqa_4: list | None = None,  # ["DEV12XX3"],
     number_data_qubits=2,
     number_flux_lines=0,
     multiplex=False,
@@ -36,7 +37,7 @@ def generate_descriptor(
     filename="yaml_descriptor",
     get_zsync=False,
     get_dio=False,
-    dummy_dio: dict = None,  # {"DEV8XX0":"DEV2XX0"}
+    dummy_dio: dict | None = None,  # {"DEV8XX0":"DEV2XX0"}
     ip_address: str = "localhost",
 ):
     """A function to generate a descriptor given a list of devices based on wiring assumptions.
@@ -111,8 +112,7 @@ def generate_descriptor(
     devid_uid = {}
 
     if pqsc is not None:
-        for i in pqsc:
-            pqsc_list.append(i)
+        pqsc_list.extend(pqsc)
     if hdawg_4 is not None:
         for i in hdawg_4:
             hd_list.append(i)
@@ -301,11 +301,10 @@ for how to set them up without a PQSC.
 
     # Create instrument dictionary
     def generate_instrument_list(instrument, instrument_name):
-        instrument_list = []
-        for entry in instrument:
-            instrument_list.append(
-                {"address": entry, "uid": f"{instrument_name}_{entry}"}
-            )
+        instrument_list = [
+            {"address": entry, "uid": f"{instrument_name}_{entry}"}
+            for entry in instrument
+        ]
         return instrument_list
 
     instrument_dict = {
@@ -1004,7 +1003,7 @@ for how to set them up without a PQSC.
         if pqsc is not None and get_zsync:
             device_pqsc = session.connect_device(pqsc[0])
             print("Checking PQSC Connections...")
-            for i, k in enumerate(devid_uid):
+            for k in devid_uid:
                 session_device = session.connect_device(devid_uid[k].split("_")[1])
                 if "SHF" in session_device.device_type:
                     print(devid_uid[k].split("_")[1])

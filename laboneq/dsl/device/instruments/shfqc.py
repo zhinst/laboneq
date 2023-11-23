@@ -35,36 +35,35 @@ class SHFQC(ZIStandardInstrument):
                 connector_labels=["ZSync"],
             ),
         ]
-        for ch in range(4):
-            inputs.append(
-                Port(
-                    IODirection.IN,
-                    uid=f"QACHANNELS/{ch}/INPUT",
-                    signal_type=IOSignalType.IQ,
-                    physical_port_ids=[f"{ch}"],
-                    connector_labels=[f"Signal Input {ch+1}"],
-                )
+        inputs.extend(
+            Port(
+                IODirection.IN,
+                uid=f"QACHANNELS/{ch}/INPUT",
+                signal_type=IOSignalType.IQ,
+                physical_port_ids=[f"{ch}"],
+                connector_labels=[f"Signal Input {ch+1}"],
             )
+            for ch in range(4)
+        )
 
-        outputs = []
-        for ch in range(4):
-            outputs.append(
-                Port(
-                    IODirection.OUT,
-                    uid=f"QACHANNELS/{ch}/OUTPUT",
-                    signal_type=IOSignalType.IQ,
-                    physical_port_ids=[f"{ch}"],
-                    connector_labels=[f"Signal Output {ch+1}"],
-                )
+        outputs = [
+            Port(
+                IODirection.OUT,
+                uid=f"QACHANNELS/{ch}/OUTPUT",
+                signal_type=IOSignalType.IQ,
+                physical_port_ids=[f"{ch}"],
+                connector_labels=[f"Signal Output {ch+1}"],
             )
-        for ch in range(8):
-            outputs.append(
-                Port(
-                    IODirection.OUT,
-                    uid=f"SGCHANNELS/{ch}/OUTPUT",
-                    signal_type=IOSignalType.IQ,
-                    physical_port_ids=[f"{ch}"],
-                    connector_labels=[f"Signal Output {ch+1}"],
-                )
+            for ch in range(4)
+        ]
+        outputs.extend(
+            Port(
+                IODirection.OUT,
+                uid=f"SGCHANNELS/{ch}/OUTPUT",
+                signal_type=IOSignalType.IQ,
+                physical_port_ids=[f"{ch}"],
+                connector_labels=[f"Signal Output {ch+1}"],
             )
+            for ch in range(8)
+        )
         return inputs + outputs

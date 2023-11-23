@@ -4,18 +4,21 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from functools import singledispatch
 from typing import Literal, Union
 
 from laboneq._utils import cached_method
-from laboneq.compiler import DeviceType
-from laboneq.compiler.common.awg_info import AwgKey, AWGInfo
+from laboneq.compiler.common.awg_info import AWGInfo, AwgKey
 from laboneq.compiler.common.awg_signal_type import AWGSignalType
+from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.feedback_connection import FeedbackConnection
-from laboneq.compiler.common.feedback_register_config import (
-    FeedbackRegisterConfig,
-)
-
+from laboneq.compiler.common.feedback_register_config import FeedbackRegisterConfig
 from laboneq.compiler.common.signal_obj import SignalObj
+from laboneq.compiler.workflow.compiler_output import (
+    CombinedRealtimeCompilerOutput,
+    CombinedRealtimeCompilerOutputCode,
+    CombinedRealtimeCompilerOutputPrettyPrinter,
+)
 from laboneq.core.exceptions import LabOneQException
 
 # list of (width, signal) tuples
@@ -177,8 +180,48 @@ class FeedbackRouter:
     @staticmethod
     def _local_feedback_allowed(sg_awg: AWGInfo, qa_awg: AWGInfo):
         # todo: this check for QC is quite brittle
+
         return (
             sg_awg.device_type == DeviceType.SHFSG
             and qa_awg.device_type == DeviceType.SHFQA
             and sg_awg.device_id == f"{qa_awg.device_id}_sg"
         )
+
+
+@singledispatch
+def _do_compute_feedback_routing(
+    combined_compiler_output, signal_objs, integration_unit_allocation
+):
+    raise NotImplementedError()
+
+
+@_do_compute_feedback_routing.register
+def _(
+    combined_compiler_output: CombinedRealtimeCompilerOutputCode,
+    signal_objs,
+    integration_unit_allocation,
+):
+    FeedbackRouter(
+        signal_objs,
+        integration_unit_allocation,
+        combined_compiler_output.feedback_connections,
+        combined_compiler_output.feedback_register_configurations,
+    ).calculate_feedback_routing()
+
+
+@_do_compute_feedback_routing.register
+def _(
+    combined_compiler_output: CombinedRealtimeCompilerOutputPrettyPrinter,
+    signal_objs,
+    integration_unit_allocation,
+):
+    ...
+
+
+def compute_feedback_routing(
+    signal_objs,
+    integration_unit_allocation,
+    combined_compiler_output: CombinedRealtimeCompilerOutput,
+):
+    for output in combined_compiler_output.combined_output.values():
+        _do_compute_feedback_routing(output, signal_objs, integration_unit_allocation)

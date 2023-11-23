@@ -86,7 +86,10 @@ class DevicePQSC(DeviceZI):
         return nodes
 
     def collect_initialization_nodes(
-        self, device_recipe_data: DeviceRecipeData, initialization: Initialization
+        self,
+        device_recipe_data: DeviceRecipeData,
+        initialization: Initialization,
+        recipe_data: RecipeData,
     ) -> list[DaqNodeAction]:
         return []
 
@@ -148,7 +151,7 @@ class DevicePQSC(DeviceZI):
                     )
         return feedback_actions
 
-    def collect_execution_nodes(self, with_pipeliner: bool):
+    def collect_execution_nodes(self, with_pipeliner: bool) -> list[DaqNodeAction]:
         _logger.debug("Starting execution...")
         nodes = []
         nodes.append(
@@ -170,7 +173,7 @@ class DevicePQSC(DeviceZI):
         return nodes
 
     def collect_execution_setup_nodes(
-        self, with_pipeliner: bool
+        self, with_pipeliner: bool, has_awg_in_use: bool
     ) -> list[DaqNodeAction]:
         nodes = []
         if with_pipeliner:
@@ -178,7 +181,7 @@ class DevicePQSC(DeviceZI):
                 DaqNodeSetAction(
                     self._daq,
                     f"/{self.serial}/execution/synchronization/enable",
-                    1,
+                    1,  # enabled
                 )
             )
         return nodes
@@ -240,3 +243,15 @@ class DevicePQSC(DeviceZI):
         )
 
         return nodes_to_configure_triggers
+
+    def collect_reset_nodes(self) -> list[DaqNodeAction]:
+        reset_nodes = super().collect_reset_nodes()
+        reset_nodes.append(
+            DaqNodeSetAction(
+                self._daq,
+                f"/{self.serial}/execution/synchronization/enable",
+                0,
+                caching_strategy=CachingStrategy.NO_CACHE,
+            )
+        )
+        return reset_nodes

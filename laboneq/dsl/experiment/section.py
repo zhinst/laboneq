@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any
 
 from laboneq._utils import id_generator
 from laboneq.core.exceptions import LabOneQException
@@ -30,6 +30,7 @@ from .set_node import SetNode
 
 if TYPE_CHECKING:
     from .. import Parameter
+    from ..prng import PRNG, PRNGSample
 
 
 @classformatter
@@ -64,17 +65,17 @@ class Section:
             If `None`, the section has no minimum length and will be as
             short as possible.
             Default: `None`.
-        play_after (str | Section | List[Union[str, Section]] | None):
+        play_after (str | Section | list[str | Section] | None):
             A list of sections that must complete before this section
             may be played.
             If `None`, the section is played as soon as allowed by the
             signal lines required.
             Default: `None`.
-        children (List[Union[Section, Operation]]):
+        children (list[Section | Operation]):
             List of children. Each child may be another section or an
             operation.
             Default: `[]`.
-        trigger (Dict[str, Dict]):
+        trigger (dict[str, dict]):
             Optional trigger pulses to play during this section.
             See [Experiment.section][laboneq.dsl.experiment.experiment.Experiment.section].
             Default: `{}`.
@@ -93,32 +94,30 @@ class Section:
     # Alignment of operations and subsections within this section.
     alignment: SectionAlignment = field(default=SectionAlignment.LEFT)
 
-    execution_type: Optional[ExecutionType] = field(default=None)
+    execution_type: ExecutionType | None = field(default=None)
 
     # Minimal length of the section in seconds. The scheduled section might be slightly longer, as its length is rounded to the next multiple of the section timing grid.
-    length: Optional[float] = field(default=None)
+    length: float | None = field(default=None)
 
     # Play after the section with the given ID.
-    play_after: Optional[Union[str, Section, List[Union[str, Section]]]] = field(
-        default=None
-    )
+    play_after: str | Section | list[str | Section] | None = field(default=None)
 
     # List of children. Each child may be another section or an operation.
-    children: List[Union[Section, Operation]] = field(default_factory=list)
+    children: list[Section | Operation] = field(default_factory=list)
 
     # Optional trigger pulses to play during this section.
     # See [Experiment.section][laboneq.dsl.experiment.experiment.Experiment.section].
-    trigger: Dict[str, Dict] = field(default_factory=dict)
+    trigger: dict[str, dict] = field(default_factory=dict)
 
     # Whether to escalate to the system grid even if tighter alignment is possible.
     # See [Experiment.section][laboneq.dsl.experiment.experiment.Experiment.section].
-    on_system_grid: Optional[bool] = field(default=False)
+    on_system_grid: bool | None = field(default=False)
 
     def __post_init__(self):
         if self.uid is None:
             self.uid = id_generator("s")
 
-    def add(self, section: Union[Section, Operation, SetNode]):
+    def add(self, section: Section | Operation | SetNode):
         """Add a subsection or operation to the section.
 
         Arguments:
@@ -127,12 +126,12 @@ class Section:
         self.children.append(section)
 
     @property
-    def sections(self) -> Tuple[Section, ...]:
+    def sections(self) -> tuple[Section, ...]:
         """A list of subsections of this section."""
         return tuple([s for s in self.children if isinstance(s, Section)])
 
     @property
-    def operations(self) -> Tuple[Operation, ...]:
+    def operations(self) -> tuple[Operation, ...]:
         """A list of operations in the section.
 
         Note that there may be other children of a section which are not operations but subsections.
@@ -152,14 +151,14 @@ class Section:
         self,
         signal: str,
         pulse: Pulse,
-        amplitude: Union[float, complex, Parameter] = None,
-        phase: float = None,
+        amplitude: float | complex | Parameter | None = None,
+        phase: float | None = None,
         increment_oscillator_phase=None,
         set_oscillator_phase=None,
         length=None,
-        pulse_parameters: Optional[Dict[str, Any]] = None,
-        precompensation_clear: Optional[bool] = None,
-        marker: Optional[Dict[str, Any]] = None,
+        pulse_parameters: dict[str, Any] | None = None,
+        precompensation_clear: bool | None = None,
+        marker: dict[str, Any] | None = None,
     ):
         """Play a pulse on a signal.
 
@@ -230,18 +229,18 @@ class Section:
         self,
         acquire_signal: str,
         handle: str,
-        integration_kernel: Optional[Pulse | list[Pulse]] = None,
-        integration_kernel_parameters: Optional[
-            Dict[str, Any] | List[Dict[str, Any] | None]
-        ] = None,
-        integration_length: Optional[float] = None,
-        measure_signal: Optional[str] = None,
-        measure_pulse: Optional[Pulse] = None,
-        measure_pulse_length: Optional[float] = None,
-        measure_pulse_parameters: Optional[Dict[str, Any]] = None,
-        measure_pulse_amplitude: Optional[float] = None,
-        acquire_delay: Optional[float] = None,
-        reset_delay: Optional[float] = None,
+        integration_kernel: Pulse | list[Pulse] | None = None,
+        integration_kernel_parameters: dict[str, Any]
+        | list[dict[str, Any] | None]
+        | None = None,
+        integration_length: float | None = None,
+        measure_signal: str | None = None,
+        measure_pulse: Pulse | None = None,
+        measure_pulse_length: float | None = None,
+        measure_pulse_parameters: dict[str, Any] | None = None,
+        measure_pulse_amplitude: float | None = None,
+        acquire_delay: float | None = None,
+        reset_delay: float | None = None,
     ):
         """
         Execute a measurement.
@@ -312,8 +311,8 @@ class Section:
     def delay(
         self,
         signal: str,
-        time: Union[float, Parameter],
-        precompensation_clear: Optional[bool] = None,
+        time: float | Parameter,
+        precompensation_clear: bool | None = None,
     ):
         """Adds a delay on the signal with a specified time.
 
@@ -330,7 +329,7 @@ class Section:
         """Function call.
 
         Arguments:
-            func_name (Union[str, Callable]): Function that should be called.
+            func_name (str | Callable): Function that should be called.
             kwargs (dict): Arguments of the function call.
         """
         self.add(Call(func_name=func_name, **kwargs))
@@ -381,6 +380,7 @@ class AcquireLoopNt(Section):
             " removed in a future version of LabOne Q. Use a sweep outside"
             " of the acquire_loop_rt instead.",
             FutureWarning,
+            stacklevel=2,
         )
         super().__post_init__()
 
@@ -452,7 +452,7 @@ class Sweep(Section):
     Sweeps are used to sample through a range of parameter values.
 
     Attributes:
-        parameters (List[Parameter]):
+        parameters (list[Parameter]):
             Parameters that should be swept.
             Default: `[]`.
         reset_oscillator_phase (bool):
@@ -468,7 +468,7 @@ class Sweep(Section):
     """
 
     # Parameters that should be swept.
-    parameters: List[Parameter] = field(default_factory=list)
+    parameters: list[Parameter] = field(default_factory=list)
     # When True, reset all oscillators at the start of every step.
     reset_oscillator_phase: bool = field(default=False)
     # When non-zero, split the sweep into N chunks.
@@ -484,7 +484,7 @@ class Sweep(Section):
 @classformatter
 @dataclass(init=True, repr=True, order=True)
 class Match(Section):
-    """Execute one of the child branches depending on feedback result.
+    """Execute one of the child branches depending on condition.
 
     Attributes:
         handle (str | None):
@@ -494,6 +494,8 @@ class Match(Section):
             for where handles are specified.
         user_register (int | None):
             User register on which to match.
+        prng (PRNGSample | None):
+            PRNG sample to match.
         local (bool):
             Whether to fetch the codeword via the PQSC (`False`),
             SHFQC-internal bus (`True`) or automatic (`None`).
@@ -509,10 +511,13 @@ class Match(Section):
     """
 
     # Handle from which to obtain results
-    handle: Optional[str] = None
+    handle: str | None = None
 
     # User register on which to match
-    user_register: Optional[int] = None
+    user_register: int | None = None
+
+    # PRNG sample
+    prng_sample: PRNGSample | None = None
 
     # Whether to fetch the codeword via the PQSC (False), SHFQC-internal bus (True) or automatic (None)
     local: bool | None = None
@@ -599,3 +604,32 @@ class Case(Section):
             type. Sub-classes may not be used.
         """
         return cls(**section.__dict__, state=state)  # type: ignore
+
+
+@validating_allowed_values(
+    {
+        "alignment": [SectionAlignment.LEFT],
+        "execution_type": [ExecutionType.REAL_TIME],
+    }
+)
+@classformatter
+@dataclass(init=True, repr=True, order=True)
+class PRNGSetup(Section):
+    """Setup and seed the pseudo random number generator."""
+
+    prng: PRNG = None
+
+    def __iter__(self):
+        return iter(self.prng)
+
+
+@validating_allowed_values(
+    {
+        "alignment": [SectionAlignment.LEFT],
+        "execution_type": [ExecutionType.REAL_TIME],
+    }
+)
+@classformatter
+@dataclass(init=True, repr=True, order=True)
+class PRNGLoop(Section):
+    prng_sample: PRNGSample = None

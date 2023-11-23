@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+from enum import Enum
+import json
 
 import logging
 import re
@@ -101,7 +103,8 @@ class DeviceCollection:
         self._prepare_devices()
         for device in self._devices.values():
             await device.connect()
-        await self.load_factory_preset()
+        if self._reset_devices:
+            await self.load_factory_preset()
         self.start_monitor()
         await self.configure_device_setup()
 
@@ -230,8 +233,8 @@ class DeviceCollection:
 
     async def disable_outputs(
         self,
-        device_uids: list[str] = None,
-        logical_signals: list[str] = None,
+        device_uids: list[str] | None = None,
+        logical_signals: list[str] | None = None,
         unused_only: bool = False,
     ):
         # Set of outputs to disable or skip (depending on the 'invert' param) per device.
@@ -310,11 +313,12 @@ class DeviceCollection:
         self._monitor_started = False
 
     async def load_factory_preset(self):
-        if self._reset_devices:
-            reset_nodes = []
-            for device in self._devices.values():
-                reset_nodes += device.collect_load_factory_preset_nodes()
-            await batch_set(reset_nodes)
+        reset_nodes = []
+        for device in self._devices.values():
+            reset_nodes += device.collect_load_factory_preset_nodes()
+        await batch_set(reset_nodes)
+        for daq in self._daqs.values():
+            daq.clear_cache()
 
     def _validate_dataserver_device_fw_compatibility(self):
         """Validate dataserver and device firmware compatibility."""
@@ -329,7 +333,7 @@ class DeviceCollection:
                     check_dataserver_device_compatibility(
                         self._daqs.get(server_uid)._zi_api_object, dev_serials
                     )
-                except Exception as error:
+                except Exception as error:  # noqa: PERF203
                     raise LabOneQControllerException(str(error)) from error
 
     def _prepare_devices(self):
@@ -419,3 +423,39 @@ class DeviceCollection:
             await daq.validate_connection()
             updated_daqs[server_uid] = daq
         self._daqs = updated_daqs
+
+    def check_errors(self, raise_on_error: bool = True) -> str | None:
+        all_errors: list[str] = []
+        for _, device in self.all:
+            all_errors.extend(decode_errors(device.fetch_errors(), device.dev_repr))
+        if len(all_errors) == 0:
+            return None
+        all_messages = "\n".join(all_errors)
+        msg = f"Error(s) happened on device(s) during the execution of the experiment. Error messages:\n{all_messages}"
+        if raise_on_error:
+            raise LabOneQControllerException(msg)
+        return msg
+
+
+class DeviceErrorSeverity(Enum):
+    info = 0
+    warning = 1
+    error = 2
+
+
+def decode_errors(errors: list[str], dev_repr: str) -> list[str]:
+    collected_messages: list[str] = []
+    for error in errors:
+        # the key in error["vector"] looks like a dict, but it's a string. so we have to use
+        # json.loads to convert it into a dict.
+        error_vector = json.loads(error["vector"])
+        for message in error_vector["messages"]:
+            if message["code"] == "AWGRUNTIMEERROR" and message["params"][0] == 1:
+                awg_core = int(message["attribs"][0])
+                program_counter = int(message["params"][1])
+                collected_messages.append(
+                    f"{dev_repr}: Gap detected on AWG core {awg_core}, program counter {program_counter}"
+                )
+            if message["severity"] >= DeviceErrorSeverity.error.value:
+                collected_messages.append(f'{dev_repr}: {message["message"]}')
+    return collected_messages

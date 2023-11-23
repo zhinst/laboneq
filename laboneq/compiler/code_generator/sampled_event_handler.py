@@ -292,8 +292,8 @@ class SampledEventHandler:
         sampled_event: AWGEvent,
         signature: PlaybackSignature,
         sig_string: str,
-        wave_index: Optional[int],
-        play_wave_channel: Optional[int],
+        wave_index: int | None,
+        play_wave_channel: int | None,
     ):
         assert signature.waveform is not None
         if self.use_command_table:
@@ -318,7 +318,7 @@ class SampledEventHandler:
         self,
         sampled_event: AWGEvent,
         signature: PlaybackSignature,
-        wave_index: Optional[int],
+        wave_index: int | None,
     ):
         assert self.use_command_table
         assert self.match_parent_event is not None
@@ -382,8 +382,8 @@ class SampledEventHandler:
         self,
         signature: PlaybackSignature,
         sig_string: str,
-        wave_index: Optional[int],
-        play_wave_channel: Optional[int],
+        wave_index: int | None,
+        play_wave_channel: int | None,
     ):
         assert self.match_parent_event is not None
         user_register = self.match_parent_event.params["user_register"]
@@ -736,8 +736,10 @@ class SampledEventHandler:
 
     def handle_iterate(self, sampled_event: AWGEvent):
         if (
-            self.seqc_tracker.current_loop_stack_generator().num_noncomment_statements()
-            > 0
+            any(
+                cg.num_noncomment_statements() > 0
+                for cg in self.seqc_tracker.loop_stack_generators[-1]
+            )
             or self.seqc_tracker.deferred_function_calls.num_statements() > 0
         ):
             _logger.debug(
@@ -807,6 +809,26 @@ class SampledEventHandler:
         self.seqc_tracker.add_command_table_execution(
             ct_index, comment=self._make_command_table_comment(signature)
         )
+
+    def handle_setup_prng(self, sampled_event: AWGEvent):
+        if not self.device_type.has_prng:
+            return
+
+        seed = sampled_event.params["seed"]
+        prng_range = sampled_event.params["range"]
+
+        assert seed is not None or prng_range is not None
+
+        # todo: reserve command table entries? otherwise add offset in sequencer
+
+        if seed is not None:
+            self.seqc_tracker.add_function_call_statement(
+                name="setPRNGSeed", args=[seed], deferred=False
+            )
+        if prng_range is not None:
+            self.seqc_tracker.add_function_call_statement(
+                name="setPRNGRange", args=[0, prng_range], deferred=False
+            )
 
     def close_event_list(self):
         if self.match_parent_event is not None:
@@ -887,7 +909,7 @@ class SampledEventHandler:
             pass  # Already declared, this is fine
         self.seqc_tracker.add_required_playzeros(match_event)
         if_generator = SeqCGenerator()
-        conditions_bodies: list[tuple[Optional[str], SeqCGenerator]] = [
+        conditions_bodies: list[tuple[str | None, SeqCGenerator]] = [
             (f"{var_name} == {state}", gen.compressed())
             for state, gen in self.match_seqc_generators.items()
             if gen.num_noncomment_statements() > 0
@@ -945,6 +967,8 @@ class SampledEventHandler:
             self.handle_match(sampled_event)
         elif signature == AWGEventType.CHANGE_OSCILLATOR_PHASE:
             self.handle_change_oscillator_phase(sampled_event)
+        elif signature == AWGEventType.SEED_PRNG:
+            self.handle_setup_prng(sampled_event)
         self.last_event = sampled_event
 
     def handle_sampled_event_list(self):

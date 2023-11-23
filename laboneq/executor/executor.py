@@ -210,7 +210,9 @@ class ExecAcquire(Statement):
 
 
 class SetSoftwareParamLinear(Statement):
-    def __init__(self, name: str, start: float, step: float, axis_name: str = None):
+    def __init__(
+        self, name: str, start: float, step: float, axis_name: str | None = None
+    ):
         self.name = name
         self.start = start
         self.step = step
@@ -248,7 +250,7 @@ class SetSoftwareParamLinear(Statement):
 
 
 class SetSoftwareParam(Statement):
-    def __init__(self, name: str, values: npt.ArrayLike, axis_name: str = None):
+    def __init__(self, name: str, values: npt.ArrayLike, axis_name: str | None = None):
         self.name = name
         self.values = values
         self.axis_name = axis_name

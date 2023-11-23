@@ -6,9 +6,13 @@ from __future__ import annotations
 import copy
 import itertools
 import logging
+import re
+from collections import defaultdict
 from types import SimpleNamespace
 from typing import Any, Dict, Tuple
+import numpy as np
 
+from laboneq.core.path import LogicalSignalGroups_Path, insert_logical_signal_prefix
 from laboneq._utils import UIDReference, ensure_list, id_generator
 from laboneq.compiler import DeviceType
 from laboneq.core.exceptions import LabOneQException
@@ -29,6 +33,7 @@ from laboneq.data.compilation_job import (
     Marker,
     MixerCalibrationInfo,
     OscillatorInfo,
+    OutputRoute,
     ParameterInfo,
     PrecompensationInfo,
     PulseDef,
@@ -37,6 +42,7 @@ from laboneq.data.compilation_job import (
     SignalInfo,
     SignalInfoType,
     SignalRange,
+    PRNGInfo,
 )
 from laboneq.data.experiment_description import (
     Acquire,
@@ -48,6 +54,7 @@ from laboneq.data.experiment_description import (
     Reserve,
     Section,
     SignalOperation,
+    Sweep,
 )
 from laboneq.data.parameter import LinearSweepParameter, Parameter, SweepParameter
 from laboneq.data.setup_description import (
@@ -74,7 +81,9 @@ class ExperimentInfoBuilder:
         self._experiment = copy.deepcopy(experiment)
         self._device_setup = copy.deepcopy(device_setup)
         self._signal_mappings = copy.deepcopy(signal_mappings)
-
+        self._ls_to_exp_sig_mapping = {
+            ls: exp for exp, ls in self._signal_mappings.items()
+        }
         self._params: dict[str, ParameterInfo] = {}
         self._nt_only_params = []
         self._oscillators: dict[str, OscillatorInfo] = {}
@@ -88,7 +97,7 @@ class ExperimentInfoBuilder:
         self._ppc_connections = self._setup_helper.ppc_connections()
 
         self._parameter_parents: dict[str, list[str]] = {}
-
+        self._sweep_params_min_maxes: dict[str, tuple[float, float]] = {}
         self._acquisition_type = None
 
     def load_experiment(self) -> ExperimentInfo:
@@ -294,7 +303,6 @@ class ExperimentInfoBuilder:
                 signal_info.type = SignalInfoType.IQ
 
         calibration = self._get_signal_calibration(signal, mapped_ls)
-
         if calibration is not None:
             signal_info.port_delay = self.opt_param(
                 calibration.port_delay, nt_only=True
@@ -345,6 +353,82 @@ class ExperimentInfoBuilder:
                         amp_pump, channel
                     )
 
+            # Output router and adder (RTR SHFSG/QC). Requires: RTR option
+            if calibration.output_routing:
+                for port in physical_channel.ports:
+                    if (
+                        not re.match(r"SGCHANNELS/\d/OUTPUT", port.path)
+                        and signal_info.device.device_type != DeviceType.SHFSG
+                    ):
+                        msg = f"Error on signal {mapped_ls_path}: Output routing can be only applied to output SGCHANNELS."
+                        raise LabOneQException(msg)
+
+            output_routers_per_channel = defaultdict(set)
+            for output_router in calibration.output_routing:
+                source_signal = output_router.source_signal
+                if LogicalSignalGroups_Path not in source_signal:
+                    source_signal = insert_logical_signal_prefix(source_signal)
+                try:
+                    from_pc = self._setup_helper.instruments.physical_channel_by_logical_signal(
+                        source_signal
+                    )
+                except RuntimeError:
+                    msg = f"Error on signal {mapped_ls_path}: Output routing source signal {output_router.source_signal} does not exist."
+                    raise LabOneQException(msg) from None
+                if from_pc.group != signal_info.device.uid:
+                    msg = f"Error on signal {mapped_ls_path}: Output routing can be only applied within the same device SGCHANNELS: {signal_info.device.uid} != {from_pc.group}"
+                    raise LabOneQException(msg)
+                assert (
+                    len(physical_channel.ports) == 1 and len(from_pc.ports) == 1
+                ), "Output SG physical channels must have exactly one port."
+                to_port = physical_channel.ports[0]
+                from_port = from_pc.ports[0]
+                if to_port == from_port:
+                    msg = f"Error on signal {mapped_ls_path}: Output routing source is the same as the target channel: {from_port.path}"
+                    raise LabOneQException(msg)
+                if from_port.channel in output_routers_per_channel[to_port.channel]:
+                    msg = f"Error on signal {mapped_ls_path}: Duplicate output routing from channel {from_port.channel}."
+                    raise LabOneQException(msg)
+                output_routers_per_channel[to_port.channel].add(from_port.channel)
+                if len(output_routers_per_channel[to_port.channel]) > 3:
+                    msg = f"Error on signal {mapped_ls_path}: Maximum of three signals can be routed per output SGCHANNELS."
+                    raise LabOneQException(msg)
+                if isinstance(output_router.amplitude, Parameter):
+                    if isinstance(output_router.amplitude, SweepParameter):
+                        if (
+                            output_router.amplitude.uid
+                            not in self._sweep_params_min_maxes
+                        ):
+                            self._sweep_params_min_maxes[
+                                output_router.amplitude.uid
+                            ] = (
+                                np.min(output_router.amplitude.values),
+                                np.max(output_router.amplitude.values),
+                            )
+                        min_val, max_val = self._sweep_params_min_maxes[
+                            output_router.amplitude.uid
+                        ]
+                    elif isinstance(output_router.amplitude, LinearSweepParameter):
+                        min_val = output_router.amplitude.start
+                        max_val = output_router.amplitude.stop
+                    if min_val < 0.0 or max_val > 1.0:
+                        msg = "Output route amplitude value must be between 0 and 1."
+                        raise LabOneQException(
+                            f"Invalid sweep parameter {output_router.amplitude.uid}: {msg}"
+                        )
+                signal_info.output_routing.append(
+                    OutputRoute(
+                        to_channel=to_port.channel,
+                        to_signal=signal_info.uid,
+                        from_channel=from_port.channel,
+                        from_signal=self._ls_to_exp_sig_mapping.get(
+                            source_signal, None
+                        ),
+                        amplitude=self.opt_param(output_router.amplitude, nt_only=True),
+                        phase=self.opt_param(output_router.phase, nt_only=True),
+                    )
+                )
+
         signal_info.channels = sorted((port.channel for port in physical_channel.ports))
 
         self._signal_infos[signal.uid] = signal_info
@@ -373,9 +457,15 @@ class ExperimentInfoBuilder:
 
             for parent_param in value.driven_by:
                 self._add_parameter(parent_param)
-            self._parameter_parents[value.uid] = [
-                parent_param.uid for parent_param in value.driven_by
-            ]
+
+            seen = set()
+            self._parameter_parents[value.uid] = []
+            for parent_param in value.driven_by:
+                uid = parent_param.uid
+                if uid in seen:
+                    continue
+                self._parameter_parents[value.uid].append(uid)
+                seen.add(uid)
 
         if value.uid not in self._params:
             self._params[value.uid] = param_info
@@ -440,7 +530,7 @@ class ExperimentInfoBuilder:
             section_uid_map,
         )
 
-        for index, child_section in enumerate(section.children):
+        for child_section in section.children:
             if not isinstance(child_section, Section):
                 continue
             section_info.children.append(
@@ -499,7 +589,7 @@ class ExperimentInfoBuilder:
         operation_length = self.opt_param(length)
 
         if hasattr(operation, "pulse"):
-            pulses = ensure_list(getattr(operation, "pulse"))
+            pulses = ensure_list(operation.pulse)
             if len(pulses) > 1:
                 raise RuntimeError(
                     f"Only one pulse can be provided for pulse play command in section"
@@ -516,7 +606,7 @@ class ExperimentInfoBuilder:
             pulse.can_compress = False
 
         if hasattr(operation, "kernel"):
-            pulses = ensure_list(getattr(operation, "kernel") or [])
+            pulses = ensure_list(operation.kernel or [])
             kernel_count = len(pulses)
             if signal_info.kernel_count is None:
                 signal_info.kernel_count = kernel_count
@@ -542,7 +632,7 @@ class ExperimentInfoBuilder:
         if hasattr(operation, "handle") and len(pulses) == 0:
             raise RuntimeError(
                 f"Either 'kernel' or 'length' must be provided for the acquire"
-                f" operation with handle '{getattr(operation, 'handle')}'."
+                f" operation with handle '{operation.handle}'."
             )
 
         amplitude = self.opt_param(getattr(operation, "amplitude", None))
@@ -561,7 +651,7 @@ class ExperimentInfoBuilder:
                 acquisition_type=acquisition_type.value,
             )
 
-        operation_pulse_parameters = getattr(operation, "pulse_parameters")
+        operation_pulse_parameters = operation.pulse_parameters
         if operation_pulse_parameters is not None:
             operation_pulse_parameters_list = ensure_list(operation_pulse_parameters)
             operation_pulse_parameters_list = [
@@ -687,13 +777,19 @@ class ExperimentInfoBuilder:
 
         section_parameters = []
 
-        if hasattr(section, "parameters"):
+        if isinstance(section, Sweep):
+            sweep_params_equal_len = all(
+                len(section.parameters[0]) == len(section.parameters[i])
+                for i in range(len(section.parameters))
+            )
+            if not sweep_params_equal_len:
+                raise LabOneQException(
+                    f"Error in experiment section '{section.uid}': Parallel executed sweep parameters must be of same length. {section.uid}"
+                )
             for parameter in section.parameters:
                 section_parameters.append(self._add_parameter(parameter))
-                if hasattr(parameter, "count"):
-                    count = parameter.count
-                elif hasattr(parameter, "values"):
-                    count = len(parameter.values)
+                if isinstance(parameter, (SweepParameter, LinearSweepParameter)):
+                    count = len(parameter)
                 if count < 1:
                     raise ValueError(
                         f"Repeat count must be at least 1, but section {section.uid} has count={count}"
@@ -707,7 +803,6 @@ class ExperimentInfoBuilder:
                         f"Parameter {parameter.uid} can't be swept in real-time, it is bound to a value "
                         f"that can only be set in near-time"
                     )
-
         execution_type = section.execution_type
         align = section.alignment
         on_system_grid = section.on_system_grid
@@ -728,6 +823,17 @@ class ExperimentInfoBuilder:
         ]
         chunk_count = getattr(section, "chunk_count", 1)
 
+        prng_seed_info = None
+        if hasattr(section, "prng"):
+            prng_seed_info = PRNGInfo(section.prng.range, section.prng.seed)
+            on_system_grid = True
+
+        draw_from_prng = False
+        if hasattr(section, "prng_sample"):
+            prng_sample = section.prng_sample
+            count = prng_sample.count
+            draw_from_prng = True
+
         this_acquisition_type = None
         if any(isinstance(operation, Acquire) for operation in section.children):
             # an acquire event - add acquisition_types
@@ -739,7 +845,6 @@ class ExperimentInfoBuilder:
             play_after = section_uid(play_after)
             if isinstance(play_after, list):
                 play_after = [section_uid(s) for s in play_after]
-
         section_info = SectionInfo(
             uid=instance_id,
             length=length,
@@ -760,6 +865,8 @@ class ExperimentInfoBuilder:
             triggers=triggers,
             play_after=play_after,
             parameters=section_parameters,
+            prng=prng_seed_info,
+            draw_prng=draw_from_prng,
         )
 
         self._section_operations_to_add.append(
@@ -823,13 +930,16 @@ class ExperimentInfoBuilder:
 
             self._sweep_derived_parameter(parent, sweeps_by_parameter)
 
-            # the parent should now have been added correctly
-            assert parent_id in sweeps_by_parameter
+            # The parent should now have been added correctly. If it has not, than
+            # that means that the parent (or its parents in turn) are not used anywhere
+            # in the experiment. We can just ignore them.
+            if parent_id not in sweeps_by_parameter:
+                continue
 
             for sweep in sweeps_by_parameter[parent_id]:
-                assert parameter not in sweep.parameters
-                sweep.parameters.append(parameter)
-                sweeps_by_parameter.setdefault(parameter.uid, []).append(sweep)
+                if parameter not in sweep.parameters:
+                    sweep.parameters.append(parameter)
+                    sweeps_by_parameter.setdefault(parameter.uid, []).append(sweep)
 
     def _sweep_all_derived_parameters(
         self,
@@ -933,7 +1043,11 @@ class ExperimentInfoBuilder:
             innermost_sweep = this_innermost_sweep
         if innermost_sweep is not None:
             return innermost_sweep
-        if parent.count is not None and parent.averaging_mode is None:
+        if (
+            parent.count is not None
+            and parent.averaging_mode is None
+            and not parent.draw_prng  # PRNG loop is considered to be inside shot
+        ):
             # this section is a sweep (aka loop but not averaging)
             return parent
         return None

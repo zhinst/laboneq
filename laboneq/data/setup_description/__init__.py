@@ -32,6 +32,7 @@ class DeviceType(EnumReprMixin, Enum):
     UHFQA = "uhfqa"
     SHFQC = "shfqc"
     SHFPPC = "shfppc"
+    PRETTYPRINTERDEVICE = "prettyprinterdevice"
     UNMANAGED = "unmanaged"
 
 
@@ -116,6 +117,7 @@ class Instrument:
     ports: List[Port] = field(default_factory=list)
     physical_channels: List[PhysicalChannel] = field(default_factory=list)
     connections: List[ChannelMapEntry] = field(default_factory=list)
+    device_class: int = 0x0
 
 
 @dataclass

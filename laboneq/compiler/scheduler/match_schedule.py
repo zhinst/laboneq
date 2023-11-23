@@ -239,7 +239,7 @@ def _compute_start_with_latency(
 
 @define(kw_only=True, slots=True)
 class MatchSchedule(SectionSchedule):
-    handle: Optional[str]
+    handle: str | None
     user_register: Optional[int]
     local: Optional[bool]
 

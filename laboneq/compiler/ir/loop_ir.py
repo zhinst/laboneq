@@ -33,20 +33,14 @@ class LoopIR(SectionIR):
         max_events -= 3
 
         if not self.compressed:  # unrolled loop
-            children_events = list(
-                self.children_events(
-                    start,
-                    max_events,
-                    settings,
-                    id_tracker,
-                    expand_loops,
-                    subsection_events=False,
-                )
+            children_events = self.children_events(
+                start,
+                max_events,
+                settings,
+                id_tracker,
+                expand_loops,
+                subsection_events=False,
             )
-            for iteration, event_list in enumerate(children_events):
-                for e in event_list:
-                    if "loop_iteration" not in e:
-                        e["loop_iteration"] = f"{self.section}_{iteration}"
         else:
             children_events = [
                 self.children[0].generate_event_list(

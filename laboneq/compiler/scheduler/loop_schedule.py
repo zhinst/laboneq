@@ -35,7 +35,7 @@ class LoopSchedule(SectionSchedule):
             else ceil_to_grid(self.repetition_time, self.grid)
         )
 
-        def check_repetition_time(child_length):
+        def check_repetition_time(child_length, iteration):
             if self.repetition_mode == RepetitionMode.CONSTANT:
                 assert adjusted_rep_time is not None
                 if child_length > adjusted_rep_time:
@@ -43,7 +43,7 @@ class LoopSchedule(SectionSchedule):
                         "Specified repetition time "
                         f"({self.repetition_time*schedule_data.TINYSAMPLE*1e6:.3f} us) "
                         f"is insufficient to fit the content of '{self.section}', "
-                        f"iteration {i} "
+                        f"iteration {iteration} "
                         f"({child_length*schedule_data.TINYSAMPLE*1e6:.3f} us)"
                     )
 
@@ -55,7 +55,7 @@ class LoopSchedule(SectionSchedule):
             )
             length = self.children[0].length
             assert length is not None
-            check_repetition_time(length)
+            check_repetition_time(length, iteration=0)
             if adjusted_rep_time is not None:
                 length = adjusted_rep_time
             grid = self.grid
@@ -88,7 +88,7 @@ class LoopSchedule(SectionSchedule):
                     c.adjust_length(length)
                     current_start += length
                 elif repetition_mode == RepetitionMode.CONSTANT:
-                    check_repetition_time(c.length)
+                    check_repetition_time(c.length, iteration=i)
                     assert adjusted_rep_time is not None
                     c.adjust_length(adjusted_rep_time)
                     assert c.length == adjusted_rep_time
@@ -116,8 +116,8 @@ class LoopSchedule(SectionSchedule):
         compressed: bool,
         sweep_parameters: List[ParameterInfo],
         iterations: int,
-        repetition_mode: Optional[RepetitionMode],
-        repetition_time: Optional[int],
+        repetition_mode: RepetitionMode | None,
+        repetition_time: int | None,
     ):
         """Down-cast from SectionSchedule."""
         return cls(

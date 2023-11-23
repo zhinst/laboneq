@@ -51,7 +51,7 @@ def flatten(l: Iterable):
             yield el
 
 
-_iid_map = defaultdict(count)
+_iid_map: defaultdict[str, count] = defaultdict(count)
 
 
 def id_generator(cat: str = "") -> str:

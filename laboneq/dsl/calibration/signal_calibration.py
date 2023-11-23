@@ -11,6 +11,7 @@ from laboneq.dsl.calibration.amplifier_pump import AmplifierPump
 from laboneq.dsl.calibration.mixer_calibration import MixerCalibration
 from laboneq.dsl.calibration.observable import Observable
 from laboneq.dsl.calibration.oscillator import Oscillator
+from laboneq.dsl.calibration.output_routing import OutputRoute
 from laboneq.dsl.calibration.precompensation import Precompensation
 from laboneq.dsl.parameter import Parameter
 
@@ -71,6 +72,10 @@ class SignalCalibration(Observable):
             Only supported by the SHFQA.
         amplifier_pump (AmplifierPump | None):
             Parametric Pump Controller settings.
+        added_outputs (list[OutputRoute] | None):
+            Added outputs to the signal line's physical channel port.
+            Only available for SHFSG/SHFQC devices with Output Router and Adder (RTR) option enabled.
+            Only viable for signals which point to 'SGCHANNELS/N/OUTPUT' physical ports.
     """
 
     oscillator: Oscillator | None = None
@@ -85,6 +90,7 @@ class SignalCalibration(Observable):
     threshold: float | list[float] | None = None
     amplitude: float | Parameter | None = None
     amplifier_pump: AmplifierPump | None = None
+    added_outputs: list[OutputRoute] | None = None
 
     def __init__(
         self,
@@ -100,6 +106,7 @@ class SignalCalibration(Observable):
         range=None,
         threshold=None,
         amplifier_pump=None,
+        added_outputs=None,
     ):
         super().__init__()
         self.amplitude = amplitude
@@ -114,6 +121,8 @@ class SignalCalibration(Observable):
         self.range = range
         self.threshold = threshold
         self.amplifier_pump = amplifier_pump
+        self.added_outputs = added_outputs
+
         super().__post_init__()
         if self._mixer_calibration is not None:
             self._mixer_calibration.has_changed().connect(

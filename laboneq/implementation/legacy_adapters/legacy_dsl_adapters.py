@@ -1,6 +1,7 @@
 # Copyright 2023 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
 from laboneq.application_management.application_manager import ApplicationManager
 from laboneq.data.execution_payload import ExecutionPayload
 from laboneq.data.experiment_description import (
@@ -63,9 +64,9 @@ class ExperimentResultsAdapter:
 class DeviceSetupAdapter:
     def from_descriptor(
         yaml_text: str,
-        server_host: str = None,
-        server_port: str = None,
-        setup_name: str = None,
+        server_host: str | None = None,
+        server_port: str | None = None,
+        setup_name: str | None = None,
     ):
         from laboneq.application_management.application_manager import (
             ApplicationManager,
@@ -110,7 +111,7 @@ class LegacySessionAdapter:
         self.compiled_experiment = self.l1q.build_payload_for_current_experiment()
         return self.compiled_experiment
 
-    def run(self, compiled_experiment: ExecutionPayload = None):
+    def run(self, compiled_experiment: ExecutionPayload | None = None):
         if compiled_experiment is None:
             compiled_experiment = self.compiled_experiment
         self.results = self.l1q.run_payload(compiled_experiment)

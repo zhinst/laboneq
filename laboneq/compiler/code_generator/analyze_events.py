@@ -537,3 +537,26 @@ def analyze_trigger_events(
                     ),
                 )
     return retval
+
+
+def analyze_prng_setup_times(events, sampling_rate, delay):
+    retval = AWGSampledEventSequence()
+    filtered_events = (
+        (index, event)
+        for index, event in enumerate(events)
+        if event["event_type"] == EventType.SETUP_PRNG
+    )
+    for index, event in filtered_events:
+        event_time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
+        retval.add(
+            event_time_in_samples,
+            AWGEvent(
+                type=AWGEventType.SEED_PRNG,
+                start=event_time_in_samples,
+                end=event_time_in_samples,
+                priority=index,
+                params={"range": event["range"], "seed": event["seed"]},
+            ),
+        )
+
+    return retval

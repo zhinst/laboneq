@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 # Note: The simulator may be used as a testing tool, so it must be independent of the production code
 # Do not add dependencies to the code being tested here (such as compiler, DSL asf.)
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 import numpy as np
 from numpy import typing as npt
@@ -32,7 +32,7 @@ from pycparser.c_ast import (
 from pycparser.c_parser import CParser
 
 from laboneq.compiler.common.compiler_settings import EXECUTETABLEENTRY_LATENCY
-from laboneq.data.recipe import Recipe, TriggeringMode
+from laboneq.data.recipe import Recipe, TriggeringMode, RoutedOutput
 
 if TYPE_CHECKING:
     from laboneq.core.types.compiled_experiment import CompiledExperiment
@@ -68,7 +68,26 @@ def precompensation_delay_samples(precompensation):
     return delay
 
 
-def get_frequency(device_type):
+def calculate_output_router_delays(
+    mapping: Mapping[int, Sequence[RoutedOutput]]
+) -> dict[int, int]:
+    """Calculate delays introduced from using Output router.
+
+    Using output router introduces a constant delay of 52 samples.
+    """
+    key_to_delay = {}
+    for uid, routing in mapping.items():
+        if routing:
+            key_to_delay[uid] = 52
+            for output in routing:
+                key_to_delay[output.from_channel] = 52
+        else:
+            if uid not in key_to_delay:
+                key_to_delay[uid] = 0
+    return key_to_delay
+
+
+def get_frequency(device_type: str) -> float:
     try:
         return {
             "HDAWG": 2.4e9,
@@ -80,7 +99,7 @@ def get_frequency(device_type):
             "SHFPPC": 0.0,
         }[device_type]
     except KeyError:
-        raise RuntimeError(f"Unsupported device type {device_type}")
+        raise RuntimeError(f"Unsupported device type {device_type}") from None
 
 
 def get_sample_multiple(device_type):
@@ -107,11 +126,11 @@ def parse_seq_c(runtime: SimpleRuntime):
         if isinstance(ext, FuncDef) and ext.decl.name.startswith("set_"):
             parse_set_func(ext.decl.name[4:], ext.body.block_items[1], runtime)
 
-    for item in ast.ext[-1].body.block_items:
-        try:
+    try:
+        for item in ast.ext[-1].body.block_items:
             parse_item(item, runtime)
-        except StopSimulation:
-            break
+    except StopSimulation:
+        pass
 
     runtime.program_finished()
 
@@ -175,7 +194,7 @@ def parse_int_literal(s: str):
             else int(s[:l], 0)
         )
     except ValueError:
-        raise ValueError(f"Invalid int literal: '{s}'")
+        raise ValueError(f"Invalid int literal: '{s}'") from None
 
 
 @lru_cache(maxsize=None)
@@ -268,7 +287,7 @@ def parse_item(item: Node, runtime: SimpleRuntime):
 
         # if cond and next are None, assume the for loop is just encoding a seqc repeat
         n = int(parse_expression(item.init, runtime))
-        for i in range(n):
+        for _i in range(n):
             for subitem in item.stmt.children():
                 parse_item(subitem[1], runtime)
     if (
@@ -660,14 +679,13 @@ class SimpleRuntime:
 
         wave_format = ".csv" if known_wave.assigned_index == -1 else ".wave"
 
-        wave_names = []
         # Supporting only combinations emitted by L1Q compiler, not any possible SeqC
-        for arg in args:
-            if isinstance(arg, str):
-                # handle also instructions like `playWave(1, "", 2, w1);`
-                wave_names.append(
-                    None if arg == '""' else (arg.strip('"') + wave_format)
-                )
+        # handle also instructions like `playWave(1, "", 2, w1);`
+        wave_names = [
+            None if arg == '""' else (arg.strip('"') + wave_format)
+            for arg in args
+            if isinstance(arg, str)
+        ]
 
         if not wave_names or wave_names == [None]:
             raise RuntimeError(f"Couldn't determine wave name(s) from {args}")
@@ -718,7 +736,7 @@ class SimpleRuntime:
                 for name in self.wave_names_by_index[wave_index]
             ]
         else:
-            assert False, f"Unknown signal type: {wave['type']}"
+            raise ValueError(f"Unknown signal type: {wave['type']}")
 
         for candidate_wave in self.waves.keys():
             if wave["wave_name"] in candidate_wave and "marker" in candidate_wave:
@@ -999,11 +1017,15 @@ def analyze_recipe(
             + (0.0 if o.port_delay is None else o.port_delay)
             for o in init.outputs
         }
-
         output_channel_precompensation = {
             o.channel: o.precompensation for o in init.outputs
         }
-
+        output_channel_output_routers = {
+            o.channel: o.routed_outputs for o in init.outputs
+        }
+        output_channel_output_router_delays = calculate_output_router_delays(
+            output_channel_output_routers
+        )
         awg_index = 0
         for awg in init.awgs:
             awg_nr = awg.awg
@@ -1044,7 +1066,13 @@ def analyze_recipe(
                 seqc_descriptors_from_recipe[
                     seqc
                 ].output_port_delay += precompensation_delay
-
+            delay_by_output_router = output_channel_output_router_delays.get(
+                output_channels[0]
+            )
+            if delay_by_output_router is not None:
+                seqc_descriptors_from_recipe[seqc].output_port_delay += (
+                    delay_by_output_router / sampling_rate
+                )
             channels: list[int] = [
                 output.channel
                 for output in init.outputs

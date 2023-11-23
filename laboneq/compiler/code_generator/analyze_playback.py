@@ -66,7 +66,7 @@ class _IntervalStartEvent:
     play_pulse_parameters: dict[str, Any] | None
     pulse_pulse_parameters: dict[str, Any] | None
     state: int | None
-    markers: Any | None
+    markers: Any
     amp_param: str | None
 
 
@@ -635,7 +635,7 @@ def analyze_play_wave_times(
     waveform_size_hints: Tuple[int, int],
     phase_resolution_range: int,
     amplitude_resolution_range: int,
-    sub_channel: Optional[int] = None,
+    sub_channel: int | None = None,
     use_command_table: bool = False,
     use_amplitude_increment: bool = False,
 ) -> AWGSampledEventSequence:
@@ -836,7 +836,7 @@ def analyze_play_wave_times(
         AWGEventType.MATCH: 1,
     }
 
-    for _, event_list in interval_events.sequence.items():
+    for event_list in interval_events.sequence.values():
         for event in sorted(event_list, key=lambda x: priorities[x.type]):
             if event.type == AWGEventType.PLAY_WAVE:
                 signature = event.params["playback_signature"]

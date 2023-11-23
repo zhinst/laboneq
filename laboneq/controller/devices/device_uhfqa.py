@@ -51,7 +51,7 @@ class DeviceUHFQA(DeviceZI):
         self._channels = 2
         self._use_internal_clock = True
 
-    def _get_num_awgs(self):
+    def _get_num_awgs(self) -> int:
         return 1
 
     def _osc_group_by_channel(self, channel: int) -> int:
@@ -67,17 +67,16 @@ class DeviceUHFQA(DeviceZI):
     def disable_outputs(
         self, outputs: set[int], invert: bool
     ) -> list[DaqNodeSetAction]:
-        channels_to_disable: list[DaqNodeSetAction] = []
-        for ch in range(self._channels):
-            if (ch in outputs) != invert:
-                channels_to_disable.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/sigouts/{ch}/on",
-                        0,
-                        caching_strategy=CachingStrategy.NO_CACHE,
-                    )
-                )
+        channels_to_disable: list[DaqNodeSetAction] = [
+            DaqNodeSetAction(
+                self._daq,
+                f"/{self.serial}/sigouts/{ch}/on",
+                0,
+                caching_strategy=CachingStrategy.NO_CACHE,
+            )
+            for ch in range(self._channels)
+            if (ch in outputs) != invert
+        ]
         return channels_to_disable
 
     def _nodes_to_monitor_impl(self) -> list[str]:
@@ -312,7 +311,10 @@ class DeviceUHFQA(DeviceZI):
                 )
 
     def collect_initialization_nodes(
-        self, device_recipe_data: DeviceRecipeData, initialization: Initialization
+        self,
+        device_recipe_data: DeviceRecipeData,
+        initialization: Initialization,
+        recipe_data: RecipeData,
     ) -> list[DaqNodeAction]:
         _logger.debug("%s: Initializing device...", self.dev_repr)
 

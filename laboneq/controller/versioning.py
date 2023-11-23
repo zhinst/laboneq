@@ -9,7 +9,8 @@ from functools import total_ordering
 class LabOneVersion(Enum):
     UNKNOWN = "unknown"
     V_23_06 = "23.06"
-    LATEST = V_23_06
+    V_23_10 = "23.10"
+    LATEST = V_23_10
 
     def __eq__(self, other):
         return float(self.value) == float(other.value)

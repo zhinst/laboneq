@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from laboneq.openqasm3.openqasm_error import OpenQasmException
 
@@ -33,7 +33,7 @@ class Frame:
 
 
 class Namespace:
-    def __init__(self, toplevel: Optional[bool] = True):
+    def __init__(self, toplevel: bool | None = True):
         self.toplevel = toplevel
         self.local_scope: dict[str, Any] = {}
 

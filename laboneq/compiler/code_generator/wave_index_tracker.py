@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Tuple, Union
 
 
 class WaveIndexTracker:
@@ -11,11 +11,11 @@ class WaveIndexTracker:
         self._wave_indices: Dict[str, Tuple[int, str]] = {}
         self._next_wave_index: int = 0
 
-    def lookup_index_by_wave_id(self, wave_id: str) -> Optional[int]:
+    def lookup_index_by_wave_id(self, wave_id: str) -> int | None:
         wave_index_entry = self._wave_indices.get(wave_id)
         return None if wave_index_entry is None else wave_index_entry[0]
 
-    def create_index_for_wave(self, wave_id: str, signal_type: str) -> Optional[int]:
+    def create_index_for_wave(self, wave_id: str, signal_type: str) -> int | None:
         assert wave_id not in self._wave_indices
         if signal_type == "csv":
             # For CSV store only the signature, do not allocate an index

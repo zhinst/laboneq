@@ -26,6 +26,7 @@ from laboneq.dsl.device.physical_channel_group import (
 from laboneq.dsl.experiment.pulse import Pulse
 from laboneq.dsl.experiment.section import Section
 from laboneq.dsl.parameter import Parameter
+from laboneq.dsl.prng import PRNGSample
 
 
 class Serializer:
@@ -45,6 +46,7 @@ class Serializer:
                 PhysicalChannelGroup,
                 PhysicalChannel,
                 Server,
+                PRNGSample,
             )
         )
         entity_mapper = {
@@ -59,6 +61,7 @@ class Serializer:
             "PhysicalChannelGroup": "physical_channel_groups",
             "PhysicalChannel": "physical_channels",
             "Server": "servers",
+            "PRNGSample": "prng_samples",
         }
 
         return entity_classes, entity_mapper

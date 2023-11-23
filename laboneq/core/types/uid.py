@@ -1,12 +1,14 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 from uuid import uuid4
 
 UID = str
 
 
-def make_random_uid(obj: object = None, pre: str = None) -> UID:
+def make_random_uid(obj: object | None = None, pre: str | None = None) -> UID:
     uid = UID(uuid4()) if obj is None else str(id(obj))
 
     if obj is not None and pre is None:
@@ -21,7 +23,7 @@ def make_random_uid(obj: object = None, pre: str = None) -> UID:
 _current_uid = 12910802
 
 
-def make_repeatable_uid(obj: object = None, pre: str = None) -> UID:
+def make_repeatable_uid(obj: object | None = None, pre: str | None = None) -> UID:
     global _current_uid
     uid = UID(_current_uid)
     _current_uid += 1
@@ -38,7 +40,7 @@ def make_repeatable_uid(obj: object = None, pre: str = None) -> UID:
 make_uid_creator = make_random_uid
 
 
-def make_uid(obj: object = None, pre: str = None) -> UID:
+def make_uid(obj: object | None = None, pre: str | None = None) -> UID:
     return make_uid_creator(obj, pre)
 
 

@@ -1,8 +1,9 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Union
+from typing import Any, Optional
 
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration import Calibration, Oscillator, SignalCalibration
@@ -34,10 +35,10 @@ class QubitParameters:
     #: offset voltage for flux control line - defaults to 0.
     flux_offset_voltage: Optional[float] = 0
     #: Free form dictionary of user defined parameters.
-    user_defined: Optional[Dict] = field(default_factory=dict)
+    user_defined: dict | None = field(default_factory=dict)
 
     @property
-    def drive_frequency(self) -> Optional[float]:
+    def drive_frequency(self) -> float | None:
         """Qubit drive frequency.
 
         Calculated from `resonance_frequency` and `drive_lo_frequency`,
@@ -51,7 +52,7 @@ class QubitParameters:
             return None
 
     @property
-    def readout_frequency(self) -> Optional[float]:
+    def readout_frequency(self) -> float | None:
         """Readout baseband frequency.
 
         Calculated from `readout_resonator_frequency` and `readout_lo_frequency`,
@@ -74,9 +75,9 @@ class Qubit(QuantumElement):
 
     def __init__(
         self,
-        uid: str = None,
-        signals: Dict[str, LogicalSignal] = None,
-        parameters: Optional[Union[QubitParameters, Dict[str, Any]]] = None,
+        uid: str | None = None,
+        signals: dict[str, LogicalSignal] | None = None,
+        parameters: QubitParameters | dict[str, Any] | None = None,
     ):
         """
         Initializes a new Qubit.
@@ -104,7 +105,7 @@ class Qubit(QuantumElement):
         cls,
         uid: str,
         lsg: LogicalSignalGroup,
-        parameters: Optional[Union[QubitParameters, Dict[str, Any]]] = None,
+        parameters: QubitParameters | dict[str, Any] | None = None,
     ) -> "Qubit":
         """Qubit from logical signal group.
 

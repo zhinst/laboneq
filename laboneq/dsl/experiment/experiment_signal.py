@@ -112,7 +112,7 @@ class ExperimentSignal:
 
     uid: str
     calibration: Optional[SignalCalibration]
-    mapped_logical_signal_path: Optional[str]
+    mapped_logical_signal_path: str | None
 
     def __init__(
         self,
@@ -363,6 +363,17 @@ class ExperimentSignal:
             self.calibration = SignalCalibration(amplifier_pump=value)
         else:
             self.calibration.amplifier_pump = value
+
+    @property
+    def added_outputs(self):
+        return self.calibration.added_outputs if self.is_calibrated() else None
+
+    @added_outputs.setter
+    def added_outputs(self, value):
+        if not self.is_calibrated():
+            self.calibration = SignalCalibration(added_outputs=value)
+        else:
+            self.calibration.added_outputs = value
 
     def is_calibrated(self) -> bool:
         """True if calibration has been set for this experiment signal.

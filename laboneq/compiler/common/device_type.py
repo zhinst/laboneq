@@ -1,6 +1,7 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
 from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Optional
@@ -40,6 +41,8 @@ class DeviceTraits:
     max_ct_entries: Optional[int] = None
     integration_dsp_latency: Optional[float] = None
     spectroscopy_dsp_latency: Optional[float] = None
+    has_prng: bool = False
+    device_class: int = 0x0
 
 
 class DeviceType(DeviceTraits, Enum):
@@ -85,6 +88,8 @@ class DeviceType(DeviceTraits, Enum):
         # Schema v.1.1.0
         max_ct_entries=1024,
         is_qa_device=False,
+        has_prng=True,
+        device_class=0x0,
     )
 
     UHFQA = DeviceTraits(
@@ -104,6 +109,7 @@ class DeviceType(DeviceTraits, Enum):
         reset_osc_duration=40e-9,
         supports_oscillator_switching=False,
         is_qa_device=True,
+        device_class=0x0,
     )
 
     SHFQA = DeviceTraits(
@@ -129,6 +135,7 @@ class DeviceType(DeviceTraits, Enum):
         is_qa_device=True,
         integration_dsp_latency=212e-9,
         spectroscopy_dsp_latency=220e-9,
+        device_class=0x0,
     )
     SHFSG = DeviceTraits(
         str_value="shfsg",
@@ -153,6 +160,23 @@ class DeviceType(DeviceTraits, Enum):
         # Schema v.1.2.0
         max_ct_entries=4096,
         is_qa_device=False,
+        has_prng=True,
+        device_class=0x0,
+    )
+    PRETTYPRINTERDEVICE = DeviceTraits(
+        str_value="prettyprinterdevice",
+        sampling_rate=2.4e9,
+        min_play_wave=32,
+        sample_multiple=16,
+        supports_zsync=False,
+        supports_reset_osc_phase=False,
+        supports_binary_waves=False,
+        supports_complex_waves=False,
+        supports_digital_iq_modulation=False,
+        supports_precompensation=False,
+        channels_per_awg=2,
+        is_qa_device=False,
+        device_class=0x1,
     )
 
     def __repr__(self):

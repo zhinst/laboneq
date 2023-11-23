@@ -171,7 +171,7 @@ class PlaybackSignature:
     information beyond the sampled waveform."""
 
     waveform: Optional[WaveformSignature]
-    hw_oscillator: Optional[str]
+    hw_oscillator: str | None
     pulse_parameters: Tuple[Tuple[frozenset, ...], ...]
     state: Optional[int] = None
     set_phase: Optional[float] = None

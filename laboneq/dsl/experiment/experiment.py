@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Deque, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Deque, Dict, List, Union
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import DSLVersion
@@ -83,7 +83,7 @@ class Experiment:
             self.signals = signals_dict
 
     def add_signal(
-        self, uid: str = None, connect_to: LogicalSignalRef = None
+        self, uid: str | None = None, connect_to: LogicalSignalRef | None = None
     ) -> ExperimentSignal:
         """Add an experiment signal to the experiment.
 
@@ -171,7 +171,7 @@ class Experiment:
 
         self.signals[experiment_signal_uid].map(logical_signal)
 
-    def reset_signal_map(self, signal_map: Dict[str, LogicalSignalRef] = None):
+    def reset_signal_map(self, signal_map: dict[str, LogicalSignalRef] | None = None):
         """Reset, i.e. disconnect, all defined signal connections and
         apply a new signal map if provided.
 
@@ -254,7 +254,7 @@ class Experiment:
 
     # Calibration ....................................
 
-    def _signal_not_found_error(self, signal_uid: str, msg: str = None):
+    def _signal_not_found_error(self, signal_uid: str, msg: str | None = None):
         if msg is None:
             msg = ""
         raise LabOneQException(
@@ -373,8 +373,8 @@ class Experiment:
         increment_oscillator_phase=None,
         set_oscillator_phase=None,
         length=None,
-        pulse_parameters: Optional[Dict[str, Any]] = None,
-        precompensation_clear: Optional[bool] = None,
+        pulse_parameters: Dict[str, Any] | None = None,
+        precompensation_clear: bool | None = None,
         marker=None,
     ):
         """Play a pulse on a signal line.
@@ -430,7 +430,7 @@ class Experiment:
         self,
         signal: str,
         time: Union[float, Parameter],
-        precompensation_clear: Optional[bool] = None,
+        precompensation_clear: bool | None = None,
     ):
         """Delay execution of next operation on the given experiment signal.
 
@@ -496,18 +496,18 @@ class Experiment:
         self,
         acquire_signal: str,
         handle: str,
-        integration_kernel: Optional[Pulse | list[Pulse]] = None,
+        integration_kernel: Pulse | list[Pulse] | None = None,
         integration_kernel_parameters: dict[str, Any]
         | list[dict[str, Any] | None]
         | None = None,
-        integration_length: Optional[float] = None,
-        measure_signal: Optional[str] = None,
-        measure_pulse: Optional[Pulse] = None,
-        measure_pulse_length: Optional[float] = None,
-        measure_pulse_parameters: Optional[Dict[str, Any]] = None,
-        measure_pulse_amplitude: Optional[float] = None,
-        acquire_delay: Optional[float] = None,
-        reset_delay: Optional[float] = None,
+        integration_length: float | None = None,
+        measure_signal: str | None = None,
+        measure_pulse: Pulse | None = None,
+        measure_pulse_length: float | None = None,
+        measure_pulse_parameters: Dict[str, Any] | None = None,
+        measure_pulse_amplitude: float | None = None,
+        acquire_delay: float | None = None,
+        reset_delay: float | None = None,
     ):
         """
         Execute a measurement.
@@ -575,7 +575,7 @@ class Experiment:
     def sweep(
         self,
         parameter: Parameter | List[Parameter],
-        execution_type: ExecutionType = None,
+        execution_type: ExecutionType | None = None,
         uid: str | None = None,
         alignment: SectionAlignment | None = None,
         reset_oscillator_phase: bool = False,
@@ -838,8 +838,8 @@ class Experiment:
         alignment: SectionAlignment | None = None,
         uid: str | None = None,
         on_system_grid: bool | None = None,
-        play_after: Optional[Union[str, Section, List[Union[str, Section]]]] = None,
-        trigger: Optional[Dict[str, Dict[str, int]]] = None,
+        play_after: str | Section | list[str | Section] | None = None,
+        trigger: dict[str, dict[str, int]] | None = None,
     ):
         """Define an section for scoping operations.
 
@@ -1011,8 +1011,8 @@ class Experiment:
     def match_local(
         self,
         handle: str,
-        uid: str = None,
-        play_after: Optional[Union[str, Section, List[Union[str, Section]]]] = None,
+        uid: str | None = None,
+        play_after: str | Section | list[str | Section] | None = None,
     ):
         """Define a section which switches between different child sections based
         on a QA measurement on an SHFQC.
@@ -1047,8 +1047,8 @@ class Experiment:
     def match_global(
         self,
         handle: str,
-        uid: str = None,
-        play_after: Optional[Union[str, Section, List[Union[str, Section]]]] = None,
+        uid: str | None = None,
+        play_after: str | Section | list[str | Section] | None = None,
     ):
         """Define a section which switches between different child sections based
         on a QA measurement via the PQSC.
@@ -1110,10 +1110,10 @@ class Experiment:
 
     def match(
         self,
-        handle: Optional[str] = None,
-        user_register: Optional[int] = None,
-        uid: str = None,
-        play_after: Optional[Union[str, Section, List[Union[str, Section]]]] = None,
+        handle: str | None = None,
+        user_register: int | None = None,
+        uid: str | None = None,
+        play_after: str | Section | list[str | Section] | None = None,
     ):
         """Define a section which switches between different child sections based
         on a QA measurement (using `handle`) or a user register (using `user_register`).
@@ -1153,7 +1153,7 @@ class Experiment:
             local=None,
         )
 
-    def case(self, state: int, uid: str = None):
+    def case(self, state: int, uid: str | None = None):
         """Define a section which plays after matching with the given value to the
         result of a QA measurement.
 
