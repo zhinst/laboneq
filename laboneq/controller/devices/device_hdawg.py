@@ -362,10 +362,15 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
                 ]
 
             precomp_p = f"sigouts/{output.channel}/precompensation/"
+            has_pc = "PC" in self.dev_opts
             try:
                 precomp = output.precompensation
                 if not precomp:
                     raise AttributeError
+                if not has_pc:
+                    raise LabOneQControllerException(
+                        f"Precompensation is not supported on device {self.dev_repr}."
+                    )
                 nodes.append((precomp_p + "enable", 1))
                 # Exponentials
                 for e in range(8):
@@ -417,7 +422,8 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
                 except (KeyError, IndexError, TypeError):
                     nodes.append((fir_p + "enable", 0))
             except (KeyError, TypeError, AttributeError):
-                nodes.append((precomp_p + "enable", 0))
+                if has_pc:
+                    nodes.append((precomp_p + "enable", 0))
             if output.marker_mode is not None:
                 if output.marker_mode == "TRIGGER":
                     nodes.append(

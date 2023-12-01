@@ -480,7 +480,7 @@ class DevEmuHDAWG(DevEmuHW):
             ),
             "features/options": NodeInfo(
                 type=NodeType.STR,
-                default=self._dev_opts.get("features/options", "MF\nME\nSKW"),
+                default=self._dev_opts.get("features/options", "MF\nME\nSKW\nPC"),
             ),
             "system/clocks/sampleclock/status": NodeInfo(type=NodeType.INT, default=0),
             "system/clocks/sampleclock/freq": NodeInfo(
