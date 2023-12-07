@@ -19,7 +19,12 @@ from laboneq.controller.communication import (
     DaqNodeSetAction,
 )
 from laboneq.controller.devices.device_zi import DeviceZI, delay_to_rounded_samples
-from laboneq.controller.devices.zi_node_monitor import Command, NodeControlBase
+from laboneq.controller.devices.zi_node_monitor import (
+    Command,
+    Response,
+    Setting,
+    NodeControlBase,
+)
 from laboneq.controller.recipe_processor import (
     AwgConfig,
     AwgKey,
@@ -118,23 +123,14 @@ class DeviceUHFQA(DeviceZI):
             else REFERENCE_CLOCK_SOURCE_EXTERNAL
         )
         return [
-            Command(f"/{self.serial}/system/extclk", source),
+            Setting(f"/{self.serial}/system/extclk", source),
         ]
 
-    def collect_load_factory_preset_nodes(self):
+    def load_factory_preset_control_nodes(self) -> list[NodeControlBase]:
         return [
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/system/preset/index",
-                0,
-                caching_strategy=CachingStrategy.NO_CACHE,
-            ),
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/system/preset/load",
-                1,
-                caching_strategy=CachingStrategy.NO_CACHE,
-            ),
+            Command(f"/{self.serial}/system/preset/index", 0),
+            Command(f"/{self.serial}/system/preset/load", 1),
+            Response(f"/{self.serial}/system/preset/busy", 0),
         ]
 
     def configure_acquisition(
@@ -684,7 +680,7 @@ class DeviceUHFQA(DeviceZI):
 
         return nodes_to_configure_triggers
 
-    def _get_integrator_measurement_data(
+    async def _get_integrator_measurement_data(
         self, result_index, num_results, averages_divider: int
     ):
         result_path = f"/{self.serial}/qas/0/result/data/{result_index}/wave"
@@ -698,7 +694,7 @@ class DeviceUHFQA(DeviceZI):
         )
         return data_node_query[result_path][0]["vector"] / averages_divider
 
-    def get_measurement_data(
+    async def get_measurement_data(
         self,
         channel: int,
         acquisition_type: AcquisitionType,
@@ -711,19 +707,19 @@ class DeviceUHFQA(DeviceZI):
         )
         assert len(result_indices) <= 2
         if len(result_indices) == 1:
-            return self._get_integrator_measurement_data(
+            return await self._get_integrator_measurement_data(
                 result_indices[0], num_results, averages_divider
             )
         else:
-            in_phase = self._get_integrator_measurement_data(
+            in_phase = await self._get_integrator_measurement_data(
                 result_indices[0], num_results, averages_divider
             )
-            quadrature = self._get_integrator_measurement_data(
+            quadrature = await self._get_integrator_measurement_data(
                 result_indices[1], num_results, averages_divider
             )
             return [complex(real, imag) for real, imag in zip(in_phase, quadrature)]
 
-    def get_input_monitor_data(self, channel: int, num_results: int):
+    async def get_input_monitor_data(self, channel: int, num_results: int):
         result_path_ch0 = f"/{self.serial}/qas/0/monitor/inputs/0/wave".lower()
         result_path_ch1 = f"/{self.serial}/qas/0/monitor/inputs/1/wave".lower()
         data = self._daq.get_raw(",".join([result_path_ch0, result_path_ch1]))

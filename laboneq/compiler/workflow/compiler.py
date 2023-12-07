@@ -262,7 +262,6 @@ class Compiler:
         self._signal_objects = self._generate_signal_objects()
 
         rt_compiler = RealtimeCompiler(
-            self._experiment_dao,
             Scheduler(
                 self._experiment_dao,
                 self._sampling_rate_tracker,
@@ -801,6 +800,11 @@ class Compiler:
                                 output["marker_mode"] = "MARKER"
                             if "marker2" in markers:
                                 raise RuntimeError("Only marker1 supported on SHFSG")
+                    if signal_info.type == SignalInfoType.RF:
+                        if device_type == DeviceType.HDAWG:
+                            marker_key = channel % 2 + 1
+                            if f"marker{marker_key}" in markers:
+                                output["marker_mode"] = "MARKER"
                 if triggers is not None:
                     if signal_info.type == SignalInfoType.IQ:
                         if device_type == DeviceType.HDAWG:

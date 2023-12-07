@@ -158,7 +158,7 @@ def eval_expression(
     expression: ast.Expression | None,
     *,
     namespace: NamespaceNest | None = None,
-    type: Type | None = None,
+    type_: Type | None = None,
 ):
     if namespace is None:
         namespace = NamespaceNest()
@@ -169,9 +169,10 @@ def eval_expression(
     except Exception as e:
         raise OpenQasmException(str(e), mark=expression.span) from e
 
-    if type is not None and not isinstance(retval, type):
+    if type_ is not None and not isinstance(retval, type_):
         raise OpenQasmException(
-            f"Expected expression of type {type}, got {type(retval)}", expression.span
+            f"Expected expression of type {type_}, got {type(retval)}",
+            mark=expression.span,
         )
     return retval
 

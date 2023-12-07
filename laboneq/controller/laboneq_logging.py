@@ -7,6 +7,8 @@ import functools
 import logging
 import logging.config
 import os
+import sys
+import warnings
 
 import yaml
 
@@ -15,6 +17,7 @@ from laboneq.core.utilities.compressed_formatter import CompressedFormatter
 _logger = logging.getLogger(__name__)
 _log_dir = os.path.join("laboneq_output", "log")
 _logging_initialized = False
+_laboneq_showwarning = None
 
 
 def set_log_dir(dir):
@@ -25,6 +28,56 @@ def set_log_dir(dir):
 def get_log_dir():
     global _log_dir
     return _log_dir
+
+
+def _showwarning(message, category, filename, lineno, file=None, line=None):
+    """Show warnings to the logging system.
+
+    This is a replacement for `warnings.showwarning` that logs warnings
+    to the logger attached to its module.
+    """
+    if file is not None:
+        if _laboneq_showwarning is not None:
+            return _laboneq_showwarning(message, category, filename, lineno, file, line)
+        return None
+
+    for modname, module in sys.modules.items():
+        path = getattr(module, "__file__", None)
+        if path is not None and filename == os.path.abspath(path):
+            logger = logging.getLogger(modname)
+            break
+    else:
+        # No module matching the file name was found. Fall back to original implementation.
+        if _laboneq_showwarning is not None:
+            return _laboneq_showwarning(message, category, filename, lineno, file, line)
+
+    formatted_message = warnings.formatwarning(
+        message, category, filename, lineno, line
+    )
+    if not logger.handlers:
+        logger.addHandler(logging.NullHandler())
+    logger.warning(formatted_message)
+
+
+def capture_warnings(capture: bool):
+    """Capture warnings to the logging system.
+
+    If `capture` is `True`, warnings are captured to the logging system. If
+    `capture` is `False`, the orignal state is restored.
+
+    This follows the approach from `warnings.captureWarnings`, however, instead
+    of logging to the `py.warnings` logger, warnings are logged to the logger
+    attached to its module.
+    """
+    global _laboneq_showwarning
+    if capture:
+        if _laboneq_showwarning is None:
+            _laboneq_showwarning = warnings.showwarning
+            warnings.showwarning = _showwarning
+    else:
+        if _laboneq_showwarning is not None:
+            warnings.showwarning = _laboneq_showwarning
+            _laboneq_showwarning = None
 
 
 DEFAULT_CONFIG_YML = """
@@ -90,6 +143,7 @@ def initialize_logging(
     performance_log: bool = False,
     logging_config_dict: dict | None = None,
     log_level: int | str | None = None,
+    warnings: bool = True,
 ):
     """Configure logging.
 
@@ -121,6 +175,8 @@ def initialize_logging(
             does not exist.
         log_level:
             If specified, sets the log level for the `laboneq` logger.
+        warnings:
+            If true, warnings are captured to the logging system.
     """
     global _logging_initialized
     logdir = get_log_dir()
@@ -181,6 +237,8 @@ def initialize_logging(
 
     if log_level is not None:
         logging.getLogger("laboneq").setLevel(log_level)
+
+    capture_warnings(warnings)
 
     _logger.info(
         "Logging initialized from [%s] logdir is %s",

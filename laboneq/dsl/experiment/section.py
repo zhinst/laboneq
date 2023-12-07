@@ -494,7 +494,7 @@ class Match(Section):
             for where handles are specified.
         user_register (int | None):
             User register on which to match.
-        prng (PRNGSample | None):
+        prng_sample (PRNGSample | None):
             PRNG sample to match.
         local (bool):
             Whether to fetch the codeword via the PQSC (`False`),

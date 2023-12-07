@@ -15,9 +15,6 @@ class DevicePRETTYPRINTER(DeviceZI):
     def is_standalone(self):
         return False
 
-    def check_errors(self):
-        pass
-
     def collect_reset_nodes(self) -> list[DaqNodeAction]:
         return []
 

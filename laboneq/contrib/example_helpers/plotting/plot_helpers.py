@@ -40,7 +40,7 @@ def plot_simulation(
     length: float = 10e-6,
     xaxis_label: str = "Time (s)",
     yaxis_label: str = "Amplitude",
-    plot_width: int = 6,
+    plot_width: int = 9,
     plot_height: int = 2,
     save: bool = False,
     filename: str = "filename",
@@ -104,6 +104,7 @@ def plot_simulation(
             .physical_channel,
             start=start_time,
             output_length=length,
+            channel_type=physical_channel_path.type,
             get_trigger=True,
             get_marker=True,
             get_frequency=True,
@@ -224,7 +225,7 @@ def plot_simulation(
             axs.set_ylabel(yaxis_label)
             axs.set_xlabel(xaxis_label)
             axs.set_title(title)
-            axs.legend(loc="upper right")
+            axs.legend(bbox_to_anchor=(1.0, 1.0))
             axs.ticklabel_format(axis="both", style="sci", scilimits=(0, 0))
             axs.grid(True)
 
@@ -240,7 +241,7 @@ def plot_simulation(
             axes.set_ylabel(yaxis_label)
             axes.set_xlabel(xaxis_label)
             axes.set_title(title)
-            axes.legend(loc="upper right")
+            axes.legend(bbox_to_anchor=(1.0, 1.0))
             axes.ticklabel_format(axis="both", style="sci", scilimits=(0, 0))
             axes.grid(True)
 

@@ -238,8 +238,8 @@ def dump(experiment_dao: ExperimentDAO):
             "length",
             "repetition_time",
             "play_after",
-            "handle",
-            "user_register",
+            "match_handle",
+            "match_user_register",
             "state",
             "local",
         ]

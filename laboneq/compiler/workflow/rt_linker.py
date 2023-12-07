@@ -179,8 +179,10 @@ def _(
             #  but not the command table or the src.
         merged_ids.append((awg.device_id, awg.awg_number))
         this.src.append({"filename": seqc_name, **awg_src})
-        this.command_tables.append({"seqc": seqc_name, **new_ct})
-        this.wave_indices.append({"filename": seqc_name, **new_wave_indices})
+        if new_ct is not None:
+            this.command_tables.append({"seqc": seqc_name, **new_ct})
+        if new_wave_indices is not None:
+            this.wave_indices.append({"filename": seqc_name, **new_wave_indices})
         this.waves.update(new_waves)
         this.max_execution_time_per_step = max(
             this.max_execution_time_per_step, new.total_execution_time

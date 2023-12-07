@@ -38,12 +38,7 @@ class XarrayDatasetDeserializer:
 
 
 def serialize_maybe_xarray(
-    obj: object,
-    serializer_function,
-    entity_classes,
-    entities_collector,
-    emit_enum_types,
-    omit_none_fields,
+    obj: object, serializer_function, entity_classes, **serialize_kwargs
 ) -> dict | None:
     """Serialize `xarray` object.
 
@@ -65,19 +60,13 @@ def serialize_maybe_xarray(
             as_dict = obj.to_dict()
             as_dict["__type"] = XarrayDataArrayDeserializer._type_
             as_dict["data"] = serializer_function(
-                NumpyArrayRepr(array_data=obj.data),
-                entity_classes,
-                entities_collector,
-                emit_enum_types,
-                omit_none_fields,
+                NumpyArrayRepr(array_data=obj.data), entity_classes, **serialize_kwargs
             )
             for coord_name in obj.coords:
                 as_dict["coords"][coord_name]["data"] = serializer_function(
                     NumpyArrayRepr(array_data=obj.coords[coord_name].data),
                     entity_classes,
-                    entities_collector,
-                    emit_enum_types,
-                    omit_none_fields,
+                    **serialize_kwargs,
                 )
             return as_dict
 
@@ -88,17 +77,13 @@ def serialize_maybe_xarray(
                 as_dict["data_vars"][data_var_name]["data"] = serializer_function(
                     NumpyArrayRepr(array_data=obj.data_vars[data_var_name].data),
                     entity_classes,
-                    entities_collector,
-                    emit_enum_types,
-                    omit_none_fields,
+                    **serialize_kwargs,
                 )
             for coord_name in obj.coords:
                 as_dict["coords"][coord_name]["data"] = serializer_function(
                     NumpyArrayRepr(array_data=obj.coords[coord_name].data),
                     entity_classes,
-                    entities_collector,
-                    emit_enum_types,
-                    omit_none_fields,
+                    **serialize_kwargs,
                 )
             return as_dict
     return None

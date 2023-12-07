@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 from engineering_notation import EngNumber
 from sortedcontainers import SortedDict
@@ -471,8 +471,8 @@ def analyze_trigger_events(
 
     sampled_digital_signal_change_events = AWGSampledEventSequence()
 
-    event: Dict[Any, Any]
     for index, event in digital_signal_change_events:
+        event: dict
         time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
         sampled_digital_signal_change_events.add(
             time_in_samples, AWGEvent(type=None, params=event, priority=index)
@@ -482,7 +482,6 @@ def analyze_trigger_events(
     retval = AWGSampledEventSequence()
     state_progression = SortedDict()
 
-    event: AWGEvent
     event_list: List[AWGEvent]
     for (
         time_in_samples,
@@ -490,15 +489,18 @@ def analyze_trigger_events(
     ) in sampled_digital_signal_change_events.sequence.items():
         if device_type in (DeviceType.SHFQA, DeviceType.SHFSG):
             for event in event_list:
+                event: AWGEvent
                 if event.params["bit"] > 0:
                     raise LabOneQException(
                         f"On device {device_type.value}, only a single trigger channel is "
                         f"available (section {event.params['section_name']})."
                     )
         for event in [e for e in event_list if e.params["change"] == "CLEAR"]:
+            event: AWGEvent
             mask = ~(2 ** event.params["bit"])
             current_state = current_state & mask
         for event in [e for e in event_list if e.params["change"] == "SET"]:
+            event: AWGEvent
             mask = 2 ** event.params["bit"]
             current_state = current_state | mask
         state_progression[time_in_samples] = current_state
@@ -526,7 +528,10 @@ def analyze_trigger_events(
     resampled_states = resample_state(loop_events.sequence.keys(), state_progression)
     if resampled_states:
         for time_in_samples, event_list in loop_events.sequence.items():
-            if any(event.type == AWGEventType.PUSH_LOOP for event in event_list):
+            if any(
+                cast(AWGEvent, event).type == AWGEventType.PUSH_LOOP
+                for event in event_list
+            ):
                 retval.add(
                     time_in_samples,
                     AWGEvent(
@@ -539,7 +544,7 @@ def analyze_trigger_events(
     return retval
 
 
-def analyze_prng_setup_times(events, sampling_rate, delay):
+def analyze_prng_times(events, sampling_rate, delay):
     retval = AWGSampledEventSequence()
     filtered_events = (
         (index, event)
@@ -555,7 +560,29 @@ def analyze_prng_setup_times(events, sampling_rate, delay):
                 start=event_time_in_samples,
                 end=event_time_in_samples,
                 priority=index,
-                params={"range": event["range"], "seed": event["seed"]},
+                params={
+                    "range": event["range"],
+                    "seed": event["seed"],
+                    "section": event["section_name"],
+                },
+            ),
+        )
+
+    filtered_events = (
+        (index, event)
+        for index, event in enumerate(events)
+        if event["event_type"] == EventType.SAMPLE_PRNG
+    )
+    for index, event in filtered_events:
+        event_time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
+        retval.add(
+            event_time_in_samples,
+            AWGEvent(
+                type=AWGEventType.SAMPLE_PRNG,
+                start=event_time_in_samples,
+                end=event_time_in_samples,
+                priority=index,
+                params={},
             ),
         )
 

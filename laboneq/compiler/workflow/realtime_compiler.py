@@ -13,7 +13,6 @@ from laboneq.compiler import CodeGenerator, CompilerSettings
 from laboneq.compiler.code_generator.ir_to_event_list import generate_event_list_from_ir
 from laboneq.compiler.code_generator.code_generator_pretty_printer import PrettyPrinter
 from laboneq.compiler.common.signal_obj import SignalObj
-from laboneq.compiler.experiment_access import ExperimentDAO
 from laboneq.compiler.ir.ir import IR
 from laboneq.compiler.scheduler.parameter_store import ParameterStore
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
@@ -47,13 +46,11 @@ class Schedule(TypedDict):
 class RealtimeCompiler:
     def __init__(
         self,
-        experiment_dao: ExperimentDAO,
         scheduler: Scheduler,
         sampling_rate_tracker: SamplingRateTracker,
         signal_objects: Dict[str, SignalObj],
         settings: CompilerSettings | None = None,
     ):
-        self._experiment_dao = experiment_dao
         self._ir = None
         self._scheduler = scheduler
         self._sampling_rate_tracker = sampling_rate_tracker
@@ -125,46 +122,40 @@ class RealtimeCompiler:
 
         return compiler_output
 
-    def _lower_ir_to_schedule(self, ir: IR):
+    def _lower_ir_to_pulse_sheet(self, ir: IR):
         event_list = generate_event_list_from_ir(
             ir=ir,
             settings=self._settings,
             expand_loops=self._settings.EXPAND_LOOPS_FOR_SCHEDULE,
             max_events=self._settings.MAX_EVENTS_TO_PUBLISH,
         )
-
         event_list = [
             {k: v for k, v in event.items() if v is not None} for event in event_list
         ]
 
-        try:
-            root_section = self._experiment_dao.root_rt_sections()[0]
-        except IndexError:
+        if ir.root_section is None:
             return Schedule.empty()
 
         preorder_map = self._scheduler.preorder_map()
 
         section_info_out = {}
-
         section_signals_with_children = {}
 
-        for section in [
-            root_section,
-            *self._experiment_dao.all_section_children(root_section),
+        for section_info in [
+            ir.root_section,
+            *ir.root_section_children,
         ]:
-            section_info = self._experiment_dao.section_info(section)
             section_display_name = section_info.uid
-            section_signals_with_children[section] = list(
-                self._experiment_dao.section_signals_with_children(section)
+            section_signals_with_children[section_info.uid] = list(
+                ir.section_signals_with_chidlren_ids[section_info.uid]
             )
-            section_info_out[section] = {
+            section_info_out[section_info.uid] = {
                 "section_display_name": section_display_name,
-                "preorder": preorder_map[section],
+                "preorder": preorder_map[section_info.uid],
             }
 
         sampling_rate_tuples = []
-        for signal_id in self._experiment_dao.signals():
-            signal_info = self._experiment_dao.signal_info(signal_id)
+        for signal_info in ir.signals:
             device_id = signal_info.device.uid
             device_type = signal_info.device.device_type.value
             sampling_rate_tuples.append(
@@ -196,4 +187,4 @@ class RealtimeCompiler:
     def prepare_schedule(self):
         if self._ir is None:
             self._ir = self._lower_to_ir()
-        return self._lower_ir_to_schedule(self._ir)
+        return self._lower_ir_to_pulse_sheet(self._ir)

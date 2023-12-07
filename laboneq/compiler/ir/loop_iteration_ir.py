@@ -21,6 +21,7 @@ class LoopIterationIR(SectionIR):
     sweep_parameters: List[ParameterInfo]
     num_repeats: int
     shadow: bool
+    sample_prng: bool
 
     def compressed_iteration(self, iteration: int):
         """Make a copy of this schedule, but replace ``iteration`` and set the
@@ -55,23 +56,30 @@ class LoopIterationIR(SectionIR):
             start, max_events, settings, id_tracker, expand_loops
         )
 
+        sample_prng_events = []
+        if self.sample_prng:
+            sample_prng_events = [
+                {"event_type": EventType.SAMPLE_PRNG, "time": start, **common}
+            ]
+
         event_list = [
-            dict(event_type=EventType.LOOP_STEP_START, time=start, **common),
+            {"event_type": EventType.LOOP_STEP_START, "time": start, **common},
             *[
-                dict(
-                    event_type=EventType.PARAMETER_SET,
-                    time=start,
-                    section_name=self.section,
-                    parameter={"id": param.uid},
-                    iteration=self.iteration,
-                    value=param.values[self.iteration],
-                )
+                {
+                    "event_type": EventType.PARAMETER_SET,
+                    "time": start,
+                    "section_name": self.section,
+                    "parameter": {"id": param.uid},
+                    "iteration": self.iteration,
+                    "value": param.values[self.iteration],
+                }
                 for param in self.sweep_parameters
             ],
+            *sample_prng_events,
             *[e for l in children_events for e in l],
-            dict(event_type=EventType.LOOP_STEP_END, time=end, **common),
+            {"event_type": EventType.LOOP_STEP_END, "time": end, **common},
             *(
-                [dict(event_type=EventType.LOOP_ITERATION_END, time=end, **common)]
+                [{"event_type": EventType.LOOP_ITERATION_END, "time": end, **common}]
                 if self.iteration == 0
                 else []
             ),

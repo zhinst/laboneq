@@ -82,6 +82,7 @@ def analyze_amplitude_register_set_events(
         loop for loop, is_compressed in loop_sections.items() if is_compressed
     ]
 
+    # todo: does this clash with PRNG?
     # Any of these sweep loops contain a compressed loop (the averaging loop).
     # We must emit a dedicated amplitude set command before entering that inner loop.
     critical_loops = [

@@ -97,6 +97,14 @@ class _PlayIntervalData:
     amp_param: str | None
 
 
+@dataclass
+class FeedbackIntervalData:
+    handle: str | None
+    local: bool | None
+    user_register: int | None
+    match_prng: bool
+
+
 def _analyze_branches(events, delay, sampling_rate, playwave_max_hint):
     """For feedback, the pulses in the branches create a single waveform which spans
     the whole duration of the section; also keep the state to be able to split
@@ -109,7 +117,8 @@ def _analyze_branches(events, delay, sampling_rate, playwave_max_hint):
         if ev["event_type"] == "SECTION_START":
             handle = ev.get("handle", None)
             user_register = ev.get("user_register", None)
-            if handle is not None or user_register is not None:
+            match_prng = ev.get("match_prng", False)
+            if handle is not None or user_register is not None or match_prng:
                 begin = length_to_samples(ev["time"] + delay, sampling_rate)
                 # Add the command table interval boundaries as cut points
                 cut_points.add(begin)
@@ -119,7 +128,9 @@ def _analyze_branches(events, delay, sampling_rate, playwave_max_hint):
                         # right time; todo(JL): Use actual min_play_wave
                         begin=begin,
                         end=None,
-                        data=(handle, ev["local"], user_register),
+                        data=FeedbackIntervalData(
+                            handle, ev.get("local"), user_register, match_prng
+                        ),
                     )
                 )
             else:
@@ -735,9 +746,10 @@ def analyze_play_wave_times(
                 start=interval.begin,
                 end=interval.end,
                 params={
-                    "handle": interval.data[0],
-                    "local": interval.data[1],
-                    "user_register": interval.data[2],
+                    "handle": interval.data.handle,
+                    "local": interval.data.local,
+                    "user_register": interval.data.user_register,
+                    "match_prng": interval.data.match_prng,
                     "signal_id": signal_id,
                     "section_name": section_name,
                 },

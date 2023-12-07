@@ -129,6 +129,7 @@ class Match(Section):
     uid: str = None
     handle: str | None = None
     user_register: Optional[int] = None
+    prng_sample: PRNGSample | None = None
     local: Optional[bool] = None
 
 

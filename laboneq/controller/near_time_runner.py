@@ -115,6 +115,7 @@ class NearTimeRunner(AsyncExecutorBase):
             # Skip the pipeliner loop iterations, except the first one - iterated by the pipeliner itself
             return
 
+        await self.controller._devices.update_warning_nodes()
         await self.controller._initialize_awgs(
             nt_step=self.nt_step(), rt_section_uid=uid
         )
@@ -125,7 +126,6 @@ class NearTimeRunner(AsyncExecutorBase):
         await batch_set([*self.user_set_nodes, *nt_sweep_nodes, *step_prepare_nodes])
         self.user_set_nodes.clear()
         self.sweep_params_tracker.clear_for_next_step()
-
         for retry in range(3):  # Up to 3 retries
             if retry > 0:
                 _logger.info("Step retry %s of 3...", retry + 1)
@@ -145,3 +145,4 @@ class NearTimeRunner(AsyncExecutorBase):
                     rt_section_uid=uid,
                     message=traceback.format_exc(),
                 )
+        await self.controller._devices.update_warning_nodes()

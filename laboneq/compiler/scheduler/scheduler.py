@@ -32,7 +32,7 @@ from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.ir.acquire_group_ir import AcquireGroupIR
 from laboneq.compiler.ir.case_ir import CaseIR, EmptyBranchIR
 from laboneq.compiler.ir.interval_ir import IntervalIR
-from laboneq.compiler.ir.ir import IR
+from laboneq.compiler.ir.ir import IR, DeviceIR, SectionInfoIR, SignalIR, PulseDefIR
 from laboneq.compiler.ir.loop_ir import LoopIR
 from laboneq.compiler.ir.loop_iteration_ir import LoopIterationIR
 from laboneq.compiler.ir.match_ir import MatchIR
@@ -191,12 +191,41 @@ class Scheduler:
             )
             self._schedule_to_ir(root_ir, self._root_schedule)
         exp_info = self._experiment_dao.to_experiment_info()
+
+        root_sections_ids = self._experiment_dao.root_rt_sections()
+        has_rt_root = len(root_sections_ids) != 0
+
+        section_signals_with_chidlren = {}
+        root_section_children_ids = None
+        if has_rt_root:
+            root_section_children_ids = self._experiment_dao.all_section_children(
+                root_sections_ids[0]
+            )
+            all_section_ids = [root_sections_ids[0], *root_section_children_ids]
+            for section_id in all_section_ids:
+                section_signals_with_chidlren[
+                    section_id
+                ] = self._experiment_dao.section_signals_with_children(section_id)
+
         return IR(
-            devices=exp_info.devices,
-            signals=exp_info.signals,
+            devices=[DeviceIR.from_device_info(dev) for dev in exp_info.devices],
+            signals=[SignalIR.from_signal_info(sig) for sig in exp_info.signals],
             root=root_ir,
-            global_leader_device=exp_info.global_leader_device,
-            pulse_defs=exp_info.pulse_defs,
+            pulse_defs=[
+                PulseDefIR.from_pulse_def(pulse) for pulse in exp_info.pulse_defs
+            ],
+            root_section=SectionInfoIR.from_section_info(
+                self._experiment_dao.section_info(root_sections_ids[0])
+            )
+            if has_rt_root
+            else None,
+            root_section_children=[
+                SectionInfoIR.from_section_info(self._experiment_dao.section_info(id))
+                for id in root_section_children_ids
+            ]
+            if has_rt_root
+            else None,
+            section_signals_with_chidlren_ids=section_signals_with_chidlren,
         )
 
     def _schedule_root(
@@ -256,11 +285,17 @@ class Scheduler:
                 param.values = param.start + np.arange(section_info.count) * param.step
 
         is_loop = section_info.count is not None
+        if not is_loop:
+            assert not section_info.sample_prng, "only allowed in loops"
         if is_loop:
             schedule = self._schedule_loop(
                 section_id, section_info, current_parameters, sweep_parameters
             )
-        elif section_info.handle is not None or section_info.user_register is not None:
+        elif (
+            section_info.match_handle is not None
+            or section_info.match_user_register is not None
+            or section_info.match_prng
+        ):
             schedule = self._schedule_match(
                 section_id, section_info, current_parameters
             )
@@ -597,6 +632,7 @@ class Scheduler:
             shadow=local_iteration > 0,
             num_repeats=num_repeats,
             sweep_parameters=sweep_parameters,
+            sample_prng=section_info.sample_prng,
         )
 
     def _schedule_children(
@@ -841,9 +877,14 @@ class Scheduler:
         section_info: SectionInfo,
         current_parameters: ParameterStore[str, float],
     ) -> MatchSchedule:
-        assert section_info.handle is not None or section_info.user_register is not None
-        handle: str | None = section_info.handle
-        user_register: Optional[int] = section_info.user_register
+        assert (
+            section_info.match_handle is not None
+            or section_info.match_user_register is not None
+            or section_info.match_prng
+        )
+        handle: str | None = section_info.match_handle
+        user_register: Optional[int] = section_info.match_user_register
+        match_prng = section_info.match_prng
         local: Optional[bool] = section_info.local
 
         dao = self._schedule_data.experiment_dao
@@ -858,7 +899,7 @@ class Scheduler:
         signals = set()
         for c in children_schedules:
             signals.update(c.signals)
-        _, grid = self.grid(*signals)
+        grid = self._system_grid
 
         for i, cs in enumerate(children_schedules):
             if not cs.children:  # empty branch
@@ -889,6 +930,7 @@ class Scheduler:
                     f"Local feedback not possible across devices {acquire_device} and {', '.join(match_devices)}"
                 )
 
+            # todo (PW) is this correct? should it not be 100 ns regardless of the sampling rate?
             compressed_loop_grid = round(
                 (
                     (8 if local else 200)
@@ -916,6 +958,7 @@ class Scheduler:
             play_after=play_after,
             handle=handle,
             user_register=user_register,
+            match_prng=match_prng,
             local=local,
             compressed_loop_grid=compressed_loop_grid,
         )
@@ -935,7 +978,10 @@ class Scheduler:
         section_info = self._schedule_data.experiment_dao.section_info(section_id)
 
         assert section_info.count is None, "case must not be a loop"
-        assert section_info.handle is None and section_info.user_register is None
+        assert (
+            section_info.match_handle is None
+            and section_info.match_user_register is None
+        )
         state = section_info.state
         assert state is not None
 

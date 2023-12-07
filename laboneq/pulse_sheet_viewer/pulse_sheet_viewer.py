@@ -29,12 +29,19 @@ def _get_html_template():
     return template.read_text(encoding="utf-8")
 
 
-def interactive_psv(compiled_experiment: CompiledExperiment, inline=True):
+def interactive_psv(
+    compiled_experiment: CompiledExperiment,
+    inline=True,
+    max_simulation_length: float | None = None,
+):
     name = compiled_experiment.experiment.uid
     html_text = PulseSheetViewer.generate_viewer_html_text(
         compiled_experiment.schedule, name, interactive=True
     )
-    simulation = OutputSimulator(compiled_experiment)
+    simulation = OutputSimulator(
+        compiled_experiment,
+        max_simulation_length=max_simulation_length,
+    )
     exp = compiled_experiment.experiment
     ds = compiled_experiment.device_setup
 
@@ -140,6 +147,7 @@ def show_pulse_sheet(
     compiled_experiment: CompiledExperiment,
     max_events_to_publish: int = 1000,
     interactive: bool = False,
+    max_simulation_length: float | None = None,
 ):
     """Creates the pulse sheet of an experiment as html file.
 
@@ -150,6 +158,9 @@ def show_pulse_sheet(
         compiled_experiment: The compiled experiment to show.
         max_events_to_publish: Number of events to show
         interactive: Launch pulse sheet viewer in interactive mode?
+        max_simulation_length: In interactive mode displays signals
+            up to this time in seconds; no signals beyond this time
+            are shown. Default: 10ms.
 
     Returns:
         link (IPython link, filename or None):
@@ -194,4 +205,7 @@ def show_pulse_sheet(
         except ImportError:
             return filename
     else:
-        interactive_psv(compiled_experiment=compiled_experiment)
+        interactive_psv(
+            compiled_experiment=compiled_experiment,
+            max_simulation_length=max_simulation_length,
+        )

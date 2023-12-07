@@ -24,8 +24,17 @@ from laboneq.dsl.calibration import (
     SignalCalibration,
     units,
 )
-from laboneq.dsl.device import DeviceSetup
+from laboneq.dsl.device import create_connection, DeviceSetup
 from laboneq.dsl.device.device_setup_helper import DeviceSetupHelper
+from laboneq.dsl.device.instruments import (
+    SHFQC,
+    SHFPPC,
+    SHFSG,
+    SHFQA,
+    HDAWG,
+    UHFQA,
+    PQSC,
+)
 from laboneq.dsl.enums import (
     AcquisitionType,
     AveragingMode,

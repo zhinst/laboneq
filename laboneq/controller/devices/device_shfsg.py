@@ -8,7 +8,6 @@ from typing import Any, Iterator
 
 import numpy
 from numpy import typing as npt
-
 from laboneq.controller.attribute_value_tracker import (
     AttributeName,
     DeviceAttribute,
@@ -54,6 +53,7 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
         self._emit_trigger = False
         self.pipeliner_set_node_base(f"/{self.serial}/sgchannels")
         self._has_opt_rtr = False
+        self._warning_nodes = {}
 
     @property
     def dev_repr(self) -> str:
@@ -409,7 +409,6 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
     def _collect_output_router_initialization_nodes(
         self, outputs: list[IO]
     ) -> list[DaqNodeSetAction]:
-        # TODO: Check for overflow warnings: sgchannels/n/outputrouter/overflowcount
         nodes: list[DaqNodeSetAction] = []
         active_output_routers: set[int] = set()
         for output in outputs:
@@ -478,6 +477,25 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
                     )
         return nodes
 
+    def _collect_configure_oscillator_nodes(self, channel: int, oscillator_idx: int):
+        return [
+            DaqNodeSetAction(
+                self._daq,
+                f"/{self.serial}/sgchannels/{channel}/sines/0/oscselect",
+                oscillator_idx,
+            ),
+            DaqNodeSetAction(
+                self._daq,
+                f"/{self.serial}/sgchannels/{channel}/sines/0/harmonic",
+                1,
+            ),
+            DaqNodeSetAction(
+                self._daq,
+                f"/{self.serial}/sgchannels/{channel}/sines/0/phaseshift",
+                0,
+            ),
+        ]
+
     def collect_initialization_nodes(
         self,
         device_recipe_data: DeviceRecipeData,
@@ -487,7 +505,6 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
         _logger.debug("%s: Initializing device...", self.dev_repr)
 
         nodes_to_initialize_output: list[DaqNodeSetAction] = []
-
         outputs = initialization.outputs or []
         for output in outputs:
             self._warn_for_unsupported_param(
@@ -529,9 +546,20 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
                 DaqNodeSetAction(
                     self._daq,
                     f"/{self.serial}/sgchannels/{output.channel}/awg/modulation/enable",
-                    1 if output.modulation else 0,
+                    1,
                 )
             )
+
+            if not output.modulation:
+                # We still use the output modulation (`awg/modulation/enable`), but we
+                # set the oscillator to 0 Hz.
+                nodes_to_initialize_output.extend(
+                    self._collect_configure_oscillator_nodes(output.channel, 0)
+                )
+                osc_freq_path = self._make_osc_path(output.channel, 0)
+                nodes_to_initialize_output.append(
+                    DaqNodeSetAction(self._daq, osc_freq_path, 0.0)
+                )
 
             if self._is_full_channel(output.channel):
                 if output.marker_mode is None or output.marker_mode == "TRIGGER":
@@ -584,26 +612,8 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
         # via the command table, and the oscselect node is ignored. Therefore it can be set to
         # any oscillator.
         for ch, osc_idx in osc_selects.items():
-            nodes_to_initialize_output.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/sgchannels/{ch}/sines/0/oscselect",
-                    osc_idx,
-                )
-            )
-            nodes_to_initialize_output.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/sgchannels/{ch}/sines/0/harmonic",
-                    1,
-                )
-            )
-            nodes_to_initialize_output.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/sgchannels/{ch}/sines/0/phaseshift",
-                    0,
-                )
+            nodes_to_initialize_output.extend(
+                self._collect_configure_oscillator_nodes(ch, osc_idx)
             )
         return nodes_to_initialize_output
 
@@ -852,3 +862,24 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
                     )
                 )
         return reset_nodes
+
+    def collect_warning_nodes(self) -> list[str]:
+        if self._has_opt_rtr:
+            return [
+                f"/{self.serial}/sgchannels/{ch}/outputrouter/overflowcount"
+                for ch in range(self._outputs)
+            ]
+        return []
+
+    def update_warning_nodes(self, node_values: dict[str, Any]):
+        for idx, node in enumerate(self.collect_warning_nodes()):
+            value = node_values.get(node)
+            prev = self._warning_nodes.get(node)
+            if value is not None and prev is not None and value > prev:
+                _logger.warning(
+                    "%s: Output channel %s Output Router overflow count: %s",
+                    self.dev_repr,
+                    idx,
+                    value - prev,
+                )
+            self._warning_nodes[node] = value

@@ -55,6 +55,7 @@ from laboneq.data.experiment_description import (
     Section,
     SignalOperation,
     Sweep,
+    PrngLoop,
 )
 from laboneq.data.parameter import LinearSweepParameter, Parameter, SweepParameter
 from laboneq.data.setup_description import (
@@ -598,6 +599,12 @@ class ExperimentInfoBuilder:
         if pulses == [None] and markers:
             # generate a zero amplitude pulse to play the markers
             # TODO: generate a proper constant pulse here
+
+            if any(m.start is None or m.length is None for m in markers):
+                raise RuntimeError(
+                    f"Please specify a start and length for a play command without pulse and enabled marker(s) in section {section.uid}"
+                )
+
             pulses = [pulse] = [SimpleNamespace()]
             pulse.uid = next(auto_pulse_id)
             pulse.function = "const"
@@ -813,10 +820,11 @@ class ExperimentInfoBuilder:
         reset_oscillator_phase = (
             getattr(section, "reset_oscillator_phase", None) or False
         )
-        handle = getattr(section, "handle", None)
+        match_handle = getattr(section, "handle", None)
         state = getattr(section, "state", None)
         local = getattr(section, "local", None)
-        user_register = getattr(section, "user_register", None)
+        match_user_register = getattr(section, "user_register", None)
+        match_prng_sample = getattr(section, "prng_sample", None)
         assert section.trigger is not None
         triggers = [
             {"signal_id": k, "state": v["state"]} for k, v in section.trigger.items()
@@ -829,7 +837,7 @@ class ExperimentInfoBuilder:
             on_system_grid = True
 
         draw_from_prng = False
-        if hasattr(section, "prng_sample"):
+        if isinstance(section, PrngLoop):
             prng_sample = section.prng_sample
             count = prng_sample.count
             draw_from_prng = True
@@ -851,8 +859,9 @@ class ExperimentInfoBuilder:
             alignment=align,
             count=count,
             chunk_count=chunk_count,
-            handle=handle,
-            user_register=user_register,
+            match_handle=match_handle,
+            match_user_register=match_user_register,
+            match_prng=(match_prng_sample is not None),
             state=state,
             local=local,
             execution_type=execution_type,
@@ -866,7 +875,7 @@ class ExperimentInfoBuilder:
             play_after=play_after,
             parameters=section_parameters,
             prng=prng_seed_info,
-            draw_prng=draw_from_prng,
+            sample_prng=draw_from_prng,
         )
 
         self._section_operations_to_add.append(
@@ -1046,7 +1055,7 @@ class ExperimentInfoBuilder:
         if (
             parent.count is not None
             and parent.averaging_mode is None
-            and not parent.draw_prng  # PRNG loop is considered to be inside shot
+            and not parent.sample_prng  # PRNG loop is considered to be inside shot
         ):
             # this section is a sweep (aka loop but not averaging)
             return parent

@@ -17,6 +17,7 @@ class MatchIR(SectionIR):
     handle: str | None
     user_register: Optional[int]
     local: Optional[bool]
+    match_prng: bool
 
     def generate_event_list(
         self,
@@ -34,9 +35,13 @@ class MatchIR(SectionIR):
             return []
         section_start_event = events[0]
         assert section_start_event["event_type"] == EventType.SECTION_START
-        section_start_event["handle"] = self.handle
-        section_start_event["user_register"] = self.user_register
-        section_start_event["local"] = self.local
+        if self.handle is not None:
+            section_start_event["handle"] = self.handle
+            section_start_event["local"] = self.local
+        if self.user_register is not None:
+            section_start_event["user_register"] = self.user_register
+        if self.match_prng:
+            section_start_event["match_prng"] = True
 
         return events
 

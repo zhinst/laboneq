@@ -9,6 +9,7 @@ from typing import List, Optional, Set
 
 import numpy as np
 from numpy.typing import ArrayLike
+from laboneq.dsl.device.io_units.physical_channel import PhysicalChannelType
 
 from laboneq.simulator.seqc_parser import (
     CommandTableEntryInfo,
@@ -144,9 +145,11 @@ class WaveScroller:
         ch: List[int],
         sim_targets: SimTarget,
         sim: SeqCSimulation,
+        channel_type: PhysicalChannelType = PhysicalChannelType.IQ_CHANNEL,
     ):
         self.ch = ch
         self.sim = sim
+        self.channel_type = channel_type
 
         self.is_shfqa = sim.device_type == "SHFQA"
         self.is_spectroscopy = sim.is_spectroscopy
@@ -284,21 +287,29 @@ class WaveScroller:
 
         markers = event.args[2] if len(event.args) > 2 else {}
 
-        if markers.get("marker1"):
+        if markers.get("marker1") and not (
+            self.channel_type == PhysicalChannelType.RF_CHANNEL and self.ch[0] % 2 == 1
+        ):
+            wave_arg_pos = (
+                len(event.args[0]) - 2
+                if event.args[2]["marker2"]
+                else len(event.args[0]) - 1
+            )
             _slice_copy(
                 self.marker_snippet,
                 snippet_start_samples,
-                self.sim.waves[event.args[0][2]],
+                self.sim.waves[event.args[0][wave_arg_pos]],
                 event.start_samples,
                 event.length_samples,
             )
 
-        if markers.get("marker2"):
-            wave_arg_pos = 3 if event.args[2]["marker1"] else 2
+        if markers.get("marker2") and not (
+            self.channel_type == PhysicalChannelType.RF_CHANNEL and self.ch[0] % 2 == 0
+        ):
             _slice_add(
                 self.marker_snippet,
                 snippet_start_samples,
-                1j * self.sim.waves[event.args[0][wave_arg_pos]],
+                1j * self.sim.waves[event.args[0][len(event.args[0]) - 1]],
                 event.start_samples,
                 event.length_samples,
             )

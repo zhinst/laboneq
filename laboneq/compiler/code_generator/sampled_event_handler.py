@@ -142,7 +142,9 @@ class SampledEventHandler:
         self.last_event: Optional[AWGEvent] = None
         self.match_parent_event: Optional[AWGEvent] = None
         self.command_table_match_offset = None
-        self.match_command_table_entries: dict[int, tuple] = {}  # For feedback match
+        self.match_command_table_entries: dict[
+            int, tuple
+        ] = {}  # For feedback or prng match
         self.match_seqc_generators: dict[int, SeqCGenerator] = {}  # user_register match
         self.current_sequencer_step = 0 if use_current_sequencer_step else None
         self.sequencer_step = 8  # todo(JL): Is this always the case, and how to get it?
@@ -207,11 +209,17 @@ class SampledEventHandler:
         else:
             if handle is not None:
                 self.handle_playwave_on_feedback(sampled_event, signature, wave_index)
-            else:
+                return True
+            user_register = self.match_parent_event.params.get("user_register")
+            if user_register is not None:
                 self.handle_playwave_on_user_register(
                     signature, sig_string, wave_index, play_wave_channel
                 )
-        return True
+                return True
+            match_prng = self.match_parent_event.params.get("match_prng", False)
+            assert match_prng
+            self.handle_playwave_on_prng(sampled_event, signature, wave_index)
+            return True
 
     def get_wave_index(self, signature, sig_string, play_wave_channel):
         signal_type_for_wave_index = (
@@ -345,6 +353,62 @@ class SampledEventHandler:
             self.match_parent_event.params["handle"], FeedbackConnection(None)
         ).drive.add(signal_id)
 
+    def handle_playwave_on_user_register(
+        self,
+        signature: PlaybackSignature,
+        sig_string: str,
+        wave_index: int | None,
+        play_wave_channel: int | None,
+    ):
+        assert self.match_parent_event is not None
+        user_register = self.match_parent_event.params["user_register"]
+        state = signature.state
+        assert state is not None
+        assert user_register is not None
+        branch_generator = self.match_seqc_generators.setdefault(state, SeqCGenerator())
+        if self.use_command_table:
+            ct_index = self.command_table_tracker.lookup_index_by_signature(signature)
+            if ct_index is None:
+                ct_index = self.command_table_tracker.create_entry(
+                    signature, wave_index
+                )
+            comment = self._make_command_table_comment(signature)
+            branch_generator.add_command_table_execution(ct_index, comment=comment)
+        else:
+            branch_generator.add_play_wave_statement(
+                self.device_type,
+                self.awg.signal_type.value,
+                sig_string,
+                play_wave_channel,
+            )
+
+    def handle_playwave_on_prng(
+        self,
+        sampled_event,
+        signature: PlaybackSignature,
+        wave_index: int | None,
+    ):
+        assert self.use_command_table
+        assert self.match_parent_event is not None
+        state = signature.state
+
+        if state in self.match_command_table_entries:
+            if self.match_command_table_entries[state] != (
+                signature,
+                wave_index,
+                sampled_event.start - self.match_parent_event.start,
+            ):
+                raise LabOneQException(
+                    f"Duplicate state {state} with different pulses for PRNG found in section "
+                    f"{self.match_parent_event.params['handle']} found."
+                )
+        else:
+            self.match_command_table_entries[state] = (
+                signature,
+                wave_index,
+                sampled_event.start - self.match_parent_event.start,
+            )
+
     @staticmethod
     def _make_command_table_comment(signature: PlaybackSignature):
         parts = []
@@ -377,35 +441,6 @@ class SampledEventHandler:
             parts.append(signature.waveform.signature_string())
 
         return "; ".join(parts)
-
-    def handle_playwave_on_user_register(
-        self,
-        signature: PlaybackSignature,
-        sig_string: str,
-        wave_index: int | None,
-        play_wave_channel: int | None,
-    ):
-        assert self.match_parent_event is not None
-        user_register = self.match_parent_event.params["user_register"]
-        state = signature.state
-        assert state is not None
-        assert user_register is not None
-        branch_generator = self.match_seqc_generators.setdefault(state, SeqCGenerator())
-        if self.use_command_table:
-            ct_index = self.command_table_tracker.lookup_index_by_signature(signature)
-            if ct_index is None:
-                ct_index = self.command_table_tracker.create_entry(
-                    signature, wave_index
-                )
-            comment = self._make_command_table_comment(signature)
-            branch_generator.add_command_table_execution(ct_index, comment=comment)
-        else:
-            branch_generator.add_play_wave_statement(
-                self.device_type,
-                self.awg.signal_type.value,
-                sig_string,
-                play_wave_channel,
-            )
 
     def handle_playhold(
         self,
@@ -816,26 +851,32 @@ class SampledEventHandler:
 
         seed = sampled_event.params["seed"]
         prng_range = sampled_event.params["range"]
+        section = sampled_event.params["section"]
 
-        assert seed is not None or prng_range is not None
+        assert seed is not None and prng_range is not None
 
-        # todo: reserve command table entries? otherwise add offset in sequencer
-
-        if seed is not None:
-            self.seqc_tracker.add_function_call_statement(
-                name="setPRNGSeed", args=[seed], deferred=False
+        if self.seqc_tracker.prng_tracker() is not None:
+            raise LabOneQException(
+                f"In section '{section}': Cannot seed PRNG, it is already allocated in this context"
             )
-        if prng_range is not None:
-            self.seqc_tracker.add_function_call_statement(
-                name="setPRNGRange", args=[0, prng_range], deferred=False
-            )
+
+        self.seqc_tracker.setup_prng(seed=seed, prng_range=prng_range)
+
+    def handle_sample_prng(self, _sampled_event: AWGEvent):
+        if not self.device_type.has_prng:
+            return
+
+        self.seqc_tracker.sample_prng(self.declarations_generator)
 
     def close_event_list(self):
         if self.match_parent_event is not None:
-            if self.match_parent_event.params["handle"] is not None:
+            params = self.match_parent_event.params
+            if params["handle"] is not None:
                 self.close_event_list_for_handle()
-            elif self.match_parent_event.params["user_register"] is not None:
+            elif params["user_register"] is not None:
                 self.close_event_list_for_user_register()
+            elif params["match_prng"]:
+                self.close_event_list_for_prng_match()
 
     def close_event_list_for_handle(self):
         assert self.match_parent_event is not None
@@ -865,6 +906,7 @@ class SampledEventHandler:
                     )
         else:
             self.command_table_match_offset = len(self.command_table_tracker)
+            # Allocate command table entries
             for idx, (signature, wave_index, _) in sorted_ct_entries:
                 id2 = self.command_table_tracker.create_entry(signature, wave_index)
                 assert self.command_table_match_offset + idx == id2
@@ -931,6 +973,45 @@ class SampledEventHandler:
         self.seqc_tracker.current_time = match_event.end
         self.match_parent_event = None
 
+    def close_event_list_for_prng_match(self):
+        assert self.match_parent_event is not None
+        section = self.match_parent_event.params["section_name"]
+        sorted_ct_entries = sorted(self.match_command_table_entries.items())
+        first = sorted_ct_entries[0][0]
+        last = sorted_ct_entries[-1][0]
+        if first != 0 or last - first + 1 != len(sorted_ct_entries):
+            raise LabOneQException(
+                f"States missing in match statement (section {section}). First "
+                f"state: {first}, last state: {last}, number of states: "
+                f"{len(sorted_ct_entries)}, expected {last+1}, starting from 0."
+            )
+
+        command_table_match_offset = len(self.command_table_tracker)
+        # Allocate command table entries
+        for idx, (signature, wave_index, _) in sorted_ct_entries:
+            id2 = self.command_table_tracker.create_entry(signature, wave_index)
+            assert command_table_match_offset + idx == id2
+
+        prng_tracker = self.seqc_tracker.prng_tracker()
+        if prng_tracker.offset is not None:
+            # use the PRNG output range to do the offset for us
+            prng_tracker.offset = command_table_match_offset
+            command_table_match_offset = 0
+            prng_tracker.commit()
+
+        ev = self.match_parent_event
+        start = ev.start
+        assert start >= self.seqc_tracker.current_time
+        self.seqc_tracker.add_required_playzeros(ev)
+        self.seqc_tracker.add_prng_match_command_table_execution(
+            command_table_match_offset
+        )
+        self.seqc_tracker.add_timing_comment(ev.end)
+        self.seqc_tracker.flush_deferred_function_calls()
+        self.seqc_tracker.current_time = self.match_parent_event.end
+
+        self.match_parent_event = None
+
     def handle_sampled_event(self, sampled_event: AWGEvent):
         signature = sampled_event.type
         if signature == AWGEventType.PLAY_WAVE:
@@ -969,6 +1050,8 @@ class SampledEventHandler:
             self.handle_change_oscillator_phase(sampled_event)
         elif signature == AWGEventType.SEED_PRNG:
             self.handle_setup_prng(sampled_event)
+        elif signature == AWGEventType.SAMPLE_PRNG:
+            self.handle_sample_prng(sampled_event)
         self.last_event = sampled_event
 
     def handle_sampled_event_list(self):

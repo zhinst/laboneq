@@ -54,10 +54,10 @@ dependencies = [
     "attrs",
     "sortedcontainers",
     "typing_extensions",
-    "zhinst-core~=23.10.49450",
-    "zhinst-toolkit~=0.6.0",
-    "zhinst-utils==0.3.5",
-    "nest_asyncio",
+    "zhinst-core~=23.10.51605",
+    "zhinst-toolkit~=0.6.2",
+    "zhinst-utils==0.3.6",
+    "unsync==1.4.0",
 ]
 
 [project.urls]
@@ -154,3 +154,19 @@ max-complexity = 10
 ruff = [
     "--ignore=F403"
 ]
+
+[[tool.mypy.overrides]]
+module = [
+    "scipy.*",
+    "sortedcollections",
+    "sortedcontainers",
+    "intervaltree",
+    "pybase64",
+    "engineering_notation",
+    "jsonschema.*",
+    "pycparser.*",
+    "sqlitedict",
+    "openpulse",
+    "cycler"
+]
+ignore_missing_imports = true

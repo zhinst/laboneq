@@ -1,28 +1,29 @@
 # Copyright 2023 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from unsync import unsync
+from typing import Awaitable, TypeVar, Callable, Any
 import asyncio
 
-_event_loop_patched = False
+
+T = TypeVar("T")
 
 
-# Required to keep sync interface callable from Jupyter Notebooks
-# See https://blog.jupyter.org/ipython-7-0-async-repl-a35ce050f7f7
-def _enable_event_loop_nesting_if_necessary():
-    global _event_loop_patched
-    if _event_loop_patched:
-        return
+def run_sync(func: Callable[[Any], Awaitable[T]], *args, **kwargs) -> T:
+    """Run callable asynchronous object synchronously.
+
+    Args:
+        func: Asynchronous callable to be called with `*args` and `*kwargs`
+    """
     try:
         asyncio.get_running_loop()
-        # Running event loop detected, nesting is necessary
-        import nest_asyncio
-
-        nest_asyncio.apply()
+        # Running event loop detected
+        need_nesting = True
     except RuntimeError:
-        pass  # No event loop is running
-    _event_loop_patched = True
+        # No event loop is running
+        need_nesting = False
 
-
-def run_async(coro):
-    _enable_event_loop_nesting_if_necessary()
-    return asyncio.run(coro)
+    if need_nesting:
+        return unsync(func)(*args, **kwargs).result()
+    else:
+        return asyncio.run(func(*args, **kwargs))

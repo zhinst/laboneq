@@ -13,7 +13,7 @@ from laboneq.controller.communication import (
 )
 from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.devices.zi_node_monitor import (
-    Command,
+    Setting,
     Condition,
     NodeControlBase,
     Response,
@@ -56,7 +56,7 @@ class DevicePQSC(DeviceZI):
             Condition(
                 f"/{self.serial}/system/clocks/referenceclock/in/freq", expected_freq
             ),
-            Command(f"/{self.serial}/system/clocks/referenceclock/in/source", source),
+            Setting(f"/{self.serial}/system/clocks/referenceclock/in/source", source),
             Response(
                 f"/{self.serial}/system/clocks/referenceclock/in/sourceactual", source
             ),

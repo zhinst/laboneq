@@ -243,13 +243,11 @@ class DeviceZI:
             return
         actual_opts = "/".join([self.dev_type, *self.dev_opts]).upper()
         if self.options.expected_installed_options is None:
-            # TODO: enable this warning when device options in setup descriptor are documented
-            # _logger.warning(
-            #     f"{self.dev_repr}: Include the device options '{actual_opts}' in the"
-            #     f" device setup ('options' field of the 'instruments' list in the device"
-            #     f" setup descriptor). This will become a strict requirement in the future."
-            # )
-            pass
+            _logger.warning(
+                f"{self.dev_repr}: Include the device options '{actual_opts}' in the"
+                f" device setup ('options' field of the 'instruments' list in the device"
+                f" setup descriptor). This will become a strict requirement in the future."
+            )
         elif actual_opts != self.options.expected_installed_options.upper():
             _logger.warning(
                 f"{self.dev_repr}: The expected device options specified in the device"
@@ -426,10 +424,12 @@ class DeviceZI:
 
     def _nodes_to_monitor_impl(self):
         nodes = []
+        nodes.extend([node.path for node in self.load_factory_preset_control_nodes()])
         nodes.extend([node.path for node in self.clock_source_control_nodes()])
         nodes.extend([node.path for node in self.system_freq_control_nodes()])
         nodes.extend([node.path for node in self.rf_offset_control_nodes()])
         nodes.extend([node.path for node in self.zsync_link_control_nodes()])
+        nodes.extend(self.collect_warning_nodes())
         return nodes
 
     def update_clock_source(self, force_internal: bool | None):
@@ -438,7 +438,7 @@ class DeviceZI:
     def update_rf_offsets(self, rf_offsets: dict[int, float]):
         self._rf_offsets = rf_offsets
 
-    def collect_load_factory_preset_nodes(self):
+    def load_factory_preset_control_nodes(self) -> list[NodeControlBase]:
         return []
 
     def clock_source_control_nodes(self) -> list[NodeControlBase]:
@@ -513,7 +513,7 @@ class DeviceZI:
     ) -> list[DaqNodeAction]:
         return []
 
-    def get_measurement_data(
+    async def get_measurement_data(
         self,
         channel: int,
         acquisition_type: AcquisitionType,
@@ -523,7 +523,7 @@ class DeviceZI:
     ):
         return None  # default -> no results available from the device
 
-    def get_input_monitor_data(self, channel: int, num_results: int):
+    async def get_input_monitor_data(self, channel: int, num_results: int):
         return None  # default -> no results available from the device
 
     def conditions_for_execution_ready(self, with_pipeliner: bool) -> dict[str, Any]:
@@ -920,7 +920,7 @@ class DeviceZI:
     def collect_internal_start_execution_nodes(self):
         return []
 
-    def fetch_errors(self):
+    async def fetch_errors(self):
         error_node = f"/{self.serial}/raw/error/json/errors"
         all_errors = self._daq.get_raw(error_node)
         return all_errors[error_node]
@@ -934,3 +934,9 @@ class DeviceZI:
                 caching_strategy=CachingStrategy.NO_CACHE,
             )
         ]
+
+    def collect_warning_nodes(self) -> list[str]:
+        return []
+
+    def update_warning_nodes(self, node_values: dict[str, Any]):
+        pass

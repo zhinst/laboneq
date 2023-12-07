@@ -246,14 +246,13 @@ class Session:
                 The connection state of the session.
         """
         self._ignore_version_mismatch = ignore_version_mismatch
-        self._reset_devices = reset_devices
         if (
             self._connection_state.connected
             and self._connection_state.emulated != do_emulation
         ):
             self.disconnect()
         self._connection_state.emulated = do_emulation
-        LabOneQFacade.connect(self)
+        LabOneQFacade.connect(self, reset_devices)
         self._connection_state.connected = True
         return self._connection_state
 

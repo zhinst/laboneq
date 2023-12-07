@@ -241,6 +241,7 @@ def _compute_start_with_latency(
 class MatchSchedule(SectionSchedule):
     handle: str | None
     user_register: Optional[int]
+    match_prng: bool
     local: Optional[bool]
 
     def __attrs_post_init__(self):

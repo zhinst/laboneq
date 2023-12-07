@@ -29,6 +29,7 @@ from laboneq.dsl.experiment.section import (
     PRNGSetup,
     PRNGLoop,
 )
+from laboneq.dsl.prng import PRNGSample
 
 
 class SectionContext(Context):
@@ -220,6 +221,7 @@ class MatchSectionContextManager(SectionContextManagerBase):
         self,
         handle: str | None = None,
         user_register: int | None = None,
+        prng_sample: PRNGSample | None = None,
         uid=None,
         play_after=None,
         local=None,
@@ -233,6 +235,8 @@ class MatchSectionContextManager(SectionContextManagerBase):
             kwargs["handle"] = handle
         if user_register is not None:
             kwargs["user_register"] = user_register
+        if prng_sample is not None:
+            kwargs["prng_sample"] = prng_sample
         if local is not None:
             kwargs["local"] = local
         super().__init__(kwargs=kwargs)

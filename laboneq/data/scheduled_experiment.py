@@ -108,12 +108,7 @@ class ScheduledExperiment:
     artifacts: CompilerArtifact | dict[int, CompilerArtifact] = None
 
     def __getattr__(self, attr):
-        if hasattr(self.artifacts, attr):
-            return getattr(self.artifacts, attr)
-        else:
-            raise AttributeError(
-                f"{self.artifacts.__class__.__name__} does not have attribute {attr}"
-            )
+        return getattr(self.artifacts, attr)
 
     def __copy__(self):
         new_artefacts = copy.copy(self.artifacts)

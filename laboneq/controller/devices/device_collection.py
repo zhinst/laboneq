@@ -25,11 +25,12 @@ from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.devices.zi_node_monitor import (
     ConditionsChecker,
     NodeControlBase,
-    NodeControlKind,
     ResponseWaiter,
     filter_commands,
+    filter_settings,
     filter_conditions,
     filter_responses,
+    filter_wait_conditions,
 )
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
@@ -47,7 +48,6 @@ class DeviceCollection:
         target_setup: TargetSetup,
         dry_run: bool,
         ignore_version_mismatch: bool = False,
-        reset_devices: bool = False,
     ):
         self._ds = DeviceSetupDAO(
             target_setup=target_setup,
@@ -56,7 +56,6 @@ class DeviceCollection:
         )
         self._dry_run = dry_run
         self._ignore_version_mismatch = ignore_version_mismatch
-        self._reset_devices = reset_devices
         self._daqs: dict[str, DaqWrapper] = {}
         self._devices: dict[str, DeviceZI] = {}
         self._monitor_started = False
@@ -98,15 +97,13 @@ class DeviceCollection:
                 return dev
         raise LabOneQControllerException(f"Could not find device for the path '{path}'")
 
-    async def connect(self):
+    async def connect(self, reset_devices: bool = False):
         await self._prepare_daqs()
         self._prepare_devices()
         for device in self._devices.values():
             await device.connect()
-        if self._reset_devices:
-            await self.load_factory_preset()
         self.start_monitor()
-        await self.configure_device_setup()
+        await self.configure_device_setup(reset_devices)
 
     async def _configure_parallel(
         self,
@@ -114,57 +111,73 @@ class DeviceCollection:
         control_nodes_getter: Callable[[DeviceZI], list[NodeControlBase]],
         config_name: str,
     ):
+        conditions_checker = ConditionsChecker()
         response_waiter = ResponseWaiter()
         set_nodes: list[DaqNodeSetAction] | None = None
-        for device in devices:
-            dev_nodes = control_nodes_getter(device)
 
-            conditions_checker = ConditionsChecker()
-            conditions_checker.add(
-                target=device.daq.node_monitor,
-                conditions={n.path: n.value for n in filter_conditions(dev_nodes)},
-            )
-            failed = conditions_checker.check_all()
-            if not failed:
-                continue
-
-            failed_paths = [path for path, _ in failed]
-            wait_conditions = {
-                node.path: node.value
-                for node in dev_nodes
-                if node.kind == NodeControlKind.WaitCondition
-                and node.path in failed_paths
-            }
-            if wait_conditions:
-                response_waiter.add(
-                    target=device.daq.node_monitor,
-                    conditions=wait_conditions,
-                )
-
+        def _add_set_nodes(daq, nodes: list[NodeControlBase] | None):
+            nonlocal set_nodes
+            if nodes is None or len(nodes) == 0:
+                return
             if set_nodes is None:
                 set_nodes = []
-            set_nodes.extend(
-                [
+
+            for node in nodes:
+                set_nodes.append(
                     DaqNodeSetAction(
-                        daq=device.daq,
+                        daq=daq,
                         path=node.path,
                         value=node.raw_value,
                         caching_strategy=CachingStrategy.NO_CACHE,
                     )
-                    for node in filter_commands(dev_nodes)
-                ]
-            )
-            response_waiter.add(
-                target=device.daq.node_monitor,
-                conditions={n.path: n.value for n in filter_responses(dev_nodes)},
-            )
+                )
 
-        if set_nodes is None:
+        for device in devices:
+            dev_nodes = control_nodes_getter(device)
+
+            commands = filter_commands(dev_nodes)
+            if len(commands) > 0:
+                # 1a. Unconditional command
+                _add_set_nodes(device.daq, filter_commands(dev_nodes))
+                response_waiter.add(
+                    target=device.daq.node_monitor,
+                    conditions={n.path: n.value for n in filter_responses(dev_nodes)},
+                )
+            else:
+                # 1b. Verify if device is already configured as desired
+                dev_conditions_checker = ConditionsChecker()
+                dev_conditions_checker.add(
+                    target=device.daq.node_monitor,
+                    conditions={n.path: n.value for n in filter_conditions(dev_nodes)},
+                )
+                conditions_checker.add_from(dev_conditions_checker)
+                failed = dev_conditions_checker.check_all()
+                if not failed:
+                    continue
+
+                failed_paths = [path for path, _ in failed]
+                failed_nodes = [n for n in dev_nodes if n.path in failed_paths]
+                response_waiter.add(
+                    target=device.daq.node_monitor,
+                    conditions={
+                        n.path: n.value for n in filter_wait_conditions(failed_nodes)
+                    },
+                )
+
+                _add_set_nodes(device.daq, filter_settings(dev_nodes))
+                response_waiter.add(
+                    target=device.daq.node_monitor,
+                    conditions={n.path: n.value for n in filter_responses(dev_nodes)},
+                )
+
+        if set_nodes is None:  # All devices already configured as desired?
             return
 
+        # 2. Apply any necessary node changes (which may be empty)
         if set_nodes:
             await batch_set(set_nodes)
 
+        # 3. Wait for responses to the changes in step 2 and settling of conditions resulting from earlier config stages
         timeout = 10
         if not response_waiter.wait_all(timeout=timeout):
             raise LabOneQControllerException(
@@ -173,6 +186,7 @@ class DeviceCollection:
                 f"Not fulfilled:\n{response_waiter.remaining_str()}"
             )
 
+        # 4. Recheck all the conditions, as some may have potentially changed as a result of step 2
         failed = conditions_checker.check_all()
         if failed:
             raise LabOneQControllerException(
@@ -181,8 +195,22 @@ class DeviceCollection:
                 f"Errors:\n{conditions_checker.failed_str(failed)}"
             )
 
-    async def configure_device_setup(self):
+    async def configure_device_setup(self, reset_devices: bool):
         _logger.info("Configuring the device setup")
+
+        self.flush_monitor()  # Ensure status is up-to-date
+
+        if reset_devices:
+            await self._configure_parallel(
+                [d for d in self._devices.values() if not d.is_secondary],
+                lambda d: cast(DeviceZI, d).load_factory_preset_control_nodes(),
+                "Reset to factory defaults",
+            )
+            self.flush_monitor()  # Consume any updates resulted from the above reset
+            # TODO(2K): Error check
+            for daq in self._daqs.values():
+                daq.clear_cache()
+
         configs = {
             "Reference clock switching": lambda d: cast(
                 DeviceZI, d
@@ -197,8 +225,6 @@ class DeviceCollection:
                 DeviceZI, d
             ).zsync_link_control_nodes(),
         }
-
-        self.flush_monitor()  # Ensure status is up-to-date
 
         leaders = [dev for _, dev in self.leaders]
         if len(leaders) == 0:  # Happens for standalone devices
@@ -312,14 +338,6 @@ class DeviceCollection:
             daq.node_monitor.reset()
         self._monitor_started = False
 
-    async def load_factory_preset(self):
-        reset_nodes = []
-        for device in self._devices.values():
-            reset_nodes += device.collect_load_factory_preset_nodes()
-        await batch_set(reset_nodes)
-        for daq in self._daqs.values():
-            daq.clear_cache()
-
     def _validate_dataserver_device_fw_compatibility(self):
         """Validate dataserver and device firmware compatibility."""
         if not self._dry_run and not self._ignore_version_mismatch:
@@ -351,7 +369,6 @@ class DeviceCollection:
             device.remove_all_links()
             updated_devices[device_qualifier.uid] = device
         self._devices = updated_devices
-
         # Update device links and leader/follower status
         for device_qualifier in self._ds.instruments:
             from_dev = self._devices[device_qualifier.uid]
@@ -424,10 +441,11 @@ class DeviceCollection:
             updated_daqs[server_uid] = daq
         self._daqs = updated_daqs
 
-    def check_errors(self, raise_on_error: bool = True) -> str | None:
+    async def check_errors(self, raise_on_error: bool = True) -> str | None:
         all_errors: list[str] = []
         for _, device in self.all:
-            all_errors.extend(decode_errors(device.fetch_errors(), device.dev_repr))
+            dev_errors = await device.fetch_errors()
+            all_errors.extend(decode_errors(dev_errors, device.dev_repr))
         if len(all_errors) == 0:
             return None
         all_messages = "\n".join(all_errors)
@@ -435,6 +453,18 @@ class DeviceCollection:
         if raise_on_error:
             raise LabOneQControllerException(msg)
         return msg
+
+    async def update_warning_nodes(self):
+        for daq in self._daqs.values():
+            daq.node_monitor.poll()
+
+        for _, device in self.all:
+            device.update_warning_nodes(
+                {
+                    node: daq.node_monitor.get_last(node)
+                    for node in device.collect_warning_nodes()
+                }
+            )
 
 
 class DeviceErrorSeverity(Enum):

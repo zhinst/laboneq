@@ -3,7 +3,7 @@
 
 from dataclasses import dataclass, field
 import itertools
-from laboneq.core.utilities.prng import prng as prng_sim
+from laboneq.core.utilities.prng import PRNG as prng_sim
 
 import numpy as np
 
@@ -27,7 +27,7 @@ class PRNG:
 
     def __iter__(self):
         """Construct an iterator that simulates the PRNG."""
-        return prng_sim(self.seed, upper=self.range)
+        return prng_sim(self.seed, upper=self.range - 1)
 
 
 @dataclass

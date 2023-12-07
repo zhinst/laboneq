@@ -157,8 +157,14 @@ class MultiDeviceHandlerBase:
         self._conditions: dict[NodeMonitor, dict[str, Any]] = {}
 
     def add(self, target: NodeMonitor, conditions: dict[str, Any]):
-        daq_conditions: dict[str, Any] = self._conditions.setdefault(target, {})
-        daq_conditions.update(conditions)
+        if conditions:
+            daq_conditions: dict[str, Any] = self._conditions.setdefault(target, {})
+            daq_conditions.update(conditions)
+
+    def add_from(self, other: MultiDeviceHandlerBase):
+        for target, conditions in other._conditions.items():
+            daq_conditions: dict[str, Any] = self._conditions.setdefault(target, {})
+            daq_conditions.update(conditions)
 
 
 class ConditionsChecker(MultiDeviceHandlerBase):
@@ -267,6 +273,7 @@ class ResponseWaiter(MultiDeviceHandlerBase):
 class NodeControlKind(Enum):
     Condition = auto()
     WaitCondition = auto()
+    Setting = auto()
     Command = auto()
     Response = auto()
     Prepare = auto()
@@ -294,8 +301,8 @@ class NodeControlBase:
 @dataclass
 class Condition(NodeControlBase):
     """Represents a condition to be fulfilled. Condition node may not
-    necessarily receive an update after executing Command(s), if it has
-    already the right value, for instance extref freq, but still must be
+    necessarily receive an update after applying new Setting(s), if it has
+    already the right value, for instance extref freq, but it still must be
     verified."""
 
     def __post_init__(self):
@@ -304,18 +311,33 @@ class Condition(NodeControlBase):
 
 @dataclass
 class WaitCondition(NodeControlBase):
-    """Represents a condition to be fulfilled. Unlike plain Condition requiring a command if not fulfilled, the WaitCondition
-    must get fulfilled on its own as a result of some previous actions (ZSync status on PQSC after switching the follower to
-    ZSync)."""
+    """Represents a condition to be fulfilled. Unlike a plain Condition,
+    which causes Setting(s) from the same control block to be applied if not
+    fulfilled, the WaitCondition must get fulfilled on its own as a result of
+    previously executed control blocks. For example, the ZSync status on PQSC
+    is a WaitCondition, which is fulfilled after switching the follower to
+    ZSync in a previous action."""
 
     def __post_init__(self):
         self.kind = NodeControlKind.WaitCondition
 
 
 @dataclass
+class Setting(NodeControlBase):
+    """Represents a setting node. The node will be set, if conditions
+    of the control block are not fulfilled. Also treated as a response and
+    a condition."""
+
+    def __post_init__(self):
+        self.kind = NodeControlKind.Setting
+
+
+@dataclass
 class Command(NodeControlBase):
-    """Represents a command node. The node will be set, if conditions
-    are not fulfilled. Also treated as a response and a condition."""
+    """Represents a command node. Unlike a setting node, the current value
+    of it is not important, but setting this node to a specific value (even
+    if it's the same as previously set) triggers a specific activity on the
+    instrument, such as loading a preset."""
 
     def __post_init__(self):
         self.kind = NodeControlKind.Command
@@ -323,8 +345,8 @@ class Command(NodeControlBase):
 
 @dataclass
 class Response(NodeControlBase):
-    """Represents a response, expected in return to
-    the executed Command(s). Also treated as a condition."""
+    """Represents a response, expected in return to the changed Setting(s)
+    and/or executed Command(s). Also treated as a condition."""
 
     def __post_init__(self):
         self.kind = NodeControlKind.Response
@@ -332,9 +354,10 @@ class Response(NodeControlBase):
 
 @dataclass
 class Prepare(NodeControlBase):
-    """Represents a command node, that has to be set only as
-    a preparation before the main Command(s), but shouldn't be touched
-    or be in a specific state otherwise."""
+    """Represents a setting node, that has to be set along with the main
+    Setting(s), but shouldn't be touched or be in a specific state otherwise.
+    For example, HDAWG outputs must be turned off when changing the system
+    clock frequency."""
 
     def __post_init__(self):
         self.kind = NodeControlKind.Prepare
@@ -346,21 +369,29 @@ def _filter_nodes(
     return [n for n in nodes if n.kind in filter]
 
 
-def filter_commands(nodes: list[NodeControlBase]) -> list[NodeControlBase]:
-    return _filter_nodes(nodes, [NodeControlKind.Prepare, NodeControlKind.Command])
-
-
-def filter_responses(nodes: list[NodeControlBase]) -> list[NodeControlBase]:
-    return _filter_nodes(nodes, [NodeControlKind.Command, NodeControlKind.Response])
-
-
 def filter_conditions(nodes: list[NodeControlBase]) -> list[NodeControlBase]:
     return _filter_nodes(
         nodes,
         [
             NodeControlKind.Condition,
             NodeControlKind.WaitCondition,
-            NodeControlKind.Command,
+            NodeControlKind.Setting,
             NodeControlKind.Response,
         ],
     )
+
+
+def filter_wait_conditions(nodes: list[NodeControlBase]) -> list[NodeControlBase]:
+    return _filter_nodes(nodes, [NodeControlKind.WaitCondition])
+
+
+def filter_settings(nodes: list[NodeControlBase]) -> list[NodeControlBase]:
+    return _filter_nodes(nodes, [NodeControlKind.Prepare, NodeControlKind.Setting])
+
+
+def filter_responses(nodes: list[NodeControlBase]) -> list[NodeControlBase]:
+    return _filter_nodes(nodes, [NodeControlKind.Setting, NodeControlKind.Response])
+
+
+def filter_commands(nodes: list[NodeControlBase]) -> list[NodeControlBase]:
+    return _filter_nodes(nodes, [NodeControlKind.Command])

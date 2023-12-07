@@ -5,10 +5,10 @@ from __future__ import annotations
 
 from enum import IntEnum
 
-from laboneq.controller.communication import CachingStrategy, DaqNodeSetAction
 from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.devices.zi_node_monitor import (
     Command,
+    Setting,
     Condition,
     NodeControlBase,
     Response,
@@ -37,14 +37,10 @@ class DeviceSHFBase(DeviceZI):
             # ZSync is the only possible source when device is not standalone
             self._reference_clock_source = ReferenceClockSourceSHF.ZSYNC
 
-    def collect_load_factory_preset_nodes(self):
+    def load_factory_preset_control_nodes(self) -> list[NodeControlBase]:
         return [
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/system/preset/load",
-                1,
-                caching_strategy=CachingStrategy.NO_CACHE,
-            )
+            Command(f"/{self.serial}/system/preset/load", 1),
+            Response(f"/{self.serial}/system/preset/busy", 0),
         ]
 
     def clock_source_control_nodes(self) -> list[NodeControlBase]:
@@ -59,7 +55,7 @@ class DeviceSHFBase(DeviceZI):
             Condition(
                 f"/{self.serial}/system/clocks/referenceclock/in/freq", expected_freq
             ),
-            Command(f"/{self.serial}/system/clocks/referenceclock/in/source", source),
+            Setting(f"/{self.serial}/system/clocks/referenceclock/in/source", source),
             Response(
                 f"/{self.serial}/system/clocks/referenceclock/in/sourceactual", source
             ),

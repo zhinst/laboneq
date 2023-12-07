@@ -2,17 +2,32 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-def prng(seed=1, lower=0, upper=0xFFFE):
+class PRNG:
     """Software model of the PRNG on HDAWG and SHFSG"""
 
-    assert 0 < seed < 1 << 16
-    assert 0 <= lower < (1 << 16) - 1
-    assert 0 <= upper < (1 << 16) - 1
+    def __init__(self, seed=0xACE1, lower=0, upper=0xFFFE):
+        self._lsfr = seed
+        self._lower = lower
+        self._upper = upper
 
-    lsfr = seed
-    while True:
-        lsb = lsfr & 1
-        lsfr >>= 1
+    def __next__(self):
+        assert 0 < self._lsfr < 1 << 16
+        assert 0 <= self._lower < (1 << 16) - 1
+        assert 0 <= self._upper < (1 << 16) - 1
+
+        lsb = self._lsfr & 1
+        self._lsfr >>= 1
         if lsb:
-            lsfr ^= 0xB400
-        yield ((lsfr * (upper - lower + 1) >> 16) + lower) & 0xFFFF
+            self._lsfr ^= 0xB400
+        return (
+            (self._lsfr * (self._upper - self._lower + 1) >> 16) + self._lower
+        ) & 0xFFFF
+
+    def set_seed(self, seed):
+        self._lsfr = seed
+
+    def set_range(self, lower=None, upper=None):
+        if lower is not None:
+            self._lower = lower
+        if upper is not None:
+            self._upper = upper

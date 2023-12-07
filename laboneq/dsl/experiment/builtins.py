@@ -22,7 +22,7 @@ from laboneq.dsl.experiment.pulse import Pulse
 
 if typing.TYPE_CHECKING:
     from laboneq.dsl.experiment import Experiment, Section
-    from laboneq.dsl.prng import PRNG
+    from laboneq.dsl.prng import PRNG, PRNGSample
 
 __all__ = [
     "acquire",
@@ -38,6 +38,8 @@ __all__ = [
     "match",
     "measure",
     "play",
+    "prng_setup",
+    "prng_loop",
     "qubit_experiment",
     "reserve",
     "section",
@@ -102,6 +104,7 @@ def acquire_loop_nt(*args, **kwargs):
 def match(
     handle: str | None = None,
     user_register: int | None = None,
+    prng_sample: PRNGSample | None = None,
     uid: str | None = None,
     play_after: str | list[str] | None = None,
     local: bool | None = None,
@@ -109,6 +112,7 @@ def match(
     return MatchSectionContextManager(
         handle=handle,
         user_register=user_register,
+        prng_sample=prng_sample,
         uid=uid,
         play_after=play_after,
         local=local,

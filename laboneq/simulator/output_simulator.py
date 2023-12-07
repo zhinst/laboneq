@@ -9,6 +9,7 @@ from numpy.typing import ArrayLike
 
 from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.data.recipe import RealtimeExecutionInit
+from laboneq.data.setup_description import PhysicalChannelType
 from laboneq.dsl.device.device_setup import DeviceSetup
 from laboneq.dsl.device.instruments.shfqc import SHFQC
 from laboneq.dsl.device.io_units.physical_channel import PhysicalChannel
@@ -110,11 +111,6 @@ class OutputSimulator:
             Deprecated and has no effect. Use the `output_length` argument to
             the `get_snippet` method instead.
 
-    Attributes:
-        max_output_length:
-            Deprecated nad has no effect. Use the `output_length` argument to
-            the `get_snippet` method instead.
-
     Examples:
 
         Example showing how to compile an experiment and make use of the
@@ -127,7 +123,7 @@ class OutputSimulator:
         # Create an output simulation object
         output_simulator = OutputSimulator(compiled_experiment)
 
-        # By default, simulation is stopped after 1ms, but it can be explicitly specified
+        # By default, simulation is stopped after 10 ms, but it can be explicitly specified
         output_simulator = OutputSimulator(compiled_experiment, max_simulation_length = 10e-3)
 
         # Also the maximum output snippet length is configurable, defaulting to 1us
@@ -157,13 +153,13 @@ class OutputSimulator:
     def __init__(
         self,
         compiled_experiment: CompiledExperiment,
-        max_simulation_length: float = 10e-3,
+        max_simulation_length: float | None = None,
         max_output_length: float = 10e-6,
     ) -> None:
         self._compiled_experiment = compiled_experiment
         self._max_output_length = max_output_length
         self._simulations = simulate(
-            compiled_experiment, max_time=max_simulation_length
+            compiled_experiment, max_time=max_simulation_length or 10e-3
         )
 
     @property
@@ -192,6 +188,7 @@ class OutputSimulator:
         physical_channel: str | PhysicalChannel,
         start: float,
         output_length: float,
+        channel_type: PhysicalChannelType = PhysicalChannelType.IQ_CHANNEL,
         get_wave: bool = True,
         get_trigger: bool = False,
         get_marker: bool = False,
@@ -246,6 +243,7 @@ class OutputSimulator:
             ch=awg_id.channels,
             sim_targets=sim_targets,
             sim=sim,
+            channel_type=channel_type,
         )
         ws.calc_snippet(start, output_length)
         return OutputData(

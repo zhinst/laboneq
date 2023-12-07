@@ -175,7 +175,10 @@ class LoaderBase:
         signal_info.amplifier_pump = signal_connection["amplifier_pump"]
 
     def add_section(self, section_id, section_info: SectionInfo):
-        if section_info.handle is not None and section_info.user_register is not None:
+        if (
+            section_info.match_handle is not None
+            and section_info.match_user_register is not None
+        ):
             raise LabOneQException(
                 f"Section {section_id} has both a handle and a user register set."
             )

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import List
 
+from laboneq.compiler.code_generator.prng_tracker import PRNGTracker
 from laboneq.compiler.code_generator.seq_c_generator import SeqCGenerator
 from laboneq.compiler.common.awg_sampled_event import AWGEvent
 from laboneq.compiler.common.device_type import DeviceType
@@ -31,6 +32,7 @@ class SeqCTracker:
         self.emit_timing_comments = emit_timing_comments
         self.logger = logger
         self.current_time = 0
+        self._prng_tracker: PRNGTracker | None = None
 
     def current_loop_stack_generator(self):
         return self.loop_stack_generators[-1][-1]
@@ -142,13 +144,16 @@ class SeqCTracker:
         self.current_loop_stack_generator().add_variable_increment(variable_name, value)
 
     # todo: remove `always` argument
-    def append_loop_stack_generator(self, always=False, generator=None):
+    def append_loop_stack_generator(
+        self, always=False, generator=None
+    ) -> SeqCGenerator:
         if not generator:
             generator = SeqCGenerator()
 
         top_of_stack = self.loop_stack_generators[-1]
         if always or len(top_of_stack) == 0 or top_of_stack[-1].num_statements() > 0:
             top_of_stack.append(generator)
+        return self.current_loop_stack_generator()
 
     def push_loop_stack_generator(self, generator=None):
         self.loop_stack_generators.append([])
@@ -160,3 +165,48 @@ class SeqCTracker:
             compressed = gen.compressed()
             top_of_stack[i] = compressed
         return top_of_stack
+
+    def setup_prng(self, seed=None, prng_range=None, offset=None):
+        """Insert a placeholder for setting up the PRNG
+
+        In particular the offset into the command table can be efficiently encoded in
+        range of the PRNG, which we do not know yet.
+
+        This function returns a reference to a PRNGTracker through which the code
+        generator can adjust the values and eventually commit them.
+        Once committed, they values cannot be changed, and the PRNG has to be setup anew.
+        """
+
+        assert self._prng_tracker is None
+
+        seqc_gen_prng = self.append_loop_stack_generator()
+        self.append_loop_stack_generator()  # continuation
+
+        self._prng_tracker = PRNGTracker(seqc_gen_prng)
+
+        if seed is not None:
+            self._prng_tracker.seed = seed
+        if prng_range is not None:
+            self._prng_tracker.range = prng_range
+        if offset is not None:
+            self._prng_tracker.offset = offset
+
+    def add_prng_match_command_table_execution(self, offset: int):
+        assert self.prng_tracker().is_committed()
+        if offset != 0:
+            index = f"prng_value + {offset}"
+        else:
+            index = "prng_value"
+        self.add_command_table_execution(index)
+
+    def sample_prng(self, declarations_generator: SeqCGenerator):
+        variable_name = "prng_value"
+        if not declarations_generator.is_variable_declared("prng_value"):
+            declarations_generator.add_variable_declaration("prng_value")
+
+        self.add_function_call_statement(
+            name="getPRNGValue", args=[], deferred=False, assign_to=variable_name
+        )
+
+    def prng_tracker(self):
+        return self._prng_tracker

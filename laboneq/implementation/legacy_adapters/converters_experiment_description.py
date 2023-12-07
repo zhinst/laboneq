@@ -243,6 +243,9 @@ def convert_Match(orig: MatchDSL):
     retval.uid = orig.uid
     retval.handle = orig.handle
     retval.user_register = orig.user_register
+    retval.prng_sample = (
+        convert_PRNGSample(orig.prng_sample) if orig.prng_sample is not None else None
+    )
     retval.local = orig.local
     retval.uid = orig.uid
     return post_process(orig, retval, converter_function_directory)

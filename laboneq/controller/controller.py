@@ -43,7 +43,7 @@ from laboneq.controller.versioning import LabOneVersion
 from laboneq.core.exceptions import AbortExecution
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
-from laboneq.core.utilities.async_helpers import run_async
+from laboneq.core.utilities.async_helpers import run_sync
 from laboneq.core.utilities.replace_pulse import ReplacementType, calc_wave_replacements
 from laboneq.data.execution_payload import TargetSetup
 from laboneq.data.experiment_results import ExperimentResults
@@ -76,7 +76,6 @@ class ControllerRunParameters:
     setup_filename = None
     servers_filename = None
     ignore_version_mismatch = False
-    reset_devices = False
 
 
 # atexit hook
@@ -108,10 +107,9 @@ class Controller:
     ):
         self._run_parameters = run_parameters or ControllerRunParameters()
         self._devices = DeviceCollection(
-            target_setup,
-            self._run_parameters.dry_run,
-            self._run_parameters.ignore_version_mismatch,
-            self._run_parameters.reset_devices,
+            target_setup=target_setup,
+            dry_run=self._run_parameters.dry_run,
+            ignore_version_mismatch=self._run_parameters.ignore_version_mismatch,
         )
 
         self._dataserver_version: LabOneVersion | None = None
@@ -561,16 +559,16 @@ class Controller:
 
         _logger.debug("Execution stopped")
 
-    def connect(self):
-        run_async(self.connect_async())
+    def connect(self, reset_devices: bool = False):
+        run_sync(self._connect_async, reset_devices=reset_devices)
 
-    async def connect_async(self):
+    async def _connect_async(self, reset_devices: bool = False):
         now = time.monotonic()
         if (
             self._last_connect_check_ts is None
             or now - self._last_connect_check_ts > CONNECT_CHECK_HOLDOFF
         ):
-            await self._devices.connect()
+            await self._devices.connect(reset_devices=reset_devices)
 
         try:
             self._dataserver_version = next(self._devices.leaders)[
@@ -589,9 +587,9 @@ class Controller:
         logical_signals: list[str] | None = None,
         unused_only: bool = False,
     ):
-        run_async(self.disable_outputs_async(device_uids, logical_signals, unused_only))
+        run_sync(self._disable_outputs_async, device_uids, logical_signals, unused_only)
 
-    async def disable_outputs_async(
+    async def _disable_outputs_async(
         self,
         device_uids: list[str] | None = None,
         logical_signals: list[str] | None = None,
@@ -600,17 +598,17 @@ class Controller:
         await self._devices.disable_outputs(device_uids, logical_signals, unused_only)
 
     def shut_down(self):
-        run_async(self.shut_down_async())
+        run_sync(self._shut_down_async)
 
-    async def shut_down_async(self):
+    async def _shut_down_async(self):
         _logger.info("Shutting down all devices...")
         self._devices.shut_down()
         _logger.info("Successfully Shut down all devices.")
 
     def disconnect(self):
-        run_async(self.disconnect_async())
+        run_sync(self._disconnect_async)
 
-    async def disconnect_async(self):
+    async def _disconnect_async(self):
         _logger.info("Disconnecting from all devices and servers...")
         self._devices.disconnect()
         self._last_connect_check_ts = None
@@ -620,9 +618,9 @@ class Controller:
     def execute_compiled_legacy(
         self, compiled_experiment: CompiledExperiment, session: Session | None = None
     ):
-        run_async(self.execute_compiled_legacy_async(compiled_experiment, session))
+        run_sync(self._execute_compiled_legacy_async, compiled_experiment, session)
 
-    async def execute_compiled_legacy_async(
+    async def _execute_compiled_legacy_async(
         self, compiled_experiment: CompiledExperiment, session: Session | None = None
     ):
         execution: Statement
@@ -649,9 +647,9 @@ class Controller:
             session._last_results.execution_errors = self._results.execution_errors
 
     def execute_compiled(self, job: ExecutionPayload):
-        run_async(self.execute_compiled_async(job))
+        run_sync(self._execute_compiled_async, job)
 
-    async def execute_compiled_async(self, job: ExecutionPayload):
+    async def _execute_compiled_async(self, job: ExecutionPayload):
         self._recipe_data = pre_process_compiled(
             job.scheduled_experiment,
             self._devices,
@@ -661,7 +659,9 @@ class Controller:
         await self._execute_compiled_impl()
 
     async def _execute_compiled_impl(self):
-        await self.connect_async()  # Ensure all connect configurations are still valid!
+        await (
+            self._connect_async()
+        )  # Ensure all connect configurations are still valid!
         self._prepare_result_shapes()
         try:
             await self._initialize_devices()
@@ -679,10 +679,10 @@ class Controller:
                 # eat the exception
                 pass
             _logger.info("Finished near-time execution.")
-            self._devices.check_errors()
+            await self._devices.check_errors()
         except LabOneQControllerException:
             # Report device errors if any - it maybe useful to diagnose the original exception
-            device_errors = self._devices.check_errors(raise_on_error=False)
+            device_errors = await self._devices.check_errors(raise_on_error=False)
             if device_errors is not None:
                 _logger.warning(device_errors)
             raise
@@ -691,12 +691,11 @@ class Controller:
             self._last_connect_check_ts = time.monotonic()
 
         await self._devices.on_experiment_end()
-
         if self._run_parameters.shut_down is True:
-            await self.shut_down_async()
+            await self._shut_down_async()
 
         if self._run_parameters.disconnect is True:
-            await self.disconnect_async()
+            await self._disconnect_async()
 
     def _find_awg(self, seqc_name: str) -> tuple[str, int]:
         # TODO(2K): Do this in the recipe preprocessor, or even modify the compiled experiment
@@ -868,7 +867,7 @@ class Controller:
         for awg_key, awg_config in self._recipe_data.awgs_producing_results():
             device = self._devices.find_by_uid(awg_key.device_uid)
             if rt_execution_info.acquisition_type == AcquisitionType.RAW:
-                raw_results = device.get_input_monitor_data(
+                raw_results = await device.get_input_monitor_data(
                     awg_key.awg_index, awg_config.raw_acquire_length
                 )
                 # Copy to all result handles, but actually only one handle is supported for now
@@ -916,7 +915,7 @@ class Controller:
                         if is_multistate
                         else integrator_allocation.channels
                     )
-                    raw_results = device.get_measurement_data(
+                    raw_results = await device.get_measurement_data(
                         awg_key.awg_index,
                         rt_execution_info.acquisition_type,
                         result_indices,

@@ -169,12 +169,13 @@ class SectionInfo:
 
     signals: list[SignalInfo] = field(default_factory=list)
 
-    handle: str | None = None
-    state: int | None = None
+    match_handle: str | None = None
+    match_user_register: int | None = None
+    match_prng: bool = False
     local: bool | None = None
-    user_register: int | None = None
+    state: int | None = None
     prng: PRNGInfo | None = None
-    draw_prng: bool = False
+    sample_prng: bool = False
 
     count: int | None = None  # 'None' means 'not a loop'
     chunk_count: int = 1

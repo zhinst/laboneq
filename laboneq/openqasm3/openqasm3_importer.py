@@ -9,9 +9,9 @@ from contextlib import contextmanager
 from typing import Any, Optional, TextIO, Union
 
 import openpulse
+import openqasm3.visitor
 from openpulse import ast
 
-import openqasm3.visitor
 from laboneq._utils import id_generator
 from laboneq.core.exceptions import LabOneQException
 from laboneq.dsl import LinearSweepParameter, SweepParameter
@@ -225,7 +225,7 @@ class OpenQasm3Importer:
             if statement.size is not None:
                 try:
                     size = eval_expression(
-                        statement.size, namespace=self.scope, type=int
+                        statement.size, namespace=self.scope, type_=int
                     )
                 except Exception:
                     msg = "Qubit declaration size must evaluate to an integer."
@@ -255,13 +255,13 @@ class OpenQasm3Importer:
                 value = eval_expression(
                     statement.init_expression,
                     namespace=self.scope,
-                    type=int,
+                    type_=int,
                 )
             else:
                 value = None
             size = statement.type.size
             if size is not None:
-                size = eval_expression(size, namespace=self.scope, type=int)
+                size = eval_expression(size, namespace=self.scope, type_=int)
 
                 # declare the individual bits...
                 bits = [
@@ -424,7 +424,7 @@ class OpenQasm3Importer:
     def _handle_delay_instruction(self, statement: ast.DelayInstruction):
         qubits = statement.qubits
         duration = eval_expression(
-            statement.duration, namespace=self.scope, type=(float, SweepParameter)
+            statement.duration, namespace=self.scope, type_=(float, SweepParameter)
         )
         qubit_names = [
             eval_expression(qubit, namespace=self.scope).canonical_name
@@ -455,9 +455,16 @@ class OpenQasm3Importer:
         loop_set_decl = statement.set_declaration
 
         if isinstance(loop_set_decl, ast.RangeDefinition):
-            start = eval_expression(loop_set_decl.start, namespace=self.scope)
-            stop = eval_expression(loop_set_decl.end, namespace=self.scope)
-            step = eval_expression(loop_set_decl.step, namespace=self.scope) or 1
+            start = eval_expression(
+                loop_set_decl.start, namespace=self.scope, type_=int
+            )
+            stop = eval_expression(loop_set_decl.end, namespace=self.scope, type_=int)
+            if loop_set_decl.step is not None:
+                step = eval_expression(
+                    loop_set_decl.step, namespace=self.scope, type_=int
+                )
+            else:
+                step = 1
             count = math.floor(((stop - start) / step) + 1)
             sweep_param = LinearSweepParameter(
                 uid=id_generator("sweep_parameter"),

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import copy
 import logging
-import math
 from collections import defaultdict, namedtuple
 from itertools import groupby
 from numbers import Number
@@ -23,7 +22,7 @@ from laboneq.compiler.code_generator.analyze_events import (
     analyze_precomp_reset_times,
     analyze_set_oscillator_times,
     analyze_trigger_events,
-    analyze_prng_setup_times,
+    analyze_prng_times,
 )
 from laboneq.compiler.code_generator.analyze_playback import analyze_play_wave_times
 from laboneq.compiler.code_generator.command_table_tracker import (
@@ -269,6 +268,11 @@ def calculate_integration_weights(
                 if existing_weight := integration_weights.get(play_wave_id):
                     for key in ["samples_i", "samples_q"]:
                         if np.any(existing_weight[key] != integration_weight[key]):
+                            if np.any(np.isnan(integration_weight[key])):
+                                # this is because nan != nan is always true
+                                raise LabOneQException(
+                                    "Encountered NaN in an integration kernel."
+                                )
                             # Kernel differs even though pulse ID is the same
                             # (e.g. affected by pulse parameters)
                             raise LabOneQException(
@@ -463,6 +467,20 @@ class CodeGenerator:
                                         sig_string,
                                         "",
                                     )
+                                    if "samples_marker1" in sampled_signature:
+                                        self._save_wave_bin(
+                                            sampled_signature["samples_marker1"],
+                                            sampled_signature["signature_pulse_map"],
+                                            sig_string,
+                                            "_marker1",
+                                        )
+                                    if "samples_marker2" in sampled_signature:
+                                        self._save_wave_bin(
+                                            sampled_signature["samples_marker2"],
+                                            sampled_signature["signature_pulse_map"],
+                                            sig_string,
+                                            "_marker2",
+                                        )
                                 else:
                                     self._save_wave_bin(
                                         sampled_signature["samples_i"],
@@ -948,15 +966,6 @@ class CodeGenerator:
                 to_item["signal_id"] for to_item in event.get("trigger_output", [])
             ).intersection(signal_ids)
         )
-        has_match_case = False
-        for event in events:
-            if (
-                event["event_type"] == EventType.SECTION_START
-                and event.get("state") is not None
-                and event["section_name"] in own_sections
-            ):
-                has_match_case = True
-                use_command_table = True
         for event in events:
             if (
                 event["event_type"] == EventType.SUBSECTION_END
@@ -964,8 +973,16 @@ class CodeGenerator:
             ):
                 # by looking at SUBSECTION_END, we'll always walk towards the tree root
                 own_sections.add(event["section_name"])
-
-        if has_match_case:
+        has_readout_feedback = False
+        for event in events:
+            if (
+                event["event_type"] == EventType.SECTION_START
+                and event.get("handle") is not None
+                and event["section_name"] in own_sections
+            ):
+                has_readout_feedback = True
+                use_command_table = True
+        if has_readout_feedback:
             declarations_generator.add_variable_declaration("current_seq_step", 0)
 
         if awg.device_type not in [DeviceType.HDAWG, DeviceType.SHFSG]:
@@ -1005,10 +1022,8 @@ class CodeGenerator:
         )
         sampled_events.merge(loop_events)
 
-        prng_setup_events = analyze_prng_setup_times(
-            events, global_sampling_rate, global_delay
-        )
-        sampled_events.merge(prng_setup_events)
+        prng_setup = analyze_prng_times(events, global_sampling_rate, global_delay)
+        sampled_events.merge(prng_setup)
 
         for signal_obj in awg.signals:
             set_oscillator_events = analyze_set_oscillator_times(
@@ -1253,8 +1268,8 @@ class CodeGenerator:
                         awg.signal_type.value,
                         sig_string,
                         length,
-                        False,
-                        False,
+                        "samples_marker1" in sampled,
+                        "samples_marker2" in sampled,
                     )
         self.post_process_sampled_events(awg, sampled_events)
 
@@ -1291,7 +1306,7 @@ class CodeGenerator:
             sampled_signatures=self._sampled_signatures,
             use_command_table=use_command_table,
             emit_timing_comments=self.EMIT_TIMING_COMMENTS,
-            use_current_sequencer_step=has_match_case,
+            use_current_sequencer_step=has_readout_feedback,
         )
 
         setup_sine_phase(awg, command_table_tracker, init_generator, use_command_table)
@@ -1468,9 +1483,6 @@ class CodeGenerator:
                     pulse_part,
                     used_oscillator_frequency,
                 )
-
-                if used_oscillator_frequency and device_type == DeviceType.SHFSG:
-                    amplitude /= math.sqrt(2)
 
                 iq_phase = 0.0
 

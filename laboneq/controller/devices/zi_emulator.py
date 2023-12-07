@@ -364,6 +364,18 @@ class DevEmuZI(DevEmu):
 
 
 class DevEmuHW(DevEmu):
+    def _preset_loaded(self):
+        self._set_val("system/preset/busy", 0)
+
+    def _preset_load(self, node: NodeBase):
+        self._set_val("system/preset/load", 0)
+        self._set_val("system/preset/busy", 1)
+        for p in self._node_tree.keys():
+            if p not in ["system/preset/load", "system/preset/busy"]:
+                node_info = self._cached_node_def().get(p)
+                self._set_val(p, 0 if node_info is None else node_info.default)
+        self._scheduler.enter(delay=0.001, priority=0, action=self._preset_loaded)
+
     def _node_def_common(self) -> dict[str, NodeInfo]:
         return {
             # TODO(2K): Emulate errors. True response example (without whitespace):
@@ -418,6 +430,10 @@ class DevEmuHW(DevEmu):
             "raw/error/json/errors": NodeInfo(
                 type=NodeType.VECTOR_STR, read_only=True, default='{"messages":[]}'
             ),
+            "system/preset/load": NodeInfo(
+                type=NodeType.INT, default=0, handler=self._preset_load
+            ),
+            "system/preset/busy": NodeInfo(type=NodeType.INT, default=0),
         }
 
 

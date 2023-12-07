@@ -31,6 +31,7 @@ class AWGEventType(Enum):
     INIT_AMPLITUDE_REGISTER = auto()
     CHANGE_OSCILLATOR_PHASE = auto()
     SEED_PRNG = auto()
+    SAMPLE_PRNG = auto()
 
 
 @dataclass

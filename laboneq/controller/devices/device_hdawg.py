@@ -27,6 +27,7 @@ from laboneq.controller.devices.zi_node_monitor import (
     NodeControlBase,
     Prepare,
     Response,
+    Setting,
 )
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.controller.util import LabOneQControllerException
@@ -158,18 +159,14 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
             Condition(
                 f"/{self.serial}/system/clocks/referenceclock/freq", expected_freq
             ),
-            Command(f"/{self.serial}/system/clocks/referenceclock/source", source),
+            Setting(f"/{self.serial}/system/clocks/referenceclock/source", source),
             Response(f"/{self.serial}/system/clocks/referenceclock/status", 0),
         ]
 
-    def collect_load_factory_preset_nodes(self):
+    def load_factory_preset_control_nodes(self) -> list[NodeControlBase]:
         return [
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/system/preset/load",
-                1,
-                caching_strategy=CachingStrategy.NO_CACHE,
-            )
+            Command(f"/{self.serial}/system/preset/load", 1),
+            Response(f"/{self.serial}/system/preset/busy", 0),
         ]
 
     def system_freq_control_nodes(self) -> list[NodeControlBase]:
@@ -184,7 +181,7 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
         ]
         nodes.extend(
             [
-                Command(
+                Setting(
                     f"/{self.serial}/system/clocks/sampleclock/freq",
                     self._sampling_rate,
                 ),
@@ -198,8 +195,8 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
         for channel, offset in self._rf_offsets.items():
             nodes.extend(
                 [
-                    Command(f"/{self.serial}/sigouts/{channel}/on", 1),
-                    Command(
+                    Setting(f"/{self.serial}/sigouts/{channel}/on", 1),
+                    Setting(
                         f"/{self.serial}/sigouts/{channel}/offset",
                         FloatWithTolerance(offset, 0.0001),
                     ),

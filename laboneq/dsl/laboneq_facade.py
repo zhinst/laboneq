@@ -29,11 +29,10 @@ if TYPE_CHECKING:
 
 class LabOneQFacade:
     @staticmethod
-    def connect(session: Session):
+    def connect(session: Session, reset_devices: bool):
         run_parameters = ctrl.ControllerRunParameters()
         run_parameters.dry_run = session._connection_state.emulated
         run_parameters.ignore_version_mismatch = session._ignore_version_mismatch
-        run_parameters.reset_devices = session._reset_devices
 
         target_setup = convert_dsl_to_target_setup(session._device_setup)
 
@@ -42,7 +41,7 @@ class LabOneQFacade:
             target_setup=target_setup,
             neartime_callbacks=session._neartime_callbacks,
         )
-        controller.connect()
+        controller.connect(reset_devices=reset_devices)
         session._controller = controller
         if session._connection_state.emulated:
             session._toolkit_devices = ctrl.MockedToolkit()

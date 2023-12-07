@@ -9,8 +9,9 @@ import inspect
 import logging
 from collections.abc import Mapping
 from enum import Enum
-from io import BytesIO, StringIO
+from io import BytesIO
 from typing import Dict
+import warnings
 
 import numpy as np
 import pybase64 as base64
@@ -30,6 +31,13 @@ ID_KEY = "__id"
 
 class SerializerException(Exception):
     pass
+
+
+class SerializerWarning(UserWarning):
+    pass
+
+
+warnings.simplefilter("always", SerializerWarning)
 
 
 class NumpyArrayRepr:
@@ -270,13 +278,17 @@ def create_ref(item, item_ref_type):
 def serialize_to_dict_with_entities(
     to_serialize,
     entity_classes,
+    *,
     whitelist,
     entities_collector,
     emit_enum_types=False,
     omit_none_fields=False,
     depth=0,
     max_depth=100,
+    collected_warnings: set | None = None,
 ):
+    if collected_warnings is None:
+        collected_warnings = set()
     if depth == max_depth:
         raise SerializerException(
             f"Reached maximum recursion depth of {max_depth} in serialization"
@@ -304,16 +316,19 @@ def serialize_to_dict_with_entities(
         else:
             return str(to_serialize)
 
+    serialize_kwargs = {
+        "whitelist": whitelist,
+        "entities_collector": entities_collector,
+        "emit_enum_types": emit_enum_types,
+        "omit_none_fields": omit_none_fields,
+        "depth": depth,
+        "max_depth": max_depth,
+        "collected_warnings": collected_warnings,
+    }
+
     if _issubclass(cls, np.ndarray):
         return serialize_to_dict_with_entities(
-            NumpyArrayRepr(array_data=to_serialize),
-            entity_classes,
-            whitelist,
-            entities_collector,
-            emit_enum_types,
-            omit_none_fields,
-            depth,
-            max_depth,
+            NumpyArrayRepr(array_data=to_serialize), entity_classes, **serialize_kwargs
         )
 
     if _issubclass(cls, list):
@@ -336,14 +351,7 @@ def serialize_to_dict_with_entities(
                     entities_collector[entity_typename_short][
                         item.uid
                     ] = serialize_to_dict_with_entities(
-                        item,
-                        entity_classes,
-                        whitelist,
-                        entities_collector,
-                        emit_enum_types,
-                        omit_none_fields,
-                        depth,
-                        max_depth,
+                        item, entity_classes, **serialize_kwargs
                     )
                     entities_collector[entity_typename_short][item.uid][ID_KEY] = id(
                         item
@@ -352,14 +360,7 @@ def serialize_to_dict_with_entities(
             else:
                 retval.append(
                     serialize_to_dict_with_entities(
-                        item,
-                        entity_classes,
-                        whitelist,
-                        entities_collector,
-                        emit_enum_types,
-                        omit_none_fields,
-                        depth,
-                        max_depth,
+                        item, entity_classes, **serialize_kwargs
                     )
                 )
         return retval
@@ -371,14 +372,7 @@ def serialize_to_dict_with_entities(
         for cotent in to_serialize:
             sub_dict["__contents"].append(
                 serialize_to_dict_with_entities(
-                    cotent,
-                    entity_classes,
-                    whitelist,
-                    entities_collector,
-                    emit_enum_types,
-                    omit_none_fields,
-                    depth,
-                    max_depth,
+                    cotent, entity_classes, **serialize_kwargs
                 )
             )
         if _issubclass(cls, set):
@@ -391,9 +385,7 @@ def serialize_to_dict_with_entities(
             obj=to_serialize,
             serializer_function=serialize_to_dict_with_entities,
             entity_classes=entity_classes,
-            entities_collector=entities_collector,
-            emit_enum_types=emit_enum_types,
-            omit_none_fields=omit_none_fields,
+            **serialize_kwargs,
         )
     ) is not None:
         return xarr
@@ -420,7 +412,12 @@ def serialize_to_dict_with_entities(
         type_name = short_typename(to_serialize)
 
         if type_name not in whitelist:
-            _logger.warning(f"instance of class {type_name} may not serialize properly")
+            warning = SerializerWarning(
+                f"instance of class {type_name} may not serialize properly"
+            )
+            if warning not in collected_warnings:
+                warnings.warn(warning, stacklevel=2)
+                collected_warnings.add(warning)
 
         sub_dict["__type"] = type_name
 
@@ -451,14 +448,7 @@ def serialize_to_dict_with_entities(
                 entities_collector[entity_typename_short][
                     v.uid
                 ] = serialize_to_dict_with_entities(
-                    v,
-                    entity_classes,
-                    whitelist,
-                    entities_collector,
-                    emit_enum_types,
-                    omit_none_fields,
-                    depth,
-                    max_depth,
+                    v, entity_classes, **serialize_kwargs
                 )
                 entities_collector[entity_typename_short][v.uid][ID_KEY] = id(v)
             else:
@@ -470,26 +460,12 @@ def serialize_to_dict_with_entities(
             sub_dict[outkey] = create_ref(v, entity_typename_short)
         elif _issubclass(item_class, np.ndarray):
             sub_dict[outkey] = serialize_to_dict_with_entities(
-                NumpyArrayRepr(array_data=outvalue),
-                entity_classes,
-                whitelist,
-                entities_collector,
-                emit_enum_types,
-                omit_none_fields,
-                depth,
-                max_depth,
+                NumpyArrayRepr(array_data=outvalue), entity_classes, **serialize_kwargs
             )
 
         elif _issubclass(item_class, Mapping):
             sub_dict[outkey] = serialize_to_dict_with_entities(
-                v,
-                entity_classes,
-                whitelist,
-                entities_collector,
-                emit_enum_types,
-                omit_none_fields,
-                depth,
-                max_depth,
+                v, entity_classes, **serialize_kwargs
             )
         elif _issubclass(item_class, list):
             sub_dict[outkey] = []
@@ -511,14 +487,7 @@ def serialize_to_dict_with_entities(
                         entities_collector[entity_typename_short][
                             item.uid
                         ] = serialize_to_dict_with_entities(
-                            item,
-                            entity_classes,
-                            whitelist,
-                            entities_collector,
-                            emit_enum_types,
-                            omit_none_fields,
-                            depth,
-                            max_depth,
+                            item, entity_classes, **serialize_kwargs
                         )
                         entities_collector[entity_typename_short][item.uid][
                             ID_KEY
@@ -535,26 +504,12 @@ def serialize_to_dict_with_entities(
                 else:
                     sub_dict[outkey].append(
                         serialize_to_dict_with_entities(
-                            item,
-                            entity_classes,
-                            whitelist,
-                            entities_collector,
-                            emit_enum_types,
-                            omit_none_fields,
-                            depth,
-                            max_depth,
+                            item, entity_classes, **serialize_kwargs
                         )
                     )
         else:
             sub_dict[outkey] = serialize_to_dict_with_entities(
-                outvalue,
-                entity_classes,
-                whitelist,
-                entities_collector,
-                emit_enum_types,
-                omit_none_fields,
-                depth,
-                max_depth,
+                outvalue, entity_classes, **serialize_kwargs
             )
 
     if is_object and omit_none_fields:
@@ -566,6 +521,7 @@ def serialize_to_dict_with_entities(
 def serialize_to_dict_with_ref(
     to_serialize,
     entity_classes,
+    *,
     whitelist,
     entity_mapper=None,
     emit_enum_types=False,
@@ -575,28 +531,27 @@ def serialize_to_dict_with_ref(
     if entity_mapper is None:
         entity_mapper = {}
     entities_collector = {}
+    unique_warnings = set()
 
-    log_stream = StringIO()
-    log_handler = logging.StreamHandler(log_stream)
-    logging.getLogger("laboneq.core.serialization.simple_serialization").addHandler(
-        log_handler
-    )
     try:
         root_object = serialize_to_dict_with_entities(
             to_serialize,
             entity_classes,
-            whitelist,
-            entities_collector,
+            whitelist=whitelist,
+            entities_collector=entities_collector,
             emit_enum_types=emit_enum_types,
             omit_none_fields=omit_none_fields,
             depth=0,
             max_depth=max_depth,
+            collected_warnings=unique_warnings,
         )
     except Exception as ex:
-        unique_log_msgs = "\n".join({l for l in log_stream.getvalue().splitlines()})
-        if len(unique_log_msgs) > 0:
+        if len(unique_warnings) > 0:
+            unique_warning_messages = "\n".join(
+                str(warning) for warning in unique_warnings
+            )
             raise SerializerException(
-                f"The following warning(s) were encountered during serialization:\n{unique_log_msgs}"
+                f"The following warning(s) were encountered during serialization:\n{unique_warning_messages}"
             ) from ex
         else:
             raise ex

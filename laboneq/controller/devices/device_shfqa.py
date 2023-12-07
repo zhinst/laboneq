@@ -1142,7 +1142,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
             )
         return nodes_to_configure_triggers
 
-    def get_measurement_data(
+    async def get_measurement_data(
         self,
         channel: int,
         acquisition_type: AcquisitionType,
@@ -1179,7 +1179,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
             return result.real
         return result
 
-    def get_input_monitor_data(self, channel: int, num_results: int):
+    async def get_input_monitor_data(self, channel: int, num_results: int):
         result_path_ch = f"/{self.serial}/scopes/0/channels/{channel}/wave"
         node_data = self._daq.get_raw(result_path_ch)
         data = node_data[result_path_ch][0]["vector"][0:num_results]

@@ -61,9 +61,6 @@ class DeviceSHFPPC(DeviceZI):
                         name=attribute_name, index=channel, value_or_param=settings[key]
                     )
 
-    def check_errors(self):
-        pass
-
     def collect_reset_nodes(self) -> list[DaqNodeAction]:
         return []
 

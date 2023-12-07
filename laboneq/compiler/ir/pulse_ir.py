@@ -71,7 +71,7 @@ class PulseIR(IntervalIR):
         if self.amp_param_name:
             d_start["amplitude_parameter"] = self.amp_param_name
 
-        if self.markers is not None:
+        if self.markers is not None and len(self.markers) > 0:
             d_start["markers"] = [vars(m) for m in self.markers]
 
         if self.oscillator_frequency is not None:

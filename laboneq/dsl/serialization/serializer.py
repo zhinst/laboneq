@@ -73,8 +73,8 @@ class Serializer:
         json_struct = serialize_to_dict_with_ref(
             serializable_object,
             entity_classes,
-            Serializer._classes_by_short_name(),
-            entity_mapper,
+            whitelist=Serializer.classes_by_short_name(),
+            entity_mapper=entity_mapper,
             emit_enum_types=True,
             omit_none_fields=omit_none_fields,
         )
@@ -93,8 +93,8 @@ class Serializer:
                 json_struct = serialize_to_dict_with_ref(
                     serializable_object,
                     entity_classes,
-                    Serializer._classes_by_short_name(),
-                    entity_mapper,
+                    whitelist=Serializer.classes_by_short_name(),
+                    entity_mapper=entity_mapper,
                     emit_enum_types=True,
                     omit_none_fields=omit_none_fields,
                 )
@@ -112,8 +112,8 @@ class Serializer:
         return serialize_to_dict_with_ref(
             serializable_object,
             entity_classes,
-            Serializer._classes_by_short_name(),
-            entity_mapper,
+            whitelist=Serializer.classes_by_short_name(),
+            entity_mapper=entity_mapper,
             emit_enum_types=True,
             omit_none_fields=omit_none_fields,
         )
@@ -128,7 +128,7 @@ class Serializer:
             raise LabOneQException() from e
 
     @staticmethod
-    def _classes_by_short_name():
+    def classes_by_short_name():
         dsl_modules = [
             "laboneq.dsl.experiment",
             "laboneq.dsl.calibration.oscillator",
@@ -186,7 +186,7 @@ class Serializer:
 
     @staticmethod
     # NOTE(mr): This can be removed after the legacy adapters have been removed, or, conversely after class names are unique in L1Q once more
-    def _classes_by_short_name_ir():
+    def classes_by_short_name_ir():
         _, classes_by_short_name = module_classes(
             [
                 "laboneq.compiler.ir.ir",
@@ -220,9 +220,9 @@ class Serializer:
 
             obj = deserialize_from_dict_with_ref(
                 serialized_form,
-                Serializer._classes_by_short_name_ir()
+                Serializer.classes_by_short_name_ir()
                 if type_hint is not None and type_hint.__name__ == "IR"
-                else Serializer._classes_by_short_name(),
+                else Serializer.classes_by_short_name(),
                 entity_classes,
                 entity_mapper,
             )
@@ -237,7 +237,7 @@ class Serializer:
             entity_classes, entity_mapper = Serializer._entity_config()
 
             obj = deserialize_from_dict_with_ref(
-                data, Serializer._classes_by_short_name(), entity_classes, entity_mapper
+                data, Serializer.classes_by_short_name(), entity_classes, entity_mapper
             )
 
         return obj

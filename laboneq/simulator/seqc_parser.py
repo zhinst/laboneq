@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import operator
+
 import re
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -32,6 +34,7 @@ from pycparser.c_ast import (
 from pycparser.c_parser import CParser
 
 from laboneq.compiler.common.compiler_settings import EXECUTETABLEENTRY_LATENCY
+from laboneq.core.utilities.prng import PRNG
 from laboneq.data.recipe import Recipe, TriggeringMode, RoutedOutput
 
 if TYPE_CHECKING:
@@ -128,11 +131,15 @@ def parse_seq_c(runtime: SimpleRuntime):
 
     try:
         for item in ast.ext[-1].body.block_items:
-            parse_item(item, runtime)
+            parse_statement(item, runtime)
     except StopSimulation:
         pass
 
     runtime.program_finished()
+
+
+class TreeWalkException(TypeError):
+    pass
 
 
 def parse_expression(item, runtime: SimpleRuntime):
@@ -141,31 +148,21 @@ def parse_expression(item, runtime: SimpleRuntime):
     if isinstance(item, ID):
         return runtime.resolve(item.name)
     if isinstance(item, BinaryOp):
-        if item.op == "|":
-            return parse_expression(item.left, runtime) | parse_expression(
-                item.right, runtime
-            )
-        if item.op == "&":
-            return parse_expression(item.left, runtime) & parse_expression(
-                item.right, runtime
-            )
-        if item.op == "^":
-            return parse_expression(item.left, runtime) ^ parse_expression(
-                item.right, runtime
-            )
-        if item.op == "+":
-            return parse_expression(item.left, runtime) + parse_expression(
-                item.right, runtime
-            )
-        if item.op == "-":
-            return parse_expression(item.left, runtime) - parse_expression(
-                item.right, runtime
-            )
-        if item.op == "*":
-            return parse_expression(item.left, runtime) * parse_expression(
-                item.right, runtime
-            )
-    elif isinstance(item, UnaryOp):
+        lhs = parse_expression(item.left, runtime)
+        rhs = parse_expression(item.right, runtime)
+        ops = {
+            "|": operator.or_,
+            "&": operator.and_,
+            "^": operator.xor,
+            "+": operator.add,
+            "-": operator.sub,
+            "*": operator.mul,
+        }
+        if item.op in ops:
+            return ops[item.op](lhs, rhs)
+        else:
+            raise NotImplementedError(f"Unsupported operator: {item.op}")
+    if isinstance(item, UnaryOp):
         if item.op == "-":
             return -parse_expression(item.expr, runtime)
         if item.op == "++p":  # pre-increment
@@ -181,6 +178,22 @@ def parse_expression(item, runtime: SimpleRuntime):
                 runtime.variables[identifier.name]["value"] += 1
                 return val
             raise RuntimeError(f"Invalid lvalue in increment expression {identifier}")
+    if isinstance(item, FuncCall):
+        func_name: str = item.name.name
+        args = (
+            tuple(parse_expression(arg, runtime) for arg in item.args)
+            if item.args is not None
+            else ()
+        )
+        if func_name in runtime.exposedFunctions:
+            return runtime.exposedFunctions[func_name](*args)
+        elif func_name.startswith("set_"):
+            return runtime.setOscFreqByParam(func_name[4:], *args)
+        else:
+            raise RuntimeError(f"unknown function: {func_name}")
+            return  # Skipping unknown function
+
+    raise TreeWalkException("not an expression")
 
 
 def parse_int_literal(s: str):
@@ -225,7 +238,11 @@ def parse_set_func(param_name: str, stmt: Node, runtime: SimpleRuntime):
     parse_step(0, stmt)
 
 
-def parse_item(item: Node, runtime: SimpleRuntime):
+def parse_statement(item: Node, runtime: SimpleRuntime):
+    try:
+        return parse_expression(item, runtime)
+    except TreeWalkException:
+        pass  # not an expression, must be a proper statement
     if isinstance(item, Decl):
         runtime.declare(item.name)
         init_value = None
@@ -234,19 +251,6 @@ def parse_item(item: Node, runtime: SimpleRuntime):
         elif isinstance(item.init, FuncCall):
             init_value = f'"{item.name[1:]}"'
         runtime.initialize(item.name, init_value)
-    elif isinstance(item, FuncCall):
-        func_name: str = item.name.name
-        args = (
-            tuple(parse_expression(arg, runtime) for arg in item.args)
-            if item.args is not None
-            else ()
-        )
-        if func_name in runtime.exposedFunctions:
-            runtime.exposedFunctions[func_name](*args)
-        elif func_name.startswith("set_"):
-            runtime.setOscFreqByParam(func_name[4:], *args)
-        else:
-            pass  # Skipping unknown function
 
     elif isinstance(item, Assignment):
         variables = runtime.variables
@@ -267,7 +271,7 @@ def parse_item(item: Node, runtime: SimpleRuntime):
         endless_guard = 10000
         while True:
             for subitem in item.stmt.children():
-                parse_item(subitem[1], runtime)
+                parse_statement(subitem[1], runtime)
             variable_value = 0
             try:
                 variables = runtime.variables
@@ -289,7 +293,7 @@ def parse_item(item: Node, runtime: SimpleRuntime):
         n = int(parse_expression(item.init, runtime))
         for _i in range(n):
             for subitem in item.stmt.children():
-                parse_item(subitem[1], runtime)
+                parse_statement(subitem[1], runtime)
     if (
         runtime.max_time is not None
         and runtime._last_play_start_samples()[0] / runtime.descriptor.sampling_rate
@@ -478,7 +482,11 @@ class SimpleRuntime:
             if descriptor.device_type == "SHFSG"
             else 0b10000000001,
         }
+        noop = lambda *args: None
         self.exposedFunctions = {
+            "resetOscPhase": noop,
+            "setDIO": noop,
+            "wait": noop,
             "assignWaveIndex": self.assignWaveIndex,
             "playWave": self.playWave,
             "playZero": self.playZero,
@@ -493,7 +501,11 @@ class SimpleRuntime:
             "setPrecompClear": self.setPrecompClear,
             "waitWave": self.waitWave,
             "waitDIOTrigger": self.waitDIOTrigger,
+            "waitDigTrigger": self.waitDigTrigger,
             "waitZSyncTrigger": self.waitZSyncTrigger,
+            "setPRNGRange": self.setPRNGRange,
+            "setPRNGSeed": self.setPRNGSeed,
+            "getPRNGValue": self.getPRNGValue,
         }
         self.variables = {}
         self.seqc_simulation = SeqCSimulation()
@@ -512,6 +524,7 @@ class SimpleRuntime:
         self._command_table_by_index = {
             ct["index"]: ct for ct in self.descriptor.command_table
         }
+        self._prng = PRNG()
 
     def _last_played_sample(self) -> int:
         ev = self.seqc_simulation.events
@@ -980,8 +993,21 @@ class SimpleRuntime:
     def waitDIOTrigger(self):
         self._start_trigger()
 
+    def waitDigTrigger(self, _index):
+        self._start_trigger()
+
     def waitZSyncTrigger(self):
         self._start_trigger()
+
+    def setPRNGRange(self, lower: int, upper: int):
+        self._prng.set_range(lower, upper)
+
+    def setPRNGSeed(self, seed: int):
+        self._prng.set_seed(seed)
+
+    def getPRNGValue(self):
+        val = next(self._prng)
+        return val
 
 
 def analyze_recipe(
