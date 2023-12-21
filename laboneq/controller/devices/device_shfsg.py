@@ -203,7 +203,9 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
         else:
             return super().clock_source_control_nodes()
 
-    def collect_execution_nodes(self, with_pipeliner: bool) -> list[DaqNodeAction]:
+    async def collect_execution_nodes(
+        self, with_pipeliner: bool
+    ) -> list[DaqNodeAction]:
         if with_pipeliner:
             return self.pipeliner_collect_execution_nodes()
 
@@ -496,7 +498,7 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
             ),
         ]
 
-    def collect_initialization_nodes(
+    async def collect_initialization_nodes(
         self,
         device_recipe_data: DeviceRecipeData,
         initialization: Initialization,
@@ -831,10 +833,10 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
     def command_table_path(self, awg_index: int) -> str:
         return f"/{self.serial}/sgchannels/{awg_index}/awg/commandtable/"
 
-    def collect_reset_nodes(self) -> list[DaqNodeAction]:
-        reset_nodes = super().collect_reset_nodes()
+    async def collect_reset_nodes(self) -> list[DaqNodeAction]:
+        reset_nodes = await super().collect_reset_nodes()
         # Reset pipeliner first, attempt to set AWG enable leads to FW error if pipeliner was enabled.
-        reset_nodes.extend(self.pipeliner_reset_nodes())
+        reset_nodes.extend(await self.pipeliner_reset_nodes())
         reset_nodes.append(
             DaqNodeSetAction(
                 self._daq,

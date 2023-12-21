@@ -587,7 +587,10 @@ def add_connection(
     }
     if dev := setup.instrument_by_uid(instrument):
         handler: _InstrumentGenerator = HANDLERS[dev.__class__]
-        _raise_for_invalid_ports(dev, connection.ports)
+        if isinstance(dev, PRETTYPRINTERDEVICE):
+            dev._ports.extend(connection.ports)
+        else:
+            _raise_for_invalid_ports(dev, connection.ports)
 
         # Device connections
         new_conns = handler.make_connections(connection)
@@ -669,19 +672,20 @@ def add_instrument(setup: DeviceSetup, instrument: Instrument):
     if isinstance(instrument, ZIStandardInstrument):
         if not instrument.address:
             raise DeviceSetupInternalException("Instrument must have an address.")
-        if len(setup.servers) == 1 and instrument.server_uid is None:
-            instrument.server_uid = next(iter(setup.servers.values())).uid
-        else:
-            if not setup.servers:
-                raise DeviceSetupInternalException(
-                    "At least one dataserver must be defined before instruments."
-                )
-            if len(setup.servers) > 1 and instrument.server_uid is None:
-                raise DeviceSetupInternalException(
-                    "Multiple dataservers defined. Specify dataserver UID in the instrument `server_uid`."
-                )
-            if instrument.server_uid not in setup.servers:
-                raise DeviceSetupInternalException(
-                    f"No dataserver '{instrument.server_uid}' defined."
-                )
+        if not isinstance(instrument, PRETTYPRINTERDEVICE):
+            if len(setup.servers) == 1 and instrument.server_uid is None:
+                instrument.server_uid = next(iter(setup.servers.values())).uid
+            else:
+                if not setup.servers:
+                    raise DeviceSetupInternalException(
+                        "At least one dataserver must be defined before instruments."
+                    )
+                if len(setup.servers) > 1 and instrument.server_uid is None:
+                    raise DeviceSetupInternalException(
+                        "Multiple dataservers defined. Specify dataserver UID in the instrument `server_uid`."
+                    )
+                if instrument.server_uid not in setup.servers:
+                    raise DeviceSetupInternalException(
+                        f"No dataserver '{instrument.server_uid}' defined."
+                    )
     setup.instruments.append(instrument)

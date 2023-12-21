@@ -25,9 +25,10 @@ from laboneq.controller.communication import (
     DaqWrapper,
     batch_set,
 )
+from laboneq.controller.devices.async_support import gather_and_apply
 from laboneq.controller.devices.device_collection import DeviceCollection
 from laboneq.controller.devices.device_uhfqa import DeviceUHFQA
-from laboneq.controller.devices.device_zi import Waveforms
+from laboneq.controller.devices.device_zi import Waveforms, IntegrationWeights
 from laboneq.controller.devices.zi_node_monitor import ResponseWaiter
 from laboneq.controller.near_time_runner import NearTimeRunner
 from laboneq.controller.pipeliner_reload_tracker import PipelinerReloadTracker
@@ -43,13 +44,14 @@ from laboneq.controller.versioning import LabOneVersion
 from laboneq.core.exceptions import AbortExecution
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
-from laboneq.core.utilities.async_helpers import run_sync
+from laboneq.core.utilities.async_helpers import run_async
 from laboneq.core.utilities.replace_pulse import ReplacementType, calc_wave_replacements
 from laboneq.data.execution_payload import TargetSetup
 from laboneq.data.experiment_results import ExperimentResults
 from laboneq.data.recipe import NtStepKey
 from laboneq.executor.execution_from_experiment import ExecutionFactoryFromExperiment
 from laboneq.executor.executor import Statement
+from laboneq.controller.devices.device_pretty_printer import DevicePRETTYPRINTER
 
 if TYPE_CHECKING:
     from laboneq.controller.devices.device_zi import DeviceZI
@@ -96,6 +98,7 @@ class _UploadItem:
     seqc_item: _SeqCCompileItem | None
     waves: Waveforms | None
     command_table: dict[Any] | None
+    integration_weights: IntegrationWeights | None
 
 
 class Controller:
@@ -137,25 +140,22 @@ class Controller:
             self._devices.find_by_uid(osc_param.device_id).allocate_osc(osc_param)
 
     async def _reset_to_idle_state(self):
-        reset_nodes = []
-        for _, device in self._devices.all:
-            reset_nodes.extend(device.collect_reset_nodes())
-        await batch_set(reset_nodes)
+        async with gather_and_apply(batch_set) as awaitables:
+            for _, device in self._devices.all:
+                awaitables.append(device.collect_reset_nodes())
 
     async def _apply_recipe_initializations(self):
-        nodes_to_initialize: list[DaqNodeAction] = []
-        for initialization in self._recipe_data.initializations:
-            device = self._devices.find_by_uid(initialization.device_uid)
-            nodes_to_initialize.extend(
-                device.collect_initialization_nodes(
-                    self._recipe_data.device_settings[initialization.device_uid],
-                    initialization,
-                    self._recipe_data,
+        async with gather_and_apply(batch_set) as awaitables:
+            for initialization in self._recipe_data.initializations:
+                device = self._devices.find_by_uid(initialization.device_uid)
+                awaitables.append(
+                    device.collect_initialization_nodes(
+                        self._recipe_data.device_settings[initialization.device_uid],
+                        initialization,
+                        self._recipe_data,
+                    )
                 )
-            )
-            nodes_to_initialize.extend(device.collect_osc_initialization_nodes())
-
-        await batch_set(nodes_to_initialize)
+                awaitables.append(device.collect_osc_initialization_nodes())
 
     async def _set_nodes_before_awg_program_upload(self):
         nodes_to_initialize = []
@@ -231,6 +231,15 @@ class Controller:
                     if rt_exec_step is None:
                         continue
 
+                    if isinstance(device, DevicePRETTYPRINTER):
+                        # TODO: Temporary API
+                        await device.prepare_artifacts(
+                            artifacts=recipe_data.scheduled_experiment.artifacts,
+                            channel=rt_exec_step.awg_id,
+                            instructions_ref=rt_exec_step.seqc_ref,
+                            waves_ref=rt_exec_step.wave_indices_ref,
+                        )
+                        continue
                     seqc_code = device.prepare_seqc(
                         recipe_data.scheduled_experiment.artifacts,
                         rt_exec_step.seqc_ref,
@@ -242,6 +251,11 @@ class Controller:
                     command_table = device.prepare_command_table(
                         recipe_data.scheduled_experiment.artifacts,
                         rt_exec_step.wave_indices_ref,
+                    )
+                    integration_weights = device.prepare_integration_weights(
+                        recipe_data.scheduled_experiment.artifacts,
+                        recipe_data.recipe.integrator_allocations,
+                        rt_exec_step.kernel_indices_ref,
                     )
 
                     seqc_item = _SeqCCompileItem(
@@ -258,6 +272,7 @@ class Controller:
                             seqc_item=seqc_item,
                             waves=waves,
                             command_table=command_table,
+                            integration_weights=integration_weights,
                         )
                     )
 
@@ -306,6 +321,11 @@ class Controller:
                         seqc_item.awg_index, item.command_table
                     )
                     wf_dev_nodes.append(set_action)
+
+                if item.integration_weights is not None:
+                    wf_dev_nodes += device.prepare_upload_all_integration_weights(
+                        seqc_item.awg_index, item.integration_weights
+                    )
 
                 if with_pipeliner:
                     # For devices with pipeliner, wf_dev_nodes == elf_node_settings
@@ -444,7 +464,7 @@ class Controller:
         nodes_to_execute = []
         for _, device in self._devices.followers:
             nodes_to_execute.extend(
-                device.collect_execution_nodes(with_pipeliner=with_pipeliner)
+                await device.collect_execution_nodes(with_pipeliner=with_pipeliner)
             )
 
         await batch_set(nodes_to_execute)
@@ -479,7 +499,7 @@ class Controller:
 
         for _, device in self._devices.leaders:
             nodes_to_execute.extend(
-                device.collect_execution_nodes(with_pipeliner=with_pipeliner)
+                await device.collect_execution_nodes(with_pipeliner=with_pipeliner)
             )
         await batch_set(nodes_to_execute)
 
@@ -560,7 +580,7 @@ class Controller:
         _logger.debug("Execution stopped")
 
     def connect(self, reset_devices: bool = False):
-        run_sync(self._connect_async, reset_devices=reset_devices)
+        run_async(self._connect_async, reset_devices=reset_devices)
 
     async def _connect_async(self, reset_devices: bool = False):
         now = time.monotonic()
@@ -587,7 +607,9 @@ class Controller:
         logical_signals: list[str] | None = None,
         unused_only: bool = False,
     ):
-        run_sync(self._disable_outputs_async, device_uids, logical_signals, unused_only)
+        run_async(
+            self._disable_outputs_async, device_uids, logical_signals, unused_only
+        )
 
     async def _disable_outputs_async(
         self,
@@ -598,7 +620,7 @@ class Controller:
         await self._devices.disable_outputs(device_uids, logical_signals, unused_only)
 
     def shut_down(self):
-        run_sync(self._shut_down_async)
+        run_async(self._shut_down_async)
 
     async def _shut_down_async(self):
         _logger.info("Shutting down all devices...")
@@ -606,7 +628,7 @@ class Controller:
         _logger.info("Successfully Shut down all devices.")
 
     def disconnect(self):
-        run_sync(self._disconnect_async)
+        run_async(self._disconnect_async)
 
     async def _disconnect_async(self):
         _logger.info("Disconnecting from all devices and servers...")
@@ -618,7 +640,7 @@ class Controller:
     def execute_compiled_legacy(
         self, compiled_experiment: CompiledExperiment, session: Session | None = None
     ):
-        run_sync(self._execute_compiled_legacy_async, compiled_experiment, session)
+        run_async(self._execute_compiled_legacy_async, compiled_experiment, session)
 
     async def _execute_compiled_legacy_async(
         self, compiled_experiment: CompiledExperiment, session: Session | None = None
@@ -647,7 +669,7 @@ class Controller:
             session._last_results.execution_errors = self._results.execution_errors
 
     def execute_compiled(self, job: ExecutionPayload):
-        run_sync(self._execute_compiled_async, job)
+        run_async(self._execute_compiled_async, job)
 
     async def _execute_compiled_async(self, job: ExecutionPayload):
         self._recipe_data = pre_process_compiled(

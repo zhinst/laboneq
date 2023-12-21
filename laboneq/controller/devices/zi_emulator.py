@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from dataclasses import InitVar, dataclass, field
 from enum import Enum
 from functools import partial
-from typing import Any, Callable, overload
+from typing import Any, Callable, cast, overload
 from weakref import ref
 
 import numpy as np
@@ -25,7 +25,7 @@ class NodeBase:
 
     read_only: bool = False
     subscribed: bool = False
-    handler: Callable[[NodeBase], None] = None
+    handler: Callable[[NodeBase], None] | None = None
     _value: Any = field(init=False, repr=False)
 
     @property
@@ -38,6 +38,10 @@ class NodeBase:
 
     def node_value(self) -> Any:
         return {"value": [self.value]}
+
+    def call_handler(self):
+        if self.handler is not None:
+            self.handler(self)
 
 
 @dataclass
@@ -85,21 +89,22 @@ class NodeVectorComplex(NodeVectorBase):
 
 @dataclass
 class NodeDynamic(NodeBase):
-    value: InitVar[Any]
-    getter: Callable[[], Any] = None
-    setter: Callable[[Any], None] = None
+    value: InitVar[Any | None] = field(default=None)
+    getter: Callable[[], Any] | None = None
+    setter: Callable[[Any], None] | None = None
 
-    def __post_init__(self, value: Any):
+    def __post_init__(self, value: Any | None):
         if self.setter is not None and value is not None:
             self.value = value
 
-    @property
+    @property  # type: ignore
     def value(self) -> Any:
         return None if self.getter is None else self.getter()
 
     @value.setter
     def value(self, value: Any):
-        self.setter(value)
+        if self.setter is not None:
+            self.setter(value)
 
 
 class NodeType(Enum):
@@ -120,10 +125,10 @@ class NodeInfo:
     type: NodeType = NodeType.FLOAT
     default: Any = None
     read_only: bool = False
-    handler: Callable[[NodeBase], None] = None
+    handler: Callable[[NodeBase], Any] | None = None
     # For DYNAMIC nodes
-    getter: Callable[[], Any] = None
-    setter: Callable[[Any], None] = None
+    getter: Callable[[], Any] | None = None
+    setter: Callable[[Any], Any] | None = None
 
     def make_node(self) -> NodeBase:
         "Constructs concrete node instance from a node descriptor."
@@ -153,7 +158,7 @@ class NodeInfo:
 class PollEvent:
     "A class representing a single poll event"
 
-    path: str | None = None
+    path: str
     timestamp: int | None = None
     value: Any = None
 
@@ -216,8 +221,7 @@ class DevEmu(ABC):
 
     def set(self, dev_path: str, value: Any):
         node = self._set_val(dev_path, value)
-        if node.handler is not None:
-            node.handler(node)
+        node.call_handler()
 
     def subscribe(self, dev_path: str):
         node = self._get_node(dev_path)
@@ -252,7 +256,9 @@ class PipelinerEmu:
 
     @property
     def _parent(self) -> DevEmu:
-        return self._parent_ref()
+        parent = self._parent_ref()
+        assert parent is not None
+        return parent
 
     def _pipeliner_committed(self, channel: int):
         avail_slots: int = self._parent._get_node(
@@ -461,7 +467,7 @@ class DevEmuHDAWG(DevEmuHW):
     def _sample_clock_switched(self):
         self._set_val("system/clocks/sampleclock/status", 0)
 
-    def _sample_clock(self, node: NodeFloat):
+    def _sample_clock(self, node: NodeBase):
         self._set_val("system/clocks/sampleclock/status", 2)
         self._scheduler.enter(
             delay=0.001,
@@ -479,12 +485,12 @@ class DevEmuHDAWG(DevEmuHW):
         if current_freq != target_freq:
             self._set_val("system/clocks/referenceclock/freq", target_freq)
 
-    def _ref_clock(self, node: NodeInt):
+    def _ref_clock(self, node: NodeBase):
         self._scheduler.enter(
             delay=0.001,
             priority=0,
             action=self._ref_clock_switched,
-            argument=(node.value,),
+            argument=(cast(NodeInt, node).value,),
         )
 
     def _node_def(self) -> dict[str, NodeInfo]:
@@ -612,12 +618,11 @@ class Gen2Base(DevEmuHW):
         self._set_val("system/clocks/referenceclock/in/freq", freq)
 
     def _ref_clock(self, node: NodeBase):
-        node_int: NodeInt = node
         self._scheduler.enter(
             delay=0.001,
             priority=0,
             action=self._ref_clock_switched,
-            argument=(node_int.value,),
+            argument=(cast(NodeInt, node).value,),
         )
 
     def _node_def_gen2(self) -> dict[str, NodeInfo]:
@@ -868,6 +873,18 @@ def _canonical_path_list(path: str | list[str]) -> list[str]:
     return paths
 
 
+_dev_type_map: dict[str | None, type[DevEmu]] = {
+    "ZI": DevEmuZI,
+    "HDAWG": DevEmuHDAWG,
+    "UHFQA": DevEmuUHFQA,
+    "PQSC": DevEmuPQSC,
+    "SHFQA": DevEmuSHFQA,
+    "SHFSG": DevEmuSHFSG,
+    "SHFQC": DevEmuSHFQC,
+    "NONQC": DevEmuNONQC,
+}
+
+
 class ziDAQServerEmulator:
     """A class replacing the 'zhinst.core.ziDAQServer', emulating its behavior
     to the extent required by LabOne Q SW without the real DataServer/HW.
@@ -880,41 +897,25 @@ class ziDAQServerEmulator:
         assert isinstance(port, int)
         super().__init__()
         self._scheduler = sched.scheduler()
-        self._device_type_map: dict[str, str] = {"ZI": "ZI"}
+        self._dev_type_by_serial: dict[str, str] = {"ZI": "ZI"}
         self._devices: dict[str, DevEmu] = {}
         self._options: dict[str, dict[str, Any]] = {"ZI": {"emu_server": self}}
 
     def map_device_type(self, serial: str, type: str):
-        self._device_type_map[serial.upper()] = type.upper()
+        self._dev_type_by_serial[serial.upper()] = type.upper()
 
     def set_option(self, serial: str, option: str, value: Any):
         dev_opts = self._options.setdefault(serial.upper(), {})
         dev_opts[option] = value
 
     def _device_factory(self, serial: str) -> DevEmu:
-        dev_type_str = self._device_type_map.get(serial.upper())
-        if dev_type_str == "ZI":
-            dev_type = DevEmuZI
-        elif dev_type_str == "HDAWG":
-            dev_type = DevEmuHDAWG
-        elif dev_type_str == "UHFQA":
-            dev_type = DevEmuUHFQA
-        elif dev_type_str == "PQSC":
-            dev_type = DevEmuPQSC
-        elif dev_type_str == "SHFQA":
-            dev_type = DevEmuSHFQA
-        elif dev_type_str == "SHFSG":
-            dev_type = DevEmuSHFSG
-        elif dev_type_str == "SHFQC":
-            dev_type = DevEmuSHFQC
-        elif dev_type_str == "NONQC":
-            dev_type = DevEmuNONQC
-        else:
+        dev_type = _dev_type_map.get(self._dev_type_by_serial.get(serial.upper()))
+        if dev_type is None:
             dev_type = _serial_to_device_type(serial)
         dev_opts = self._options.setdefault(serial.upper(), {})
         return dev_type(serial=serial, scheduler=self._scheduler, dev_opts=dev_opts)
 
-    def _device_lookup(self, serial: str, create: bool = True) -> DevEmu:
+    def _device_lookup(self, serial: str, create: bool = True) -> DevEmu | None:
         serial = serial.upper()
         device = self._devices.get(serial)
         if device is None and create:
@@ -938,14 +939,16 @@ class ziDAQServerEmulator:
             if len(path_parts) == 1 and path_parts[0] == "*":
                 dev_path = "*"
         else:
-            devices.append(self._device_lookup(path_parts[0]))
+            path_dev = self._device_lookup(path_parts[0])
+            assert path_dev is not None
+            devices.append(path_dev)
             dev_path = "/".join(path_parts[1:]).lower()
         return devices, dev_path
 
     def _resolve_paths_and_perform(
-        self, path: str | list[str], handler: Callable
-    ) -> dict[str, NodeBase]:
-        results: dict[str, NodeBase] = {}
+        self, path: str | list[str], handler: Callable[[DevEmu, str], Any]
+    ) -> dict[str, Any]:
+        results: dict[str, Any] = {}
         for p in _canonical_path_list(path):
             devices, dev_path = self._resolve_dev(p)
             dev_path_suffix = "" if len(dev_path) == 0 else f"/{dev_path}"
@@ -990,14 +993,14 @@ class ziDAQServerEmulator:
         device.set(dev_path, value)
 
     @overload
-    def set(self, path: str, value: Any):
+    def set(self, path: str, value: Any, /):
         ...
 
     @overload
-    def set(self, items: list[list[Any]]):
+    def set(self, items: list[list[Any]], /):
         ...
 
-    def set(self, path_or_items: str | list[list[Any]], value: Any = None):
+    def set(self, path_or_items: str | list[list[Any]], value: Any | None = None):
         self._progress_scheduler()
         if isinstance(path_or_items, str):
             pass
@@ -1014,7 +1017,7 @@ class ziDAQServerEmulator:
         assert len(devices) == 1
         return devices[0].getString(dev_path)
 
-    def _listNodesJSON(self, device: DevEmu, dev_path: str):
+    def _listNodesJSON(self, device: DevEmu, dev_path: str) -> dict:
         # Not implemented. Was intended mainly for the toolkit, instead toolkit itself is mocked.
         return {}
 
@@ -1023,7 +1026,7 @@ class ziDAQServerEmulator:
         results = self._resolve_paths_and_perform(path, self._listNodesJSON)
         combined_result = {}
         for r in results.values():
-            combined_result.update(r)
+            combined_result.update(cast(dict, r))
         return json.dumps(combined_result)
 
     def _subscribe(self, device: DevEmu, dev_path: str):
@@ -1057,12 +1060,12 @@ class ziDAQServerEmulator:
         timeout_ms: int,
         flags: int = 0,
         flat: bool = False,
-    ) -> Any:
+    ) -> dict[str, Any]:
         self._progress_scheduler(wait_time=recording_time_s)
         events: list[PollEvent] = []
         for dev in self._devices.values():
             events.extend(dev.poll())
-        result = {}
+        result: dict[str, Any] = {}
         # TODO(2K): reshape results
         assert flat is True
         for event in events:

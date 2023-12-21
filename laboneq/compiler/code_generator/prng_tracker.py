@@ -13,6 +13,7 @@ class PRNGTracker:
         self._seed: int | None = None
         self._offset: int = 0
         self._committed: bool = False
+        self._active_sample: str | None = None
 
     @property
     def range(self):
@@ -37,9 +38,23 @@ class PRNGTracker:
         return self._offset
 
     @offset.setter
-    def offset(self, value):
+    def offset(self, value: int):
         assert not self._committed
         self._offset = value
+
+    @property
+    def active_sample(self):
+        return self._active_sample
+
+    @active_sample.setter
+    def active_sample(self, value: str):
+        assert isinstance(value, str)
+        assert self._active_sample is None, "must first drop existing sample"
+        self._active_sample = value
+
+    def drop_sample(self):
+        assert self._active_sample is not None, "no sample to drop"
+        self._active_sample = None
 
     def is_committed(self) -> bool:
         return self._committed

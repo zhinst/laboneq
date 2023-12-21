@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import TYPE_CHECKING, Iterable, List, Optional, Tuple
+from typing import TYPE_CHECKING, Iterable, List, Tuple
 
 from attrs import define
 from zhinst.utils.feedback_model import (
@@ -240,9 +240,9 @@ def _compute_start_with_latency(
 @define(kw_only=True, slots=True)
 class MatchSchedule(SectionSchedule):
     handle: str | None
-    user_register: Optional[int]
-    match_prng: bool
-    local: Optional[bool]
+    user_register: int | None
+    prng_sample: str | None
+    local: bool | None
 
     def __attrs_post_init__(self):
         super().__attrs_post_init__()

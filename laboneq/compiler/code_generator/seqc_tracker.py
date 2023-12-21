@@ -191,6 +191,10 @@ class SeqCTracker:
         if offset is not None:
             self._prng_tracker.offset = offset
 
+    def drop_prng(self):
+        assert self._prng_tracker is not None
+        self._prng_tracker = None
+
     def add_prng_match_command_table_execution(self, offset: int):
         assert self.prng_tracker().is_committed()
         if offset != 0:

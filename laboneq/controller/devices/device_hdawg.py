@@ -229,11 +229,13 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
 
         return nodes_to_configure_phase
 
-    def collect_execution_nodes(self, with_pipeliner: bool) -> list[DaqNodeAction]:
+    async def collect_execution_nodes(
+        self, with_pipeliner: bool
+    ) -> list[DaqNodeAction]:
         if with_pipeliner:
             return self.pipeliner_collect_execution_nodes()
 
-        return super().collect_execution_nodes(with_pipeliner=with_pipeliner)
+        return await super().collect_execution_nodes(with_pipeliner=with_pipeliner)
 
     def conditions_for_execution_ready(self, with_pipeliner: bool) -> dict[str, Any]:
         if with_pipeliner:
@@ -269,12 +271,12 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
             )
         return nodes
 
-    def collect_initialization_nodes(
+    async def collect_initialization_nodes(
         self,
         device_recipe_data: DeviceRecipeData,
         initialization: Initialization,
         recipe_data: RecipeData,
-    ) -> list[DaqNodeAction]:
+    ) -> list[DaqNodeSetAction]:
         _logger.debug("%s: Initializing device...", self.dev_repr)
 
         nodes: list[tuple[str, Any]] = []
@@ -446,17 +448,13 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
         for ch, osc_idx in osc_selects.items():
             nodes.append((f"sines/{ch}/oscselect", osc_idx))
 
-        set_actions = [
-            DaqNodeSetAction(self._daq, f"/{self.serial}/{k}", v) for k, v in nodes
-        ]
         # Configure DIO/ZSync at init (previously was after AWG loading).
         # This is a prerequisite for passing AWG checks in FW on the pipeliner commit.
         # Without the pipeliner, these checks are only performed when the AWG is enabled,
         # therefore DIO could be configured after the AWG loading.
-        set_actions.extend(
-            self.collect_dio_configuration_nodes(initialization, recipe_data)
-        )
-        return set_actions
+        nodes.extend(self._collect_dio_configuration_nodes(initialization, recipe_data))
+
+        return [DaqNodeSetAction(self._daq, f"/{self.serial}/{k}", v) for k, v in nodes]
 
     def collect_prepare_nt_step_nodes(
         self, attributes: DeviceAttributesView, recipe_data: RecipeData
@@ -522,11 +520,11 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
     ) -> list[DaqNodeAction]:
         return []
 
-    def collect_dio_configuration_nodes(
+    def _collect_dio_configuration_nodes(
         self, initialization: Initialization, recipe_data: RecipeData
-    ) -> list[DaqNodeAction]:
+    ) -> list[tuple[str, Any]]:
         _logger.debug("%s: Configuring trigger configuration nodes.", self.dev_repr)
-        nodes_to_configure_triggers = []
+        nodes: list[tuple[str, Any]] = []
 
         triggering_mode = initialization.config.triggering_mode
         if triggering_mode == TriggeringMode.ZSYNC_FOLLOWER:
@@ -534,13 +532,8 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
                 "%s: Configuring DIO mode: ZSync pass-through.", self.dev_repr
             )
             _logger.debug("%s: Configuring external clock to ZSync.", self.dev_repr)
-            nodes_to_configure_triggers.append(
-                DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/mode", 3)
-            )
-
-            nodes_to_configure_triggers.append(
-                DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/drive", 0xC)
-            )
+            nodes.append(("dios/0/mode", 3))
+            nodes.append(("dios/0/drive", 0xC))
 
             # Loop over at least AWG instance to cover the case that the instrument is only used
             # as a communication proxy. Some of the nodes on the AWG branch are needed to get
@@ -548,15 +541,9 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
             for awg_index in (
                 self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
             ):
-                awg_path = f"/{self.serial}/awgs/{awg_index}"
-                nodes_to_configure_triggers.extend(
-                    [
-                        DaqNodeSetAction(self._daq, f"{awg_path}/dio/strobe/slope", 0),
-                        DaqNodeSetAction(
-                            self._daq, f"{awg_path}/dio/valid/polarity", 0
-                        ),
-                    ]
-                )
+                awg_path = f"awgs/{awg_index}"
+                nodes.append((f"{awg_path}/dio/strobe/slope", 0))
+                nodes.append((f"{awg_path}/dio/valid/polarity", 0))
                 awg_config = next(
                     (
                         awg_config
@@ -570,64 +557,35 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
                     None,
                 )
                 if awg_config is not None:
-                    nodes_to_configure_triggers.extend(
-                        [
-                            DaqNodeSetAction(
-                                self._daq,
-                                f"{awg_path}/zsync/register/shift",
-                                awg_config.register_selector_shift,
-                            ),
-                            DaqNodeSetAction(
-                                self._daq,
-                                f"{awg_path}/zsync/register/mask",
-                                awg_config.register_selector_bitmask,
-                            ),
-                            DaqNodeSetAction(
-                                self._daq,
-                                f"{awg_path}/zsync/register/offset",
-                                awg_config.command_table_match_offset,
-                            ),
-                        ]
+                    nodes.append(
+                        (
+                            f"{awg_path}/zsync/register/shift",
+                            awg_config.register_selector_shift,
+                        )
+                    )
+                    nodes.append(
+                        (
+                            f"{awg_path}/zsync/register/mask",
+                            awg_config.register_selector_bitmask,
+                        )
+                    )
+                    nodes.append(
+                        (
+                            f"{awg_path}/zsync/register/offset",
+                            awg_config.command_table_match_offset,
+                        )
                     )
         elif triggering_mode == TriggeringMode.DESKTOP_LEADER:
-            nodes_to_configure_triggers.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/triggers/in/0/level",
-                    DIG_TRIGGER_1_LEVEL,
-                )
-            )
+            nodes.append(("triggers/in/0/level", DIG_TRIGGER_1_LEVEL))
 
             for awg_index in (
                 self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
             ):
-                nodes_to_configure_triggers.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/awgs/{awg_index}/auxtriggers/0/slope",
-                        1,
-                    )
-                )
-                nodes_to_configure_triggers.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/awgs/{awg_index}/auxtriggers/0/channel",
-                        0,
-                    )
-                )
+                nodes.append((f"awgs/{awg_index}/auxtriggers/0/slope", 1))
+                nodes.append((f"awgs/{awg_index}/auxtriggers/0/channel", 0))
 
-            nodes_to_configure_triggers.extend(
-                [
-                    DaqNodeSetAction(
-                        self._daq, f"/{self.serial}/triggers/out/0/source", 0
-                    ),
-                    DaqNodeSetAction(
-                        self._daq, f"/{self.serial}/triggers/out/1/source", 1
-                    ),
-                    DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/mode", 1),
-                    DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/drive", 15),
-                ]
-            )
+            nodes.append(("dios/0/mode", 1))
+            nodes.append(("dios/0/drive", 15))
 
             # Loop over at least AWG instance to cover the case that the instrument is only used
             # as a communication proxy. Some of the nodes on the AWG branch are needed to get
@@ -635,46 +593,20 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
             for awg_index in (
                 self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
             ):
-                nodes_to_configure_triggers.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/awgs/{awg_index}/dio/strobe/slope",
-                        0,
-                    )
-                )
-                nodes_to_configure_triggers.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/awgs/{awg_index}/dio/valid/polarity",
-                        2,
-                    )
-                )
-                nodes_to_configure_triggers.append(
-                    DaqNodeSetAction(
-                        self._daq, f"/{self.serial}/awgs/{awg_index}/dio/valid/index", 0
-                    )
-                )
-                nodes_to_configure_triggers.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/awgs/{awg_index}/dio/mask/value",
-                        0x3FF,
-                    )
-                )
-                nodes_to_configure_triggers.append(
-                    DaqNodeSetAction(
-                        self._daq, f"/{self.serial}/awgs/{awg_index}/dio/mask/shift", 1
-                    )
-                )
+                nodes.append((f"awgs/{awg_index}/dio/strobe/slope", 0))
+                nodes.append((f"awgs/{awg_index}/dio/valid/polarity", 2))
+                nodes.append((f"awgs/{awg_index}/dio/valid/index", 0))
+                nodes.append((f"awgs/{awg_index}/dio/mask/value", 0x3FF))
+                nodes.append((f"awgs/{awg_index}/dio/mask/shift", 1))
 
-        return nodes_to_configure_triggers
+        return nodes
 
-    def collect_reset_nodes(self) -> list[DaqNodeAction]:
+    async def collect_reset_nodes(self) -> list[DaqNodeAction]:
         reset_nodes = []
         reset_nodes.extend(
             [
                 # Reset pipeliner first, attempt to set AWG enable leads to FW error if pipeliner was enabled.
-                *self.pipeliner_reset_nodes(),
+                *await self.pipeliner_reset_nodes(),
                 DaqNodeSetAction(
                     self._daq,
                     f"/{self.serial}/awgs/*/enable",
@@ -691,5 +623,5 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
         )
         # Reset errors must be the last operation, as above sets may cause errors.
         # See https://zhinst.atlassian.net/browse/HULK-1606
-        reset_nodes.extend(super().collect_reset_nodes())
+        reset_nodes.extend(await super().collect_reset_nodes())
         return reset_nodes

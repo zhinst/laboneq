@@ -90,6 +90,13 @@ class LoopIR(SectionIR):
         }
         return [
             {"event_type": EventType.SECTION_START, "time": start, "id": start_id, **d},
+            {
+                "event_type": EventType.LOOP_START,
+                "time": start,
+                "iterations": self.iterations,
+                "compressed": self.compressed,
+                **d,
+            },
             *[e for l in children_events for e in l],
             {"event_type": EventType.LOOP_END, "time": start + self.length, **d},
             {"event_type": EventType.SECTION_END, "time": start + self.length, **d},

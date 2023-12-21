@@ -105,6 +105,15 @@ class CompiledExperiment:
         return self.scheduled_experiment.recipe
 
     @property
+    def estimated_runtime(self) -> float:
+        """An estimation of the total runtime of the experiment in seconds.
+
+        DISCLAIMER: This estimation does not include any overhead from network, IO,
+        or python runtime.
+        """
+        return self.scheduled_experiment.recipe.total_execution_time
+
+    @property
     def wave_indices(self) -> list[dict]:
         """A list of which waves are used by each Sequence C program.
 

@@ -19,7 +19,7 @@ class LoopIterationSchedule(SectionSchedule):
     sweep_parameters: List[ParameterInfo]
     num_repeats: int
     shadow: bool
-    sample_prng: bool
+    prng_sample: str | None
 
     def __attrs_post_init__(self):
         # We always "steal" the data from a SectionSchedule which has already done
@@ -34,7 +34,7 @@ class LoopIterationSchedule(SectionSchedule):
         num_repeats,
         shadow,
         sweep_parameters,
-        sample_prng,
+        prng_sample,
     ):
         """Down-cast from SectionSchedule."""
         return cls(
@@ -43,7 +43,7 @@ class LoopIterationSchedule(SectionSchedule):
             num_repeats=num_repeats,
             shadow=shadow,
             sweep_parameters=sweep_parameters,
-            sample_prng=sample_prng,
+            prng_sample=prng_sample,
         )
 
     def __hash__(self):

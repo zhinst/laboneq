@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations  # | for Union
+import warnings
 
 from collections import deque
 from dataclasses import dataclass
@@ -60,4 +61,12 @@ class ExperimentInspector:
 
 
 def inspect(exp: Experiment | CompiledExperiment) -> ExperimentInspector:
+    warnings.warn(
+        "Experiment inspection is deprecated and will be removed in the future versions. "
+        "Use `Experiment.get_acquire_loop_rt` and `CompiledExperiment.estimated_runtime` "
+        "instead.",
+        FutureWarning,
+        stacklevel=2,
+    )
+
     return ExperimentInspector.from_experiment(exp)

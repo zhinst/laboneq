@@ -206,6 +206,8 @@ class JsonLoader(LoaderBase):
                     f" To sweep the amplitude, pass the parameter in the"
                     f" corresponding `play()` command."
                 )
+            if amplitude is None:
+                amplitude = 1.0
 
             self.add_pulse(
                 pulse["id"],

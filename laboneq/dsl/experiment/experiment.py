@@ -1278,3 +1278,20 @@ class Experiment:
         for s in self.sections:
             retval.extend(Experiment._all_subsections(s))
         return retval
+
+    def _traverse(self):
+        staq = deque([self.sections[0]])
+
+        while len(staq):
+            sec = staq.pop()
+            yield sec
+            try:
+                staq.extendleft(sec.children)
+            except AttributeError:
+                pass
+
+    def get_rt_acquire_loop(self) -> AcquireLoopRt:
+        """Return the real-time acquire loop object."""
+        for node in self._traverse():
+            if isinstance(node, AcquireLoopRt):
+                return node

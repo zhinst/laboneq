@@ -70,6 +70,6 @@ from laboneq.dsl.session import Session
 from laboneq.dsl.utils import has_onboard_lo
 from laboneq.implementation.data_storage.laboneq_database import DataStore
 from laboneq.openqasm3.gate_store import GateStore
-from laboneq.openqasm3.openqasm3_importer import exp_from_qasm
+from laboneq.openqasm3.openqasm3_importer import exp_from_qasm, ExternResult
 from laboneq.pulse_sheet_viewer.pulse_sheet_viewer import show_pulse_sheet
 from laboneq.simulator.output_simulator import OutputSimulator

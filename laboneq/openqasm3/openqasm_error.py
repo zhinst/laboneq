@@ -15,7 +15,7 @@ class OpenQasmException(Exception):
     >>> raise OpenQasmException("Highlight the name of the class!", mark, src)  #doctest: +ELLIPSIS
     Traceback (most recent call last):
       ...
-    openqasm_error.OpenQasmException: Highlight the name of the class!
+    laboneq.openqasm3.openqasm_error.OpenQasmException: Highlight the name of the class!
     |  class OpenQasmException(Exception):
              ^^^^^^^^^^^^^^^^^
 
@@ -25,7 +25,7 @@ class OpenQasmException(Exception):
     >>> raise OpenQasmException("Something went wrong")
     Traceback (most recent call last):
       ...
-    openqasm_error.OpenQasmException: Something went wrong
+    laboneq.openqasm3.openqasm_error.OpenQasmException: Something went wrong
     """
 
     def __init__(self, msg=None, mark: Span | None = None, source: str | None = None):

@@ -15,12 +15,12 @@ from rich.table import Table
 
 from laboneq.compiler.common.awg_info import AwgKey
 from laboneq.compiler.workflow.compiler_output import (
-    CodegenOutput,
-    CombinedRealtimeCompilerOutput,
-    CombinedRealtimeCompilerOutputCode,
-    CombinedRealtimeCompilerOutputPrettyPrinter,
+    SeqCGenOutput,
+    CombinedRTCompilerOutputContainer,
+    CombinedRTOutputSeqC,
+    CombinedRTOutputPrettyPrinter,
     PrettyPrinterOutput,
-    RealtimeCompilerOutput,
+    RTCompilerOutputContainer,
 )
 
 _logger = logging.getLogger(__name__)
@@ -69,7 +69,7 @@ def _do_get_report(compiler_output, step_indices):
 
 
 @_do_calculate_total.register
-def _(compiler_output: CombinedRealtimeCompilerOutputCode) -> ReportEntry:
+def _(compiler_output: CombinedRTOutputSeqC) -> ReportEntry:
     total_seqc = sum(len(s["text"].splitlines()) for s in compiler_output.src)
     total_ct = sum(len(ct["ct"]) for ct in compiler_output.command_tables)
     total_wave_idx = sum(len(wi) for wi in compiler_output.wave_indices)
@@ -90,7 +90,7 @@ def _(compiler_output: CombinedRealtimeCompilerOutputCode) -> ReportEntry:
 
 
 @_do_calculate_total.register
-def _(compiler_output: CombinedRealtimeCompilerOutputPrettyPrinter) -> ReportEntry:
+def _(compiler_output: CombinedRTOutputPrettyPrinter) -> ReportEntry:
     total_src = sum(len(s) for s in compiler_output.src.items())
 
     return ReportEntry(
@@ -120,7 +120,7 @@ def _(
 
 
 @_do_get_report.register
-def _(compiler_output: CodegenOutput, step_indices: list[int]) -> list[ReportEntry]:
+def _(compiler_output: SeqCGenOutput, step_indices: list[int]) -> list[ReportEntry]:
     report = []
     for awg, awg_src in compiler_output.src.items():
         seqc_loc = len(awg_src["text"].splitlines())
@@ -150,13 +150,13 @@ class CompilationReportGenerator:
         self._total: ReportEntry | None = None
 
     def update(
-        self, rt_compiler_output: RealtimeCompilerOutput, step_indices: list[int]
+        self, rt_compiler_output: RTCompilerOutputContainer, step_indices: list[int]
     ):
         for output in rt_compiler_output.codegen_output.values():
             report = _do_get_report(output, step_indices=step_indices)
             self._data += report
 
-    def calculate_total(self, compiler_output: CombinedRealtimeCompilerOutput):
+    def calculate_total(self, compiler_output: CombinedRTCompilerOutputContainer):
         totals = [
             _do_calculate_total(tot) for tot in compiler_output.combined_output.values()
         ]

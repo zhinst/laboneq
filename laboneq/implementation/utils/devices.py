@@ -14,8 +14,8 @@ def hdawg_ports() -> List[Port]:
     return inputs + outputs
 
 
-def test_device_ports() -> List[Port]:
-    return [Port(path=f"SIGOUTS/{0}", type=PortType.RF, channel=0)]
+def test_device_ports(ports: list[str]) -> List[Port]:
+    return [Port(path=port, type=PortType.RF, channel=0) for port in ports]
 
 
 def pqsc_ports() -> List[Port]:

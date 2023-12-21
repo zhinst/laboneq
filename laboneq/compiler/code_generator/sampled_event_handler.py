@@ -216,8 +216,7 @@ class SampledEventHandler:
                     signature, sig_string, wave_index, play_wave_channel
                 )
                 return True
-            match_prng = self.match_parent_event.params.get("match_prng", False)
-            assert match_prng
+            assert self.match_parent_event.params.get("prng_sample") is not None
             self.handle_playwave_on_prng(sampled_event, signature, wave_index)
             return True
 
@@ -400,7 +399,7 @@ class SampledEventHandler:
             ):
                 raise LabOneQException(
                     f"Duplicate state {state} with different pulses for PRNG found in section "
-                    f"{self.match_parent_event.params['handle']} found."
+                    f"{self.match_parent_event.params['section_name']}."
                 )
         else:
             self.match_command_table_entries[state] = (
@@ -818,6 +817,14 @@ class SampledEventHandler:
             self.loop_stack.pop()
 
     def handle_match(self, sampled_event: AWGEvent):
+        if (this_sample := sampled_event.params.get("prng_sample")) is not None:
+            other_sample = self.seqc_tracker.prng_tracker().active_sample
+            section = sampled_event.params["section_name"]
+            if this_sample != other_sample:
+                raise LabOneQException(
+                    f"In section '{section}: cannot match PRNG sample '{this_sample}' here. The only available PRNG sample is '{other_sample}'."
+                )
+
         if self.match_parent_event is not None:
             mpe_par = self.match_parent_event.params
             se_par = sampled_event.params
@@ -862,11 +869,35 @@ class SampledEventHandler:
 
         self.seqc_tracker.setup_prng(seed=seed, prng_range=prng_range)
 
-    def handle_sample_prng(self, _sampled_event: AWGEvent):
+    def handle_drop_prng_setup(self, _sampled_event: AWGEvent):
+        if not self.device_type.has_prng:
+            return
+        self.seqc_tracker.drop_prng()
+
+    def handle_sample_prng(self, sampled_event: AWGEvent):
         if not self.device_type.has_prng:
             return
 
+        prng_tracker = self.seqc_tracker.prng_tracker()
+        if prng_tracker.active_sample is not None:
+            section = sampled_event.params["section_name"]
+            this_sample = sampled_event.params["sample_name"]
+            other_sample = prng_tracker.active_sample
+            raise LabOneQException(
+                f"In section '{section}': Can't draw sample '{this_sample}' from PRNG,"
+                f" when other sample '{other_sample}' is still required at the same time"
+            )
+        prng_tracker.active_sample = sampled_event.params["sample_name"]
+
         self.seqc_tracker.sample_prng(self.declarations_generator)
+
+    def handle_drop_prng_sample(self, sampled_event: AWGEvent):
+        if not self.device_type.has_prng:
+            return
+        prng_tracker = self.seqc_tracker.prng_tracker()
+        assert prng_tracker.active_sample == sampled_event.params["sample_name"]
+        prng_tracker.drop_sample()
+        self.match_command_table_entries.clear()
 
     def close_event_list(self):
         if self.match_parent_event is not None:
@@ -875,7 +906,7 @@ class SampledEventHandler:
                 self.close_event_list_for_handle()
             elif params["user_register"] is not None:
                 self.close_event_list_for_user_register()
-            elif params["match_prng"]:
+            elif params["prng_sample"]:
                 self.close_event_list_for_prng_match()
 
     def close_event_list_for_handle(self):
@@ -989,11 +1020,13 @@ class SampledEventHandler:
         command_table_match_offset = len(self.command_table_tracker)
         # Allocate command table entries
         for idx, (signature, wave_index, _) in sorted_ct_entries:
-            id2 = self.command_table_tracker.create_entry(signature, wave_index)
+            id2 = self.command_table_tracker.create_entry(
+                signature, wave_index, ignore_already_in_table=True
+            )
             assert command_table_match_offset + idx == id2
 
         prng_tracker = self.seqc_tracker.prng_tracker()
-        if prng_tracker.offset is not None:
+        if not prng_tracker.is_committed():
             # use the PRNG output range to do the offset for us
             prng_tracker.offset = command_table_match_offset
             command_table_match_offset = 0
@@ -1048,10 +1081,14 @@ class SampledEventHandler:
             self.handle_match(sampled_event)
         elif signature == AWGEventType.CHANGE_OSCILLATOR_PHASE:
             self.handle_change_oscillator_phase(sampled_event)
-        elif signature == AWGEventType.SEED_PRNG:
+        elif signature == AWGEventType.SETUP_PRNG:
             self.handle_setup_prng(sampled_event)
-        elif signature == AWGEventType.SAMPLE_PRNG:
+        elif signature == AWGEventType.DROP_PRNG_SETUP:
+            self.handle_drop_prng_setup(sampled_event)
+        elif signature == AWGEventType.PRNG_SAMPLE:
             self.handle_sample_prng(sampled_event)
+        elif signature == AWGEventType.DROP_PRNG_SAMPLE:
+            self.handle_drop_prng_sample(sampled_event)
         self.last_event = sampled_event
 
     def handle_sampled_event_list(self):

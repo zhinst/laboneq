@@ -7,17 +7,18 @@ import functools
 import importlib
 import inspect
 import logging
+import warnings
 from collections.abc import Mapping
 from enum import Enum
 from io import BytesIO
 from typing import Dict
-import warnings
 
 import numpy as np
 import pybase64 as base64
 from numpy.lib.format import read_array, write_array
 from sortedcontainers import SortedDict
 
+from laboneq._version import get_version
 from laboneq.core.serialization.externals import (
     XarrayDataArrayDeserializer,
     XarrayDatasetDeserializer,
@@ -567,7 +568,7 @@ def serialize_to_dict_with_ref(
         for k, v in entities_collector.items()
     }
     root_name = full_typename(to_serialize).split(".")[-1].lower()
-    retval = {root_name: root_object}
+    retval = {root_name: root_object, "__version": get_version()}
     if entities_collector_flat:
         retval["entities"] = entities_collector_flat
 
@@ -691,7 +692,13 @@ def deserialize_from_dict_with_ref(data, class_mapping, entity_classes, entity_m
                 )
             entity_pool[entity_key] = entity
 
-    root_key = next(k for k, v in data.items() if k != "entities")
+    version = data.get("__version")
+    if version != get_version():
+        warnings.warn(
+            f"Deserializing data with version {version}, but current version is {get_version()}. This may lead to errors.",
+            stacklevel=2,
+        )
+    root_key = next(k for k, v in data.items() if k != "entities" and k != "__version")
     entity_pool[("__ROOT__", "")] = data[root_key]
     entity_pool_deserialized = {}
     return deserialize_from_dict_with_ref_recursor(

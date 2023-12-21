@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import logging
 from collections import defaultdict, namedtuple
+from dataclasses import dataclass
 from itertools import groupby
 from numbers import Number
 from typing import Any, Dict, List, NamedTuple, Tuple
@@ -74,7 +76,7 @@ from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.pulse_parameters import decode_pulse_parameters
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.common.trigger_mode import TriggerMode
-from laboneq.compiler.workflow.compiler_output import CodegenOutput
+from laboneq.compiler.workflow.compiler_output import SeqCGenOutput
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.pulse_sampler import (
     combine_pulse_parameters,
@@ -82,7 +84,7 @@ from laboneq.core.utilities.pulse_sampler import (
     sample_pulse,
     verify_amplitude_no_clipping,
 )
-from laboneq.data.compilation_job import ParameterInfo, PulseDef
+from laboneq.data.compilation_job import PulseDef
 from laboneq.data.scheduled_experiment import (
     PulseInstance,
     PulseMapEntry,
@@ -173,11 +175,20 @@ def setup_sine_phase(
     init_generator.add_command_table_execution(index)
 
 
+def stable_hash(integration_weight):
+    """Stable hashing function for generating names for readout weights"""
+    return hashlib.sha1(
+        integration_weight["samples_i"].tobytes()
+        + integration_weight["samples_q"].tobytes()
+    )
+
+
 def calculate_integration_weights(
     acquire_events: AWGSampledEventSequence, signal_obj, pulse_defs
 ):
-    integration_weights = {}
+    integration_weights_by_pulse = {}
     signal_id = signal_obj.id
+
     nr_of_weights_per_event = None
     for event_list in acquire_events.sequence.values():
         for event in event_list:
@@ -192,6 +203,11 @@ def calculate_integration_weights(
             pulse_pars = ensure_list(
                 event.params.get("pulse_pulse_parameters") or [None] * n
             )
+
+            oscillator_frequency = event.params.get("oscillator_frequency", 0.0)
+            if isinstance(oscillator_frequency, list):
+                [oscillator_frequency, *rest] = oscillator_frequency
+                assert all(oscillator_frequency == f for f in rest)
 
             filtered_pulses = [
                 (play_wave_id, play_par, pulse_par)
@@ -209,34 +225,31 @@ def calculate_integration_weights(
                 nr_of_weights_per_event = n
             else:
                 assert n == nr_of_weights_per_event
-                if any(w not in integration_weights for w, _, _ in filtered_pulses):
+                if any(
+                    w not in integration_weights_by_pulse for w, _, _ in filtered_pulses
+                ):
                     # Event uses different pulse UIDs than earlier event
                     raise LabOneQException(
                         f"Using different integration kernels on a single signal"
                         f" ({signal_id}) is unsupported. Weights: {play_wave_ids} vs"
-                        f" {list(integration_weights.keys())}"
+                        f" {list(integration_weights_by_pulse.keys())}"
                     )
+
             for play_wave_id, play_par, pulse_par in filtered_pulses:
                 pulse_def = pulse_defs[play_wave_id]
                 samples = pulse_def.samples
-                pulse_amplitude: Number | ParameterInfo = pulse_def.amplitude
-                if pulse_amplitude is None:
-                    pulse_amplitude = 1.0
-                elif isinstance(pulse_amplitude, ParameterInfo):
-                    pulse_amplitude = (
-                        event.params.get(pulse_def.amplitude.uid) or pulse_amplitude
-                    )
+                pulse_amplitude: Number = pulse_def.amplitude
                 assert isinstance(pulse_amplitude, Number)
+
+                play_amplitude = event.params.get("amplitude", 1.0)
+                if isinstance(play_amplitude, list):
+                    [play_amplitude, *rest] = play_amplitude
+                    assert all(a == play_amplitude for a in rest)
+                amplitude = pulse_amplitude * play_amplitude
 
                 length = pulse_def.length
                 if length is None:
                     length = len(samples) / signal_obj.awg.sampling_rate
-
-                _logger.debug(
-                    "Sampling integration weights for %s with modulation_frequency %s",
-                    signal_obj.id,
-                    signal_obj.oscillator_frequency,
-                )
 
                 pulse_parameters = combine_pulse_parameters(pulse_par, None, play_par)
                 pulse_parameters = decode_pulse_parameters(pulse_parameters)
@@ -244,9 +257,9 @@ def calculate_integration_weights(
                     signal_type="iq",
                     sampling_rate=signal_obj.awg.sampling_rate,
                     length=length,
-                    amplitude=pulse_amplitude,
+                    amplitude=amplitude,
                     pulse_function=pulse_def.function,
-                    modulation_frequency=signal_obj.oscillator_frequency,
+                    modulation_frequency=oscillator_frequency,
                     samples=samples,
                     mixer_type=signal_obj.mixer_type,
                     pulse_parameters=pulse_parameters,
@@ -259,13 +272,11 @@ def calculate_integration_weights(
                     signal_obj.id,
                 )
 
-                integration_weight["basename"] = (
-                    f"{signal_obj.awg.device_id}"
-                    f"_{signal_obj.awg.awg_number}"
-                    f"_{min(signal_obj.channels)}"
-                    f"_{play_wave_id}"
-                )
-                if existing_weight := integration_weights.get(play_wave_id):
+                # 128-bit hash as waveform name
+                digest = stable_hash(integration_weight).hexdigest()[:32]
+                integration_weight["basename"] = f"kernel_{digest}"
+
+                if existing_weight := integration_weights_by_pulse.get(play_wave_id):
                     for key in ["samples_i", "samples_q"]:
                         if np.any(existing_weight[key] != integration_weight[key]):
                             if np.any(np.isnan(integration_weight[key])):
@@ -279,9 +290,10 @@ def calculate_integration_weights(
                                 f"Using different integration kernels on a single signal"
                                 f" ({signal_id}) is unsupported."
                             )
-                integration_weights[play_wave_id] = integration_weight
+                # This relies on the dict remembering insertion order.
+                integration_weights_by_pulse[play_wave_id] = integration_weight
 
-    return integration_weights
+    return list(integration_weights_by_pulse.values())
 
 
 class CodeGenerator:
@@ -317,15 +329,17 @@ class CodeGenerator:
         self._sampled_signatures: Dict[str, Dict[WaveformSignature, Dict]] = {}
         self._awgs: Dict[AwgKey, AWGInfo] = {}
         self._events_in_samples = {}
-        self._integration_times: IntegrationTimes = None
-        self._signal_delays: SignalDelays = None
-        self._integration_weights = None
-        self._simultaneous_acquires: Dict[float, Dict[str, str]] = None
+        self._integration_times: IntegrationTimes | None = None
+        self._signal_delays: SignalDelays | None = None
+        self._integration_weights: dict[
+            AwgKey, dict[str, list[dict[str, Any]]]
+        ] | None = None  # awg key -> signal id -> kernel index -> kernel data
+        self._simultaneous_acquires: list[Dict[str, str]] = []
         self._feedback_register_config: Dict[
             AwgKey, FeedbackRegisterConfig
         ] = defaultdict(FeedbackRegisterConfig)
         self._feedback_connections: Dict[str, FeedbackConnection] = {}
-        self._feedback_register_allocator: FeedbackRegisterAllocator = None
+        self._feedback_register_allocator: FeedbackRegisterAllocator | None = None
         self._total_execution_time = None
 
         self.EMIT_TIMING_COMMENTS = self._settings.EMIT_TIMING_COMMENTS
@@ -344,7 +358,7 @@ class CodeGenerator:
         self.gen_waves()
 
     def fill_output(self):
-        return CodegenOutput(
+        return SeqCGenOutput(
             feedback_connections=self.feedback_connections(),
             signal_delays=self.signal_delays(),
             integration_weights=self.integration_weights(),
@@ -360,9 +374,12 @@ class CodeGenerator:
         )
 
     def integration_weights(self):
-        return self._integration_weights
+        return {
+            awg: {signal: [iw["basename"] for iw in l] for signal, l in d.items()}
+            for awg, d in self._integration_weights.items()
+        }
 
-    def simultaneous_acquires(self) -> Dict[float, Dict[str, str]]:
+    def simultaneous_acquires(self) -> list[Dict[str, str]]:
         return self._simultaneous_acquires
 
     def total_execution_time(self):
@@ -410,9 +427,9 @@ class CodeGenerator:
             # Handle integration weights separately
             for signal_obj in awg.signals:
                 assert self._integration_weights is not None
-                if signal_obj.id in self._integration_weights:
-                    signal_weights = self._integration_weights[signal_obj.id]
-                    for weight in signal_weights.values():
+                if signal_obj.id in self._integration_weights.get(awg.key, {}):
+                    signal_weights = self._integration_weights[awg.key][signal_obj.id]
+                    for weight in signal_weights:
                         basename = weight["basename"]
                         if signal_obj.awg.device_type.supports_complex_waves:
                             self._save_wave_bin(
@@ -576,12 +593,71 @@ class CodeGenerator:
             group = list(group)
             assert all(np.all(group[0][1] == g[1]) for g in group[1:])
 
+    def _unroll_acquisition_in_prng_loops(self, events: EventList):
+        @dataclass
+        class LoopInfo:
+            name: str
+            start: float
+            end: float | None = None
+            iterations: int = 0
+
+        prng_loop_sections = {
+            e["section_name"]
+            for e in events
+            if e["event_type"] == EventType.DRAW_PRNG_SAMPLE
+        }
+
+        loop_stack: list[LoopInfo] = []
+        open_acquisitions: list[EventList] = [[]]
+
+        for e in events:
+            if e["event_type"] == EventType.ACQUIRE_START:
+                open_acquisitions[-1].append(e)
+            elif (
+                e["event_type"] == EventType.LOOP_START
+                and (section := e["section_name"]) in prng_loop_sections
+            ):
+                # entering new nested loop, push onto stack
+                loop_stack.append(
+                    LoopInfo(name=section, start=e["time"], iterations=e["iterations"])
+                )
+                open_acquisitions.append([])
+            elif (
+                e["event_type"] == EventType.LOOP_END
+                and (section := e["section_name"]) in prng_loop_sections
+            ):
+                # exiting loop, pop from stack and replicate any open acquisitions N times
+                loop = loop_stack.pop()
+                loop.end = e["time"]
+                assert loop.name == section
+
+                length = (loop.end - loop.start) / loop.iterations
+
+                unrolled_acquires = []
+                for original_acquire in open_acquisitions.pop():
+                    extra_acquires = [
+                        original_acquire.copy() for _ in range(loop.iterations)
+                    ]
+                    for i in range(1, loop.iterations):
+                        extra_acquires[i]["time"] += i * length
+                    unrolled_acquires.extend(extra_acquires)
+
+                open_acquisitions[-1].extend(unrolled_acquires)
+
+        [unrolled_acquires] = open_acquisitions
+        return unrolled_acquires
+
     def gen_acquire_map(self, events: EventList):
         # timestamp -> map[signal -> handle]
-        self._simultaneous_acquires: Dict[float, Dict[str, str]] = {}
-        for e in (e for e in events if e["event_type"] == "ACQUIRE_START"):
-            time_events = self._simultaneous_acquires.setdefault(e["time"], {})
+        simultaneous_acquires: Dict[float, Dict[str, str]] = {}
+
+        events = self._unroll_acquisition_in_prng_loops(events)
+
+        for e in events:
+            time_events = simultaneous_acquires.setdefault(e["time"], {})
             time_events[e["signal"]] = e["acquire_handle"]
+
+        self._simultaneous_acquires = list(simultaneous_acquires.values())
 
     def gen_seq_c(self, events: List[Any], pulse_defs: Dict[str, PulseDef]):
         signal_info_map = {
@@ -959,7 +1035,6 @@ class CodeGenerator:
             in (
                 EventType.PARAMETER_SET,
                 EventType.RESET_SW_OSCILLATOR_PHASE,
-                EventType.INCREMENT_OSCILLATOR_PHASE,
                 EventType.SET_OSCILLATOR_FREQUENCY_START,
             )
             or set(
@@ -1058,7 +1133,7 @@ class CodeGenerator:
                     signal_obj.id,
                     len(acquire_events.sequence),
                 )
-                self._integration_weights[
+                self._integration_weights.setdefault(awg.key, {})[
                     signal_obj.id
                 ] = calculate_integration_weights(
                     acquire_events, signal_obj, pulse_defs

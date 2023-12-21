@@ -15,9 +15,9 @@ from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.feedback_register_config import FeedbackRegisterConfig
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.workflow.compiler_output import (
-    CombinedRealtimeCompilerOutput,
-    CombinedRealtimeCompilerOutputCode,
-    CombinedRealtimeCompilerOutputPrettyPrinter,
+    CombinedRTCompilerOutputContainer,
+    CombinedRTOutputSeqC,
+    CombinedRTOutputPrettyPrinter,
 )
 from laboneq.core.exceptions import LabOneQException
 
@@ -144,7 +144,8 @@ class FeedbackRouter:
                 continue  # not transmitted
 
             bit_width = 1
-            if integration_unit["is_msd"] or register == "local":
+            is_msd = (integration_unit["kernel_count"] or 0) > 1
+            if is_msd or register == "local":
                 bit_width = 2
 
             feedback_register_layout[register].append((bit_width, signal_id))
@@ -197,7 +198,7 @@ def _do_compute_feedback_routing(
 
 @_do_compute_feedback_routing.register
 def _(
-    combined_compiler_output: CombinedRealtimeCompilerOutputCode,
+    combined_compiler_output: CombinedRTOutputSeqC,
     signal_objs,
     integration_unit_allocation,
 ):
@@ -211,7 +212,7 @@ def _(
 
 @_do_compute_feedback_routing.register
 def _(
-    combined_compiler_output: CombinedRealtimeCompilerOutputPrettyPrinter,
+    combined_compiler_output: CombinedRTOutputPrettyPrinter,
     signal_objs,
     integration_unit_allocation,
 ):
@@ -221,7 +222,7 @@ def _(
 def compute_feedback_routing(
     signal_objs,
     integration_unit_allocation,
-    combined_compiler_output: CombinedRealtimeCompilerOutput,
+    combined_compiler_output: CombinedRTCompilerOutputContainer,
 ):
     for output in combined_compiler_output.combined_output.values():
         _do_compute_feedback_routing(output, signal_objs, integration_unit_allocation)

@@ -28,6 +28,8 @@ from laboneq.controller.devices.device_zi import (
     SequencerPaths,
     Waveforms,
     delay_to_rounded_samples,
+    IntegrationWeightItem,
+    IntegrationWeights,
 )
 from laboneq.controller.recipe_processor import (
     AwgConfig,
@@ -48,6 +50,7 @@ from laboneq.data.recipe import (
     Measurement,
     TriggeringMode,
 )
+from laboneq.data.scheduled_experiment import CompilerArtifact, ArtifactsCodegen
 
 _logger = logging.getLogger(__name__)
 
@@ -66,6 +69,10 @@ DELAY_NODE_SPECTROSCOPY_MAX_SAMPLES = round(131.066e-6 * SAMPLE_FREQUENCY_HZ)
 INTEGRATION_DELAY_OFFSET = 212e-9  # LabOne Q calibrated value
 SPECTROSCOPY_DELAY_OFFSET = 220e-9  # LabOne Q calibrated value
 SCOPE_DELAY_OFFSET = INTEGRATION_DELAY_OFFSET  # Equality tested at FW level
+
+MAX_INTEGRATION_WEIGHT_LENGTH = 4096
+MAX_WAVEFORM_LENGTH_INTEGRATION = 4096
+MAX_WAVEFORM_LENGTH_SPECTROSCOPY = 65536
 
 
 def node_generator(daq, l: list):
@@ -482,7 +489,9 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         )
         return nodes_to_initialize_scope
 
-    def collect_execution_nodes(self, with_pipeliner: bool) -> list[DaqNodeAction]:
+    async def collect_execution_nodes(
+        self, with_pipeliner: bool
+    ) -> list[DaqNodeAction]:
         if with_pipeliner:
             return self.pipeliner_collect_execution_nodes()
 
@@ -626,7 +635,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
                     value_or_param=io.lo_frequency,
                 )
 
-    def collect_initialization_nodes(
+    async def collect_initialization_nodes(
         self,
         device_recipe_data: DeviceRecipeData,
         initialization: Initialization,
@@ -803,6 +812,52 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
 
         return nodes_to_set
 
+    def prepare_integration_weights(
+        self,
+        artifacts: CompilerArtifact | dict[int, CompilerArtifact],
+        integrator_allocations: list[IntegratorAllocation],
+        kernel_ref: str,
+    ) -> IntegrationWeights | None:
+        if isinstance(artifacts, dict):
+            artifacts: ArtifactsCodegen = artifacts[self._device_class]
+        integration_weights = next(
+            (s for s in artifacts.integration_weights if s["filename"] == kernel_ref),
+            None,
+        )
+        if integration_weights is None:
+            return
+
+        max_len = MAX_INTEGRATION_WEIGHT_LENGTH
+
+        bin_waves: IntegrationWeights = []
+        for signal_id, weight_names in integration_weights["signals"].items():
+            integrator_allocation = next(
+                ia for ia in integrator_allocations if ia.signal_id == signal_id
+            )
+            [channel] = integrator_allocation.channels
+
+            for index, weight_name in enumerate(weight_names):
+                wave_name = weight_name + ".wave"
+                weight_vector = np.conjugate(get_wave(wave_name, artifacts.waves))
+                wave_len = len(weight_vector)
+                if wave_len > max_len:
+                    max_pulse_len = max_len / SAMPLE_FREQUENCY_HZ
+                    raise LabOneQControllerException(
+                        f"{self.dev_repr}: Length {wave_len} of the integration weight"
+                        f" '{channel}' of channel {integrator_allocation.awg} exceeds"
+                        f" maximum of {max_len} samples ({max_pulse_len * 1e6:.3f} us)."
+                    )
+                bin_waves.append(
+                    IntegrationWeightItem(
+                        integration_unit=channel,
+                        index=index,
+                        name=wave_name,
+                        samples=weight_vector,
+                    )
+                )
+
+        return bin_waves
+
     def prepare_upload_binary_wave(
         self,
         filename: str,
@@ -836,7 +891,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
                     f"{self.dev_repr}: Only one envelope waveform per physical channel is "
                     f"possible in spectroscopy mode. Check play commands for channel {awg_index}."
                 )
-            max_len = 65536
+            max_len = MAX_WAVEFORM_LENGTH_SPECTROSCOPY
             for wave in waves:
                 has_spectroscopy_envelope = True
                 wave_len = len(wave.samples)
@@ -858,7 +913,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
                     )
                 )
         else:
-            max_len = 4096
+            max_len = MAX_WAVEFORM_LENGTH_INTEGRATION
             for wave in waves:
                 wave_len = len(wave.samples)
                 if wave_len > max_len:
@@ -887,29 +942,47 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         )
         return waves_upload
 
+    def prepare_upload_all_integration_weights(
+        self, awg_index, integration_weights: IntegrationWeights
+    ):
+        ret_nodes: list[DaqNodeSetAction] = []
+        node = node_generator(self._daq, ret_nodes)
+        base_path = f"/{self.serial}/qachannels/{awg_index}/readout/multistate"
+
+        for iw in integration_weights:
+            qudit_path = f"{base_path}/qudits/{iw.integration_unit}"
+            node(f"{qudit_path}/weights/{iw.index}/wave", iw.samples, iw.name)
+
+        return ret_nodes
+
     def _integrator_has_consistent_msd_num_state(
         self, integrator_allocation: IntegratorAllocation.Data
     ):
-        num_states = len(integrator_allocation.weights) + 1
+        num_states = integrator_allocation.kernel_count + 1
         num_thresholds = len(integrator_allocation.thresholds)
-        num_expected_thresholds = (num_states - 1) * (num_states) / 2
+        num_expected_thresholds = (num_states - 1) * num_states // 2
+
+        def pluralize(n, noun):
+            return f"{n} {noun}{'s' if n > 1 else ''}"
+
         if num_thresholds != num_expected_thresholds:
             raise LabOneQControllerException(
-                f"Multi discrimination configuration of experiment is not consistent. "
-                f"Received num weights={len(integrator_allocation.weights)}, num thresholds={len(integrator_allocation.thresholds)}, "
-                f"where num_weights should be n-1 and num_thresholds should be (n-1)*n/2 with n the number of states."
+                f"Multi discrimination configuration of experiment is not consistent."
+                f" For {pluralize(num_states, 'state')}, I expected"
+                f" {pluralize(integrator_allocation.kernel_count, 'kernel')}"
+                f" and {pluralize(num_expected_thresholds, 'threshold')}, but got"
+                f" {pluralize(num_thresholds, 'threshold')}.\n"
+                "For n states, there should be n-1 kernels, and (n-1)*n/2 thresholds."
             )
         return True
 
     def _configure_readout_mode_nodes_multi_state(
         self,
-        integrator_allocation: IntegratorAllocation.Data,
-        recipe_data: RecipeData,
-        measurement: Measurement.Data,
-        max_len: int,
+        integrator_allocation: IntegratorAllocation,
+        measurement: Measurement,
     ):
         ret_nodes: list[DaqNodeSetAction] = []
-        num_states = len(integrator_allocation.weights) + 1
+        num_states = integrator_allocation.kernel_count + 1
         assert self._integrator_has_consistent_msd_num_state(integrator_allocation)
 
         assert len(integrator_allocation.channels) == 1, (
@@ -935,22 +1008,6 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
             calc_theoretical_assignment_vec(num_states - 1),
         )
 
-        for state_i in range(0, num_states - 1):
-            wave_name = integrator_allocation.weights[state_i] + ".wave"
-            weight_vector = np.conjugate(
-                get_wave(wave_name, recipe_data.scheduled_experiment.waves)
-            )
-            wave_len = len(weight_vector)
-            if wave_len > max_len:
-                max_pulse_len = max_len / SAMPLE_FREQUENCY_HZ
-                raise LabOneQControllerException(
-                    f"{self.dev_repr}: Length {wave_len} of the integration weight "
-                    f"'{integration_unit_index}' of channel {measurement.channel} exceeds "
-                    f"maximum of {max_len} samples. Ensure length of acquire kernels don't "
-                    f"exceed {max_pulse_len * 1e6:.3f} us."
-                )
-            node(f"{qudit_path}/weights/{state_i}/wave", weight_vector, wave_name)
-
         return ret_nodes
 
     def _configure_readout_mode_nodes(
@@ -971,19 +1028,14 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         node(f"{base_path}/integration/length", measurement.length)
         node(f"{base_path}/multistate/qudits/*/enable", 0, cache=False)
 
-        max_len = 4096
         for integrator_allocation in recipe_data.recipe.integrator_allocations:
             if (
                 integrator_allocation.device_id != device_uid
                 or integrator_allocation.awg != measurement.channel
             ):
                 continue
-            if integrator_allocation.weights == [None]:
-                # Skip configuration if no integration weights provided to keep same behavior
-                # TODO(2K): Consider not emitting the integrator allocation in this case.
-                continue
             readout_nodes = self._configure_readout_mode_nodes_multi_state(
-                integrator_allocation, recipe_data, measurement, max_len
+                integrator_allocation, measurement
             )
             nodes_to_set_for_readout_mode.extend(readout_nodes)
 
@@ -1047,7 +1099,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
                 nodes_to_initialize_measurement.extend(
                     self._configure_spectroscopy_mode_nodes(dev_input, measurement)
                 )
-            else:
+            elif acquisition_type != AcquisitionType.RAW:
                 nodes_to_initialize_measurement.extend(
                     self._configure_readout_mode_nodes(
                         dev_input,
@@ -1211,10 +1263,10 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
                 f"a loop is too short. Please contact Zurich Instruments."
             )
 
-    def collect_reset_nodes(self) -> list[DaqNodeAction]:
-        reset_nodes = super().collect_reset_nodes()
+    async def collect_reset_nodes(self) -> list[DaqNodeAction]:
+        reset_nodes = await super().collect_reset_nodes()
         # Reset pipeliner first, attempt to set generator enable leads to FW error if pipeliner was enabled.
-        reset_nodes.extend(self.pipeliner_reset_nodes())
+        reset_nodes.extend(await self.pipeliner_reset_nodes())
         reset_nodes.append(
             DaqNodeSetAction(
                 self._daq,

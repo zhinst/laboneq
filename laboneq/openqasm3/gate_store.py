@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Callable, Dict, Tuple
 
 from laboneq._utils import id_generator
-from laboneq.dsl.device.io_units import LogicalSignal
 from laboneq.dsl.experiment import Section
 from laboneq.dsl.experiment.pulse import Pulse
 
@@ -27,7 +26,7 @@ class GateStore:
         """Define mapping from qasm gate name to LabOne Q gate name."""
         self.gate_map[qasm_name] = labone_q_name
 
-    def register_port(self, qasm_port: str, signal_line: LogicalSignal) -> None:
+    def register_port(self, qasm_port: str, signal_line: str) -> None:
         self.ports[qasm_port] = signal_line
 
     def register_gate_section(self, name: str, qubit_names: list[str], section_factory):

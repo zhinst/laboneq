@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, Iterator, List, Optional
+from typing import Dict, Iterator, List
 
 from attrs import define
 
@@ -15,9 +15,9 @@ from laboneq.compiler.ir.section_ir import SectionIR
 @define(kw_only=True, slots=True)
 class MatchIR(SectionIR):
     handle: str | None
-    user_register: Optional[int]
-    local: Optional[bool]
-    match_prng: bool
+    user_register: int | None
+    local: bool | None
+    prng_sample: str | None
 
     def generate_event_list(
         self,
@@ -40,8 +40,8 @@ class MatchIR(SectionIR):
             section_start_event["local"] = self.local
         if self.user_register is not None:
             section_start_event["user_register"] = self.user_register
-        if self.match_prng:
-            section_start_event["match_prng"] = True
+        if self.prng_sample is not None:
+            section_start_event["prng_sample"] = self.prng_sample
 
         return events
 

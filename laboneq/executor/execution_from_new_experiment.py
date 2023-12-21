@@ -6,6 +6,7 @@ from __future__ import annotations
 import numpy as np
 
 from laboneq.core.exceptions import LabOneQException
+from laboneq.core.utilities.prng import PRNG
 from laboneq.data.experiment_description import (
     Acquire,
     AcquireLoopNt,
@@ -19,8 +20,10 @@ from laboneq.data.experiment_description import (
     Section,
     SetNode,
     Sweep,
+    PrngLoop,
 )
 from laboneq.data.parameter import LinearSweepParameter, SweepParameter
+from laboneq.data.prng import PRNGSample
 from laboneq.executor import executor
 
 
@@ -75,6 +78,11 @@ class ExecutionFactoryFromNewExperiment(executor.ExecutionFactory):
                     count = len(parameter.values)
                 loop_body = self._sub_scope(self._handle_sweep, child)
                 self._append_statement(executor.ForLoop(count=count, body=loop_body))
+            elif isinstance(child, PrngLoop):
+                prng_sample = child.prng_sample
+                count = prng_sample.count
+                loop_body = self._sub_scope(self._handle_prng_loop, child)
+                self._append_statement(executor.ForLoop(count=count, body=loop_body))
             else:
                 sub_sequence = self._sub_scope(
                     self._handle_children, child.children, child.uid
@@ -86,12 +94,29 @@ class ExecutionFactoryFromNewExperiment(executor.ExecutionFactory):
             self._append_statement(self._statement_from_param(parameter))
         self._handle_children(sweep.children, sweep.uid)
 
-    def _statement_from_param(self, parameter: SweepParameter | LinearSweepParameter):
+    def _handle_prng_loop(self, loop: PrngLoop):
+        self._append_statement(self._statement_from_param(loop.prng_sample))
+        self._handle_children(loop.children, loop.uid)
+
+    def _statement_from_param(
+        self, parameter: SweepParameter | LinearSweepParameter | PRNGSample
+    ):
         if isinstance(parameter, SweepParameter):
             values = parameter.values
-        else:
+            axis_name = parameter.axis_name
+        elif isinstance(parameter, LinearSweepParameter):
             values = np.linspace(parameter.start, parameter.stop, parameter.count)
-        return executor.SetSoftwareParam(parameter.uid, values, parameter.axis_name)
+            axis_name = parameter.axis_name
+        elif isinstance(parameter, PRNGSample):
+            prng = parameter.prng
+            prng_sim = PRNG(seed=prng.seed, upper=prng.range - 1)
+            values = np.array([next(prng_sim) for _ in range(parameter.count)])
+            axis_name = parameter.uid
+        else:
+            raise TypeError(f"Unrecognized parameter type: {type(parameter)}")
+        return executor.SetSoftwareParam(
+            name=parameter.uid, values=values, axis_name=axis_name
+        )
 
     def _statement_from_operation(self, operation, parent_uid: str):
         if isinstance(operation, Call):

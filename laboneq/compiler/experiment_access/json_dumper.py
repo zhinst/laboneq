@@ -180,7 +180,7 @@ def dump(experiment_dao: ExperimentDAO):
         pulse_entry = {"id": pulse.uid}
         if pulse.function:
             pulse_entry["function"] = pulse.function
-        if pulse.amplitude is not None:
+        if pulse.amplitude not in (None, 1.0):
             pulse_entry["amplitude"] = pulse.amplitude
         if pulse.length is not None:
             pulse_entry["length"] = pulse.length

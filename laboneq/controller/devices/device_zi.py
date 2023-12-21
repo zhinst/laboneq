@@ -10,7 +10,7 @@ import re
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Iterator
+from typing import Any, Iterator, cast
 from weakref import ReferenceType, ref
 
 import numpy as np
@@ -30,6 +30,7 @@ from laboneq.controller.communication import (
     DaqNodeGetAction,
     DaqNodeSetAction,
     DaqWrapper,
+    DaqWrapperDryRun,
 )
 from laboneq.controller.devices.zi_node_monitor import NodeControlBase
 from laboneq.controller.recipe_processor import (
@@ -104,7 +105,16 @@ class WaveformItem:
     samples: npt.ArrayLike
 
 
+@dataclass
+class IntegrationWeightItem:
+    integration_unit: int
+    index: int
+    name: str
+    samples: npt.ArrayLike
+
+
 Waveforms = list[WaveformItem]
+IntegrationWeights = list[IntegrationWeightItem]
 
 
 def delay_to_rounded_samples(
@@ -148,12 +158,13 @@ def delay_to_rounded_samples(
 
 class DeviceZI:
     def __init__(self, device_qualifier: DeviceQualifier, daq: DaqWrapper):
-        self._device_qualifier: DeviceQualifier = device_qualifier
+        self._device_qualifier = device_qualifier
         self._downlinks: dict[str, list[tuple[str, ReferenceType[DeviceZI]]]] = {}
         self._uplinks: list[ReferenceType[DeviceZI]] = []
         self._rf_offsets: dict[int, float] = {}
 
-        self._daq: DaqWrapper = daq
+        self._daq = daq
+        self._api = None  # TODO(2K): Add type labone.Instrument
         self.dev_type: str = None
         self.dev_opts: list[str] = []
         self._connected = False
@@ -211,6 +222,10 @@ class DeviceZI:
     @property
     def daq(self):
         return self._daq
+
+    @property
+    def _daq_dry_run(self) -> DaqWrapperDryRun:
+        return cast(DaqWrapperDryRun, self._daq)
 
     @property
     def is_secondary(self) -> bool:
@@ -335,12 +350,12 @@ class DeviceZI:
                 value_or_param=input.port_delay,
             )
 
-    def collect_initialization_nodes(
+    async def collect_initialization_nodes(
         self,
         device_recipe_data: DeviceRecipeData,
         initialization: Initialization,
         recipe_data: RecipeData,
-    ) -> list[DaqNodeAction]:
+    ) -> list[DaqNodeSetAction]:
         return []
 
     # TODO(2K): Routine collecting nodes does not need to be asynchronous
@@ -350,12 +365,17 @@ class DeviceZI:
     ) -> list[DaqNodeAction]:
         return []
 
+    def _prepare_emulator(self):
+        if self.dry_run:
+            self._daq_dry_run.map_device_type(self.device_qualifier)
+
     async def _connect_to_data_server(self):
         if self._connected:
             return
 
         _logger.debug("%s: Connecting to %s interface.", self.dev_repr, self.interface)
         try:
+            self._prepare_emulator()
             self._daq.connectDevice(self.serial, self.interface)
         except RuntimeError as exc:
             raise LabOneQControllerException(
@@ -579,19 +599,7 @@ class DeviceZI:
             return True
         return not np.any(a * (1 - a))
 
-    def _prepare_wave_iq(self, waves, sig: str) -> tuple[str, npt.ArrayLike]:
-        wave_i = next((w for w in waves if w["filename"] == f"{sig}_i.wave"), None)
-        if not wave_i:
-            raise LabOneQControllerException(
-                f"I wave not found, IQ wave signature '{sig}'"
-            )
-
-        wave_q = next((w for w in waves if w["filename"] == f"{sig}_q.wave"), None)
-        if not wave_q:
-            raise LabOneQControllerException(
-                f"Q wave not found, IQ wave signature '{sig}'"
-            )
-
+    def _prepare_markers_iq(self, waves, sig: str) -> npt.ArrayLike:
         marker1_samples = None
         marker2_samples = None
         try:
@@ -632,6 +640,46 @@ class DeviceZI:
             # bit 2 is factor 4
             factor = 4
             marker_samples += factor * marker2_samples
+        return marker_samples
+
+    def _prepare_markers_single(self, waves, sig: str) -> npt.ArrayLike:
+        marker_samples = None
+        try:
+            marker_samples = next(
+                (w for w in waves if w["filename"] == f"{sig}_marker1.wave")
+            )["samples"]
+        except StopIteration:
+            pass
+
+        try:
+            marker_samples = next(
+                (w for w in waves if w["filename"] == f"{sig}_marker2.wave")
+            )["samples"]
+        except StopIteration:
+            pass
+
+        if marker_samples is not None:
+            if not self._contains_only_zero_or_one(marker_samples):
+                raise LabOneQControllerException(
+                    "Marker samples must only contain ones and zeros"
+                )
+            marker_samples = np.array(marker_samples)
+        return marker_samples
+
+    def _prepare_wave_iq(self, waves, sig: str) -> tuple[str, npt.ArrayLike]:
+        wave_i = next((w for w in waves if w["filename"] == f"{sig}_i.wave"), None)
+        if not wave_i:
+            raise LabOneQControllerException(
+                f"I wave not found, IQ wave signature '{sig}'"
+            )
+
+        wave_q = next((w for w in waves if w["filename"] == f"{sig}_q.wave"), None)
+        if not wave_q:
+            raise LabOneQControllerException(
+                f"Q wave not found, IQ wave signature '{sig}'"
+            )
+
+        marker_samples = self._prepare_markers_iq(waves, sig)
 
         return (
             sig,
@@ -644,18 +692,8 @@ class DeviceZI:
 
     def _prepare_wave_single(self, waves, sig: str) -> tuple[str, npt.ArrayLike]:
         wave = next((w for w in waves if w["filename"] == f"{sig}.wave"), None)
-        marker_samples = None
-        try:
-            marker_samples = next(
-                (w for w in waves if w["filename"] == f"{sig}_marker1.wave")
-            )["samples"]
-        except StopIteration:
-            pass
 
-        if not self._contains_only_zero_or_one(marker_samples):
-            raise LabOneQControllerException(
-                "Marker samples must only contain ones and zeros"
-            )
+        marker_samples = self._prepare_markers_single(waves, sig)
 
         if not wave:
             raise LabOneQControllerException(f"Wave not found, signature '{sig}'")
@@ -679,7 +717,7 @@ class DeviceZI:
         self,
         artifacts: CompilerArtifact | dict[int, CompilerArtifact],
         wave_indices_ref: str,
-    ) -> Waveforms:
+    ) -> Waveforms | None:
         if wave_indices_ref is None:
             return None
         if isinstance(artifacts, dict):
@@ -772,6 +810,14 @@ class DeviceZI:
 
         return seqc_text
 
+    def prepare_integration_weights(
+        self,
+        artifacts: CompilerArtifact | dict[int, CompilerArtifact],
+        integrator_allocations: list[IntegratorAllocation],
+        kernel_ref: str,
+    ) -> IntegrationWeights | None:
+        pass  # implemented in subclasses of QA instruments
+
     def prepare_upload_elf(self, elf: bytes, awg_index: int, filename: str):
         sequencer_paths = self.get_sequencer_paths(awg_index)
         return DaqNodeSetAction(
@@ -825,6 +871,11 @@ class DeviceZI:
             caching_strategy=CachingStrategy.NO_CACHE,
         )
 
+    def prepare_upload_all_integration_weights(
+        self, awg_index, integration_weights: IntegrationWeights
+    ):
+        raise NotImplementedError
+
     def compile_seqc(self, code: str, awg_index: int, filename_hint: str | None = None):
         _logger.debug(
             "%s: Compiling sequence for AWG #%d...",
@@ -876,7 +927,7 @@ class DeviceZI:
     def _get_num_awgs(self) -> int:
         return 0
 
-    def collect_osc_initialization_nodes(self) -> list[DaqNodeAction]:
+    async def collect_osc_initialization_nodes(self) -> list[DaqNodeAction]:
         nodes_to_initialize_oscs = []
         osc_inits = {
             self._make_osc_path(ch, osc.index): osc.frequency
@@ -899,7 +950,9 @@ class DeviceZI:
     def collect_awg_after_upload_nodes(self, initialization: Initialization):
         return []
 
-    def collect_execution_nodes(self, with_pipeliner: bool) -> list[DaqNodeAction]:
+    async def collect_execution_nodes(
+        self, with_pipeliner: bool
+    ) -> list[DaqNodeAction]:
         nodes_to_execute = []
         _logger.debug("%s: Executing AWGS...", self.dev_repr)
 
@@ -925,7 +978,7 @@ class DeviceZI:
         all_errors = self._daq.get_raw(error_node)
         return all_errors[error_node]
 
-    def collect_reset_nodes(self) -> list[DaqNodeAction]:
+    async def collect_reset_nodes(self) -> list[DaqNodeAction]:
         return [
             DaqNodeSetAction(
                 self._daq,

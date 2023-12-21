@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from laboneq.openqasm3.openqasm_error import OpenQasmException
 
@@ -30,6 +30,16 @@ class Frame:
     port: str
     frequency: float
     phase: float
+
+
+@dataclass
+class Function:
+    """A callable function"""
+
+    canonical_name: str
+    func: Callable
+    # TODO: Add argument types
+    # TODO: Add return type
 
 
 class Namespace:
@@ -83,6 +93,20 @@ class Namespace:
             raise OpenQasmException(msg)
         return self.local_scope[name]
 
+    def declare_function(
+        self,
+        name: str,
+        arguments,
+        return_type,
+        func: Callable,
+    ):
+        # TODO: Check what to do if already defined
+        if name not in self.local_scope:
+            # TODO: Store argument and return types
+            self.local_scope[name] = Function(canonical_name=name, func=func)
+
+        return self.local_scope[name]
+
 
 class NamespaceNest:
     """A stack of namespaces, with the the current namespace on top.
@@ -105,7 +129,7 @@ class NamespaceNest:
 
     def lookup(
         self, name: str
-    ) -> QubitRef | ClassicalRef | list[QubitRef] | list[ClassicalRef]:
+    ) -> QubitRef | ClassicalRef | list[QubitRef] | list[ClassicalRef] | Function:
         for namespace in reversed(self._nesting):
             if name in namespace.local_scope:
                 return namespace.local_scope[name]

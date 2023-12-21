@@ -13,6 +13,7 @@ from laboneq.controller.communication import (
 )
 from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.devices.zi_node_monitor import (
+    Command,
     Setting,
     Condition,
     NodeControlBase,
@@ -41,6 +42,12 @@ class DevicePQSC(DeviceZI):
         nodes = super()._nodes_to_monitor_impl()
         nodes.append(f"/{self.serial}/execution/enable")
         return nodes
+
+    def load_factory_preset_control_nodes(self) -> list[NodeControlBase]:
+        return [
+            Command(f"/{self.serial}/system/preset/load", 1),
+            Response(f"/{self.serial}/system/preset/busy", 0),
+        ]
 
     def update_clock_source(self, force_internal: bool | None):
         self._use_internal_clock = force_internal is True
@@ -85,12 +92,12 @@ class DevicePQSC(DeviceZI):
                 )
         return nodes
 
-    def collect_initialization_nodes(
+    async def collect_initialization_nodes(
         self,
         device_recipe_data: DeviceRecipeData,
         initialization: Initialization,
         recipe_data: RecipeData,
-    ) -> list[DaqNodeAction]:
+    ) -> list[DaqNodeSetAction]:
         return []
 
     def configure_feedback(self, recipe_data: RecipeData) -> list[DaqNodeAction]:
@@ -151,7 +158,9 @@ class DevicePQSC(DeviceZI):
                     )
         return feedback_actions
 
-    def collect_execution_nodes(self, with_pipeliner: bool) -> list[DaqNodeAction]:
+    async def collect_execution_nodes(
+        self, with_pipeliner: bool
+    ) -> list[DaqNodeAction]:
         _logger.debug("Starting execution...")
         nodes = []
         nodes.append(
@@ -244,8 +253,8 @@ class DevicePQSC(DeviceZI):
 
         return nodes_to_configure_triggers
 
-    def collect_reset_nodes(self) -> list[DaqNodeAction]:
-        reset_nodes = super().collect_reset_nodes()
+    async def collect_reset_nodes(self) -> list[DaqNodeAction]:
+        reset_nodes = await super().collect_reset_nodes()
         reset_nodes.append(
             DaqNodeSetAction(
                 self._daq,
@@ -255,3 +264,19 @@ class DevicePQSC(DeviceZI):
             )
         )
         return reset_nodes
+
+    def _prepare_emulator(self):
+        super()._prepare_emulator()
+
+        # Make emulated PQSC aware of the down-stream devices
+        if self.dry_run:
+            enabled_zsyncs = {}
+            for port, _, to_dev in self.downlinks():
+                if enabled_zsyncs.get(port.lower()) == to_dev.serial:
+                    continue
+                enabled_zsyncs[port.lower()] = to_dev.serial
+                self._daq_dry_run.set_emulation_option(
+                    serial=self.serial,
+                    option=f"{port.lower()}/connection/serial",
+                    value=to_dev.serial[3:],
+                )

@@ -67,22 +67,25 @@ class CompilerArtifact:
 
 @dataclass
 class ArtifactsCodegen(CompilerArtifact):
-    #: The SeqC source code, per device.
+    # The SeqC source code, per device.
     src: list[dict[str, str]] = None
 
-    #: The waveforms that will be uploaded to the devices.
+    # The waveforms that will be uploaded to the devices.
     waves: list[dict[str, Any]] = None
 
-    #: Data structure for storing the indices or filenames by which the waveforms are
-    #: referred to during and after upload.
+    # Data structure for storing the indices or filenames by which the waveforms are
+    # referred to during and after upload.
     wave_indices: list[dict[str, Any]] = None
 
-    #: Data structure for storing the command table data
+    # Data structure for storing the command table data
     command_tables: list[dict[str, Any]] = field(default_factory=list)
 
-    #: Data structure for mapping pulses (in the experiment) to waveforms (on the
-    #: device).
+    # Data structure for mapping pulses (in the experiment) to waveforms (on the
+    # device).
     pulse_map: dict[str, PulseMapEntry] = None
+
+    # Data structure for referencing the waveforms used as integration kernels.
+    integration_weights: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -108,7 +111,7 @@ class ScheduledExperiment:
     artifacts: CompilerArtifact | dict[int, CompilerArtifact] = None
 
     def __getattr__(self, attr):
-        return getattr(self.artifacts, attr)
+        return getattr(self.artifacts, attr)  # @IgnoreException
 
     def __copy__(self):
         new_artefacts = copy.copy(self.artifacts)

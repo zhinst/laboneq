@@ -30,8 +30,10 @@ class AWGEventType(Enum):
     PLAY_HOLD = auto()
     INIT_AMPLITUDE_REGISTER = auto()
     CHANGE_OSCILLATOR_PHASE = auto()
-    SEED_PRNG = auto()
-    SAMPLE_PRNG = auto()
+    SETUP_PRNG = auto()
+    DROP_PRNG_SETUP = auto()
+    PRNG_SAMPLE = auto()
+    DROP_PRNG_SAMPLE = auto()
 
 
 @dataclass

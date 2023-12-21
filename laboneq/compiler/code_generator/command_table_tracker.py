@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 from laboneq.compiler.code_generator.signatures import PlaybackSignature
 from laboneq.compiler.common.device_type import DeviceType
@@ -24,48 +24,50 @@ class EntryLimitExceededError(InvalidCommandTableError):
 
 class CommandTableTracker:
     def __init__(self, device_type: DeviceType):
-        self._command_table: Dict[PlaybackSignature, Dict] = {}
+        self._command_table: list[Dict] = []
+        self._table_index_by_signature: Dict[PlaybackSignature, int] = {}
         self._device_type = device_type
 
     def lookup_index_by_signature(self, signature: PlaybackSignature) -> int | None:
-        table_entry = self._command_table.get(signature)
-        if table_entry is None:
-            return
-        return table_entry["index"]
+        return self._table_index_by_signature.get(signature)
 
-    def __getitem__(self, index: int):
-        return next(
-            (
-                (sig, ct_entry)
-                for sig, ct_entry in self._command_table.items()
-                if ct_entry["index"] == index
-            ),
-            None,
-        )
+    def __getitem__(self, index: int) -> tuple[PlaybackSignature, dict]:
+        entry = self._command_table[index]
+
+        for sig, index in self._table_index_by_signature.items():
+            if index == entry["index"]:
+                return sig, entry
+
+        raise AssertionError("no signature associated with index {}".format(index))
 
     def __len__(self):
         return len(self._command_table)
 
     def create_entry(
-        self, signature: PlaybackSignature, wave_index: Optional[int]
+        self,
+        signature: PlaybackSignature,
+        wave_index: Optional[int],
+        ignore_already_in_table=False,
     ) -> int:
         """Create command table entry.
 
         Args:
             signature: Playback signature.
             wave_index: Wave index.
+            ignore_already_in_table: Do not error if the signature is already in the table
 
         Raises:
             AssertionError: Signature already exists in the command table.
             EntryLimitExceededError: If the entries exceed the command table entry limit.
         """
-        assert signature not in self._command_table
+        if not ignore_already_in_table:
+            assert signature not in self._table_index_by_signature
         index = len(self._command_table)
         if index > self._device_type.max_ct_entries:
             raise EntryLimitExceededError(
                 f"Invalid command table index: '{index}' for device {self._device_type}."
             )
-        ct_entry = {"index": index}
+        ct_entry: dict[str, bool | int | dict] = {"index": index}
         if wave_index is None:
             if signature.waveform is not None:
                 length = signature.waveform.length
@@ -77,11 +79,13 @@ class CommandTableTracker:
                 ct_entry["waveform"]["precompClear"] = True
         ct_entry.update(self._oscillator_config(signature))
         ct_entry.update(self._amplitude_config(signature))
-        self._command_table[signature] = ct_entry
+        self._command_table.append(ct_entry)
+        if signature not in self._table_index_by_signature:
+            self._table_index_by_signature[signature] = index
         return index
 
-    def _oscillator_config(self, signature: PlaybackSignature):
-        d = {}
+    def _oscillator_config(self, signature: PlaybackSignature) -> dict:
+        d: dict[str, int | bool | dict] = {}
         oscillator = signature.hw_oscillator
         if oscillator is not None:
             d["oscillatorSelect"] = {"value": {"$ref": oscillator}}
@@ -120,7 +124,7 @@ class CommandTableTracker:
 
         return d
 
-    def _amplitude_config(self, signature: PlaybackSignature):
+    def _amplitude_config(self, signature: PlaybackSignature) -> dict:
         d = {}
 
         assert signature.set_amplitude is None or signature.increment_amplitude is None
@@ -151,5 +155,5 @@ class CommandTableTracker:
 
         return d
 
-    def command_table(self) -> List[Dict]:
-        return list(self._command_table.values())
+    def command_table(self) -> list[dict]:
+        return self._command_table

@@ -18,6 +18,7 @@ class PRETTYPRINTERDEVICE(ZIStandardInstrument):
 
     def __post_init__(self):
         self.device_class = 0x1
+        self._ports: list[str] = []
 
     def calc_options(self):
         return {
@@ -25,14 +26,14 @@ class PRETTYPRINTERDEVICE(ZIStandardInstrument):
         }
 
     @property
-    def ports(self):
-        outputs = [
+    def ports(self) -> list[Port]:
+        return [
             Port(
                 IODirection.OUT,
-                uid=f"SIGOUTS/{0}",
+                uid=port,
                 signal_type=IOSignalType.RF,
                 physical_port_ids=[str(0)],
                 connector_labels=[f"Wave {0 + 1}"],
-            ),
+            )
+            for port in self._ports
         ]
-        return outputs

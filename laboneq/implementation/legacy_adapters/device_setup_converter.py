@@ -166,7 +166,7 @@ class PortConverter:
         elif isinstance(target, legacy_instruments.PQSC):
             return devices.pqsc_ports()
         elif isinstance(target, legacy_instruments.PRETTYPRINTERDEVICE):
-            return devices.test_device_ports()
+            return devices.test_device_ports([port.uid for port in target.ports])
         elif isinstance(target, legacy_instruments.NonQC):
             return devices.nonqc_ports()
         else:

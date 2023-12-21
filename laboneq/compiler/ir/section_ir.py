@@ -59,16 +59,24 @@ class SectionIR(IntervalIR):
                 }
             )
 
-        prng_setup_events = []
+        prng_setup_events = prng_drop_events = []
         if self.prng_setup is not None and max_events > 0:
-            max_events -= 1
+            max_events -= 2
             prng_setup_events = [
                 {
-                    "event_type": EventType.SETUP_PRNG,
+                    "event_type": EventType.PRNG_SETUP,
                     "time": start,
                     "section_name": self.section,
                     "range": self.prng_setup.range,
                     "seed": self.prng_setup.seed,
+                    "id": next(id_tracker),
+                }
+            ]
+            prng_drop_events = [
+                {
+                    "event_type": EventType.DROP_PRNG_SETUP,
+                    "time": start + self.length,
+                    "section_name": self.section,
                     "id": next(id_tracker),
                 }
             ]
@@ -94,6 +102,7 @@ class SectionIR(IntervalIR):
             *trigger_set_events,
             *prng_setup_events,
             *[e for l in children_events for e in l],
+            *prng_drop_events,
             *trigger_clear_events,
             {
                 "event_type": EventType.SECTION_END,

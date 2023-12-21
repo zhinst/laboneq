@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import typing
 from functools import wraps
-from typing import Any
+from typing import Any, Iterable
 
 import numpy as np
 
@@ -19,9 +19,10 @@ from laboneq.dsl.experiment.experiment_context import (
     current_experiment_context,
 )
 from laboneq.dsl.experiment.pulse import Pulse
+import logging
 
 if typing.TYPE_CHECKING:
-    from laboneq.dsl.experiment import Experiment, Section
+    from laboneq.dsl.experiment import Experiment, Section, PlayPulse, Operation
     from laboneq.dsl.prng import PRNG, PRNGSample
 
 __all__ = [
@@ -38,6 +39,7 @@ __all__ = [
     "match",
     "measure",
     "play",
+    "play_indexed",
     "prng_setup",
     "prng_loop",
     "qubit_experiment",
@@ -59,6 +61,9 @@ from laboneq.dsl.experiment.section_context import (
     PRNGSetupContextManager,
     PRNGLoopContextManager,
 )
+
+
+_logger = logging.getLogger(__name__)
 
 
 def _active_experiment() -> Experiment:
@@ -215,7 +220,7 @@ def measure(
     )
 
 
-def add(section: Section):
+def add(section: Section | Operation):
     try:
         parent = active_section()
     except LabOneQException:
@@ -289,3 +294,16 @@ def prng_loop(prng: PRNG, count=1, uid=None):
 
     prng_sample = PRNGSample(uid=uid, prng=prng, count=count)
     return PRNGLoopContextManager(prng_sample, uid)
+
+
+def play_indexed(pulses: Iterable[PlayPulse], index: PRNGSample):
+    count = 0
+    with match(prng_sample=index):
+        for i, p in enumerate(pulses):
+            count += 1
+            with case(i):
+                add(p)
+    if count != index.prng.range:
+        _logger.warning(
+            f"'playIndexed' called with {count} pulses, mismatching the range of the PRNG, which is {index.prng.range}"
+        )

@@ -76,7 +76,7 @@ class DeviceRecipeData:
 
 
 DeviceId = str
-DeviceSettings = dict[DeviceId, DeviceRecipeData]
+DeviceSettings = defaultdict[DeviceId, DeviceRecipeData]
 
 
 @dataclass
@@ -496,9 +496,10 @@ def pre_process_compiled(
 
     device_settings: DeviceSettings = defaultdict(DeviceRecipeData)
     for initialization in recipe.initializations:
-        device_settings[initialization.device_uid] = DeviceRecipeData(
-            iq_settings=_pre_process_iq_settings_hdawg(initialization)
-        )
+        if initialization.device_type == "HDAWG":
+            device_settings[
+                initialization.device_uid
+            ].iq_settings = _pre_process_iq_settings_hdawg(initialization)
 
     lp = _LoopsPreprocessor()
     lp.run(execution)

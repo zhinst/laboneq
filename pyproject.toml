@@ -54,7 +54,7 @@ dependencies = [
     "attrs",
     "sortedcontainers",
     "typing_extensions",
-    "zhinst-core~=23.10.51605",
+    "zhinst-core~=23.10.52579",
     "zhinst-toolkit~=0.6.2",
     "zhinst-utils==0.3.6",
     "unsync==1.4.0",
@@ -146,13 +146,14 @@ max-complexity = 10
 "tests/integration/dsl_v3/*" = ["F403", "F405"]
 
 "tests/*" = ["B008", "B011", "B017", "B904", "PERF"]
-"resources/examples/*" = ["B015", "B018", "PERF"]
-"examples/*" = ["B018", "PERF"]
+"resources/examples/*" = ["B015", "PERF"]
+"examples/*" = ["PERF"]
 
 [tool.nbqa.addopts]
-# Notebooks utilize `from laboneq.simple import *`, therefore ignore F403
+
 ruff = [
-    "--ignore=F403"
+    "--ignore=F403", # Notebooks utilize `from laboneq.simple import *`, therefore ignore F403
+    "--ignore=B018", # Allow 'useless expressions' that represent the result of a cell
 ]
 
 [[tool.mypy.overrides]]

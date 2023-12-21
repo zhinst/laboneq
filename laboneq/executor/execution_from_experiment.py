@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, List, Union
 
 from laboneq.core.exceptions import LabOneQException
+from laboneq.dsl.experiment.section import PRNGLoop
 from laboneq.executor import executor
 
 if TYPE_CHECKING:
@@ -68,6 +69,8 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
                 count = len(child.parameters[0].values)
                 loop_body = self._sub_scope(self._handle_sweep, child)
                 self._append_statement(executor.ForLoop(count=count, body=loop_body))
+            elif isinstance(child, PRNGLoop):
+                raise NotImplementedError
             else:
                 sub_sequence = self._sub_scope(
                     self._handle_children, child.children, child.uid

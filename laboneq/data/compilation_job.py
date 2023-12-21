@@ -171,11 +171,11 @@ class SectionInfo:
 
     match_handle: str | None = None
     match_user_register: int | None = None
-    match_prng: bool = False
+    match_prng_sample: str | None = None
     local: bool | None = None
     state: int | None = None
     prng: PRNGInfo | None = None
-    sample_prng: bool = False
+    prng_sample: str | None = None
 
     count: int | None = None  # 'None' means 'not a loop'
     chunk_count: int = 1

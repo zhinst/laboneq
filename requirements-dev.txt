@@ -17,6 +17,7 @@ mypy
 nbconvert
 nbmake
 nbqa
+numpy>=1.25
 RsInstrument
 flaky==3.7.0
 pyvisa-py==0.5.3

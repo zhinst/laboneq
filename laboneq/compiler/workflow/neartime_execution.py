@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
 from builtins import frozenset
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
@@ -10,10 +11,10 @@ from numpy.typing import ArrayLike
 
 from laboneq.compiler.scheduler.parameter_store import ParameterStore
 from laboneq.compiler.workflow import rt_linker
-from laboneq.compiler.workflow.compiler_output import CodegenOutput
+from laboneq.compiler.workflow.compiler_output import RTCompilerOutputContainer
 from laboneq.compiler.workflow.realtime_compiler import RealtimeCompiler
 from laboneq.compiler.workflow.reporter import CompilationReportGenerator
-from laboneq.compiler.workflow.rt_linker import CombinedRealtimeCompilerOutput
+from laboneq.compiler.workflow.rt_linker import CombinedRTCompilerOutputContainer
 from laboneq.executor.executor import (
     ExecRT,
     ExecutorBase,
@@ -71,10 +72,14 @@ class NtCompilerExecutor(ExecutorBase):
         self._rt_compiler = rt_compiler
         self._iteration_stack = IterationStack()
 
-        self._compiler_output_by_param_values: Dict[frozenset, CodegenOutput] = {}
-        self._last_compiler_output: Optional[CodegenOutput] = None
+        self._compiler_output_by_param_values: Dict[
+            frozenset, RTCompilerOutputContainer
+        ] = {}
+        self._last_compiler_output: Optional[RTCompilerOutputContainer] = None
         self._required_parameters: Optional[Set[str]] = None
-        self._combined_compiler_output: Optional[CombinedRealtimeCompilerOutput] = None
+        self._combined_compiler_output: Optional[
+            CombinedRTCompilerOutputContainer
+        ] = None
         self._compiler_report_generator = CompilationReportGenerator()
 
     def set_sw_param_handler(

@@ -18,7 +18,12 @@ from laboneq.controller.communication import (
     DaqNodeGetAction,
     DaqNodeSetAction,
 )
-from laboneq.controller.devices.device_zi import DeviceZI, delay_to_rounded_samples
+from laboneq.controller.devices.device_zi import (
+    DeviceZI,
+    delay_to_rounded_samples,
+    IntegrationWeights,
+    IntegrationWeightItem,
+)
 from laboneq.controller.devices.zi_node_monitor import (
     Command,
     Response,
@@ -37,6 +42,7 @@ from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.data.recipe import IO, Initialization, IntegratorAllocation, TriggeringMode
+from laboneq.data.scheduled_experiment import CompilerArtifact, ArtifactsCodegen
 
 _logger = logging.getLogger(__name__)
 
@@ -306,15 +312,15 @@ class DeviceUHFQA(DeviceZI):
                     "%s's output port delay should be set to None, not 0", self.dev_repr
                 )
 
-    def collect_initialization_nodes(
+    async def collect_initialization_nodes(
         self,
         device_recipe_data: DeviceRecipeData,
         initialization: Initialization,
         recipe_data: RecipeData,
-    ) -> list[DaqNodeAction]:
+    ) -> list[DaqNodeSetAction]:
         _logger.debug("%s: Initializing device...", self.dev_repr)
 
-        nodes_to_initialize_output: list[DaqNodeAction] = []
+        nodes_to_initialize_output: list[DaqNodeSetAction] = []
 
         outputs = initialization.outputs or []
         for output in outputs:
@@ -447,10 +453,7 @@ class DeviceUHFQA(DeviceZI):
                         f"'{integrator_allocation.signal_id}' in integration mode, "
                         f"got {len(integrator_allocation.channels)}"
                     )
-                if integrator_allocation.weights == [None]:
-                    # Skip configuration if no integration weights provided to keep same behavior
-                    # TODO(2K): Consider not emitting the integrator allocation in this case.
-                    continue
+
                 # 0: 1 -> Real, 2 -> Imag
                 # 1: 2 -> Real, 1 -> Imag
                 inputs_mapping = [0, 1]
@@ -480,26 +483,6 @@ class DeviceUHFQA(DeviceZI):
                             self._daq,
                             f"/{self.serial}/qas/0/rotations/{integration_unit_index}",
                             rotations[integrator],
-                        ),
-                        DaqNodeSetAction(
-                            self._daq,
-                            f"/{self.serial}/qas/0/integration/weights/"
-                            f"{integration_unit_index}/real",
-                            get_wave(
-                                integrator_allocation.weights[0] + "_i.wave",
-                                recipe_data.scheduled_experiment.waves,
-                            ),
-                        ),
-                        DaqNodeSetAction(
-                            self._daq,
-                            f"/{self.serial}/qas/0/integration/weights/"
-                            f"{integration_unit_index}/imag",
-                            np.negative(
-                                get_wave(
-                                    integrator_allocation.weights[0] + "_q.wave",
-                                    recipe_data.scheduled_experiment.waves,
-                                )
-                            ),
                         ),
                     ]
                 )
@@ -557,6 +540,71 @@ class DeviceUHFQA(DeviceZI):
             DaqNodeSetAction(self._daq, f"/{self.serial}/qas/0/rotations/1", -1 - 1j)
         )
         return nodes_to_set_for_spectroscopy_mode
+
+    def prepare_integration_weights(
+        self,
+        artifacts: CompilerArtifact | dict[int, CompilerArtifact],
+        integrator_allocations: list[IntegratorAllocation],
+        kernel_ref: str,
+    ) -> IntegrationWeights | None:
+        if isinstance(artifacts, dict):
+            artifacts: ArtifactsCodegen = artifacts[self._device_class]
+        integration_weights = next(
+            (s for s in artifacts.integration_weights if s["filename"] == kernel_ref),
+            None,
+        )
+        if integration_weights is None:
+            return
+
+        bin_waves: IntegrationWeights = []
+        for signal_id, weight_names in integration_weights["signals"].items():
+            integrator_allocation = next(
+                ia for ia in integrator_allocations if ia.signal_id == signal_id
+            )
+
+            for index, weight_name in enumerate(weight_names):
+                for channel in integrator_allocation.channels:
+                    weight_vector_real = get_wave(
+                        weight_name + "_i.wave", artifacts.waves
+                    )
+                    weight_vector_imag = get_wave(
+                        weight_name + "_q.wave", artifacts.waves
+                    )
+                    bin_waves.append(
+                        IntegrationWeightItem(
+                            integration_unit=channel,
+                            index=index,
+                            name=weight_name,
+                            samples=weight_vector_real - 1j * weight_vector_imag,
+                        )
+                    )
+
+        return bin_waves
+
+    def prepare_upload_all_integration_weights(
+        self, awg_index, integration_weights: IntegrationWeights
+    ):
+        ret_nodes: list[DaqNodeSetAction] = []
+        for iw in integration_weights:
+            ret_nodes.extend(
+                [
+                    DaqNodeSetAction(
+                        self._daq,
+                        f"/{self.serial}/qas/0/integration/weights/"
+                        f"{iw.integration_unit}/real",
+                        iw.samples.real,
+                        filename=iw.name + "_i.wave",
+                    ),
+                    DaqNodeSetAction(
+                        self._daq,
+                        f"/{self.serial}/qas/0/integration/weights/"
+                        f"{iw.integration_unit}/imag",
+                        iw.samples.imag,
+                        filename=iw.name + "_q.wave",
+                    ),
+                ]
+            )
+        return ret_nodes
 
     def collect_awg_before_upload_nodes(
         self, initialization: Initialization, recipe_data: RecipeData

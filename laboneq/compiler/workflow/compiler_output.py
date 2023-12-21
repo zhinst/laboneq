@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
+import abc
 from dataclasses import dataclass, field
 from typing import Any, Dict
 
@@ -27,37 +29,53 @@ def _make_seqc_name(awg: AwgKey, step_indices: list[int]) -> str:
     return f"seq_{awg.device_id}_{awg.awg_number}_{step_indices_str}.seqc"
 
 
-@dataclass
-class RealtimeStep:
+class RealtimeStepBase:
     device_id: str
     awg_id: int
-    seqc_ref: str
-    wave_indices_ref: str
     nt_step: list[int]
 
 
 @dataclass
-class RealtimeStepPrettyPrinter:
+class RealtimeStep(RealtimeStepBase):
+    device_id: str
+    awg_id: int
+    seqc_ref: str
+    wave_indices_ref: str
+    kernel_indices_ref: str
+    nt_step: list[int]
+
+
+@dataclass
+class RealtimeStepPrettyPrinter(RealtimeStepBase):
     device_id: str
     awg_id: int
     nt_step: list[int]
 
 
 class RTCompilerOutput:
-    pass
+    """Base class for a single run of a code generation backend."""
 
 
-class CombinedOutput:
-    pass
+class CombinedOutput(abc.ABC):
+    """Base class for compiler output _after_ linking individual runs of the code
+    generation backend."""
+
+    feedback_register_configurations: dict[AwgKey, Any]
+    total_execution_time: int
+    max_execution_time_per_step: float
+
+    @abc.abstractmethod
+    def get_artifacts(self) -> CompilerArtifact:
+        raise NotImplementedError
 
 
 @dataclass
-class CombinedRealtimeCompilerOutputCode(CombinedOutput):
+class CombinedRTOutputSeqC(CombinedOutput):
     feedback_connections: dict[str, FeedbackConnection] = field(default_factory=dict)
     signal_delays: SignalDelays = field(default_factory=dict)
-    integration_weights: dict = field(default_factory=dict)
+    integration_weights: list[dict[str, Any]] = field(default_factory=list)
     integration_times: IntegrationTimes = None
-    simultaneous_acquires: dict[float, dict[str, str]] = field(default_factory=dict)
+    simultaneous_acquires: list[dict[str, str]] = field(default_factory=list)
     src: list[dict[str, Any]] = field(default_factory=dict)
     waves: dict[str, dict[str, Any]] = field(default_factory=list)
     wave_indices: list[dict[str, Any]] = field(default_factory=dict)
@@ -77,11 +95,12 @@ class CombinedRealtimeCompilerOutputCode(CombinedOutput):
             wave_indices=self.wave_indices,
             command_tables=self.command_tables,
             pulse_map=self.pulse_map,
+            integration_weights=self.integration_weights,
         )
 
 
 @dataclass
-class CombinedRealtimeCompilerOutputPrettyPrinter(CombinedOutput):
+class CombinedRTOutputPrettyPrinter(CombinedOutput):
     src: list[dict[str, Any]] = field(default_factory=dict)
     waves: list[dict[str, list[str]]] = field(default_factory=dict)
     sections: list[dict[str, list[str]]] = field(default_factory=dict)
@@ -107,17 +126,14 @@ class PrettyPrinterOutput(RTCompilerOutput):
 
     total_execution_time: float = 0
 
-    def real_time_steps(self, step_indices) -> list[RealtimeStep]:
-        return [RealtimeStepPrettyPrinter("pp", 0, step_indices)]
-
 
 @dataclass
-class CodegenOutput(RTCompilerOutput):
+class SeqCGenOutput(RTCompilerOutput):
     feedback_connections: Dict[str, FeedbackConnection]
     signal_delays: SignalDelays
-    integration_weights: Dict
+    integration_weights: dict[AwgKey, dict[str, list[str]]]
     integration_times: IntegrationTimes
-    simultaneous_acquires: Dict[float, Dict[str, str]]
+    simultaneous_acquires: list[Dict[str, str]]
     src: Dict[AwgKey, Dict[str, Any]]
     waves: Dict[str, Dict[str, Any]]
     wave_indices: Dict[AwgKey, Dict[str, Any]]
@@ -127,41 +143,28 @@ class CodegenOutput(RTCompilerOutput):
 
     total_execution_time: float = 0
 
-    def real_time_steps(self, step_indices) -> list[RealtimeStep]:
-        realtime_steps = []
-        for awg in self.src.keys():
-            seqc_name = _make_seqc_name(awg, step_indices)
-            realtime_steps.append(
-                RealtimeStep(
-                    awg.device_id, awg.awg_number, seqc_name, seqc_name, step_indices
-                )
-            )
-        return realtime_steps
 
+@dataclass
+class RTCompilerOutputContainer:
+    """Container (by device class) for the output of the code gen backend for a single
+    run."""
 
-@dataclass()
-class RealtimeCompilerOutput:
     codegen_output: dict[int, RTCompilerOutput]
     schedule: dict[str, Any]
 
-    def realtime_steps(self, step_indices: list[int]):
-        return [
-            step
-            for rtoutput in self.codegen_output.values()
-            for step in rtoutput.real_time_steps(step_indices)
-        ]
-
 
 @dataclass
-class CombinedRealtimeCompilerOutput:
+class CombinedRTCompilerOutputContainer:
+    """Container (by device class) for the compiler artifacts, after linking."""
+
     combined_output: dict[int, CombinedOutput]
     # NOTE(mr) does this make sense? do we want realtime steps "globally" or stored per device class?
-    realtime_steps: dict[int, list[RealtimeStep]] = field(default_factory=dict)
+    realtime_steps: list[RealtimeStep] = field(default_factory=list)
     schedule: dict[str, Any] = field(default_factory=dict)
 
     def get_artifacts(self):
         if len(self.combined_output) == 1:
-            return list(self.combined_output.values())[0].get_artifacts()
+            return next(iter(self.combined_output.values())).get_artifacts()
         else:
             return {
                 device_class: combined_output.get_artifacts()

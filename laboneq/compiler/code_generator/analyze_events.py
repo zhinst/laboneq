@@ -371,6 +371,8 @@ def analyze_acquire_times(
         play_wave_id: str
         acquisition_type: list
         acquire_handle: str
+        oscillator_frequency: float
+        amplitude: float
         play_pulse_parameters: Optional[Dict[str, Any]]
         pulse_pulse_parameters: Optional[Dict[str, Any]]
         channels: list[int | list[int]]
@@ -382,7 +384,7 @@ def analyze_acquire_times(
         time: float
         play_wave_id: str
 
-    interval_zip = list(
+    interval_zip: list[tuple[IntervalStartEvent, IntervalEndEvent]] = list(
         zip(
             [
                 IntervalStartEvent(
@@ -391,6 +393,8 @@ def analyze_acquire_times(
                     event["play_wave_id"],
                     event.get("acquisition_type", []),
                     event["acquire_handle"],
+                    event.get("oscillator_frequency", 0.0),
+                    event.get("amplitude", 1.0),
                     event.get("play_pulse_parameters"),
                     event.get("pulse_pulse_parameters"),
                     event.get("channel") or channels,
@@ -444,6 +448,8 @@ def analyze_acquire_times(
                 "play_wave_id": interval_start.play_wave_id,
                 "acquisition_type": interval_start.acquisition_type,
                 "acquire_handles": [interval_start.acquire_handle],
+                "oscillator_frequency": interval_start.oscillator_frequency,
+                "amplitude": interval_start.amplitude,
                 "feedback_register": feedback_register,
                 "channels": interval_start.channels,
                 "play_pulse_parameters": interval_start.play_pulse_parameters,
@@ -549,14 +555,19 @@ def analyze_prng_times(events, sampling_rate, delay):
     filtered_events = (
         (index, event)
         for index, event in enumerate(events)
-        if event["event_type"] == EventType.SETUP_PRNG
+        if event["event_type"]
+        in (
+            EventType.PRNG_SETUP,
+            EventType.DROP_PRNG_SETUP,
+            EventType.DRAW_PRNG_SAMPLE,
+            EventType.DROP_PRNG_SAMPLE,
+        )
     )
     for index, event in filtered_events:
         event_time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
-        retval.add(
-            event_time_in_samples,
-            AWGEvent(
-                type=AWGEventType.SEED_PRNG,
+        if event["event_type"] == EventType.PRNG_SETUP:
+            awg_event = AWGEvent(
+                type=AWGEventType.SETUP_PRNG,
                 start=event_time_in_samples,
                 end=event_time_in_samples,
                 priority=index,
@@ -565,25 +576,34 @@ def analyze_prng_times(events, sampling_rate, delay):
                     "seed": event["seed"],
                     "section": event["section_name"],
                 },
-            ),
-        )
-
-    filtered_events = (
-        (index, event)
-        for index, event in enumerate(events)
-        if event["event_type"] == EventType.SAMPLE_PRNG
-    )
-    for index, event in filtered_events:
-        event_time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
-        retval.add(
-            event_time_in_samples,
-            AWGEvent(
-                type=AWGEventType.SAMPLE_PRNG,
+            )
+        elif event["event_type"] == EventType.DROP_PRNG_SETUP:
+            awg_event = AWGEvent(
+                type=AWGEventType.DROP_PRNG_SETUP,
                 start=event_time_in_samples,
                 end=event_time_in_samples,
                 priority=index,
-                params={},
-            ),
-        )
+                params={"section": event["section_name"]},
+            )
+        elif event["event_type"] == EventType.DRAW_PRNG_SAMPLE:
+            awg_event = AWGEvent(
+                type=AWGEventType.PRNG_SAMPLE,
+                start=event_time_in_samples,
+                end=event_time_in_samples,
+                priority=index,
+                params={
+                    "sample_name": event["sample_name"],
+                    "section_name": event["section_name"],
+                },
+            )
+        else:  # EventType.DROP_PRNG_SAMPLE
+            awg_event = AWGEvent(
+                type=AWGEventType.DROP_PRNG_SAMPLE,
+                start=event_time_in_samples,
+                end=event_time_in_samples,
+                priority=index,
+                params={"sample_name": event["sample_name"]},
+            )
+        retval.add(event_time_in_samples, awg_event)
 
     return retval

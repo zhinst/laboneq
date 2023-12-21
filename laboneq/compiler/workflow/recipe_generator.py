@@ -7,10 +7,13 @@ import dataclasses
 from functools import singledispatchmethod
 from typing import TYPE_CHECKING, Any, Dict
 
+from zhinst.core import __version__ as zhinst_version
+
 from laboneq._utils import ensure_list
 from laboneq.compiler.common.feedback_register_config import (
     FeedbackRegisterConfig,
 )
+from laboneq._version import get_version
 from laboneq.compiler.code_generator.measurement_calculator import IntegrationTimes
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
@@ -48,6 +51,8 @@ if TYPE_CHECKING:
 class RecipeGenerator:
     def __init__(self):
         self._recipe = Recipe()
+        self._recipe.versions.target_labone = zhinst_version
+        self._recipe.versions.laboneq = get_version()
 
     def add_oscillator_params(self, experiment_dao: ExperimentDAO):
         for signal_id in experiment_dao.signals():
@@ -76,25 +81,20 @@ class RecipeGenerator:
         self,
         integration_unit_allocation,
         experiment_dao: ExperimentDAO,
-        integration_weights,
     ):
         for signal_id, integrator in integration_unit_allocation.items():
             thresholds = experiment_dao.threshold(signal_id)
-            weights: list[dict[str, Any]] = (
-                list(integration_weights[signal_id].values())
-                if signal_id in integration_weights
-                else []
-            )
+            n = max(1, integrator["kernel_count"] or 0)
             if not thresholds or thresholds == [None]:
-                n = max(1, len(weights))
                 thresholds = [0.0] * (n * (n + 1) // 2)
+
             integrator_allocation = IntegratorAllocation(
                 signal_id=signal_id,
                 device_id=integrator["device_id"],
                 awg=integrator["awg_nr"],
                 channels=integrator["channels"],
-                weights=[w.get("basename") for w in weights] if weights else [None],
                 thresholds=ensure_list(thresholds),
+                kernel_count=n,
             )
             self._recipe.integrator_allocations.append(integrator_allocation)
 
@@ -380,6 +380,7 @@ class RecipeGenerator:
                 awg_id=rt_step.awg_id,
                 seqc_ref=rt_step.seqc_ref,
                 wave_indices_ref=rt_step.wave_indices_ref,
+                kernel_indices_ref=rt_step.kernel_indices_ref,
                 nt_step=NtStepKey(indices=tuple(rt_step.nt_step)),
             )
         )
@@ -400,11 +401,8 @@ class RecipeGenerator:
         )
         self._recipe.is_spectroscopy = is_spectroscopy(experiment_dao.acquisition_type)
 
-    def add_simultaneous_acquires(
-        self, simultaneous_acquires: Dict[float, Dict[str, str]]
-    ):
-        # Keys are of no interest, only order and simultaneity is important
-        self._recipe.simultaneous_acquires = list(simultaneous_acquires.values())
+    def add_simultaneous_acquires(self, simultaneous_acquires: list[Dict[str, str]]):
+        self._recipe.simultaneous_acquires = list(simultaneous_acquires)
 
     def add_total_execution_time(self, total_execution_time):
         self._recipe.total_execution_time = total_execution_time

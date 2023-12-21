@@ -451,20 +451,20 @@ class SeqCGenerator:
         length = statement["length"]
         device_type = statement["device_type"]
         assert length >= device_type.min_play_wave
-        makers_declaration1 = ""
-        makers_declaration2 = ""
+        markers_declaration1 = ""
+        markers_declaration2 = ""
         if statement["has_marker1"]:
-            makers_declaration1 = ",true"
+            markers_declaration1 = ",true"
         if statement["has_marker2"]:
-            makers_declaration2 = ",true"
+            markers_declaration2 = ",true"
 
         if dual_channel:
             return (
-                f"wave w{sig_string}_i = placeholder({length}{makers_declaration1});\n"
-                f"wave w{sig_string}_q = placeholder({length}{makers_declaration2});\n"
+                f"wave w{sig_string}_i = placeholder({length}{markers_declaration1});\n"
+                f"wave w{sig_string}_q = placeholder({length}{markers_declaration2});\n"
             )
         else:
-            return f"wave w{sig_string} = placeholder({length}{makers_declaration1});\n"
+            return f"wave w{sig_string} = placeholder({length}{markers_declaration1}{markers_declaration2});\n"
 
     def _gen_zero_wave_declaration(self, statement):
         dual_channel = statement["signal_type"] in ["iq", "double", "multi"]

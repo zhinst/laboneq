@@ -119,6 +119,12 @@ def sample_pulse(
         )
 
     num_samples = length_to_samples(length, sampling_rate)
+    pulse_parameters = pulse_parameters or {}
+    if "amplitude" in pulse_parameters:
+        amplitude *= pulse_parameters["amplitude"]
+        pulse_parameters = {
+            k: v for (k, v) in pulse_parameters.items() if k != "amplitude"
+        }
 
     if pulse_function is not None:
         samples = pulse_function_library[pulse_function](
@@ -126,7 +132,7 @@ def sample_pulse(
             length=length,
             amplitude=amplitude,
             sampling_rate=sampling_rate,
-            **(pulse_parameters or {}),
+            **pulse_parameters,
         )
     assert isinstance(samples, (list, np.ndarray))
     samples = np.array(samples[:num_samples])

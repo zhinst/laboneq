@@ -92,15 +92,16 @@ class DeviceCollection:
                 f"Path '{path}' is not referring to any device"
             )
         serial = m.group(1).lower()
-        for dev in self._devices.values():
+        for _, dev in self.all:
             if dev.serial == serial:
                 return dev
         raise LabOneQControllerException(f"Could not find device for the path '{path}'")
 
     async def connect(self, reset_devices: bool = False):
         await self._prepare_daqs()
+        self._validate_dataserver_device_fw_compatibility()  # TODO(2K): Uses zhinst utils -> async api version?
         self._prepare_devices()
-        for device in self._devices.values():
+        for _, device in self.all:
             await device.connect()
         self.start_monitor()
         await self.configure_device_setup(reset_devices)
@@ -113,15 +114,10 @@ class DeviceCollection:
     ):
         conditions_checker = ConditionsChecker()
         response_waiter = ResponseWaiter()
-        set_nodes: list[DaqNodeSetAction] | None = None
+        set_nodes: list[DaqNodeSetAction] = []
 
-        def _add_set_nodes(daq, nodes: list[NodeControlBase] | None):
+        def _add_set_nodes(daq, nodes: list[NodeControlBase]):
             nonlocal set_nodes
-            if nodes is None or len(nodes) == 0:
-                return
-            if set_nodes is None:
-                set_nodes = []
-
             for node in nodes:
                 set_nodes.append(
                     DaqNodeSetAction(
@@ -170,14 +166,15 @@ class DeviceCollection:
                     conditions={n.path: n.value for n in filter_responses(dev_nodes)},
                 )
 
-        if set_nodes is None:  # All devices already configured as desired?
-            return
-
         # 2. Apply any necessary node changes (which may be empty)
-        if set_nodes:
+        if len(set_nodes) > 0:
             await batch_set(set_nodes)
 
         # 3. Wait for responses to the changes in step 2 and settling of conditions resulting from earlier config stages
+        if len(response_waiter.remaining()) == 0:
+            # Nothing to wait for, e.g. all devices were already configured as desired?
+            return
+
         timeout = 10
         if not response_waiter.wait_all(timeout=timeout):
             raise LabOneQControllerException(
@@ -355,16 +352,11 @@ class DeviceCollection:
                     raise LabOneQControllerException(str(error)) from error
 
     def _prepare_devices(self):
-        self._validate_dataserver_device_fw_compatibility()
-
         updated_devices: dict[str, DeviceZI] = {}
         for device_qualifier in self._ds.instruments:
-            daq = self._daqs.get(device_qualifier.server_uid)
-
-            if device_qualifier.dry_run:
-                cast(DaqWrapperDryRun, daq).map_device_type(device_qualifier)
             device = self._devices.get(device_qualifier.uid)
             if device is None or device.device_qualifier != device_qualifier:
+                daq = self._daqs[device_qualifier.server_uid]
                 device = DeviceFactory.create(device_qualifier, daq)
             device.remove_all_links()
             updated_devices[device_qualifier.uid] = device
@@ -383,21 +375,6 @@ class DeviceCollection:
                     )
                 from_dev.add_downlink(from_port, to_dev_uid, to_dev)
                 to_dev.add_uplink(from_dev)
-
-        # Make emulated PQSC aware of the down-stream devices
-        for device_qualifier in self._ds.instruments:
-            if device_qualifier.dry_run and device_qualifier.driver == "PQSC":
-                enabled_zsyncs = {}
-                from_dev = self._devices[device_qualifier.uid]
-                for port, _, to_dev in from_dev.downlinks():
-                    if enabled_zsyncs.get(port.lower()) == to_dev.serial:
-                        continue
-                    enabled_zsyncs[port.lower()] = to_dev.serial
-                    cast(DaqWrapperDryRun, daq).set_emulation_option(
-                        serial=device_qualifier.options.serial,
-                        option=f"{port.lower()}/connection/serial",
-                        value=to_dev.serial[3:],
-                    )
 
         # Move various device settings from device setup
         for device_qualifier in self._ds.instruments:

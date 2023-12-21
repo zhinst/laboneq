@@ -33,8 +33,8 @@ from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.scheduler.scheduler import Scheduler
 from laboneq.compiler.workflow import rt_linker
 from laboneq.compiler.workflow.compiler_output import (
-    CombinedRealtimeCompilerOutputCode,
-    CombinedRealtimeCompilerOutputPrettyPrinter,
+    CombinedRTOutputSeqC,
+    CombinedRTOutputPrettyPrinter,
 )
 from laboneq.compiler.workflow.neartime_execution import (
     NtCompilerExecutor,
@@ -48,7 +48,7 @@ from laboneq.compiler.workflow.precompensation_helpers import (
 )
 from laboneq.compiler.workflow.realtime_compiler import RealtimeCompiler
 from laboneq.compiler.workflow.recipe_generator import RecipeGenerator
-from laboneq.compiler.workflow.rt_linker import CombinedRealtimeCompilerOutput
+from laboneq.compiler.workflow.rt_linker import CombinedRTCompilerOutputContainer
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.core.types.enums.acquisition_type import AcquisitionType, is_spectroscopy
@@ -57,7 +57,6 @@ from laboneq.data.calibration import PortMode
 from laboneq.data.compilation_job import (
     CompilationJob,
     DeviceInfo,
-    ExperimentInfo,
     ParameterInfo,
     PrecompensationInfo,
     SignalInfo,
@@ -86,12 +85,11 @@ _AWGMapping = Dict[str, Dict[int, AWGInfo]]
 class Compiler:
     def __init__(self, settings: dict | None = None):
         self._experiment_dao: ExperimentDAO = None
-        self._experiment_info: ExperimentInfo = None
         self._execution: Statement = None
         self._settings = compiler_settings.from_dict(settings)
         self._sampling_rate_tracker: SamplingRateTracker = None
         self._scheduler: Scheduler = None
-        self._combined_compiler_output: CombinedRealtimeCompilerOutput = None
+        self._combined_compiler_output: CombinedRTCompilerOutputContainer = None
 
         self._leader_properties = LeaderProperties()
         self._clock_settings: Dict[str, Any] = {}
@@ -123,12 +121,9 @@ class Compiler:
     def use_experiment(self, experiment):
         if isinstance(experiment, CompilationJob):
             self._experiment_dao = ExperimentDAO(experiment.experiment_info)
-            self._experiment_info = experiment.experiment_info
             self._execution = experiment.execution
         else:  # legacy JSON
             self._experiment_dao = ExperimentDAO(experiment)
-            # NOTE(mr) work around for legacy JSON tests
-            self._experiment_info = self._experiment_dao.to_experiment_info()
             self._execution = legacy_execution_program()
 
     @staticmethod
@@ -167,16 +162,18 @@ class Compiler:
         standalone_qc = len(self._experiment_dao.devices()) <= 2 and all(
             dev.is_qc for dev in device_infos
         )
-        self._leader_properties.is_desktop_setup = not has_pqsc and (
-            used_devices == {"hdawg"}
-            or used_devices == {"prettyprinterdevice"}
-            or used_devices == {"shfsg"}
-            or used_devices == {"shfqa"}
-            or used_devices == {"shfqa", "shfsg"}
-            or standalone_qc
-            or used_devices == {"hdawg", "uhfqa"}
-            or (used_devices == {"uhfqa"} and has_hdawg)  # No signal on leader
-        )
+        if "prettyprinterdevice" in used_devices:
+            self._leader_properties.is_desktop_setup = True
+        else:
+            self._leader_properties.is_desktop_setup = not has_pqsc and (
+                used_devices == {"hdawg"}
+                or used_devices == {"shfsg"}
+                or used_devices == {"shfqa"}
+                or used_devices == {"shfqa", "shfsg"}
+                or standalone_qc
+                or used_devices == {"hdawg", "uhfqa"}
+                or (used_devices == {"uhfqa"} and has_hdawg)  # No signal on leader
+            )
         if (
             not has_pqsc
             and not self._leader_properties.is_desktop_setup
@@ -368,7 +365,7 @@ class Compiler:
                     integrators_per_signal * num_acquire_signals + i
                     for i in range(integrators_per_signal)
                 ],
-                "is_msd": (signal_info.kernel_count or 0) > 1,
+                "kernel_count": signal_info.kernel_count,
             }
         return integration_unit_allocation
 
@@ -998,7 +995,7 @@ class Compiler:
     @_add_io_to_recipe.register
     def _(
         self,
-        output: CombinedRealtimeCompilerOutputPrettyPrinter,
+        output: CombinedRTOutputPrettyPrinter,
         recipe_generator: RecipeGenerator,
     ):
         ...
@@ -1006,7 +1003,7 @@ class Compiler:
     @_add_io_to_recipe.register
     def _(
         self,
-        combined_output: CombinedRealtimeCompilerOutputCode,
+        combined_output: CombinedRTOutputSeqC,
         recipe_generator: RecipeGenerator,
     ):
         for output in self.calc_outputs(combined_output.signal_delays):
@@ -1046,7 +1043,7 @@ class Compiler:
     @_add_acquire_info_to_recipe.register
     def _(
         self,
-        output: CombinedRealtimeCompilerOutputPrettyPrinter,
+        output: CombinedRTOutputPrettyPrinter,
         recipe_generator: RecipeGenerator,
     ):
         ...
@@ -1054,13 +1051,12 @@ class Compiler:
     @_add_acquire_info_to_recipe.register
     def _(
         self,
-        output: CombinedRealtimeCompilerOutputCode,
+        output: CombinedRTOutputSeqC,
         recipe_generator: RecipeGenerator,
     ):
         recipe_generator.add_integrator_allocations(
             self._integration_unit_allocation,
             self._experiment_dao,
-            output.integration_weights,
         )
 
         recipe_generator.add_acquire_lengths(integration_times=output.integration_times)
@@ -1073,7 +1069,7 @@ class Compiler:
 
     def _drive_recipe_generator(
         self,
-        combined_outputs: CombinedRealtimeCompilerOutput,
+        combined_outputs: CombinedRTCompilerOutputContainer,
         recipe_generator: RecipeGenerator,
     ):
         recipe_generator.add_oscillator_params(self._experiment_dao)

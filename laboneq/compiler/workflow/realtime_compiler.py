@@ -17,7 +17,7 @@ from laboneq.compiler.ir.ir import IR
 from laboneq.compiler.scheduler.parameter_store import ParameterStore
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.scheduler.scheduler import Scheduler
-from laboneq.compiler.workflow.compiler_output import RealtimeCompilerOutput
+from laboneq.compiler.workflow.compiler_output import RTCompilerOutputContainer
 
 _logger = logging.getLogger(__name__)
 
@@ -104,7 +104,9 @@ class RealtimeCompiler:
         self._lower_ir_to_code(ir)
         _logger.debug("lowering IR to code complete")
 
-    def run(self, near_time_parameters: Optional[ParameterStore] = None):
+    def run(
+        self, near_time_parameters: Optional[ParameterStore] = None
+    ) -> RTCompilerOutputContainer:
         self._scheduler.run(near_time_parameters)
         self._generate_code()
 
@@ -115,7 +117,7 @@ class RealtimeCompiler:
             for device_class, code_generator in self._code_generators.items()
         }
 
-        compiler_output = RealtimeCompilerOutput(
+        compiler_output = RTCompilerOutputContainer(
             codegen_output=outputs,
             schedule=schedule,
         )

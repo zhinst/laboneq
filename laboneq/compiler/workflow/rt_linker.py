@@ -10,12 +10,15 @@ import numpy as np
 
 from laboneq.compiler.common.awg_info import AwgKey
 from laboneq.compiler.workflow.compiler_output import (
-    CodegenOutput,
-    CombinedRealtimeCompilerOutput,
-    CombinedRealtimeCompilerOutputCode,
-    CombinedRealtimeCompilerOutputPrettyPrinter,
+    SeqCGenOutput,
+    CombinedRTCompilerOutputContainer,
+    CombinedRTOutputSeqC,
+    CombinedRTOutputPrettyPrinter,
     PrettyPrinterOutput,
-    RealtimeCompilerOutput,
+    RTCompilerOutputContainer,
+    RTCompilerOutput,
+    RealtimeStep,
+    RealtimeStepPrettyPrinter,
 )
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 
@@ -57,14 +60,14 @@ def _merge_combined_compiler_runs(this, new, previous, step_indices: list[int]):
 @_combined_from_single_run.register
 def _(
     output: PrettyPrinterOutput, step_indices: list[int]
-) -> CombinedRealtimeCompilerOutputPrettyPrinter:
+) -> CombinedRTOutputPrettyPrinter:
     step_indices_str = (
         "[" + ",".join([str(i) for i in step_indices]) + "]"
         if len(step_indices) > 0
         else "[0]"
     )
     key = f"pp_{step_indices_str}"
-    return CombinedRealtimeCompilerOutputPrettyPrinter(
+    return CombinedRTOutputPrettyPrinter(
         src={key: output.src},
         sections={key: output.sections},
         waves={key: output.waves},
@@ -72,12 +75,11 @@ def _(
 
 
 @_combined_from_single_run.register
-def _(
-    output: CodegenOutput, step_indices: list[int]
-) -> CombinedRealtimeCompilerOutputCode:
+def _(output: SeqCGenOutput, step_indices: list[int]) -> CombinedRTOutputSeqC:
     src = []
     command_tables = []
     wave_indices = []
+    integration_weights = []
     for awg, awg_src in output.src.items():
         seqc_name = _make_seqc_name(awg, step_indices)
         src.append({"filename": seqc_name, **awg_src})
@@ -91,10 +93,15 @@ def _(
                 **output.wave_indices[awg],
             }
         )
-    return CombinedRealtimeCompilerOutputCode(
+        if awg in output.integration_weights:
+            integration_weights.append(
+                {"filename": seqc_name, "signals": output.integration_weights[awg]}
+            )
+
+    return CombinedRTOutputSeqC(
         feedback_connections=output.feedback_connections,
         signal_delays=output.signal_delays,
-        integration_weights=output.integration_weights,
+        integration_weights=integration_weights,
         integration_times=output.integration_times,
         simultaneous_acquires=output.simultaneous_acquires,
         total_execution_time=output.total_execution_time,
@@ -117,11 +124,6 @@ def _check_compatibility(this, new):
         raise LabOneQException(
             "Signal delays do not match between real-time iterations"
         )
-    if not _deep_compare(this.integration_weights, new.integration_weights):
-        # todo: this we probably want to allow in the future
-        raise LabOneQException(
-            "Integration weights do not match between real-time iterations"
-        )
     if this.integration_times != new.integration_times:
         raise LabOneQException(
             "Integration times do not match between real-time iterations"
@@ -138,9 +140,9 @@ def _check_compatibility(this, new):
 
 @_merge_combined_compiler_runs.register
 def _(
-    this: CombinedRealtimeCompilerOutputCode,
-    new: CodegenOutput,
-    previous: CodegenOutput,
+    this: CombinedRTOutputSeqC,
+    new: SeqCGenOutput,
+    previous: SeqCGenOutput,
     step_indices: list[int],
 ):
     _check_compatibility(this, new)
@@ -151,10 +153,13 @@ def _(
         seqc_name = _make_seqc_name(awg, step_indices)
 
         previous_src = previous.src[awg]
+
         previous_ct = previous.command_tables.get(awg)
         new_ct = new.command_tables.get(awg)
+
         previous_wave_indices = previous.wave_indices.get(awg)
         new_wave_indices = new.wave_indices.get(awg)
+
         previous_waves = {
             name: wave
             for name, wave in previous.waves.items()
@@ -166,11 +171,36 @@ def _(
             if any(index_name in name for index_name in new_wave_indices["value"])
         }
 
+        previous_integration_weights = previous.integration_weights.get(awg)
+        if previous_integration_weights is not None:
+            previous_waves |= {
+                name: wave
+                for name, wave in previous.waves.items()
+                if any(
+                    index_name in name
+                    for l in previous_integration_weights.values()
+                    for index_name in l
+                )
+            }
+
+        new_integration_weights = new.integration_weights.get(awg)
+        if new_integration_weights is not None:
+            new_waves |= {
+                name: wave
+                for name, wave in new.waves.items()
+                if any(
+                    index_name in name
+                    for l in new_integration_weights.values()
+                    for index_name in l
+                )
+            }
+
         if (
             previous_src == awg_src
             and previous_ct == new_ct
             and previous_wave_indices == new_wave_indices
             and _deep_compare(previous_waves, new_waves)
+            and _deep_compare(previous_integration_weights, new_integration_weights)
         ):
             # No change in this iteration
             continue
@@ -183,6 +213,10 @@ def _(
             this.command_tables.append({"seqc": seqc_name, **new_ct})
         if new_wave_indices is not None:
             this.wave_indices.append({"filename": seqc_name, **new_wave_indices})
+        if new_integration_weights is not None:
+            this.integration_weights.append(
+                {"filename": seqc_name, "signals": new_integration_weights}
+            )
         this.waves.update(new_waves)
         this.max_execution_time_per_step = max(
             this.max_execution_time_per_step, new.total_execution_time
@@ -193,7 +227,7 @@ def _(
 
 @_merge_combined_compiler_runs.register
 def _(
-    this: CombinedRealtimeCompilerOutputPrettyPrinter,
+    this: CombinedRTOutputPrettyPrinter,
     new: PrettyPrinterOutput,
     previous: PrettyPrinterOutput,
     step_indices: list[int],
@@ -201,23 +235,57 @@ def _(
     return []
 
 
+def make_real_time_step_from_container(
+    rt_compiler_output: RTCompilerOutputContainer, step_indices: list[int]
+):
+    return [
+        step
+        for rtoutput in rt_compiler_output.codegen_output.values()
+        for step in make_real_time_step(rtoutput, step_indices)
+    ]
+
+
+def make_real_time_step(rt_compiler_output: RTCompilerOutput, step_indices: list[int]):
+    if isinstance(rt_compiler_output, SeqCGenOutput):
+        realtime_steps = []
+        for awg in rt_compiler_output.src.keys():
+            seqc_name = _make_seqc_name(awg, step_indices)
+            realtime_steps.append(
+                RealtimeStep(
+                    device_id=awg.device_id,
+                    awg_id=awg.awg_number,
+                    seqc_ref=seqc_name,
+                    wave_indices_ref=seqc_name,
+                    kernel_indices_ref=seqc_name,
+                    nt_step=step_indices,
+                )
+            )
+    elif isinstance(rt_compiler_output, PrettyPrinterOutput):
+        realtime_steps = [RealtimeStepPrettyPrinter("pp", 0, step_indices)]
+    else:
+        raise TypeError
+    return realtime_steps
+
+
 def from_single_run(
-    rt_compiler_output: RealtimeCompilerOutput, step_indices: list[int]
-) -> CombinedRealtimeCompilerOutput:
-    return CombinedRealtimeCompilerOutput(
+    rt_compiler_output: RTCompilerOutputContainer, step_indices: list[int]
+) -> CombinedRTCompilerOutputContainer:
+    return CombinedRTCompilerOutputContainer(
         combined_output={
             device_class: _combined_from_single_run(output, step_indices)
             for device_class, output in rt_compiler_output.codegen_output.items()
         },
-        realtime_steps=rt_compiler_output.realtime_steps(step_indices),
+        realtime_steps=make_real_time_step_from_container(
+            rt_compiler_output, step_indices
+        ),
         schedule=rt_compiler_output.schedule,
     )
 
 
 def merge_compiler_runs(
-    this: CombinedRealtimeCompilerOutput,
-    new: RealtimeCompilerOutput,
-    previous: RealtimeCompilerOutput,
+    this: CombinedRTCompilerOutputContainer,
+    new: RTCompilerOutputContainer,
+    previous: RTCompilerOutputContainer,
     step_indices: list[int],
 ):
     for device_class, combined_output in this.combined_output.items():
@@ -227,7 +295,7 @@ def merge_compiler_runs(
             previous.codegen_output[device_class],
             step_indices,
         )
-        new_realtime_steps = new.realtime_steps(step_indices)
+        new_realtime_steps = make_real_time_step_from_container(new, step_indices)
         for new_realtime_step in new_realtime_steps:
             if (
                 new_realtime_step.device_id,

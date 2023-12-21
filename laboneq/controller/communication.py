@@ -11,6 +11,7 @@ from enum import Enum
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Dict, List
 
+import numpy as np
 import zhinst.core
 from zhinst.toolkit import Session as TKSession
 
@@ -96,14 +97,18 @@ class ZiApiWrapperBase(ABC):
     def _log_set(self, method_name: str, daq_action):
         path = daq_action.path
 
-        # @TODO(andreyk): remove this after node logging is refactored
-        # it's needed because node logger doesn't support  multiline strings
         value = daq_action.value if daq_action.filename is None else daq_action.filename
 
-        # this is a hack to maintain compatibility with old ground truth files
-        # @TODO(andreyk): remove compatibility hack and refactor the node logger to support lists and other types
+        if isinstance(value, np.ndarray):
+            value = str(np.array2string(value, threshold=30))
+        elif isinstance(value, (list, tuple)):
+            value = str(value)
+        if isinstance(value, str):
+            value = value.replace("\n", r"\n")
         if isinstance(value, (int, float, complex, str)):
             self._log_node(f"{method_name} {path} {value}")
+        else:
+            raise TypeError(f"Invalid type {type(value)} for node logging of {path}")
 
         _logger.debug("%s - %s -> %s", method_name, path, value)
 
@@ -140,7 +145,6 @@ class ZiApiWrapperBase(ABC):
         node_list = [daq_action.path for daq_action in daq_actions]
         _logger.debug("Batch set node list: %s", node_list)
 
-        api_input = []
         daq_actions_to_execute: list[DaqNodeSetAction] = []
 
         for action in daq_actions:
@@ -154,6 +158,9 @@ class ZiApiWrapperBase(ABC):
             else:
                 _logger.debug("set not caching: %s", action.path)
                 self._node_cache_root.force_set(action.path, action.value)
+
+            if isinstance(action.value, np.ndarray):
+                action.value = np.ascontiguousarray(action.value)
 
             daq_actions_to_execute.append(action)
 

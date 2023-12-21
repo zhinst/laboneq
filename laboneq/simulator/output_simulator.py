@@ -111,6 +111,11 @@ class OutputSimulator:
             Deprecated and has no effect. Use the `output_length` argument to
             the `get_snippet` method instead.
 
+    Attributes:
+        max_output_length:
+            Deprecated and has no effect. Use the `output_length` argument to
+            the `get_snippet` method instead.
+
     Examples:
 
         Example showing how to compile an experiment and make use of the

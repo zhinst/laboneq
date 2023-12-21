@@ -61,16 +61,16 @@ class DeviceSHFPPC(DeviceZI):
                         name=attribute_name, index=channel, value_or_param=settings[key]
                     )
 
-    def collect_reset_nodes(self) -> list[DaqNodeAction]:
+    async def collect_reset_nodes(self) -> list[DaqNodeAction]:
         return []
 
-    def collect_initialization_nodes(
+    async def collect_initialization_nodes(
         self,
         device_recipe_data: DeviceRecipeData,
         initialization: Initialization,
         recipe_data: RecipeData,
-    ) -> list[DaqNodeAction]:
-        nodes_to_set: list[DaqNodeAction] = []
+    ) -> list[DaqNodeSetAction]:
+        nodes_to_set: list[DaqNodeSetAction] = []
         ppchannels = initialization.ppchannels or []
 
         def _convert(value):

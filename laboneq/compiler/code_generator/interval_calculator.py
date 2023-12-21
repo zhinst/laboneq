@@ -25,7 +25,7 @@ def are_cut_points_valid(interval_tree: IntervalTree, cut_points: List[int]):
         at_cut_point = interval_tree.at(cut_point)
         for iv in at_cut_point:
             if iv.begin < cut_point < iv.end:
-                _logger.warning("Cut point %s would cut interval %s", cut_point, iv)
+                _logger.error("Cut point %s would cut interval %s", cut_point, iv)
                 return False
     return True
 

@@ -21,7 +21,7 @@ class LoopIterationIR(SectionIR):
     sweep_parameters: List[ParameterInfo]
     num_repeats: int
     shadow: bool
-    sample_prng: bool
+    prng_sample: str | None
 
     def compressed_iteration(self, iteration: int):
         """Make a copy of this schedule, but replace ``iteration`` and set the
@@ -56,10 +56,23 @@ class LoopIterationIR(SectionIR):
             start, max_events, settings, id_tracker, expand_loops
         )
 
-        sample_prng_events = []
-        if self.sample_prng:
-            sample_prng_events = [
-                {"event_type": EventType.SAMPLE_PRNG, "time": start, **common}
+        prng_sample_events = drop_prng_sample_events = []
+        if self.prng_sample is not None:
+            prng_sample_events = [
+                {
+                    "event_type": EventType.DRAW_PRNG_SAMPLE,
+                    "time": start,
+                    "sample_name": self.prng_sample,
+                    **common,
+                }
+            ]
+            drop_prng_sample_events = [
+                {
+                    "event_type": EventType.DROP_PRNG_SAMPLE,
+                    "time": end,
+                    "sample_name": self.prng_sample,
+                    **common,
+                }
             ]
 
         event_list = [
@@ -75,9 +88,10 @@ class LoopIterationIR(SectionIR):
                 }
                 for param in self.sweep_parameters
             ],
-            *sample_prng_events,
+            *prng_sample_events,
             *[e for l in children_events for e in l],
             {"event_type": EventType.LOOP_STEP_END, "time": end, **common},
+            *drop_prng_sample_events,
             *(
                 [{"event_type": EventType.LOOP_ITERATION_END, "time": end, **common}]
                 if self.iteration == 0

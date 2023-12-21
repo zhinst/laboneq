@@ -149,7 +149,7 @@ class PlayPulse(SignalOperation):
 @dataclass
 class PulseFunctional(Pulse):
     function: str = None
-    amplitude: float | Parameter = None
+    amplitude: float | Parameter = 1.0
     length: float = None
     pulse_parameters: dict | None = None
 

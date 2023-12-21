@@ -9,6 +9,7 @@ import logging
 import math
 from bisect import bisect_left
 from dataclasses import dataclass
+from math import ceil
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from intervaltree import Interval, IntervalTree
@@ -102,7 +103,7 @@ class FeedbackIntervalData:
     handle: str | None
     local: bool | None
     user_register: int | None
-    match_prng: bool
+    prng_sample: str | None
 
 
 def _analyze_branches(events, delay, sampling_rate, playwave_max_hint):
@@ -117,8 +118,12 @@ def _analyze_branches(events, delay, sampling_rate, playwave_max_hint):
         if ev["event_type"] == "SECTION_START":
             handle = ev.get("handle", None)
             user_register = ev.get("user_register", None)
-            match_prng = ev.get("match_prng", False)
-            if handle is not None or user_register is not None or match_prng:
+            prng_sample = ev.get("prng_sample")
+            if (
+                handle is not None
+                or user_register is not None
+                or prng_sample is not None
+            ):
                 begin = length_to_samples(ev["time"] + delay, sampling_rate)
                 # Add the command table interval boundaries as cut points
                 cut_points.add(begin)
@@ -129,7 +134,7 @@ def _analyze_branches(events, delay, sampling_rate, playwave_max_hint):
                         begin=begin,
                         end=None,
                         data=FeedbackIntervalData(
-                            handle, ev.get("local"), user_register, match_prng
+                            handle, ev.get("local"), user_register, prng_sample
                         ),
                     )
                 )
@@ -186,7 +191,7 @@ def _interval_list(events, states, signal_ids, delay, sub_channel):
                     signal_id=cur_signal_id,
                     time=start["time"] + delay,
                     play_wave_id=start["play_wave_id"],
-                    amplitude=start["amplitude"],
+                    amplitude=start.get("amplitude", 1.0),
                     index=index,
                     oscillator_phase=start.get("oscillator_phase"),
                     oscillator_frequency=start.get("oscillator_frequency"),
@@ -322,6 +327,17 @@ def _make_interval_tree(
     return interval_tree
 
 
+def _oscillator_phase_increment_points(
+    events, signals, delay, sampling_rate
+) -> set[int]:
+    virtual_z_gates = _find_frame_changes(events, delay, sampling_rate)
+    virtual_z_gates = [v for v in virtual_z_gates if v.signal in signals]
+
+    frame_change_times = {frame_change.time for frame_change in virtual_z_gates}
+
+    return frame_change_times
+
+
 @dataclass
 class _FrameChange:
     time: int
@@ -353,6 +369,22 @@ def _find_frame_changes(events, delay, sampling_rate):
     return virtual_z_gates
 
 
+def _make_virtual_z_gate_event(frame_change: _FrameChange, signal: SignalObj):
+    return AWGEvent(
+        type=AWGEventType.CHANGE_OSCILLATOR_PHASE,
+        start=frame_change.time,
+        end=frame_change.time,
+        priority=frame_change.priority,
+        params={
+            "signal": frame_change.signal,
+            "phase": frame_change.phase,
+            "oscillator": signal.hw_oscillator
+            if signal.awg.device_type.supports_oscillator_switching
+            else None,
+        },
+    )
+
+
 def _insert_frame_changes(
     interval_events: AWGSampledEventSequence,
     events,
@@ -361,15 +393,15 @@ def _insert_frame_changes(
     signals: dict[str, SignalObj],
 ):
     frame_change_events = AWGSampledEventSequence()
-    frame_changes = _find_frame_changes(events, delay, sampling_rate)
-    frame_changes = [fc for fc in frame_changes if fc.signal in signals]
-
     intervals = IntervalTree.from_tuples(
         (ev.start, ev.end, ev)
         for t, evl in interval_events.sequence.items()
         for ev in evl
         if ev.type == AWGEventType.PLAY_WAVE
     )
+
+    frame_changes = _find_frame_changes(events, delay, sampling_rate)
+    frame_changes = [fc for fc in frame_changes if fc.signal in signals]
 
     for frame_change in frame_changes:
         if frame_change.signal not in signals.keys():
@@ -393,20 +425,7 @@ def _insert_frame_changes(
                     " adding a small delay after the phase increment."
                 )
             frame_change_events.add(
-                frame_change.time,
-                AWGEvent(
-                    type=AWGEventType.CHANGE_OSCILLATOR_PHASE,
-                    start=frame_change.time,
-                    end=frame_change.time,
-                    priority=frame_change.priority,
-                    params={
-                        "signal": frame_change.signal,
-                        "phase": frame_change.phase,
-                        "oscillator": signal.hw_oscillator
-                        if signal.awg.device_type.supports_oscillator_switching
-                        else None,
-                    },
-                ),
+                frame_change.time, _make_virtual_z_gate_event(frame_change, signal)
             )
             continue
 
@@ -418,6 +437,15 @@ def _insert_frame_changes(
             signal.hw_oscillator != signature.hw_oscillator
             and signature.hw_oscillator is not None
         ):
+            # Oscillator conflict!
+            # We may still get out of this, if the frame change happens at the beginning
+            # of the interval, by emitting a 0-length command table entry.
+            if frame_change.time == play_iv.data.start:
+                frame_change_events.add(
+                    frame_change.time, _make_virtual_z_gate_event(frame_change, signal)
+                )
+                continue
+
             raise LabOneQException(
                 f"Cannot increment oscillator '{signal.hw_oscillator}' of signal"
                 f" '{signal.id}': the line is occupied by '{signature.hw_oscillator}'."
@@ -450,6 +478,7 @@ def _oscillator_switch_cut_points(
     interval_tree: IntervalTree,
     signals: Dict[str, SignalObj],
     sample_multiple,
+    oscillator_phase_increment_times: set[int],
 ) -> Tuple[AWGSampledEventSequence, Set]:
     cut_points = set()
 
@@ -512,6 +541,13 @@ def _oscillator_switch_cut_points(
         return a
 
     osc_intervals.merge_overlaps(reducer)
+
+    for time in oscillator_phase_increment_times:
+        # Check if the frame change happens after the last oscillator switch - the
+        # compiler will otherwise assume that the last oscillator switch stays valid
+        # to the end of the sequence.
+        if time >= osc_intervals.end():
+            cut_points.add(ceil(time / sample_multiple) * sample_multiple)
 
     oscillator_switch_events = AWGSampledEventSequence()
     for iv in osc_intervals:
@@ -682,10 +718,22 @@ def analyze_play_wave_times(
     cut_points.add(sequence_end)
     cut_points.update(other_events.sequence)
 
+    # Oscillator phase increments are determined in a two-step process.
+    #  1. A preliminary list of all phase increments is collected. These are used to
+    #     determine the cut points for waveforms, as some phase increments require
+    #     oscillator switching.
+    #  2. Once the waveform intervals have been established (aka compacted), the actual
+    #     phase increments are baked into the intervals.
+    prelim_oscillator_phase_increments = _oscillator_phase_increment_points(
+        events, signals, delay, sampling_rate
+    )
+
     (
         oscillator_switch_events,
         oscillator_switch_cut_points,
-    ) = _oscillator_switch_cut_points(interval_tree, signals, sample_multiple)
+    ) = _oscillator_switch_cut_points(
+        interval_tree, signals, sample_multiple, prelim_oscillator_phase_increments
+    )
 
     cut_points.update(oscillator_switch_cut_points)
     oscillator_intervals = _oscillator_intervals(
@@ -749,7 +797,7 @@ def analyze_play_wave_times(
                     "handle": interval.data.handle,
                     "local": interval.data.local,
                     "user_register": interval.data.user_register,
-                    "match_prng": interval.data.match_prng,
+                    "prng_sample": interval.data.prng_sample,
                     "signal_id": signal_id,
                     "section_name": section_name,
                 },

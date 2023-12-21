@@ -105,7 +105,7 @@ class AwgPipeliner(_type_base):
             for index in self._allocated_awgs
         }
 
-    def pipeliner_reset_nodes(self) -> list[DaqNodeAction]:
+    async def pipeliner_reset_nodes(self) -> list[DaqNodeAction]:
         return [
             DaqNodeSetAction(
                 self._daq,

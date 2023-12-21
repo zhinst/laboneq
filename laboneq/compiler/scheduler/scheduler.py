@@ -286,7 +286,7 @@ class Scheduler:
 
         is_loop = section_info.count is not None
         if not is_loop:
-            assert not section_info.sample_prng, "only allowed in loops"
+            assert section_info.prng_sample is None, "only allowed in loops"
         if is_loop:
             schedule = self._schedule_loop(
                 section_id, section_info, current_parameters, sweep_parameters
@@ -294,7 +294,7 @@ class Scheduler:
         elif (
             section_info.match_handle is not None
             or section_info.match_user_register is not None
-            or section_info.match_prng
+            or section_info.match_prng_sample is not None
         ):
             schedule = self._schedule_match(
                 section_id, section_info, current_parameters
@@ -632,7 +632,7 @@ class Scheduler:
             shadow=local_iteration > 0,
             num_repeats=num_repeats,
             sweep_parameters=sweep_parameters,
-            sample_prng=section_info.sample_prng,
+            prng_sample=section_info.prng_sample,
         )
 
     def _schedule_children(
@@ -880,11 +880,11 @@ class Scheduler:
         assert (
             section_info.match_handle is not None
             or section_info.match_user_register is not None
-            or section_info.match_prng
+            or section_info.match_prng_sample is not None
         )
         handle: str | None = section_info.match_handle
         user_register: Optional[int] = section_info.match_user_register
-        match_prng = section_info.match_prng
+        prng_sample = section_info.match_prng_sample
         local: Optional[bool] = section_info.local
 
         dao = self._schedule_data.experiment_dao
@@ -958,7 +958,7 @@ class Scheduler:
             play_after=play_after,
             handle=handle,
             user_register=user_register,
-            match_prng=match_prng,
+            prng_sample=prng_sample,
             local=local,
             compressed_loop_grid=compressed_loop_grid,
         )

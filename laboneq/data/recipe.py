@@ -34,7 +34,7 @@ class TriggeringMode(Enum):
 
 @dataclass(frozen=True)
 class NtStepKey:
-    indices: tuple[int]
+    indices: tuple[int, ...]
 
     def __post_init__(self):
         # Required for JSON deserialization, as tuples are serialized as lists.
@@ -134,7 +134,7 @@ class IntegratorAllocation:
     device_id: str
     awg: int
     channels: list[int]
-    weights: list[str | None] = field(default_factory=lambda: [None])
+    kernel_count: int
     thresholds: list[float] = field(default_factory=lambda: [0.0])
 
 
@@ -151,7 +151,14 @@ class RealtimeExecutionInit:
     awg_id: int
     seqc_ref: str
     wave_indices_ref: str
+    kernel_indices_ref: str
     nt_step: NtStepKey
+
+
+@dataclass
+class SoftwareVersions:
+    target_labone: str
+    laboneq: str
 
 
 @dataclass
@@ -165,3 +172,4 @@ class Recipe:
     total_execution_time: float = None
     max_step_execution_time: float = None
     is_spectroscopy: bool = False
+    versions: SoftwareVersions = field(default_factory=lambda: SoftwareVersions("", ""))

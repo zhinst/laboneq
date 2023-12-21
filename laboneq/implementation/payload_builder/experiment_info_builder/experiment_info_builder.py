@@ -56,6 +56,7 @@ from laboneq.data.experiment_description import (
     SignalOperation,
     Sweep,
     PrngLoop,
+    Match,
 )
 from laboneq.data.parameter import LinearSweepParameter, Parameter, SweepParameter
 from laboneq.data.setup_description import (
@@ -820,27 +821,35 @@ class ExperimentInfoBuilder:
         reset_oscillator_phase = (
             getattr(section, "reset_oscillator_phase", None) or False
         )
-        match_handle = getattr(section, "handle", None)
-        state = getattr(section, "state", None)
-        local = getattr(section, "local", None)
-        match_user_register = getattr(section, "user_register", None)
-        match_prng_sample = getattr(section, "prng_sample", None)
+
         assert section.trigger is not None
         triggers = [
             {"signal_id": k, "state": v["state"]} for k, v in section.trigger.items()
         ]
         chunk_count = getattr(section, "chunk_count", 1)
 
-        prng_seed_info = None
+        prng_setup_info = None
         if hasattr(section, "prng"):
-            prng_seed_info = PRNGInfo(section.prng.range, section.prng.seed)
+            prng_setup_info = PRNGInfo(section.prng.range, section.prng.seed)
             on_system_grid = True
 
-        draw_from_prng = False
+        prng_sample = None
         if isinstance(section, PrngLoop):
-            prng_sample = section.prng_sample
-            count = prng_sample.count
-            draw_from_prng = True
+            prng_sample = section.prng_sample.uid
+            count = section.prng_sample.count
+
+        match_handle = None
+        local = None
+        match_user_register = None
+        match_prng_sample = None
+        if isinstance(section, Match):
+            match_handle = section.handle
+            local = section.local
+            match_user_register = section.user_register
+            match_prng_sample = (
+                section.prng_sample.uid if section.prng_sample is not None else None
+            )
+        state = getattr(section, "state", None)
 
         this_acquisition_type = None
         if any(isinstance(operation, Acquire) for operation in section.children):
@@ -861,7 +870,7 @@ class ExperimentInfoBuilder:
             chunk_count=chunk_count,
             match_handle=match_handle,
             match_user_register=match_user_register,
-            match_prng=(match_prng_sample is not None),
+            match_prng_sample=match_prng_sample,
             state=state,
             local=local,
             execution_type=execution_type,
@@ -874,8 +883,8 @@ class ExperimentInfoBuilder:
             triggers=triggers,
             play_after=play_after,
             parameters=section_parameters,
-            prng=prng_seed_info,
-            sample_prng=draw_from_prng,
+            prng=prng_setup_info,
+            prng_sample=prng_sample,
         )
 
         self._section_operations_to_add.append(
@@ -889,10 +898,7 @@ class ExperimentInfoBuilder:
             function = getattr(pulse, "function", None)
             length = getattr(pulse, "length", None)
             samples = getattr(pulse, "samples", None)
-
-            amplitude = self.opt_param(getattr(pulse, "amplitude", None))
-            if amplitude is None:
-                amplitude = 1.0
+            amplitude = getattr(pulse, "amplitude", 1.0)
             can_compress = getattr(pulse, "can_compress", False)
 
             self._pulse_defs[pulse.uid] = PulseDef(
@@ -1055,7 +1061,8 @@ class ExperimentInfoBuilder:
         if (
             parent.count is not None
             and parent.averaging_mode is None
-            and not parent.sample_prng  # PRNG loop is considered to be inside shot
+            and not parent.prng_sample
+            is not None  # PRNG loop is considered to be inside shot
         ):
             # this section is a sweep (aka loop but not averaging)
             return parent

@@ -50,10 +50,8 @@ def duration_to_seconds(duration: ast.DurationLiteral):
 
 
 def _eval_expression(
-    expression: ast.Expression | ast.DiscreteSet | None, namespace: NamespaceNest
+    expression: ast.Expression | ast.DiscreteSet, namespace: NamespaceNest
 ):
-    if expression is None:
-        return None
     if isinstance(
         expression,
         (
@@ -64,10 +62,13 @@ def _eval_expression(
         ),
     ):
         return expression.value
+
     if isinstance(expression, ast.ImaginaryLiteral):
         return 1j * expression.value
+
     if isinstance(expression, ast.DurationLiteral):
         return duration_to_seconds(expression)
+
     if isinstance(expression, ast.BinaryExpression):
         try:
             op = binary_ops[expression.op.name]
@@ -78,12 +79,13 @@ def _eval_expression(
         lhs = _eval_expression(expression.lhs, namespace)
         rhs = _eval_expression(expression.rhs, namespace)
         return op(lhs, rhs)
+
     if isinstance(expression, ast.UnaryExpression):
         try:
             op = unary_ops[expression.op.name]
         except KeyError as e:
             raise OpenQasmException(
-                f"Unsupported operator '{expression.op}'", expression.span
+                f"Unsupported operator '{expression.op.name}'", expression.span
             ) from e
         return op(_eval_expression(expression.expression, namespace))
 
@@ -102,12 +104,17 @@ def _eval_expression(
             return value
         else:  # value is a list; dereference classical references
             return [v.value if isinstance(v, ClassicalRef) else v for v in value]
+
     if isinstance(expression, ast.RangeDefinition):
         start = _eval_expression(expression.start, namespace)
         end = _eval_expression(expression.end, namespace)
         end += 1 if end >= start else -1
-        step = _eval_expression(expression.step, namespace) or 1
+        if expression.step is None:
+            step = 1
+        else:
+            step = _eval_expression(expression.step, namespace)
         return range(start, end, step)
+
     if isinstance(expression, ast.DiscreteSet):
         return [_eval_expression(x, namespace) for x in expression.values]
 
@@ -149,8 +156,15 @@ def _eval_expression(
         rhs = _eval_expression(expression.rhs, namespace)
         return [*lhs, *rhs]
 
+    if isinstance(expression, ast.FunctionCall):
+        func_name = expression.name.name
+        func_args = [_eval_expression(arg, namespace) for arg in expression.arguments]
+        func = namespace.lookup(func_name)
+        return func.func(*func_args)
+
     raise OpenQasmException(
-        "Failed to evaluate expression", getattr(expression, "span", None)
+        f"Unsupported expression: {type(expression)}",
+        mark=expression.span,
     )
 
 
