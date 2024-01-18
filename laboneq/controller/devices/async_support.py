@@ -4,11 +4,14 @@
 from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, TypeVar
 
 if TYPE_CHECKING:
     from laboneq.controller.communication import ServerQualifier
     from laboneq.controller.devices.device_zi import DeviceQualifier
+
+
+ASYNC_DEBUG_MODE = False
 
 
 async def create_device_kernel_session(
@@ -17,9 +20,17 @@ async def create_device_kernel_session(
     return None  # TODO(2K): stub, will return the real async api kernel session
 
 
+U = TypeVar("U")
+
+
+async def _gather(*args: Coroutine[Any, Any, U]) -> list[U]:
+    if ASYNC_DEBUG_MODE:
+        return [await arg for arg in args]
+    return await asyncio.gather(*args)
+
+
 @asynccontextmanager
-async def gather_and_apply(func):
-    awaitables = []
+async def gather_and_apply(func: Callable[[list[U]], Coroutine[Any, Any, None]]):
+    awaitables: list[Coroutine[Any, Any, U]] = []
     yield awaitables
-    results = await asyncio.gather(*awaitables)
-    await func([value for values in results for value in values])
+    await func(await _gather(*awaitables))

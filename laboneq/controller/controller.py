@@ -3,14 +3,11 @@
 
 from __future__ import annotations
 
-import concurrent.futures
 import itertools
 import logging
-import os
 import time
 from collections import defaultdict
 from copy import deepcopy
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
@@ -20,20 +17,17 @@ from numpy import typing as npt
 from laboneq import __version__
 from laboneq._observability import tracing
 from laboneq.controller.communication import (
-    DaqNodeAction,
     DaqNodeSetAction,
     DaqWrapper,
     batch_set,
+    batch_set_multiple,
 )
 from laboneq.controller.devices.async_support import gather_and_apply
 from laboneq.controller.devices.device_collection import DeviceCollection
-from laboneq.controller.devices.device_uhfqa import DeviceUHFQA
-from laboneq.controller.devices.device_zi import Waveforms, IntegrationWeights
+from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.devices.zi_node_monitor import ResponseWaiter
 from laboneq.controller.near_time_runner import NearTimeRunner
-from laboneq.controller.pipeliner_reload_tracker import PipelinerReloadTracker
 from laboneq.controller.recipe_processor import (
-    AwgKey,
     RecipeData,
     RtExecutionInfo,
     pre_process_compiled,
@@ -51,10 +45,8 @@ from laboneq.data.experiment_results import ExperimentResults
 from laboneq.data.recipe import NtStepKey
 from laboneq.executor.execution_from_experiment import ExecutionFactoryFromExperiment
 from laboneq.executor.executor import Statement
-from laboneq.controller.devices.device_pretty_printer import DevicePRETTYPRINTER
 
 if TYPE_CHECKING:
-    from laboneq.controller.devices.device_zi import DeviceZI
     from laboneq.core.types import CompiledExperiment
     from laboneq.data.execution_payload import ExecutionPayload
     from laboneq.dsl.experiment.pulse import Pulse
@@ -85,22 +77,6 @@ def _stop_controller(controller: "Controller"):
     controller.shut_down()
 
 
-@dataclass
-class _SeqCCompileItem:
-    awg_index: int
-    seqc_code: str | None = None
-    seqc_filename: str | None = None
-    elf: bytes | None = None
-
-
-@dataclass
-class _UploadItem:
-    seqc_item: _SeqCCompileItem | None
-    waves: Waveforms | None
-    command_table: dict[Any] | None
-    integration_weights: IntegrationWeights | None
-
-
 class Controller:
     def __init__(
         self,
@@ -122,11 +98,10 @@ class Controller:
         # Waves which are uploaded to the devices via pulse replacements
         self._current_waves = []
         self._neartime_callbacks: dict[str, Callable] = neartime_callbacks
-        self._nodes_from_neartime_callbacks: list[DaqNodeAction] = []
+        self._nodes_from_neartime_callbacks: list[DaqNodeSetAction] = []
         self._recipe_data: RecipeData = None
         self._session: Any = None
         self._results = ExperimentResults()
-        self._pipeliner_reload_tracker = PipelinerReloadTracker()
 
         _logger.debug("Controller created")
         _logger.debug("Controller debug logging is on")
@@ -140,12 +115,12 @@ class Controller:
             self._devices.find_by_uid(osc_param.device_id).allocate_osc(osc_param)
 
     async def _reset_to_idle_state(self):
-        async with gather_and_apply(batch_set) as awaitables:
+        async with gather_and_apply(batch_set_multiple) as awaitables:
             for _, device in self._devices.all:
                 awaitables.append(device.collect_reset_nodes())
 
     async def _apply_recipe_initializations(self):
-        async with gather_and_apply(batch_set) as awaitables:
+        async with gather_and_apply(batch_set_multiple) as awaitables:
             for initialization in self._recipe_data.initializations:
                 device = self._devices.find_by_uid(initialization.device_uid)
                 awaitables.append(
@@ -158,193 +133,41 @@ class Controller:
                 awaitables.append(device.collect_osc_initialization_nodes())
 
     async def _set_nodes_before_awg_program_upload(self):
-        nodes_to_initialize = []
-        for initialization in self._recipe_data.initializations:
-            device = self._devices.find_by_uid(initialization.device_uid)
-            nodes_to_initialize.extend(
-                device.collect_awg_before_upload_nodes(
-                    initialization, self._recipe_data
-                )
-            )
-        await batch_set(nodes_to_initialize)
-
-    @tracing.trace("awg-program-handler")
-    async def _upload_awg_programs(self, nt_step: NtStepKey, rt_section_uid: str):
-        # Mise en place:
-        awg_data: dict[DeviceZI, list[_UploadItem]] = defaultdict(list)
-        awgs_used: dict[DeviceZI, set[int]] = defaultdict(set)
-        compile_data: dict[DeviceZI, list[_SeqCCompileItem]] = defaultdict(list)
-        recipe_data = self._recipe_data
-        rt_execution_info = recipe_data.rt_execution_infos.get(rt_section_uid)
-        with_pipeliner = rt_execution_info.pipeliner_chunk_count is not None
-        acquisition_type = RtExecutionInfo.get_acquisition_type_def(rt_execution_info)
-        for initialization in recipe_data.initializations:
-            if not initialization.awgs:
-                continue
-
-            device = self._devices.find_by_uid(initialization.device_uid)
-            if with_pipeliner and not device.has_pipeliner:
-                raise LabOneQControllerException(
-                    f"{device.dev_repr}: Pipeliner is not supported by the device."
+        async with gather_and_apply(batch_set_multiple) as awaitables:
+            for initialization in self._recipe_data.initializations:
+                device = self._devices.find_by_uid(initialization.device_uid)
+                awaitables.append(
+                    device.collect_awg_before_upload_nodes(
+                        initialization, self._recipe_data
+                    )
                 )
 
-            for awg_obj in initialization.awgs:
-                awg_index = awg_obj.awg
-                awgs_used[device].add(awg_index)
-                for pipeline_chunk in range(
-                    rt_execution_info.pipeliner_chunk_count or 1
-                ):
-                    effective_nt_step = (
-                        NtStepKey(indices=tuple([*nt_step.indices, pipeline_chunk]))
-                        if with_pipeliner
-                        else nt_step
-                    )
-                    rt_exec_step = next(
-                        (
-                            r
-                            for r in recipe_data.recipe.realtime_execution_init
-                            if r.device_id == initialization.device_uid
-                            and r.awg_id == awg_obj.awg
-                            and r.nt_step == effective_nt_step
-                        ),
-                        None,
-                    )
+    async def _perform_awg_upload(
+        self,
+        results: list[
+            tuple[
+                DeviceZI, list[DaqNodeSetAction], list[DaqNodeSetAction], dict[str, Any]
+            ]
+        ],
+    ):
+        elf_upload_conditions: dict[DaqWrapper, dict[str, Any]] = defaultdict(dict)
+        elf_node_settings: list[DaqNodeSetAction] = []
+        wf_node_settings: list[DaqNodeSetAction] = []
 
-                    if rt_execution_info.pipeliner_chunk_count is None:
-                        seqc_filename = (
-                            None if rt_exec_step is None else rt_exec_step.seqc_ref
-                        )
-                    else:
-                        # TODO(2K): repeated compilation of SeqC to be solved by moving it to the compile stage
-                        (
-                            rt_exec_step,
-                            seqc_filename,
-                        ) = self._pipeliner_reload_tracker.calc_next_step(
-                            awg_key=AwgKey(
-                                device_uid=initialization.device_uid,
-                                awg_index=awg_index,
-                            ),
-                            pipeline_chunk=pipeline_chunk,
-                            rt_exec_step=rt_exec_step,
-                        )
-
-                    if rt_exec_step is None:
-                        continue
-
-                    if isinstance(device, DevicePRETTYPRINTER):
-                        # TODO: Temporary API
-                        await device.prepare_artifacts(
-                            artifacts=recipe_data.scheduled_experiment.artifacts,
-                            channel=rt_exec_step.awg_id,
-                            instructions_ref=rt_exec_step.seqc_ref,
-                            waves_ref=rt_exec_step.wave_indices_ref,
-                        )
-                        continue
-                    seqc_code = device.prepare_seqc(
-                        recipe_data.scheduled_experiment.artifacts,
-                        rt_exec_step.seqc_ref,
-                    )
-                    waves = device.prepare_waves(
-                        recipe_data.scheduled_experiment.artifacts,
-                        rt_exec_step.wave_indices_ref,
-                    )
-                    command_table = device.prepare_command_table(
-                        recipe_data.scheduled_experiment.artifacts,
-                        rt_exec_step.wave_indices_ref,
-                    )
-                    integration_weights = device.prepare_integration_weights(
-                        recipe_data.scheduled_experiment.artifacts,
-                        recipe_data.recipe.integrator_allocations,
-                        rt_exec_step.kernel_indices_ref,
-                    )
-
-                    seqc_item = _SeqCCompileItem(
-                        awg_index=awg_index,
-                    )
-
-                    if seqc_code is not None:
-                        seqc_item.seqc_code = seqc_code
-                        seqc_item.seqc_filename = seqc_filename
-                        compile_data[device].append(seqc_item)
-
-                    awg_data[device].append(
-                        _UploadItem(
-                            seqc_item=seqc_item,
-                            waves=waves,
-                            command_table=command_table,
-                            integration_weights=integration_weights,
-                        )
-                    )
-
-        if compile_data:
-            self._awg_compile(compile_data)
+        for device, elf_nodes, wf_nodes, upload_ready_conditions in results:
+            elf_node_settings.extend(elf_nodes)
+            wf_node_settings.extend(wf_nodes)
+            if len(upload_ready_conditions) > 0:
+                elf_upload_conditions[device.daq].update(upload_ready_conditions)
 
         # Upload AWG programs, waveforms, and command tables:
-        elf_node_settings: dict[DaqWrapper, list[DaqNodeSetAction]] = defaultdict(list)
-        elf_upload_conditions: dict[DaqWrapper, dict[str, Any]] = defaultdict(dict)
-        wf_node_settings: dict[DaqWrapper, list[DaqNodeSetAction]] = defaultdict(list)
-        for device, items in awg_data.items():
-            if with_pipeliner:
-                for awg_index in awgs_used[device]:
-                    elf_node_settings[device.daq].extend(
-                        device.pipeliner_prepare_for_upload(awg_index)
-                    )
-            for item in items:
-                seqc_item = item.seqc_item
-                if seqc_item.elf is not None:
-                    set_action = device.prepare_upload_elf(
-                        seqc_item.elf, seqc_item.awg_index, seqc_item.seqc_filename
-                    )
-                    node_settings = elf_node_settings[device.daq]
-                    node_settings.append(set_action)
-
-                    if isinstance(device, DeviceUHFQA):
-                        # UHFQA does not yet support upload of ELF and waveforms in
-                        # a single transaction.
-                        ready_node = device.get_sequencer_paths(
-                            seqc_item.awg_index
-                        ).ready
-                        elf_upload_conditions[device.daq][ready_node] = 1
-
-                if isinstance(device, DeviceUHFQA):
-                    wf_dev_nodes = wf_node_settings[device.daq]
-                else:
-                    wf_dev_nodes = elf_node_settings[device.daq]
-
-                if item.waves is not None:
-                    wf_dev_nodes += device.prepare_upload_all_binary_waves(
-                        seqc_item.awg_index, item.waves, acquisition_type
-                    )
-
-                if item.command_table is not None:
-                    set_action = device.prepare_upload_command_table(
-                        seqc_item.awg_index, item.command_table
-                    )
-                    wf_dev_nodes.append(set_action)
-
-                if item.integration_weights is not None:
-                    wf_dev_nodes += device.prepare_upload_all_integration_weights(
-                        seqc_item.awg_index, item.integration_weights
-                    )
-
-                if with_pipeliner:
-                    # For devices with pipeliner, wf_dev_nodes == elf_node_settings
-                    wf_dev_nodes.extend(device.pipeliner_commit(seqc_item.awg_index))
-
-            if with_pipeliner:
-                for awg_index in awgs_used[device]:
-                    elf_upload_conditions[device.daq].update(
-                        device.pipeliner_ready_conditions(awg_index)
-                    )
-
         if len(elf_upload_conditions) > 0:
             for daq in elf_upload_conditions.keys():
                 daq.node_monitor.flush()
 
         _logger.debug("Started upload of AWG programs...")
         with tracing.get_tracer().start_span("upload-awg-programs") as _:
-            for daq, nodes in elf_node_settings.items():
-                await daq.batch_set(nodes)
+            await batch_set(elf_node_settings)
 
             if len(elf_upload_conditions) > 0:
                 _logger.debug("Waiting for devices...")
@@ -362,50 +185,39 @@ class Controller:
                     )
             if len(wf_node_settings) > 0:
                 _logger.debug("Started upload of waveforms...")
-                with tracing.get_tracer().start_span("upload-waveforms") as _:
-                    for daq, nodes in wf_node_settings.items():
-                        await daq.batch_set(nodes)
+                with tracing.get_tracer().start_span("upload-waveforms"):
+                    await batch_set(wf_node_settings)
         _logger.debug("Finished upload.")
 
-    @classmethod
-    def _awg_compile(cls, awg_data: dict[DeviceZI, list[_SeqCCompileItem]]):
-        # Compile in parallel:
-        def worker(device: DeviceZI, item: _SeqCCompileItem, span: tracing.Span):
-            with tracing.get_tracer().start_span("compile-awg-thread", span) as _:
-                item.elf = device.compile_seqc(
-                    item.seqc_code, item.awg_index, item.seqc_filename
-                )
+    async def _upload_awg_programs(self, nt_step: NtStepKey, rt_section_uid: str):
+        # Mise en place:
+        recipe_data = self._recipe_data
 
-        _logger.debug("Started compilation of AWG programs...")
-        with tracing.get_tracer().start_span("compile-awg-programs") as awg_span:
-            max_workers = os.environ.get("LABONEQ_AWG_COMPILER_MAX_WORKERS")
-            max_workers = int(max_workers) if max_workers is not None else None
-            with concurrent.futures.ThreadPoolExecutor(
-                max_workers=max_workers
-            ) as executor:
-                futures = [
-                    executor.submit(worker, device, item, awg_span)
-                    for device, items in awg_data.items()
-                    for item in items
-                ]
-                concurrent.futures.wait(futures)
-                exceptions = [
-                    future.exception()
-                    for future in futures
-                    if future.exception() is not None
-                ]
-                if len(exceptions) > 0:
-                    raise LabOneQControllerException(
-                        "Compilation failed. See log output for details."
+        async with gather_and_apply(self._perform_awg_upload) as awaitables:
+            for initialization in recipe_data.initializations:
+                if not initialization.awgs:
+                    continue
+
+                device = self._devices.find_by_uid(initialization.device_uid)
+
+                for awg_obj in initialization.awgs:
+                    awg_index = awg_obj.awg
+                    awaitables.append(
+                        device.prepare_artifacts(
+                            recipe_data=recipe_data,
+                            rt_section_uid=rt_section_uid,
+                            initialization=initialization,
+                            awg_index=awg_index,
+                            nt_step=nt_step,
+                        )
                     )
-        _logger.debug("Finished compilation.")
 
     async def _set_nodes_after_awg_program_upload(self):
         nodes_to_initialize = []
         for initialization in self._recipe_data.initializations:
             device = self._devices.find_by_uid(initialization.device_uid)
             nodes_to_initialize.extend(
-                device.collect_awg_after_upload_nodes(initialization)
+                await device.collect_awg_after_upload_nodes(initialization)
             )
 
         await batch_set(nodes_to_initialize)
@@ -432,20 +244,24 @@ class Controller:
 
         await batch_set(nodes_to_configure_triggers)
 
-    def _prepare_nt_step(
+    async def _prepare_nt_step(
         self, sweep_params_tracker: SweepParamsTracker
-    ) -> list[DaqNodeAction]:
+    ) -> list[DaqNodeSetAction]:
         for param in sweep_params_tracker.updated_params():
             self._recipe_data.attribute_value_tracker.update(
                 param, sweep_params_tracker.get_param(param)
             )
 
-        nt_sweep_nodes: list[DaqNodeAction] = []
+        nt_sweep_nodes: list[DaqNodeSetAction] = []
         for device_uid, device in self._devices.all:
             nt_sweep_nodes.extend(
-                device.collect_prepare_nt_step_nodes(
-                    self._recipe_data.attribute_value_tracker.device_view(device_uid),
-                    self._recipe_data,
+                await device.maybe_async(
+                    device.collect_prepare_nt_step_nodes(
+                        self._recipe_data.attribute_value_tracker.device_view(
+                            device_uid
+                        ),
+                        self._recipe_data,
+                    )
                 )
             )
 
@@ -461,19 +277,17 @@ class Controller:
     async def _execute_one_step_followers(self, with_pipeliner: bool):
         _logger.debug("Settings nodes to start on followers")
 
-        nodes_to_execute = []
-        for _, device in self._devices.followers:
-            nodes_to_execute.extend(
-                await device.collect_execution_nodes(with_pipeliner=with_pipeliner)
-            )
-
-        await batch_set(nodes_to_execute)
+        async with gather_and_apply(batch_set_multiple) as awaitables:
+            for _, device in self._devices.followers:
+                awaitables.append(
+                    device.collect_execution_nodes(with_pipeliner=with_pipeliner)
+                )
 
         response_waiter = ResponseWaiter()
         for _, device in self._devices.followers:
             response_waiter.add(
                 target=device.daq.node_monitor,
-                conditions=device.conditions_for_execution_ready(
+                conditions=await device.conditions_for_execution_ready(
                     with_pipeliner=with_pipeliner
                 ),
             )
@@ -487,11 +301,9 @@ class Controller:
 
         # Standalone workaround: The device is triggering itself,
         # thus split the execution into AWG trigger arming and triggering
-        nodes_to_execute = []
-        for _, device in self._devices.followers:
-            nodes_to_execute.extend(device.collect_internal_start_execution_nodes())
-
-        await batch_set(nodes_to_execute)
+        async with gather_and_apply(batch_set_multiple) as awaitables:
+            for _, device in self._devices.followers:
+                awaitables.append(device.collect_internal_start_execution_nodes())
 
     async def _execute_one_step_leaders(self, with_pipeliner: bool):
         _logger.debug("Settings nodes to start on leaders")
@@ -503,7 +315,7 @@ class Controller:
             )
         await batch_set(nodes_to_execute)
 
-    def _wait_execution_to_stop(
+    async def _wait_execution_to_stop(
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
     ):
         min_wait_time = self._recipe_data.recipe.max_step_execution_time
@@ -517,7 +329,7 @@ class Controller:
         for _, device in self._devices.followers:
             response_waiter.add(
                 target=device.daq.node_monitor,
-                conditions=device.conditions_for_execution_done(
+                conditions=await device.conditions_for_execution_done(
                     acquisition_type, with_pipeliner=with_pipeliner
                 ),
             )
@@ -541,7 +353,7 @@ class Controller:
                 for init in self._recipe_data.initializations
             )
             nodes_to_execute.extend(
-                device.collect_execution_setup_nodes(
+                await device.collect_execution_setup_nodes(
                     with_pipeliner=with_pipeliner, has_awg_in_use=has_awg_in_use
                 )
             )
@@ -551,7 +363,9 @@ class Controller:
         nodes_to_execute = []
         for _, device in self._devices.all:
             nodes_to_execute.extend(
-                device.collect_execution_teardown_nodes(with_pipeliner=with_pipeliner)
+                await device.collect_execution_teardown_nodes(
+                    with_pipeliner=with_pipeliner
+                )
             )
         await batch_set(nodes_to_execute)
 
@@ -574,7 +388,9 @@ class Controller:
 
         _logger.debug("Execution started")
 
-        self._wait_execution_to_stop(acquisition_type, with_pipeliner=with_pipeliner)
+        await self._wait_execution_to_stop(
+            acquisition_type, with_pipeliner=with_pipeliner
+        )
         await self._teardown_one_step_execution(with_pipeliner=with_pipeliner)
 
         _logger.debug("Execution stopped")
@@ -781,29 +597,35 @@ class Controller:
             if repl.replacement_type == ReplacementType.I_Q:
                 clipped = np.clip(repl.samples, -1.0, 1.0)
                 bin_wave = zhinst.utils.convert_awg_waveform(*clipped)
-                self._nodes_from_neartime_callbacks.append(
-                    device.prepare_upload_binary_wave(
-                        filename=repl.sig_string + " (repl)",
-                        waveform=bin_wave,
-                        awg_index=awg[1],
-                        wave_index=target_wave[0],
-                        acquisition_type=acquisition_type,
+                self._nodes_from_neartime_callbacks.extend(
+                    device.to_daq_actions(
+                        device.prepare_upload_binary_wave(
+                            filename=repl.sig_string + " (repl)",
+                            waveform=bin_wave,
+                            awg_index=awg[1],
+                            wave_index=target_wave[0],
+                            acquisition_type=acquisition_type,
+                        )
                     )
                 )
             elif repl.replacement_type == ReplacementType.COMPLEX:
                 np.clip(repl.samples.real, -1.0, 1.0, out=repl.samples.real)
                 np.clip(repl.samples.imag, -1.0, 1.0, out=repl.samples.imag)
-                self._nodes_from_neartime_callbacks.append(
-                    device.prepare_upload_binary_wave(
-                        filename=repl.sig_string + " (repl)",
-                        waveform=repl.samples,
-                        awg_index=awg[1],
-                        wave_index=target_wave[0],
-                        acquisition_type=acquisition_type,
+                self._nodes_from_neartime_callbacks.extend(
+                    device.to_daq_actions(
+                        device.prepare_upload_binary_wave(
+                            filename=repl.sig_string + " (repl)",
+                            waveform=repl.samples,
+                            awg_index=awg[1],
+                            wave_index=target_wave[0],
+                            acquisition_type=acquisition_type,
+                        )
                     )
                 )
 
-    def _prepare_rt_execution(self, rt_section_uid: str) -> list[DaqNodeAction]:
+    async def _prepare_rt_execution(
+        self, rt_section_uid: str
+    ) -> list[DaqNodeSetAction]:
         if rt_section_uid is None:
             return [], []  # Old recipe-based execution - skip RT preparation
         rt_execution_info = self._recipe_data.rt_execution_infos[rt_section_uid]
@@ -811,7 +633,9 @@ class Controller:
         nodes_to_prepare_rt = [*self._nodes_from_neartime_callbacks]
         self._nodes_from_neartime_callbacks.clear()
         for _, device in self._devices.leaders:
-            nodes_to_prepare_rt.extend(device.configure_feedback(self._recipe_data))
+            nodes_to_prepare_rt.extend(
+                await device.configure_feedback(self._recipe_data)
+            )
         for awg_key, awg_config in self._recipe_data.awgs_producing_results():
             device = self._devices.find_by_uid(awg_key.device_uid)
             if rt_execution_info.averaging_mode == AveragingMode.SINGLE_SHOT:
@@ -822,7 +646,7 @@ class Controller:
                 effective_averages = rt_execution_info.averages
                 effective_averaging_mode = rt_execution_info.averaging_mode
             nodes_to_prepare_rt.extend(
-                device.configure_acquisition(
+                await device.configure_acquisition(
                     awg_key,
                     awg_config,
                     self._recipe_data.recipe.integrator_allocations,
@@ -850,6 +674,8 @@ class Controller:
                 raw_acquire_length = (
                     4096 if awg_config is None else awg_config.raw_acquire_length
                 )
+                # TODO: This result format does not work when sweeping in near-time, returns only
+                # results of the last sweep parameter value
                 empty_res = make_acquired_result(
                     data=np.empty(shape=[raw_acquire_length], dtype=np.complex128),
                     axis_name=["samples"],

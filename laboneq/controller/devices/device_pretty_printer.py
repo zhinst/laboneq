@@ -4,14 +4,18 @@
 from __future__ import annotations
 
 import logging
-from laboneq.controller.communication import DaqNodeAction, DaqWrapper
-from laboneq.controller.devices.device_zi import DeviceQualifier, DeviceZI
+from typing import Any
+from laboneq.controller.communication import DaqNodeSetAction, DaqWrapper
+from laboneq.controller.devices.device_zi import (
+    DeviceQualifier,
+    DeviceZI,
+    NodeCollector,
+)
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
-from laboneq.data.recipe import Initialization
+from laboneq.data.recipe import Initialization, NtStepKey
 from laboneq.controller.attribute_value_tracker import (
     DeviceAttributesView,
 )
-from laboneq.compiler.workflow.compiler_output import ArtifactsPrettyPrinter
 
 
 _logger = logging.getLogger(__name__)
@@ -34,12 +38,15 @@ class DevicePRETTYPRINTER(DeviceZI):
 
     async def prepare_artifacts(
         self,
-        artifacts: ArtifactsPrettyPrinter | dict[int, ArtifactsPrettyPrinter],
-        channel: str,
-        instructions_ref: str,
-        waves_ref: str,
-    ):
-        pass
+        recipe_data: RecipeData,
+        rt_section_uid: str,
+        initialization: Initialization,
+        awg_index: int,
+        nt_step: NtStepKey,
+    ) -> tuple[
+        DeviceZI, list[DaqNodeSetAction], list[DaqNodeSetAction], dict[str, Any]
+    ]:
+        return self, [], [], {}
 
     async def collect_initialization_nodes(
         self,
@@ -49,18 +56,18 @@ class DevicePRETTYPRINTER(DeviceZI):
     ):
         return []
 
-    async def collect_osc_initialization_nodes(self) -> list[DaqNodeAction]:
+    async def collect_osc_initialization_nodes(self) -> list[DaqNodeSetAction]:
         return []
 
     def collect_prepare_nt_step_nodes(
         self, attributes: DeviceAttributesView, recipe_data: RecipeData
-    ) -> list[DaqNodeAction]:
-        return []
+    ) -> NodeCollector:
+        return NodeCollector()
 
     async def collect_execution_nodes(self, *args, **kwargs):
         return []
 
-    async def collect_reset_nodes(self) -> list[DaqNodeAction]:
+    async def collect_reset_nodes(self) -> list[DaqNodeSetAction]:
         return []
 
     async def fetch_errors(self):

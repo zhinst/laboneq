@@ -201,7 +201,8 @@ class Compiler:
 
             _logger.debug("Using desktop setup configuration with leader %s", leader)
 
-            if has_hdawg or has_shfsg and not has_shfqa:
+            # TODO: Check if this is needed for standalone QC, where only SG part is used
+            if has_hdawg or (standalone_qc is True and has_shfsg and not has_shfqa):
                 has_signal_on_awg_0_of_leader = False
                 for signal_id in self._experiment_dao.signals():
                     signal_info = self._experiment_dao.signal_info(signal_id)
@@ -319,7 +320,7 @@ class Compiler:
     def _calc_integration_unit_allocation(dao: ExperimentDAO):
         integration_unit_allocation: dict[str, dict] = {}
 
-        integration_signals = [
+        integration_signals: list[SignalInfo] = [
             signal_info
             for signal in dao.signals()
             if (signal_info := dao.signal_info(signal)).type
@@ -357,7 +358,6 @@ class Compiler:
                 or is_spectroscopy(dao.acquisition_type)
                 else 1
             )
-
             integration_unit_allocation[signal_info.uid] = {
                 "device_id": signal_info.device.uid,
                 "awg_nr": awg_nr,
@@ -799,8 +799,7 @@ class Compiler:
                                 raise RuntimeError("Only marker1 supported on SHFSG")
                     if signal_info.type == SignalInfoType.RF:
                         if device_type == DeviceType.HDAWG:
-                            marker_key = channel % 2 + 1
-                            if f"marker{marker_key}" in markers:
+                            if "marker1" in markers:
                                 output["marker_mode"] = "MARKER"
                 if triggers is not None:
                     if signal_info.type == SignalInfoType.IQ:
@@ -842,16 +841,33 @@ class Compiler:
 
     def calc_inputs(self, signal_delays: SignalDelays):
         all_channels = {}
+        ports_delays_raw_shfqa = set()
         for signal_id in self._experiment_dao.signals():
-            signal_info = self._experiment_dao.signal_info(signal_id)
+            signal_info: SignalInfo = self._experiment_dao.signal_info(signal_id)
             if signal_info.type != SignalInfoType.INTEGRATION:
                 continue
 
+            port_delay = self._experiment_dao.port_delay(signal_id)
+            # SHFQA scope delay cannot be set for individual channels
+            if (
+                self._experiment_dao.acquisition_type == AcquisitionType.RAW
+                and port_delay is not None
+            ):
+                device_type = DeviceType.from_device_info_type(
+                    signal_info.device.device_type
+                )
+                if device_type == device_type.SHFQA:
+                    ports_delays_raw_shfqa.add(
+                        port_delay.uid
+                        if isinstance(port_delay, ParameterInfo)
+                        else port_delay
+                    )
+                if len(ports_delays_raw_shfqa) > 1:
+                    msg = f"{signal_info.device.uid}: Multiple different `port_delay`s defined for SHFQA acquisition signals in `AcquisitionType.RAW` mode. Only 1 supported."
+                    raise LabOneQException(msg)
+
             lo_frequency = self._experiment_dao.lo_frequency(signal_id)
             signal_range = self._experiment_dao.signal_range(signal_id)
-
-            port_delay = self._experiment_dao.port_delay(signal_id)
-
             port_mode = self._experiment_dao.port_mode(signal_id)
 
             scheduler_port_delay: float = 0.0

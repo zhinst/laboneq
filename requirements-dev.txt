@@ -30,6 +30,9 @@ ipykernel
 rustworkx
 ipython
 parse
+opentelemetry-sdk
+opentelemetry-api
+cattrs
 
 # Packaging test
 pydeps

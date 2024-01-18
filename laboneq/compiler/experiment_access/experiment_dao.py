@@ -344,7 +344,6 @@ class ExperimentDAO:
                         )
                         == DeviceType.HDAWG
                         and len(section_pulse.signal.channels) == 1
-                        and section_pulse.signal.channels[0] % 2 == 0
                         and any(
                             "marker2" == m.marker_selector
                             for m in section_pulse.markers
@@ -352,24 +351,7 @@ class ExperimentDAO:
                     ):
                         raise LabOneQException(
                             f"Single channel RF Pulse {pulse_id} referenced in section {section_id}"
-                            f" has marker 2 enabled but is to be played on channel {section_pulse.signal.channels[0]+1}. Please use marker 1"
-                        )
-
-                    if (
-                        DeviceType.from_device_info_type(
-                            section_pulse.signal.device.device_type
-                        )
-                        == DeviceType.HDAWG
-                        and len(section_pulse.signal.channels) == 1
-                        and section_pulse.signal.channels[0] % 2 == 1
-                        and any(
-                            "marker1" == m.marker_selector
-                            for m in section_pulse.markers
-                        )
-                    ):
-                        raise LabOneQException(
-                            f"Single channel RF Pulse {pulse_id} referenced in section {section_id}"
-                            f" has marker 1 enabled but is to be played on channel {section_pulse.signal.channels[0]+1}. Please use marker 2"
+                            f" has marker 2 enabled. Please only use marker 1 on RF channels."
                         )
 
                     if (

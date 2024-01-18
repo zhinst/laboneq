@@ -7,11 +7,9 @@ import logging
 from enum import IntEnum
 
 from laboneq.controller.communication import (
-    CachingStrategy,
-    DaqNodeAction,
     DaqNodeSetAction,
 )
-from laboneq.controller.devices.device_zi import DeviceZI
+from laboneq.controller.devices.device_zi import DeviceZI, NodeCollector
 from laboneq.controller.devices.zi_node_monitor import (
     Command,
     Setting,
@@ -100,21 +98,20 @@ class DevicePQSC(DeviceZI):
     ) -> list[DaqNodeSetAction]:
         return []
 
-    def configure_feedback(self, recipe_data: RecipeData) -> list[DaqNodeAction]:
+    async def configure_feedback(
+        self, recipe_data: RecipeData
+    ) -> list[DaqNodeSetAction]:
+        nc = NodeCollector(base=f"/{self.serial}/")
         min_wait_time = recipe_data.recipe.max_step_execution_time
         # This is required because PQSC is only receiving the feedback events
         # during the holdoff time, even for a single trigger.
-        feedback_actions = [
-            DaqNodeSetAction(
-                self.daq, f"/{self.serial}/execution/holdoff", min_wait_time
-            )
-        ]
+        nc.add("execution/holdoff", min_wait_time)
         enabled_zsyncs = set()
         for port, downstream_devices in self._downlinks.items():
             [p_kind, p_addr] = port.split("/")
             if p_kind != "ZSYNCS":
                 continue
-            zsync_output = f"/{self.serial}/zsyncs/{p_addr}/output"
+            zsync_output = f"zsyncs/{p_addr}/output"
             zsync_base = f"{zsync_output}/registerbank"
             for follower_uid, follower_ref in downstream_devices:
                 follower = follower_ref()
@@ -126,143 +123,64 @@ class DevicePQSC(DeviceZI):
                         or awg_config.source_feedback_register in (None, "local")
                     ):
                         continue  # Only consider devices receiving feedback from PQSC
-                    if p_addr in enabled_zsyncs:
-                        actions_to_enable_feedback = []
-                    else:
-                        actions_to_enable_feedback = [
-                            DaqNodeSetAction(self.daq, f"{zsync_output}/enable", 1),
-                            DaqNodeSetAction(self.daq, f"{zsync_output}/source", 0),
-                        ]
+                    if p_addr not in enabled_zsyncs:
+                        nc.add(f"{zsync_output}/enable", 1)
+                        nc.add(f"{zsync_output}/source", 0)
                     enabled_zsyncs.add(p_addr)
-                    feedback_actions.extend(actions_to_enable_feedback)
 
                     reg_selector_base = (
                         f"{zsync_base}/sources/{awg_config.fb_reg_target_index}"
                     )
-                    feedback_actions.extend(
-                        [
-                            DaqNodeSetAction(
-                                self.daq, f"{reg_selector_base}/enable", 1
-                            ),
-                            DaqNodeSetAction(
-                                self.daq,
-                                f"{reg_selector_base}/register",
-                                awg_config.source_feedback_register,
-                            ),
-                            DaqNodeSetAction(
-                                self.daq,
-                                f"{reg_selector_base}/index",
-                                awg_config.fb_reg_source_index,
-                            ),
-                        ]
+                    nc.add(f"{reg_selector_base}/enable", 1)
+                    nc.add(
+                        f"{reg_selector_base}/register",
+                        awg_config.source_feedback_register,
                     )
-        return feedback_actions
+                    nc.add(f"{reg_selector_base}/index", awg_config.fb_reg_source_index)
+        return await self.maybe_async(nc)
 
     async def collect_execution_nodes(
         self, with_pipeliner: bool
-    ) -> list[DaqNodeAction]:
+    ) -> list[DaqNodeSetAction]:
         _logger.debug("Starting execution...")
-        nodes = []
-        nodes.append(
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/execution/enable",
-                1,
-                caching_strategy=CachingStrategy.NO_CACHE,
-            )
-        )
-        nodes.append(
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/triggers/out/0/enable",
-                1,
-                caching_strategy=CachingStrategy.NO_CACHE,
-            )
-        )
-        return nodes
+        nc = NodeCollector(base=f"/{self.serial}/")
+        nc.add("execution/enable", 1, cache=False)
+        nc.add("triggers/out/0/enable", 1, cache=False)
+        return await self.maybe_async(nc)
 
-    def collect_execution_setup_nodes(
+    async def collect_execution_setup_nodes(
         self, with_pipeliner: bool, has_awg_in_use: bool
-    ) -> list[DaqNodeAction]:
-        nodes = []
+    ) -> list[DaqNodeSetAction]:
+        nc = NodeCollector(base=f"/{self.serial}/")
         if with_pipeliner:
-            nodes.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/execution/synchronization/enable",
-                    1,  # enabled
-                )
-            )
-        return nodes
+            nc.add("execution/synchronization/enable", 1)
+        return await self.maybe_async(nc)
 
-    def collect_execution_teardown_nodes(
+    async def collect_execution_teardown_nodes(
         self, with_pipeliner: bool
-    ) -> list[DaqNodeAction]:
-        nodes = []
+    ) -> list[DaqNodeSetAction]:
+        nc = NodeCollector(base=f"/{self.serial}/")
         if with_pipeliner:
-            nodes.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/execution/synchronization/enable",
-                    0,
-                )
-            )
-        return nodes
+            nc.add("execution/synchronization/enable", 0)
+        return await self.maybe_async(nc)
 
     async def collect_trigger_configuration_nodes(
         self, initialization: Initialization, recipe_data: RecipeData
-    ) -> list[DaqNodeAction]:
-        # TODO(2K): This was moved as is from no more existing "configure_as_leader".
-        # Verify, if separate `batch_set` per node is truly necessary here, or the corresponding
-        # nodes can be set in one batch with others.
-        _logger.debug(
-            "%s: Setting reference clock frequency to %d MHz...",
-            self.dev_repr,
-            initialization.config.reference_clock,
+    ) -> list[DaqNodeSetAction]:
+        nc = NodeCollector(base=f"/{self.serial}/")
+        nc.add("system/clocks/referenceclock/out/enable", 1)
+        nc.add(
+            "system/clocks/referenceclock/out/freq",
+            initialization.config.reference_clock.value,
         )
+        nc.add("execution/repetitions", initialization.config.repetitions)
+        return await self.maybe_async(nc)
 
-        await self._daq.batch_set(
-            [
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/system/clocks/referenceclock/out/enable",
-                    1,
-                )
-            ]
-        )
-
-        await self._daq.batch_set(
-            [
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/system/clocks/referenceclock/out/freq",
-                    initialization.config.reference_clock.value,
-                )
-            ]
-        )
-
-        nodes_to_configure_triggers = []
-
-        nodes_to_configure_triggers.append(
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/execution/repetitions",
-                initialization.config.repetitions,
-            )
-        )
-
-        return nodes_to_configure_triggers
-
-    async def collect_reset_nodes(self) -> list[DaqNodeAction]:
+    async def collect_reset_nodes(self) -> list[DaqNodeSetAction]:
+        nc = NodeCollector(base=f"/{self.serial}/")
+        nc.add("execution/synchronization/enable", 0, cache=False)
         reset_nodes = await super().collect_reset_nodes()
-        reset_nodes.append(
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/execution/synchronization/enable",
-                0,
-                caching_strategy=CachingStrategy.NO_CACHE,
-            )
-        )
+        reset_nodes.extend(await self.maybe_async(nc))
         return reset_nodes
 
     def _prepare_emulator(self):
@@ -275,8 +193,7 @@ class DevicePQSC(DeviceZI):
                 if enabled_zsyncs.get(port.lower()) == to_dev.serial:
                     continue
                 enabled_zsyncs[port.lower()] = to_dev.serial
-                self._daq_dry_run.set_emulation_option(
-                    serial=self.serial,
+                self._set_emulation_option(
                     option=f"{port.lower()}/connection/serial",
                     value=to_dev.serial[3:],
                 )

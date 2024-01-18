@@ -10,8 +10,8 @@ from laboneq.controller.attribute_value_tracker import (
     DeviceAttribute,
     DeviceAttributesView,
 )
-from laboneq.controller.communication import DaqNodeAction, DaqNodeSetAction
-from laboneq.controller.devices.device_zi import DeviceZI
+from laboneq.controller.communication import DaqNodeSetAction
+from laboneq.controller.devices.device_zi import DeviceZI, NodeCollector
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.data.recipe import Initialization
 
@@ -61,7 +61,7 @@ class DeviceSHFPPC(DeviceZI):
                         name=attribute_name, index=channel, value_or_param=settings[key]
                     )
 
-    async def collect_reset_nodes(self) -> list[DaqNodeAction]:
+    async def collect_reset_nodes(self) -> list[DaqNodeSetAction]:
         return []
 
     async def collect_initialization_nodes(
@@ -70,7 +70,7 @@ class DeviceSHFPPC(DeviceZI):
         initialization: Initialization,
         recipe_data: RecipeData,
     ) -> list[DaqNodeSetAction]:
-        nodes_to_set: list[DaqNodeSetAction] = []
+        nc = NodeCollector()
         ppchannels = initialization.ppchannels or []
 
         def _convert(value):
@@ -80,29 +80,24 @@ class DeviceSHFPPC(DeviceZI):
 
         for settings in ppchannels:
             ch = settings["channel"]
-            nodes_to_set.append(
-                DaqNodeSetAction(self._daq, self._key_to_path("_on", ch), 1)
-            )
+            nc.add(self._key_to_path("_on", ch), 1)
             for key, value in settings.items():
                 if value is None or key in [*DeviceSHFPPC.attribute_keys, "channel"]:
                     # Skip not set values, or values that are bound to sweep params and will
                     # be set during the NT execution.
                     continue
-                nodes_to_set.append(
-                    DaqNodeSetAction(
-                        self._daq, self._key_to_path(key, ch), _convert(value)
-                    )
-                )
-        return nodes_to_set
+                nc.add(self._key_to_path(key, ch), _convert(value))
+        return await self.maybe_async(nc)
 
     def collect_prepare_nt_step_nodes(
         self, attributes: DeviceAttributesView, recipe_data: RecipeData
-    ) -> list[DaqNodeAction]:
-        nodes_to_set = super().collect_prepare_nt_step_nodes(attributes, recipe_data)
+    ) -> NodeCollector:
+        nc = NodeCollector()
+        nc.extend(super().collect_prepare_nt_step_nodes(attributes, recipe_data))
         for ch in range(self._channels):
             for key, attr_name in DeviceSHFPPC.attribute_keys.items():
                 [value], updated = attributes.resolve(keys=[(attr_name, ch)])
                 if updated:
                     path = self._key_to_path(key, ch)
-                    nodes_to_set.append(DaqNodeSetAction(self._daq, path, value))
-        return nodes_to_set
+                    nc.add(path, value)
+        return nc

@@ -29,14 +29,56 @@ def _get_html_template():
     return template.read_text(encoding="utf-8")
 
 
+def _fill_maybe_missing_information(
+    compiled_experiment: CompiledExperiment, max_events_to_publish: int
+) -> CompiledExperiment:
+    if (compiled_experiment.schedule is None) or (
+        len(compiled_experiment.schedule["event_list"]) < max_events_to_publish
+    ):
+        _logger.info(
+            "Recompiling the experiment due to missing extra information in the compiled experiment. "
+            f"Compile with `OUTPUT_EXTRAS=True` and `MAX_EVENTS_TO_PUBLISH={max_events_to_publish}` "
+            "to bypass this step with a small impact on the compilation time."
+        )
+        dummy_session = SimpleNamespace()
+        dummy_session.experiment = compiled_experiment.experiment
+        dummy_session.device_setup = compiled_experiment.device_setup
+
+        compiled_experiment_for_psv = LabOneQFacade.compile(
+            dummy_session,
+            _logger,
+            {
+                "MAX_EVENTS_TO_PUBLISH": max_events_to_publish,
+                "OUTPUT_EXTRAS": True,
+                "LOG_REPORT": False,
+            },
+        )
+        compiled_experiment_for_psv.experiment = compiled_experiment.experiment
+        return compiled_experiment_for_psv
+    return compiled_experiment
+
+
 def interactive_psv(
     compiled_experiment: CompiledExperiment,
     inline=True,
     max_simulation_length: float | None = None,
+    max_events_to_publish: int = 1000,
 ):
+    """Start an interactive pulse sheet viewer.
+
+    Args:
+        compiled_experiment: The compiled experiment to show.
+        inline: If `True`, displays the pulse sheet viewer in the Notebook.
+        max_simulation_length: Displays signals up to this time in seconds.
+            No signals beyond this time are shown. Default: 10ms.
+        max_events_to_publish: Number of events to show
+    """
     name = compiled_experiment.experiment.uid
+    compiled_experiment = _fill_maybe_missing_information(
+        compiled_experiment, max_events_to_publish
+    )
     html_text = PulseSheetViewer.generate_viewer_html_text(
-        compiled_experiment.schedule, name, interactive=True
+        compiled_experiment.scheduled_experiment.schedule, name, interactive=True
     )
     simulation = OutputSimulator(
         compiled_experiment,
@@ -169,35 +211,13 @@ def show_pulse_sheet(
     """
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     filename = f"{name}_{timestamp}.html"
-
-    schedule = compiled_experiment.scheduled_experiment.schedule
-
-    if (schedule is None) or (len(schedule["event_list"]) < max_events_to_publish):
-        _logger.info(
-            "Recompiling the experiment due to missing extra information in the compiled experiment. "
-            f"Compile with `OUTPUT_EXTRAS=True` and `MAX_EVENTS_TO_PUBLISH={max_events_to_publish}` "
-            "to bypass this step with a small impact on the compilation time."
-        )
-        dummy_session = SimpleNamespace()
-        dummy_session.experiment = compiled_experiment.experiment
-        dummy_session.device_setup = compiled_experiment.device_setup
-
-        compiled_experiment_for_psv = LabOneQFacade.compile(
-            dummy_session,
-            _logger,
-            {
-                "MAX_EVENTS_TO_PUBLISH": max_events_to_publish,
-                "OUTPUT_EXTRAS": True,
-                "LOG_REPORT": False,
-            },
-        )
-        compiled_experiment_for_psv.experiment = compiled_experiment.experiment
-        compiled_experiment = compiled_experiment_for_psv
-
-    schedule = compiled_experiment.scheduled_experiment.schedule
-
+    compiled_experiment = _fill_maybe_missing_information(
+        compiled_experiment, max_events_to_publish
+    )
     if not interactive:
-        PulseSheetViewer.generate_viewer_html_file(schedule, name, filename)
+        PulseSheetViewer.generate_viewer_html_file(
+            compiled_experiment.scheduled_experiment.schedule, name, filename
+        )
         try:
             import IPython.display as ipd
 

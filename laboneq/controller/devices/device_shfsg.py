@@ -14,13 +14,12 @@ from laboneq.controller.attribute_value_tracker import (
     DeviceAttributesView,
 )
 from laboneq.controller.communication import (
-    CachingStrategy,
-    DaqNodeAction,
     DaqNodeSetAction,
 )
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
 from laboneq.controller.devices.device_shf_base import DeviceSHFBase
 from laboneq.controller.devices.device_zi import (
+    NodeCollector,
     SequencerPaths,
     delay_to_rounded_samples,
 )
@@ -174,20 +173,14 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
     def _make_osc_path(self, channel: int, index: int) -> str:
         return f"/{self.serial}/sgchannels/{channel}/oscs/{index}/freq"
 
-    def disable_outputs(
+    async def disable_outputs(
         self, outputs: set[int], invert: bool
     ) -> list[DaqNodeSetAction]:
-        channels_to_disable: list[DaqNodeSetAction] = [
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/sgchannels/{ch}/output/on",
-                0,
-                caching_strategy=CachingStrategy.NO_CACHE,
-            )
-            for ch in range(self._outputs)
-            if (ch in outputs) != invert
-        ]
-        return channels_to_disable
+        nc = NodeCollector(base=f"/{self.serial}/")
+        for ch in range(self._outputs):
+            if (ch in outputs) != invert:
+                nc.add(f"sgchannels/{ch}/output/on", 0, cache=False)
+        return await self.maybe_async(nc)
 
     def _nodes_to_monitor_impl(self) -> list[str]:
         nodes = super()._nodes_to_monitor_impl()
@@ -205,77 +198,58 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
 
     async def collect_execution_nodes(
         self, with_pipeliner: bool
-    ) -> list[DaqNodeAction]:
+    ) -> list[DaqNodeSetAction]:
         if with_pipeliner:
-            return self.pipeliner_collect_execution_nodes()
+            nc = self.pipeliner_collect_execution_nodes()
+        else:
+            nc = NodeCollector(base=f"/{self.serial}/")
+            for awg_index in self._allocated_awgs:
+                nc.add(f"sgchannels/{awg_index}/awg/enable", 1, cache=False)
+        return await self.maybe_async(nc)
 
-        return [
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/sgchannels/{awg_index}/awg/enable",
-                1,
-                caching_strategy=CachingStrategy.NO_CACHE,
-            )
-            for awg_index in self._allocated_awgs
-        ]
-
-    def collect_execution_setup_nodes(
+    async def collect_execution_setup_nodes(
         self, with_pipeliner: bool, has_awg_in_use: bool
-    ) -> list[DaqNodeAction]:
+    ) -> list[DaqNodeSetAction]:
         hw_sync = with_pipeliner and has_awg_in_use and not self.is_secondary
-        nodes = []
+        nc = NodeCollector(base=f"/{self.serial}/")
         if hw_sync and self._emit_trigger:
-            nodes.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/system/internaltrigger/synchronization/enable",
-                    1,  # enable
-                )
-            )
+            nc.add("system/internaltrigger/synchronization/enable", 1)  # enable
         if hw_sync and not self._emit_trigger:
-            nodes.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/system/synchronization/source",
-                    1,  # external
-                )
-            )
-        return nodes
+            nc.add("system/synchronization/source", 1)  # external
+        return await self.maybe_async(nc)
 
-    def collect_internal_start_execution_nodes(self):
+    async def collect_internal_start_execution_nodes(self) -> list[DaqNodeSetAction]:
+        nc = NodeCollector(base=f"/{self.serial}/")
         if self._emit_trigger:
-            return [
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/system/internaltrigger/enable",
-                    1,
-                    caching_strategy=CachingStrategy.NO_CACHE,
-                )
-            ]
-        return []
+            nc.add("system/internaltrigger/enable", 1, cache=False)
+        return await self.maybe_async(nc)
 
-    def conditions_for_execution_ready(self, with_pipeliner: bool) -> dict[str, Any]:
+    async def conditions_for_execution_ready(
+        self, with_pipeliner: bool
+    ) -> dict[str, Any]:
         if not self._wait_for_awgs:
             return {}
 
         if with_pipeliner:
-            return self.pipeliner_conditions_for_execution_ready()
+            conditions = self.pipeliner_conditions_for_execution_ready()
+        else:
+            conditions = {
+                f"/{self.serial}/sgchannels/{awg_index}/awg/enable": 1
+                for awg_index in self._allocated_awgs
+            }
+        return await self.maybe_async_wait(conditions)
 
-        return {
-            f"/{self.serial}/sgchannels/{awg_index}/awg/enable": 1
-            for awg_index in self._allocated_awgs
-        }
-
-    def conditions_for_execution_done(
+    async def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
     ) -> dict[str, Any]:
         if with_pipeliner:
-            return self.pipeliner_conditions_for_execution_done()
-
-        return {
-            f"/{self.serial}/sgchannels/{awg_index}/awg/enable": 0
-            for awg_index in self._allocated_awgs
-        }
+            conditions = self.pipeliner_conditions_for_execution_done()
+        else:
+            conditions = {
+                f"/{self.serial}/sgchannels/{awg_index}/awg/enable": 0
+                for awg_index in self._allocated_awgs
+            }
+        return await self.maybe_async_wait(conditions)
 
     def pre_process_attributes(
         self,
@@ -363,55 +337,30 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
         router_idx: int,
         amplitude: float | None = None,
         phase: float | None = None,
-    ) -> list[DaqNodeAction]:
-        nodes = [
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/sgchannels/{target}/outputrouter/enable",
-                1,
-            ),
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/sgchannels/{target}/outputrouter/routes/{router_idx}/enable",
-                1,
-            ),
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/sgchannels/{target}/outputrouter/routes/{router_idx}/source",
-                source,
-            ),
-        ]
+    ) -> NodeCollector:
+        nc = NodeCollector(base=f"/{self.serial}/")
+        nc.add(f"sgchannels/{target}/outputrouter/enable", 1)
+        nc.add(f"sgchannels/{target}/outputrouter/routes/{router_idx}/enable", 1)
+        nc.add(f"sgchannels/{target}/outputrouter/routes/{router_idx}/source", source)
         if amplitude is not None:
-            nodes.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/sgchannels/{target}/outputrouter/routes/{router_idx}/amplitude",
-                    amplitude,
-                )
+            nc.add(
+                f"sgchannels/{target}/outputrouter/routes/{router_idx}/amplitude",
+                amplitude,
             )
         if phase is not None:
-            nodes.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/sgchannels/{target}/outputrouter/routes/{router_idx}/phase",
-                    phase * 180 / numpy.pi,
-                )
+            nc.add(
+                f"sgchannels/{target}/outputrouter/routes/{router_idx}/phase",
+                phase * 180 / numpy.pi,
             )
         # Turn output router on source channel, device will make sync them internally.
         if self._is_full_channel(source):
-            nodes.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/sgchannels/{source}/outputrouter/enable",
-                    1,
-                )
-            )
-        return nodes
+            nc.add(f"sgchannels/{source}/outputrouter/enable", 1)
+        return nc
 
     def _collect_output_router_initialization_nodes(
         self, outputs: list[IO]
-    ) -> list[DaqNodeSetAction]:
-        nodes: list[DaqNodeSetAction] = []
+    ) -> NodeCollector:
+        nc = NodeCollector()
         active_output_routers: set[int] = set()
         for output in outputs:
             if output.routed_outputs and self._has_opt_rtr is False:
@@ -424,7 +373,7 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
                 # We enable the router on both the source and destination channels, so that the delay matches between them.
                 active_output_routers.add(output.channel)
                 active_output_routers.add(route.from_channel)
-                nodes.extend(
+                nc.extend(
                     self._collect_output_router_nodes(
                         target=output.channel,
                         source=route.from_channel,
@@ -441,13 +390,10 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
             if output.routed_outputs:
                 routes_to_disable = [1, 2]
                 [
-                    nodes.append(
-                        DaqNodeSetAction(
-                            self._daq,
-                            f"/{self.serial}/sgchannels/{output.channel}/outputrouter/routes/{route_disable}/enable",
-                            0,
-                            caching_strategy=CachingStrategy.NO_CACHE,
-                        ),
+                    nc.add(
+                        f"/{self.serial}/sgchannels/{output.channel}/outputrouter/routes/{route_disable}/enable",
+                        0,
+                        cache=False,
                     )
                     for route_disable in routes_to_disable[
                         len(output.routed_outputs) - 1 :
@@ -461,42 +407,26 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
                     output.channel not in active_output_routers
                     and self._is_full_channel(output.channel)
                 ):
-                    nodes.extend(
-                        [
-                            DaqNodeSetAction(
-                                self._daq,
-                                f"/{self.serial}/sgchannels/{output.channel}/outputrouter/enable",
-                                0,
-                                caching_strategy=CachingStrategy.NO_CACHE,
-                            ),
-                            DaqNodeSetAction(
-                                self._daq,
-                                f"/{self.serial}/sgchannels/{output.channel}/outputrouter/routes/*/enable",
-                                0,
-                                caching_strategy=CachingStrategy.NO_CACHE,
-                            ),
-                        ]
+                    nc.add(
+                        f"/{self.serial}/sgchannels/{output.channel}/outputrouter/enable",
+                        0,
+                        cache=False,
                     )
-        return nodes
+                    nc.add(
+                        f"/{self.serial}/sgchannels/{output.channel}/outputrouter/routes/*/enable",
+                        0,
+                        cache=False,
+                    )
+        return nc
 
-    def _collect_configure_oscillator_nodes(self, channel: int, oscillator_idx: int):
-        return [
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/sgchannels/{channel}/sines/0/oscselect",
-                oscillator_idx,
-            ),
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/sgchannels/{channel}/sines/0/harmonic",
-                1,
-            ),
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/sgchannels/{channel}/sines/0/phaseshift",
-                0,
-            ),
-        ]
+    def _collect_configure_oscillator_nodes(
+        self, channel: int, oscillator_idx: int
+    ) -> NodeCollector:
+        nc = NodeCollector(base=f"/{self.serial}/sgchannels/{channel}/sines/0/")
+        nc.add("oscselect", oscillator_idx)
+        nc.add("harmonic", 1)
+        nc.add("phaseshift", 0)
+        return nc
 
     async def collect_initialization_nodes(
         self,
@@ -506,7 +436,7 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
     ) -> list[DaqNodeSetAction]:
         _logger.debug("%s: Initializing device...", self.dev_repr)
 
-        nodes_to_initialize_output: list[DaqNodeSetAction] = []
+        nc = NodeCollector()
         outputs = initialization.outputs or []
         for output in outputs:
             self._warn_for_unsupported_param(
@@ -520,65 +450,37 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
 
             self._allocated_awgs.add(output.channel)
             if self._is_full_channel(output.channel):
-                nodes_to_initialize_output.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/sgchannels/{output.channel}/output/on",
-                        1 if output.enable else 0,
-                    )
+                nc.add(
+                    f"/{self.serial}/sgchannels/{output.channel}/output/on",
+                    1 if output.enable else 0,
                 )
                 if output.range is not None:
                     self._validate_range(output)
-                    nodes_to_initialize_output.append(
-                        DaqNodeSetAction(
-                            self._daq,
-                            f"/{self.serial}/sgchannels/{output.channel}/output/range",
-                            output.range,
-                        )
+                    nc.add(
+                        f"/{self.serial}/sgchannels/{output.channel}/output/range",
+                        output.range,
                     )
-            nodes_to_initialize_output.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/sgchannels/{output.channel}/awg/single",
-                    1,
-                )
-            )
+            nc.add(f"/{self.serial}/sgchannels/{output.channel}/awg/single", 1)
 
-            nodes_to_initialize_output.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/sgchannels/{output.channel}/awg/modulation/enable",
-                    1,
-                )
+            nc.add(
+                f"/{self.serial}/sgchannels/{output.channel}/awg/modulation/enable", 1
             )
 
             if not output.modulation:
                 # We still use the output modulation (`awg/modulation/enable`), but we
                 # set the oscillator to 0 Hz.
-                nodes_to_initialize_output.extend(
-                    self._collect_configure_oscillator_nodes(output.channel, 0)
-                )
+                nc.extend(self._collect_configure_oscillator_nodes(output.channel, 0))
                 osc_freq_path = self._make_osc_path(output.channel, 0)
-                nodes_to_initialize_output.append(
-                    DaqNodeSetAction(self._daq, osc_freq_path, 0.0)
-                )
+                nc.add(osc_freq_path, 0.0)
 
             if self._is_full_channel(output.channel):
                 if output.marker_mode is None or output.marker_mode == "TRIGGER":
-                    nodes_to_initialize_output.append(
-                        DaqNodeSetAction(
-                            self.daq,
-                            f"/{self.serial}/sgchannels/{output.channel}/marker/source",
-                            0,
-                        )
+                    nc.add(
+                        f"/{self.serial}/sgchannels/{output.channel}/marker/source", 0
                     )
                 elif output.marker_mode == "MARKER":
-                    nodes_to_initialize_output.append(
-                        DaqNodeSetAction(
-                            self.daq,
-                            f"/{self.serial}/sgchannels/{output.channel}/marker/source",
-                            4,
-                        )
+                    nc.add(
+                        f"/{self.serial}/sgchannels/{output.channel}/marker/source", 4
                     )
                 else:
                     raise ValueError(
@@ -586,26 +488,15 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
                     )
 
                 # set trigger delay to 0
-                nodes_to_initialize_output.append(
-                    DaqNodeSetAction(
-                        self.daq,
-                        f"/{self.serial}/sgchannels/{output.channel}/trigger/delay",
-                        0.0,
-                    )
-                )
+                nc.add(f"/{self.serial}/sgchannels/{output.channel}/trigger/delay", 0.0)
 
-                nodes_to_initialize_output.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/sgchannels/{output.channel}/output/rflfpath",
-                        1  # RF
-                        if output.port_mode is None or output.port_mode == "rf"
-                        else 0,  # LF
-                    )
+                nc.add(
+                    f"/{self.serial}/sgchannels/{output.channel}/output/rflfpath",
+                    1  # RF
+                    if output.port_mode is None or output.port_mode == "rf"
+                    else 0,  # LF
                 )
-        nodes_to_initialize_output.extend(
-            self._collect_output_router_initialization_nodes(outputs)
-        )
+        nc.extend(self._collect_output_router_initialization_nodes(outputs))
         osc_selects = {
             ch: osc.index for osc in self._allocated_oscs for ch in osc.channels
         }
@@ -614,41 +505,29 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
         # via the command table, and the oscselect node is ignored. Therefore it can be set to
         # any oscillator.
         for ch, osc_idx in osc_selects.items():
-            nodes_to_initialize_output.extend(
-                self._collect_configure_oscillator_nodes(ch, osc_idx)
-            )
-        return nodes_to_initialize_output
+            nc.extend(self._collect_configure_oscillator_nodes(ch, osc_idx))
+
+        return await self.maybe_async(nc)
 
     def collect_prepare_nt_step_nodes(
         self, attributes: DeviceAttributesView, recipe_data: RecipeData
-    ) -> list[DaqNodeAction]:
-        nodes_to_set = super().collect_prepare_nt_step_nodes(attributes, recipe_data)
+    ) -> NodeCollector:
+        nc = NodeCollector(base=f"/{self.serial}/")
+        nc.extend(super().collect_prepare_nt_step_nodes(attributes, recipe_data))
 
         for synth_idx in set(self._output_to_synth_map):
             [synth_cf], synth_cf_updated = attributes.resolve(
                 keys=[(AttributeName.SG_SYNTH_CENTER_FREQ, synth_idx)]
             )
             if synth_cf_updated:
-                nodes_to_set.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/synthesizers/{synth_idx}/centerfreq",
-                        synth_cf,
-                    )
-                )
+                nc.add(f"synthesizers/{synth_idx}/centerfreq", synth_cf)
 
         for ch in range(self._outputs):
             [dig_mixer_cf], dig_mixer_cf_updated = attributes.resolve(
                 keys=[(AttributeName.SG_DIG_MIXER_CENTER_FREQ, ch)]
             )
             if dig_mixer_cf_updated:
-                nodes_to_set.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/sgchannels/{ch}/digitalmixer/centerfreq",
-                        dig_mixer_cf,
-                    )
-                )
+                nc.add(f"sgchannels/{ch}/digitalmixer/centerfreq", dig_mixer_cf)
             [scheduler_port_delay, port_delay], updated = attributes.resolve(
                 keys=[
                     (AttributeName.OUTPUT_SCHEDULER_PORT_DELAY, ch),
@@ -669,13 +548,7 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
                     / SAMPLE_FREQUENCY_HZ
                 )
 
-                nodes_to_set.append(
-                    DaqNodeSetAction(
-                        daq=self.daq,
-                        path=f"/{self.serial}/sgchannels/{ch}/output/delay",
-                        value=output_delay_rounded,
-                    )
-                )
+                nc.add(f"sgchannels/{ch}/output/delay", output_delay_rounded)
             for route_idx, (route, ampl, phase) in enumerate(
                 (
                     [
@@ -704,7 +577,7 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
                     and route_amplitude is not None
                     or route_phase is not None
                 ):
-                    nodes_to_set.extend(
+                    nc.extend(
                         self._collect_output_router_nodes(
                             target=ch,
                             source=output_router.from_channel,
@@ -713,7 +586,7 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
                             phase=route_phase,
                         )
                     )
-        return nodes_to_set
+        return nc
 
     def prepare_upload_binary_wave(
         self,
@@ -722,23 +595,24 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
         awg_index: int,
         wave_index: int,
         acquisition_type: AcquisitionType,
-    ):
-        return DaqNodeSetAction(
-            self._daq,
+    ) -> NodeCollector:
+        nc = NodeCollector()
+        nc.add(
             f"/{self.serial}/sgchannels/{awg_index}/awg/waveform/waves/{wave_index}",
             waveform,
+            cache=False,
             filename=filename,
-            caching_strategy=CachingStrategy.NO_CACHE,
         )
+        return nc
 
     async def collect_trigger_configuration_nodes(
         self, initialization: Initialization, recipe_data: RecipeData
-    ) -> list[DaqNodeAction]:
+    ) -> list[DaqNodeSetAction]:
         _logger.debug("Configuring triggers...")
         self._wait_for_awgs = True
         self._emit_trigger = False
 
-        ntc = []
+        nc = NodeCollector(base=f"/{self.serial}/")
 
         for awg_key, awg_config in recipe_data.awg_configs.items():
             if awg_key.device_uid != initialization.device_uid:
@@ -749,43 +623,34 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
 
             if awg_config.source_feedback_register == "local" and self.is_secondary:
                 # local feedback
-                ntc.extend(
-                    [
-                        (
-                            f"sgchannels/{awg_key.awg_index}/awg/intfeedback/direct/shift",
-                            awg_config.register_selector_shift,
-                        ),
-                        (
-                            f"sgchannels/{awg_key.awg_index}/awg/intfeedback/direct/mask",
-                            awg_config.register_selector_bitmask,
-                        ),
-                        (
-                            f"sgchannels/{awg_key.awg_index}/awg/intfeedback/direct/offset",
-                            awg_config.command_table_match_offset,
-                        ),
-                    ]
+                nc.add(
+                    f"sgchannels/{awg_key.awg_index}/awg/intfeedback/direct/shift",
+                    awg_config.register_selector_shift,
+                )
+                nc.add(
+                    f"sgchannels/{awg_key.awg_index}/awg/intfeedback/direct/mask",
+                    awg_config.register_selector_bitmask,
+                )
+                nc.add(
+                    f"sgchannels/{awg_key.awg_index}/awg/intfeedback/direct/offset",
+                    awg_config.command_table_match_offset,
                 )
             else:
                 # global feedback
-                ntc.extend(
-                    [
-                        (
-                            f"sgchannels/{awg_key.awg_index}/awg/diozsyncswitch",
-                            1,  # ZSync Trigger
-                        ),
-                        (
-                            f"sgchannels/{awg_key.awg_index}/awg/zsync/register/shift",
-                            awg_config.register_selector_shift,
-                        ),
-                        (
-                            f"sgchannels/{awg_key.awg_index}/awg/zsync/register/mask",
-                            awg_config.register_selector_bitmask,
-                        ),
-                        (
-                            f"sgchannels/{awg_key.awg_index}/awg/zsync/register/offset",
-                            awg_config.command_table_match_offset,
-                        ),
-                    ]
+                nc.add(
+                    f"sgchannels/{awg_key.awg_index}/awg/diozsyncswitch", 1
+                )  # ZSync Trigger
+                nc.add(
+                    f"sgchannels/{awg_key.awg_index}/awg/zsync/register/shift",
+                    awg_config.register_selector_shift,
+                )
+                nc.add(
+                    f"sgchannels/{awg_key.awg_index}/awg/zsync/register/mask",
+                    awg_config.register_selector_bitmask,
+                )
+                nc.add(
+                    f"sgchannels/{awg_key.awg_index}/awg/zsync/register/offset",
+                    awg_config.command_table_match_offset,
                 )
 
         triggering_mode = initialization.config.triggering_mode
@@ -800,28 +665,21 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
             if not self.is_secondary:
                 # otherwise, the QA will initialize the nodes
                 self._emit_trigger = True
-                ntc += [
-                    ("system/internaltrigger/enable", 0),
-                    ("system/internaltrigger/repetitions", 1),
-                ]
+                nc.add("system/internaltrigger/enable", 0)
+                nc.add("system/internaltrigger/repetitions", 1)
             for awg_index in (
                 self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
             ):
-                ntc += [
-                    # Rise
-                    (f"sgchannels/{awg_index}/awg/auxtriggers/0/slope", 1),
-                    # Internal trigger
-                    (f"sgchannels/{awg_index}/awg/auxtriggers/0/channel", 8),
-                ]
+                nc.add(f"sgchannels/{awg_index}/awg/auxtriggers/0/slope", 1)  # Rise
+                nc.add(
+                    f"sgchannels/{awg_index}/awg/auxtriggers/0/channel", 8
+                )  # Internal trigger
         else:
             raise LabOneQControllerException(
                 f"Unsupported triggering mode: {triggering_mode} for device type SHFSG."
             )
 
-        nodes_to_configure_triggers = [
-            DaqNodeSetAction(self._daq, f"/{self.serial}/{node}", v) for node, v in ntc
-        ]
-        return nodes_to_configure_triggers
+        return await self.maybe_async(nc)
 
     def add_command_table_header(self, body: dict) -> dict:
         return {
@@ -833,36 +691,21 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
     def command_table_path(self, awg_index: int) -> str:
         return f"/{self.serial}/sgchannels/{awg_index}/awg/commandtable/"
 
-    async def collect_reset_nodes(self) -> list[DaqNodeAction]:
-        reset_nodes = await super().collect_reset_nodes()
+    async def collect_reset_nodes(self) -> list[DaqNodeSetAction]:
+        nc = NodeCollector(base=f"/{self.serial}/")
         # Reset pipeliner first, attempt to set AWG enable leads to FW error if pipeliner was enabled.
-        reset_nodes.extend(await self.pipeliner_reset_nodes())
-        reset_nodes.append(
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/sgchannels/*/awg/enable",
-                0,
-                caching_strategy=CachingStrategy.NO_CACHE,
-            )
-        )
+        nc.extend(self.pipeliner_reset_nodes())
+        nc.add("sgchannels/*/awg/enable", 0, cache=False)
         if not self.is_secondary:
-            reset_nodes.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/system/synchronization/source",
-                    0,  # internal
-                    caching_strategy=CachingStrategy.NO_CACHE,
-                )
+            nc.add(
+                "system/synchronization/source",
+                0,  # internal
+                cache=False,
             )
             if self.options.is_qc:
-                reset_nodes.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/system/internaltrigger/synchronization/enable",
-                        0,
-                        caching_strategy=CachingStrategy.NO_CACHE,
-                    )
-                )
+                nc.add("system/internaltrigger/synchronization/enable", 0, cache=False)
+        reset_nodes = await super().collect_reset_nodes()
+        reset_nodes.extend(await self.maybe_async(nc))
         return reset_nodes
 
     def collect_warning_nodes(self) -> list[str]:

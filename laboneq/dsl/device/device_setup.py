@@ -142,6 +142,13 @@ class DeviceSetup:
             raise LabOneQException(str(e)) from e
 
     def instrument_by_uid(self, uid: str) -> Instrument | None:
+        """Get an instrument by its uid.
+
+        Args:
+            uid (str): UID of the instrument.
+        Returns:
+            Instrument with the given UID, or `None` if no such instrument was found.
+        """
         return next((i for i in self.instruments if i.uid == uid), None)
 
     def logical_signal_by_uid(self, uid: str) -> LogicalSignal:
@@ -321,6 +328,15 @@ class DeviceSetup:
             self.set_calibration(calibration)
 
     def list_calibratables(self):
+        """Load the device setup from a specified file.
+
+        Returns:
+            calibratables (dict):
+                Dictionary of calibratable objects within the device setup.
+                The dictionary keys are the path string of the calibratable,
+                and the values are again a dictionary with type of the calibratable
+                and whether it is already set or not.
+        """
         calibratables = dict()
         for logical_signal_group in self.logical_signal_groups.values():
             calibratables = {

@@ -1,15 +1,16 @@
 # Copyright 2023 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
 import copy
-from collections import defaultdict
 
-from laboneq.controller.recipe_processor import AwgKey
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.data.recipe import RealtimeExecutionInit
 
 
-def _merge(last: RealtimeExecutionInit, update: RealtimeExecutionInit):
+def _merge(
+    last: RealtimeExecutionInit, update: RealtimeExecutionInit
+) -> RealtimeExecutionInit:
     new = copy.deepcopy(last)
     if update.seqc_ref is not None:
         new.seqc_ref = update.seqc_ref
@@ -20,16 +21,13 @@ def _merge(last: RealtimeExecutionInit, update: RealtimeExecutionInit):
 
 class PipelinerReloadTracker:
     def __init__(self):
-        self.last_rt_exec_steps_per_awg: dict[
-            AwgKey, list[RealtimeExecutionInit]
-        ] = defaultdict(list)
+        self.last_rt_exec_steps: list[RealtimeExecutionInit] = []
 
     def calc_next_step(
         self,
-        awg_key: AwgKey,
         pipeline_chunk: int,
-        rt_exec_step: RealtimeExecutionInit,
-    ) -> tuple[RealtimeExecutionInit, str]:
+        rt_exec_step: RealtimeExecutionInit | None,
+    ) -> RealtimeExecutionInit:
         """Constructs the current RT chunk of a pipeline (PL) from recipe data + trace from previous NT steps
 
         Assuming similar sequence of pipeliner jobs for each near-time step, and that any potential
@@ -51,7 +49,7 @@ class PipelinerReloadTracker:
         |       3 |  ^  |  ^+ |  ^  | Update from recipe for a PL step > 1
         """
         assert pipeline_chunk >= 0
-        last_rt_exec_steps = self.last_rt_exec_steps_per_awg[awg_key]
+        last_rt_exec_steps = self.last_rt_exec_steps
         if rt_exec_step is None:
             # No update from recipe
             if pipeline_chunk < len(last_rt_exec_steps):
@@ -86,7 +84,4 @@ class PipelinerReloadTracker:
                 rt_exec_step = _merge(last_rt_exec_steps[-1], rt_exec_step)
                 last_rt_exec_steps.append(rt_exec_step)
 
-        return (
-            rt_exec_step,
-            f"{awg_key.device_uid}_{awg_key.awg_index}_{pipeline_chunk}.seqc",
-        )
+        return rt_exec_step

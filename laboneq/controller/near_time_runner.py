@@ -120,8 +120,12 @@ class NearTimeRunner(AsyncExecutorBase):
             nt_step=self.nt_step(), rt_section_uid=uid
         )
         await self.controller._configure_triggers()
-        nt_sweep_nodes = self.controller._prepare_nt_step(self.sweep_params_tracker)
-        step_prepare_nodes = self.controller._prepare_rt_execution(rt_section_uid=uid)
+        nt_sweep_nodes = await self.controller._prepare_nt_step(
+            self.sweep_params_tracker
+        )
+        step_prepare_nodes = await self.controller._prepare_rt_execution(
+            rt_section_uid=uid
+        )
 
         await batch_set([*self.user_set_nodes, *nt_sweep_nodes, *step_prepare_nodes])
         self.user_set_nodes.clear()

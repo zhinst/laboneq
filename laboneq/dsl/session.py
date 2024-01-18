@@ -444,6 +444,18 @@ class Session:
     def replace_pulse(
         self, pulse_uid: str | Pulse, pulse_or_array: npt.ArrayLike | Pulse
     ):
+        """
+        Replaces a specific pulse with new sample data on the device.
+
+        This is useful when called from within a near-time callback, and allows fast
+        waveform replacement within near-time loops without recompilation of the experiment.
+
+        Args:
+            pulse_uid: Pulse to replace, can be a Pulse object or the UID of the pulse.
+            pulse_or_array:
+                Replacement pulse, can be a Pulse object or array of values.
+                Needs to have the same length as the pulse it replaces.
+        """
         LabOneQFacade.replace_pulse(self, pulse_uid, pulse_or_array)
 
     def get_results(self) -> Results:

@@ -14,12 +14,14 @@ from laboneq.controller.attribute_value_tracker import (
     DeviceAttributesView,
 )
 from laboneq.controller.communication import (
-    CachingStrategy,
-    DaqNodeAction,
     DaqNodeSetAction,
 )
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
-from laboneq.controller.devices.device_zi import DeviceZI, delay_to_rounded_samples
+from laboneq.controller.devices.device_zi import (
+    DeviceZI,
+    NodeCollector,
+    delay_to_rounded_samples,
+)
 from laboneq.controller.devices.zi_node_monitor import (
     Command,
     Condition,
@@ -110,20 +112,14 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
         osc_index_base = osc_group * max_per_group
         return osc_index_base + previously_allocated
 
-    def disable_outputs(
+    async def disable_outputs(
         self, outputs: set[int], invert: bool
     ) -> list[DaqNodeSetAction]:
-        channels_to_disable: list[DaqNodeSetAction] = [
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/sigouts/{ch}/on",
-                0,
-                caching_strategy=CachingStrategy.NO_CACHE,
-            )
-            for ch in range(self._channels)
-            if (ch in outputs) != invert
-        ]
-        return channels_to_disable
+        nc = NodeCollector(base=f"/{self.serial}/")
+        for ch in range(self._channels):
+            if (ch in outputs) != invert:
+                nc.add(f"sigouts/{ch}/on", 0, cache=False)
+        return await self.maybe_async(nc)
 
     def _nodes_to_monitor_impl(self) -> list[str]:
         nodes = super()._nodes_to_monitor_impl()
@@ -204,8 +200,10 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
             )
         return nodes
 
-    def collect_awg_after_upload_nodes(self, initialization: Initialization):
-        nodes_to_configure_phase = []
+    async def collect_awg_after_upload_nodes(
+        self, initialization: Initialization
+    ) -> list[DaqNodeSetAction]:
+        nc = NodeCollector(base=f"/{self.serial}/")
 
         for awg in initialization.awgs or []:
             _logger.debug(
@@ -213,63 +211,53 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
                 self.dev_repr,
                 awg.awg,
             )
-            nodes_to_configure_phase.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/sines/{awg.awg * 2}/phaseshift",
-                    90 if (awg.signal_type == SignalType.IQ) else 0,
-                )
+            nc.add(
+                f"sines/{awg.awg * 2}/phaseshift",
+                90 if (awg.signal_type == SignalType.IQ) else 0,
             )
+            nc.add(f"sines/{awg.awg * 2 + 1}/phaseshift", 0)
 
-            nodes_to_configure_phase.append(
-                DaqNodeSetAction(
-                    self._daq, f"/{self.serial}/sines/{awg.awg * 2 + 1}/phaseshift", 0
-                )
-            )
-
-        return nodes_to_configure_phase
+        return await self.maybe_async(nc)
 
     async def collect_execution_nodes(
         self, with_pipeliner: bool
-    ) -> list[DaqNodeAction]:
+    ) -> list[DaqNodeSetAction]:
         if with_pipeliner:
-            return self.pipeliner_collect_execution_nodes()
+            return await self.maybe_async(self.pipeliner_collect_execution_nodes())
 
         return await super().collect_execution_nodes(with_pipeliner=with_pipeliner)
 
-    def conditions_for_execution_ready(self, with_pipeliner: bool) -> dict[str, Any]:
+    async def conditions_for_execution_ready(
+        self, with_pipeliner: bool
+    ) -> dict[str, Any]:
         if with_pipeliner:
-            return self.pipeliner_conditions_for_execution_ready()
+            conditions = self.pipeliner_conditions_for_execution_ready()
+        else:
+            conditions = {
+                f"/{self.serial}/awgs/{awg_index}/enable": 1
+                for awg_index in self._allocated_awgs
+            }
+        return await self.maybe_async_wait(conditions)
 
-        return {
-            f"/{self.serial}/awgs/{awg_index}/enable": 1
-            for awg_index in self._allocated_awgs
-        }
-
-    def conditions_for_execution_done(
+    async def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
     ) -> dict[str, Any]:
         if with_pipeliner:
-            return self.pipeliner_conditions_for_execution_done()
+            conditions = self.pipeliner_conditions_for_execution_done()
+        else:
+            conditions = {
+                f"/{self.serial}/awgs/{awg_index}/enable": 0
+                for awg_index in self._allocated_awgs
+            }
+        return await self.maybe_async_wait(conditions)
 
-        return {
-            f"/{self.serial}/awgs/{awg_index}/enable": 0
-            for awg_index in self._allocated_awgs
-        }
-
-    def collect_execution_setup_nodes(
+    async def collect_execution_setup_nodes(
         self, with_pipeliner: bool, has_awg_in_use: bool
-    ) -> list[DaqNodeAction]:
-        nodes = []
+    ) -> list[DaqNodeSetAction]:
+        nc = NodeCollector(base=f"/{self.serial}/")
         if with_pipeliner and has_awg_in_use:
-            nodes.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/system/synchronization/source",
-                    1,  # external
-                )
-            )
-        return nodes
+            nc.add("system/synchronization/source", 1)  # external
+        return await self.maybe_async(nc)
 
     async def collect_initialization_nodes(
         self,
@@ -279,14 +267,14 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
     ) -> list[DaqNodeSetAction]:
         _logger.debug("%s: Initializing device...", self.dev_repr)
 
-        nodes: list[tuple[str, Any]] = []
+        nc = NodeCollector(base=f"/{self.serial}/")
 
         outputs = initialization.outputs or []
         for output in outputs:
             awg_idx = output.channel // 2
             self._allocated_awgs.add(awg_idx)
 
-            nodes.append((f"sigouts/{output.channel}/on", 1 if output.enable else 0))
+            nc.add(f"sigouts/{output.channel}/on", 1 if output.enable else 0)
 
             if output.range is not None:
                 if output.range_unit not in (None, "volt"):
@@ -301,14 +289,9 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
                         output.range,
                         self.dev_repr,
                     )
-                nodes.append(
-                    (
-                        f"sigouts/{output.channel}/range",
-                        output.range,
-                    )
-                )
-            nodes.append((f"sigouts/{output.channel}/offset", output.offset))
-            nodes.append((f"awgs/{awg_idx}/single", 1))
+                nc.add(f"sigouts/{output.channel}/range", output.range)
+            nc.add(f"sigouts/{output.channel}/offset", output.offset)
+            nc.add(f"awgs/{awg_idx}/single", 1)
 
             awg_ch = output.channel % 2
             iq_idx = output.channel // 2
@@ -324,20 +307,17 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
                     if output.modulation
                     else ModulationMode.OFF
                 )
-                nodes += [
-                    (
-                        f"awgs/{awg_idx}/outputs/{awg_ch}/modulation/mode",
-                        modulation_mode,
-                    ),
-                    (
-                        f"awgs/{awg_idx}/outputs/{awg_ch}/gains/{diagonal_channel_index}",
-                        output.gains.diagonal,
-                    ),
-                    (
-                        f"awgs/{awg_idx}/outputs/{awg_ch}/gains/{off_diagonal_channel_index}",
-                        output.gains.off_diagonal,
-                    ),
-                ]
+                nc.add(
+                    f"awgs/{awg_idx}/outputs/{awg_ch}/modulation/mode", modulation_mode
+                )
+                nc.add(
+                    f"awgs/{awg_idx}/outputs/{awg_ch}/gains/{diagonal_channel_index}",
+                    output.gains.diagonal,
+                )
+                nc.add(
+                    f"awgs/{awg_idx}/outputs/{awg_ch}/gains/{off_diagonal_channel_index}",
+                    output.gains.off_diagonal,
+                )
             else:
                 # I/Q output
                 modulation_mode = (
@@ -345,20 +325,15 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
                     if output.modulation
                     else ModulationMode.OFF
                 )
-                nodes += [
-                    (
-                        f"awgs/{awg_idx}/outputs/{awg_ch}/modulation/mode",
-                        modulation_mode,
-                    ),
-                    (
-                        f"awgs/{awg_idx}/outputs/{awg_ch}/gains/0",
-                        iq_gains_mx[0][awg_ch],
-                    ),
-                    (
-                        f"awgs/{awg_idx}/outputs/{awg_ch}/gains/1",
-                        iq_gains_mx[1][awg_ch],
-                    ),
-                ]
+                nc.add(
+                    f"awgs/{awg_idx}/outputs/{awg_ch}/modulation/mode", modulation_mode
+                )
+                nc.add(
+                    f"awgs/{awg_idx}/outputs/{awg_ch}/gains/0", iq_gains_mx[0][awg_ch]
+                )
+                nc.add(
+                    f"awgs/{awg_idx}/outputs/{awg_ch}/gains/1", iq_gains_mx[1][awg_ch]
+                )
 
             precomp_p = f"sigouts/{output.channel}/precompensation/"
             has_pc = "PC" in self.dev_opts
@@ -370,44 +345,38 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
                     raise LabOneQControllerException(
                         f"Precompensation is not supported on device {self.dev_repr}."
                     )
-                nodes.append((precomp_p + "enable", 1))
+                nc.add(precomp_p + "enable", 1)
                 # Exponentials
                 for e in range(8):
                     exp_p = precomp_p + f"exponentials/{e}/"
                     try:
                         exp = precomp["exponential"][e]
-                        nodes += [
-                            (exp_p + "enable", 1),
-                            (exp_p + "timeconstant", exp["timeconstant"]),
-                            (exp_p + "amplitude", exp["amplitude"]),
-                        ]
+                        nc.add(exp_p + "enable", 1)
+                        nc.add(exp_p + "timeconstant", exp["timeconstant"])
+                        nc.add(exp_p + "amplitude", exp["amplitude"])
                     except (KeyError, IndexError, TypeError):
-                        nodes.append((exp_p + "enable", 0))
+                        nc.add(exp_p + "enable", 0)
                 # Bounce
                 bounce_p = precomp_p + "bounces/0/"
                 try:
                     bounce = precomp["bounce"]
                     delay = bounce["delay"]
                     amp = bounce["amplitude"]
-                    nodes += [
-                        (bounce_p + "enable", 1),
-                        (bounce_p + "delay", delay),
-                        (bounce_p + "amplitude", amp),
-                    ]
+                    nc.add(bounce_p + "enable", 1)
+                    nc.add(bounce_p + "delay", delay)
+                    nc.add(bounce_p + "amplitude", amp)
                 except (KeyError, TypeError):
-                    nodes.append((bounce_p + "enable", 0))
+                    nc.add(bounce_p + "enable", 0)
                 # Highpass
                 hp_p = precomp_p + "highpass/0/"
                 try:
                     hp = precomp["high_pass"]
                     timeconstant = hp["timeconstant"]
-                    nodes += [
-                        (hp_p + "enable", 1),
-                        (hp_p + "timeconstant", timeconstant),
-                        (hp_p + "clearing/slope", 1),
-                    ]
+                    nc.add(hp_p + "enable", 1)
+                    nc.add(hp_p + "timeconstant", timeconstant)
+                    nc.add(hp_p + "clearing/slope", 1)
                 except (KeyError, TypeError):
-                    nodes.append((hp_p + "enable", 0))
+                    nc.add(hp_p + "enable", 0)
                 # FIR
                 fir_p = precomp_p + "fir/"
                 try:
@@ -417,49 +386,47 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
                             "FIR coefficients must be a list of at most 40 doubles"
                         )
                     fir = np.concatenate((fir, np.zeros((40 - len(fir)))))
-                    nodes += [(fir_p + "enable", 1), (fir_p + "coefficients", fir)]
+                    nc.add(fir_p + "enable", 1)
+                    nc.add(fir_p + "coefficients", fir)
                 except (KeyError, IndexError, TypeError):
-                    nodes.append((fir_p + "enable", 0))
+                    nc.add(fir_p + "enable", 0)
             except (KeyError, TypeError, AttributeError):
                 if has_pc:
-                    nodes.append((precomp_p + "enable", 0))
+                    nc.add(precomp_p + "enable", 0)
             if output.marker_mode is not None:
                 if output.marker_mode == "TRIGGER":
-                    nodes.append(
-                        (f"triggers/out/{output.channel}/source", output.channel % 2)
-                    )
+                    nc.add(f"triggers/out/{output.channel}/source", output.channel % 2)
                 elif output.marker_mode == "MARKER":
-                    nodes.append(
-                        (
-                            f"triggers/out/{output.channel}/source",
-                            4 + 2 * (output.channel % 2),
-                        )
+                    nc.add(
+                        f"triggers/out/{output.channel}/source",
+                        4 + 2 * (output.channel % 2),
                     )
                 else:
                     raise ValueError(
                         f"Maker mode must be either 'MARKER' or 'TRIGGER', but got {output.marker_mode} for output {output.channel} on HDAWG {self.serial}"
                     )
                 # set trigger delay to 0
-                nodes.append((f"triggers/out/{output.channel}/delay", 0.0))
+                nc.add(f"triggers/out/{output.channel}/delay", 0.0)
 
         osc_selects = {
             ch: osc.index for osc in self._allocated_oscs for ch in osc.channels
         }
         for ch, osc_idx in osc_selects.items():
-            nodes.append((f"sines/{ch}/oscselect", osc_idx))
+            nc.add(f"sines/{ch}/oscselect", osc_idx)
 
         # Configure DIO/ZSync at init (previously was after AWG loading).
         # This is a prerequisite for passing AWG checks in FW on the pipeliner commit.
         # Without the pipeliner, these checks are only performed when the AWG is enabled,
         # therefore DIO could be configured after the AWG loading.
-        nodes.extend(self._collect_dio_configuration_nodes(initialization, recipe_data))
+        nc.extend(self._collect_dio_configuration_nodes(initialization, recipe_data))
 
-        return [DaqNodeSetAction(self._daq, f"/{self.serial}/{k}", v) for k, v in nodes]
+        return await self.maybe_async(nc)
 
     def collect_prepare_nt_step_nodes(
         self, attributes: DeviceAttributesView, recipe_data: RecipeData
-    ) -> list[DaqNodeAction]:
-        nodes_to_set = super().collect_prepare_nt_step_nodes(attributes, recipe_data)
+    ) -> NodeCollector:
+        nc = NodeCollector(base=f"/{self.serial}/")
+        nc.extend(super().collect_prepare_nt_step_nodes(attributes, recipe_data))
 
         for ch in range(self._channels):
             [scheduler_port_delay, port_delay], updated = attributes.resolve(
@@ -484,26 +451,16 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
                 / self._sampling_rate
             )
 
-            nodes_to_set.append(
-                DaqNodeSetAction(
-                    daq=self.daq,
-                    path=f"/{self.serial}/sigouts/{ch}/delay",
-                    value=output_delay_rounded,
-                )
-            )
+            nc.add(f"sigouts/{ch}/delay", output_delay_rounded)
 
-        return nodes_to_set
+        return nc
 
-    def collect_awg_before_upload_nodes(
+    async def collect_awg_before_upload_nodes(
         self, initialization: Initialization, recipe_data: RecipeData
-    ):
-        device_specific_initialization_nodes = [
-            DaqNodeSetAction(
-                self._daq, f"/{self.serial}/system/awg/oscillatorcontrol", 1
-            ),
-        ]
-
-        return device_specific_initialization_nodes
+    ) -> list[DaqNodeSetAction]:
+        nc = NodeCollector(base=f"/{self.serial}/")
+        nc.add("system/awg/oscillatorcontrol", 1)
+        return await self.maybe_async(nc)
 
     def add_command_table_header(self, body: dict) -> dict:
         return {
@@ -517,14 +474,14 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
 
     async def collect_trigger_configuration_nodes(
         self, initialization: Initialization, recipe_data: RecipeData
-    ) -> list[DaqNodeAction]:
+    ) -> list[DaqNodeSetAction]:
         return []
 
     def _collect_dio_configuration_nodes(
         self, initialization: Initialization, recipe_data: RecipeData
-    ) -> list[tuple[str, Any]]:
+    ) -> NodeCollector:
         _logger.debug("%s: Configuring trigger configuration nodes.", self.dev_repr)
-        nodes: list[tuple[str, Any]] = []
+        nc = NodeCollector(base=f"/{self.serial}/")
 
         triggering_mode = initialization.config.triggering_mode
         if triggering_mode == TriggeringMode.ZSYNC_FOLLOWER:
@@ -532,8 +489,8 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
                 "%s: Configuring DIO mode: ZSync pass-through.", self.dev_repr
             )
             _logger.debug("%s: Configuring external clock to ZSync.", self.dev_repr)
-            nodes.append(("dios/0/mode", 3))
-            nodes.append(("dios/0/drive", 0xC))
+            nc.add("dios/0/mode", 3)
+            nc.add("dios/0/drive", 0xC)
 
             # Loop over at least AWG instance to cover the case that the instrument is only used
             # as a communication proxy. Some of the nodes on the AWG branch are needed to get
@@ -542,8 +499,8 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
                 self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
             ):
                 awg_path = f"awgs/{awg_index}"
-                nodes.append((f"{awg_path}/dio/strobe/slope", 0))
-                nodes.append((f"{awg_path}/dio/valid/polarity", 0))
+                nc.add(f"{awg_path}/dio/strobe/slope", 0)
+                nc.add(f"{awg_path}/dio/valid/polarity", 0)
                 awg_config = next(
                     (
                         awg_config
@@ -557,35 +514,29 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
                     None,
                 )
                 if awg_config is not None:
-                    nodes.append(
-                        (
-                            f"{awg_path}/zsync/register/shift",
-                            awg_config.register_selector_shift,
-                        )
+                    nc.add(
+                        f"{awg_path}/zsync/register/shift",
+                        awg_config.register_selector_shift,
                     )
-                    nodes.append(
-                        (
-                            f"{awg_path}/zsync/register/mask",
-                            awg_config.register_selector_bitmask,
-                        )
+                    nc.add(
+                        f"{awg_path}/zsync/register/mask",
+                        awg_config.register_selector_bitmask,
                     )
-                    nodes.append(
-                        (
-                            f"{awg_path}/zsync/register/offset",
-                            awg_config.command_table_match_offset,
-                        )
+                    nc.add(
+                        f"{awg_path}/zsync/register/offset",
+                        awg_config.command_table_match_offset,
                     )
         elif triggering_mode == TriggeringMode.DESKTOP_LEADER:
-            nodes.append(("triggers/in/0/level", DIG_TRIGGER_1_LEVEL))
+            nc.add("triggers/in/0/level", DIG_TRIGGER_1_LEVEL)
 
             for awg_index in (
                 self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
             ):
-                nodes.append((f"awgs/{awg_index}/auxtriggers/0/slope", 1))
-                nodes.append((f"awgs/{awg_index}/auxtriggers/0/channel", 0))
+                nc.add(f"awgs/{awg_index}/auxtriggers/0/slope", 1)
+                nc.add(f"awgs/{awg_index}/auxtriggers/0/channel", 0)
 
-            nodes.append(("dios/0/mode", 1))
-            nodes.append(("dios/0/drive", 15))
+            nc.add("dios/0/mode", 1)
+            nc.add("dios/0/drive", 15)
 
             # Loop over at least AWG instance to cover the case that the instrument is only used
             # as a communication proxy. Some of the nodes on the AWG branch are needed to get
@@ -593,34 +544,21 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
             for awg_index in (
                 self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
             ):
-                nodes.append((f"awgs/{awg_index}/dio/strobe/slope", 0))
-                nodes.append((f"awgs/{awg_index}/dio/valid/polarity", 2))
-                nodes.append((f"awgs/{awg_index}/dio/valid/index", 0))
-                nodes.append((f"awgs/{awg_index}/dio/mask/value", 0x3FF))
-                nodes.append((f"awgs/{awg_index}/dio/mask/shift", 1))
+                nc.add(f"awgs/{awg_index}/dio/strobe/slope", 0)
+                nc.add(f"awgs/{awg_index}/dio/valid/polarity", 2)
+                nc.add(f"awgs/{awg_index}/dio/valid/index", 0)
+                nc.add(f"awgs/{awg_index}/dio/mask/value", 0x3FF)
+                nc.add(f"awgs/{awg_index}/dio/mask/shift", 1)
 
-        return nodes
+        return nc
 
-    async def collect_reset_nodes(self) -> list[DaqNodeAction]:
-        reset_nodes = []
-        reset_nodes.extend(
-            [
-                # Reset pipeliner first, attempt to set AWG enable leads to FW error if pipeliner was enabled.
-                *await self.pipeliner_reset_nodes(),
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/awgs/*/enable",
-                    0,
-                    caching_strategy=CachingStrategy.NO_CACHE,
-                ),
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/system/synchronization/source",
-                    0,  # internal
-                    caching_strategy=CachingStrategy.NO_CACHE,
-                ),
-            ]
-        )
+    async def collect_reset_nodes(self) -> list[DaqNodeSetAction]:
+        nc = NodeCollector(base=f"/{self.serial}/")
+        # Reset pipeliner first, attempt to set AWG enable leads to FW error if pipeliner was enabled.
+        nc.extend(self.pipeliner_reset_nodes())
+        nc.add("awgs/*/enable", 0, cache=False)
+        nc.add("system/synchronization/source", 0, cache=False)  # internal
+        reset_nodes = await self.maybe_async(nc)
         # Reset errors must be the last operation, as above sets may cause errors.
         # See https://zhinst.atlassian.net/browse/HULK-1606
         reset_nodes.extend(await super().collect_reset_nodes())

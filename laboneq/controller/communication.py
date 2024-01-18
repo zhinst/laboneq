@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Dict, List
 import numpy as np
 import zhinst.core
 from zhinst.toolkit import Session as TKSession
+from laboneq.controller.devices.device_utils import calc_dev_type
 
 from laboneq.controller.devices.zi_emulator import ziDAQServerEmulator
 from laboneq.controller.devices.zi_node_monitor import NodeMonitor
@@ -78,6 +79,8 @@ class DaqNodeGetAction(DaqNodeAction):
 
 
 class ZiApiWrapperBase(ABC):
+    use_filenames_for_blobs: bool = True
+
     def __init__(self, name):
         self._name = name
         self._node_logger = logging.getLogger("node.log")
@@ -97,10 +100,27 @@ class ZiApiWrapperBase(ABC):
     def _log_set(self, method_name: str, daq_action):
         path = daq_action.path
 
-        value = daq_action.value if daq_action.filename is None else daq_action.filename
+        if self.use_filenames_for_blobs or isinstance(daq_action.value, bytes):
+            value = (
+                daq_action.value if daq_action.filename is None else daq_action.filename
+            )
+        else:
+            value = daq_action.value
 
         if isinstance(value, np.ndarray):
-            value = str(np.array2string(value, threshold=30))
+            array_repr = np.array2string(
+                value,
+                threshold=30,
+                max_line_width=1000,
+                floatmode="maxprec",
+                precision=3,
+                edgeitems=16,
+            )
+            if "..." in array_repr:
+                value = f"array({array_repr}, shape={value.shape})"
+            else:
+                value = array_repr
+
         elif isinstance(value, (list, tuple)):
             value = str(value)
         if isinstance(value, str):
@@ -129,7 +149,7 @@ class ZiApiWrapperBase(ABC):
     ) -> list[list[Any]]:
         return [[action.path, action.value] for action in daq_actions]
 
-    async def batch_set(self, daq_actions: list[DaqNodeAction]):
+    async def batch_set(self, daq_actions: list[DaqNodeSetAction]):
         """Set the list of nodes in one call to API
 
         Parameters:
@@ -138,9 +158,6 @@ class ZiApiWrapperBase(ABC):
         Returns:
             when all nodes are set
         """
-
-        if not isinstance(daq_actions, list):
-            raise LabOneQControllerException("List expected")
 
         node_list = [daq_action.path for daq_action in daq_actions]
         _logger.debug("Batch set node list: %s", node_list)
@@ -386,50 +403,22 @@ class DaqWrapperDryRun(DaqWrapper):
         assert server_qualifier.dry_run is True
         super().__init__(name, server_qualifier)
 
-    def map_device_type(self, device_qualifier: DeviceQualifier):
-        assert isinstance(self._zi_api_object, ziDAQServerEmulator)
 
-        def calc_dev_type(device_qualifier: DeviceQualifier) -> str:
-            if device_qualifier.options.is_qc is True:
-                return "SHFQC"
-            else:
-                return device_qualifier.driver
-
-        self._zi_api_object.map_device_type(
-            device_qualifier.options.serial, calc_dev_type(device_qualifier)
-        )
-        self._zi_api_object.set_option(
-            device_qualifier.options.serial,
-            "dev_type",
-            device_qualifier.options.dev_type,
-        )
-        if device_qualifier.options.expected_installed_options is not None:
-            exp_opts = (
-                device_qualifier.options.expected_installed_options.upper().split("/")
-            )
-            if len(exp_opts) > 0 and exp_opts[0] == "":
-                exp_opts.pop(0)
-            if len(exp_opts) > 0:
-                self._zi_api_object.set_option(
-                    device_qualifier.options.serial,
-                    "features/devtype",
-                    exp_opts.pop(0),
-                )
-                self._zi_api_object.set_option(
-                    device_qualifier.options.serial,
-                    "features/options",
-                    "\n".join(exp_opts),
-                )
-
-    def set_emulation_option(self, serial: str, option: str, value: Any):
-        assert isinstance(self._zi_api_object, ziDAQServerEmulator)
-        self._zi_api_object.set_option(serial, option, value)
+def map_device_type(daq: Any, device_qualifier: DeviceQualifier):
+    assert isinstance(daq, ziDAQServerEmulator)
+    daq.map_device_type(
+        device_qualifier.options.serial, calc_dev_type(device_qualifier)
+    )
 
 
-async def batch_set(all_actions: List[DaqNodeAction]):
-    split_actions: Dict[DaqWrapper, List[DaqNodeAction]] = {}
+async def batch_set(all_actions: List[DaqNodeSetAction]):
+    split_actions: Dict[DaqWrapper, List[DaqNodeSetAction]] = {}
     for daq_action in all_actions:
         daq_actions = split_actions.setdefault(daq_action.daq, [])
         daq_actions.append(daq_action)
     for daq, daq_actions in split_actions.items():
         await daq.batch_set(daq_actions)
+
+
+async def batch_set_multiple(results: list[list[DaqNodeSetAction]]):
+    await batch_set([value for values in results for value in values])

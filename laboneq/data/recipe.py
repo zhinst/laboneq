@@ -149,9 +149,9 @@ class AcquireLength:
 class RealtimeExecutionInit:
     device_id: str
     awg_id: int
-    seqc_ref: str
-    wave_indices_ref: str
-    kernel_indices_ref: str
+    seqc_ref: str | None
+    wave_indices_ref: str | None
+    kernel_indices_ref: str | None
     nt_step: NtStepKey
 
 

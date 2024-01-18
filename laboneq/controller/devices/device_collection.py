@@ -289,7 +289,7 @@ class DeviceCollection:
         all_actions: list[DaqNodeSetAction] = []
         for device_uid, outputs in outputs_per_device.items():
             device = self.find_by_uid(device_uid)
-            all_actions.extend(device.disable_outputs(outputs, invert))
+            all_actions.extend(await device.disable_outputs(outputs, invert))
         await batch_set(all_actions)
 
     def shut_down(self):
@@ -303,7 +303,7 @@ class DeviceCollection:
     async def on_experiment_end(self):
         all_actions: list[DaqNodeSetAction] = []
         for device in self._devices.values():
-            all_actions.extend(device.on_experiment_end())
+            all_actions.extend(await device.maybe_async(device.on_experiment_end()))
         await batch_set(all_actions)
 
     def start_monitor(self):

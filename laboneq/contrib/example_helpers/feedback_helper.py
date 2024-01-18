@@ -117,6 +117,9 @@ def create_discrimination_experiment(
     return exp()
 
 
+create_integration_verification_experiment = create_discrimination_experiment
+
+
 def gaussian_envelope(
     centre=50e-9, sigma=20e-9, start_time=0, stop_time=100e-9, sampling_rate=2e9
 ):

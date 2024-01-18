@@ -1651,39 +1651,45 @@ class CodeGenerator:
                         )
                         has_q = True
 
-                if "samples_marker1" in sampled_pulse:
-                    if (
-                        pulse_part.channel == 1
-                        and not multi_iq_signal
-                        and not device_type == DeviceType.SHFQA
-                    ):
-                        raise LabOneQException(
-                            f"Marker 1 not supported on channel 2 of multiplexed RF signal {signal_id}"
+                # RF case
+                if pulse_part.channel is not None:
+                    if "samples_marker1" in sampled_pulse and pulse_part.channel == 0:
+                        self.stencil_samples(
+                            pulse_part.start,
+                            sampled_pulse["samples_marker1"],
+                            samples_marker1,
                         )
+                        has_marker1 = True
 
-                    self.stencil_samples(
-                        pulse_part.start,
-                        sampled_pulse["samples_marker1"],
-                        samples_marker1,
-                    )
-                    has_marker1 = True
-
-                if "samples_marker2" in sampled_pulse:
-                    if (
-                        pulse_part.channel == 0
-                        and not multi_iq_signal
-                        and not device_type == DeviceType.SHFQA
-                    ):
-                        raise LabOneQException(
-                            f"Marker 2 not supported on channel 1 of multiplexed RF signal {signal_id}"
+                    # map user facing marker1 to "internal" marker 2
+                    if "samples_marker1" in sampled_pulse and pulse_part.channel == 1:
+                        self.stencil_samples(
+                            pulse_part.start,
+                            sampled_pulse["samples_marker1"],
+                            samples_marker2,
                         )
+                        has_marker2 = True
 
-                    self.stencil_samples(
-                        pulse_part.start,
-                        sampled_pulse["samples_marker2"],
-                        samples_marker2,
-                    )
-                    has_marker2 = True
+                    if "samples_marker2" in sampled_pulse and pulse_part.channel == 1:
+                        raise LabOneQException(
+                            f"Marker 2 not supported on channel 1 of multiplexed RF signal {signal_id}. Please use marker 1"
+                        )
+                else:
+                    if "samples_marker1" in sampled_pulse:
+                        self.stencil_samples(
+                            pulse_part.start,
+                            sampled_pulse["samples_marker1"],
+                            samples_marker1,
+                        )
+                        has_marker1 = True
+
+                    if "samples_marker2" in sampled_pulse:
+                        self.stencil_samples(
+                            pulse_part.start,
+                            sampled_pulse["samples_marker2"],
+                            samples_marker2,
+                        )
+                        has_marker2 = True
 
                 pm = signature_pulse_map.get(pulse_def.uid)
                 if pm is None:

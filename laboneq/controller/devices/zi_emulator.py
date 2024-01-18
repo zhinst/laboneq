@@ -1088,3 +1088,10 @@ class ziDAQServerEmulator:
                 _delay(remaining)
                 break
             _delay(delay_till_next_event)
+
+
+def set_emulation_option(api: Any, serial: str, option: str, value: Any):
+    if isinstance(api, ziDAQServerEmulator):
+        api.set_option(serial, option, value)
+    else:
+        raise AssertionError("Unexpected emulation implementation")

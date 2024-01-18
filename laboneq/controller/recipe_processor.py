@@ -329,15 +329,6 @@ class _LoopsPreprocessor(ExecutorBase):
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
     ):
-        if averaging_mode != AveragingMode.SINGLE_SHOT:
-            max_hw_averages = (
-                pow(2, 15) if acquisition_type == AcquisitionType.RAW else pow(2, 17)
-            )
-            if count > max_hw_averages:
-                raise LabOneQControllerException(
-                    f"Maximum number of hardware averages is {max_hw_averages}, but {count} was given"
-                )
-
         self._current_rt_uid = uid
         self._current_rt_info = self.rt_execution_infos.setdefault(
             uid,

@@ -13,13 +13,11 @@ from laboneq.controller.attribute_value_tracker import (
     DeviceAttributesView,
 )
 from laboneq.controller.communication import (
-    CachingStrategy,
-    DaqNodeAction,
-    DaqNodeGetAction,
     DaqNodeSetAction,
 )
 from laboneq.controller.devices.device_zi import (
     DeviceZI,
+    NodeCollector,
     delay_to_rounded_samples,
     IntegrationWeights,
     IntegrationWeightItem,
@@ -53,6 +51,9 @@ DELAY_NODE_MAX_SAMPLES = 1020
 REFERENCE_CLOCK_SOURCE_INTERNAL = 0
 REFERENCE_CLOCK_SOURCE_EXTERNAL = 1
 
+MAX_AVERAGES_RESULT_LOGGER = 1 << 17
+MAX_AVERAGES_SCOPE = 1 << 15
+
 
 class DeviceUHFQA(DeviceZI):
     def __init__(self, *args, **kwargs):
@@ -75,20 +76,14 @@ class DeviceUHFQA(DeviceZI):
             return None
         return previously_allocated
 
-    def disable_outputs(
+    async def disable_outputs(
         self, outputs: set[int], invert: bool
     ) -> list[DaqNodeSetAction]:
-        channels_to_disable: list[DaqNodeSetAction] = [
-            DaqNodeSetAction(
-                self._daq,
-                f"/{self.serial}/sigouts/{ch}/on",
-                0,
-                caching_strategy=CachingStrategy.NO_CACHE,
-            )
-            for ch in range(self._channels)
-            if (ch in outputs) != invert
-        ]
-        return channels_to_disable
+        nc = NodeCollector(base=f"/{self.serial}/")
+        for ch in range(self._channels):
+            if (ch in outputs) != invert:
+                nc.add(f"sigouts/{ch}/on", 0, cache=False)
+        return await self.maybe_async(nc)
 
     def _nodes_to_monitor_impl(self) -> list[str]:
         nodes = super()._nodes_to_monitor_impl()
@@ -139,7 +134,7 @@ class DeviceUHFQA(DeviceZI):
             Response(f"/{self.serial}/system/preset/busy", 0),
         ]
 
-    def configure_acquisition(
+    async def configure_acquisition(
         self,
         awg_key: AwgKey,
         awg_config: AwgConfig,
@@ -147,23 +142,26 @@ class DeviceUHFQA(DeviceZI):
         averages: int,
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
-    ) -> list[DaqNodeAction]:
-        nodes = [
-            *self._configure_result_logger(
+    ) -> list[DaqNodeSetAction]:
+        nc = NodeCollector()
+        nc.extend(
+            self._configure_result_logger(
                 awg_key,
                 awg_config,
                 integrator_allocations,
                 averages,
                 averaging_mode,
                 acquisition_type,
-            ),
-            *self._configure_input_monitor(
+            )
+        )
+        nc.extend(
+            self._configure_input_monitor(
                 enable=acquisition_type == AcquisitionType.RAW,
                 averages=averages,
                 acquire_length=awg_config.raw_acquire_length,
-            ),
-        ]
-        return nodes
+            )
+        )
+        return await self.maybe_async(nc)
 
     def _configure_result_logger(
         self,
@@ -173,103 +171,67 @@ class DeviceUHFQA(DeviceZI):
         averages: int,
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
-    ):
-        nodes_to_initialize_result_acquisition = []
-
+    ) -> NodeCollector:
+        nc = NodeCollector(base=f"/{self.serial}/")
         enable = acquisition_type != AcquisitionType.RAW
         if enable:
-            nodes_to_initialize_result_acquisition.extend(
-                [
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/qas/0/result/length",
-                        awg_config.result_length,
-                    ),
-                    DaqNodeSetAction(
-                        self._daq, f"/{self.serial}/qas/0/result/averages", averages
-                    ),
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/qas/0/result/mode",
-                        0 if averaging_mode == AveragingMode.CYCLIC else 1,
-                    ),
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/qas/0/result/source",
-                        # 1 == result source 'threshold'
-                        # 2 == result source 'rotation'
-                        1 if acquisition_type == AcquisitionType.DISCRIMINATION else 2,
-                    ),
-                    DaqNodeSetAction(
-                        self._daq, f"/{self.serial}/qas/0/result/enable", 0
-                    ),
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/qas/0/result/reset",
-                        1,
-                        caching_strategy=CachingStrategy.NO_CACHE,
-                    ),
-                ]
+            if averaging_mode != AveragingMode.SINGLE_SHOT:
+                if averages > MAX_AVERAGES_RESULT_LOGGER:
+                    raise LabOneQControllerException(
+                        f"Number of averages {averages} exceeds the allowed maximum {MAX_AVERAGES_RESULT_LOGGER}"
+                    )
+                if averages & (averages - 1):
+                    raise LabOneQControllerException(
+                        f"Number of averages {averages} must be a power of 2"
+                    )
+            nc.add("qas/0/result/length", awg_config.result_length)
+            nc.add("qas/0/result/averages", averages)
+            nc.add(
+                "qas/0/result/mode", 0 if averaging_mode == AveragingMode.CYCLIC else 1
             )
-
+            nc.add(
+                "qas/0/result/source",
+                # 1 == result source 'threshold'
+                # 2 == result source 'rotation'
+                1 if acquisition_type == AcquisitionType.DISCRIMINATION else 2,
+            )
+            nc.add("qas/0/result/enable", 0)
+            nc.add("qas/0/result/reset", 1, cache=False)
         _logger.debug("Turning %s result logger...", "on" if enable else "off")
-        nodes_to_initialize_result_acquisition.append(
-            DaqNodeSetAction(
-                self._daq, f"/{self.serial}/qas/0/result/enable", 1 if enable else 0
-            )
-        )
-
-        return nodes_to_initialize_result_acquisition
+        nc.add("qas/0/result/enable", 1 if enable else 0)
+        return nc
 
     def _configure_input_monitor(
         self, enable: bool, averages: int, acquire_length: int
-    ):
-        nodes_to_initialize_input_monitor = []
-
+    ) -> NodeCollector:
+        nc = NodeCollector(base=f"/{self.serial}/")
         if enable:
-            nodes_to_initialize_input_monitor.extend(
-                [
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/qas/0/monitor/length",
-                        acquire_length,
-                    ),
-                    DaqNodeSetAction(
-                        self._daq, f"/{self.serial}/qas/0/monitor/averages", averages
-                    ),
-                    DaqNodeSetAction(
-                        self._daq, f"/{self.serial}/qas/0/monitor/enable", 0
-                    ),
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/qas/0/monitor/reset",
-                        1,
-                        caching_strategy=CachingStrategy.NO_CACHE,
-                    ),
-                ]
-            )
+            if averages > MAX_AVERAGES_SCOPE:
+                raise LabOneQControllerException(
+                    f"Number of averages {averages} exceeds the allowed maximum {MAX_AVERAGES_SCOPE}"
+                )
+            nc.add("qas/0/monitor/length", acquire_length)
+            nc.add("qas/0/monitor/averages", averages)
+            nc.add("qas/0/monitor/enable", 0)
+            nc.add("qas/0/monitor/reset", 1, cache=False)
+        nc.add("qas/0/monitor/enable", 1 if enable else 0)
+        return nc
 
-        nodes_to_initialize_input_monitor.append(
-            DaqNodeSetAction(
-                self._daq, f"/{self.serial}/qas/0/monitor/enable", 1 if enable else 0
-            )
-        )
-
-        return nodes_to_initialize_input_monitor
-
-    def conditions_for_execution_ready(self, with_pipeliner: bool) -> dict[str, Any]:
+    async def conditions_for_execution_ready(
+        self, with_pipeliner: bool
+    ) -> dict[str, Any]:
         conditions: dict[str, Any] = {}
         for awg_index in self._allocated_awgs:
             conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = 1
-        return conditions
+        return await self.maybe_async_wait(conditions)
 
-    def conditions_for_execution_done(
+    async def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
     ) -> dict[str, Any]:
         conditions: dict[str, Any] = {}
         for awg_index in self._allocated_awgs:
             conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = 0
-        return conditions
+        return await self.maybe_async_wait(conditions)
 
     def _validate_range(self, io: IO, is_out: bool):
         if io.range is None:
@@ -320,7 +282,7 @@ class DeviceUHFQA(DeviceZI):
     ) -> list[DaqNodeSetAction]:
         _logger.debug("%s: Initializing device...", self.dev_repr)
 
-        nodes_to_initialize_output: list[DaqNodeSetAction] = []
+        nc = NodeCollector(base=f"/{self.serial}/")
 
         outputs = initialization.outputs or []
         for output in outputs:
@@ -331,65 +293,33 @@ class DeviceUHFQA(DeviceZI):
             awg_idx = output.channel // 2
             self._allocated_awgs.add(awg_idx)
 
-            nodes_to_initialize_output.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/sigouts/{output.channel}/on",
-                    1 if output.enable else 0,
-                )
-            )
+            nc.add(f"sigouts/{output.channel}/on", 1 if output.enable else 0)
             if output.enable:
-                nodes_to_initialize_output.append(
-                    DaqNodeSetAction(
-                        self._daq, f"/{self.serial}/sigouts/{output.channel}/imp50", 1
-                    )
-                )
-            nodes_to_initialize_output.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/sigouts/{output.channel}/offset",
-                    output.offset,
-                )
-            )
+                nc.add(f"sigouts/{output.channel}/imp50", 1)
+            nc.add(f"sigouts/{output.channel}/offset", output.offset)
 
-            nodes_to_initialize_output.append(
-                DaqNodeSetAction(self._daq, f"/{self.serial}/awgs/{awg_idx}/single", 1)
-            )
+            nc.add(f"awgs/{awg_idx}/single", 1)
 
             # the following is needed so that in spectroscopy mode, pulse lengths are correct
             # TODO(2K): Why 2 enables per sigout, but only one is used?
-            nodes_to_initialize_output.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/sigouts/{output.channel}/enables/{output.channel}",
-                    1,
-                )
-            )
+            nc.add(f"sigouts/{output.channel}/enables/{output.channel}", 1)
 
-            nodes_to_initialize_output.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/awgs/{awg_idx}/outputs/{output.channel}/mode",
-                    1 if output.modulation else 0,
-                )
+            nc.add(
+                f"awgs/{awg_idx}/outputs/{output.channel}/mode",
+                1 if output.modulation else 0,
             )
 
             if output.range is not None:
                 self._validate_range(output, is_out=True)
-                nodes_to_initialize_output.append(
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/sigouts/{output.channel}/range",
-                        output.range,
-                    )
-                )
+                nc.add(f"sigouts/{output.channel}/range", output.range)
 
-        return nodes_to_initialize_output
+        return await self.maybe_async(nc)
 
     def collect_prepare_nt_step_nodes(
         self, attributes: DeviceAttributesView, recipe_data: RecipeData
-    ) -> list[DaqNodeAction]:
-        nodes_to_set = super().collect_prepare_nt_step_nodes(attributes, recipe_data)
+    ) -> NodeCollector:
+        nc = NodeCollector(base=f"/{self.serial}/")
+        nc.extend(super().collect_prepare_nt_step_nodes(attributes, recipe_data))
 
         for ch in range(self._channels):
             [scheduler_port_delay, port_delay], updated = attributes.resolve(
@@ -411,15 +341,19 @@ class DeviceUHFQA(DeviceZI):
                 max_node_delay_samples=DELAY_NODE_MAX_SAMPLES,
             )
 
-            nodes_to_set.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/qas/0/delay",
-                    measurement_delay_rounded,
-                )
-            )
+            nc.add("qas/0/delay", measurement_delay_rounded)
 
-        return nodes_to_set
+        return nc
+
+    def _choose_wf_collector(
+        self, elf_nodes: NodeCollector, wf_nodes: NodeCollector
+    ) -> NodeCollector:
+        return wf_nodes
+
+    def _elf_upload_condition(self, awg_index: int) -> dict[str, Any]:
+        # UHFQA does not yet support upload of ELF and waveforms in a single transaction.
+        ready_node = self.get_sequencer_paths(awg_index).ready
+        return {ready_node: 1}
 
     def _adjust_frequency(self, freq):
         # To make the phase correct on the UHFQA (q leading i channel by 90 degrees)
@@ -431,14 +365,12 @@ class DeviceUHFQA(DeviceZI):
         acquisition_type: AcquisitionType,
         device_uid: str,
         recipe_data: RecipeData,
-    ):
+    ) -> NodeCollector:
         _logger.debug("%s: Setting measurement mode to 'Standard'.", self.dev_repr)
 
-        nodes_to_set_for_standard_mode = []
+        nc = NodeCollector(base=f"/{self.serial}/")
 
-        nodes_to_set_for_standard_mode.append(
-            DaqNodeSetAction(self._daq, f"/{self.serial}/qas/0/integration/mode", 0)
-        )
+        nc.add("qas/0/integration/mode", 0)
         for integrator_allocation in recipe_data.recipe.integrator_allocations:
             if integrator_allocation.device_id != device_uid:
                 continue
@@ -472,60 +404,35 @@ class DeviceUHFQA(DeviceZI):
             for integrator, integration_unit_index in enumerate(
                 integrator_allocation.channels
             ):
-                nodes_to_set_for_standard_mode.extend(
-                    [
-                        DaqNodeSetAction(
-                            self._daq,
-                            f"/{self.serial}/qas/0/integration/sources/{integration_unit_index}",
-                            inputs_mapping[integrator],
-                        ),
-                        DaqNodeSetAction(
-                            self._daq,
-                            f"/{self.serial}/qas/0/rotations/{integration_unit_index}",
-                            rotations[integrator],
-                        ),
-                    ]
+                nc.add(
+                    f"qas/0/integration/sources/{integration_unit_index}",
+                    inputs_mapping[integrator],
+                )
+                nc.add(
+                    f"qas/0/rotations/{integration_unit_index}", rotations[integrator]
                 )
                 if acquisition_type in [
                     AcquisitionType.INTEGRATION,
                     AcquisitionType.DISCRIMINATION,
                 ]:
-                    nodes_to_set_for_standard_mode.extend(
-                        [
-                            DaqNodeSetAction(
-                                self._daq,
-                                f"/{self.serial}/qas/0/thresholds/"
-                                f"{integration_unit_index}/correlation/enable",
-                                0,
-                            ),
-                            DaqNodeSetAction(
-                                self._daq,
-                                f"/{self.serial}/qas/0/thresholds/{integration_unit_index}/level",
-                                integrator_allocation.thresholds[0] or 0.0,
-                            ),
-                        ]
+                    nc.add(
+                        f"qas/0/thresholds/{integration_unit_index}/correlation/enable",
+                        0,
+                    )
+                    nc.add(
+                        f"qas/0/thresholds/{integration_unit_index}/level",
+                        integrator_allocation.thresholds[0] or 0.0,
                     )
 
-        return nodes_to_set_for_standard_mode
+        return nc
 
-    def _configure_spectroscopy_mode_nodes(self):
+    def _configure_spectroscopy_mode_nodes(self) -> NodeCollector:
         _logger.debug("%s: Setting measurement mode to 'Spectroscopy'.", self.dev_repr)
 
-        nodes_to_set_for_spectroscopy_mode = []
-        nodes_to_set_for_spectroscopy_mode.append(
-            DaqNodeSetAction(self._daq, f"/{self.serial}/qas/0/integration/mode", 1)
-        )
-
-        nodes_to_set_for_spectroscopy_mode.append(
-            DaqNodeSetAction(
-                self._daq, f"/{self.serial}/qas/0/integration/sources/0", 1
-            )
-        )
-        nodes_to_set_for_spectroscopy_mode.append(
-            DaqNodeSetAction(
-                self._daq, f"/{self.serial}/qas/0/integration/sources/1", 0
-            )
-        )
+        nc = NodeCollector(base=f"/{self.serial}/")
+        nc.add("qas/0/integration/mode", 1)
+        nc.add("qas/0/integration/sources/0", 1)
+        nc.add("qas/0/integration/sources/1", 0)
 
         # The rotation coefficients in spectroscopy mode have to take into account that I and Q are
         # swapped between in- and outputs, i.e. the AWG outputs are I = AWG_wave_I * cos,
@@ -533,19 +440,15 @@ class DeviceUHFQA(DeviceZI):
         # see "Complex multiplication in UHFQA":
         # https://zhinst.atlassian.net/wiki/spaces/~andreac/pages/787742991/Complex+multiplication+in+UHFQA
         # https://oldwiki.zhinst.com/wiki/display/~andreac/Complex+multiplication+in+UHFQA)
-        nodes_to_set_for_spectroscopy_mode.append(
-            DaqNodeSetAction(self._daq, f"/{self.serial}/qas/0/rotations/0", 1 - 1j)
-        )
-        nodes_to_set_for_spectroscopy_mode.append(
-            DaqNodeSetAction(self._daq, f"/{self.serial}/qas/0/rotations/1", -1 - 1j)
-        )
-        return nodes_to_set_for_spectroscopy_mode
+        nc.add("qas/0/rotations/0", 1 - 1j)
+        nc.add("qas/0/rotations/1", -1 - 1j)
+        return nc
 
     def prepare_integration_weights(
         self,
         artifacts: CompilerArtifact | dict[int, CompilerArtifact],
         integrator_allocations: list[IntegratorAllocation],
-        kernel_ref: str,
+        kernel_ref: str | None,
     ) -> IntegrationWeights | None:
         if isinstance(artifacts, dict):
             artifacts: ArtifactsCodegen = artifacts[self._device_class]
@@ -575,6 +478,7 @@ class DeviceUHFQA(DeviceZI):
                             integration_unit=channel,
                             index=index,
                             name=weight_name,
+                            # Note conjugation here:
                             samples=weight_vector_real - 1j * weight_vector_imag,
                         )
                     )
@@ -583,44 +487,40 @@ class DeviceUHFQA(DeviceZI):
 
     def prepare_upload_all_integration_weights(
         self, awg_index, integration_weights: IntegrationWeights
-    ):
-        ret_nodes: list[DaqNodeSetAction] = []
+    ) -> NodeCollector:
+        nc = NodeCollector(base=f"/{self.serial}/")
         for iw in integration_weights:
-            ret_nodes.extend(
-                [
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/qas/0/integration/weights/"
-                        f"{iw.integration_unit}/real",
-                        iw.samples.real,
-                        filename=iw.name + "_i.wave",
-                    ),
-                    DaqNodeSetAction(
-                        self._daq,
-                        f"/{self.serial}/qas/0/integration/weights/"
-                        f"{iw.integration_unit}/imag",
-                        iw.samples.imag,
-                        filename=iw.name + "_q.wave",
-                    ),
-                ]
+            nc.add(
+                f"qas/0/integration/weights/{iw.integration_unit}/real",
+                iw.samples.real,
+                filename=iw.name + "_i.wave",
             )
-        return ret_nodes
+            nc.add(
+                f"qas/0/integration/weights/{iw.integration_unit}/imag",
+                iw.samples.imag,
+                filename=iw.name + "_q.wave",
+            )
+        return nc
 
-    def collect_awg_before_upload_nodes(
+    async def collect_awg_before_upload_nodes(
         self, initialization: Initialization, recipe_data: RecipeData
-    ):
+    ) -> list[DaqNodeSetAction]:
         acquisition_type = RtExecutionInfo.get_acquisition_type(
             recipe_data.rt_execution_infos
         )
         if acquisition_type == AcquisitionType.SPECTROSCOPY_IQ:
-            return self._configure_spectroscopy_mode_nodes()
+            nc = self._configure_spectroscopy_mode_nodes()
         else:
-            return self._configure_standard_mode_nodes(
+            nc = self._configure_standard_mode_nodes(
                 acquisition_type, initialization.device_uid, recipe_data
             )
 
-    def collect_awg_after_upload_nodes(self, initialization: Initialization):
-        nodes_to_initialize_measurement = []
+        return await self.maybe_async(nc)
+
+    async def collect_awg_after_upload_nodes(
+        self, initialization: Initialization
+    ) -> list[DaqNodeSetAction]:
+        nc = NodeCollector(base=f"/{self.serial}/")
         inputs = initialization.inputs
         if len(initialization.measurements) > 0:
             measurement = initialization.measurements[0]
@@ -630,47 +530,22 @@ class DeviceUHFQA(DeviceZI):
                 self.dev_repr,
                 measurement.length,
             )
-            nodes_to_initialize_measurement.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/qas/0/integration/length",
-                    measurement.length,
-                )
-            )
+            nc.add("qas/0/integration/length", measurement.length)
 
-            nodes_to_initialize_measurement.append(
-                DaqNodeSetAction(
-                    self._daq, f"/{self.serial}/qas/0/integration/trigger/channel", 7
-                )
-            )
+            nc.add("qas/0/integration/trigger/channel", 7)
 
         for dev_input in inputs or []:
             if dev_input.range is None:
                 continue
             self._validate_range(dev_input, is_out=False)
-            nodes_to_initialize_measurement.append(
-                DaqNodeSetAction(
-                    self._daq,
-                    f"/{self.serial}/sigins/{dev_input.channel}/range",
-                    dev_input.range,
-                )
-            )
+            nc.add(f"sigins/{dev_input.channel}/range", dev_input.range)
 
-        return nodes_to_initialize_measurement
+        return await self.maybe_async(nc)
 
     async def collect_trigger_configuration_nodes(
         self, initialization: Initialization, recipe_data: RecipeData
-    ) -> list[DaqNodeAction]:
-        _logger.debug("Configuring triggers...")
-        _logger.debug("Configuring strobe index: 16.")
-        _logger.debug("Configuring strobe slope: 0.")
-        _logger.debug("Configuring valid polarity: 2.")
-        _logger.debug("Configuring valid index: 16.")
-        _logger.debug("Configuring dios mode: 2.")
-        _logger.debug("Configuring dios drive: 0x3.")
-        _logger.debug("Configuring dios extclk: 0x2.")
-
-        nodes_to_configure_triggers = []
+    ) -> list[DaqNodeSetAction]:
+        nc = NodeCollector(base=f"/{self.serial}/")
 
         # Loop over at least AWG instance to cover the case that the instrument is only used as a
         # communication proxy. Some of the nodes on the AWG branch are needed to get proper
@@ -678,55 +553,29 @@ class DeviceUHFQA(DeviceZI):
         for awg_index in (
             self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
         ):
-            awg_path = f"/{self.serial}/awgs/{awg_index}"
-            nodes_to_configure_triggers.extend(
-                [
-                    DaqNodeSetAction(self._daq, f"{awg_path}/dio/strobe/index", 16),
-                    DaqNodeSetAction(self._daq, f"{awg_path}/dio/strobe/slope", 0),
-                    DaqNodeSetAction(self._daq, f"{awg_path}/dio/valid/polarity", 2),
-                    DaqNodeSetAction(self._daq, f"{awg_path}/dio/valid/index", 16),
-                ]
-            )
+            nc.add(f"awgs/{awg_index}/dio/strobe/index", 16)
+            nc.add(f"awgs/{awg_index}/dio/strobe/slope", 0)
+            nc.add(f"awgs/{awg_index}/dio/valid/polarity", 2)
+            nc.add(f"awgs/{awg_index}/dio/valid/index", 16)
 
         triggering_mode = initialization.config.triggering_mode
 
         if triggering_mode == TriggeringMode.DIO_FOLLOWER or triggering_mode is None:
-            nodes_to_configure_triggers.extend(
-                [
-                    DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/mode", 4),
-                    DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/drive", 0x3),
-                    DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/extclk", 0x2),
-                ]
-            )
+            nc.add("dios/0/mode", 4)
+            nc.add("dios/0/drive", 0x3)
+            nc.add("dios/0/extclk", 0x2)
         elif triggering_mode == TriggeringMode.DESKTOP_DIO_FOLLOWER:
-            nodes_to_configure_triggers.extend(
-                [
-                    DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/mode", 0),
-                    DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/drive", 0),
-                    DaqNodeSetAction(self._daq, f"/{self.serial}/dios/0/extclk", 0x2),
-                    DaqNodeSetAction(
-                        self._daq, f"/{self.serial}/awgs/0/auxtriggers/0/channel", 0
-                    ),
-                ]
-            )
-            nodes_to_configure_triggers.append(
-                DaqNodeSetAction(
-                    self._daq, f"/{self.serial}/awgs/0/auxtriggers/0/slope", 1
-                )
-            )
+            nc.add("dios/0/mode", 0)
+            nc.add("dios/0/drive", 0)
+            nc.add("dios/0/extclk", 0x2)
+            nc.add("awgs/0/auxtriggers/0/channel", 0)
+            nc.add("awgs/0/auxtriggers/0/slope", 1)
         for trigger_index in (0, 1):
-            trigger_path = f"/{self.serial}/triggers/out/{trigger_index}"
-            nodes_to_configure_triggers.extend(
-                [
-                    DaqNodeSetAction(self._daq, f"{trigger_path}/delay", 0.0),
-                    DaqNodeSetAction(self._daq, f"{trigger_path}/drive", 1),
-                    DaqNodeSetAction(
-                        self._daq, f"{trigger_path}/source", 32 + trigger_index
-                    ),
-                ]
-            )
+            nc.add(f"triggers/out/{trigger_index}/delay", 0.0)
+            nc.add(f"triggers/out/{trigger_index}/drive", 1)
+            nc.add(f"triggers/out/{trigger_index}/source", 32 + trigger_index)
 
-        return nodes_to_configure_triggers
+        return await self.maybe_async(nc)
 
     async def _get_integrator_measurement_data(
         self, result_index, num_results, averages_divider: int
@@ -734,7 +583,7 @@ class DeviceUHFQA(DeviceZI):
         result_path = f"/{self.serial}/qas/0/result/data/{result_index}/wave"
         # @TODO(andreyk): replace the raw daq reply parsing on site here and hide it inside
         # Communication class
-        data_node_query = self._daq.get_raw(result_path)
+        data_node_query = await self.get_raw(result_path)
         assert len(data_node_query[result_path][0]["vector"]) == num_results, (
             "number of measurement points returned by daq from device "
             "'{self.uid}' does not match length of recipe"
@@ -770,7 +619,7 @@ class DeviceUHFQA(DeviceZI):
     async def get_input_monitor_data(self, channel: int, num_results: int):
         result_path_ch0 = f"/{self.serial}/qas/0/monitor/inputs/0/wave".lower()
         result_path_ch1 = f"/{self.serial}/qas/0/monitor/inputs/1/wave".lower()
-        data = self._daq.get_raw(",".join([result_path_ch0, result_path_ch1]))
+        data = await self.get_raw(",".join([result_path_ch0, result_path_ch1]))
         # Truncate returned vectors to the expected length -> hotfix for GCE-681
         ch0 = data[result_path_ch0][0]["vector"][0:num_results]
         ch1 = data[result_path_ch1][0]["vector"][0:num_results]
@@ -780,15 +629,7 @@ class DeviceUHFQA(DeviceZI):
         self, channel, acquisition_type: AcquisitionType, result_length, hw_averages
     ):
         results_acquired_path = f"/{self.serial}/qas/0/result/acquired"
-        batch_get_results = await self._daq.batch_get(
-            [
-                DaqNodeGetAction(
-                    self._daq,
-                    results_acquired_path,
-                    caching_strategy=CachingStrategy.NO_CACHE,
-                )
-            ]
-        )
+        batch_get_results = await self.get_raw_values(results_acquired_path)
         if batch_get_results[results_acquired_path] != 0:
             raise LabOneQControllerException(
                 f"The number of measurements executed for device {self.serial} does not match "
