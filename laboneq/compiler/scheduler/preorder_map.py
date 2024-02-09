@@ -1,29 +1,51 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Dict
+from __future__ import annotations
 
 import intervaltree
 
 from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
+from laboneq.compiler.scheduler.loop_iteration_schedule import LoopIterationSchedule
 from laboneq.compiler.scheduler.loop_schedule import LoopSchedule
 from laboneq.compiler.scheduler.section_schedule import SectionSchedule
 
 
 def calculate_preorder_map(
-    schedule: IntervalSchedule, preorder_map: Dict, current_depth=0
+    schedule: IntervalSchedule,
+    preorder_map: dict[str, int],
+    section_children: dict[str, set[str]],
+    current_depth=0,
 ) -> int:
-    max_depth = current_depth
-    intervals = intervaltree.IntervalTree()
     if not isinstance(schedule, SectionSchedule):
         return current_depth
+    max_depth = current_depth
+    intervals = intervaltree.IntervalTree()
     if isinstance(schedule, LoopSchedule):
-        # In the PSV, we do not consider the loop and the loop iteration separately
-        schedule = schedule.children[0]
+        # Normally we only need to look at the first loop iteration to find all the
+        # sections. When there are statically resolved branches however, not every
+        # iteration may contain all the subsections.
+        for child in schedule.children:
+            assert isinstance(child, LoopIterationSchedule)
+            # In the PSV, we do not consider the loop and the loop iteration separately, so
+            # we immediately pass to the children without incrementing the depth.
+            max_depth = max(
+                max_depth,
+                calculate_preorder_map(
+                    child, preorder_map, section_children, current_depth
+                ),
+            )
+            if section_children[schedule.section].issubset(preorder_map.keys()):
+                break
+        else:
+            # When we sweep a parameter in near-time (or the pipeliner), a section can
+            # legitimately be absent from the schedule we just generated. This is not
+            # an error.
+            pass
+        return max_depth
 
     if isinstance(schedule, SectionSchedule):
         # Draw the section on this row
-        assert schedule.section not in preorder_map
         preorder_map[schedule.section] = current_depth
         current_depth += 1
 
@@ -37,13 +59,18 @@ def calculate_preorder_map(
             if not intervals.overlap(c_start, c_end):
                 # Place child in this row
                 max_depth = max(
-                    max_depth, calculate_preorder_map(c, preorder_map, current_depth)
+                    max_depth,
+                    calculate_preorder_map(
+                        c, preorder_map, section_children, current_depth
+                    ),
                 )
             else:
                 # Place child in next free row
                 max_depth = max(
                     max_depth,
-                    calculate_preorder_map(c, preorder_map, max_depth + 1),
+                    calculate_preorder_map(
+                        c, preorder_map, section_children, max_depth + 1
+                    ),
                 )
             if c_start != c_end:
                 intervals.addi(c_start, c_end, data=c.section)

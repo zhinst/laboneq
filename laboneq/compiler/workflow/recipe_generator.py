@@ -23,7 +23,7 @@ from laboneq.compiler.workflow.compiler_output import (
 )
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums.acquisition_type import is_spectroscopy
-from laboneq.data.calibration import PortMode
+from laboneq.data.calibration import PortMode, CancellationSource
 from laboneq.data.compilation_job import DeviceInfo, DeviceInfoType, ParameterInfo
 from laboneq.data.recipe import (
     AWG,
@@ -169,17 +169,25 @@ class RecipeGenerator:
                     amplifier_pump = experiment_dao.amplifier_pump(signal)
                     if amplifier_pump is None:
                         continue
-                    amplifier_pump_dict: dict[str, str | float | bool | int] = {
-                        "cancellation": amplifier_pump.cancellation,
-                        "alc_engaged": amplifier_pump.alc_engaged,
-                        "use_probe": amplifier_pump.use_probe,
+                    amplifier_pump_dict: dict[
+                        str, str | float | bool | int | CancellationSource | None
+                    ] = {
+                        "pump_on": amplifier_pump.pump_on,
+                        "cancellation_on": amplifier_pump.cancellation_on,
+                        "cancellation_source": amplifier_pump.cancellation_source,
+                        "cancellation_source_frequency": amplifier_pump.cancellation_source_frequency,
+                        "alc_on": amplifier_pump.alc_on,
+                        "pump_filter_on": amplifier_pump.pump_filter_on,
+                        "probe_on": amplifier_pump.probe_on,
                         "channel": amplifier_pump.channel,
                     }
                     for field in [
-                        "pump_freq",
+                        "pump_frequency",
                         "pump_power",
                         "probe_frequency",
                         "probe_power",
+                        "cancellation_phase",
+                        "cancellation_attenuation",
                     ]:
                         val = getattr(amplifier_pump, field)
                         if val is None:

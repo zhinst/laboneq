@@ -17,6 +17,7 @@ from laboneq.controller.attribute_value_tracker import (
     DeviceAttribute,
 )
 from laboneq.controller.util import LabOneQControllerException
+from laboneq.controller.versioning import SetupCaps
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.data.recipe import IO, Initialization, Recipe, SignalType
@@ -84,8 +85,9 @@ class RtExecutionInfo:
     averages: int
     averaging_mode: AveragingMode
     acquisition_type: AcquisitionType
-    pipeliner_chunk_count: int
+    pipeliner_job_count: int | None
     pipeliner_repetitions: int
+    result_logger_pipelined: bool
 
     # signal id -> set of section ids
     acquire_sections: dict[str, set[str]] = field(default_factory=dict)
@@ -93,6 +95,14 @@ class RtExecutionInfo:
     # signal -> flat list of result handles
     # TODO(2K): to be replaced by event-based calculation in the compiler
     signal_result_map: dict[str, list[str]] = field(default_factory=dict)
+
+    @property
+    def with_pipeliner(self) -> bool:
+        return self.pipeliner_job_count is not None
+
+    @property
+    def pipeliner_jobs(self) -> int:
+        return self.pipeliner_job_count or 1
 
     def add_acquire_section(self, signal_id: str, section_id: str):
         self.acquire_sections.setdefault(signal_id, set()).add(section_id)
@@ -238,17 +248,19 @@ class _LoopStackEntry:
 
 
 class _LoopsPreprocessor(ExecutorBase):
-    def __init__(self):
+    def __init__(self, setup_caps: SetupCaps):
         super().__init__(looping_mode=LoopingMode.ONCE)
+
+        self._setup_caps = setup_caps
 
         self.result_shapes: HandleResultShapes = {}
         self.rt_execution_infos: RtExecutionInfos = {}
-        self.pipeliner_chunk_count: int = None
-        self.pipeliner_repetitions: int = None
+        self.pipeliner_job_count: int | None = None
+        self.pipeliner_repetitions: int | None = None
 
         self._loop_stack: list[_LoopStackEntry] = []
-        self._current_rt_uid: str = None
-        self._current_rt_info: RtExecutionInfo = None
+        self._current_rt_uid: str | None = None
+        self._current_rt_info: RtExecutionInfo | None = None
 
     def _single_shot_axis(self) -> npt.ArrayLike:
         return np.linspace(
@@ -297,7 +309,7 @@ class _LoopsPreprocessor(ExecutorBase):
 
     def for_loop_entry_handler(self, count: int, index: int, loop_flags: LoopFlags):
         if loop_flags.is_pipeline:
-            self.pipeliner_chunk_count = count
+            self.pipeliner_job_count = count
             self.pipeliner_repetitions = math.prod(
                 len(l.axis_points) for l in self._loop_stack
             )
@@ -316,7 +328,7 @@ class _LoopsPreprocessor(ExecutorBase):
 
     def for_loop_exit_handler(self, count: int, index: int, loop_flags: LoopFlags):
         if loop_flags.is_pipeline:
-            self.pipeliner_chunk_count = None
+            self.pipeliner_job_count = None
             self.pipeliner_repetitions = None
             return
 
@@ -336,8 +348,9 @@ class _LoopsPreprocessor(ExecutorBase):
                 averages=count,
                 averaging_mode=averaging_mode,
                 acquisition_type=acquisition_type,
-                pipeliner_chunk_count=self.pipeliner_chunk_count,
+                pipeliner_job_count=self.pipeliner_job_count,
                 pipeliner_repetitions=self.pipeliner_repetitions,
+                result_logger_pipelined=self._setup_caps.result_logger_pipelined,
             ),
         )
 
@@ -434,6 +447,11 @@ def _calculate_awg_configs(
                 awg_config.result_length = (
                     len(any_awg_signal_result_map) * mapping_repeats
                 )
+                if (
+                    rt_execution_info.with_pipeliner
+                    and not rt_execution_info.result_logger_pipelined
+                ):
+                    awg_config.result_length *= rt_execution_info.pipeliner_jobs
 
     return awg_configs
 
@@ -482,6 +500,7 @@ def pre_process_compiled(
     scheduled_experiment: ScheduledExperiment,
     devices: DeviceCollection,
     execution: Statement,
+    setup_caps: SetupCaps,
 ) -> RecipeData:
     recipe = scheduled_experiment.recipe
 
@@ -492,7 +511,7 @@ def pre_process_compiled(
                 initialization.device_uid
             ].iq_settings = _pre_process_iq_settings_hdawg(initialization)
 
-    lp = _LoopsPreprocessor()
+    lp = _LoopsPreprocessor(setup_caps)
     lp.run(execution)
     rt_execution_infos = lp.rt_execution_infos
 

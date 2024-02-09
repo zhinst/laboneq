@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from functools import singledispatch
 
-import logging
 from dataclasses import dataclass
 from io import StringIO
 from typing import Optional
@@ -13,17 +11,23 @@ from rich import box
 from rich.console import Console
 from rich.table import Table
 
+from laboneq.compiler import CompilerSettings
 from laboneq.compiler.common.awg_info import AwgKey
 from laboneq.compiler.workflow.compiler_output import (
     SeqCGenOutput,
     CombinedRTCompilerOutputContainer,
     CombinedRTOutputSeqC,
-    CombinedRTOutputPrettyPrinter,
-    PrettyPrinterOutput,
     RTCompilerOutputContainer,
 )
+from laboneq.laboneq_logging import get_logger
 
-_logger = logging.getLogger(__name__)
+_logger = get_logger(__name__)
+
+
+from laboneq.compiler.workflow.neartime_execution import (
+    NtCompilerExecutorDelegate,
+    NtCompilerExecutor,
+)
 
 
 def _count_samples(waves, wave_index):
@@ -43,6 +47,8 @@ def _count_samples(waves, wave_index):
         multiplier = 2  # two samples per clock cycle
     elif wave_type == "single":
         waveform_name = f"{wave_name}.wave"
+    else:
+        raise ValueError("invalid wave type")
 
     waveform = waves[waveform_name]
     return len(waveform["samples"]) * multiplier
@@ -58,124 +64,87 @@ class ReportEntry:
     waveform_samples: int
 
 
-@singledispatch
-def _do_calculate_total(compiler_output):
-    raise NotImplementedError()
-
-
-@singledispatch
-def _do_get_report(compiler_output, step_indices):
-    raise NotImplementedError()
-
-
-@_do_calculate_total.register
-def _(compiler_output: CombinedRTOutputSeqC) -> ReportEntry:
-    total_seqc = sum(len(s["text"].splitlines()) for s in compiler_output.src)
-    total_ct = sum(len(ct["ct"]) for ct in compiler_output.command_tables)
-    total_wave_idx = sum(len(wi) for wi in compiler_output.wave_indices)
-    total_samples = sum(
-        _count_samples(compiler_output.waves, wi)
-        for wil in compiler_output.wave_indices
-        for wi in wil["value"].items()
-    )
-
-    return ReportEntry(
-        nt_step_indices=(),
-        awg=None,
-        seqc_loc=total_seqc,
-        command_table_entries=total_ct,
-        wave_indices=total_wave_idx,
-        waveform_samples=total_samples,
-    )
-
-
-@_do_calculate_total.register
-def _(compiler_output: CombinedRTOutputPrettyPrinter) -> ReportEntry:
-    total_src = sum(len(s) for s in compiler_output.src.items())
-
-    return ReportEntry(
-        nt_step_indices=(),
-        awg=None,
-        seqc_loc=total_src,
-        command_table_entries=0,
-        wave_indices=0,
-        waveform_samples=0,
-    )
-
-
-@_do_get_report.register
-def _(
-    compiler_output: PrettyPrinterOutput, step_indices: list[int]
-) -> list[ReportEntry]:
-    return [
-        ReportEntry(
-            awg=AwgKey("pp", 0),
-            nt_step_indices=tuple(step_indices),
-            seqc_loc=1,
-            command_table_entries=0,
-            wave_indices=0,
-            waveform_samples=0,
-        )
-    ]
-
-
-@_do_get_report.register
-def _(compiler_output: SeqCGenOutput, step_indices: list[int]) -> list[ReportEntry]:
-    report = []
-    for awg, awg_src in compiler_output.src.items():
-        seqc_loc = len(awg_src["text"].splitlines())
-        ct = compiler_output.command_tables.get(awg, {"ct": []})["ct"]
-        ct_len = len(ct)
-        wave_indices = compiler_output.wave_indices[awg]["value"]
-        wave_indices_count = len(wave_indices)
-        sample_count = 0
-        for wave_index in wave_indices.items():
-            sample_count += _count_samples(compiler_output.waves, wave_index)
-        report.append(
-            ReportEntry(
-                awg=awg,
-                nt_step_indices=tuple(step_indices),
-                seqc_loc=seqc_loc,
-                command_table_entries=ct_len,
-                wave_indices=wave_indices_count,
-                waveform_samples=sample_count,
-            )
-        )
-    return report
-
-
-class CompilationReportGenerator:
-    def __init__(self):
+class CompilationReportGenerator(NtCompilerExecutorDelegate):
+    def __init__(self, settings: CompilerSettings):
+        self._settings = settings
         self._data: list[ReportEntry] = []
         self._total: ReportEntry | None = None
+
+        self._pulse_waveform_count = {}
+        self._pulse_map = {}
+
+    def after_compilation_run(self, new: RTCompilerOutputContainer, indices: list[int]):
+        self.update(new, indices)
+
+    def after_final_run(self, combined: CombinedRTCompilerOutputContainer):
+        for co in combined.combined_output.values():
+            if isinstance(co, CombinedRTOutputSeqC):
+                compiler_output = co
+                break
+        else:
+            return
+        if self._settings.LOG_REPORT:
+            self.compute_pulse_map_statistics(compiler_output)
+            self.calculate_total(compiler_output)
+            self.log_report()
 
     def update(
         self, rt_compiler_output: RTCompilerOutputContainer, step_indices: list[int]
     ):
-        for output in rt_compiler_output.codegen_output.values():
-            report = _do_get_report(output, step_indices=step_indices)
-            self._data += report
+        for co in rt_compiler_output.codegen_output.values():
+            if isinstance(co, SeqCGenOutput):
+                compiler_output = co
+                break
+        else:
+            return
+        report = []
+        for awg, awg_src in compiler_output.src.items():
+            seqc_loc = len(awg_src["text"].splitlines())
+            ct = compiler_output.command_tables.get(awg, {"ct": []})["ct"]
+            ct_len = len(ct)
+            wave_indices = compiler_output.wave_indices[awg]["value"]
+            wave_indices_count = len(wave_indices)
+            sample_count = 0
+            for wave_index in wave_indices.items():
+                sample_count += _count_samples(compiler_output.waves, wave_index)
+            report.append(
+                ReportEntry(
+                    awg=awg,
+                    nt_step_indices=tuple(step_indices),
+                    seqc_loc=seqc_loc,
+                    command_table_entries=ct_len,
+                    wave_indices=wave_indices_count,
+                    waveform_samples=sample_count,
+                )
+            )
+        self._data += report
 
-    def calculate_total(self, compiler_output: CombinedRTCompilerOutputContainer):
-        totals = [
-            _do_calculate_total(tot) for tot in compiler_output.combined_output.values()
-        ]
-        tot = ReportEntry(
-            (),
-            None,
-            seqc_loc=0,
-            command_table_entries=0,
-            wave_indices=0,
-            waveform_samples=0,
+    def calculate_total(self, compiler_output: CombinedRTOutputSeqC):
+        total_seqc = sum(len(s["text"].splitlines()) for s in compiler_output.src)
+        total_ct = sum(len(ct["ct"]) for ct in compiler_output.command_tables)
+        total_wave_idx = sum(len(wi) for wi in compiler_output.wave_indices)
+        total_samples = sum(
+            _count_samples(compiler_output.waves, wi)
+            for wil in compiler_output.wave_indices
+            for wi in wil["value"].items()
         )
-        for t in totals:
-            tot.seqc_loc += t.seqc_loc
-            tot.command_table_entries += t.command_table_entries
-            tot.wave_indices += t.wave_indices
-            tot.waveform_samples += t.waveform_samples
-        self._total = tot
+        self._total = ReportEntry(
+            nt_step_indices=(),
+            awg=None,
+            seqc_loc=total_seqc,
+            command_table_entries=total_ct,
+            wave_indices=total_wave_idx,
+            waveform_samples=total_samples,
+        )
 
-    def create_table(self) -> Table:
+    def compute_pulse_map_statistics(self, compiler_output: CombinedRTOutputSeqC):
+        for pulse_id, pulse_map in compiler_output.pulse_map.items():
+            self._pulse_map[pulse_id] = (
+                len(pulse_map.waveforms),
+                [i for wf in pulse_map.waveforms.values() for i in wf.instances],
+            )
+
+    def create_resource_usage_table(self) -> Table:
         entries = sorted(self._data)
         all_nt_steps = set(e.nt_step_indices for e in entries)
         include_nt_step = len(all_nt_steps) > 1
@@ -242,13 +211,54 @@ class CompilationReportGenerator:
 
         return table
 
-    def __str__(self):
-        table = self.create_table()
+    def resource_table_as_str(self):
+        table = self.create_resource_usage_table()
+
+        with StringIO() as buffer:
+            console = Console(file=buffer, force_jupyter=False)
+            console.print(table)
+            return buffer.getvalue()
+
+    def create_pulse_map_table(self):
+        table = Table(box=box.HORIZONTALS)
+        table.add_column("Pulse UID")
+        table.add_column("Waveforms", justify="right")
+        table.add_section()
+        table.add_column("Offsets", justify="right")
+        table.add_column("Amplitudes", justify="right")
+        table.add_column("Phases", justify="right")
+        table.add_column("Lengths", justify="right")
+
+        for pulse_id, (waveform_count, instances) in self._pulse_map.items():
+            offsets_count = len({inst.offset_samples for inst in instances})
+            amplitudes_count = len({inst.amplitude for inst in instances})
+            phases_count = len({inst.modulation_phase for inst in instances})
+            lengths_count = len({inst.length for inst in instances})
+            fields = [
+                str(n) if n > 1 else ""
+                for n in [offsets_count, amplitudes_count, phases_count, lengths_count]
+            ]
+
+            table.add_row(pulse_id, str(waveform_count), *fields)
+
+        return table
+
+    def pulse_map_table_as_str(self):
+        table = self.create_pulse_map_table()
+
         with StringIO() as buffer:
             console = Console(file=buffer, force_jupyter=False)
             console.print(table)
             return buffer.getvalue()
 
     def log_report(self):
-        for line in str(self).splitlines():
+        for line in self.resource_table_as_str().splitlines():
             _logger.info(line)
+
+        _logger.diagnostic("")
+        _logger.diagnostic("  Waveform usage across pulses:")
+        for line in self.pulse_map_table_as_str().splitlines():
+            _logger.diagnostic(line)
+
+
+NtCompilerExecutor.register_hook(CompilationReportGenerator)

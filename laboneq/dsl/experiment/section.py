@@ -496,6 +496,8 @@ class Match(Section):
             User register on which to match.
         prng_sample (PRNGSample | None):
             PRNG sample to match.
+        sweep_parameter (SweepParameter | None):
+            Sweep parameter to match.
         local (bool):
             Whether to fetch the codeword via the PQSC (`False`),
             SHFQC-internal bus (`True`) or automatic (`None`).
@@ -518,6 +520,9 @@ class Match(Section):
 
     # PRNG sample
     prng_sample: PRNGSample | None = None
+
+    # Sweep parameter
+    sweep_parameter: Parameter | None = None
 
     # Whether to fetch the codeword via the PQSC (False), SHFQC-internal bus (True) or automatic (None)
     local: bool | None = None
@@ -563,24 +568,17 @@ class Case(Section):
     may only be added to a [Match][laboneq.dsl.experiment.section.Match]
     section and not to any other kind of section.
 
-    A [Case][laboneq.dsl.experiment.section.Case] may only contain
-    `PlayPulse` and `Delay` operations and not other kinds of operations
-    or sections.
+    Unless matching a sweep parameter, a [Case][laboneq.dsl.experiment.section.Case]
+    may only contain `PlayPulse` and `Delay` operations and not other kinds of
+    operations or sections.
     """
 
     state: int = 0
 
-    def add(self, obj: Operation):
-        """Add an operation the Case section.
-
-        Arguments:
-            obj:
-                The `PlayPulse` or `Delay` operation to be added.
-        """
-        if not isinstance(obj, (PlayPulse, Delay)):
-            raise LabOneQException(
-                f"Trying to add object to section {self.uid}. Only ``play`` and ``delay`` are allowed."
-            )
+    def add(self, obj: Operation | Section):
+        """Add a child to the Case section."""
+        if isinstance(obj, Case):
+            raise LabOneQException("Case blocks can only be added to match blocks.")
         super().add(obj)
 
     @classmethod

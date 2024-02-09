@@ -143,10 +143,10 @@ class RealtimeCompiler:
         section_info_out = {}
         section_signals_with_children = {}
 
-        for section_info in [
+        for section_info in (
             ir.root_section,
             *ir.root_section_children,
-        ]:
+        ):
             section_display_name = section_info.uid
             section_signals_with_children[section_info.uid] = list(
                 ir.section_signals_with_chidlren_ids[section_info.uid]

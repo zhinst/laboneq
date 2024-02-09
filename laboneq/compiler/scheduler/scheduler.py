@@ -157,6 +157,7 @@ class Scheduler:
     def run(self, nt_parameters: Optional[ParameterStore] = None):
         if nt_parameters is None:
             nt_parameters = ParameterStore()
+        self._schedule_data.reset()
         self._root_schedule = self._schedule_root(nt_parameters)
         _logger.info("Schedule completed")
         for (
@@ -295,10 +296,9 @@ class Scheduler:
             section_info.match_handle is not None
             or section_info.match_user_register is not None
             or section_info.match_prng_sample is not None
+            or section_info.match_sweep_parameter is not None
         ):
-            schedule = self._schedule_match(
-                section_id, section_info, current_parameters
-            )
+            schedule = self._schedule_match(section_info, current_parameters)
         else:  # regular section
             children_schedules = self._collect_children_schedules(
                 section_id, current_parameters
@@ -873,22 +873,26 @@ class Scheduler:
 
     def _schedule_match(
         self,
-        section_id: str,
         section_info: SectionInfo,
         current_parameters: ParameterStore[str, float],
-    ) -> MatchSchedule:
+    ) -> SectionSchedule:
         assert (
             section_info.match_handle is not None
             or section_info.match_user_register is not None
             or section_info.match_prng_sample is not None
+            or section_info.match_sweep_parameter is not None
         )
         handle: str | None = section_info.match_handle
         user_register: Optional[int] = section_info.match_user_register
         prng_sample = section_info.match_prng_sample
+        match_sweep_parameter = section_info.match_sweep_parameter
         local: Optional[bool] = section_info.local
 
+        if match_sweep_parameter is not None:
+            return self._schedule_static_branch(section_info, current_parameters)
+
         dao = self._schedule_data.experiment_dao
-        section_children = dao.direct_section_children(section_id)
+        section_children = dao.direct_section_children(section_info.uid)
         if len(section_children) == 0:
             raise LabOneQException("Must provide at least one branch option")
         children_schedules = [
@@ -954,7 +958,7 @@ class Scheduler:
             signals=signals,
             children=children_schedules,
             right_aligned=False,
-            section=section_id,
+            section=section_info.uid,
             play_after=play_after,
             handle=handle,
             user_register=user_register,
@@ -962,6 +966,22 @@ class Scheduler:
             local=local,
             compressed_loop_grid=compressed_loop_grid,
         )
+
+    def _schedule_static_branch(
+        self,
+        section_info: SectionInfo,
+        current_parameters: ParameterStore,
+    ) -> SectionSchedule:
+        match_sweep_parameter = section_info.match_sweep_parameter
+        val = current_parameters[match_sweep_parameter.uid]
+
+        for case in section_info.children:
+            if case.state == val:
+                case_schedule = self._schedule_section(case.uid, current_parameters)
+                match_schedule = self._schedule_children(
+                    section_info.uid, section_info, [case_schedule]
+                )
+                return match_schedule
 
     def _schedule_case(
         self, section_id: str, current_parameters: ParameterStore
@@ -993,6 +1013,8 @@ class Scheduler:
                 raise LabOneQException(
                     "Only pulses, not sections, are allowed inside a case"
                 )
+            if cs.is_acquire:
+                raise LabOneQException("No acquisitions can happen in a case block")
             if cs.increment_oscillator_phase or cs.set_oscillator_phase:
                 for s in cs.signals:
                     s = self._experiment_dao.signal_info(s)
@@ -1227,6 +1249,12 @@ class Scheduler:
     def preorder_map(self):
         preorder_map = {}
         assert self._root_schedule is not None
+
+        section_children = {
+            s: self._experiment_dao.all_section_children(s)
+            for s in self._experiment_dao.sections()
+        }
+
         for s in self._root_schedule.children:
-            calculate_preorder_map(s, preorder_map)
+            calculate_preorder_map(s, preorder_map, section_children)
         return preorder_map

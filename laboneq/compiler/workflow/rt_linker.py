@@ -195,6 +195,12 @@ def _(
                 )
             }
 
+        for pulse_id, entry in new.pulse_map.items():
+            if pulse_id not in this.pulse_map:
+                this.pulse_map[pulse_id] = entry
+            else:
+                this.pulse_map[pulse_id].waveforms.update(entry.waveforms)
+
         if (
             previous_src == awg_src
             and previous_ct == new_ct

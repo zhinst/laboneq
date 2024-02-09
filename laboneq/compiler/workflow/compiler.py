@@ -49,6 +49,7 @@ from laboneq.compiler.workflow.precompensation_helpers import (
 from laboneq.compiler.workflow.realtime_compiler import RealtimeCompiler
 from laboneq.compiler.workflow.recipe_generator import RecipeGenerator
 from laboneq.compiler.workflow.rt_linker import CombinedRTCompilerOutputContainer
+import laboneq.compiler.workflow.reporter  # noqa: F401
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.core.types.enums.acquisition_type import AcquisitionType, is_spectroscopy
@@ -169,8 +170,7 @@ class Compiler:
                 used_devices == {"hdawg"}
                 or used_devices == {"shfsg"}
                 or used_devices == {"shfqa"}
-                or used_devices == {"shfqa", "shfsg"}
-                or standalone_qc
+                or (used_devices == {"shfqa", "shfsg"} and standalone_qc)
                 or used_devices == {"hdawg", "uhfqa"}
                 or (used_devices == {"uhfqa"} and has_hdawg)  # No signal on leader
             )
@@ -270,7 +270,7 @@ class Compiler:
             self._signal_objects,
             self._settings,
         )
-        executor = NtCompilerExecutor(rt_compiler)
+        executor = NtCompilerExecutor(rt_compiler, self._settings)
         executor.run(self._execution)
         self._combined_compiler_output = executor.combined_compiler_output()
         if self._combined_compiler_output is None:
@@ -282,15 +282,13 @@ class Compiler:
             self._combined_compiler_output = rt_linker.from_single_run(
                 rt_compiler_output, [0]
             )
+        executor.finalize()
 
         compute_feedback_routing(
             signal_objs=self._signal_objects,
             integration_unit_allocation=self._integration_unit_allocation,
             combined_compiler_output=self._combined_compiler_output,
         )
-
-        if self._settings.LOG_REPORT:
-            executor.report()
 
     @staticmethod
     def _get_total_rounded_delay(delay, signal_id, device_type, sampling_rate):

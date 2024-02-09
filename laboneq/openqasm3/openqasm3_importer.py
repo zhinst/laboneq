@@ -5,7 +5,7 @@ from __future__ import annotations  # noqa: I001
 
 import math
 import operator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from typing import Any, Callable, Optional, TextIO, Union
 
 import openpulse
@@ -930,6 +930,181 @@ def exp_from_qasm(
         acquisition_type=acquisition_type,
     ) as loop:
         loop.add(qasm_section)
+
+    exp.set_calibration(importer.implicit_calibration)
+
+    return exp
+
+
+def exp_from_qasm_list(
+    programs: list[str],
+    qubits: dict[str, Qubit],
+    gate_store: GateStore,
+    inputs: dict[str, Any] | None = None,
+    externs: dict[str, Callable] | None = None,
+    count: int = 1,
+    averaging_mode: AveragingMode = AveragingMode.CYCLIC,
+    acquisition_type: AcquisitionType = AcquisitionType.INTEGRATION,
+    repetition_time: float = 1e-3,
+    batch_execution_mode="pipeline",
+    do_reset=False,
+    pipeline_chunk_count: int | None = None,
+) -> Experiment:
+    """Process a list of openQASM programs into a single LabOne Q experiment that
+    executes the QASM snippets sequentially.
+
+    At this time, the QASM programs must not include any measurements. We automatically
+    append a measurement of all qubits to the end of each program.
+
+    Optionally, a reset operation on all qubits is prepended to each program. The
+    duration between the reset and the final readout is fixed and must be specified as
+    `repetition_time`. It must be chosen large enough to accommodate the longest of the
+    programs. The `repetition_time` parameter is also required if the resets are
+    disabled. In a future version we hope to make an explicit `repetition_time` optional.
+
+    For the measurement we require the gate store to be loaded with a `measurement`
+    gate. Similarly, the optional reset requires a `reset` gate to be available.
+
+    Args:
+        programs:
+            the list of the QASM snippets
+        qubits:
+            Map from OpenQASM qubit names to LabOne Q DSL Qubit objects
+        gate_store:
+            Map from OpenQASM gate names to LabOne Q DSL Gate objects
+        inputs:
+            Inputs to the OpenQASM program.
+        externs:
+            Extern functions for the OpenQASM program.
+        count:
+            The number of acquire iterations.
+        averaging_mode:
+            The mode of how to average the acquired data.
+        acquisition_type:
+            The type of acquisition to perform.
+        repetition_time:
+            The length that any single program is padded to.
+        batch_execution_mode:
+            The execution mode for the sequence of programs. Can be any of the following:
+
+            - "nt": The individual programs are dispatched by software.
+            - "pipeline": The individual programs are dispatched by the sequence pipeliner.
+            - "rt": All the programs are combined into a single real-time program.
+
+            "rt" offers the fastest execution, but is limited by device memory.
+            In comparison, "pipeline" introduces non-deterministic delays between
+            programs of up to a few 100 microseconds. "nt" is the slowest.
+        do_reset:
+            If `True`,  an active reset operation is added to the beginning of each program.
+        pipeline_chunk_count:
+            The number of pipeline chunks to divide the experiment into.
+
+            The default chunk count is equal to the number of programs, so that there is one
+            program per pipeliner chunk. Future versions of LabOne Q may use a more
+            sophisticated default based on the program sizes.
+
+            Currently the number of programs must be a multiple of the chunk count so that
+            there are the same number of programs in each chunk. This limitation will be
+            removed in a future release of LabOne Q.
+
+            A `ValueError` is raised if the number of programs is not a multiple of the
+            chunk count.
+
+    Returns:
+        The experiment generated from the OpenQASM programs.
+    """
+    if batch_execution_mode == "pipeline":
+        if pipeline_chunk_count is None:
+            pipeline_chunk_count = len(programs)
+        if len(programs) % pipeline_chunk_count != 0:
+            # The underlying limitation is that the structure of the acquisitions
+            # must be the same in each chunk, because the compiled experiment
+            # recipe only supplies the acquisition information once, rather than
+            # once per chunk. Once the acquisition information has been moved to
+            # per-chunk execution information and the controller updated to apply
+            # this, then this restriction can be removed.
+            raise ValueError(
+                f"Number of programs ({len(programs)}) not divisible"
+                f" by pipeline_chunk_count ({pipeline_chunk_count})"
+            )
+
+    signals = []
+    for qubit in qubits.values():
+        for exp_signal in qubit.experiment_signals():
+            if exp_signal in signals:
+                msg = f"Signal with id {exp_signal.uid} already assigned."
+                raise LabOneQException(msg)
+            signals.append(exp_signal)
+
+    exp = Experiment(signals=signals)
+    experiment_index = LinearSweepParameter(
+        uid="index", start=0, stop=len(programs) - 1, count=len(programs)
+    )
+
+    if batch_execution_mode == "nt":
+        maybe_nt_sweep = exp.sweep(experiment_index)
+    else:
+        maybe_nt_sweep = nullcontext()
+
+    with maybe_nt_sweep:
+        with exp.acquire_loop_rt(
+            count=count,
+            averaging_mode=averaging_mode,
+            acquisition_type=acquisition_type,
+        ):
+            sweep_kwargs = {}
+            if batch_execution_mode != "nt":
+                if batch_execution_mode == "pipeline":
+                    # pipelined sweep with specified programs per chunk
+                    sweep_kwargs["chunk_count"] = pipeline_chunk_count
+                maybe_rt_sweep = exp.sweep(experiment_index, **sweep_kwargs)
+            else:
+                maybe_rt_sweep = nullcontext()
+
+            with maybe_rt_sweep:
+                if do_reset:
+                    with exp.section(uid="qubit reset") as reset_section:
+                        for qasm_qubit_name in qubits:
+                            reset_section.add(
+                                gate_store.lookup_gate("reset", (qasm_qubit_name,))
+                            )
+
+                with exp.section(
+                    alignment=SectionAlignment.RIGHT,
+                    length=repetition_time,
+                ):
+                    with exp.match(
+                        sweep_parameter=experiment_index,
+                    ):
+                        for i, program in enumerate(programs):
+                            with exp.case(i) as c:
+                                importer = OpenQasm3Importer(
+                                    qubits=qubits,
+                                    inputs=inputs,
+                                    externs=externs,
+                                    gate_store=gate_store,
+                                )
+                                c.add(importer(text=program))
+
+                # read out all qubits
+                with exp.section(uid="qubit_readout") as readout_section:
+                    for qasm_qubit_name, qubit in qubits.items():
+                        readout_section.add(
+                            gate_store.lookup_gate(
+                                "measure",
+                                (qasm_qubit_name,),
+                                kwargs={"handle": f"meas{qasm_qubit_name}"},
+                            )
+                        )
+                        with exp.section():
+                            # The next shot will immediately start with an active reset.
+                            # SHFQA needs some time to process previous results before
+                            # it can trigger the next measurement. So we add a delay
+                            # here to have sufficient margin between the two readouts.
+                            # In the future, we'll ideally not have resort to two
+                            # measurements (one for readout, one for reset) in the
+                            # first place.
+                            exp.delay(qubit.signals["measure"], 500e-9)
 
     exp.set_calibration(importer.implicit_calibration)
 

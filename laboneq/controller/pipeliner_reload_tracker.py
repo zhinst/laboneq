@@ -25,10 +25,10 @@ class PipelinerReloadTracker:
 
     def calc_next_step(
         self,
-        pipeline_chunk: int,
+        pipeliner_job: int,
         rt_exec_step: RealtimeExecutionInit | None,
     ) -> RealtimeExecutionInit:
-        """Constructs the current RT chunk of a pipeline (PL) from recipe data + trace from previous NT steps
+        """Constructs the current RT job of a pipeliner (PLn) from recipe data + trace from previous NT steps
 
         Assuming similar sequence of pipeliner jobs for each near-time step, and that any potential
         differences between identical pipeliner jobs across near-time steps would likely be minor
@@ -37,50 +37,49 @@ class PipelinerReloadTracker:
 
         Legend for the table below:
             * *       - Full data must be available from the recipe
-            * <       - Inherit from the previous pipeliner chunk in the same NT step
-            * ^       - Inherit from the same pipeliner chunk of the previous NT step
+            * <       - Inherit from the previous pipeliner job in the same NT step
+            * ^       - Inherit from the same pipeliner job of the previous NT step
             * <+, ^+  - Same as above, but also apply any updates from the recipe
 
         | NT step | PL0 | PL1 | PL2 | Comment |
         |--------:|:---:|:---:|:---:|:--------|
-        |       0 |  *  |  <  |  <  | Only 1st PL step data in recipe, subsequent steps inherit it
-        |       1 |  ^  |  ^  |  ^  | No change since previous NT step, inherit previous PL entirely
-        |       2 |  ^+ |  <  |  <  | Update from recipe for the 1st PL step, start filling PL again
-        |       3 |  ^  |  ^+ |  ^  | Update from recipe for a PL step > 1
+        |       0 |  *  |  <  |  <  | Only 1st pipeliner job data in recipe, subsequent jobs inherit it
+        |       1 |  ^  |  ^  |  ^  | No change since previous NT step, inherit previous pipeliner entirely
+        |       2 |  ^+ |  <  |  <  | Update from recipe for the 1st pipeliner job, start filling pipeliner again
+        |       3 |  ^  |  ^+ |  ^  | Update from recipe for a pipeliner job > 1
         """
-        assert pipeline_chunk >= 0
+        assert pipeliner_job >= 0
         last_rt_exec_steps = self.last_rt_exec_steps
         if rt_exec_step is None:
-            # No update from recipe
-            if pipeline_chunk < len(last_rt_exec_steps):
-                # Reuse respective chunk from previous PL
-                rt_exec_step = last_rt_exec_steps[pipeline_chunk]
+            # No update from the recipe
+            if pipeliner_job < len(last_rt_exec_steps):
+                # Reuse respective job from previous NT step pipeliner
+                rt_exec_step = last_rt_exec_steps[pipeliner_job]
             elif (
-                pipeline_chunk == len(last_rt_exec_steps)
-                and len(last_rt_exec_steps) > 0
+                pipeliner_job == len(last_rt_exec_steps) and len(last_rt_exec_steps) > 0
             ):
-                # Reuse previous PL chunk
+                # Reuse previous pipeliner job
                 rt_exec_step = last_rt_exec_steps[-1]
                 last_rt_exec_steps.append(rt_exec_step)
             else:
-                # Unknown previous pipeline chunk
+                # Unknown previous pipeliner job
                 raise LabOneQControllerException(
                     "Internal error: Could not determine the RT execution params."
                 )
         else:
             # Update from recipe
-            if pipeline_chunk == 0:
-                # New pipeline and update recipe - construct fresh PL
+            if pipeliner_job == 0:
+                # New pipeline and update recipe - construct fresh pipeliner
                 if len(last_rt_exec_steps) > 0:
                     rt_exec_step = _merge(last_rt_exec_steps[0], rt_exec_step)
                 last_rt_exec_steps.clear()
                 last_rt_exec_steps.append(rt_exec_step)
-            elif pipeline_chunk < len(last_rt_exec_steps):
-                # Amend previous NT step pipeline chunk
-                rt_exec_step = _merge(last_rt_exec_steps[pipeline_chunk], rt_exec_step)
-                last_rt_exec_steps[pipeline_chunk] = rt_exec_step
-            elif pipeline_chunk == len(last_rt_exec_steps):
-                # Amend previous pipeline chunk
+            elif pipeliner_job < len(last_rt_exec_steps):
+                # Amend previous NT step pipeline job
+                rt_exec_step = _merge(last_rt_exec_steps[pipeliner_job], rt_exec_step)
+                last_rt_exec_steps[pipeliner_job] = rt_exec_step
+            elif pipeliner_job == len(last_rt_exec_steps):
+                # Amend previous pipeline job
                 rt_exec_step = _merge(last_rt_exec_steps[-1], rt_exec_step)
                 last_rt_exec_steps.append(rt_exec_step)
 

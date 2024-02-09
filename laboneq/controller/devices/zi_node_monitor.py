@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+from abc import ABC, abstractmethod
 
 import logging
 import math
@@ -36,9 +37,17 @@ class Node:
 
     def append(self, val: dict[str, Any] | list[dict[str, Any]]):
         if isinstance(val, dict):
+            # Scalar nodes, value is an array of consecutive updates
             self.values.extend(val["value"])
         else:
-            self.values.append(val[0]["vector"])
+            # Vector nodes
+            for v in val:
+                if isinstance(v["vector"], str):
+                    # String value, ignore extra header
+                    self.values.append(v["vector"])
+                else:
+                    # Other vector types, keep everything
+                    self.values.append(v)
         self.last = self.values[-1]
 
 
@@ -67,10 +76,21 @@ def _is_expected(val: Any, expected: Any | None | list[Any | None]) -> bool:
     return False
 
 
-class NodeMonitor:
-    def __init__(self, daq):
-        self._daq = daq
+class NodeMonitorBase(ABC):
+    def __init__(self):
         self._nodes: dict[str, Node] = {}
+
+    @abstractmethod
+    async def start(self):
+        ...
+
+    @abstractmethod
+    async def stop(self):
+        ...
+
+    @abstractmethod
+    async def poll(self):
+        ...
 
     def _fail_on_missing_node(self, path: str):
         if path not in self._nodes:
@@ -82,8 +102,8 @@ class NodeMonitor:
         self._fail_on_missing_node(path)
         return self._nodes[path]
 
-    def reset(self):
-        self.stop()
+    async def reset(self):
+        await self.stop()
         self._nodes.clear()
 
     def add_nodes(self, paths: list[str]):
@@ -91,27 +111,8 @@ class NodeMonitor:
             if path not in self._nodes:
                 self._nodes[path] = Node(path)
 
-    def start(self):
-        all_paths = [p for p in self._nodes.keys()]
-        if len(all_paths) > 0:
-            self._daq.subscribe(all_paths)
-            for path in all_paths:
-                self._daq.getAsEvent(path)
-
-    def stop(self):
-        self._daq.unsubscribe("*")
-        self.flush()
-
-    def poll(self):
-        while True:
-            data = self._daq.poll(1e-6, 100, flat=True)
-            if len(data) == 0:
-                break
-            for path, val in data.items():
-                self._get_node(path).append(val)
-
-    def flush(self):
-        self.poll()
+    async def flush(self):
+        await self.poll()
         for node in self._nodes.values():
             node.flush()
 
@@ -135,8 +136,10 @@ class NodeMonitor:
                 failed.append((path, val))
         return failed
 
-    def poll_and_check_conditions(self, conditions: dict[str, Any]) -> dict[str, Any]:
-        self.poll()
+    async def poll_and_check_conditions(
+        self, conditions: dict[str, Any]
+    ) -> dict[str, Any]:
+        await self.poll()
         remaining = {}
         for path, expected in conditions.items():
             self._fail_on_missing_node(path)
@@ -152,11 +155,36 @@ class NodeMonitor:
         return remaining
 
 
+class NodeMonitor(NodeMonitorBase):
+    def __init__(self, daq):
+        super().__init__()
+        self._daq = daq
+
+    async def start(self):
+        all_paths = [p for p in self._nodes.keys()]
+        if len(all_paths) > 0:
+            self._daq.subscribe(all_paths)
+            for path in all_paths:
+                self._daq.getAsEvent(path)
+
+    async def stop(self):
+        self._daq.unsubscribe("*")
+        await self.flush()
+
+    async def poll(self):
+        while True:
+            data = self._daq.poll(1e-6, 100, flat=True)
+            if len(data) == 0:
+                break
+            for path, val in data.items():
+                self._get_node(path).append(val)
+
+
 class MultiDeviceHandlerBase:
     def __init__(self):
-        self._conditions: dict[NodeMonitor, dict[str, Any]] = {}
+        self._conditions: dict[NodeMonitorBase, dict[str, Any]] = {}
 
-    def add(self, target: NodeMonitor, conditions: dict[str, Any]):
+    def add(self, target: NodeMonitorBase, conditions: dict[str, Any]):
         if conditions:
             daq_conditions: dict[str, Any] = self._conditions.setdefault(target, {})
             daq_conditions.update(conditions)
@@ -246,12 +274,14 @@ class ResponseWaiter(MultiDeviceHandlerBase):
         self._timer = time.monotonic
 
     @trace("wait-for-all-nodes", disable_tracing_during=True)
-    def wait_all(self, timeout: float) -> bool:
+    async def wait_all(self, timeout: float) -> bool:
         start = self._timer()
         while True:
             remaining: dict[NodeMonitor, dict[str, Any]] = {}
             for node_monitor, daq_conditions in self._conditions.items():
-                daq_remaining = node_monitor.poll_and_check_conditions(daq_conditions)
+                daq_remaining = await node_monitor.poll_and_check_conditions(
+                    daq_conditions
+                )
                 if len(daq_remaining) > 0:
                     remaining[node_monitor] = daq_remaining
             if len(remaining) == 0:

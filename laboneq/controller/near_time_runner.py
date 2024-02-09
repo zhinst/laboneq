@@ -11,10 +11,10 @@ from typing import TYPE_CHECKING, Any
 from numpy import typing as npt
 
 from laboneq.controller.communication import (
-    CachingStrategy,
     DaqNodeSetAction,
     batch_set,
 )
+from laboneq.controller.devices.device_zi import NodeCollector
 from laboneq.controller.protected_session import ProtectedSession
 from laboneq.controller.util import LabOneQControllerException, SweepParamsTracker
 from laboneq.core.exceptions import AbortExecution
@@ -33,21 +33,19 @@ class NearTimeRunner(AsyncExecutorBase):
     def __init__(self, controller: Controller):
         super().__init__(looping_mode=LoopingMode.NEAR_TIME_ONLY)
         self.controller = controller
-        self.user_set_nodes = []
+        self.user_set_nodes: list[DaqNodeSetAction] = []
         self.nt_loop_indices: list[int] = []
-        self.pipeline_chunk: int = 0
+        self.pipeliner_job: int = 0
         self.sweep_params_tracker = SweepParamsTracker()
 
     def nt_step(self) -> NtStepKey:
         return NtStepKey(indices=tuple(self.nt_loop_indices))
 
     async def set_handler(self, path: str, value):
+        nc = NodeCollector()
+        nc.add(path, value, cache=False)
         dev = self.controller._devices.find_by_node_path(path)
-        self.user_set_nodes.append(
-            DaqNodeSetAction(
-                dev._daq, path, value, caching_strategy=CachingStrategy.NO_CACHE
-            )
-        )
+        self.user_set_nodes.extend(await dev.maybe_async(nc))
 
     async def nt_callback_handler(self, func_name: str, args: dict[str, Any]):
         func = self.controller._neartime_callbacks.get(func_name)
@@ -93,7 +91,7 @@ class NearTimeRunner(AsyncExecutorBase):
     ):
         if loop_flags.is_pipeline:
             # Don't add the pipeliner loop index to NT indices
-            self.pipeline_chunk = index
+            self.pipeliner_job = index
             return
         self.nt_loop_indices.append(index)
 
@@ -111,7 +109,7 @@ class NearTimeRunner(AsyncExecutorBase):
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
     ):
-        if self.pipeline_chunk > 0:
+        if self.pipeliner_job > 0:
             # Skip the pipeliner loop iterations, except the first one - iterated by the pipeliner itself
             return
 

@@ -28,11 +28,17 @@ from laboneq.controller.communication import (
     CachingStrategy,
     DaqNodeSetAction,
     DaqWrapper,
-    map_device_type,
 )
-from laboneq.controller.devices.device_utils import dev_api
-from laboneq.controller.devices.zi_emulator import set_emulation_option
-from laboneq.controller.devices.zi_node_monitor import NodeControlBase
+from laboneq.controller.devices.async_support import (
+    create_device_kernel_session,
+    get_raw,
+    set_parallel,
+)
+from laboneq.controller.devices.zi_emulator import EmulatorState
+from laboneq.controller.devices.zi_node_monitor import (
+    NodeControlBase,
+    NodeMonitorBase,
+)
 from laboneq.controller.pipeliner_reload_tracker import PipelinerReloadTracker
 from laboneq.controller.recipe_processor import (
     AwgConfig,
@@ -95,7 +101,6 @@ class DeviceQualifier:
     server_uid: str
     driver: str
     options: DeviceOptions
-    dry_run: bool = True
 
 
 @dataclass
@@ -200,6 +205,7 @@ class DeviceZI:
 
         self._daq = daq
         self._api = None  # TODO(2K): Add type labone.Instrument
+        self._node_monitor: NodeMonitorBase | None = None
         self.dev_type: str | None = None
         self.dev_opts: list[str] = []
         self._connected = False
@@ -230,10 +236,6 @@ class DeviceZI:
         return self._device_qualifier
 
     @property
-    def dry_run(self):
-        return self._device_qualifier.dry_run
-
-    @property
     def dev_repr(self) -> str:
         return f"{self._device_qualifier.driver.upper()}:{self.serial}"
 
@@ -262,13 +264,18 @@ class DeviceZI:
         return self._daq
 
     @property
+    def node_monitor(self) -> NodeMonitorBase:
+        assert self._node_monitor is not None
+        return self._node_monitor
+
+    @property
     def is_secondary(self) -> bool:
         return False
 
     def to_daq_actions(self, nodes: NodeCollector) -> list[DaqNodeSetAction]:
         return [
             DaqNodeSetAction(
-                self._daq,
+                self.daq,
                 node.path,
                 node.value,
                 caching_strategy=CachingStrategy.CACHE
@@ -281,9 +288,7 @@ class DeviceZI:
 
     async def maybe_async(self, nodes: NodeCollector) -> list[DaqNodeSetAction]:
         if self._api is not None:
-            # await set_parallel(
-            #     self._api, *[(node.path, node.value) for node in nodes()]
-            # )
+            await set_parallel(self._api, *[(node.path, node.value) for node in nodes])
             return []
         return self.to_daq_actions(nodes)
 
@@ -376,7 +381,14 @@ class DeviceZI:
         return len(self._uplinks) > 0 or self.is_standalone()
 
     def is_standalone(self):
-        return len(self._uplinks) == 0 and len(self._downlinks) == 0
+        def is_ppc(dev):
+            return (
+                getattr(getattr(dev, "device_qualifier", None), "driver", None)
+                == "SHFPPC"
+            )
+
+        no_ppc_uplinks = [u for u in self._uplinks if u() and not is_ppc(u())]
+        return len(no_ppc_uplinks) == 0 and len(self._downlinks) == 0
 
     def _validate_initialization(self, initialization: Initialization):
         pass
@@ -425,34 +437,20 @@ class DeviceZI:
     ) -> list[DaqNodeSetAction]:
         return []
 
-    def _set_emulation_option(self, option: str, value: Any):
-        set_emulation_option(*dev_api(self), option, value)
-
-    def _prepare_emulator(self):
-        if not self.dry_run:
-            return
-
-        if self._api is None:
-            map_device_type(self._daq._zi_api_object, self.device_qualifier)
-
-        self._set_emulation_option("dev_type", self.options.dev_type)
-        if self.options.expected_installed_options is not None:
-            exp_opts = self.options.expected_installed_options.upper().split("/")
-            if len(exp_opts) > 0 and exp_opts[0] == "":
-                exp_opts.pop(0)
-            if len(exp_opts) > 0:
-                self._set_emulation_option("features/devtype", exp_opts.pop(0))
-            if len(exp_opts) > 0:
-                self._set_emulation_option("features/options", "\n".join(exp_opts))
-
-    async def _connect_to_data_server(self):
+    async def _connect_to_data_server(self, emulator_state: EmulatorState | None):
         if self._connected:
             return
 
         _logger.debug("%s: Connecting to %s interface.", self.dev_repr, self.interface)
         try:
-            self._prepare_emulator()
-            self._daq.connectDevice(self.serial, self.interface)
+            self._api = await create_device_kernel_session(
+                device_qualifier=self._device_qualifier,
+                server_qualifier=self.daq._server_qualifier,
+                emulator_state=emulator_state,
+            )
+            if self._api is None:
+                self.daq.connectDevice(self.serial, self.interface)
+                self._node_monitor = self.daq.node_monitor
         except RuntimeError as exc:
             raise LabOneQControllerException(
                 f"{self.dev_repr}: Connecting failed"
@@ -473,15 +471,18 @@ class DeviceZI:
 
         self._connected = True
 
-    async def connect(self):
-        await self._connect_to_data_server()
-        self._daq.node_monitor.add_nodes(self.nodes_to_monitor())
+    async def connect(self, emulator_state: EmulatorState | None):
+        await self._connect_to_data_server(emulator_state)
+        self.node_monitor.add_nodes(self.nodes_to_monitor())
 
     def disconnect(self):
         if not self._connected:
             return
 
-        self._daq.disconnectDevice(self.serial)
+        if self._api is None:
+            self.daq.disconnectDevice(self.serial)
+        else:
+            self._api = None  # TODO(2K): Proper disconnect?
         self._connected = False
 
     async def disable_outputs(
@@ -603,11 +604,14 @@ class DeviceZI:
         averages: int,
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
+        with_pipeliner: bool,
     ) -> list[DaqNodeSetAction]:
         return []
 
     async def get_raw(self, path: str) -> dict[str, Any]:
-        return self._daq.get_raw(path)
+        if self._api is not None:
+            return await get_raw(self._api, path)
+        return self.daq.get_raw(path)
 
     async def get_raw_values(self, path: str) -> dict[str, Any]:
         return {p: v["value"][-1] for p, v in (await self.get_raw(path)).items()}
@@ -615,7 +619,7 @@ class DeviceZI:
     async def get_measurement_data(
         self,
         channel: int,
-        acquisition_type: AcquisitionType,
+        rt_execution_info: RtExecutionInfo,
         result_indices: list[int],
         num_results: int,
         hw_averages: int,
@@ -688,9 +692,8 @@ class DeviceZI:
     ]:
         artifacts = recipe_data.scheduled_experiment.artifacts
         rt_execution_info = recipe_data.rt_execution_infos[rt_section_uid]
-        with_pipeliner = rt_execution_info.pipeliner_chunk_count is not None
 
-        if with_pipeliner and not self.has_pipeliner:
+        if rt_execution_info.with_pipeliner and not self.has_pipeliner:
             raise LabOneQControllerException(
                 f"{self.dev_repr}: Pipeliner is not supported by the device."
             )
@@ -700,13 +703,13 @@ class DeviceZI:
         wf_eff = self._choose_wf_collector(elf_nodes, wf_nodes)
         upload_ready_conditions: dict[str, Any] = {}
 
-        if with_pipeliner:
+        if rt_execution_info.with_pipeliner:
             elf_nodes.extend(self.pipeliner_prepare_for_upload(awg_index))
 
-        for pipeline_chunk in range(rt_execution_info.pipeliner_chunk_count or 1):
+        for pipeliner_job in range(rt_execution_info.pipeliner_jobs):
             effective_nt_step = (
-                NtStepKey(indices=tuple([*nt_step.indices, pipeline_chunk]))
-                if with_pipeliner
+                NtStepKey(indices=tuple([*nt_step.indices, pipeliner_job]))
+                if rt_execution_info.with_pipeliner
                 else nt_step
             )
             rt_exec_step = next(
@@ -720,33 +723,16 @@ class DeviceZI:
                 None,
             )
 
-            if with_pipeliner:
+            if rt_execution_info.with_pipeliner:
                 rt_exec_step = self._pipeliner_reload_tracker[awg_index].calc_next_step(
-                    pipeline_chunk=pipeline_chunk,
+                    pipeliner_job=pipeliner_job,
                     rt_exec_step=rt_exec_step,
                 )
 
             if rt_exec_step is None:
                 continue
 
-            seqc_code = self.prepare_seqc(
-                artifacts,
-                rt_exec_step.seqc_ref,
-            )
-            waves = self.prepare_waves(
-                artifacts,
-                rt_exec_step.wave_indices_ref,
-            )
-            command_table = self.prepare_command_table(
-                artifacts,
-                rt_exec_step.wave_indices_ref,
-            )
-            integration_weights = self.prepare_integration_weights(
-                artifacts,
-                recipe_data.recipe.integrator_allocations,
-                rt_exec_step.kernel_indices_ref,
-            )
-
+            seqc_code = self.prepare_seqc(artifacts, rt_exec_step.seqc_ref)
             if seqc_code is not None:
                 seqc_item = SeqCCompileItem(
                     dev_type=self.dev_type,
@@ -765,6 +751,7 @@ class DeviceZI:
                 )
                 upload_ready_conditions.update(self._elf_upload_condition(awg_index))
 
+            waves = self.prepare_waves(artifacts, rt_exec_step.wave_indices_ref)
             if waves is not None:
                 acquisition_type = RtExecutionInfo.get_acquisition_type_def(
                     rt_execution_info
@@ -774,21 +761,41 @@ class DeviceZI:
                         awg_index, waves, acquisition_type
                     )
                 )
+
+            command_table = self.prepare_command_table(
+                artifacts, rt_exec_step.wave_indices_ref
+            )
             if command_table is not None:
                 wf_eff.extend(
                     self.prepare_upload_command_table(awg_index, command_table)
                 )
+
+            integration_weights = self.prepare_integration_weights(
+                artifacts,
+                recipe_data.recipe.integrator_allocations,
+                rt_exec_step.kernel_indices_ref,
+            )
             if integration_weights is not None:
                 wf_eff.extend(
                     self.prepare_upload_all_integration_weights(
                         awg_index, integration_weights
                     )
                 )
-            if with_pipeliner:
+
+            wf_eff.extend(
+                self.prepare_pipeliner_job_nodes(
+                    recipe_data,
+                    rt_section_uid,
+                    AwgKey(initialization.device_uid, awg_index),
+                    pipeliner_job,
+                )
+            )
+
+            if rt_execution_info.with_pipeliner:
                 # For devices with pipeliner, wf_eff == elf_nodes
                 wf_eff.extend(self.pipeliner_commit(awg_index))
 
-        if with_pipeliner:
+        if rt_execution_info.with_pipeliner:
             upload_ready_conditions.update(self.pipeliner_ready_conditions(awg_index))
 
         elf_nodes_actions = await self.maybe_async(elf_nodes)
@@ -1086,6 +1093,15 @@ class DeviceZI:
     ) -> NodeCollector:
         raise NotImplementedError
 
+    def prepare_pipeliner_job_nodes(
+        self,
+        recipe_data: RecipeData,
+        rt_section_uid: str,
+        awg_key: AwgKey,
+        pipeliner_job: int,
+    ) -> NodeCollector:
+        return NodeCollector()
+
     def pipeliner_prepare_for_upload(self, index: int) -> NodeCollector:
         return []
 
@@ -1125,12 +1141,9 @@ class DeviceZI:
         nc = NodeCollector(base=f"/{self.serial}/")
         _logger.debug("%s: Executing AWGS...", self.dev_repr)
 
-        if self._daq is not None:
-            for awg_index in self._allocated_awgs:
-                _logger.debug(
-                    "%s: Starting AWG #%d sequencer", self.dev_repr, awg_index
-                )
-                nc.add(f"awgs/{awg_index}/enable", 1, cache=False)
+        for awg_index in self._allocated_awgs:
+            _logger.debug("%s: Starting AWG #%d sequencer", self.dev_repr, awg_index)
+            nc.add(f"awgs/{awg_index}/enable", 1, cache=False)
 
         return await self.maybe_async(nc)
 

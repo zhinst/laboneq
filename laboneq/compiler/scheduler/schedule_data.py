@@ -26,3 +26,8 @@ class ScheduleData:
 
     def __post_init__(self):
         self.TINYSAMPLE = self.settings.TINYSAMPLE
+
+    def reset(self):
+        """`ScheduleData` is persistent between scheduler runs, so we must clear the
+        cache of acquire pulses that are included in the schedule."""
+        self.acquire_pulses = {}

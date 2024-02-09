@@ -13,6 +13,7 @@ from laboneq.core.types.enums import (
     ExecutionType,
     RepetitionMode,
 )
+from laboneq.dsl import Parameter
 from laboneq.dsl.experiment.context import (
     Context,
     peek_context,
@@ -222,6 +223,7 @@ class MatchSectionContextManager(SectionContextManagerBase):
         handle: str | None = None,
         user_register: int | None = None,
         prng_sample: PRNGSample | None = None,
+        sweep_parameter: Parameter | None = None,
         uid=None,
         play_after=None,
         local=None,
@@ -237,6 +239,8 @@ class MatchSectionContextManager(SectionContextManagerBase):
             kwargs["user_register"] = user_register
         if prng_sample is not None:
             kwargs["prng_sample"] = prng_sample
+        if sweep_parameter is not None:
+            kwargs["sweep_parameter"] = sweep_parameter
         if local is not None:
             kwargs["local"] = local
         super().__init__(kwargs=kwargs)

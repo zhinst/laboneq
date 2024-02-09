@@ -716,13 +716,10 @@ class CodeGenerator:
         ):
             self._gen_seq_c_per_awg(awg, events, pulse_defs)
 
-        for (
-            awg,
-            target_fb_register,
-        ) in self._feedback_register_allocator.target_feedback_registers.items():
-            self._feedback_register_config[
-                awg
-            ].target_feedback_register = target_fb_register
+        tgt_feedback_regs = self._feedback_register_allocator.target_feedback_registers
+        for awg, target_fb_register in tgt_feedback_regs.items():
+            feedback_reg_config = self._feedback_register_config[awg]
+            feedback_reg_config.target_feedback_register = target_fb_register
 
     @staticmethod
     def _calc_global_awg_params(awg: AWGInfo) -> Tuple[float, float]:
@@ -1399,9 +1396,10 @@ class CodeGenerator:
             )
             raise LabOneQException(f"Compiler error. {msg}") from error
 
-        self._feedback_register_config[
-            awg.key
-        ].command_table_offset = handler.command_table_match_offset
+        fb_register_config = self._feedback_register_config[awg.key]
+        fb_register_config.command_table_offset = handler.command_table_match_offset
+        if handler.use_zsync_feedback is False:
+            fb_register_config.source_feedback_register = "local"
 
         _logger.debug(
             "***  Finished event processing, loop_stack_generators: %s",
@@ -1834,7 +1832,7 @@ class CodeGenerator:
                 start = None
                 end = None
                 acquisition_types = set()
-                feedback_registers = list()
+                feedback_register: None | int = None
                 play: List[AWGEvent] = []
                 acquire: List[AWGEvent] = []
                 for x in sampled_event_list:
@@ -1846,9 +1844,16 @@ class CodeGenerator:
                         start = x.start
                         if "acquisition_type" in x.params:
                             acquisition_types.update(x.params["acquisition_type"])
-                        feedback_register = x.params.get("feedback_register")
-                        if feedback_register is not None:
-                            feedback_registers.append(feedback_register)
+                        this_feedback_register = x.params.get("feedback_register")
+                        if this_feedback_register is not None:
+                            if (
+                                feedback_register is not None
+                                and feedback_register != this_feedback_register
+                            ):
+                                raise LabOneQException(
+                                    "Conflicting feedback register allocation detected, please contact development."
+                                )
+                            feedback_register = this_feedback_register
                         acquire.append(x)
                         end = x.end if end is None else max(end, x.end)
                 if len(play) > 0 and len(acquire) == 0 and has_acquire:
@@ -1856,10 +1861,6 @@ class CodeGenerator:
                     for log_event in sampled_event_list:
                         _logger.warning("  %s", log_event)
                     raise Exception("Play and acquire must happen at the same time")
-                if len(feedback_registers) > 1:
-                    _logger.warning(
-                        "Conflicting feedback register allocation detected, please contact development."
-                    )
                 if len(play) > 0 or len(acquire) > 0:
                     end = (
                         round(end / DeviceType.SHFQA.sample_multiple)
@@ -1876,9 +1877,7 @@ class CodeGenerator:
                             "acquire_handles": [
                                 a.params["acquire_handles"][0] for a in acquire
                             ],
-                            "feedback_register": None
-                            if len(feedback_registers) == 0
-                            else feedback_registers[0],
+                            "feedback_register": feedback_register,
                         },
                     )
 

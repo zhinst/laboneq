@@ -48,7 +48,7 @@ class Parameter(ABC):
 
 
 class _ParameterArithmeticMixin(NDArrayOperatorsMixin):
-    """A mixin that implments arithmetic using numpy's ufunc hooks.
+    """A mixin that implements arithmetic using numpy's ufunc hooks.
 
     Classes that include this mixin should provide a `.values`
     attribute or property that gives an [ArrayLike][] containing

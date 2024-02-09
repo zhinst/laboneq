@@ -58,8 +58,12 @@ def _integration_weights_by_signal(
         if iw["filename"] not in kernel_indices_ref:
             continue
 
-        # discard all but the first kernel in case of MSD
-        kernel_name_by_signal.update({k: v[0] for k, v in iw["signals"].items()})
+        if iw["signals"]:
+            # discard all but the first kernel in case of MSD
+            for k, v in iw["signals"].items():
+                # ensure no failure if no integration kernel is defined
+                if v:
+                    kernel_name_by_signal.update({k: v[0]})
 
     kernel_samples_by_signal: dict[str, np.ndarray] = {}
     for signal, kernel in kernel_name_by_signal.items():

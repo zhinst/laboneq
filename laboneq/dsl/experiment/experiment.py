@@ -1040,6 +1040,7 @@ class Experiment:
             uid=uid,
             handle=handle,
             user_register=None,
+            sweep_parameter=None,
             play_after=play_after,
             local=True,
         )
@@ -1076,6 +1077,7 @@ class Experiment:
             uid=uid,
             handle=handle,
             user_register=None,
+            sweep_parameter=None,
             play_after=play_after,
             local=False,
         )
@@ -1087,17 +1089,21 @@ class Experiment:
             uid,
             handle,
             user_register,
+            sweep_parameter,
             local,
             play_after=None,
         ):
             self.exp = experiment
-            args = {"handle": handle}
+            args = {
+                "handle": handle,
+                "local": local,
+                "user_register": user_register,
+                "sweep_parameter": sweep_parameter,
+            }
             if uid is not None:
                 args["uid"] = uid
             if play_after is not None:
                 args["play_after"] = play_after
-            args["local"] = local
-            args["user_register"] = user_register
 
             self.section = Match(**args)
 
@@ -1112,6 +1118,7 @@ class Experiment:
         self,
         handle: str | None = None,
         user_register: int | None = None,
+        sweep_parameter: Parameter | None = None,
         uid: str | None = None,
         play_after: str | Section | list[str | Section] | None = None,
     ):
@@ -1140,6 +1147,7 @@ class Experiment:
             handle: A unique identifier string that allows to retrieve the
                 acquired data.
             user_register: The user register to use for the match.
+            sweep_parameter: The sweep_parameter to use for the match.
             play_after: Play this section after the end of the section(s) with the
                 given ID(s). Defaults to None.
 
@@ -1149,6 +1157,7 @@ class Experiment:
             uid=uid,
             handle=handle,
             user_register=user_register,
+            sweep_parameter=sweep_parameter,
             play_after=play_after,
             local=None,
         )

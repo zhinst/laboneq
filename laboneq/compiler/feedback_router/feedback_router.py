@@ -8,9 +8,7 @@ from functools import singledispatch
 from typing import Literal, Union
 
 from laboneq._utils import cached_method
-from laboneq.compiler.common.awg_info import AWGInfo, AwgKey
-from laboneq.compiler.common.awg_signal_type import AWGSignalType
-from laboneq.compiler.common.device_type import DeviceType
+from laboneq.compiler.common.awg_info import AwgKey
 from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.feedback_register_config import FeedbackRegisterConfig
 from laboneq.compiler.common.signal_obj import SignalObj
@@ -60,11 +58,14 @@ class FeedbackRouter:
         for awg in self._awgs.values():
             if (tx_qa := self._transmitter_qa_for_awg(awg.key)) is None:
                 continue
+            feedback_register_config = feedback_register_configs[awg.key]
             qa_awg, qa_signal = tx_qa
             register = feedback_register_configs[qa_awg].target_feedback_register
             assert register is not None
 
-            use_local_feedback = self._local_feedback_allowed(awg, self._awgs[qa_awg])
+            use_local_feedback = (
+                feedback_register_config.source_feedback_register == "local"
+            )
 
             register_bitshift, width, mask = self._register_bitshift(
                 register,
@@ -87,7 +88,6 @@ class FeedbackRouter:
                         "Measurement result must not span across indices"
                     )
 
-            feedback_register_config = feedback_register_configs[awg.key]
             feedback_register_config.source_feedback_register = register
             feedback_register_config.codeword_bitshift = codeword_bitshift
             feedback_register_config.register_index_select = register_index_select
@@ -97,11 +97,7 @@ class FeedbackRouter:
     def _transmitter_qa_for_awg(self, awg_key: AwgKey) -> tuple[AwgKey, str] | None:
         """Find the QA core that is transmitting feedback data to this AWG."""
         awg = self._awgs[AwgKey(awg_key.device_id, awg_key.awg_number)]
-        signal_type = awg.signal_type
-        if signal_type == AWGSignalType.DOUBLE:
-            awg_signals = {f"{awg.signal_channels[0][0]}_{awg.signal_channels[1][0]}"}
-        else:
-            awg_signals = {c for c, _ in awg.signal_channels}
+        awg_signals = {c for c, _ in awg.signal_channels}
         qa_signal_ids = {
             h.acquire
             for h in self._feedback_connections.values()
@@ -177,16 +173,6 @@ class FeedbackRouter:
         else:
             raise AssertionError(f"Signal {qa_signal} not found in register {register}")
         return register_bitshift, width, mask
-
-    @staticmethod
-    def _local_feedback_allowed(sg_awg: AWGInfo, qa_awg: AWGInfo):
-        # todo: this check for QC is quite brittle
-
-        return (
-            sg_awg.device_type == DeviceType.SHFSG
-            and qa_awg.device_type == DeviceType.SHFQA
-            and sg_awg.device_id == f"{qa_awg.device_id}_sg"
-        )
 
 
 @singledispatch

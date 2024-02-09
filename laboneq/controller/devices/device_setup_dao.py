@@ -6,7 +6,7 @@ from __future__ import annotations
 import copy
 import logging
 import math
-from typing import TYPE_CHECKING, Iterator
+from typing import TYPE_CHECKING, ItemsView, Iterator
 
 from laboneq.controller.communication import ServerQualifier
 from laboneq.controller.devices.device_zi import DeviceOptions, DeviceQualifier
@@ -22,11 +22,8 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 
-def _make_server_qualifier(
-    server: TargetServer, dry_run: bool, ignore_version_mismatch: bool
-):
+def _make_server_qualifier(server: TargetServer, ignore_version_mismatch: bool):
     return ServerQualifier(
-        dry_run=dry_run,
         host=server.host,
         port=server.port,
         ignore_version_mismatch=ignore_version_mismatch,
@@ -34,7 +31,7 @@ def _make_server_qualifier(
 
 
 def _make_device_qualifier(
-    target_device: TargetDevice, dry_run: bool, has_shf: bool
+    target_device: TargetDevice, has_shf: bool
 ) -> DeviceQualifier:
     driver = target_device.device_type.name
     options = DeviceOptions(
@@ -58,7 +55,6 @@ def _make_device_qualifier(
         server_uid=target_device.server.uid,
         driver=driver,
         options=options,
-        dry_run=dry_run,
     )
 
 
@@ -66,14 +62,12 @@ class DeviceSetupDAO:
     def __init__(
         self,
         target_setup: TargetSetup,
-        dry_run: bool = True,
         ignore_version_mismatch: bool = False,
     ):
         self._target_setup = target_setup
         self._servers: dict[str, ServerQualifier] = {
             server.uid: _make_server_qualifier(
                 server=server,
-                dry_run=dry_run,
                 ignore_version_mismatch=ignore_version_mismatch,
             )
             for server in target_setup.servers
@@ -89,9 +83,7 @@ class DeviceSetupDAO:
                 break
 
         self._devices: list[DeviceQualifier] = [
-            _make_device_qualifier(
-                target_device=device, dry_run=dry_run, has_shf=has_shf
-            )
+            _make_device_qualifier(target_device=device, has_shf=has_shf)
             for device in target_setup.devices
         ]
         self._used_outputs: dict[str, dict[str, list[int]]] = {
@@ -107,17 +99,17 @@ class DeviceSetupDAO:
         }
 
     @property
-    def servers(self) -> Iterator[tuple[str, ServerQualifier]]:
+    def servers(self) -> ItemsView[str, ServerQualifier]:
         return self._servers.items()
 
     @property
     def instruments(self) -> Iterator[DeviceQualifier]:
         return iter(self._devices)
 
-    def downlinks_by_device_uid(self, device_uid: str) -> list[str]:
+    def downlinks_by_device_uid(self, device_uid: str) -> list[tuple[str, str]]:
         return self._downlinks[device_uid]
 
-    def resolve_ls_path_outputs(self, ls_path: str) -> tuple[str, set[int]]:
+    def resolve_ls_path_outputs(self, ls_path: str) -> tuple[str | None, set[int]]:
         for device_uid, used_outputs in self._used_outputs.items():
             outputs = used_outputs.get(ls_path)
             if outputs:

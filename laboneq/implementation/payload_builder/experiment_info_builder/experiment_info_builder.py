@@ -275,11 +275,17 @@ class ExperimentInfoBuilder:
         self, amp_pump: AmplifierPump, channel
     ) -> AmplifierPumpInfo:
         return AmplifierPumpInfo(
-            pump_freq=self.opt_param(amp_pump.pump_freq, nt_only=True),
+            pump_frequency=self.opt_param(amp_pump.pump_frequency, nt_only=True),
             pump_power=self.opt_param(amp_pump.pump_power, nt_only=True),
-            cancellation=amp_pump.cancellation,
-            alc_engaged=amp_pump.alc_engaged,
-            use_probe=amp_pump.use_probe,
+            pump_on=amp_pump.pump_on,
+            pump_filter_on=amp_pump.pump_filter_on,
+            cancellation_on=amp_pump.cancellation_on,
+            cancellation_phase=self.opt_param(amp_pump.cancellation_phase),
+            cancellation_attenuation=self.opt_param(amp_pump.cancellation_attenuation),
+            cancellation_source=amp_pump.cancellation_source,
+            cancellation_source_frequency=amp_pump.cancellation_source_frequency,
+            alc_on=amp_pump.alc_on,
+            probe_on=amp_pump.probe_on,
             probe_frequency=self.opt_param(amp_pump.probe_frequency, nt_only=True),
             probe_power=self.opt_param(amp_pump.probe_power, nt_only=True),
             channel=channel,
@@ -481,8 +487,8 @@ class ExperimentInfoBuilder:
         return param_info
 
     def opt_param(
-        self, value: float | int | complex | Parameter, nt_only=False
-    ) -> float | int | complex | ParameterInfo:
+        self, value: float | int | complex | None | Parameter, nt_only=False
+    ) -> float | int | complex | ParameterInfo | None:
         """Pass through numbers, but convert `Parameter` to `ParameterInfo`
 
         Args:
@@ -842,6 +848,7 @@ class ExperimentInfoBuilder:
         local = None
         match_user_register = None
         match_prng_sample = None
+        match_sweep_parameter: ParameterInfo | None = None
         if isinstance(section, Match):
             match_handle = section.handle
             local = section.local
@@ -849,6 +856,18 @@ class ExperimentInfoBuilder:
             match_prng_sample = (
                 section.prng_sample.uid if section.prng_sample is not None else None
             )
+            match_sweep_parameter = self.opt_param(
+                section.sweep_parameter if section.sweep_parameter is not None else None
+            )
+            if (
+                match_handle is None
+                and match_user_register is None
+                and match_sweep_parameter is None
+                and match_prng_sample is None
+            ):
+                raise LabOneQException(
+                    f"Match section '{section.uid}' requires a target (measurement handle, sweep parameter, ...)"
+                )
         state = getattr(section, "state", None)
 
         this_acquisition_type = None
@@ -871,6 +890,7 @@ class ExperimentInfoBuilder:
             match_handle=match_handle,
             match_user_register=match_user_register,
             match_prng_sample=match_prng_sample,
+            match_sweep_parameter=match_sweep_parameter,
             state=state,
             local=local,
             execution_type=execution_type,

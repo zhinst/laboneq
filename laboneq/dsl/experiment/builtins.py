@@ -110,6 +110,7 @@ def match(
     handle: str | None = None,
     user_register: int | None = None,
     prng_sample: PRNGSample | None = None,
+    sweep_parameter: Parameter | None = None,
     uid: str | None = None,
     play_after: str | list[str] | None = None,
     local: bool | None = None,
@@ -118,6 +119,7 @@ def match(
         handle=handle,
         user_register=user_register,
         prng_sample=prng_sample,
+        sweep_parameter=sweep_parameter,
         uid=uid,
         play_after=play_after,
         local=local,
@@ -292,7 +294,9 @@ def prng_setup(range: int, seed=1, uid=None):
 def prng_loop(prng: PRNG, count=1, uid=None):
     from laboneq.dsl.prng import PRNGSample
 
-    prng_sample = PRNGSample(uid=uid, prng=prng, count=count)
+    maybe_uid = {"uid": uid} if uid is not None else {}
+
+    prng_sample = PRNGSample(prng=prng, count=count, **maybe_uid)
     return PRNGLoopContextManager(prng_sample, uid)
 
 

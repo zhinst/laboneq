@@ -91,8 +91,6 @@ class HighPassCompensation(Observable):
                 FutureWarning,
                 stacklevel=2,
             )
-        else:
-            self.clearing = HighPassCompensationClearing.RISE
         super().__post_init__()
 
 

@@ -120,10 +120,19 @@ def convert_amplifier_pump(
         return obj
     return calibration.AmplifierPump(
         uid=obj.uid,
-        pump_freq=convert_maybe_parameter(obj.pump_freq),
+        pump_on=obj.pump_on,
+        pump_frequency=convert_maybe_parameter(obj.pump_frequency),
         pump_power=convert_maybe_parameter(obj.pump_power),
-        alc_engaged=obj.alc_engaged,
-        use_probe=obj.use_probe,
+        pump_filter_on=obj.pump_filter_on,
+        cancellation_on=obj.cancellation_on,
+        cancellation_phase=convert_maybe_parameter(obj.cancellation_phase),
+        cancellation_attenuation=convert_maybe_parameter(obj.cancellation_attenuation),
+        cancellation_source=obj.cancellation_source,
+        cancellation_source_frequency=convert_maybe_parameter(
+            obj.cancellation_source_frequency
+        ),
+        alc_on=obj.alc_on,
+        probe_on=obj.probe_on,
         probe_frequency=convert_maybe_parameter(obj.probe_frequency),
         probe_power=convert_maybe_parameter(obj.probe_power),
     )

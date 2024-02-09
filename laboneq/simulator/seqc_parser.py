@@ -191,7 +191,6 @@ def parse_expression(item, runtime: SimpleRuntime):
             return runtime.setOscFreqByParam(func_name[4:], *args)
         else:
             raise RuntimeError(f"unknown function: {func_name}")
-            return  # Skipping unknown function
 
     raise TreeWalkException("not an expression")
 
@@ -322,6 +321,7 @@ class SeqCDescriptor:
     wave_index: dict[Any, Any] = None
     command_table: list[Any] = None
     is_spectroscopy: bool = False
+    feedback_command_table_offset: int = 0
 
 
 class Operation(Enum):
@@ -732,8 +732,7 @@ class SimpleRuntime:
     def _waves_from_command_table_entry(self, ct_entry):
         if "waveform" not in ct_entry:
             return None, None
-        if "index" not in ct_entry["waveform"]:
-            return None, None
+        assert "index" in ct_entry["waveform"]
         wave_index = ct_entry["waveform"]["index"]
         known_wave = WaveRefInfo(assigned_index=wave_index)
 
@@ -763,14 +762,17 @@ class SimpleRuntime:
         ZSYNC_DATA_PQSC_REGISTER_HD = 0b10000000001
         if ct_index == QA_DATA_PROCESSED_SG or ct_index == ZSYNC_DATA_PQSC_REGISTER_SG:
             assert self.descriptor.device_type == "SHFSG"
-            # todo(JL): Find a better index via the command table offset; take last for now
-            ct_index = self.descriptor.command_table[-1]["index"]
+            ct_index = self.descriptor.feedback_command_table_offset
         elif ct_index == ZSYNC_DATA_PQSC_REGISTER_HD:
             assert self.descriptor.device_type == "HDAWG"
-            # todo(JL): Find a better index via the command table offset; take last for now
-            ct_index = self.descriptor.command_table[-1]["index"]
+            ct_index = self.descriptor.feedback_command_table_offset
 
         ct_entry = self._command_table_by_index[ct_index]
+
+        if "waveform" in ct_entry and ct_entry["waveform"].get("playZero", False):
+            length = ct_entry["waveform"]["length"]
+            self.playZero(length)
+            return
 
         wave_names, known_wave = self._waves_from_command_table_entry(ct_entry)
 
@@ -1080,6 +1082,7 @@ def analyze_recipe(
                 sample_multiple=sample_multiple,
                 sampling_rate=sampling_rate,
                 output_port_delay=output_channel_delays.get(output_channels[0], 0.0),
+                feedback_command_table_offset=awg.command_table_match_offset,
             )
 
             precompensation_info = output_channel_precompensation.get(

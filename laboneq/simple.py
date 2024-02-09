@@ -5,8 +5,8 @@
 Convenience header for the LabOne Q project.
 """
 
+from laboneq import laboneq_logging
 from laboneq._token import install_token
-from laboneq.controller import laboneq_logging
 from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.dsl import LinearSweepParameter, SweepParameter
 from laboneq.dsl.calibration import (
@@ -14,26 +14,27 @@ from laboneq.dsl.calibration import (
     BounceCompensation,
     Calibratable,
     Calibration,
+    CancellationSource,
     ExponentialCompensation,
     FIRCompensation,
     HighPassCompensation,
     MixerCalibration,
     Oscillator,
-    Precompensation,
     OutputRoute,
+    Precompensation,
     SignalCalibration,
     units,
 )
-from laboneq.dsl.device import create_connection, DeviceSetup
+from laboneq.dsl.device import DeviceSetup, create_connection
 from laboneq.dsl.device.device_setup_helper import DeviceSetupHelper
 from laboneq.dsl.device.instruments import (
-    SHFQC,
-    SHFPPC,
-    SHFSG,
-    SHFQA,
     HDAWG,
-    UHFQA,
     PQSC,
+    SHFPPC,
+    SHFQA,
+    SHFQC,
+    SHFSG,
+    UHFQA,
 )
 from laboneq.dsl.enums import (
     AcquisitionType,
@@ -70,6 +71,10 @@ from laboneq.dsl.session import Session
 from laboneq.dsl.utils import has_onboard_lo
 from laboneq.implementation.data_storage.laboneq_database import DataStore
 from laboneq.openqasm3.gate_store import GateStore
-from laboneq.openqasm3.openqasm3_importer import exp_from_qasm, ExternResult
+from laboneq.openqasm3.openqasm3_importer import (
+    ExternResult,
+    exp_from_qasm,
+    exp_from_qasm_list,
+)
 from laboneq.pulse_sheet_viewer.pulse_sheet_viewer import show_pulse_sheet
 from laboneq.simulator.output_simulator import OutputSimulator

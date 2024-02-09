@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+from collections import defaultdict
 
 import functools
 import json
@@ -62,28 +63,32 @@ class NodeStr(NodeBase):
 @dataclass
 class NodeVectorBase(NodeBase):
     def node_value(self) -> Any:
-        return [{"vector": self.value}]
+        return [{"vector": self.value[0], "properties": self.value[1]}]
 
 
 @dataclass
 class NodeVectorFloat(NodeVectorBase):
-    value: npt.ArrayLike = field(default_factory=lambda: np.array([], dtype=np.float64))
+    value: tuple[npt.ArrayLike, dict[str, Any]] = field(
+        default_factory=lambda: (np.array([], dtype=np.float64), {})
+    )
 
 
 @dataclass
 class NodeVectorInt(NodeVectorBase):
-    value: npt.ArrayLike = field(default_factory=lambda: np.array([], dtype=np.int64))
+    value: tuple[npt.ArrayLike, dict[str, Any]] = field(
+        default_factory=lambda: (np.array([], dtype=np.int64), {})
+    )
 
 
 @dataclass
 class NodeVectorStr(NodeVectorBase):
-    value: str = ""
+    value: tuple[str, dict[str, Any]] = ("", {})
 
 
 @dataclass
 class NodeVectorComplex(NodeVectorBase):
-    value: npt.ArrayLike = field(
-        default_factory=lambda: np.array([], dtype=np.complex128)
+    value: tuple[npt.ArrayLike, dict[str, Any]] = field(
+        default_factory=lambda: (np.array([], dtype=np.complex128), {})
     )
 
 
@@ -166,12 +171,10 @@ class PollEvent:
 class DevEmu(ABC):
     "Base class emulating a device, specialized per device type."
 
-    def __init__(
-        self, serial: str, scheduler: sched.scheduler, dev_opts: dict[str, Any]
-    ):
+    def __init__(self, serial: str, emulator_state: EmulatorState):
         self._serial = serial
-        self._scheduler = scheduler
-        self._dev_opts = dev_opts
+        self._emulator_state = emulator_state
+        self._dev_opts = emulator_state.get_options(serial)
         self._node_tree: dict[str, NodeBase] = {}
         self._poll_queue: list[PollEvent] = []
         self._total_subscribed: int = 0
@@ -179,6 +182,11 @@ class DevEmu(ABC):
 
     def serial(self) -> str:
         return self._serial
+
+    def schedule(self, delay, action, argument=()):
+        self._emulator_state.scheduler.enter(
+            delay=delay, priority=0, action=action, argument=argument
+        )
 
     @abstractmethod
     def _node_def(self) -> dict[str, NodeInfo]:
@@ -215,7 +223,7 @@ class DevEmu(ABC):
         node.value = value
         if node.subscribed:
             self._poll_queue.append(
-                PollEvent(path=self._full_path(dev_path), value=value)
+                PollEvent(path=self._full_path(dev_path), value=node.node_value())
             )
         return node
 
@@ -234,7 +242,7 @@ class DevEmu(ABC):
     def getAsEvent(self, dev_path: str):
         node = self._get_node(dev_path)
         self._poll_queue.append(
-            PollEvent(path=self._full_path(dev_path), value=node.value)
+            PollEvent(path=self._full_path(dev_path), value=node.node_value())
         )
 
     def poll(self) -> list[PollEvent]:
@@ -253,6 +261,9 @@ class PipelinerEmu:
         self._parent_ref = ref(parent)
         self._pipeliner_base = pipeliner_base
         self._pipeliner_stop_hook = pipeliner_stop_hook
+        self._staging_slot: dict[int, int] = defaultdict(lambda: 0)
+        # self._pipelined[<channel>][<slot>][<path_part>] = <value>
+        self._pipelined: dict[int, list[dict[str, Any]]] = defaultdict(list)
 
     @property
     def _parent(self) -> DevEmu:
@@ -260,21 +271,37 @@ class PipelinerEmu:
         assert parent is not None
         return parent
 
+    def is_active(self, channel) -> bool:
+        mode: int = self._parent._get_node(
+            f"{self._pipeliner_base}/{channel}/pipeliner/mode"
+        ).value
+        return mode > 0
+
+    def _pipeline(self, node: NodeBase, item: str, channel: int):
+        if self.is_active(channel):
+            pipelined = self._pipelined[channel]
+            staging_slot = self._staging_slot[channel]
+            while len(pipelined) <= staging_slot:
+                pipelined.append({})
+            pipelined[-1][item] = node.value
+
+    def _pipeliner_mode(self, node: NodeBase, channel: int):
+        self._staging_slot[channel] = 0
+        self._pipelined[channel].clear()
+
     def _pipeliner_committed(self, channel: int):
-        avail_slots: int = self._parent._get_node(
-            f"{self._pipeliner_base}/{channel}/pipeliner/availableslots"
+        max_slots: int = self._parent._get_node(
+            f"{self._pipeliner_base}/{channel}/pipeliner/maxslots"
         ).value
         self._parent._set_val(
             f"{self._pipeliner_base}/{channel}/pipeliner/availableslots",
-            avail_slots - 1,
+            max_slots - self._staging_slot[channel],
         )
 
     def _pipeliner_commit(self, node: NodeBase, channel: int):
-        self._parent._scheduler.enter(
-            delay=0.001,
-            priority=0,
-            action=self._pipeliner_committed,
-            argument=(channel,),
+        self._staging_slot[channel] += 1
+        self._parent.schedule(
+            delay=0.001, action=self._pipeliner_committed, argument=(channel,)
         )
 
     def _pipeliner_reset(self, node: NodeBase, channel: int):
@@ -285,6 +312,8 @@ class PipelinerEmu:
         self._parent._set_val(
             f"{self._pipeliner_base}/{channel}/pipeliner/availableslots", max_slots
         )
+        self._staging_slot[channel] = 0
+        self._pipelined[channel].clear()
 
     def _pipeliner_stop(self, channel: int):
         # idle
@@ -295,16 +324,18 @@ class PipelinerEmu:
     def _pipeliner_enable(self, node: NodeBase, channel: int):
         # exec
         self._parent._set_val(f"{self._pipeliner_base}/{channel}/pipeliner/status", 1)
-        self._parent._scheduler.enter(
-            delay=0.001,
-            priority=0,
-            action=self._pipeliner_stop,
-            argument=(channel,),
+        self._parent.schedule(
+            delay=0.001, action=self._pipeliner_stop, argument=(channel,)
         )
 
     def _node_def_pipeliner(self) -> dict[str, NodeInfo]:
         nd = {}
         for channel in range(8):
+            nd[f"{self._pipeliner_base}/{channel}/pipeliner/mode"] = NodeInfo(
+                type=NodeType.INT,
+                default=0,
+                handler=partial(self._pipeliner_mode, channel=channel),
+            )
             nd[f"{self._pipeliner_base}/{channel}/pipeliner/maxslots"] = NodeInfo(
                 type=NodeType.INT,
                 default=1024,
@@ -379,8 +410,15 @@ class DevEmuHW(DevEmu):
         for p in self._node_tree.keys():
             if p not in ["system/preset/load", "system/preset/busy"]:
                 node_info = self._cached_node_def().get(p)
-                self._set_val(p, 0 if node_info is None else node_info.default)
-        self._scheduler.enter(delay=0.001, priority=0, action=self._preset_loaded)
+                self._set_val(
+                    p,
+                    0
+                    if node_info is None
+                    else node_info.type.value()._value
+                    if node_info.default is None
+                    else node_info.default,
+                )
+        self.schedule(delay=0.001, action=self._preset_loaded)
 
     def _node_def_common(self) -> dict[str, NodeInfo]:
         return {
@@ -434,7 +472,9 @@ class DevEmuHW(DevEmu):
             #     ]
             # }
             "raw/error/json/errors": NodeInfo(
-                type=NodeType.VECTOR_STR, read_only=True, default='{"messages":[]}'
+                type=NodeType.VECTOR_STR,
+                read_only=True,
+                default=('{"messages":[]}', {}),
             ),
             "system/preset/load": NodeInfo(
                 type=NodeType.INT, default=0, handler=self._preset_load
@@ -460,20 +500,14 @@ class DevEmuHDAWG(DevEmuHW):
         self._set_val(f"awgs/{awg_idx}/enable", 0)
 
     def _awg_execute(self, node: NodeBase, awg_idx):
-        self._scheduler.enter(
-            delay=0.001, priority=0, action=self._awg_stop, argument=(awg_idx,)
-        )
+        self.schedule(delay=0.001, action=self._awg_stop, argument=(awg_idx,))
 
     def _sample_clock_switched(self):
         self._set_val("system/clocks/sampleclock/status", 0)
 
     def _sample_clock(self, node: NodeBase):
         self._set_val("system/clocks/sampleclock/status", 2)
-        self._scheduler.enter(
-            delay=0.001,
-            priority=0,
-            action=self._sample_clock_switched,
-        )
+        self.schedule(delay=0.001, action=self._sample_clock_switched)
 
     def _ref_clock_switched(self, source):
         self._set_val("system/clocks/referenceclock/status", 0)
@@ -486,9 +520,8 @@ class DevEmuHDAWG(DevEmuHW):
             self._set_val("system/clocks/referenceclock/freq", target_freq)
 
     def _ref_clock(self, node: NodeBase):
-        self._scheduler.enter(
+        self.schedule(
             delay=0.001,
-            priority=0,
             action=self._ref_clock_switched,
             argument=(cast(NodeInt, node).value,),
         )
@@ -563,21 +596,23 @@ class DevEmuUHFQA(DevEmuHW):
                     integrator = result_index // 2
                     res_c = (42 + integrator + 1j * np.arange(length)).view(float)
                     res = res_c[result_index % 2 :: 2]
-                self._set_val(f"qas/0/result/data/{result_index}/wave", np.array(res))
+                self._set_val(
+                    f"qas/0/result/data/{result_index}/wave", (np.array(res), {})
+                )
         if monitor_enable != 0:
             length = self._get_node("qas/0/monitor/length").value
-            self._set_val("qas/0/monitor/inputs/0/wave", [52] * length)
-            self._set_val("qas/0/monitor/inputs/1/wave", [52] * length)
+            self._set_val("qas/0/monitor/inputs/0/wave", ([52] * length, {}))
+            self._set_val("qas/0/monitor/inputs/1/wave", ([52] * length, {}))
 
     def _awg_execute(self, node: NodeBase):
-        self._scheduler.enter(delay=0.001, priority=0, action=self._awg_stop)
+        self.schedule(delay=0.001, action=self._awg_stop)
 
     def _awg_ready(self):
         self._set_val("awgs/0/ready", 1)
 
     def _elf_upload(self, node: NodeBase):
         self._set_val("awgs/0/ready", 0)
-        self._scheduler.enter(delay=0.001, priority=0, action=self._awg_ready)
+        self.schedule(delay=0.001, action=self._awg_ready)
 
     def _node_def(self) -> dict[str, NodeInfo]:
         nd = {
@@ -594,7 +629,7 @@ class DevEmuUHFQA(DevEmuHW):
                 type=NodeType.INT, default=0, handler=self._awg_execute
             ),
             "awgs/0/elf/data": NodeInfo(
-                type=NodeType.VECTOR_INT, default=[], handler=self._elf_upload
+                type=NodeType.VECTOR_INT, default=([], {}), handler=self._elf_upload
             ),
             "awgs/0/ready": NodeInfo(type=NodeType.INT, default=0),
             "qas/0/monitor/inputs/0/wave": NodeInfo(type=NodeType.VECTOR_COMPLEX),
@@ -618,9 +653,8 @@ class Gen2Base(DevEmuHW):
         self._set_val("system/clocks/referenceclock/in/freq", freq)
 
     def _ref_clock(self, node: NodeBase):
-        self._scheduler.enter(
+        self.schedule(
             delay=0.001,
-            priority=0,
             action=self._ref_clock_switched,
             argument=(cast(NodeInt, node).value,),
         )
@@ -648,7 +682,7 @@ class DevEmuPQSC(Gen2Base):
         self._set_val("execution/enable", 0)
 
     def _trig_execute(self, node: NodeBase):
-        self._scheduler.enter(delay=0.001, priority=0, action=self._trig_stop)
+        self.schedule(delay=0.001, action=self._trig_stop)
 
     def _node_def(self) -> dict[str, NodeInfo]:
         nd = {
@@ -663,7 +697,10 @@ class DevEmuPQSC(Gen2Base):
             )
             nd[f"zsyncs/{zsync}/connection/serial"] = NodeInfo(
                 type=NodeType.VECTOR_STR,
-                default=self._dev_opts.get(f"zsyncs/{zsync}/connection/serial", ""),
+                default=(
+                    self._dev_opts.get(f"zsyncs/{zsync}/connection/serial", ""),
+                    {},
+                ),
             )
         return nd
 
@@ -674,8 +711,48 @@ class DevEmuSHFQABase(Gen2Base):
         self._qa_pipeliner = PipelinerEmu(
             parent=self,
             pipeliner_base="qachannels",
-            pipeliner_stop_hook=self._measurement_done,
+            pipeliner_stop_hook=self._pipeliner_done,
         )
+
+    def _push_readout_result(self, channel: int, length: int, averages: int):
+        self._set_val(
+            f"qachannels/{channel}/readout/result/acquired", length * averages
+        )
+        for integrator in range(16):
+            self._set_val(
+                f"qachannels/{channel}/readout/result/data/{integrator}/wave",
+                ((42 + integrator + 1j * np.arange(length)) / averages, {}),
+            )
+
+    def _push_spectroscopy_result(self, channel: int, length: int, averages: int):
+        self._set_val(
+            f"qachannels/{channel}/spectroscopy/result/acquired", length * averages
+        )
+        self._set_val(
+            f"qachannels/{channel}/spectroscopy/result/data/wave",
+            (np.array([(42 + 42j)] * length), {}),
+        )
+
+    def _pipeliner_done(self, channel: int):
+        pipelined_nodes: dict[str, Any] = {}
+        for slot in self._qa_pipeliner._pipelined[channel]:
+            for path, value in slot.items():
+                pipelined_nodes[path] = value
+
+            readout_enable = pipelined_nodes.get("readout/result/enable", 0)
+            spectroscopy_enable = pipelined_nodes.get("spectroscopy/result/enable", 0)
+            pipelined_nodes["readout/result/enable"] = 0
+            pipelined_nodes["spectroscopy/result/enable"] = 0
+
+            if readout_enable != 0:
+                length = pipelined_nodes.get("readout/result/length", 0)
+                averages = pipelined_nodes.get("readout/result/averages", 0)
+                self._push_readout_result(channel, length, averages)
+
+            if spectroscopy_enable != 0:
+                length = pipelined_nodes.get("spectroscopy/result/length", 0)
+                averages = pipelined_nodes.get("spectroscopy/result/averages", 0)
+                self._push_spectroscopy_result(channel, length, averages)
 
     def _measurement_done(self, channel: int):
         readout_enable = self._get_node(
@@ -684,22 +761,19 @@ class DevEmuSHFQABase(Gen2Base):
         spectroscopy_enable = self._get_node(
             f"qachannels/{channel}/spectroscopy/result/enable"
         ).value
-        scope_enable = self._get_node("scopes/0/enable").value
         self._set_val(f"qachannels/{channel}/readout/result/enable", 0)
         self._set_val(f"qachannels/{channel}/spectroscopy/result/enable", 0)
+
+        if self._qa_pipeliner.is_active(channel):
+            return
+
         if readout_enable != 0:
             length = self._get_node(f"qachannels/{channel}/readout/result/length").value
             averages = self._get_node(
                 f"qachannels/{channel}/readout/result/averages"
             ).value
-            self._set_val(
-                f"qachannels/{channel}/readout/result/acquired", length * averages
-            )
-            for integrator in range(16):
-                self._set_val(
-                    f"qachannels/{channel}/readout/result/data/{integrator}/wave",
-                    (42 + integrator + 1j * np.arange(length)) / averages,
-                )
+            self._push_readout_result(channel, length, averages)
+
         if spectroscopy_enable != 0:
             length = self._get_node(
                 f"qachannels/{channel}/spectroscopy/result/length"
@@ -707,14 +781,9 @@ class DevEmuSHFQABase(Gen2Base):
             averages = self._get_node(
                 f"qachannels/{channel}/spectroscopy/result/averages"
             ).value
-            self._set_val(
-                f"qachannels/{channel}/spectroscopy/result/acquired", length * averages
-            )
-            self._set_val(
-                f"qachannels/{channel}/spectroscopy/result/data/wave",
-                np.array([(42 + 42j)] * length),
-            )
-        if scope_enable != 0:
+            self._push_spectroscopy_result(channel, length, averages)
+
+        if self._get_node("scopes/0/enable").value != 0:
             # Assuming here that the scope was triggered by AWG and channels configured to capture
             # QA channels 1:1. Not emulating various trigger, input source, etc. settings!
             scope_single = self._get_node("scopes/0/single").value
@@ -724,7 +793,7 @@ class DevEmuSHFQABase(Gen2Base):
             for scope_ch in range(4):
                 self._set_val(
                     f"scopes/0/channels/{scope_ch}/wave",
-                    np.array([(52 + 52j)] * length),
+                    (np.array([(52 + 52j)] * length), {}),
                 )
 
     def _awg_stop_qa(self, channel: int):
@@ -732,11 +801,18 @@ class DevEmuSHFQABase(Gen2Base):
         self._measurement_done(channel)
 
     def _awg_execute_qa(self, node: NodeBase, channel: int):
-        self._scheduler.enter(
-            delay=0.001, priority=0, action=self._awg_stop_qa, argument=(channel,)
-        )
+        if not self._qa_pipeliner.is_active(channel):
+            self.schedule(delay=0.001, action=self._awg_stop_qa, argument=(channel,))
 
     def _node_def_qa(self) -> dict[str, NodeInfo]:
+        pipelineable_nodes: list[str] = [
+            "readout/result/enable",
+            "readout/result/length",
+            "readout/result/averages",
+            "spectroscopy/result/enable",
+            "spectroscopy/result/length",
+            "spectroscopy/result/averages",
+        ]
         nd = self._qa_pipeliner._node_def_pipeliner()
         for channel in range(4):
             nd[f"qachannels/{channel}/generator/enable"] = NodeInfo(
@@ -744,12 +820,14 @@ class DevEmuSHFQABase(Gen2Base):
                 default=0,
                 handler=partial(self._awg_execute_qa, channel=channel),
             )
-            nd[f"qachannels/{channel}/readout/result/enable"] = NodeInfo(
-                type=NodeType.INT, default=0
-            )
-            nd[f"qachannels/{channel}/spectroscopy/result/enable"] = NodeInfo(
-                type=NodeType.INT, default=0
-            )
+            for path_part in pipelineable_nodes:
+                nd[f"qachannels/{channel}/{path_part}"] = NodeInfo(
+                    type=NodeType.INT,
+                    default=0,
+                    handler=partial(
+                        self._qa_pipeliner._pipeline, item=path_part, channel=channel
+                    ),
+                )
             for integrator in range(16):
                 nd[
                     f"qachannels/{channel}/readout/result/data/{integrator}/wave"
@@ -790,9 +868,7 @@ class DevEmuSHFSGBase(Gen2Base):
         self._set_val(f"sgchannels/{channel}/awg/enable", 0)
 
     def _awg_execute_sg(self, node: NodeBase, channel: int):
-        self._scheduler.enter(
-            delay=0.001, priority=0, action=self._awg_stop_sg, argument=(channel,)
-        )
+        self.schedule(delay=0.001, action=self._awg_stop_sg, argument=(channel,))
 
     def _node_def_sg(self) -> dict[str, NodeInfo]:
         nd = self._sg_pipeliner._node_def_pipeliner()
@@ -885,35 +961,58 @@ _dev_type_map: dict[str | None, type[DevEmu]] = {
 }
 
 
+class EmulatorState:
+    def __init__(self):
+        self._dev_type_by_serial: dict[str, str] = {}
+        self._options: dict[str, dict[str, Any]] = defaultdict(dict)
+        self._scheduler = sched.scheduler()
+
+    @property
+    def scheduler(self) -> sched.scheduler:
+        return self._scheduler
+
+    def map_device_type(self, serial: str, type: str):
+        self._dev_type_by_serial[serial.upper()] = type.upper()
+
+    def get_device_type(self, serial: str) -> str | None:
+        return self._dev_type_by_serial.get(serial.upper())
+
+    def set_option(self, serial: str, option: str, value: Any):
+        self._options[serial.upper()][option] = value
+
+    def get_options(self, serial: str) -> dict[str, Any]:
+        return self._options[serial.upper()]
+
+
 class ziDAQServerEmulator:
     """A class replacing the 'zhinst.core.ziDAQServer', emulating its behavior
     to the extent required by LabOne Q SW without the real DataServer/HW.
     """
 
-    def __init__(self, host: str, port: int, api_level: int):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        api_level: int,
+        emulator_state: EmulatorState | None = None,
+    ):
+        if emulator_state is None:
+            emulator_state = EmulatorState()
+        self._emulator_state = emulator_state
+        self._emulator_state.map_device_type("ZI", "ZI")
+        self._emulator_state.set_option("ZI", "emu_server", self)
         if api_level is None:
             api_level = 6
         assert api_level == 6
         assert isinstance(port, int)
         super().__init__()
-        self._scheduler = sched.scheduler()
-        self._dev_type_by_serial: dict[str, str] = {"ZI": "ZI"}
         self._devices: dict[str, DevEmu] = {}
-        self._options: dict[str, dict[str, Any]] = {"ZI": {"emu_server": self}}
-
-    def map_device_type(self, serial: str, type: str):
-        self._dev_type_by_serial[serial.upper()] = type.upper()
-
-    def set_option(self, serial: str, option: str, value: Any):
-        dev_opts = self._options.setdefault(serial.upper(), {})
-        dev_opts[option] = value
 
     def _device_factory(self, serial: str) -> DevEmu:
-        dev_type = _dev_type_map.get(self._dev_type_by_serial.get(serial.upper()))
+        dev_type = _dev_type_map.get(self._emulator_state.get_device_type(serial))
         if dev_type is None:
             dev_type = _serial_to_device_type(serial)
-        dev_opts = self._options.setdefault(serial.upper(), {})
-        return dev_type(serial=serial, scheduler=self._scheduler, dev_opts=dev_opts)
+        return dev_type(serial=serial, emulator_state=self._emulator_state)
 
     def _device_lookup(self, serial: str, create: bool = True) -> DevEmu | None:
         serial = serial.upper()
@@ -1069,8 +1168,12 @@ class ziDAQServerEmulator:
         # TODO(2K): reshape results
         assert flat is True
         for event in events:
-            path_res = result.setdefault(event.path, {"value": []})
-            path_res["value"].append(event.value)
+            if "value" in event.value:
+                path_res = result.setdefault(event.path, {"value": []})
+                path_res["value"].extend(event.value["value"])
+            else:
+                path_res = result.setdefault(event.path, [])
+                path_res.extend(event.value)
         return result
 
     def _progress_scheduler(self, wait_time: float = 0.0):
@@ -1081,17 +1184,10 @@ class ziDAQServerEmulator:
 
         start = time.perf_counter()
         while True:
-            delay_till_next_event = self._scheduler.run(blocking=False)
+            delay_till_next_event = self._emulator_state.scheduler.run(blocking=False)
             elapsed = time.perf_counter() - start
             remaining = wait_time - elapsed
             if delay_till_next_event is None or delay_till_next_event > remaining:
                 _delay(remaining)
                 break
             _delay(delay_till_next_event)
-
-
-def set_emulation_option(api: Any, serial: str, option: str, value: Any):
-    if isinstance(api, ziDAQServerEmulator):
-        api.set_option(serial, option, value)
-    else:
-        raise AssertionError("Unexpected emulation implementation")

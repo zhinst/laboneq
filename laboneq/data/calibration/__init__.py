@@ -82,14 +82,25 @@ class Precompensation:
     FIR: FIRCompensation | None = None
 
 
+class CancellationSource(EnumReprMixin, Enum):
+    INTERNAL = "internal"
+    EXTERNAL = "external"
+
+
 @dataclass
 class AmplifierPump:
     uid: str = None
-    pump_freq: float | Parameter | None = None
+    pump_frequency: float | Parameter | None = None
     pump_power: float | Parameter | None = None
-    cancellation: bool = True
-    alc_engaged: bool = True
-    use_probe: bool = False
+    pump_on: bool = True
+    pump_filter_on: bool = True
+    cancellation_on: bool = True
+    cancellation_phase: float | Parameter | None = None
+    cancellation_attenuation: float | Parameter | None = None
+    cancellation_source: CancellationSource = CancellationSource.INTERNAL
+    cancellation_source_frequency: float | None = None
+    alc_on: bool = True
+    probe_on: bool = False
     probe_frequency: float | Parameter | None = None
     probe_power: float | Parameter | None = None
 

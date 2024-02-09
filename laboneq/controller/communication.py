@@ -14,9 +14,9 @@ from typing import TYPE_CHECKING, Any, Dict, List
 import numpy as np
 import zhinst.core
 from zhinst.toolkit import Session as TKSession
-from laboneq.controller.devices.device_utils import calc_dev_type
+from laboneq.controller.devices.device_utils import zhinst_core_version
 
-from laboneq.controller.devices.zi_emulator import ziDAQServerEmulator
+from laboneq.controller.devices.zi_emulator import EmulatorState, ziDAQServerEmulator
 from laboneq.controller.devices.zi_node_monitor import NodeMonitor
 
 from .cache import Cache
@@ -24,7 +24,7 @@ from .util import LabOneQControllerException
 from .versioning import LabOneVersion
 
 if TYPE_CHECKING:
-    from laboneq.controller.devices.device_zi import DeviceQualifier
+    pass
 
 _logger = logging.getLogger(__name__)
 
@@ -204,8 +204,7 @@ class ZiApiWrapperBase(ABC):
 
 @dataclass
 class ServerQualifier:
-    dry_run: bool = True
-    host: str = None
+    host: str | None = None
     port: int = 8004
     ignore_version_mismatch: bool = False
 
@@ -218,31 +217,21 @@ class DaqWrapper(ZiApiWrapperBase):
         self._server_qualifier = server_qualifier
         self._dataserver_version = LabOneVersion.LATEST
         self._vector_counter = 0
-        self.node_monitor = None
+        self._zi_api_object = self._make_zi_api()
+        self.node_monitor = NodeMonitor(self._zi_api_object)
 
-        ZiApiClass = (
-            ziDAQServerEmulator if server_qualifier.dry_run else zhinst.core.ziDAQServer
-        )
-
+    def _make_zi_api(self):
         try:
-            self._zi_api_object = ZiApiClass(
+            return zhinst.core.ziDAQServer(
                 self.server_qualifier.host,
                 self.server_qualifier.port,
                 self._API_LEVEL,
             )
-            self.node_monitor = NodeMonitor(self._zi_api_object)
         except RuntimeError as exp:
             raise LabOneQControllerException(str(exp)) from None
 
     async def validate_connection(self):
-        [major, minor] = zhinst.core.__version__.split(".")[0:2]
-        zhinst_core_version_str = f"{major}.{minor}"
-
-        if self._server_qualifier.dry_run:
-            # Ensure emulated data server version matches installed zhinst.core
-            self._zi_api_object.set_option(
-                "ZI", "about/version", zhinst_core_version_str
-            )
+        zhinst_core_version_str = zhinst_core_version()
 
         path = "/zi/about/version"
         result = await self.batch_get([DaqNodeGetAction(self, path)])
@@ -397,18 +386,26 @@ class DaqWrapper(ZiApiWrapperBase):
 
 
 class DaqWrapperDryRun(DaqWrapper):
-    def __init__(self, name, server_qualifier: ServerQualifier = None):
+    def __init__(
+        self,
+        name,
+        server_qualifier: ServerQualifier | None = None,
+        emulator_state: EmulatorState | None = None,
+    ):
         if server_qualifier is None:
             server_qualifier = ServerQualifier()
-        assert server_qualifier.dry_run is True
+        if emulator_state is None:
+            emulator_state = EmulatorState()
+        self._emulator_state = emulator_state
         super().__init__(name, server_qualifier)
 
-
-def map_device_type(daq: Any, device_qualifier: DeviceQualifier):
-    assert isinstance(daq, ziDAQServerEmulator)
-    daq.map_device_type(
-        device_qualifier.options.serial, calc_dev_type(device_qualifier)
-    )
+    def _make_zi_api(self):
+        return ziDAQServerEmulator(
+            self.server_qualifier.host,
+            self.server_qualifier.port,
+            self._API_LEVEL,
+            self._emulator_state,
+        )
 
 
 async def batch_set(all_actions: List[DaqNodeSetAction]):

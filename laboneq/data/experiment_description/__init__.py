@@ -130,6 +130,7 @@ class Match(Section):
     handle: str | None = None
     user_register: Optional[int] = None
     prng_sample: PRNGSample | None = None
+    sweep_parameter: Parameter | None = None
     local: Optional[bool] = None
 
 

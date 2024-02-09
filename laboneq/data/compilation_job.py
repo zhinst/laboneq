@@ -18,6 +18,8 @@ from laboneq.data.experiment_description import (
     SectionAlignment,
 )
 
+from laboneq.data.calibration import CancellationSource
+
 if TYPE_CHECKING:
     from numpy.typing import ArrayLike
     from laboneq.core.types.enums.acquisition_type import AcquisitionType
@@ -172,6 +174,7 @@ class SectionInfo:
     match_handle: str | None = None
     match_user_register: int | None = None
     match_prng_sample: str | None = None
+    match_sweep_parameter: ParameterInfo | None = None
     local: bool | None = None
     state: int | None = None
     prng: PRNGInfo | None = None
@@ -241,11 +244,17 @@ class SignalRange:
 @dataclass
 class AmplifierPumpInfo:
     device: DeviceInfo | None = None
-    pump_freq: float | ParameterInfo | None = None
+    pump_frequency: float | ParameterInfo | None = None
     pump_power: float | ParameterInfo | None = None
-    cancellation: bool = True
-    alc_engaged: bool = True
-    use_probe: bool = False
+    pump_on: bool = True
+    pump_filter_on: bool = True
+    cancellation_on: bool = True
+    cancellation_phase: float | ParameterInfo | None = None
+    cancellation_attenuation: float | ParameterInfo | None = None
+    cancellation_source: CancellationSource = CancellationSource.INTERNAL
+    cancellation_source_frequency: float | None = None
+    alc_on: bool = True
+    probe_on: bool = False
     probe_frequency: float | ParameterInfo | None = None
     probe_power: float | ParameterInfo | None = None
     channel: int | None = None

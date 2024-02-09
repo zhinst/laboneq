@@ -246,6 +246,9 @@ def convert_Match(orig: MatchDSL):
     retval.prng_sample = (
         convert_PRNGSample(orig.prng_sample) if orig.prng_sample is not None else None
     )
+    retval.sweep_parameter = convert_dynamic(
+        orig.sweep_parameter, converter_function_directory
+    )
     retval.local = orig.local
     retval.uid = orig.uid
     return post_process(orig, retval, converter_function_directory)

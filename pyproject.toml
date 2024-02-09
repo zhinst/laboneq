@@ -37,7 +37,7 @@ dependencies = [
     "jsonschema",
     "matplotlib",
     "cycler",
-    "numpy",
+    "numpy<2.0",
     "openpulse",
     "openqasm3",
     "orjson",
@@ -54,9 +54,10 @@ dependencies = [
     "attrs",
     "sortedcontainers",
     "typing_extensions",
-    "zhinst-core~=23.10.52579",
-    "zhinst-toolkit~=0.6.2",
-    "zhinst-utils==0.3.6",
+    "zhinst-core~=24.1.54288",
+    "zhinst-toolkit~=0.6.3",
+    "zhinst-utils==0.4.0",
+    "zhinst-timing-models~= 24.1.54288",
     "unsync==1.4.0",
 ]
 

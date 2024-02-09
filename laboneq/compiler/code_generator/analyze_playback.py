@@ -875,6 +875,8 @@ def analyze_play_wave_times(
                         "signal_id": signal_id,
                     },
                 )
+                if len(signal_ids) > 1:
+                    interval_event.params["multiplexed_signal_ids"] = signal_ids
                 interval_events.add(start, interval_event)
 
     # A value of 'None' indicates that we do not know the current value (e.g. after a

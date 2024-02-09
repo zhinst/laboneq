@@ -24,9 +24,10 @@ _logger = logging.getLogger(__name__)
 class DevicePRETTYPRINTER(DeviceZI):
     def __init__(self, device_qualifier: DeviceQualifier, daq: DaqWrapper):
         super().__init__(device_qualifier=device_qualifier, daq=daq)
+        self._node_monitor = self.daq.node_monitor
         self._device_class = 0x1
 
-    async def connect(self):
+    async def connect(self, emulator_state: Any):
         _logger.info(
             "%s: Connected to %s",
             self.dev_repr,

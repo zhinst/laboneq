@@ -78,7 +78,7 @@ class Session:
     def __init__(
         self,
         device_setup: DeviceSetup | None = None,
-        log_level: int = logging.INFO,
+        log_level: int = None,
         performance_log: bool = False,
         configure_logging: bool = True,
         _last_results=None,
@@ -93,7 +93,8 @@ class Session:
                 of the object.
             log_level: Log level of the session.
                 If no log level is specified, the session will use the logging.INFO level.
-                Other possible levels refer to the logging python package.
+                Other possible levels refer to the logging python package and
+                `laboneq.laboneq_logging`.
             performance_log: Flag to enable performance logging.
                 When True, the system creates a separate logfile containing logs aimed to analyze system performance.
             configure_logging:
@@ -117,8 +118,7 @@ class Session:
             LabOneQFacade.init_logging(
                 log_level=log_level, performance_log=performance_log
             )
-            self._logger = logging.getLogger(__name__)
-            self._logger.setLevel(log_level)
+            self._logger = logging.getLogger("laboneq")
         else:
             self._logger = logging.getLogger("null")
         self._neartime_callbacks: Dict[str, Callable] = {}
@@ -547,6 +547,10 @@ class Session:
     def log_level(self) -> int:
         """The current log level."""
         return self._logger.level
+
+    @log_level.setter
+    def log_level(self, value: int):
+        self._logger.setLevel(value)
 
     @property
     def logger(self):

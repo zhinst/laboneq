@@ -182,18 +182,3 @@ class DevicePQSC(DeviceZI):
         reset_nodes = await super().collect_reset_nodes()
         reset_nodes.extend(await self.maybe_async(nc))
         return reset_nodes
-
-    def _prepare_emulator(self):
-        super()._prepare_emulator()
-
-        # Make emulated PQSC aware of the down-stream devices
-        if self.dry_run:
-            enabled_zsyncs = {}
-            for port, _, to_dev in self.downlinks():
-                if enabled_zsyncs.get(port.lower()) == to_dev.serial:
-                    continue
-                enabled_zsyncs[port.lower()] = to_dev.serial
-                self._set_emulation_option(
-                    option=f"{port.lower()}/connection/serial",
-                    value=to_dev.serial[3:],
-                )

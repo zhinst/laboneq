@@ -21,10 +21,13 @@ from laboneq.controller.communication import (
 )
 from laboneq.controller.devices.device_factory import DeviceFactory
 from laboneq.controller.devices.device_setup_dao import DeviceSetupDAO
+from laboneq.controller.devices.device_utils import prepare_emulator_state
 from laboneq.controller.devices.device_zi import DeviceZI
+from laboneq.controller.devices.zi_emulator import EmulatorState
 from laboneq.controller.devices.zi_node_monitor import (
     ConditionsChecker,
     NodeControlBase,
+    NodeMonitorBase,
     ResponseWaiter,
     filter_commands,
     filter_settings,
@@ -51,14 +54,20 @@ class DeviceCollection:
     ):
         self._ds = DeviceSetupDAO(
             target_setup=target_setup,
-            dry_run=dry_run,
             ignore_version_mismatch=ignore_version_mismatch,
         )
         self._dry_run = dry_run
+        self._emulator_state: EmulatorState | None = None
         self._ignore_version_mismatch = ignore_version_mismatch
         self._daqs: dict[str, DaqWrapper] = {}
         self._devices: dict[str, DeviceZI] = {}
         self._monitor_started = False
+
+    @property
+    def emulator_state(self) -> EmulatorState | None:
+        if self._emulator_state is None and self._dry_run:
+            self._emulator_state = prepare_emulator_state(self._ds)
+        return self._emulator_state
 
     @property
     def all(self) -> Iterator[tuple[str, DeviceZI]]:
@@ -76,6 +85,13 @@ class DeviceCollection:
         for uid, device in self._devices.items():
             if device.is_follower():
                 yield uid, device
+
+    @property
+    def node_monitors(self) -> set[NodeMonitorBase]:
+        all_monitors: set[NodeMonitorBase] = set()
+        for device in self._devices.values():
+            all_monitors.add(device.node_monitor)
+        return all_monitors
 
     def find_by_uid(self, device_uid) -> DeviceZI:
         device = self._devices.get(device_uid)
@@ -102,8 +118,8 @@ class DeviceCollection:
         self._validate_dataserver_device_fw_compatibility()  # TODO(2K): Uses zhinst utils -> async api version?
         self._prepare_devices()
         for _, device in self.all:
-            await device.connect()
-        self.start_monitor()
+            await device.connect(self.emulator_state)
+        await self.start_monitor()
         await self.configure_device_setup(reset_devices)
 
     async def _configure_parallel(
@@ -136,14 +152,14 @@ class DeviceCollection:
                 # 1a. Unconditional command
                 _add_set_nodes(device.daq, filter_commands(dev_nodes))
                 response_waiter.add(
-                    target=device.daq.node_monitor,
+                    target=device.node_monitor,
                     conditions={n.path: n.value for n in filter_responses(dev_nodes)},
                 )
             else:
                 # 1b. Verify if device is already configured as desired
                 dev_conditions_checker = ConditionsChecker()
                 dev_conditions_checker.add(
-                    target=device.daq.node_monitor,
+                    target=device.node_monitor,
                     conditions={n.path: n.value for n in filter_conditions(dev_nodes)},
                 )
                 conditions_checker.add_from(dev_conditions_checker)
@@ -154,7 +170,7 @@ class DeviceCollection:
                 failed_paths = [path for path, _ in failed]
                 failed_nodes = [n for n in dev_nodes if n.path in failed_paths]
                 response_waiter.add(
-                    target=device.daq.node_monitor,
+                    target=device.node_monitor,
                     conditions={
                         n.path: n.value for n in filter_wait_conditions(failed_nodes)
                     },
@@ -162,7 +178,7 @@ class DeviceCollection:
 
                 _add_set_nodes(device.daq, filter_settings(dev_nodes))
                 response_waiter.add(
-                    target=device.daq.node_monitor,
+                    target=device.node_monitor,
                     conditions={n.path: n.value for n in filter_responses(dev_nodes)},
                 )
 
@@ -176,7 +192,7 @@ class DeviceCollection:
             return
 
         timeout = 10
-        if not response_waiter.wait_all(timeout=timeout):
+        if not await response_waiter.wait_all(timeout=timeout):
             raise LabOneQControllerException(
                 f"Internal error: {config_name} for devices "
                 f"{[d.dev_repr for d in devices]} is not complete within {timeout}s. "
@@ -195,7 +211,7 @@ class DeviceCollection:
     async def configure_device_setup(self, reset_devices: bool):
         _logger.info("Configuring the device setup")
 
-        self.flush_monitor()  # Ensure status is up-to-date
+        await self.flush_monitor()  # Ensure status is up-to-date
 
         if reset_devices:
             await self._configure_parallel(
@@ -203,7 +219,9 @@ class DeviceCollection:
                 lambda d: cast(DeviceZI, d).load_factory_preset_control_nodes(),
                 "Reset to factory defaults",
             )
-            self.flush_monitor()  # Consume any updates resulted from the above reset
+            await (
+                self.flush_monitor()
+            )  # Consume any updates resulted from the above reset
             # TODO(2K): Error check
             for daq in self._daqs.values():
                 daq.clear_cache()
@@ -247,12 +265,13 @@ class DeviceCollection:
                 targets = children
         _logger.info("The device setup is configured")
 
-    def disconnect(self):
-        self.reset_monitor()
+    async def disconnect(self):
+        await self.reset_monitor()
         for device in self._devices.values():
             device.disconnect()
         self._devices = {}
         self._daqs = {}
+        self._emulator_state = None
 
     async def disable_outputs(
         self,
@@ -306,19 +325,19 @@ class DeviceCollection:
             all_actions.extend(await device.maybe_async(device.on_experiment_end()))
         await batch_set(all_actions)
 
-    def start_monitor(self):
+    async def start_monitor(self):
         if self._monitor_started:
             return
 
         response_waiter = ResponseWaiter()
-        for daq in self._daqs.values():
-            daq.node_monitor.start()
+        for node_monitor in self.node_monitors:
+            await node_monitor.start()
             response_waiter.add(
-                target=daq.node_monitor,
-                conditions={path: None for path in daq.node_monitor._nodes},
+                target=node_monitor,
+                conditions={path: None for path in node_monitor._nodes},
             )
 
-        if not response_waiter.wait_all(timeout=2):
+        if not await response_waiter.wait_all(timeout=2):
             raise LabOneQControllerException(
                 f"Internal error: Didn't get all the status node values within 2s. "
                 f"Missing:\n{response_waiter.remaining_str()}"
@@ -326,13 +345,13 @@ class DeviceCollection:
 
         self._monitor_started = True
 
-    def flush_monitor(self):
-        for daq in self._daqs.values():
-            daq.node_monitor.flush()
+    async def flush_monitor(self):
+        for node_monitor in self.node_monitors:
+            await node_monitor.flush()
 
-    def reset_monitor(self):
-        for daq in self._daqs.values():
-            daq.node_monitor.reset()
+    async def reset_monitor(self):
+        for node_monitor in self.node_monitors:
+            await node_monitor.reset()
         self._monitor_started = False
 
     def _validate_dataserver_device_fw_compatibility(self):
@@ -410,8 +429,11 @@ class DeviceCollection:
                 server_qualifier.host,
                 server_qualifier.port,
             )
-            if server_qualifier.dry_run:
-                daq = DaqWrapperDryRun(server_uid, server_qualifier)
+            daq: DaqWrapper
+            if self._dry_run:
+                daq = DaqWrapperDryRun(
+                    server_uid, server_qualifier, self.emulator_state
+                )
             else:
                 daq = DaqWrapper(server_uid, server_qualifier)
             await daq.validate_connection()
@@ -432,13 +454,13 @@ class DeviceCollection:
         return msg
 
     async def update_warning_nodes(self):
-        for daq in self._daqs.values():
-            daq.node_monitor.poll()
+        for node_monitor in self.node_monitors:
+            await node_monitor.poll()
 
         for _, device in self.all:
             device.update_warning_nodes(
                 {
-                    node: daq.node_monitor.get_last(node)
+                    node: device.node_monitor.get_last(node)
                     for node in device.collect_warning_nodes()
                 }
             )

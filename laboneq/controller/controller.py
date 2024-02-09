@@ -18,14 +18,13 @@ from laboneq import __version__
 from laboneq._observability import tracing
 from laboneq.controller.communication import (
     DaqNodeSetAction,
-    DaqWrapper,
     batch_set,
     batch_set_multiple,
 )
 from laboneq.controller.devices.async_support import gather_and_apply
 from laboneq.controller.devices.device_collection import DeviceCollection
 from laboneq.controller.devices.device_zi import DeviceZI
-from laboneq.controller.devices.zi_node_monitor import ResponseWaiter
+from laboneq.controller.devices.zi_node_monitor import NodeMonitorBase, ResponseWaiter
 from laboneq.controller.near_time_runner import NearTimeRunner
 from laboneq.controller.recipe_processor import (
     RecipeData,
@@ -34,7 +33,7 @@ from laboneq.controller.recipe_processor import (
 )
 from laboneq.controller.results import build_partial_result, make_acquired_result
 from laboneq.controller.util import LabOneQControllerException, SweepParamsTracker
-from laboneq.controller.versioning import LabOneVersion
+from laboneq.controller.versioning import LabOneVersion, SetupCaps
 from laboneq.core.exceptions import AbortExecution
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
@@ -80,11 +79,11 @@ def _stop_controller(controller: "Controller"):
 class Controller:
     def __init__(
         self,
-        run_parameters: ControllerRunParameters | None = None,
-        target_setup: TargetSetup | None = None,
+        run_parameters: ControllerRunParameters,
+        target_setup: TargetSetup,
         neartime_callbacks: dict[str, Callable] | None = None,
     ):
-        self._run_parameters = run_parameters or ControllerRunParameters()
+        self._run_parameters = run_parameters
         self._devices = DeviceCollection(
             target_setup=target_setup,
             dry_run=self._run_parameters.dry_run,
@@ -92,12 +91,15 @@ class Controller:
         )
 
         self._dataserver_version: LabOneVersion | None = None
+        self._setup_caps = SetupCaps(None)
 
-        self._last_connect_check_ts: float = None
+        self._last_connect_check_ts: float | None = None
 
         # Waves which are uploaded to the devices via pulse replacements
         self._current_waves = []
-        self._neartime_callbacks: dict[str, Callable] = neartime_callbacks
+        self._neartime_callbacks: dict[str, Callable] = (
+            {} if neartime_callbacks is None else neartime_callbacks
+        )
         self._nodes_from_neartime_callbacks: list[DaqNodeSetAction] = []
         self._recipe_data: RecipeData = None
         self._session: Any = None
@@ -150,7 +152,7 @@ class Controller:
             ]
         ],
     ):
-        elf_upload_conditions: dict[DaqWrapper, dict[str, Any]] = defaultdict(dict)
+        elf_upload_conditions: dict[NodeMonitorBase, dict[str, Any]] = defaultdict(dict)
         elf_node_settings: list[DaqNodeSetAction] = []
         wf_node_settings: list[DaqNodeSetAction] = []
 
@@ -158,12 +160,14 @@ class Controller:
             elf_node_settings.extend(elf_nodes)
             wf_node_settings.extend(wf_nodes)
             if len(upload_ready_conditions) > 0:
-                elf_upload_conditions[device.daq].update(upload_ready_conditions)
+                elf_upload_conditions[device.node_monitor].update(
+                    upload_ready_conditions
+                )
 
         # Upload AWG programs, waveforms, and command tables:
         if len(elf_upload_conditions) > 0:
-            for daq in elf_upload_conditions.keys():
-                daq.node_monitor.flush()
+            for node_monitor in elf_upload_conditions.keys():
+                await node_monitor.flush()
 
         _logger.debug("Started upload of AWG programs...")
         with tracing.get_tracer().start_span("upload-awg-programs") as _:
@@ -172,13 +176,13 @@ class Controller:
             if len(elf_upload_conditions) > 0:
                 _logger.debug("Waiting for devices...")
                 response_waiter = ResponseWaiter()
-                for daq, conditions in elf_upload_conditions.items():
+                for node_monitor, conditions in elf_upload_conditions.items():
                     response_waiter.add(
-                        target=daq.node_monitor,
+                        target=node_monitor,
                         conditions=conditions,
                     )
                 timeout_s = 10
-                if not response_waiter.wait_all(timeout=timeout_s):
+                if not await response_waiter.wait_all(timeout=timeout_s):
                     raise LabOneQControllerException(
                         f"AWGs not in ready state within timeout ({timeout_s} s). "
                         f"Not fulfilled:\n{response_waiter.remaining_str()}"
@@ -286,12 +290,12 @@ class Controller:
         response_waiter = ResponseWaiter()
         for _, device in self._devices.followers:
             response_waiter.add(
-                target=device.daq.node_monitor,
+                target=device.node_monitor,
                 conditions=await device.conditions_for_execution_ready(
                     with_pipeliner=with_pipeliner
                 ),
             )
-        if not response_waiter.wait_all(timeout=2):
+        if not await response_waiter.wait_all(timeout=2):
             _logger.warning(
                 "Conditions to start RT on followers still not fulfilled after 2"
                 " seconds, nonetheless trying to continue..."
@@ -316,9 +320,14 @@ class Controller:
         await batch_set(nodes_to_execute)
 
     async def _wait_execution_to_stop(
-        self, acquisition_type: AcquisitionType, with_pipeliner: bool
+        self, acquisition_type: AcquisitionType, rt_execution_info: RtExecutionInfo
     ):
         min_wait_time = self._recipe_data.recipe.max_step_execution_time
+        if rt_execution_info.with_pipeliner:
+            pipeliner_reload_worst_case = 1500e-6
+            min_wait_time = (
+                min_wait_time + pipeliner_reload_worst_case
+            ) * rt_execution_info.pipeliner_jobs
         if min_wait_time > 5:  # Only inform about RT executions taking longer than 5s
             _logger.info("Estimated RT execution time: %.2f s.", min_wait_time)
         guarded_wait_time = round(
@@ -328,12 +337,12 @@ class Controller:
         response_waiter = ResponseWaiter()
         for _, device in self._devices.followers:
             response_waiter.add(
-                target=device.daq.node_monitor,
+                target=device.node_monitor,
                 conditions=await device.conditions_for_execution_done(
-                    acquisition_type, with_pipeliner=with_pipeliner
+                    acquisition_type, with_pipeliner=rt_execution_info.with_pipeliner
                 ),
             )
-        if not response_waiter.wait_all(timeout=guarded_wait_time):
+        if not await response_waiter.wait_all(timeout=guarded_wait_time):
             _logger.warning(
                 (
                     "Stop conditions still not fulfilled after %f s, estimated"
@@ -374,24 +383,31 @@ class Controller:
     ):
         _logger.debug("Step executing")
 
-        self._devices.flush_monitor()
+        await self._devices.flush_monitor()
 
         rt_execution_info = self._recipe_data.rt_execution_infos.get(rt_section_uid)
-        with_pipeliner = rt_execution_info.pipeliner_chunk_count is not None
 
-        await self._setup_one_step_execution(with_pipeliner=with_pipeliner)
+        await self._setup_one_step_execution(
+            with_pipeliner=rt_execution_info.with_pipeliner
+        )
 
         # Can't batch everything together, because PQSC needs to be executed after HDs
         # otherwise it can finish before AWGs are started, and the trigger is lost
-        await self._execute_one_step_followers(with_pipeliner=with_pipeliner)
-        await self._execute_one_step_leaders(with_pipeliner=with_pipeliner)
+        await self._execute_one_step_followers(
+            with_pipeliner=rt_execution_info.with_pipeliner
+        )
+        await self._execute_one_step_leaders(
+            with_pipeliner=rt_execution_info.with_pipeliner
+        )
 
         _logger.debug("Execution started")
 
         await self._wait_execution_to_stop(
-            acquisition_type, with_pipeliner=with_pipeliner
+            acquisition_type, rt_execution_info=rt_execution_info
         )
-        await self._teardown_one_step_execution(with_pipeliner=with_pipeliner)
+        await self._teardown_one_step_execution(
+            with_pipeliner=rt_execution_info.with_pipeliner
+        )
 
         _logger.debug("Execution stopped")
 
@@ -407,13 +423,13 @@ class Controller:
             await self._devices.connect(reset_devices=reset_devices)
 
         try:
-            self._dataserver_version = next(self._devices.leaders)[
-                1
-            ].daq._dataserver_version
+            self._dataserver_version = next(self._devices.all)[1].daq.dataserver_version
         except StopIteration:
             # It may happen in emulation mode, mainly for tests
             # We use LATEST in emulation mode, keeping the consistency here.
             self._dataserver_version = LabOneVersion.LATEST
+
+        self._setup_caps = SetupCaps(self._dataserver_version)
 
         self._last_connect_check_ts = now
 
@@ -448,7 +464,7 @@ class Controller:
 
     async def _disconnect_async(self):
         _logger.info("Disconnecting from all devices and servers...")
-        self._devices.disconnect()
+        await self._devices.disconnect()
         self._last_connect_check_ts = None
         _logger.info("Successfully disconnected from all devices and servers.")
 
@@ -473,6 +489,7 @@ class Controller:
             compiled_experiment.scheduled_experiment,
             self._devices,
             execution,
+            self._setup_caps,
         )
 
         self._session = session
@@ -492,6 +509,7 @@ class Controller:
             job.scheduled_experiment,
             self._devices,
             job.scheduled_experiment.execution,
+            self._setup_caps,
         )
         self._session = None
         await self._execute_compiled_impl()
@@ -653,6 +671,7 @@ class Controller:
                     effective_averages,
                     effective_averaging_mode,
                     rt_execution_info.acquisition_type,
+                    rt_execution_info.with_pipeliner,
                 )
             )
         return nodes_to_prepare_rt
@@ -765,7 +784,7 @@ class Controller:
                     )
                     raw_results = await device.get_measurement_data(
                         awg_key.awg_index,
-                        rt_execution_info.acquisition_type,
+                        rt_execution_info,
                         result_indices,
                         awg_config.result_length,
                         effective_averages,

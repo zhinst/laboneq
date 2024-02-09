@@ -142,6 +142,7 @@ class DeviceUHFQA(DeviceZI):
         averages: int,
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
+        with_pipeliner: bool,
     ) -> list[DaqNodeSetAction]:
         nc = NodeCollector()
         nc.extend(
@@ -585,22 +586,23 @@ class DeviceUHFQA(DeviceZI):
         # Communication class
         data_node_query = await self.get_raw(result_path)
         assert len(data_node_query[result_path][0]["vector"]) == num_results, (
-            "number of measurement points returned by daq from device "
-            "'{self.uid}' does not match length of recipe"
-            " measurement_map"
+            f"{self.dev_repr}: number of measurement points returned"
+            " does not match length of recipe measurement_map"
         )
         return data_node_query[result_path][0]["vector"] / averages_divider
 
     async def get_measurement_data(
         self,
         channel: int,
-        acquisition_type: AcquisitionType,
+        rt_execution_info: RtExecutionInfo,
         result_indices: list[int],
         num_results: int,
         hw_averages: int,
     ):
         averages_divider = (
-            1 if acquisition_type == AcquisitionType.DISCRIMINATION else hw_averages
+            1
+            if rt_execution_info.acquisition_type == AcquisitionType.DISCRIMINATION
+            else hw_averages
         )
         assert len(result_indices) <= 2
         if len(result_indices) == 1:

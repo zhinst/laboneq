@@ -492,7 +492,7 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
             nc.add("dios/0/mode", 3)
             nc.add("dios/0/drive", 0xC)
 
-            # Loop over at least AWG instance to cover the case that the instrument is only used
+            # Loop over at least one AWG instance to cover the case that the instrument is only used
             # as a communication proxy. Some of the nodes on the AWG branch are needed to get
             # proper communication between HDAWG and UHFQA.
             for awg_index in (

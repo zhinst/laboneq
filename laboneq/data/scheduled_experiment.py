@@ -107,17 +107,17 @@ class ScheduledExperiment:
     #: Instructions to the controller for running the experiment.
     recipe: Recipe = None
 
-    #: Compiler arteficts specific to backend(s)
+    #: Compiler artifacts specific to backend(s)
     artifacts: CompilerArtifact | dict[int, CompilerArtifact] = None
 
     def __getattr__(self, attr):
         return getattr(self.artifacts, attr)  # @IgnoreException
 
     def __copy__(self):
-        new_artefacts = copy.copy(self.artifacts)
+        new_artifacts = copy.copy(self.artifacts)
         new_scheduled_experiment = self.__class__(
             uid=self.uid,
-            artifacts=new_artefacts,
+            artifacts=new_artifacts,
             schedule=self.schedule,
             execution=self.execution,
             compilation_job_hash=self.compilation_job_hash,

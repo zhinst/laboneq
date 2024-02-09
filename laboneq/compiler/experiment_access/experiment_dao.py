@@ -241,12 +241,10 @@ class ExperimentDAO:
 
     @cached_method()
     def section_signals_with_children(self, section_id):
-        retval = set()
-        section_with_children = self.all_section_children(section_id)
-        section_with_children.add(section_id)
-        for child in section_with_children:
-            retval |= self.section_signals(child)
-        return retval
+        signals = set(self.section_signals(section_id))
+        for child in self.all_section_children(section_id):
+            signals |= self.section_signals(child)
+        return signals
 
     def pulses(self) -> list[str]:
         return list(self._data["pulses"].keys())

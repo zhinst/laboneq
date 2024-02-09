@@ -8,7 +8,7 @@ import math
 from typing import TYPE_CHECKING, Iterable, List, Tuple
 
 from attrs import define
-from zhinst.utils.feedback_model import (
+from zhinst.timing_models import (
     FeedbackPath,
     PQSCMode,
     QAType,
@@ -178,6 +178,10 @@ def _compute_start_with_latency(
             time_of_pulse_played = (
                 time_of_arrival_at_register + EXECUTETABLEENTRY_LATENCY
             )
+
+            # Extra slack to avoid issues with marginal model.
+            # See HBAR-1934
+            time_of_pulse_played += 5
 
             sg_seq_rate = schedule_data.sampling_rate_tracker.sequencer_rate_for_device(
                 sg_signal_obj.awg.device_id

@@ -3,17 +3,18 @@
 
 from __future__ import annotations
 
+import abc
 from builtins import frozenset
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 from numpy.typing import ArrayLike
 
+from laboneq.compiler import CompilerSettings
 from laboneq.compiler.scheduler.parameter_store import ParameterStore
 from laboneq.compiler.workflow import rt_linker
 from laboneq.compiler.workflow.compiler_output import RTCompilerOutputContainer
 from laboneq.compiler.workflow.realtime_compiler import RealtimeCompiler
-from laboneq.compiler.workflow.reporter import CompilationReportGenerator
 from laboneq.compiler.workflow.rt_linker import CombinedRTCompilerOutputContainer
 from laboneq.executor.executor import (
     ExecRT,
@@ -66,10 +67,27 @@ def legacy_execution_program():
     )
 
 
+class NtCompilerExecutorDelegate(abc.ABC):
+    @abc.abstractmethod
+    def __init__(self, settings: CompilerSettings):
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def after_compilation_run(self, new: RTCompilerOutputContainer, indices: list[int]):
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def after_final_run(self, combined: CombinedRTCompilerOutputContainer):
+        raise NotImplementedError
+
+
 class NtCompilerExecutor(ExecutorBase):
-    def __init__(self, rt_compiler: RealtimeCompiler):
+    _delegates_types: list[type[NtCompilerExecutorDelegate]] = []
+
+    def __init__(self, rt_compiler: RealtimeCompiler, settings: CompilerSettings):
         super().__init__(looping_mode=LoopingMode.NEAR_TIME_ONLY)
         self._rt_compiler = rt_compiler
+        self._settings = settings
         self._iteration_stack = IterationStack()
 
         self._compiler_output_by_param_values: Dict[
@@ -80,7 +98,14 @@ class NtCompilerExecutor(ExecutorBase):
         self._combined_compiler_output: Optional[
             CombinedRTCompilerOutputContainer
         ] = None
-        self._compiler_report_generator = CompilationReportGenerator()
+
+        self._delegates = [
+            Delegate(self._settings) for Delegate in self._delegates_types
+        ]
+
+    @classmethod
+    def register_hook(cls, delegate_class: type[NtCompilerExecutorDelegate]):
+        cls._delegates_types.append(delegate_class)
 
     def set_sw_param_handler(
         self,
@@ -154,7 +179,10 @@ class NtCompilerExecutor(ExecutorBase):
                 nt_step_indices,
             )
             self._combined_compiler_output.add_total_execution_time(new_compiler_output)
-        self._compiler_report_generator.update(new_compiler_output, nt_step_indices)
+
+        for delegate in self._delegates:
+            delegate.after_compilation_run(new_compiler_output, nt_step_indices)
+
         self._last_compiler_output = new_compiler_output
 
     def _frozen_required_parameters(self):
@@ -167,9 +195,7 @@ class NtCompilerExecutor(ExecutorBase):
     def combined_compiler_output(self):
         return self._combined_compiler_output
 
-    def report(self):
+    def finalize(self):
         if self._combined_compiler_output is not None:
-            self._compiler_report_generator.calculate_total(
-                self._combined_compiler_output
-            )
-        return self._compiler_report_generator.log_report()
+            for delegate in self._delegates:
+                delegate.after_final_run(self._combined_compiler_output)

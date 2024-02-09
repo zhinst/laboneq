@@ -142,6 +142,11 @@ class SampledEventHandler:
         self.last_event: Optional[AWGEvent] = None
         self.match_parent_event: Optional[AWGEvent] = None
         self.command_table_match_offset = None
+
+        # If true, this AWG sources feedback data from Zsync. If False, it sources data
+        # from the local bus. None means neither source is used. Using both is illegal.
+        self.use_zsync_feedback: bool | None = None
+
         self.match_command_table_entries: dict[
             int, tuple
         ] = {}  # For feedback or prng match
@@ -330,7 +335,6 @@ class SampledEventHandler:
         assert self.use_command_table
         assert self.match_parent_event is not None
         state = signature.state
-        signal_id = sampled_event.params["signal_id"]
 
         if state in self.match_command_table_entries:
             if self.match_command_table_entries[state] != (
@@ -348,9 +352,15 @@ class SampledEventHandler:
                 wave_index,
                 sampled_event.start - self.match_parent_event.start,
             )
+
+        if "multiplexed_signal_ids" in sampled_event.params:
+            drive_signal_ids = sampled_event.params["multiplexed_signal_ids"]
+        else:
+            drive_signal_ids = (sampled_event.params["signal_id"],)
+
         self.feedback_connections.setdefault(
             self.match_parent_event.params["handle"], FeedbackConnection(None)
-        ).drive.add(signal_id)
+        ).drive.update(drive_signal_ids)
 
     def handle_playwave_on_user_register(
         self,
@@ -960,6 +970,12 @@ class SampledEventHandler:
             + (f"+ {latency}" if latency >= 0 else f"- {-latency}"),
             comment="Match handle " + handle,
         )
+        use_zsync: bool = not ev.params["local"]
+        if self.use_zsync_feedback is not None and self.use_zsync_feedback != use_zsync:
+            raise LabOneQException(
+                "Mixed feedback paths (global and local) are illegal"
+            )
+        self.use_zsync_feedback = use_zsync
         self.seqc_tracker.add_timing_comment(ev.end)
         self.seqc_tracker.flush_deferred_function_calls()
         self.seqc_tracker.current_time = self.match_parent_event.end

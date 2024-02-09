@@ -21,6 +21,7 @@ from laboneq.implementation.legacy_adapters.converters_target_setup import (
 from laboneq.implementation.legacy_adapters.device_setup_converter import (
     convert_device_setup_to_setup,
 )
+from laboneq.laboneq_logging import initialize_logging
 
 if TYPE_CHECKING:
     from laboneq.dsl.experiment.pulse import Pulse
@@ -105,6 +106,4 @@ class LabOneQFacade:
         if "pytest" not in sys.modules:
             # Only initialize logging outside pytest
             # pytest initializes the logging itself
-            ctrl.initialize_logging(
-                log_level=log_level, performance_log=performance_log
-            )
+            initialize_logging(log_level=log_level, performance_log=performance_log)
