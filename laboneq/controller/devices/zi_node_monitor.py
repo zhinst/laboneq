@@ -159,17 +159,22 @@ class NodeMonitor(NodeMonitorBase):
     def __init__(self, daq):
         super().__init__()
         self._daq = daq
+        self._started = False
 
     async def start(self):
+        if self._started:
+            return
         all_paths = [p for p in self._nodes.keys()]
         if len(all_paths) > 0:
             self._daq.subscribe(all_paths)
             for path in all_paths:
                 self._daq.getAsEvent(path)
+        self._started = True
 
     async def stop(self):
         self._daq.unsubscribe("*")
         await self.flush()
+        self._started = False
 
     async def poll(self):
         while True:
@@ -180,18 +185,29 @@ class NodeMonitor(NodeMonitorBase):
                 self._get_node(path).append(val)
 
 
+class INodeMonitorProvider(ABC):
+    @property
+    @abstractmethod
+    def node_monitor(self) -> NodeMonitorBase:
+        ...
+
+
 class MultiDeviceHandlerBase:
     def __init__(self):
         self._conditions: dict[NodeMonitorBase, dict[str, Any]] = {}
 
-    def add(self, target: NodeMonitorBase, conditions: dict[str, Any]):
+    def add(self, target: INodeMonitorProvider, conditions: dict[str, Any]):
         if conditions:
-            daq_conditions: dict[str, Any] = self._conditions.setdefault(target, {})
+            daq_conditions: dict[str, Any] = self._conditions.setdefault(
+                target.node_monitor, {}
+            )
             daq_conditions.update(conditions)
 
     def add_from(self, other: MultiDeviceHandlerBase):
-        for target, conditions in other._conditions.items():
-            daq_conditions: dict[str, Any] = self._conditions.setdefault(target, {})
+        for node_monitor, conditions in other._conditions.items():
+            daq_conditions: dict[str, Any] = self._conditions.setdefault(
+                node_monitor, {}
+            )
             daq_conditions.update(conditions)
 
 
@@ -216,6 +232,7 @@ class ConditionsChecker(MultiDeviceHandlerBase):
                 cond = daq_conds.get(path)
                 if cond is not None:
                     return cond
+            return "<no condition found for the path>"
 
         return "\n".join([f"{p}: {v} != {_find_condition(p)}" for p, v in failed])
 
@@ -227,16 +244,16 @@ class ResponseWaiter(MultiDeviceHandlerBase):
     Usage:
     ======
 
-    daqA = zhinst.core.ziDAQServer('serverA', ...)
-    daqB = zhinst.core.ziDAQServer('serverB', ...)
+    apiA = ApiClass('serverA', ...)
+    apiB = ApiClass('serverB', ...)
 
     # One NodeMonitor per data server connection
-    monitorA = NodeMonitor(daqA)
-    monitorB = NodeMonitor(daqB)
+    monitorA = NodeMonitorNNN(apiA)
+    monitorB = NodeMonitorNNN(apiB)
 
-    dev1_monitor = monitorA # dev1 connected via serverA
-    dev2_monitor = monitorA # dev2 connected via serverA
-    dev3_monitor = monitorB # dev3 connected via serverB
+    dev1_monitor = monitorA # dev1 connected via apiA
+    dev2_monitor = monitorA # dev2 connected via apiA
+    dev3_monitor = monitorB # dev3 connected via apiB
     #...
 
     dev1_conditions = {

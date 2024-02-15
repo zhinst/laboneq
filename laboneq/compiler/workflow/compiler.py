@@ -260,12 +260,7 @@ class Compiler:
         self._signal_objects = self._generate_signal_objects()
 
         rt_compiler = RealtimeCompiler(
-            Scheduler(
-                self._experiment_dao,
-                self._sampling_rate_tracker,
-                self._signal_objects,
-                self._settings,
-            ),
+            self._experiment_dao,
             self._sampling_rate_tracker,
             self._signal_objects,
             self._settings,

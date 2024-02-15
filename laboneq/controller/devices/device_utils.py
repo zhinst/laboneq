@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Iterator
 
 import zhinst.core
 
@@ -18,6 +19,33 @@ def calc_dev_type(device_qualifier: DeviceQualifier) -> str:
         return "SHFQC"
     else:
         return device_qualifier.driver
+
+
+@dataclass
+class NodeAction:
+    path: str
+    value: Any
+    cache: bool = True
+    filename: str | None = None
+
+
+class NodeCollector:
+    def __init__(self, base: str = ""):
+        self._base = base
+        self._nodes: list[NodeAction] = []
+
+    def add(
+        self, path: str, value: Any, cache: bool = True, filename: str | None = None
+    ):
+        self._nodes.append(NodeAction(self._base + path, value, cache, filename))
+
+    def extend(self, other: NodeCollector):
+        for node in other:
+            self._nodes.append(node)
+
+    def __iter__(self) -> Iterator[NodeAction]:
+        for node in self._nodes:
+            yield node
 
 
 def zhinst_core_version() -> str:

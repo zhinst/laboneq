@@ -9,7 +9,8 @@ from enum import IntEnum
 from laboneq.controller.communication import (
     DaqNodeSetAction,
 )
-from laboneq.controller.devices.device_zi import DeviceZI, NodeCollector
+from laboneq.controller.devices.device_utils import NodeCollector
+from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.devices.zi_node_monitor import (
     Command,
     Setting,
@@ -145,7 +146,26 @@ class DevicePQSC(DeviceZI):
         _logger.debug("Starting execution...")
         nc = NodeCollector(base=f"/{self.serial}/")
         nc.add("execution/enable", 1, cache=False)
+
         nc.add("triggers/out/0/enable", 1, cache=False)
+
+        try:
+            # Select the first ZSYNC port from downlinks.
+            first_valid_link_address = next(
+                (s for s in self._downlinks.keys() if s.startswith("ZSYNCS"))
+            )
+            _, p_addr_str = first_valid_link_address.split("/")
+            p_addr = int(p_addr_str)
+
+            # Why do we set this?
+            # Trigger output on PQSC mirrors the ZSYNC signals sent through
+            # `p_addr`. No valid connection -> no ZSYNC signal -> no trigger output
+            # -> (probably nothing on the scope because trigger out is typically connected to a scope)
+            nc.add("triggers/out/0/port", p_addr, cache=False)
+        except StopIteration:
+            # Do not touch any setting if there is no valid ZSYNC connection
+            pass
+
         return await self.maybe_async(nc)
 
     async def collect_execution_setup_nodes(

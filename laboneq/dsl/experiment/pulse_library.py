@@ -6,7 +6,6 @@ from __future__ import annotations
 from typing import Any, Callable, Dict
 
 import numpy as np
-
 from laboneq.core.utilities.pulse_sampler import pulse_function_library
 from laboneq.dsl.experiment.pulse import (
     PulseFunctional,
@@ -145,9 +144,7 @@ def gaussian(
 
 
 @register_pulse_functional
-def gaussian_square(
-    x, sigma=1 / 3, width=90e-9, zero_boundaries=False, length=100e-9, **_
-):
+def gaussian_square(x, sigma=1 / 3, width=None, zero_boundaries=False, **_):
     """Create a gaussian square waveform with a square portion of length
     ``width`` and Gaussian shaped sides.
 
@@ -158,7 +155,7 @@ def gaussian_square(
             - length ([float][]): Length of the pulse in seconds
             - amplitude ([float][]): Amplitude of the pulse
         width (float):
-            Width of the flat portion of the pulse in seconds
+            Width of the flat portion of the pulse in seconds. Dynamically set to 90% of `length` if not provided.
         sigma (float):
             Std. deviation of the Gaussian rise/fall portion of the pulse
         zero_boundaries (bool):
@@ -167,6 +164,16 @@ def gaussian_square(
     Returns:
         pulse (Pulse): Gaussian square pulse.
     """
+
+    length = _["length"]
+
+    if width is not None and width >= length:
+        raise ValueError(
+            "The width of the flat portion of the pulse must be smaller than the total length."
+        )
+
+    if width is None:
+        width = 0.9 * length
 
     risefall_in_samples = round(len(x) * (1 - width / length) / 2)
     flat_in_samples = len(x) - 2 * risefall_in_samples

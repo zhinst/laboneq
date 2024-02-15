@@ -6,7 +6,8 @@ import math
 
 from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.device_type import DeviceType
-from laboneq.compiler.common.event_type import EventType
+from laboneq.compiler.event_list.event_type import EventType
+from laboneq.compiler.event_list.event_list_generator import generate_event_list
 from laboneq.compiler.ir.ir import IR
 
 
@@ -123,7 +124,8 @@ def generate_event_list_from_ir(
     if ir.root is not None:
         id_tracker = itertools.count()
         event_list.extend(
-            ir.root.generate_event_list(
+            generate_event_list(
+                ir.root,
                 start=0,
                 max_events=max_events,
                 id_tracker=id_tracker,

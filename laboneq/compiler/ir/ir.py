@@ -80,8 +80,8 @@ class IR:
     root: Optional[RootIR] = None
     pulse_defs: list[PulseDefIR] = field(default_factory=list)
     root_section: Optional[SectionInfoIR] = None
-    root_section_children: Optional[list[SectionInfoIR]] = None
-    section_signals_with_chidlren_ids: Optional[dict[SectionInfoIR, set(str)]] = None
+    root_section_children: list[SectionInfoIR] = field(default_factory=list)
+    section_signals_with_children_ids: dict[str, set[str]] = field(default_factory=dict)
 
     def round_trip(self):
         from laboneq.dsl.serialization import Serializer

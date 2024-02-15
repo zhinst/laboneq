@@ -94,10 +94,13 @@ class ZiApiWrapperBase(ABC):
     def name(self):
         return self._name
 
-    def _log_node(self, msg):
-        self._node_logger.debug(msg)
+    def _log_node(self, msg, value: Any | None = None):
+        if value is None:
+            self._node_logger.debug(msg)
+        else:
+            self._node_logger.debug(msg, extra={"node_value": value})
 
-    def _log_set(self, method_name: str, daq_action):
+    def _log_set(self, method_name: str, daq_action: DaqNodeSetAction):
         path = daq_action.path
 
         if self.use_filenames_for_blobs or isinstance(daq_action.value, bytes):
@@ -126,13 +129,13 @@ class ZiApiWrapperBase(ABC):
         if isinstance(value, str):
             value = value.replace("\n", r"\n")
         if isinstance(value, (int, float, complex, str)):
-            self._log_node(f"{method_name} {path} {value}")
+            self._log_node(f"{method_name} {path} {value}", value=daq_action.value)
         else:
             raise TypeError(f"Invalid type {type(value)} for node logging of {path}")
 
         _logger.debug("%s - %s -> %s", method_name, path, value)
 
-    def _log_sets(self, method_name, daq_actions: list):
+    def _log_sets(self, method_name, daq_actions: list[DaqNodeSetAction]):
         for action in daq_actions:
             self._log_set(method_name, action)
 
@@ -210,7 +213,7 @@ class ServerQualifier:
 
 
 class DaqWrapper(ZiApiWrapperBase):
-    _API_LEVEL = 6  # The ZI device API level used by this class
+    _API_LEVEL: zhinst.core._APILevel = 6  # The ZI device API level used by this class
 
     def __init__(self, name, server_qualifier: ServerQualifier):
         super().__init__(name)
@@ -237,7 +240,7 @@ class DaqWrapper(ZiApiWrapperBase):
         result = await self.batch_get([DaqNodeGetAction(self, path)])
         version_str = result[path]
         try:
-            self._dataserver_version = LabOneVersion.cast_if_supported(version_str)
+            self._dataserver_version = LabOneVersion.cast(version_str)
         except ValueError as e:
             err_msg = e.args[0]
             if self._server_qualifier.ignore_version_mismatch:
@@ -302,10 +305,6 @@ class DaqWrapper(ZiApiWrapperBase):
     @property
     def server_qualifier(self):
         return self._server_qualifier
-
-    @property
-    def dataserver_version(self):
-        return self._dataserver_version
 
     def connectDevice(self, serial: str, interface: str):
         if not isinstance(serial, str) or not isinstance(interface, str):

@@ -9,6 +9,7 @@ import functools
 import itertools
 import logging
 from dataclasses import replace
+from itertools import groupby
 from math import ceil
 from typing import (
     TYPE_CHECKING,
@@ -226,7 +227,7 @@ class Scheduler:
             ]
             if has_rt_root
             else None,
-            section_signals_with_chidlren_ids=section_signals_with_chidlren,
+            section_signals_with_children_ids=section_signals_with_chidlren,
         )
 
     def _schedule_root(
@@ -1074,32 +1075,35 @@ class Scheduler:
 
         pulse_schedules = []
         section_signals = self._schedule_data.experiment_dao.section_signals(section_id)
-        pulse_groups: dict[str | None, list[Any]] = {None: []}
-        for signal_id in section_signals:
+
+        for signal_id in sorted(section_signals):
             pulses = self._schedule_data.experiment_dao.section_pulses(
                 section_id, signal_id
             )
-
             if len(pulses) == 0:
                 # the section occupies the signal via a reserve, so add a placeholder
                 # to include this signal in the grid calculation
                 signal_grid, _ = self.grid(signal_id)
                 pulse_schedules.append(ReserveSchedule.create(signal_id, signal_grid))
-            else:
-                for p in pulses:
-                    pulse_groups.setdefault(p.pulse_group, []).append(p)
+                continue
 
-        for pulse in pulse_groups[None]:
-            pulse_schedules.append(self._schedule_pulse(pulse, section_id, parameters))
-            if pulse.precompensation_clear:
-                pulse_schedules.append(
-                    self._schedule_precomp_clear(pulse_schedules[-1])
-                )
-        for group, group_pulses in pulse_groups.items():
-            if group is not None:
-                pulse_schedules.append(
-                    self._schedule_acquire_group(group_pulses, section_id, parameters)
-                )
+            for group, group_pulses in groupby(pulses, lambda p: p.pulse_group):
+                if group is not None:
+                    pulse_schedules.append(
+                        self._schedule_acquire_group(
+                            list(group_pulses), section_id, parameters
+                        )
+                    )
+                else:
+                    for pulse in group_pulses:
+                        pulse_schedules.append(
+                            self._schedule_pulse(pulse, section_id, parameters)
+                        )
+                        if pulse.precompensation_clear:
+                            pulse_schedules.append(
+                                self._schedule_precomp_clear(pulse_schedules[-1])
+                            )
+
         if len(pulse_schedules) and len(subsection_schedules):
             if any(not isinstance(ps, ReserveSchedule) for ps in pulse_schedules):
                 raise LabOneQException(

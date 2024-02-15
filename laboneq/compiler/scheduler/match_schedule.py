@@ -282,6 +282,3 @@ class MatchSchedule(SectionSchedule):
 
         self._calculate_length(schedule_data)
         return start
-
-    def __hash__(self):
-        return super().__hash__()

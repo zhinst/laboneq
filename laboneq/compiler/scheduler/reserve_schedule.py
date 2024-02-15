@@ -13,6 +13,3 @@ class ReserveSchedule(IntervalSchedule):
     def _calculate_timing(self, _schedule_data, start: int, *__, **___) -> int:
         self.length = 0
         return start
-
-    def __hash__(self):
-        return super().__hash__()

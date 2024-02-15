@@ -49,9 +49,6 @@ class PulseSchedule(IntervalSchedule):
 
         return start
 
-    def __hash__(self):
-        return super().__hash__()
-
 
 @define(kw_only=True, slots=True)
 class PrecompClearSchedule(IntervalSchedule):
@@ -87,6 +84,3 @@ class PrecompClearSchedule(IntervalSchedule):
                 markers=self.pulse.markers,
             ),
         )
-
-    def __hash__(self):
-        return super().__hash__()

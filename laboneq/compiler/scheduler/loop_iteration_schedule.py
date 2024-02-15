@@ -45,6 +45,3 @@ class LoopIterationSchedule(SectionSchedule):
             sweep_parameters=sweep_parameters,
             prng_sample=prng_sample,
         )
-
-    def __hash__(self):
-        return super().__hash__()

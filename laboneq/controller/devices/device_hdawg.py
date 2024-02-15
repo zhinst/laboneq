@@ -17,9 +17,9 @@ from laboneq.controller.communication import (
     DaqNodeSetAction,
 )
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
+from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import (
     DeviceZI,
-    NodeCollector,
     delay_to_rounded_samples,
 )
 from laboneq.controller.devices.zi_node_monitor import (

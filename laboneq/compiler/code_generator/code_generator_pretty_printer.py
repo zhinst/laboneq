@@ -3,6 +3,7 @@
 
 import logging
 
+from laboneq.compiler.common.code_generator import ICodeGenerator
 from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.ir.interval_ir import IntervalIR
@@ -14,7 +15,7 @@ from laboneq.compiler.workflow.compiler_output import PrettyPrinterOutput
 _logger = logging.getLogger(__name__)
 
 
-class PrettyPrinter:
+class PrettyPrinter(ICodeGenerator):
     def _print_outline_rec(self, ir: IntervalIR, nesting: int):
         self._src += f"{'  '*nesting}{ir.__class__.__name__}\n"
         for c in ir.children:
@@ -45,7 +46,7 @@ class PrettyPrinter:
         self._collect_sections(self._ir.root, self._sections)
         self._collect_waves(self._ir.root, self._waves)
 
-    def fill_output(self):
+    def get_output(self):
         return PrettyPrinterOutput(
             src=self._src, waves=self._waves, sections=self._sections
         )

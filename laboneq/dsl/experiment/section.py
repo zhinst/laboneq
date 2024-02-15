@@ -19,6 +19,7 @@ from laboneq.dsl.enums import (
     RepetitionMode,
 )
 from laboneq.dsl.experiment.pulse import Pulse
+from laboneq.dsl.parameter import Parameter
 
 from .acquire import Acquire
 from .call import Call
@@ -29,7 +30,6 @@ from .reserve import Reserve
 from .set_node import SetNode
 
 if TYPE_CHECKING:
-    from .. import Parameter
     from ..prng import PRNG, PRNGSample
 
 
@@ -452,7 +452,7 @@ class Sweep(Section):
     Sweeps are used to sample through a range of parameter values.
 
     Attributes:
-        parameters (list[Parameter]):
+        parameters (list[Parameter] | Parameter):
             Parameters that should be swept.
             Default: `[]`.
         reset_oscillator_phase (bool):
@@ -465,6 +465,10 @@ class Sweep(Section):
     [Sweep][laboneq.dsl.experiment.section.Sweep] inherits
     all the attributes of
     [Section][laboneq.dsl.experiment.section.Section].
+
+    !!! version-changed "Changed in 2.24.0"
+        `parameters` now accepts a single `Parameter` in addition to accepting a list.
+
     """
 
     # Parameters that should be swept.
@@ -473,6 +477,17 @@ class Sweep(Section):
     reset_oscillator_phase: bool = field(default=False)
     # When non-zero, split the sweep into N chunks.
     chunk_count: int = field(default=1)
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.parameters is None:
+            self.parameters = []
+        else:
+            self.parameters = (
+                [self.parameters]
+                if isinstance(self.parameters, Parameter)
+                else list(self.parameters)
+            )
 
 
 @validating_allowed_values(

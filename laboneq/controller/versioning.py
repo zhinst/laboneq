@@ -9,7 +9,7 @@ from functools import total_ordering
 
 @total_ordering
 class LabOneVersion(Enum):
-    UNKNOWN = "unknown"
+    UNKNOWN = "0"
     V_24_01 = "24.01"
     LATEST = V_24_01
 
@@ -20,18 +20,21 @@ class LabOneVersion(Enum):
         return float(self.value) < float(other.value)
 
     @classmethod
-    def cast_if_supported(cls, version: str) -> LabOneVersion:
+    def cast(cls, version: str, raise_if_unsupported: bool = True) -> LabOneVersion:
         try:
             labone_version = LabOneVersion(version)
         except ValueError as e:
-            err_msg = f"Version {version} is not supported by LabOne Q."
-            raise ValueError(err_msg) from e
+            if raise_if_unsupported:
+                err_msg = f"Version {version} is not supported by LabOne Q."
+                raise ValueError(err_msg) from e
+            else:
+                labone_version = LabOneVersion.UNKNOWN
         return labone_version
 
 
 class SetupCaps:
-    def __init__(self, version: LabOneVersion | None):
-        self._version = version or LabOneVersion.LATEST
+    def __init__(self, version: LabOneVersion):
+        self._version = version
 
     @property
     def result_logger_pipelined(self) -> bool:

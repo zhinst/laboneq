@@ -6,10 +6,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 from laboneq.controller.communication import DaqNodeSetAction, DaqWrapper
+from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import (
     DeviceQualifier,
     DeviceZI,
-    NodeCollector,
 )
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.data.recipe import Initialization, NtStepKey
@@ -24,7 +24,6 @@ _logger = logging.getLogger(__name__)
 class DevicePRETTYPRINTER(DeviceZI):
     def __init__(self, device_qualifier: DeviceQualifier, daq: DaqWrapper):
         super().__init__(device_qualifier=device_qualifier, daq=daq)
-        self._node_monitor = self.daq.node_monitor
         self._device_class = 0x1
 
     async def connect(self, emulator_state: Any):

@@ -23,12 +23,6 @@ from laboneq.data.scheduled_experiment import (
 )
 
 
-def _make_seqc_name(awg: AwgKey, step_indices: list[int]) -> str:
-    # Replace with UUID? Hash digest?
-    step_indices_str = "[" + ",".join([str(i) for i in step_indices]) + "]"
-    return f"seq_{awg.device_id}_{awg.awg_number}_{step_indices_str}.seqc"
-
-
 class RealtimeStepBase:
     device_id: str
     awg_id: int
@@ -61,7 +55,7 @@ class CombinedOutput(abc.ABC):
     generation backend."""
 
     feedback_register_configurations: dict[AwgKey, Any]
-    total_execution_time: int
+    total_execution_time: float
     max_execution_time_per_step: float
 
     @abc.abstractmethod
@@ -184,10 +178,13 @@ class CombinedRTCompilerOutputContainer:
 
     @property
     def total_execution_time(self):
-        return max([c.total_execution_time for c in self.combined_output.values()])
+        return max(
+            [c.total_execution_time for c in self.combined_output.values()], default=0.0
+        )
 
     @property
     def max_execution_time_per_step(self):
         return max(
-            [c.max_execution_time_per_step for c in self.combined_output.values()]
+            [c.max_execution_time_per_step for c in self.combined_output.values()],
+            default=0,
         )

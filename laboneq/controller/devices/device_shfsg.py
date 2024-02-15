@@ -18,8 +18,8 @@ from laboneq.controller.communication import (
 )
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
 from laboneq.controller.devices.device_shf_base import DeviceSHFBase
+from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import (
-    NodeCollector,
     SequencerPaths,
     delay_to_rounded_samples,
 )

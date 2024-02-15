@@ -106,9 +106,6 @@ class LoopSchedule(SectionSchedule):
             self._calculate_length(schedule_data)
         return loop_start
 
-    def __hash__(self):
-        return super().__hash__()
-
     @classmethod
     def from_section_schedule(
         cls,

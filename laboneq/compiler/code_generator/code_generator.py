@@ -34,6 +34,7 @@ from laboneq.compiler.code_generator.command_table_tracker import (
 from laboneq.compiler.code_generator.feedback_register_allocator import (
     FeedbackRegisterAllocator,
 )
+from laboneq.compiler.common.code_generator import ICodeGenerator
 from laboneq.compiler.common.feedback_register_config import FeedbackRegisterConfig
 from laboneq.compiler.code_generator.ir_to_event_list import generate_event_list_from_ir
 from laboneq.compiler.code_generator.measurement_calculator import (
@@ -60,7 +61,7 @@ from laboneq.compiler.code_generator.wave_compressor import (
 )
 from laboneq.compiler.code_generator.wave_index_tracker import WaveIndexTracker
 from laboneq.compiler.common.awg_info import AWGInfo, AwgKey
-from laboneq.compiler.common.awg_sampled_event import (
+from laboneq.compiler.code_generator.awg_sampled_event import (
     AWGEvent,
     AWGEventType,
     AWGSampledEventSequence,
@@ -71,7 +72,7 @@ from laboneq.compiler.common.compiler_settings import (
     round_min_playwave_hint,
 )
 from laboneq.compiler.common.device_type import DeviceType
-from laboneq.compiler.common.event_type import EventList, EventType
+from laboneq.compiler.event_list.event_type import EventList, EventType
 from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.pulse_parameters import decode_pulse_parameters
 from laboneq.compiler.common.signal_obj import SignalObj
@@ -296,7 +297,7 @@ def calculate_integration_weights(
     return list(integration_weights_by_pulse.values())
 
 
-class CodeGenerator:
+class CodeGenerator(ICodeGenerator):
     USE_ZSYNC_TRIGGER = True
 
     DELAY_FIRST_AWG = 32 / DeviceType.HDAWG.sampling_rate
@@ -357,7 +358,7 @@ class CodeGenerator:
         )
         self.gen_waves()
 
-    def fill_output(self):
+    def get_output(self):
         return SeqCGenOutput(
             feedback_connections=self.feedback_connections(),
             signal_delays=self.signal_delays(),

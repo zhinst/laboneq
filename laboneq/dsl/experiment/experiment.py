@@ -616,11 +616,10 @@ class Experiment:
                 The number of chunks to split the sweep into. Defaults to 1.
 
         """
-        parameters = parameter if isinstance(parameter, list) else [parameter]
         return Experiment._SweepSectionContext(
             self,
             uid=uid,
-            parameters=parameters,
+            parameters=parameter,
             execution_type=execution_type,
             alignment=alignment,
             reset_oscillator_phase=reset_oscillator_phase,

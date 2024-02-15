@@ -48,6 +48,3 @@ class AcquireGroupSchedule(IntervalSchedule):
             ).append(self)
 
         return start
-
-    def __hash__(self):
-        return super().__hash__()

@@ -16,7 +16,7 @@ from laboneq.compiler.code_generator.signatures import (
     PlaybackSignature,
     WaveformSignature,
 )
-from laboneq.compiler.common.awg_sampled_event import (
+from laboneq.compiler.code_generator.awg_sampled_event import (
     AWGEvent,
     AWGEventType,
     AWGSampledEventSequence,

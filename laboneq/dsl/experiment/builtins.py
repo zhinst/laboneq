@@ -78,8 +78,7 @@ def section(*args, **kwargs):
 
 
 def sweep(*args, parameter=None, **kwargs):
-    parameters = parameter if isinstance(parameter, list) else [parameter]
-    return SweepSectionContextManager(*args, parameters=parameters, **kwargs)
+    return SweepSectionContextManager(*args, parameters=parameter, **kwargs)
 
 
 def acquire_loop_rt(

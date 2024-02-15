@@ -21,6 +21,3 @@ class OscillatorFrequencyStepSchedule(IntervalSchedule):
         # Length must be set via parameter, so nothing to do here
         assert self.length is not None
         return start
-
-    def __hash__(self):
-        return super().__hash__()

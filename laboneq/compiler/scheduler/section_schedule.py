@@ -220,6 +220,3 @@ class SectionSchedule(IntervalSchedule):
             self.adjust_length(force_length)
         else:
             self.length = length
-
-    def __hash__(self):
-        return super().__hash__()

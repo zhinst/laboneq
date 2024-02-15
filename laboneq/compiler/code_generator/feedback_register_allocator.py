@@ -6,7 +6,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Literal, Optional
 
 from laboneq.compiler.common.awg_info import AwgKey
-from laboneq.compiler.common.event_type import EventType
+from laboneq.compiler.event_list.event_type import EventType
 from laboneq.compiler.common.signal_obj import SignalObj
 
 PQSC_FEEDBACK_REGISTER_COUNT = 32

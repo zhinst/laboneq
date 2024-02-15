@@ -31,14 +31,14 @@ from laboneq.compiler.code_generator.signatures import (
     reduce_signature_phase,
 )
 from laboneq.compiler.code_generator.utils import normalize_phase
-from laboneq.compiler.common.awg_sampled_event import (
+from laboneq.compiler.code_generator.awg_sampled_event import (
     AWGEvent,
     AWGEventType,
     AWGSampledEventSequence,
 )
 from laboneq.compiler.common.awg_signal_type import AWGSignalType
 from laboneq.compiler.common.device_type import DeviceType
-from laboneq.compiler.common.event_type import EventType
+from laboneq.compiler.event_list.event_type import EventType
 from laboneq.compiler.common.play_wave_type import PlayWaveType
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.core.exceptions import LabOneQException

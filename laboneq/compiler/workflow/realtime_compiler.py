@@ -6,81 +6,78 @@ from __future__ import annotations
 
 import logging
 from itertools import groupby
-from typing import Dict, Optional, TypedDict
+from typing import Optional, TypedDict
 
 from laboneq._observability.tracing import trace
 from laboneq.compiler import CodeGenerator, CompilerSettings
 from laboneq.compiler.code_generator.ir_to_event_list import generate_event_list_from_ir
 from laboneq.compiler.code_generator.code_generator_pretty_printer import PrettyPrinter
+from laboneq.compiler.common.code_generator import ICodeGenerator
 from laboneq.compiler.common.signal_obj import SignalObj
+from laboneq.compiler.experiment_access import ExperimentDAO
 from laboneq.compiler.ir.ir import IR
 from laboneq.compiler.scheduler.parameter_store import ParameterStore
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.scheduler.scheduler import Scheduler
-from laboneq.compiler.workflow.compiler_output import RTCompilerOutputContainer
+from laboneq.compiler.workflow.compiler_output import (
+    RTCompilerOutputContainer,
+)
 
 _logger = logging.getLogger(__name__)
 
-_registered_codegens = {
-    0x0: CodeGenerator,
-    0x1: PrettyPrinter,
-}
-
 
 class Schedule(TypedDict):
-    event_list: list[str]
+    event_list: list[dict]
     section_info: dict[str, dict]
     section_signals_with_children: dict[str, list[str]]
     sampling_rates: list[tuple[list[str], float]]
 
-    @classmethod
-    def empty(cls):
-        return cls(
-            event_list=[],
-            section_info={},
-            section_signals_with_children={},
-            sampling_rates=[],
-        )
-
 
 class RealtimeCompiler:
+    _registered_codegens: dict[int, type[ICodeGenerator]] = {}
+
     def __init__(
         self,
-        scheduler: Scheduler,
+        experiment_dao: ExperimentDAO,
         sampling_rate_tracker: SamplingRateTracker,
-        signal_objects: Dict[str, SignalObj],
+        signal_objects: dict[str, SignalObj],
         settings: CompilerSettings | None = None,
     ):
+        self._scheduler = Scheduler(
+            experiment_dao,
+            sampling_rate_tracker,
+            signal_objects,
+            settings,
+        )
         self._ir = None
-        self._scheduler = scheduler
         self._sampling_rate_tracker = sampling_rate_tracker
         self._signal_objects = signal_objects
-        self._settings = settings
+        self._settings = settings if settings is not None else CompilerSettings()
 
-        self._code_generators = {}
+        self._code_generators: dict[int, ICodeGenerator] = {}
+
+    @classmethod
+    def register_codegen(cls, device_class: int, codegen: type[ICodeGenerator]):
+        assert device_class not in cls._registered_codegens
+        cls._registered_codegens[device_class] = codegen
 
     def _lower_to_ir(self):
         return self._scheduler.generate_ir()
 
     def _lower_ir_to_code(self, ir: IR):
-        if len(self._signal_objects) == 0:
-            self._code_generators[0] = CodeGenerator(settings=self._settings, ir=ir)
-            self._code_generators[0].generate_code(self._signal_objects)
-            return
-
         awgs = [signal_obj.awg for signal_obj in self._signal_objects.values()]
         device_classes = {awg.device_class for awg in awgs}
         unknown_devices = [
-            awg for awg in awgs if awg.device_class not in _registered_codegens
+            awg for awg in awgs if awg.device_class not in self._registered_codegens
         ]
 
         if len(unknown_devices) != 0:
             raise Exception("Invalid device class encountered")
 
         for device_class in device_classes:
-            self._code_generators[device_class] = _registered_codegens[device_class](
-                ir, settings=self._settings
-            )
+            self._code_generators[device_class] = self._registered_codegens[
+                device_class
+            ](ir, settings=self._settings)
             self._code_generators[device_class].generate_code(
                 [
                     s
@@ -108,18 +105,17 @@ class RealtimeCompiler:
         self, near_time_parameters: Optional[ParameterStore] = None
     ) -> RTCompilerOutputContainer:
         self._scheduler.run(near_time_parameters)
-        self._generate_code()
-
         schedule = self.prepare_schedule() if self._settings.OUTPUT_EXTRAS else None
 
+        self._generate_code()
+
         outputs = {
-            device_class: code_generator.fill_output()
+            device_class: code_generator.get_output()
             for device_class, code_generator in self._code_generators.items()
         }
 
         compiler_output = RTCompilerOutputContainer(
-            codegen_output=outputs,
-            schedule=schedule,
+            codegen_output=outputs, schedule=schedule
         )
 
         return compiler_output
@@ -136,7 +132,12 @@ class RealtimeCompiler:
         ]
 
         if ir.root_section is None:
-            return Schedule.empty()
+            return Schedule(
+                event_list=[],
+                section_info={},
+                section_signals_with_children={},
+                sampling_rates=[],
+            )
 
         preorder_map = self._scheduler.preorder_map()
 
@@ -149,7 +150,7 @@ class RealtimeCompiler:
         ):
             section_display_name = section_info.uid
             section_signals_with_children[section_info.uid] = list(
-                ir.section_signals_with_chidlren_ids[section_info.uid]
+                ir.section_signals_with_children_ids[section_info.uid]
             )
             section_info_out[section_info.uid] = {
                 "section_display_name": section_display_name,
@@ -158,7 +159,9 @@ class RealtimeCompiler:
 
         sampling_rate_tuples = []
         for signal_info in ir.signals:
+            assert signal_info.device is not None
             device_id = signal_info.device.uid
+            assert signal_info.device.device_type is not None
             device_type = signal_info.device.device_type.value
             sampling_rate_tuples.append(
                 (
@@ -190,3 +193,7 @@ class RealtimeCompiler:
         if self._ir is None:
             self._ir = self._lower_to_ir()
         return self._lower_ir_to_pulse_sheet(self._ir)
+
+
+RealtimeCompiler.register_codegen(0x0, CodeGenerator)
+RealtimeCompiler.register_codegen(0x1, PrettyPrinter)

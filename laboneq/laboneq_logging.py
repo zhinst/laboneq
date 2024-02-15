@@ -30,6 +30,22 @@ def get_log_dir():
     return _log_dir
 
 
+_module_by_filename_cache = {}
+
+
+def _module_by_filename(filename: str):
+    try:
+        return _module_by_filename_cache[filename]
+    except KeyError:
+        for modname, module in list(sys.modules.items()):
+            path = getattr(module, "__file__", None)
+            if path is not None and filename == os.path.abspath(path):
+                _module_by_filename_cache[filename] = (modname, module)
+                return modname, module
+        else:
+            raise KeyError(f"No module corresponding to filename {filename}")
+
+
 def _showwarning(message, category, filename, lineno, file=None, line=None):
     """Show warnings to the logging system.
 
@@ -41,22 +57,20 @@ def _showwarning(message, category, filename, lineno, file=None, line=None):
             return _laboneq_showwarning(message, category, filename, lineno, file, line)
         return None
 
-    for modname, module in sys.modules.items():
-        path = getattr(module, "__file__", None)
-        if path is not None and filename == os.path.abspath(path):
-            logger = logging.getLogger(modname)
-            break
-    else:
+    try:
+        modname, _ = _module_by_filename(filename)
+    except KeyError:
         # No module matching the file name was found. Fall back to original implementation.
         if _laboneq_showwarning is not None:
             return _laboneq_showwarning(message, category, filename, lineno, file, line)
-
-    formatted_message = warnings.formatwarning(
-        message, category, filename, lineno, line
-    )
-    if not logger.handlers:
-        logger.addHandler(logging.NullHandler())
-    logger.warning(formatted_message)
+    else:
+        logger = get_logger(modname)
+        formatted_message = warnings.formatwarning(
+            message, category, filename, lineno, line
+        )
+        if not logger.handlers:
+            logger.addHandler(logging.NullHandler())
+        logger.warning(formatted_message)
 
 
 def capture_warnings(capture: bool):

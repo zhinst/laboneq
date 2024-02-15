@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Protocol
 
-from laboneq.controller.devices.device_zi import NodeCollector
+from laboneq.controller.devices.device_utils import NodeCollector
 
 
 class _MixInToDevice(Protocol):

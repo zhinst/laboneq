@@ -16,13 +16,13 @@ from laboneq.compiler.code_generator.feedback_register_allocator import (
 )
 from laboneq.compiler.code_generator.utils import resample_state
 from laboneq.compiler.common.awg_info import AWGInfo
-from laboneq.compiler.common.awg_sampled_event import (
+from laboneq.compiler.code_generator.awg_sampled_event import (
     AWGEvent,
     AWGEventType,
     AWGSampledEventSequence,
 )
 from laboneq.compiler.common.device_type import DeviceType
-from laboneq.compiler.common.event_type import EventType
+from laboneq.compiler.event_list.event_type import EventType
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.pulse_sampler import interval_to_samples, length_to_samples
 

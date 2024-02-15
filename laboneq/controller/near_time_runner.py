@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+from collections import defaultdict
 
 import logging
 import traceback
@@ -14,7 +15,7 @@ from laboneq.controller.communication import (
     DaqNodeSetAction,
     batch_set,
 )
-from laboneq.controller.devices.device_zi import NodeCollector
+from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.protected_session import ProtectedSession
 from laboneq.controller.util import LabOneQControllerException, SweepParamsTracker
 from laboneq.core.exceptions import AbortExecution
@@ -25,6 +26,7 @@ from laboneq.executor.executor import AsyncExecutorBase, LoopFlags, LoopingMode
 
 if TYPE_CHECKING:
     from laboneq.controller.controller import Controller
+    from laboneq.controller.devices.device_zi import DeviceZI
 
 _logger = logging.getLogger(__name__)
 
@@ -33,7 +35,7 @@ class NearTimeRunner(AsyncExecutorBase):
     def __init__(self, controller: Controller):
         super().__init__(looping_mode=LoopingMode.NEAR_TIME_ONLY)
         self.controller = controller
-        self.user_set_nodes: list[DaqNodeSetAction] = []
+        self.user_set_nodes: dict[DeviceZI, NodeCollector] = defaultdict(NodeCollector)
         self.nt_loop_indices: list[int] = []
         self.pipeliner_job: int = 0
         self.sweep_params_tracker = SweepParamsTracker()
@@ -42,10 +44,8 @@ class NearTimeRunner(AsyncExecutorBase):
         return NtStepKey(indices=tuple(self.nt_loop_indices))
 
     async def set_handler(self, path: str, value):
-        nc = NodeCollector()
-        nc.add(path, value, cache=False)
         dev = self.controller._devices.find_by_node_path(path)
-        self.user_set_nodes.extend(await dev.maybe_async(nc))
+        self.user_set_nodes[dev].add(path, value, cache=False)
 
     async def nt_callback_handler(self, func_name: str, args: dict[str, Any]):
         func = self.controller._neartime_callbacks.get(func_name)
@@ -118,15 +118,21 @@ class NearTimeRunner(AsyncExecutorBase):
             nt_step=self.nt_step(), rt_section_uid=uid
         )
         await self.controller._configure_triggers()
+
+        user_set_node_actions: list[DaqNodeSetAction] = []
+        for device, nc in self.user_set_nodes.items():
+            user_set_node_actions.extend(await device.maybe_async(nc))
+        self.user_set_nodes.clear()
+
         nt_sweep_nodes = await self.controller._prepare_nt_step(
             self.sweep_params_tracker
         )
+
         step_prepare_nodes = await self.controller._prepare_rt_execution(
             rt_section_uid=uid
         )
 
-        await batch_set([*self.user_set_nodes, *nt_sweep_nodes, *step_prepare_nodes])
-        self.user_set_nodes.clear()
+        await batch_set([*user_set_node_actions, *nt_sweep_nodes, *step_prepare_nodes])
         self.sweep_params_tracker.clear_for_next_step()
         for retry in range(3):  # Up to 3 retries
             if retry > 0:

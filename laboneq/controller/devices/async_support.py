@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, TypeVar
+from laboneq.controller.devices.device_utils import NodeCollector
 
 from laboneq.controller.devices.zi_emulator import EmulatorState
 
@@ -41,7 +42,7 @@ async def gather_and_apply(func: Callable[[list[U]], Coroutine[Any, Any, None]])
     await func(await _gather(*awaitables))
 
 
-async def set_parallel(api: Any, *node_sets):
+async def set_parallel(api: Any, nodes: NodeCollector):
     return  # TODO(2K): stub
 
 

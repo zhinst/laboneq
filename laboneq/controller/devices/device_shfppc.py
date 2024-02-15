@@ -13,7 +13,8 @@ from laboneq.controller.attribute_value_tracker import (
     DeviceAttributesView,
 )
 from laboneq.controller.communication import DaqNodeSetAction
-from laboneq.controller.devices.device_zi import DeviceZI, NodeCollector
+from laboneq.controller.devices.device_utils import NodeCollector
+from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.data.calibration import CancellationSource
 from laboneq.data.recipe import Initialization

@@ -13,21 +13,22 @@ from typing import TYPE_CHECKING, Callable, Iterator, cast
 from zhinst.utils.api_compatibility import check_dataserver_device_compatibility
 
 from laboneq.controller.communication import (
-    CachingStrategy,
-    DaqNodeSetAction,
     DaqWrapper,
     DaqWrapperDryRun,
-    batch_set,
+    batch_set_multiple,
 )
+from laboneq.controller.devices.async_support import gather_and_apply
 from laboneq.controller.devices.device_factory import DeviceFactory
 from laboneq.controller.devices.device_setup_dao import DeviceSetupDAO
-from laboneq.controller.devices.device_utils import prepare_emulator_state
+from laboneq.controller.devices.device_utils import (
+    NodeCollector,
+    prepare_emulator_state,
+)
 from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.devices.zi_emulator import EmulatorState
 from laboneq.controller.devices.zi_node_monitor import (
     ConditionsChecker,
     NodeControlBase,
-    NodeMonitorBase,
     ResponseWaiter,
     filter_commands,
     filter_settings,
@@ -87,11 +88,10 @@ class DeviceCollection:
                 yield uid, device
 
     @property
-    def node_monitors(self) -> set[NodeMonitorBase]:
-        all_monitors: set[NodeMonitorBase] = set()
+    def with_node_monitor(self) -> Iterator[DeviceZI]:
         for device in self._devices.values():
-            all_monitors.add(device.node_monitor)
-        return all_monitors
+            if device._node_monitor is not None:
+                yield device
 
     def find_by_uid(self, device_uid) -> DeviceZI:
         device = self._devices.get(device_uid)
@@ -130,18 +130,14 @@ class DeviceCollection:
     ):
         conditions_checker = ConditionsChecker()
         response_waiter = ResponseWaiter()
-        set_nodes: list[DaqNodeSetAction] = []
+        set_nodes: dict[DeviceZI, NodeCollector] = defaultdict(NodeCollector)
 
-        def _add_set_nodes(daq, nodes: list[NodeControlBase]):
-            nonlocal set_nodes
+        def _add_set_nodes(device: DeviceZI, nodes: list[NodeControlBase]):
             for node in nodes:
-                set_nodes.append(
-                    DaqNodeSetAction(
-                        daq=daq,
-                        path=node.path,
-                        value=node.raw_value,
-                        caching_strategy=CachingStrategy.NO_CACHE,
-                    )
+                set_nodes[device].add(
+                    path=node.path,
+                    value=node.raw_value,
+                    cache=False,
                 )
 
         for device in devices:
@@ -150,16 +146,16 @@ class DeviceCollection:
             commands = filter_commands(dev_nodes)
             if len(commands) > 0:
                 # 1a. Unconditional command
-                _add_set_nodes(device.daq, filter_commands(dev_nodes))
+                _add_set_nodes(device, commands)
                 response_waiter.add(
-                    target=device.node_monitor,
+                    target=device,
                     conditions={n.path: n.value for n in filter_responses(dev_nodes)},
                 )
             else:
                 # 1b. Verify if device is already configured as desired
                 dev_conditions_checker = ConditionsChecker()
                 dev_conditions_checker.add(
-                    target=device.node_monitor,
+                    target=device,
                     conditions={n.path: n.value for n in filter_conditions(dev_nodes)},
                 )
                 conditions_checker.add_from(dev_conditions_checker)
@@ -170,21 +166,23 @@ class DeviceCollection:
                 failed_paths = [path for path, _ in failed]
                 failed_nodes = [n for n in dev_nodes if n.path in failed_paths]
                 response_waiter.add(
-                    target=device.node_monitor,
+                    target=device,
                     conditions={
                         n.path: n.value for n in filter_wait_conditions(failed_nodes)
                     },
                 )
 
-                _add_set_nodes(device.daq, filter_settings(dev_nodes))
+                _add_set_nodes(device, filter_settings(dev_nodes))
                 response_waiter.add(
-                    target=device.node_monitor,
+                    target=device,
                     conditions={n.path: n.value for n in filter_responses(dev_nodes)},
                 )
 
         # 2. Apply any necessary node changes (which may be empty)
         if len(set_nodes) > 0:
-            await batch_set(set_nodes)
+            async with gather_and_apply(batch_set_multiple) as awaitables:
+                for device, nc in set_nodes.items():
+                    awaitables.append(device.maybe_async(nc))
 
         # 3. Wait for responses to the changes in step 2 and settling of conditions resulting from earlier config stages
         if len(response_waiter.remaining()) == 0:
@@ -223,8 +221,8 @@ class DeviceCollection:
                 self.flush_monitor()
             )  # Consume any updates resulted from the above reset
             # TODO(2K): Error check
-            for daq in self._daqs.values():
-                daq.clear_cache()
+            for _, device in self.all:
+                device.clear_cache()
 
         configs = {
             "Reference clock switching": lambda d: cast(
@@ -282,7 +280,7 @@ class DeviceCollection:
         # Set of outputs to disable or skip (depending on the 'invert' param) per device.
         # Rationale for the logic: the actual number of outputs is only known by the connected
         # device object, here we can only determine the outputs mapped in the device setup.
-        outputs_per_device: dict[str, set[int] | None] = {}
+        outputs_per_device: dict[str, set[int]] = defaultdict(set)
 
         if logical_signals is None:
             invert = True
@@ -303,13 +301,12 @@ class DeviceCollection:
             for ls_path in logical_signals:
                 device_uid, outputs = self._ds.resolve_ls_path_outputs(ls_path)
                 if device_uid is not None:
-                    outputs_per_device.setdefault(device_uid, set()).update(outputs)
+                    outputs_per_device[device_uid].update(outputs)
 
-        all_actions: list[DaqNodeSetAction] = []
-        for device_uid, outputs in outputs_per_device.items():
-            device = self.find_by_uid(device_uid)
-            all_actions.extend(await device.disable_outputs(outputs, invert))
-        await batch_set(all_actions)
+        async with gather_and_apply(batch_set_multiple) as awaitables:
+            for device_uid, outputs in outputs_per_device.items():
+                device = self.find_by_uid(device_uid)
+                awaitables.append(device.disable_outputs(outputs, invert))
 
     def shut_down(self):
         for device in self._devices.values():
@@ -320,21 +317,20 @@ class DeviceCollection:
             device.free_allocations()
 
     async def on_experiment_end(self):
-        all_actions: list[DaqNodeSetAction] = []
-        for device in self._devices.values():
-            all_actions.extend(await device.maybe_async(device.on_experiment_end()))
-        await batch_set(all_actions)
+        async with gather_and_apply(batch_set_multiple) as awaitables:
+            for device in self._devices.values():
+                awaitables.append(device.maybe_async(device.on_experiment_end()))
 
     async def start_monitor(self):
         if self._monitor_started:
             return
 
         response_waiter = ResponseWaiter()
-        for node_monitor in self.node_monitors:
-            await node_monitor.start()
+        for device in self.with_node_monitor:
+            await device.node_monitor.start()
             response_waiter.add(
-                target=node_monitor,
-                conditions={path: None for path in node_monitor._nodes},
+                target=device,
+                conditions={path: None for path in device.nodes_to_monitor()},
             )
 
         if not await response_waiter.wait_all(timeout=2):
@@ -346,11 +342,11 @@ class DeviceCollection:
         self._monitor_started = True
 
     async def flush_monitor(self):
-        for node_monitor in self.node_monitors:
+        for node_monitor in {device.node_monitor for device in self.with_node_monitor}:
             await node_monitor.flush()
 
     async def reset_monitor(self):
-        for node_monitor in self.node_monitors:
+        for node_monitor in {device.node_monitor for device in self.with_node_monitor}:
             await node_monitor.reset()
         self._monitor_started = False
 
@@ -454,10 +450,10 @@ class DeviceCollection:
         return msg
 
     async def update_warning_nodes(self):
-        for node_monitor in self.node_monitors:
+        for node_monitor in {device.node_monitor for device in self.with_node_monitor}:
             await node_monitor.poll()
 
-        for _, device in self.all:
+        for device in self.with_node_monitor:
             device.update_warning_nodes(
                 {
                     node: device.node_monitor.get_last(node)

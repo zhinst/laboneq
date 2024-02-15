@@ -21,6 +21,3 @@ class RootSchedule(IntervalSchedule):
             child.on_absolute_start_time_fixed(0, schedule_data)
         self.length = ceil_to_grid(length, self.grid)
         return start
-
-    def __hash__(self):
-        return super().__hash__()

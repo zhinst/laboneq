@@ -35,7 +35,9 @@ from laboneq.controller.devices.async_support import (
     set_parallel,
 )
 from laboneq.controller.devices.zi_emulator import EmulatorState
+from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.zi_node_monitor import (
+    INodeMonitorProvider,
     NodeControlBase,
     NodeMonitorBase,
 )
@@ -169,34 +171,7 @@ def delay_to_rounded_samples(
     return delay_rounded
 
 
-@dataclass
-class NodeAction:
-    path: str
-    value: Any
-    cache: bool = True
-    filename: str | None = None
-
-
-class NodeCollector:
-    def __init__(self, base: str = ""):
-        self._base = base
-        self._nodes: list[NodeAction] = []
-
-    def add(
-        self, path: str, value: Any, cache: bool = True, filename: str | None = None
-    ):
-        self._nodes.append(NodeAction(self._base + path, value, cache, filename))
-
-    def extend(self, other: NodeCollector):
-        for node in other:
-            self._nodes.append(node)
-
-    def __iter__(self) -> Iterator[NodeAction]:
-        for node in self._nodes:
-            yield node
-
-
-class DeviceZI:
+class DeviceZI(INodeMonitorProvider):
     def __init__(self, device_qualifier: DeviceQualifier, daq: DaqWrapper):
         self._device_qualifier = device_qualifier
         self._downlinks: dict[str, list[tuple[str, ReferenceType[DeviceZI]]]] = {}
@@ -272,7 +247,10 @@ class DeviceZI:
     def is_secondary(self) -> bool:
         return False
 
-    def to_daq_actions(self, nodes: NodeCollector) -> list[DaqNodeSetAction]:
+    async def maybe_async(self, nodes: NodeCollector) -> list[DaqNodeSetAction]:
+        if self._api is not None:
+            await set_parallel(self._api, nodes)
+            return []
         return [
             DaqNodeSetAction(
                 self.daq,
@@ -286,17 +264,19 @@ class DeviceZI:
             for node in nodes
         ]
 
-    async def maybe_async(self, nodes: NodeCollector) -> list[DaqNodeSetAction]:
-        if self._api is not None:
-            await set_parallel(self._api, *[(node.path, node.value) for node in nodes])
-            return []
-        return self.to_daq_actions(nodes)
-
     async def maybe_async_wait(self, nodes: dict[str, Any]) -> dict[str, Any]:
         if self._api is not None:
             # TODO(2K): wait asynchronously
             return {}
         return nodes
+
+    def clear_cache(self):
+        if self._api is not None:
+            # TODO(2K): the code below is only needed to keep async API behavior
+            # in emulation mode matching that of legacy API with L1Q cache.
+            pass  # stub
+        else:
+            self.daq.clear_cache()
 
     def add_command_table_header(self, body: dict) -> dict:
         # Stub, implement in sub-class
@@ -445,7 +425,7 @@ class DeviceZI:
         try:
             self._api = await create_device_kernel_session(
                 device_qualifier=self._device_qualifier,
-                server_qualifier=self.daq._server_qualifier,
+                server_qualifier=self.daq.server_qualifier,
                 emulator_state=emulator_state,
             )
             if self._api is None:
@@ -473,7 +453,8 @@ class DeviceZI:
 
     async def connect(self, emulator_state: EmulatorState | None):
         await self._connect_to_data_server(emulator_state)
-        self.node_monitor.add_nodes(self.nodes_to_monitor())
+        if self._node_monitor is not None:
+            self.node_monitor.add_nodes(self.nodes_to_monitor())
 
     def disconnect(self):
         if not self._connected:
@@ -690,6 +671,7 @@ class DeviceZI:
     ) -> tuple[
         DeviceZI, list[DaqNodeSetAction], list[DaqNodeSetAction], dict[str, Any]
     ]:
+        # TODO(2K): Interface need to be more generic, abstract away DaqNodeSetAction
         artifacts = recipe_data.scheduled_experiment.artifacts
         rt_execution_info = recipe_data.rt_execution_infos[rt_section_uid]
 

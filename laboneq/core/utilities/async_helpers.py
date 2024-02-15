@@ -3,7 +3,7 @@
 
 from functools import lru_cache
 from unsync import unsync
-from typing import Awaitable, TypeVar, Callable, Any
+from typing import Coroutine, TypeVar, Callable
 import asyncio
 
 
@@ -23,7 +23,7 @@ def _is_event_loop_running() -> bool:
         return False
 
 
-def run_async(func: Callable[[Any], Awaitable[T]], *args, **kwargs) -> T:
+def run_async(func: Callable[..., Coroutine[None, None, T]], *args, **kwargs) -> T:
     """Run callable asynchronous object synchronously.
 
     Args:

@@ -6,13 +6,13 @@ from __future__ import annotations
 from typing import Dict, List
 
 from laboneq.compiler.code_generator.signatures import PlaybackSignature
-from laboneq.compiler.common.awg_sampled_event import (
+from laboneq.compiler.code_generator.awg_sampled_event import (
     AWGEvent,
     AWGEventType,
     AWGSampledEventSequence,
 )
 from laboneq.compiler.common.device_type import DeviceType
-from laboneq.compiler.common.event_type import EventType
+from laboneq.compiler.event_list.event_type import EventType
 from laboneq.core.utilities.pulse_sampler import length_to_samples
 
 
