@@ -192,9 +192,7 @@ def _compute_start_with_latency(
             latency_in_ts = time_of_pulse_played * sg_seq_dt_for_latency_in_ts
         else:
             # gen 1 system
-            latency = (
-                900e-9
-            )  # https://www.zhinst.com/ch/en/blogs/practical-active-qubit-reset
+            latency = 900e-9  # https://www.zhinst.com/ch/en/blogs/practical-active-qubit-reset
             latency_in_ts = int(
                 (
                     latency

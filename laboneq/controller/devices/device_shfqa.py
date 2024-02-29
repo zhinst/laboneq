@@ -462,6 +462,18 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
             )
         return await self.maybe_async_wait(conditions)
 
+    async def collect_execution_teardown_nodes(
+        self, with_pipeliner: bool
+    ) -> list[DaqNodeSetAction]:
+        nc = NodeCollector(base=f"/{self.serial}/")
+
+        if not self.is_standalone():
+            # Deregister this instrument from synchronization via ZSync.
+            # HULK-1707: this must happen before disabling the synchronization of the last AWG
+            nc.add("system/synchronization/source", 0)
+
+        return await self.maybe_async(nc)
+
     def _validate_initialization(self, initialization: Initialization):
         super()._validate_initialization(initialization)
         for input in initialization.inputs or []:
@@ -894,7 +906,6 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         )
         integration_unit_index = integrator_allocation.channels[0]
 
-        # Note: copying this from grimsel_multistate_demo jupyter notebook
         nc = NodeCollector(
             base=f"/{self.serial}/qachannels/{measurement.channel}/readout/multistate/"
         )

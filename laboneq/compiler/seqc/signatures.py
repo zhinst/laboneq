@@ -11,7 +11,7 @@ from typing import Any, Dict, FrozenSet, Optional, Tuple
 import numpy as np
 from orjson import orjson
 
-from laboneq.compiler.code_generator.utils import normalize_phase
+from laboneq.compiler.seqc.utils import normalize_phase
 from laboneq.core.utilities.string_sanitize import string_sanitize
 
 

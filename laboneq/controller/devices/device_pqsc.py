@@ -89,6 +89,11 @@ class DevicePQSC(DeviceZI):
                         dev.serial[3:],
                     ),
                 )
+
+        # Todo: Check if no ZSync ports are registered for synchronisation.
+        #  If this check fails, then a previous execution may have exited uncleanly.
+        #  See discussions in MR !2739.
+
         return nodes
 
     async def collect_initialization_nodes(

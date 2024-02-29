@@ -14,13 +14,11 @@ from laboneq.compiler.common.feedback_register_config import (
     FeedbackRegisterConfig,
 )
 from laboneq._version import get_version
-from laboneq.compiler.code_generator.measurement_calculator import IntegrationTimes
+from laboneq.compiler.common.iface_compiler_output import RealtimeStepBase
+from laboneq.compiler.seqc.measurement_calculator import IntegrationTimes
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
-from laboneq.compiler.workflow.compiler_output import (
-    RealtimeStep,
-    RealtimeStepPrettyPrinter,
-)
+from laboneq.compiler.seqc.linker import RealtimeStep
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums.acquisition_type import is_spectroscopy
 from laboneq.data.calibration import PortMode, CancellationSource
@@ -377,8 +375,8 @@ class RecipeGenerator:
         initialization.awgs.append(awg)
 
     @singledispatchmethod
-    def add_realtime_step(self, rt_step):
-        raise NotImplementedError()
+    def add_realtime_step(self, rt_step: RealtimeStepBase):
+        raise NotImplementedError
 
     @add_realtime_step.register
     def _(self, rt_step: RealtimeStep):
@@ -392,10 +390,6 @@ class RecipeGenerator:
                 nt_step=NtStepKey(indices=tuple(rt_step.nt_step)),
             )
         )
-
-    @add_realtime_step.register
-    def _(self, rt_step: RealtimeStepPrettyPrinter):
-        ...
 
     def from_experiment(
         self,

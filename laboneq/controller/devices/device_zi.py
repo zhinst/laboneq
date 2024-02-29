@@ -482,11 +482,6 @@ class DeviceZI(INodeMonitorProvider):
         """
         return []
 
-    def shut_down(self):
-        _logger.debug(
-            "%s: Turning off signal output (stub, not implemented).", self.dev_repr
-        )
-
     def on_experiment_end(self) -> NodeCollector:
         return NodeCollector()
 

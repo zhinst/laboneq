@@ -8,7 +8,7 @@ import textwrap
 from enum import Enum
 from typing import Any, Dict, List, Sequence, Set
 
-from laboneq.compiler.code_generator.compressor import Run, compressor_core
+from laboneq.compiler.seqc.compressor import Run, compressor_core
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.core.exceptions import LabOneQException
 

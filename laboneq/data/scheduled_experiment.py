@@ -89,18 +89,6 @@ class ArtifactsCodegen(CompilerArtifact):
 
 
 @dataclass
-class ArtifactsPrettyPrinter(CompilerArtifact):
-    #: Outline of the IR
-    src: list[dict[str, str]] = None
-
-    #: Pulse uids
-    waves: list[dict[str, str]] = None
-
-    #: Section names
-    sections: list[dict[str, str]] = None
-
-
-@dataclass
 class ScheduledExperiment:
     uid: str = None
 

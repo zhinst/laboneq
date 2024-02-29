@@ -14,15 +14,15 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from intervaltree import Interval, IntervalTree
 
-from laboneq.compiler.code_generator.analyze_amplitude_registers import (
+from laboneq.compiler.seqc.analyze_amplitude_registers import (
     analyze_amplitude_register_set_events,
 )
-from laboneq.compiler.code_generator.interval_calculator import (
+from laboneq.compiler.seqc.interval_calculator import (
     MinimumWaveformLengthViolation,
     MutableInterval,
     calculate_intervals,
 )
-from laboneq.compiler.code_generator.signatures import (
+from laboneq.compiler.seqc.signatures import (
     PlaybackSignature,
     PulseSignature,
     WaveformSignature,
@@ -30,8 +30,8 @@ from laboneq.compiler.code_generator.signatures import (
     reduce_signature_amplitude_register,
     reduce_signature_phase,
 )
-from laboneq.compiler.code_generator.utils import normalize_phase
-from laboneq.compiler.code_generator.awg_sampled_event import (
+from laboneq.compiler.seqc.utils import normalize_phase
+from laboneq.compiler.seqc.awg_sampled_event import (
     AWGEvent,
     AWGEventType,
     AWGSampledEventSequence,

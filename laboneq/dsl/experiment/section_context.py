@@ -10,7 +10,6 @@ from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import (
     AcquisitionType,
     AveragingMode,
-    ExecutionType,
     RepetitionMode,
 )
 from laboneq.dsl import Parameter
@@ -19,6 +18,9 @@ from laboneq.dsl.experiment.context import (
     peek_context,
     pop_context,
     push_context,
+)
+from laboneq.dsl.experiment.experiment_context import (
+    current_experiment_context,
 )
 from laboneq.dsl.experiment.section import (
     AcquireLoopNt,
@@ -30,6 +32,7 @@ from laboneq.dsl.experiment.section import (
     PRNGSetup,
     PRNGLoop,
 )
+from laboneq.dsl.experiment.uid_generator import GLOBAL_UID_GENERATOR
 from laboneq.dsl.prng import PRNGSample
 
 
@@ -57,21 +60,28 @@ class SectionContextManagerBase:
             ctx_manager.auto_add = auto_add
         return ctx_manager
 
+    def _uid(self, prefix):
+        context = current_experiment_context()
+        if context is not None:
+            return context.uid(prefix)
+        return GLOBAL_UID_GENERATOR.uid(prefix)
+
+    def _uid_name_kwargs(self):
+        kwargs = self.kwargs.copy()
+        name = kwargs.pop("name", None)
+        if name is None:
+            name = "unnamed"
+        uid = kwargs.pop("uid", None)
+        if uid is None:
+            uid = self._uid(name)
+        return uid, name, kwargs
+
     def _section_create(self):
-        return self.section_class(**self.kwargs)
+        uid, name, kwargs = self._uid_name_kwargs()
+        return self.section_class(uid=uid, name=name, **kwargs)
 
     def _section_post_create(self, section, parent):
-        if section.execution_type is None:
-            if parent is not None:
-                section.execution_type = parent.execution_type
-        elif section.execution_type == ExecutionType.NEAR_TIME:
-            if parent is not None:
-                if parent.execution_type == ExecutionType.REAL_TIME:
-                    raise LabOneQException(
-                        "Cannot nest near-time section inside real-time context"
-                    )
-        if section.execution_type is None:
-            section.execution_type = ExecutionType.NEAR_TIME
+        pass
 
     def _peek_section_parent(self):
         parent = peek_context()
@@ -105,6 +115,7 @@ class SectionContextManager(SectionContextManagerBase):
         length=None,
         alignment=None,
         uid=None,
+        name=None,
         on_system_grid=None,
         play_after: str | list[str] | None = None,
         trigger: dict[str, dict[str, int]] | None = None,
@@ -113,6 +124,8 @@ class SectionContextManager(SectionContextManagerBase):
         kwargs = {}
         if uid is not None:
             kwargs["uid"] = uid
+        if name is not None:
+            kwargs["name"] = name
         if length is not None:
             kwargs["length"] = length
         if alignment is not None:
@@ -154,6 +167,7 @@ class SweepSectionContextManager(SectionContextManagerBase):
         parameters,
         execution_type=None,
         uid=None,
+        name=None,
         alignment=None,
         reset_oscillator_phase=False,
         chunk_count=1,
@@ -161,6 +175,8 @@ class SweepSectionContextManager(SectionContextManagerBase):
         kwargs = dict(parameters=parameters, chunk_count=chunk_count)
         if uid is not None:
             kwargs["uid"] = uid
+        if name is not None:
+            kwargs["name"] = name
         if execution_type is not None:
             kwargs["execution_type"] = execution_type
         if alignment is not None:
@@ -179,13 +195,15 @@ class SweepSectionContextManager(SectionContextManagerBase):
 class AcquireLoopNtSectionContextManager(SectionContextManagerBase):
     section_class = AcquireLoopNt
 
-    def __init__(self, count, averaging_mode=AveragingMode.CYCLIC, uid=None):
+    def __init__(self, count, averaging_mode=AveragingMode.CYCLIC, uid=None, name=None):
         kwargs = dict(
             count=count,
             averaging_mode=averaging_mode,
         )
         if uid is not None:
             kwargs["uid"] = uid
+        if name is not None:
+            kwargs["name"] = name
         super().__init__(kwargs=kwargs)
 
 
@@ -201,6 +219,7 @@ class AcquireLoopRtSectionContextManager(SectionContextManagerBase):
         acquisition_type=AcquisitionType.INTEGRATION,
         reset_oscillator_phase=False,
         uid=None,
+        name=None,
     ):
         kwargs = dict(
             count=count,
@@ -212,6 +231,8 @@ class AcquireLoopRtSectionContextManager(SectionContextManagerBase):
         )
         if uid is not None:
             kwargs["uid"] = uid
+        if name is not None:
+            kwargs["name"] = name
         super().__init__(kwargs=kwargs)
 
 
@@ -225,12 +246,15 @@ class MatchSectionContextManager(SectionContextManagerBase):
         prng_sample: PRNGSample | None = None,
         sweep_parameter: Parameter | None = None,
         uid=None,
+        name=None,
         play_after=None,
         local=None,
     ):
         kwargs = {}
         if uid is not None:
             kwargs["uid"] = uid
+        if name is not None:
+            kwargs["name"] = name
         if play_after is not None:
             kwargs["play_after"] = play_after
         if handle is not None:
@@ -249,10 +273,12 @@ class MatchSectionContextManager(SectionContextManagerBase):
 class CaseSectionContextManager(SectionContextManagerBase):
     section_class = Case
 
-    def __init__(self, uid, state):
+    def __init__(self, uid, name, state):
         kwargs = dict(state=state)
         if uid is not None:
             kwargs["uid"] = uid
+        if name is not None:
+            kwargs["name"] = name
         super().__init__(kwargs=kwargs)
 
     def _section_post_create(self, section, parent):
@@ -264,10 +290,12 @@ class CaseSectionContextManager(SectionContextManagerBase):
 class PRNGSetupContextManager(SectionContextManagerBase):
     section_class = PRNGSetup
 
-    def __init__(self, prng, uid):
+    def __init__(self, prng, uid, name):
         kwargs = {"prng": prng}
         if uid is not None:
             kwargs["uid"] = uid
+        if name is not None:
+            kwargs["name"] = name
         super().__init__(kwargs=kwargs)
 
     def __enter__(self):
@@ -278,10 +306,12 @@ class PRNGSetupContextManager(SectionContextManagerBase):
 class PRNGLoopContextManager(SectionContextManagerBase):
     section_class = PRNGLoop
 
-    def __init__(self, prng_sample, uid):
+    def __init__(self, prng_sample, uid, name):
         kwargs = {"prng_sample": prng_sample}
         if uid is not None:
             kwargs["uid"] = uid
+        if name is not None:
+            kwargs["name"] = name
         super().__init__(kwargs=kwargs)
 
     def __enter__(self):

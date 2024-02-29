@@ -11,13 +11,14 @@ from rich import box
 from rich.console import Console
 from rich.table import Table
 
+from laboneq.compiler.common.iface_compiler_output import (
+    CombinedOutput,
+    RTCompilerOutputContainer,
+)
 from laboneq.compiler import CompilerSettings
 from laboneq.compiler.common.awg_info import AwgKey
 from laboneq.compiler.workflow.compiler_output import (
-    SeqCGenOutput,
     CombinedRTCompilerOutputContainer,
-    CombinedRTOutputSeqC,
-    RTCompilerOutputContainer,
 )
 from laboneq.laboneq_logging import get_logger
 
@@ -77,6 +78,8 @@ class CompilationReportGenerator(NtCompilerExecutorDelegate):
         self.update(new, indices)
 
     def after_final_run(self, combined: CombinedRTCompilerOutputContainer):
+        from laboneq.compiler.seqc.linker import CombinedRTOutputSeqC
+
         for co in combined.combined_output.values():
             if isinstance(co, CombinedRTOutputSeqC):
                 compiler_output = co
@@ -91,6 +94,8 @@ class CompilationReportGenerator(NtCompilerExecutorDelegate):
     def update(
         self, rt_compiler_output: RTCompilerOutputContainer, step_indices: list[int]
     ):
+        from laboneq.compiler.seqc.linker import SeqCGenOutput
+
         for co in rt_compiler_output.codegen_output.values():
             if isinstance(co, SeqCGenOutput):
                 compiler_output = co
@@ -119,7 +124,10 @@ class CompilationReportGenerator(NtCompilerExecutorDelegate):
             )
         self._data += report
 
-    def calculate_total(self, compiler_output: CombinedRTOutputSeqC):
+    def calculate_total(self, compiler_output: CombinedOutput):
+        from laboneq.compiler.seqc.linker import CombinedRTOutputSeqC
+
+        assert isinstance(compiler_output, CombinedRTOutputSeqC)
         total_seqc = sum(len(s["text"].splitlines()) for s in compiler_output.src)
         total_ct = sum(len(ct["ct"]) for ct in compiler_output.command_tables)
         total_wave_idx = sum(len(wi) for wi in compiler_output.wave_indices)
@@ -137,7 +145,10 @@ class CompilationReportGenerator(NtCompilerExecutorDelegate):
             waveform_samples=total_samples,
         )
 
-    def compute_pulse_map_statistics(self, compiler_output: CombinedRTOutputSeqC):
+    def compute_pulse_map_statistics(self, compiler_output: CombinedOutput):
+        from laboneq.compiler.seqc.linker import CombinedRTOutputSeqC
+
+        assert isinstance(compiler_output, CombinedRTOutputSeqC)
         for pulse_id, pulse_map in compiler_output.pulse_map.items():
             self._pulse_map[pulse_id] = (
                 len(pulse_map.waveforms),

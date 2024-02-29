@@ -45,6 +45,9 @@ class Section:
         uid (str | None):
             Unique identifier for the section. Maybe be omitted if one
             is not required. Default: `None`.
+        name (str):
+            Non-unique name for the section. May, in future, be used as a prefix for
+            generating a `uid` for the section if one is not specified. Default: `"unnamed"`.
         alignment (SectionAlignment):
             Specifies the time alignment of operations and sections within
             this section. Left alignment positions operations and sections
@@ -86,10 +89,16 @@ class Section:
 
     !!! version-changed "Changed in version 2.0.0"
         Removed `offset` member variable.
+
+    !!! version-changed "Added in version 2.27.0"
+        Added `name` member variable.
     """
 
     # Unique identifier of the section.
     uid: str | None = field(default=None)
+
+    # Non-unique name for the section.
+    name: str = field(default="unnamed")
 
     # Alignment of operations and subsections within this section.
     alignment: SectionAlignment = field(default=SectionAlignment.LEFT)

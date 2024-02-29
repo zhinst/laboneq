@@ -4,4 +4,7 @@
 
 """Utilities mainly useful for analysing results and experiments."""
 
-from ._kernelutils import calculate_integration_kernels
+from ._kernelutils import (
+    calculate_integration_kernels,
+    calculate_integration_kernels_thresholds,
+)

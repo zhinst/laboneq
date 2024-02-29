@@ -376,14 +376,22 @@ class ExperimentInfoBuilder:
                 source_signal = output_router.source_signal
                 if LogicalSignalGroups_Path not in source_signal:
                     source_signal = insert_logical_signal_prefix(source_signal)
+
                 try:
-                    from_pc = self._setup_helper.instruments.physical_channel_by_logical_signal(
+                    source_signal = self._setup_helper.logical_signal_by_path(
                         source_signal
                     )
-                except RuntimeError:
+                except KeyError:
                     msg = f"Error on signal {mapped_ls_path}: Output routing source signal {output_router.source_signal} does not exist."
                     raise LabOneQException(msg) from None
-                if from_pc.group != signal_info.device.uid:
+                from_pc = (
+                    self._setup_helper.instruments.physical_channel_by_logical_signal(
+                        source_signal
+                    )
+                )
+                from_device = self._device_info.device_by_ls(source_signal)
+
+                if from_device != signal_info.device:
                     msg = f"Error on signal {mapped_ls_path}: Output routing can be only applied within the same device SGCHANNELS: {signal_info.device.uid} != {from_pc.group}"
                     raise LabOneQException(msg)
                 assert (
@@ -430,7 +438,7 @@ class ExperimentInfoBuilder:
                         to_signal=signal_info.uid,
                         from_channel=from_port.channel,
                         from_signal=self._ls_to_exp_sig_mapping.get(
-                            source_signal, None
+                            self._setup_helper.logical_signal_path(source_signal)
                         ),
                         amplitude=self.opt_param(output_router.amplitude, nt_only=True),
                         phase=self.opt_param(output_router.phase, nt_only=True),

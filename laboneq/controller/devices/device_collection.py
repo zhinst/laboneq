@@ -308,10 +308,6 @@ class DeviceCollection:
                 device = self.find_by_uid(device_uid)
                 awaitables.append(device.disable_outputs(outputs, invert))
 
-    def shut_down(self):
-        for device in self._devices.values():
-            device.shut_down()
-
     def free_allocations(self):
         for device in self._devices.values():
             device.free_allocations()

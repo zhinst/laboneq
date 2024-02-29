@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from laboneq.compiler.code_generator.seq_c_generator import SeqCGenerator
+from laboneq.compiler.seqc.seqc_generator import SeqCGenerator
 
 
 class PRNGTracker:

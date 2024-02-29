@@ -14,9 +14,10 @@ from laboneq.compiler.common.feedback_register_config import FeedbackRegisterCon
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.workflow.compiler_output import (
     CombinedRTCompilerOutputContainer,
-    CombinedRTOutputSeqC,
-    CombinedRTOutputPrettyPrinter,
 )
+
+# todo: bad dependency
+from laboneq.compiler.seqc.linker import CombinedRTOutputSeqC
 from laboneq.core.exceptions import LabOneQException
 
 # list of (width, signal) tuples
@@ -179,7 +180,7 @@ class FeedbackRouter:
 def _do_compute_feedback_routing(
     combined_compiler_output, signal_objs, integration_unit_allocation
 ):
-    raise NotImplementedError()
+    raise NotImplementedError
 
 
 @_do_compute_feedback_routing.register
@@ -194,15 +195,6 @@ def _(
         combined_compiler_output.feedback_connections,
         combined_compiler_output.feedback_register_configurations,
     ).calculate_feedback_routing()
-
-
-@_do_compute_feedback_routing.register
-def _(
-    combined_compiler_output: CombinedRTOutputPrettyPrinter,
-    signal_objs,
-    integration_unit_allocation,
-):
-    ...
 
 
 def compute_feedback_routing(

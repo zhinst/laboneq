@@ -10,18 +10,17 @@ from typing import Optional, TypedDict
 
 from laboneq._observability.tracing import trace
 from laboneq.compiler import CodeGenerator, CompilerSettings
-from laboneq.compiler.code_generator.ir_to_event_list import generate_event_list_from_ir
-from laboneq.compiler.code_generator.code_generator_pretty_printer import PrettyPrinter
-from laboneq.compiler.common.code_generator import ICodeGenerator
+from laboneq.compiler.seqc.ir_to_event_list import generate_event_list_from_ir
+from laboneq.compiler.common.iface_code_generator import (
+    ICodeGenerator,
+)
+from laboneq.compiler.common.iface_compiler_output import RTCompilerOutputContainer
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.experiment_access import ExperimentDAO
 from laboneq.compiler.ir.ir import IR
 from laboneq.compiler.scheduler.parameter_store import ParameterStore
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.scheduler.scheduler import Scheduler
-from laboneq.compiler.workflow.compiler_output import (
-    RTCompilerOutputContainer,
-)
 
 _logger = logging.getLogger(__name__)
 
@@ -196,4 +195,3 @@ class RealtimeCompiler:
 
 
 RealtimeCompiler.register_codegen(0x0, CodeGenerator)
-RealtimeCompiler.register_codegen(0x1, PrettyPrinter)

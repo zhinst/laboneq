@@ -5,9 +5,9 @@ from __future__ import annotations
 
 from typing import List
 
-from laboneq.compiler.code_generator.prng_tracker import PRNGTracker
-from laboneq.compiler.code_generator.seq_c_generator import SeqCGenerator
-from laboneq.compiler.code_generator.awg_sampled_event import AWGEvent
+from laboneq.compiler.seqc.prng_tracker import PRNGTracker
+from laboneq.compiler.seqc.seqc_generator import SeqCGenerator
+from laboneq.compiler.seqc.awg_sampled_event import AWGEvent
 from laboneq.compiler.common.device_type import DeviceType
 
 

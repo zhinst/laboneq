@@ -11,12 +11,12 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 from engineering_notation import EngNumber
 from sortedcontainers import SortedDict
 
-from laboneq.compiler.code_generator.feedback_register_allocator import (
+from laboneq.compiler.seqc.feedback_register_allocator import (
     FeedbackRegisterAllocator,
 )
-from laboneq.compiler.code_generator.utils import resample_state
+from laboneq.compiler.seqc.utils import resample_state
 from laboneq.compiler.common.awg_info import AWGInfo
-from laboneq.compiler.code_generator.awg_sampled_event import (
+from laboneq.compiler.seqc.awg_sampled_event import (
     AWGEvent,
     AWGEventType,
     AWGSampledEventSequence,

@@ -170,7 +170,7 @@ class WaveScroller:
         self.last_played_value = 0
         self.oscillator_phase: Optional[float] = None
 
-        # Only Hirzel supports 4 registers, for other devices, the simulator simply does
+        # Only HDAWG supports 4 registers, for other devices, the simulator simply does
         # not use the extra registers.
         self.amplitude_registers = [1.0 for _ in range(4)]
 

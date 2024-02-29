@@ -6,10 +6,9 @@ from __future__ import annotations
 import abc
 from abc import abstractmethod
 
-
 from laboneq.compiler.common.compiler_settings import CompilerSettings
+from laboneq.compiler.common.iface_compiler_output import RTCompilerOutput
 from laboneq.compiler.common.signal_obj import SignalObj
-from laboneq.compiler.workflow.compiler_output import RTCompilerOutput
 
 
 class ICodeGenerator(abc.ABC):

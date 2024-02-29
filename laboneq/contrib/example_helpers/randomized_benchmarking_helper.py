@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from functools import reduce
 from typing import Callable
 
 import numpy as np
@@ -169,7 +170,7 @@ def mult_gates(gate_list):
     if len(gate_list) == 1:
         return gate_list[0]
     else:
-        return np.linalg.multi_dot(gate_list)
+        return reduce(np.dot, gate_list)
 
 
 # Matrix representation of all elementary gates used to generate the Clifford gates

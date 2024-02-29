@@ -72,7 +72,7 @@ def precompensation_delay_samples(precompensation):
 
 
 def calculate_output_router_delays(
-    mapping: Mapping[int, Sequence[RoutedOutput]]
+    mapping: Mapping[int, Sequence[RoutedOutput]],
 ) -> dict[int, int]:
     """Calculate delays introduced from using Output router.
 

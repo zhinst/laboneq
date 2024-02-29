@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import atexit
 from typing import TYPE_CHECKING
 
 from numpy import typing as npt
@@ -52,7 +51,6 @@ class LabOneQFacade:
     @staticmethod
     def disconnect(session: Session):
         controller: ctrl.Controller = session._controller
-        controller.shut_down()
         controller.disconnect()
         session._controller = None
         session._toolkit_devices = ctrl.ToolkitDevices()
@@ -86,10 +84,6 @@ class LabOneQFacade:
     @staticmethod
     def run(session: Session):
         controller: ctrl.Controller = session._controller
-
-        if controller._run_parameters.shut_down is True:
-            atexit.register(ctrl._stop_controller, controller)
-
         controller.execute_compiled_legacy(session.compiled_experiment, session)
 
     @staticmethod

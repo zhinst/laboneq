@@ -18,6 +18,7 @@ from laboneq._optional_deps import (
     import_optional,
 )
 from laboneq.core.validators import dicts_equal
+from laboneq.core.exceptions import LabOneQException
 
 
 @dataclass
@@ -74,14 +75,21 @@ class AcquiredResult:
         Returns:
             (DataArray): An [xarray.DataArray][] representation of the object.
 
-                * Name is the name of the result handle.
-                * The dimensions and coordinates are individual sweeps in the format of:
-                    `sweep_0`, `sweep_1` .. `sweep_n`.
+                * The name is that of the result handle.
+                * The coordinates correspond to the `axis_name` of the individual sweep parameters.
+                * The dimensions have fixed names `axis_0`, `axis_1` etc..
 
         Raises:
             ModuleNotFoundError: If `xarray` is not installed.
 
+        !!! version-changed "Changed in version 2.26.0"
+            Names of the coordinates are now the values of the `axis_name` instead of
+            generic `sweep_n`.
+
+            Names of the dimensions are in the format of `axis_0`, `axis_1`etc.
+
         !!! version-added "Added in version 2.16.0"
+
         """
         xr: Xarray = import_optional(
             "xarray", message="Cannot convert `AcquiredResult` to `xarray` object."
@@ -96,26 +104,15 @@ class AcquiredResult:
             axes = self.axis
             data = self.data
             handle = self.handle
-        coords = []
-        dims = []
-        sweep_params = []
-        for i, axis in enumerate(axis_names):
-            dim = f"sweep_{i}"
-            dims.append(dim)
-            coords.append((dim, axes[i]))
-            sweep_params.append({"coord": dim, "param": axis})
-        data = xr.DataArray(
-            data,
-            dims=dims,
-            coords=coords,
-            attrs={
-                "description": "Acquired results",
-                "sweep_params": sweep_params,
-            },
-        )
-        if handle is not None:
-            data.name = handle
-        return data
+        coords = {}
+        axes_as_dims = [f"axis_{n}" for n in range(len(axis_names))]
+        for idx, axis_name in enumerate(axis_names):
+            if isinstance(axis_name, list):
+                for idx_ax, axis in enumerate(axis_name):
+                    coords[axis] = (axes_as_dims[idx], axes[idx][idx_ax])
+            else:
+                coords[axis_name] = (axes_as_dims[idx], axes[idx])
+        return xr.DataArray(name=handle, data=data, dims=axes_as_dims, coords=coords)
 
 
 class AcquiredResults(UserDict[str, AcquiredResult]):
@@ -138,6 +135,13 @@ class AcquiredResults(UserDict[str, AcquiredResult]):
         By setting `copy` to `True`, the returned data
         will be detached from the `AcquiredResults` data.
 
+        !!! note
+            In the case of axis data mismatch in the underlying `AcquiredResult`s, the conversion
+            might not work. The mismatch can happen when multiple sweep parameters have the same axis name,
+            but the values are different.
+
+            Use `results["result_handle"].to_array()` to convert individual results to [xarray.Dataset][].
+
         Args:
             copy: If `True`, returns a copy of the data instead of a view.
 
@@ -146,23 +150,26 @@ class AcquiredResults(UserDict[str, AcquiredResult]):
 
         Raises:
             ModuleNotFoundError: If `xarray` is not installed.
+            LabOneQException: Individual results cannot be merged
+
+        !!! version-changed "Changed in version 2.26.0"
+
+            Name of the coordinates is now the values of the axis names instead of
+            `sweep_n`.
         """
         xr: Xarray = import_optional(
             "xarray", message="Cannot convert `AcquiredResults` to `xarray` object."
         )
-        count = 0
-        xarrs = []
-        for arr in self.data.values():
-            xarr = arr.to_xarray(copy=copy)
-            # Backwards compatibility with serializer (laboneq <=2.15)
-            if xarr.name is None:
-                xarr.name = f"handle_{count}"
-                count += 1
-            xarrs.append(xarr)
-        ds = xr.merge(
-            xarrs,
-            combine_attrs="drop",
-        )
+        datasets = [res.to_xarray(copy=copy) for res in self.data.values()]
+        try:
+            ds = xr.merge(datasets, combine_attrs="drop_conflicts")
+        except xr.MergeError as error:
+            # NOTE: Sweep parameters are allowed to have duplicate `axis_name`, but not `uid`.
+            #   If duplicate `axis_name` is used for different parallel sweep parameters, it is not
+            #   compatibile with `xarray`.
+            raise LabOneQException(
+                "Cannot merge results. Use `results['<handle>'].to_array()` instead."
+            ) from error
         ds.attrs = {"description": "A collection of acquired results."}
         return ds
 

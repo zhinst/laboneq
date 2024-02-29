@@ -15,8 +15,9 @@ from typing import Any, Dict, List, NamedTuple, Tuple
 import numpy as np
 from engineering_notation import EngNumber
 
+from laboneq.compiler.seqc.linker import SeqCGenOutput
 from laboneq._utils import ensure_list
-from laboneq.compiler.code_generator.analyze_events import (
+from laboneq.compiler.seqc.analyze_events import (
     analyze_acquire_times,
     analyze_init_times,
     analyze_loop_times,
@@ -26,42 +27,42 @@ from laboneq.compiler.code_generator.analyze_events import (
     analyze_trigger_events,
     analyze_prng_times,
 )
-from laboneq.compiler.code_generator.analyze_playback import analyze_play_wave_times
-from laboneq.compiler.code_generator.command_table_tracker import (
+from laboneq.compiler.seqc.analyze_playback import analyze_play_wave_times
+from laboneq.compiler.seqc.command_table_tracker import (
     CommandTableTracker,
     EntryLimitExceededError,
 )
-from laboneq.compiler.code_generator.feedback_register_allocator import (
+from laboneq.compiler.seqc.feedback_register_allocator import (
     FeedbackRegisterAllocator,
 )
-from laboneq.compiler.common.code_generator import ICodeGenerator
+from laboneq.compiler.common.iface_code_generator import ICodeGenerator
 from laboneq.compiler.common.feedback_register_config import FeedbackRegisterConfig
-from laboneq.compiler.code_generator.ir_to_event_list import generate_event_list_from_ir
-from laboneq.compiler.code_generator.measurement_calculator import (
+from laboneq.compiler.seqc.ir_to_event_list import generate_event_list_from_ir
+from laboneq.compiler.seqc.measurement_calculator import (
     IntegrationTimes,
     MeasurementCalculator,
     SignalDelays,
 )
-from laboneq.compiler.code_generator.sampled_event_handler import SampledEventHandler
-from laboneq.compiler.code_generator.seq_c_generator import (
+from laboneq.compiler.seqc.sampled_event_handler import SampledEventHandler
+from laboneq.compiler.seqc.seqc_generator import (
     SeqCGenerator,
     merge_generators,
 )
-from laboneq.compiler.code_generator.seqc_tracker import SeqCTracker
-from laboneq.compiler.code_generator.signatures import (
+from laboneq.compiler.seqc.seqc_tracker import SeqCTracker
+from laboneq.compiler.seqc.signatures import (
     PlaybackSignature,
     SamplesSignature,
     WaveformSignature,
 )
-from laboneq.compiler.code_generator.utils import normalize_phase
-from laboneq.compiler.code_generator.wave_compressor import (
+from laboneq.compiler.seqc.utils import normalize_phase
+from laboneq.compiler.seqc.wave_compressor import (
     PlayHold,
     PlaySamples,
     WaveCompressor,
 )
-from laboneq.compiler.code_generator.wave_index_tracker import WaveIndexTracker
+from laboneq.compiler.seqc.wave_index_tracker import WaveIndexTracker
 from laboneq.compiler.common.awg_info import AWGInfo, AwgKey
-from laboneq.compiler.code_generator.awg_sampled_event import (
+from laboneq.compiler.seqc.awg_sampled_event import (
     AWGEvent,
     AWGEventType,
     AWGSampledEventSequence,
@@ -77,7 +78,6 @@ from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.pulse_parameters import decode_pulse_parameters
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.common.trigger_mode import TriggerMode
-from laboneq.compiler.workflow.compiler_output import SeqCGenOutput
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.pulse_sampler import (
     combine_pulse_parameters,
@@ -386,18 +386,11 @@ class CodeGenerator(ICodeGenerator):
     def total_execution_time(self):
         return self._total_execution_time
 
-    def _add_signal_to_awg(self, signal_obj: SignalObj):
+    def add_signal(self, signal_obj: SignalObj):
+        self._signals[signal_obj.id] = signal_obj
         awg_key = signal_obj.awg.key
         if awg_key not in self._awgs:
-            self._awgs[awg_key] = copy.deepcopy(signal_obj.awg)
-        self._awgs[awg_key].signals.append(signal_obj)
-
-    def add_signal(self, signal: SignalObj):
-        signal_obj = copy.deepcopy(signal)
-        signal_obj.pulses = []
-        _logger.debug(signal_obj)
-        self._signals[signal.id] = signal_obj
-        self._add_signal_to_awg(signal_obj)
+            self._awgs[awg_key] = signal_obj.awg
 
     def sort_signals(self):
         for awg in self._awgs.values():

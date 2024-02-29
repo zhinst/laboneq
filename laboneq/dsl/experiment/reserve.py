@@ -19,14 +19,3 @@ class Reserve(Operation):
 
     #: Unique identifier of the signal that should be reserved.
     signal: str = field(default=None)
-
-    def get_all_signals(self) -> set:
-        """Retrieves a set with all the signals used by this operation.
-
-        Returns:
-            Set with the signal of this operation.
-        """
-        if self.signal is None:
-            return set()
-        else:
-            return {self.signal}

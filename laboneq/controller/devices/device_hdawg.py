@@ -259,6 +259,18 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
             nc.add("system/synchronization/source", 1)  # external
         return await self.maybe_async(nc)
 
+    async def collect_execution_teardown_nodes(
+        self, with_pipeliner: bool
+    ) -> list[DaqNodeSetAction]:
+        nc = NodeCollector(base=f"/{self.serial}/")
+
+        if not self.is_standalone():
+            # Deregister this instrument from synchronization via ZSync.
+            # HULK-1707: this must happen before disabling the synchronization of the last AWG
+            nc.add("system/synchronization/source", 0)
+
+        return await self.maybe_async(nc)
+
     async def collect_initialization_nodes(
         self,
         device_recipe_data: DeviceRecipeData,

@@ -14,10 +14,11 @@ from typing import Any, Dict, List, Set, Tuple, Union, TYPE_CHECKING
 from sortedcollections import SortedDict
 
 from laboneq._observability.tracing import trace
-from laboneq.compiler.code_generator.measurement_calculator import (
+from laboneq.compiler.seqc.measurement_calculator import (
     IntegrationTimes,
     SignalDelays,
 )
+from laboneq.compiler.seqc.linker import CombinedRTOutputSeqC
 from laboneq.compiler.common import compiler_settings
 from laboneq.compiler.common.awg_info import AWGInfo, AwgKey
 from laboneq.compiler.common.awg_signal_type import AWGSignalType
@@ -32,10 +33,6 @@ from laboneq.compiler.feedback_router.feedback_router import compute_feedback_ro
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.scheduler.scheduler import Scheduler
 from laboneq.compiler.workflow import rt_linker
-from laboneq.compiler.workflow.compiler_output import (
-    CombinedRTOutputSeqC,
-    CombinedRTOutputPrettyPrinter,
-)
 from laboneq.compiler.workflow.neartime_execution import (
     NtCompilerExecutor,
     legacy_execution_program,
@@ -49,7 +46,7 @@ from laboneq.compiler.workflow.precompensation_helpers import (
 from laboneq.compiler.workflow.realtime_compiler import RealtimeCompiler
 from laboneq.compiler.workflow.recipe_generator import RecipeGenerator
 from laboneq.compiler.workflow.rt_linker import CombinedRTCompilerOutputContainer
-import laboneq.compiler.workflow.reporter  # noqa: F401
+
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.core.types.enums.acquisition_type import AcquisitionType, is_spectroscopy
@@ -66,6 +63,8 @@ from laboneq.data.compilation_job import (
 )
 from laboneq.data.scheduled_experiment import ScheduledExperiment
 from laboneq.executor.executor import Statement
+
+import laboneq.compiler.workflow.reporter  # noqa: F401
 
 if TYPE_CHECKING:
     from laboneq.compiler.workflow.on_device_delays import OnDeviceDelayCompensation
@@ -640,6 +639,7 @@ class Compiler:
                 is_qc=device_info.is_qc,
             )
             signal_objects[signal_id] = signal_obj
+            awg.signals.append(signal_obj)
         for s in signal_objects.values():
             delay_info = delay_measure_acquire.get(s.awg.key, None)
             if delay_info is None:
@@ -995,19 +995,11 @@ class Compiler:
 
     @singledispatchmethod
     def _add_io_to_recipe(self, output, recipe_generator: RecipeGenerator):
-        ...
+        raise NotImplementedError
 
     @singledispatchmethod
     def _add_acquire_info_to_recipe(self, output, recipe_generator: RecipeGenerator):
-        ...
-
-    @_add_io_to_recipe.register
-    def _(
-        self,
-        output: CombinedRTOutputPrettyPrinter,
-        recipe_generator: RecipeGenerator,
-    ):
-        ...
+        raise NotImplementedError
 
     @_add_io_to_recipe.register
     def _(
@@ -1052,14 +1044,6 @@ class Compiler:
     @_add_acquire_info_to_recipe.register
     def _(
         self,
-        output: CombinedRTOutputPrettyPrinter,
-        recipe_generator: RecipeGenerator,
-    ):
-        ...
-
-    @_add_acquire_info_to_recipe.register
-    def _(
-        self,
         output: CombinedRTOutputSeqC,
         recipe_generator: RecipeGenerator,
     ):
@@ -1085,6 +1069,8 @@ class Compiler:
 
         for output in combined_outputs.combined_output.values():
             self._add_io_to_recipe(output, recipe_generator)
+            for step in output.realtime_steps:
+                recipe_generator.add_realtime_step(step)
         for device in self._experiment_dao.device_infos():
             recipe_generator.validate_and_postprocess_ios(device)
 
@@ -1103,9 +1089,6 @@ class Compiler:
                         awg.key
                     ),
                 )
-
-        for step in combined_outputs.realtime_steps:
-            recipe_generator.add_realtime_step(step)
 
         for output in combined_outputs.combined_output.values():
             self._add_acquire_info_to_recipe(output, recipe_generator)

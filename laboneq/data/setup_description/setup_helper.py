@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 from typing import List, Mapping, Tuple, Union
 
+from laboneq.core.path import LogicalSignalGroups_Path_Abs
 from laboneq.data.path import Separator
 from laboneq.data.setup_description import (
     DeviceType,
@@ -18,8 +19,8 @@ from laboneq.data.utils.calibration_helper import CalibrationHelper
 
 def split_path(path: str) -> Tuple[str, str]:
     """Split path into group and name."""
-    parts = path.split(Separator)
-    return parts[-2], parts[-1]
+    *_, group, name = path.split(Separator)
+    return group, name
 
 
 class InstrumentHelper:
@@ -31,7 +32,7 @@ class InstrumentHelper:
         self, logical_signal: Union[LogicalSignal, str]
     ) -> PhysicalChannel:
         if isinstance(logical_signal, str):
-            *_, group, name = split_path(logical_signal)
+            group, name = split_path(logical_signal)
             logical_signal = LogicalSignal(name=name, group=group)
         try:
             return self._ls_to_pc[logical_signal]
@@ -81,8 +82,12 @@ class SetupHelper:
         return self._logical_signals
 
     def logical_signal_by_path(self, path: str) -> LogicalSignal:
-        *_, group, name = split_path(path)
+        group, name = split_path(path)
         return self._setup.logical_signal_groups[group].logical_signals[name]
+
+    @staticmethod
+    def logical_signal_path(logical_signal: LogicalSignal) -> str:
+        return f"{LogicalSignalGroups_Path_Abs}{Separator}{logical_signal.group}{Separator}{logical_signal.name}"
 
     def ppc_connections(self) -> dict[LogicalSignal, PPCConnection]:
         ppc_conn_by_pc: dict[PhysicalChannel, PPCConnection] = {}

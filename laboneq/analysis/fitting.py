@@ -66,6 +66,7 @@ def fit(
         def line(x, m, c):
             return m * x + c
 
+
         x = np.linspace(0, 10, 100)
         data = np.random(*x.shape)
         popt, pcov = fit(line, x, data, 1, 0, bounds=([0, 0], [10, 10]))

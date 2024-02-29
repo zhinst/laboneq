@@ -10,9 +10,11 @@ class OpenQasmException(Exception):
     """Exception that can properly highlight the issue in the source text
 
     >>> with open(__file__, "r") as f:
-    ...    src = f.read()
-    >>> mark = Span(9, 7-1, 9, 24-1)
-    >>> raise OpenQasmException("Highlight the name of the class!", mark, src)  #doctest: +ELLIPSIS
+    ...     src = f.read()
+    >>> mark = Span(9, 7 - 1, 9, 24 - 1)
+    >>> raise OpenQasmException(
+    ...     "Highlight the name of the class!", mark, src
+    ... )  # doctest: +ELLIPSIS
     Traceback (most recent call last):
       ...
     laboneq.openqasm3.openqasm_error.OpenQasmException: Highlight the name of the class!

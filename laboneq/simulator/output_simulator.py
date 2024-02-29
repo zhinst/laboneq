@@ -129,10 +129,10 @@ class OutputSimulator:
         output_simulator = OutputSimulator(compiled_experiment)
 
         # By default, simulation is stopped after 10 ms, but it can be explicitly specified
-        output_simulator = OutputSimulator(compiled_experiment, max_simulation_length = 10e-3)
+        output_simulator = OutputSimulator(compiled_experiment, max_simulation_length=10e-3)
 
         # Also the maximum output snippet length is configurable, defaulting to 1us
-        output_simulator = OutputSimulator(compiled_experiment, max_output_length = 5e-6)
+        output_simulator = OutputSimulator(compiled_experiment, max_output_length=5e-6)
 
         # Maximum output length can also be set later
         output_simulator.max_output_length = 5e-6
@@ -140,17 +140,17 @@ class OutputSimulator:
         # As next, retrieve the actual simulated waveform
         data = output_simulator.get_snippet(
             physical_channel,
-            start = 1e-6,
-            output_length = 500e-9,
-            get_wave=True,       # Default True
-            get_trigger=True,    # Default False
+            start=1e-6,
+            output_length=500e-9,
+            get_wave=True,  # Default True
+            get_trigger=True,  # Default False
             get_frequency=True,  # Default False
         )
 
         # Returned structure has 4 members, each is a numpy array
-        data.time       # time axis
-        data.wave       # waveform data
-        data.trigger    # trigger values
+        data.time  # time axis
+        data.wave  # waveform data
+        data.trigger  # trigger values
         data.frequency  # frequency data
         ```
     """

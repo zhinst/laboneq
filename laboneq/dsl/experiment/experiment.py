@@ -1120,12 +1120,13 @@ class Experiment:
         sweep_parameter: Parameter | None = None,
         uid: str | None = None,
         play_after: str | Section | list[str | Section] | None = None,
+        local: bool | None = None,
     ):
         """Define a section which switches between different child sections based
         on a QA measurement (using `handle`) or a user register (using `user_register`).
 
         In case of the QA measurement option, the feedback path (local, or global,
-        via PQSC) is chosen automatically.
+        via PQSC) is determined by the `local` argument.
 
         Match needs to open a scope in the following way:
 
@@ -1149,6 +1150,10 @@ class Experiment:
             sweep_parameter: The sweep_parameter to use for the match.
             play_after: Play this section after the end of the section(s) with the
                 given ID(s). Defaults to None.
+            local: Selects whether the feedback path should be local
+                (exclusively on an SHFQC) or global via PQSC. Defaults to `None`,
+                which lets the LabOne Q compiler to choose the shortest path
+                given device constraints.
 
         """
         return Experiment._MatchSectionContext(
@@ -1158,7 +1163,7 @@ class Experiment:
             user_register=user_register,
             sweep_parameter=sweep_parameter,
             play_after=play_after,
-            local=None,
+            local=local,
         )
 
     def case(self, state: int, uid: str | None = None):

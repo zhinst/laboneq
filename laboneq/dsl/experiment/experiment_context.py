@@ -13,15 +13,32 @@ from laboneq.dsl.experiment.context import (
     reversed_iter_contexts,
 )
 from laboneq.dsl.experiment.experiment import Experiment
+from laboneq.dsl.experiment.uid_generator import UidGenerator
 
 
 class ExperimentContext(Context):
     def __init__(self, experiment, calibration):
         self.experiment = experiment
         self.calibration = calibration
+        self.uid_generator = UidGenerator()
 
     def add(self, section):
         self.experiment.sections.append(section)
+
+    def uid(self, prefix: str) -> str:
+        """Generate a unique identifier.
+
+        Generates an identifier that is unique to this experiment
+        context by appending a count to a given prefix.
+
+        Arguments:
+            prefix:
+                The prefix for the unique identifier.
+
+        Returns:
+            A unique identifier.
+        """
+        return self.uid_generator.uid(prefix)
 
 
 class ExperimentContextManager:

@@ -19,6 +19,10 @@ from laboneq.dsl.experiment.experiment_context import (
     current_experiment_context,
 )
 from laboneq.dsl.experiment.pulse import Pulse
+from laboneq.dsl.experiment.uid_generator import (
+    GLOBAL_UID_GENERATOR,
+    reset_global_uid_generator,
+)
 import logging
 
 if typing.TYPE_CHECKING:
@@ -44,14 +48,15 @@ __all__ = [
     "prng_loop",
     "qubit_experiment",
     "reserve",
+    "reset_global_uid_generator",
     "section",
     "set_node",
     "sweep",
     "sweep_range",
+    "uid",
 ]
 
 from laboneq.dsl.experiment.section_context import (
-    AcquireLoopNtSectionContextManager,
     AcquireLoopRtSectionContextManager,
     CaseSectionContextManager,
     MatchSectionContextManager,
@@ -78,6 +83,12 @@ def section(*args, **kwargs):
 
 
 def sweep(*args, parameter=None, **kwargs):
+    # TODO: Rework the interface of this function and context manager. Currently:
+    #
+    #       - positional arguments are accepted, but passing any positional argumnets
+    #         gives obscure errors.
+    #
+    #       - one cannot easily get access to the created section
     return SweepSectionContextManager(*args, parameters=parameter, **kwargs)
 
 
@@ -88,6 +99,7 @@ def acquire_loop_rt(
     repetition_time=None,
     acquisition_type=AcquisitionType.INTEGRATION,
     uid=None,
+    name=None,
     reset_oscillator_phase=False,
 ):
     return AcquireLoopRtSectionContextManager(
@@ -97,12 +109,9 @@ def acquire_loop_rt(
         repetition_time=repetition_time,
         acquisition_type=acquisition_type,
         uid=uid,
+        name=name,
         reset_oscillator_phase=reset_oscillator_phase,
     )
-
-
-def acquire_loop_nt(*args, **kwargs):
-    return AcquireLoopNtSectionContextManager(*args, **kwargs)
 
 
 def match(
@@ -111,6 +120,7 @@ def match(
     prng_sample: PRNGSample | None = None,
     sweep_parameter: Parameter | None = None,
     uid: str | None = None,
+    name: str | None = None,
     play_after: str | list[str] | None = None,
     local: bool | None = None,
 ):
@@ -120,13 +130,14 @@ def match(
         prng_sample=prng_sample,
         sweep_parameter=sweep_parameter,
         uid=uid,
+        name=name,
         play_after=play_after,
         local=local,
     )
 
 
-def case(state: int, uid: str | None = None):
-    return CaseSectionContextManager(state=state, uid=uid)
+def case(state: int, uid: str | None = None, name: str | None = None):
+    return CaseSectionContextManager(state=state, uid=uid, name=name)
 
 
 def call(funcname, **kwargs):
@@ -234,6 +245,9 @@ def set_node(path: str, value: Any):
 
 
 def sweep_range(start, stop, count, uid=None, axis_name=None, **kwargs):
+    # TODO: Sort out the relationship between uid, axis_name and name.
+    #       This function currently accepts all three, which definitely
+    #       has potential to be confusing.
     from laboneq.dsl import LinearSweepParameter
 
     param = LinearSweepParameter(
@@ -254,6 +268,18 @@ def experiment(uid=None, signals=None):
 
 
 def qubit_experiment(qubits: list, **kwargs):
+    # TODO: rewrite this to allow qubits to be detected in the
+    #       from arguments rather than passed to the decorator
+    #       as they are here which results in always having to
+    #       nest the decorated function inside another one, e.g.:
+    #
+    #       def rabi(q, *args, **kw):
+    #
+    #          @qubit_experiment([q])
+    #          def actual_rabi(...):
+    #              ...
+    #
+    #          return actual_rabi(*args, **kw)
     def decorator(f):
         @wraps(f)
         def wrapper(*inner_args, **inner_kwargs):
@@ -279,27 +305,53 @@ def experiment_calibration():
     return context.calibration
 
 
+def uid(prefix: str) -> str:
+    """Generate a unique identifier.
+
+    Generates an identifier that is unique to the experiment
+    being constructed. The identifier is created by by appending a
+    count to a given prefix.
+
+    Arguments:
+        prefix:
+            The prefix for the unique identifier.
+
+    Returns:
+        A unique identifier.
+
+    Raises:
+        LabOneQException:
+            If there is no experiment context.
+    """
+    context = current_experiment_context()
+    if context is not None:
+        return context.uid(prefix)
+    return GLOBAL_UID_GENERATOR.uid(prefix)
+
+
 def map_signal(experiment_signal_uid: str, logical_signal: LogicalSignal):
     _active_experiment().map_signal(experiment_signal_uid, logical_signal)
 
 
-def prng_setup(range: int, seed=1, uid=None):
+def prng_setup(range: int, seed=1, uid=None, name=None):
     from laboneq.dsl.prng import PRNG
 
     prng = PRNG(range, seed)
-    return PRNGSetupContextManager(prng=prng, uid=uid)
+    return PRNGSetupContextManager(prng=prng, uid=uid, name=name)
 
 
-def prng_loop(prng: PRNG, count=1, uid=None):
+def prng_loop(prng: PRNG, count=1, uid=None, name=None):
     from laboneq.dsl.prng import PRNGSample
 
     maybe_uid = {"uid": uid} if uid is not None else {}
 
     prng_sample = PRNGSample(prng=prng, count=count, **maybe_uid)
-    return PRNGLoopContextManager(prng_sample, uid)
+    return PRNGLoopContextManager(prng_sample, uid=uid, name=name)
 
 
 def play_indexed(pulses: Iterable[PlayPulse], index: PRNGSample):
+    # TODO: extend to allow passing all the other possibilities `match`
+    #       accepts to match on and add tests to test_builtins.py.
     count = 0
     with match(prng_sample=index):
         for i, p in enumerate(pulses):

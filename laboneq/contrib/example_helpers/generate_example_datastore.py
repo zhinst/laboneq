@@ -6,145 +6,80 @@
 
 import datetime
 
-import numpy as np
-
-from laboneq.contrib.example_helpers.example_notebook_helper import (
-    create_dummy_qubit,
-    create_dummy_transmon,
-    generate_dummy_transmon_parameters,
-)
-from laboneq.contrib.example_helpers.generate_descriptor import generate_descriptor
-from laboneq.dsl.device import DeviceSetup
 from laboneq.implementation.data_storage.laboneq_database import DataStore
 
-
-def generate_device_setup(
-    pqsc=None,
-    hdawg_8=None,
-    uhfqa=None,
-    shfsg_8=None,
-    shfqa_4=None,
-    shfqc_6=None,
-    number_data_qubits=2,
-    number_flux_lines=0,
-    multiplex=False,
-    number_multiplex=0,
-    include_cr_lines=False,
-    drive_only=False,
-    dummy_dio=None,
-    server_host="localhost",
-    server_port="8004",
-    setup_name=None,
-    store_setup=False,
-    datastore=None,
-):
-    device_setup_descriptor = generate_descriptor(
-        pqsc=pqsc,
-        uhfqa=uhfqa,
-        hdawg_8=hdawg_8,
-        shfsg_8=shfsg_8,
-        shfqa_4=shfqa_4,
-        shfqc_6=shfqc_6,
-        multiplex=multiplex,
-        number_multiplex=number_multiplex,
-        number_data_qubits=number_data_qubits,
-        number_flux_lines=number_flux_lines,
-        drive_only=drive_only,
-        include_cr_lines=include_cr_lines,
-        dummy_dio=dummy_dio,
-    )
-    device_setup = DeviceSetup.from_descriptor(
-        yaml_text=device_setup_descriptor,
-        server_host=server_host,
-        server_port=server_port,
-        setup_name=setup_name,
-    )
-    if store_setup:
-        datastore.store(
-            data=device_setup,
-            # key=setup_name,
-            metadata={
-                "name": setup_name,
-                "type": "device_setup",
-                "creation_date": datetime.datetime.now(),
-            },
-        )
-
-    return device_setup
+from .generate_device_setup import generate_device_setup_qubits
 
 
 def generate_example_datastore(
-    in_memory=False, path="./laboneq_data/", filename="dummy_datastore.db"
-):
-    # create connection to datastore
+    in_memory=False,
+    path="./laboneq_data/",
+    filename="dummy_datastore.db",
+    server_host="localhost",
+    include_qubits=True,
+) -> DataStore:
+    """A function to generate a DataStore for use with the public LabOne Q examples.
+
+    The generated Datastore is loaded with a selection of DeviceSetups and Qubits preconfigured to be used
+    with the public example notebooks.
+
+    Args:
+        in_memory: Whether to generate the Datastore in-memory instead of on the filesystem.
+        path: Path to the location of the Datastore on the filesystem. Only applies if `in_memory=False`.
+        filename: Filename of the generated Datastore on the filesystem. Only applies if `in_memory=False`.
+        server_host: IP address of the LabOne dataserver used to communicate to the instruments of the QCCS.
+            Defaults to "localhost".
+        include_qubits: Whether to include qubits directly in the DeviceSetup, through the `DeviceSetup.qubits` property.
+            If set to "False", no qubits will be generated.
+
+    Returns:
+        A LabOne Q Datastore loaded with a selection of device setups for use with the public LabOne Q examples.
+    """
+
+    # create (connection to) datastore
     if in_memory:
         setup_db = DataStore(":memory:")
     else:
         setup_db = DataStore(path + filename)
 
-    # generate dummy parameter set for all qubits
-    num_qubits = 24
-    dummy_qubit_parameters = generate_dummy_transmon_parameters(
-        number_of_qubits=num_qubits
-    )
+    # specify your device ids here
+    pqsc = ["dev10001"]
+    hdawg = ["dev8001", "dev8002", "dev8003"]
+    shfqc = ["dev12003", "dev12004", "dev12005", "dev12006"]
+    shfsg = ["dev12001"]
+    shfqa = ["dev12002"]
+    uhfqa = ["dev2001"]
+    zsync = {
+        "dev8001": 1,
+        "dev8002": 2,
+        "dev12001": 3,
+        "dev12002": 4,
+        "dev12003": 5,
+        "dev12004": 6,
+        "dev12005": 7,
+        "dev12006": 8,
+    }
+    dio = {"dev8001": "dev2001"}
 
-    # generic 24 qubit device setup - including flux lines
-    device_setup = generate_device_setup(
-        pqsc=["dev10001"],
-        hdawg_8=[f"dev800{it}" for it in range(1, int(np.ceil(num_qubits / 8)) + 1)],
-        shfqc_6=[f"dev1200{it}" for it in range(1, int(np.ceil(num_qubits / 6)) + 1)],
-        multiplex=True,
+    # generic 6 qubit device setup - including flux lines
+    num_qubits = 6
+    device_setup, qubits = generate_device_setup_qubits(
+        number_qubits=num_qubits,
+        pqsc=pqsc,
+        hdawg=hdawg[:1],
+        shfqc=shfqc[:1],
+        zsync=zsync,
         number_multiplex=6,
-        number_data_qubits=num_qubits,
-        number_flux_lines=num_qubits,
+        include_flux_lines=True,
+        multiplex_drive_lines=True,
         setup_name=f"{num_qubits}_tuneable_qubit_setup_shfqc_hdawg_pqsc",
-        store_setup=True,
-        datastore=setup_db,
+        server_host=server_host,
+        include_qubits=include_qubits,
+        calibrate_setup=True,
     )
-
-    # create transmon qubits from base parameters
-    my_tuneable_transmons = [
-        create_dummy_transmon(
-            it, base_parameters=dummy_qubit_parameters, device_setup=device_setup
-        )
-        for it in range(num_qubits)
-    ]
-    # store transmon qubits in datastore
-    for it, qubit in enumerate(my_tuneable_transmons):
-        setup_db.store(
-            data=qubit,
-            # key=f"tuneable_transmon_{it}",
-            metadata={
-                "name": f"tuneable_transmon_{it}",
-                "type": "tuneable_transmon_qubit",
-                "creation_date": datetime.datetime.now(),
-            },
-        )
-    # create generic qubits from base parameters
-    my_tuneable_qubits = [
-        create_dummy_qubit(
-            it, base_parameters=dummy_qubit_parameters, device_setup=device_setup
-        )
-        for it in range(num_qubits)
-    ]
-    # store qubits in datastore
-    for it, qubit in enumerate(my_tuneable_qubits):
-        setup_db.store(
-            data=qubit,
-            # key=f"tuneable_qubit_{it}",
-            metadata={
-                "name": f"tuneable_qubit_{it}",
-                "type": "tuneable_generic_qubit",
-                "creation_date": datetime.datetime.now(),
-            },
-        )
-    # calibrate device setup with transmon qubit parameters
-    for qubit in my_tuneable_transmons:
-        device_setup.set_calibration(qubit.calibration())
     # store calibrated device_setup in datastore
     setup_db.store(
         data=device_setup,
-        # key=f"{num_qubits}_tuneable_qubit_setup_shfqc_hdawg_pqsc_calibrated",
         metadata={
             "name": f"{num_qubits}_tuneable_qubit_setup_shfqc_hdawg_pqsc_calibrated",
             "type": "device_setup_calibrated",
@@ -152,84 +87,76 @@ def generate_example_datastore(
         },
     )
 
-    # generic 24 qubit device setup - without flux lines
-    device_setup = generate_device_setup(
-        pqsc=["dev10001"],
-        shfqc_6=[f"dev1200{it}" for it in range(1, int(np.ceil(num_qubits / 6)) + 1)],
-        multiplex=True,
+    # large 24 qubit device setup - including flux lines
+    num_qubits = 24
+    device_setup, qubits = generate_device_setup_qubits(
+        number_qubits=num_qubits,
+        pqsc=pqsc,
+        hdawg=hdawg[:3],
+        shfqc=shfqc,
+        zsync=zsync,
         number_multiplex=6,
-        number_data_qubits=num_qubits,
-        setup_name=f"{num_qubits}_qubit_setup_shfqc_pqsc",
-        store_setup=True,
-        datastore=setup_db,
+        include_flux_lines=True,
+        multiplex_drive_lines=True,
+        setup_name=f"{num_qubits}_tuneable_qubit_setup_shfqc_hdawg_pqsc",
+        server_host=server_host,
+        include_qubits=include_qubits,
+        calibrate_setup=True,
     )
-
-    # create transmon qubits from base parameters
-    my_fixed_transmons = [
-        create_dummy_transmon(
-            it, base_parameters=dummy_qubit_parameters, device_setup=device_setup
-        )
-        for it in range(num_qubits)
-    ]
-    # store transmon qubits in datastore
-    for it, qubit in enumerate(my_fixed_transmons):
-        setup_db.store(
-            data=qubit,
-            metadata={
-                "name": f"fixed_transmon_{it}",
-                "type": "fixed_transmon_qubit",
-                "creation_date": datetime.datetime.now(),
-            },
-        )
-    # create generic qubits from base parameters
-    my_fixed_qubits = [
-        create_dummy_qubit(
-            it, base_parameters=dummy_qubit_parameters, device_setup=device_setup
-        )
-        for it in range(num_qubits)
-    ]
-    # store qubits in datastore
-    for it, qubit in enumerate(my_fixed_qubits):
-        setup_db.store(
-            data=qubit,
-            metadata={
-                "name": f"fixed_qubit_{it}",
-                "type": "fixed_generic_qubit",
-                "creation_date": datetime.datetime.now(),
-            },
-        )
-    # calibrate device setup with transmon qubit parameters
-    for qubit in my_fixed_transmons:
-        device_setup.set_calibration(qubit.calibration())
     # store calibrated device_setup in datastore
     setup_db.store(
         data=device_setup,
         metadata={
-            "name": f"{num_qubits}_fixed_qubit_setup_shfqc_pqsc_calibrated",
+            "name": f"{num_qubits}_tuneable_qubit_setup_shfqc_hdawg_pqsc_calibrated",
             "type": "device_setup_calibrated",
             "creation_date": datetime.datetime.now(),
         },
     )
 
-    # shfqc
+    # generic 6 qubit device setup - without flux lines
     num_qubits = 6
-    device_setup = generate_device_setup(
-        shfqc_6=["dev12001"],
-        multiplex=True,
+    device_setup, qubits = generate_device_setup_qubits(
+        number_qubits=num_qubits,
+        pqsc=pqsc,
+        hdawg=hdawg[:1],
+        shfqc=shfqc[:1],
+        zsync=zsync,
         number_multiplex=6,
-        number_data_qubits=num_qubits,
-        setup_name=f"{num_qubits}_qubit_setup_shfqc",
-        store_setup=True,
-        datastore=setup_db,
+        include_flux_lines=False,
+        multiplex_drive_lines=True,
+        setup_name=f"{num_qubits}_fixed_qubit_setup_shfqc_hdawg_pqsc",
+        server_host=server_host,
+        include_qubits=include_qubits,
+        calibrate_setup=True,
     )
-    # calibrate device setup with qubit parameters
-    for qubit in my_fixed_transmons[0:num_qubits]:
-        device_setup.set_calibration(qubit.calibration())
     # store calibrated device_setup in datastore
     setup_db.store(
         data=device_setup,
         metadata={
-            "name": f"{num_qubits}_qubit_setup_shfqc_calibrated",
+            "name": f"{num_qubits}_fixed_qubit_setup_shfqc_hdawg_pqsc_calibrated",
+            "type": "device_setup_calibrated",
+            "creation_date": datetime.datetime.now(),
+        },
+    )
+
+    # shfqc standalone
+    num_qubits = 6
+    device_setup, qubits = generate_device_setup_qubits(
+        number_qubits=num_qubits,
+        shfqc=shfqc[:1],
+        number_multiplex=6,
+        include_flux_lines=False,
+        multiplex_drive_lines=True,
+        setup_name=f"{num_qubits}_fixed_qubit_setup_shfqc",
+        server_host=server_host,
+        include_qubits=include_qubits,
+        calibrate_setup=True,
+    )
+    # store calibrated device_setup in datastore
+    setup_db.store(
+        data=device_setup,
+        metadata={
+            "name": f"{num_qubits}_fixed_qubit_setup_shfqc_calibrated",
             "type": "device_setup_calibrated",
             "creation_date": datetime.datetime.now(),
         },
@@ -237,25 +164,25 @@ def generate_example_datastore(
 
     # shfsg_shfqa_pqsc
     num_qubits = 6
-    device_setup = generate_device_setup(
-        pqsc=["dev10001"],
-        shfsg_8=["dev12001"],
-        shfqa_4=["dev12002"],
-        multiplex=True,
+    device_setup, qubits = generate_device_setup_qubits(
+        number_qubits=num_qubits,
+        pqsc=pqsc,
+        shfsg=shfsg,
+        shfqa=shfqa,
+        zsync=zsync,
         number_multiplex=6,
-        number_data_qubits=num_qubits,
-        setup_name=f"{num_qubits}_qubit_setup_shfsg_shfqa_pqsc",
-        store_setup=True,
-        datastore=setup_db,
+        include_flux_lines=False,
+        multiplex_drive_lines=True,
+        setup_name=f"{num_qubits}_fixed_qubit_setup_shfsg_shfqa_pqsc",
+        server_host=server_host,
+        include_qubits=include_qubits,
+        calibrate_setup=True,
     )
-    # calibrate device setup with qubit parameters
-    for qubit in my_fixed_transmons[0:num_qubits]:
-        device_setup.set_calibration(qubit.calibration())
     # store calibrated device_setup in datastore
     setup_db.store(
         data=device_setup,
         metadata={
-            "name": f"{num_qubits}_qubit_setup_shfsg_shfqa_pqsc_calibrated",
+            "name": f"{num_qubits}_fixed_qubit_setup_shfsg_shfqa_pqsc_calibrated",
             "type": "device_setup_calibrated",
             "creation_date": datetime.datetime.now(),
         },
@@ -263,27 +190,26 @@ def generate_example_datastore(
 
     # shfsg_shfqa_hdawg_pqsc
     num_qubits = 6
-    device_setup = generate_device_setup(
-        pqsc=["dev10001"],
-        hdawg_8=["dev8001"],
-        shfsg_8=["dev12001"],
-        shfqa_4=["dev12002"],
-        multiplex=True,
+    device_setup, qubits = generate_device_setup_qubits(
+        number_qubits=num_qubits,
+        pqsc=pqsc,
+        hdawg=hdawg[:1],
+        shfsg=shfsg,
+        shfqa=shfqa,
+        zsync=zsync,
         number_multiplex=6,
-        number_data_qubits=num_qubits,
-        number_flux_lines=num_qubits,
-        setup_name=f"{num_qubits}_qubit_setup_shfsg_shfqa_hdawg_pqsc",
-        store_setup=True,
-        datastore=setup_db,
+        include_flux_lines=True,
+        multiplex_drive_lines=True,
+        setup_name=f"{num_qubits}_tuneable_qubit_setup_shfsg_shfqa_hdawg_pqsc",
+        server_host=server_host,
+        include_qubits=include_qubits,
+        calibrate_setup=True,
     )
-    # calibrate device setup with qubit parameters
-    for qubit in my_tuneable_transmons[0:num_qubits]:
-        device_setup.set_calibration(qubit.calibration())
     # store calibrated device_setup in datastore
     setup_db.store(
         data=device_setup,
         metadata={
-            "name": f"{num_qubits}_qubit_setup_shfsg_shfqa_hdawg_pqsc_calibrated",
+            "name": f"{num_qubits}_tuneable_qubit_setup_shfsg_shfqa_hdawg_pqsc_calibrated",
             "type": "device_setup_calibrated",
             "creation_date": datetime.datetime.now(),
         },
@@ -291,28 +217,27 @@ def generate_example_datastore(
 
     # shfsg_shfqa_shfqc_hdawg_pqsc
     num_qubits = 12
-    device_setup = generate_device_setup(
-        pqsc=["dev10001"],
-        hdawg_8=["dev8001", "dev8002"],
-        shfsg_8=["dev12001"],
-        shfqc_6=["dev12002"],
-        shfqa_4=["dev12003"],
-        multiplex=True,
+    device_setup, qubits = generate_device_setup_qubits(
+        number_qubits=num_qubits,
+        pqsc=pqsc,
+        hdawg=hdawg[:2],
+        shfsg=shfsg,
+        shfqa=shfqa,
+        shfqc=shfqc[:1],
+        zsync=zsync,
         number_multiplex=6,
-        number_data_qubits=num_qubits,
-        number_flux_lines=num_qubits,
-        setup_name=f"{num_qubits}_qubit_setup_shfsg_shfqa_shfqc_hdawg_pqsc",
-        store_setup=True,
-        datastore=setup_db,
+        include_flux_lines=True,
+        multiplex_drive_lines=True,
+        setup_name=f"{num_qubits}_tuneable_qubit_setup_shfsg_shfqa_shfqc_hdawg_pqsc",
+        server_host=server_host,
+        include_qubits=include_qubits,
+        calibrate_setup=True,
     )
-    # calibrate device setup with qubit parameters
-    for qubit in my_tuneable_transmons[0:num_qubits]:
-        device_setup.set_calibration(qubit.calibration())
     # store calibrated device_setup in datastore
     setup_db.store(
         data=device_setup,
         metadata={
-            "name": f"{num_qubits}_qubit_setup_shfsg_shfqa_shfqc_hdawg_pqsc_calibrated",
+            "name": f"{num_qubits}_tuneable_qubit_setup_shfsg_shfqa_shfqc_hdawg_pqsc_calibrated",
             "type": "device_setup_calibrated",
             "creation_date": datetime.datetime.now(),
         },
@@ -320,88 +245,74 @@ def generate_example_datastore(
 
     # hdawg_uhfqa_pqsc
     num_qubits = 2
-    device_setup = generate_device_setup(
-        pqsc=["dev10001"],
-        hdawg_8=["dev8001"],
-        uhfqa=["dev2001"],
-        multiplex=True,
-        number_multiplex=2,
-        number_data_qubits=num_qubits,
-        number_flux_lines=num_qubits,
-        dummy_dio={"dev8001": "dev2001"},
-        setup_name=f"{num_qubits}_qubit_setup_hdawg_uhfqa_pqsc",
-        store_setup=True,
-        datastore=setup_db,
+    device_setup, qubits = generate_device_setup_qubits(
+        number_qubits=num_qubits,
+        pqsc=pqsc,
+        hdawg=hdawg[:1],
+        uhfqa=uhfqa,
+        zsync=zsync,
+        dio=dio,
+        number_multiplex=6,
+        include_flux_lines=False,
+        multiplex_drive_lines=False,
+        setup_name=f"{num_qubits}_fixed_qubit_setup_hdawg_uhfqa_pqsc",
+        server_host=server_host,
+        include_qubits=include_qubits,
+        calibrate_setup=True,
     )
-    # calibrate device setup with qubit parameters
-    for qubit in my_tuneable_qubits[0:num_qubits]:
-        device_setup.set_calibration(qubit.calibration())
     # store calibrated device_setup in datastore
     setup_db.store(
         data=device_setup,
         metadata={
-            "name": f"{num_qubits}_qubit_setup_hdawg_uhfqa_pqsc_calibrated",
+            "name": f"{num_qubits}_fixed_qubit_setup_hdawg_uhfqa_pqsc_calibrated",
             "type": "device_setup_calibrated",
             "creation_date": datetime.datetime.now(),
         },
     )
 
-    # shfsg
+    # shfsg standalone
     num_qubits = 8
-    device_setup = generate_device_setup(
-        shfsg_8=["dev12001"],
-        number_data_qubits=num_qubits,
+    device_setup, qubits = generate_device_setup_qubits(
+        number_qubits=num_qubits,
+        shfsg=shfsg,
         drive_only=True,
-        setup_name=f"{num_qubits}_qubit_setup_shfsg",
-        store_setup=True,
-        datastore=setup_db,
+        number_multiplex=6,
+        include_flux_lines=False,
+        multiplex_drive_lines=True,
+        setup_name=f"{num_qubits}_fixed_qubit_setup_shfsg",
+        server_host=server_host,
+        include_qubits=include_qubits,
+        calibrate_setup=True,
     )
-    # re-create transmon qubits from base parameters - no measurement lines in this case
-    my_fixed_transmons_2 = [
-        create_dummy_transmon(
-            it, base_parameters=dummy_qubit_parameters, device_setup=device_setup
-        )
-        for it in range(num_qubits)
-    ]
-    # calibrate device setup with qubit parameters
-    for qubit in my_fixed_transmons_2[0:num_qubits]:
-        device_setup.set_calibration(qubit.calibration())
     # store calibrated device_setup in datastore
     setup_db.store(
         data=device_setup,
         metadata={
-            "name": f"{num_qubits}_qubit_setup_shfsg_calibrated",
+            "name": f"{num_qubits}_fixed_qubit_setup_shfsg_calibrated",
             "type": "device_setup_calibrated",
             "creation_date": datetime.datetime.now(),
         },
     )
 
-    # hdawg
-    num_qubits = 2
-    device_setup = generate_device_setup(
-        hdawg_8=["dev8001"],
-        number_data_qubits=num_qubits,
-        number_flux_lines=num_qubits,
+    # hdawg standalone
+    num_qubits = 4
+    device_setup, qubits = generate_device_setup_qubits(
+        number_qubits=num_qubits,
+        hdawg=hdawg[:1],
         drive_only=True,
-        setup_name=f"{num_qubits}_qubit_setup_hdawg",
-        store_setup=True,
-        datastore=setup_db,
+        number_multiplex=6,
+        include_flux_lines=False,
+        multiplex_drive_lines=False,
+        setup_name=f"{num_qubits}_fixed_qubit_setup_hdawg",
+        server_host=server_host,
+        include_qubits=include_qubits,
+        calibrate_setup=True,
     )
-    # re-create transmon qubits from base parameters - no measurement lines in this case
-    my_tuneable_qubits_2 = [
-        create_dummy_qubit(
-            it, base_parameters=dummy_qubit_parameters, device_setup=device_setup
-        )
-        for it in range(num_qubits)
-    ]
-    # calibrate device setup with qubit parameters
-    for qubit in my_tuneable_qubits_2[0:num_qubits]:
-        device_setup.set_calibration(qubit.calibration())
     # store calibrated device_setup in datastore
     setup_db.store(
         data=device_setup,
         metadata={
-            "name": f"{num_qubits}_qubit_setup_hdawg_calibrated",
+            "name": f"{num_qubits}_fixed_qubit_setup_hdawg_calibrated",
             "type": "device_setup_calibrated",
             "creation_date": datetime.datetime.now(),
         },
@@ -411,5 +322,6 @@ def generate_example_datastore(
 
 
 def get_first_named_entry(db: DataStore, name: str):
+    """Return the first entry in a LabOne Q Datastore whose metadata contains the matching name"""
     key = next(db.find(metadata={"name": name}))
     return db.get(key)

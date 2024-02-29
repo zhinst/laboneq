@@ -53,7 +53,7 @@ def convert_logical_signal(target: legacy_lsg.LogicalSignal) -> LogicalSignal:
 
 
 def convert_logical_signal_groups_with_ls_mapping(
-    logical_signal_groups: Dict[str, legacy_lsg.LogicalSignalGroup]
+    logical_signal_groups: Dict[str, legacy_lsg.LogicalSignalGroup],
 ) -> Tuple[
     Dict[str, LogicalSignalGroup], Dict[legacy_lsg.LogicalSignal, LogicalSignal]
 ]:

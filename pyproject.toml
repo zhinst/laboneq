@@ -1,12 +1,12 @@
 [build-system]
-requires = [ "setuptools>=65.0.0", "wheel",]
+requires = ["setuptools>=65.0.0", "wheel", ]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "laboneq"
 dynamic = ["version", "readme"]
 description = "Zurich Instruments LabOne Q software framework for quantum computing control"
-license = {text = "Apache 2.0"}
+license = { text = "Apache 2.0" }
 requires-python = ">=3.9"
 authors = [
     { name = "Zurich Instruments Development Team", email = "info@zhinst.com" },
@@ -69,8 +69,8 @@ Homepage = "https://github.com/zhinst/laboneq"
 zip-safe = false
 
 [tool.setuptools.dynamic]
-version = {file = "laboneq/VERSION.txt"}
-readme = {file = "README.md", content-type = "text/markdown"}
+version = { file = "laboneq/VERSION.txt" }
+readme = { file = "README.md", content-type = "text/markdown" }
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -84,7 +84,7 @@ laboneq = [
     "VERSION.txt"
 ]
 
-[tool.ruff]
+[tool.ruff.lint]
 select = [
     # flake8-bugbear
     "B",
@@ -132,24 +132,26 @@ exclude = [
     "venv",
 ]
 
-line-length = 88
-target-version = "py39"
 
-[tool.ruff.mccabe]
-max-complexity = 10
+mccabe.max-complexity = 10
 
-[tool.ruff.per-file-ignores]
+[tool.ruff.lint.per-file-ignores]
 # F401: Imported but unused
 "__init__.py" = ["F401"]
 "laboneq/simple.py" = ["F401"]
 
 # Ignore star import, mainly from laboneq.simple (TODO: Fix this)
-"tests/system/*" = ["F403", "F405"]
 "tests/integration/dsl_v3/*" = ["F403", "F405"]
 
 "tests/*" = ["B008", "B011", "B017", "B904", "PERF"]
 "resources/examples/*" = ["B015", "PERF"]
 "examples/*" = ["PERF"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+
+format.docstring-code-format = true
 
 [tool.nbqa.addopts]
 

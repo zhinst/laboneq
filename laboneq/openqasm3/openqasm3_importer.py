@@ -888,6 +888,7 @@ def exp_from_qasm(
     count: int = 1,
     averaging_mode: AveragingMode = AveragingMode.CYCLIC,
     acquisition_type: AcquisitionType = AcquisitionType.INTEGRATION,
+    reset_oscillator_phase: bool = False,
 ):
     """Create an experiment from an OpenQASM program.
 
@@ -908,6 +909,9 @@ def exp_from_qasm(
             The mode of how to average the acquired data.
         acquisition_type:
             The type of acquisition to perform.
+        reset_oscillator_phase:
+            When true, reset all oscillators at the start of every
+            acquistion loop iteration.
     """
     importer = OpenQasm3Importer(
         qubits=qubits, inputs=inputs, externs=externs, gate_store=gate_store
@@ -928,6 +932,7 @@ def exp_from_qasm(
         count=count,
         averaging_mode=averaging_mode,
         acquisition_type=acquisition_type,
+        reset_oscillator_phase=reset_oscillator_phase,
     ) as loop:
         loop.add(qasm_section)
 
@@ -945,6 +950,7 @@ def exp_from_qasm_list(
     count: int = 1,
     averaging_mode: AveragingMode = AveragingMode.CYCLIC,
     acquisition_type: AcquisitionType = AcquisitionType.INTEGRATION,
+    reset_oscillator_phase: bool = False,
     repetition_time: float = 1e-3,
     batch_execution_mode="pipeline",
     do_reset=False,
@@ -982,6 +988,9 @@ def exp_from_qasm_list(
             The mode of how to average the acquired data.
         acquisition_type:
             The type of acquisition to perform.
+        reset_oscillator_phase:
+            When true, reset all oscillators at the start of every
+            acquistion loop iteration.
         repetition_time:
             The length that any single program is padded to.
         batch_execution_mode:
@@ -1051,6 +1060,7 @@ def exp_from_qasm_list(
             count=count,
             averaging_mode=averaging_mode,
             acquisition_type=acquisition_type,
+            reset_oscillator_phase=reset_oscillator_phase,
         ):
             sweep_kwargs = {}
             if batch_execution_mode != "nt":

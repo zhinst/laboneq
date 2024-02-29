@@ -517,7 +517,7 @@ class Scheduler:
             hw_osc_devices[device.uid] = duration
             length = max(length, duration)
             if device_type.lo_frequency_granularity is not None:
-                # The frequency of Grimsel's LO in RF mode is a multiple of 100 MHz.
+                # The frequency of SHF's LO in RF mode is a multiple of 100 MHz.
                 # By aligning the grid with this (10 ns) we make sure the LO's phase is
                 # consistent after the reset of the NCO.
                 df = device_type.lo_frequency_granularity

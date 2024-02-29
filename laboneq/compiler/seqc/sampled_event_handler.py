@@ -8,15 +8,15 @@ from functools import cmp_to_key
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional
 
 from laboneq._utils import flatten
-from laboneq.compiler.code_generator.seq_c_generator import (
+from laboneq.compiler.seqc.seqc_generator import (
     SeqCGenerator,
     merge_generators,
 )
-from laboneq.compiler.code_generator.signatures import (
+from laboneq.compiler.seqc.signatures import (
     PlaybackSignature,
     WaveformSignature,
 )
-from laboneq.compiler.code_generator.awg_sampled_event import (
+from laboneq.compiler.seqc.awg_sampled_event import (
     AWGEvent,
     AWGEventType,
     AWGSampledEventSequence,
@@ -29,11 +29,11 @@ from laboneq.core.types.enums import AcquisitionType
 from laboneq.core.utilities.string_sanitize import string_sanitize
 
 if TYPE_CHECKING:
-    from laboneq.compiler.code_generator.command_table_tracker import (
+    from laboneq.compiler.seqc.command_table_tracker import (
         CommandTableTracker,
     )
-    from laboneq.compiler.code_generator.seqc_tracker import SeqCTracker
-    from laboneq.compiler.code_generator.wave_index_tracker import WaveIndexTracker
+    from laboneq.compiler.seqc.seqc_tracker import SeqCTracker
+    from laboneq.compiler.seqc.wave_index_tracker import WaveIndexTracker
     from laboneq.compiler.common.awg_info import AWGInfo
 
 

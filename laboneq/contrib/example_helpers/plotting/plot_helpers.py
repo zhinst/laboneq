@@ -39,7 +39,7 @@ def zi_mpl_theme():
 
 
 def _integration_weights_by_signal(
-    compiled_experiment: CompiledExperiment
+    compiled_experiment: CompiledExperiment,
 ) -> dict[str, np.ndarray]:
     rt_step_by_awg = {}
     assert compiled_experiment.scheduled_experiment is not None

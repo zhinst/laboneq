@@ -5,8 +5,8 @@ from __future__ import annotations
 
 from typing import Dict, List
 
-from laboneq.compiler.code_generator.signatures import PlaybackSignature
-from laboneq.compiler.code_generator.awg_sampled_event import (
+from laboneq.compiler.seqc.signatures import PlaybackSignature
+from laboneq.compiler.seqc.awg_sampled_event import (
     AWGEvent,
     AWGEventType,
     AWGSampledEventSequence,

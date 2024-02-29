@@ -43,7 +43,7 @@ class OnDeviceDelayCompensation:
 
 
 def calculate_output_router_delays(
-    mapping: Mapping[str, Sequence[OutputRoute]]
+    mapping: Mapping[str, Sequence[OutputRoute]],
 ) -> dict[str, int]:
     """Calculate delays introduced from using Output router.
 
@@ -66,7 +66,7 @@ def calculate_output_router_delays(
 
 
 def compensate_on_device_delays(
-    items: dict[str, OnDeviceDelayInfo]
+    items: dict[str, OnDeviceDelayInfo],
 ) -> dict[str, dict[str, OnDeviceDelayCompensation]]:
     """Compensate on device delays.
 

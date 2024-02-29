@@ -6,7 +6,7 @@ from __future__ import annotations
 import math
 from typing import Dict, Optional
 
-from laboneq.compiler.code_generator.signatures import PlaybackSignature
+from laboneq.compiler.seqc.signatures import PlaybackSignature
 from laboneq.compiler.common.device_type import DeviceType
 
 

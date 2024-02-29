@@ -63,18 +63,9 @@ CONNECT_CHECK_HOLDOFF = 10  # sec
 
 
 class ControllerRunParameters:
-    shut_down: bool = False
     dry_run: bool = False
-    disconnect: bool = False
     working_dir: str = "laboneq_output"
-    setup_filename = None
-    servers_filename = None
     ignore_version_mismatch = False
-
-
-# atexit hook
-def _stop_controller(controller: "Controller"):
-    controller.shut_down()
 
 
 class Controller:
@@ -430,14 +421,6 @@ class Controller:
     ):
         await self._devices.disable_outputs(device_uids, logical_signals, unused_only)
 
-    def shut_down(self):
-        run_async(self._shut_down_async)
-
-    async def _shut_down_async(self):
-        _logger.info("Shutting down all devices...")
-        self._devices.shut_down()
-        _logger.info("Successfully Shut down all devices.")
-
     def disconnect(self):
         run_async(self._disconnect_async)
 
@@ -526,11 +509,6 @@ class Controller:
             self._last_connect_check_ts = time.monotonic()
 
         await self._devices.on_experiment_end()
-        if self._run_parameters.shut_down is True:
-            await self._shut_down_async()
-
-        if self._run_parameters.disconnect is True:
-            await self._disconnect_async()
 
     def _find_awg(self, seqc_name: str) -> tuple[str, int]:
         # TODO(2K): Do this in the recipe preprocessor, or even modify the compiled experiment
