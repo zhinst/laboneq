@@ -27,6 +27,7 @@ from laboneq.controller.devices.device_utils import NodeCollector, zhinst_core_v
 from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.devices.zi_node_monitor import ResponseWaiter
 from laboneq.controller.near_time_runner import NearTimeRunner
+from laboneq.controller.protected_session import ProtectedSession
 from laboneq.controller.recipe_processor import (
     RecipeData,
     RtExecutionInfo,
@@ -43,14 +44,10 @@ from laboneq.core.utilities.replace_pulse import ReplacementType, calc_wave_repl
 from laboneq.data.execution_payload import TargetSetup
 from laboneq.data.experiment_results import ExperimentResults
 from laboneq.data.recipe import NtStepKey
-from laboneq.executor.execution_from_experiment import ExecutionFactoryFromExperiment
-from laboneq.executor.executor import Statement
+from laboneq.data.scheduled_experiment import ScheduledExperiment
 
 if TYPE_CHECKING:
-    from laboneq.core.types import CompiledExperiment
-    from laboneq.data.execution_payload import ExecutionPayload
     from laboneq.dsl.experiment.pulse import Pulse
-    from laboneq.dsl.session import Session
 
 
 _logger = logging.getLogger(__name__)
@@ -62,30 +59,24 @@ _logger = logging.getLogger(__name__)
 CONNECT_CHECK_HOLDOFF = 10  # sec
 
 
-class ControllerRunParameters:
-    dry_run: bool = False
-    working_dir: str = "laboneq_output"
-    ignore_version_mismatch = False
-
-
 class Controller:
     def __init__(
         self,
-        run_parameters: ControllerRunParameters,
         target_setup: TargetSetup,
+        ignore_version_mismatch: bool = False,
         neartime_callbacks: dict[str, Callable] | None = None,
     ):
-        self._run_parameters = run_parameters
+        self._ignore_version_mismatch = ignore_version_mismatch
+        self._do_emulation = True
         self._devices = DeviceCollection(
             target_setup=target_setup,
-            dry_run=self._run_parameters.dry_run,
-            ignore_version_mismatch=self._run_parameters.ignore_version_mismatch,
+            ignore_version_mismatch=ignore_version_mismatch,
         )
 
         self._setup_caps = SetupCaps(
             LabOneVersion.cast(
                 zhinst_core_version(),
-                raise_if_unsupported=not self._run_parameters.ignore_version_mismatch,
+                raise_if_unsupported=not ignore_version_mismatch,
             )
         )
 
@@ -100,13 +91,16 @@ class Controller:
             DeviceZI, NodeCollector
         ] = defaultdict(NodeCollector)
         self._recipe_data: RecipeData = None
-        self._session: Any = None
         self._results = ExperimentResults()
 
         _logger.debug("Controller created")
         _logger.debug("Controller debug logging is on")
 
         _logger.info("VERSION: laboneq %s", __version__)
+
+    @property
+    def setup_caps(self) -> SetupCaps:
+        return self._setup_caps
 
     def _allocate_resources(self):
         self._devices.free_allocations()
@@ -391,7 +385,10 @@ class Controller:
 
         _logger.debug("Execution stopped")
 
-    def connect(self, reset_devices: bool = False):
+    def connect(self, do_emulation: bool = True, reset_devices: bool = False):
+        self._do_emulation = (
+            do_emulation  # Remember mode for later implicit connect check
+        )
         run_async(self._connect_async, reset_devices=reset_devices)
 
     async def _connect_async(self, reset_devices: bool = False):
@@ -400,7 +397,9 @@ class Controller:
             self._last_connect_check_ts is None
             or now - self._last_connect_check_ts > CONNECT_CHECK_HOLDOFF
         ):
-            await self._devices.connect(reset_devices=reset_devices)
+            await self._devices.connect(
+                do_emulation=self._do_emulation, reset_devices=reset_devices
+            )
         self._last_connect_check_ts = now
 
     def disable_outputs(
@@ -430,57 +429,38 @@ class Controller:
         self._last_connect_check_ts = None
         _logger.info("Successfully disconnected from all devices and servers.")
 
-    # TODO(2K): remove legacy code
-    def execute_compiled_legacy(
-        self, compiled_experiment: CompiledExperiment, session: Session | None = None
-    ):
-        run_async(self._execute_compiled_legacy_async, compiled_experiment, session)
-
-    async def _execute_compiled_legacy_async(
-        self, compiled_experiment: CompiledExperiment, session: Session | None = None
-    ):
-        execution: Statement
-        if hasattr(compiled_experiment.scheduled_experiment, "execution"):
-            execution = compiled_experiment.scheduled_experiment.execution
-        else:
-            execution = ExecutionFactoryFromExperiment().make(
-                compiled_experiment.experiment
-            )
-
-        self._recipe_data = pre_process_compiled(
-            compiled_experiment.scheduled_experiment,
-            self._devices,
-            execution,
-            self._setup_caps,
+    def execute_compiled(
+        self,
+        scheduled_experiment: ScheduledExperiment,
+        protected_session: ProtectedSession | None = None,
+    ) -> ExperimentResults:
+        return run_async(
+            self._execute_compiled_async, scheduled_experiment, protected_session
         )
 
-        self._session = session
-        await self._execute_compiled_impl()
-        if session and session._last_results:
-            session._last_results.acquired_results = self._results.acquired_results
-            session._last_results.neartime_callback_results = (
-                self._results.neartime_callback_results
-            )
-            session._last_results.execution_errors = self._results.execution_errors
-
-    def execute_compiled(self, job: ExecutionPayload):
-        run_async(self._execute_compiled_async, job)
-
-    async def _execute_compiled_async(self, job: ExecutionPayload):
+    async def _execute_compiled_async(
+        self,
+        scheduled_experiment: ScheduledExperiment,
+        protected_session: ProtectedSession | None = None,
+    ) -> ExperimentResults:
         self._recipe_data = pre_process_compiled(
-            job.scheduled_experiment,
+            scheduled_experiment,
             self._devices,
-            job.scheduled_experiment.execution,
+            scheduled_experiment.execution,
             self._setup_caps,
         )
-        self._session = None
-        await self._execute_compiled_impl()
+        return await self._execute_compiled_impl(
+            protected_session=protected_session or ProtectedSession(None)
+        )
 
-    async def _execute_compiled_impl(self):
+    async def _execute_compiled_impl(
+        self, protected_session: ProtectedSession
+    ) -> ExperimentResults:
         await (
             self._connect_async()
         )  # Ensure all connect configurations are still valid!
         self._prepare_result_shapes()
+        protected_session._set_experiment_results(self._results)
         try:
             await self._initialize_devices()
 
@@ -490,9 +470,10 @@ class Controller:
             _logger.info("Starting near-time execution...")
             try:
                 with tracing.get_tracer().start_span("near-time-execution"):
-                    await NearTimeRunner(controller=self).run(
-                        self._recipe_data.execution
-                    )
+                    await NearTimeRunner(
+                        controller=self,
+                        protected_session=protected_session,
+                    ).run(self._recipe_data.execution)
             except AbortExecution:
                 # eat the exception
                 pass
@@ -509,6 +490,8 @@ class Controller:
             self._last_connect_check_ts = time.monotonic()
 
         await self._devices.on_experiment_end()
+
+        return self._results
 
     def _find_awg(self, seqc_name: str) -> tuple[str, int]:
         # TODO(2K): Do this in the recipe preprocessor, or even modify the compiled experiment
@@ -739,6 +722,7 @@ class Controller:
                         else integrator_allocation.channels
                     )
                     raw_results = await device.get_measurement_data(
+                        self._recipe_data,
                         awg_key.awg_index,
                         rt_execution_info,
                         result_indices,

@@ -46,8 +46,10 @@ class Section:
             Unique identifier for the section. Maybe be omitted if one
             is not required. Default: `None`.
         name (str):
-            Non-unique name for the section. May, in future, be used as a prefix for
-            generating a `uid` for the section if one is not specified. Default: `"unnamed"`.
+            A name for the section. The name need not be unique.
+            The name may, in future, be used as a prefix for
+            generating a `uid` for the section if one is not specified.
+            Default: `"unnamed"`.
         alignment (SectionAlignment):
             Specifies the time alignment of operations and sections within
             this section. Left alignment positions operations and sections
@@ -90,7 +92,7 @@ class Section:
     !!! version-changed "Changed in version 2.0.0"
         Removed `offset` member variable.
 
-    !!! version-changed "Added in version 2.27.0"
+    !!! version-changed "Added in version 2.26.0"
         Added `name` member variable.
     """
 

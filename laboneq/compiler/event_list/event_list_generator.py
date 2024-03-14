@@ -20,7 +20,7 @@ from laboneq.compiler.ir.oscillator_ir import OscillatorFrequencyStepIR
 from laboneq.compiler.ir.phase_reset_ir import PhaseResetIR
 from laboneq.compiler.ir.pulse_ir import PulseIR, PrecompClearIR
 from laboneq.compiler.ir.reserve_ir import ReserveIR
-from laboneq.compiler.ir.root_ir import RootIR
+from laboneq.compiler.ir.root_ir import RootScheduleIR
 from laboneq.compiler.ir.section_ir import SectionIR
 from laboneq.data.compilation_job import ParameterInfo
 
@@ -251,7 +251,7 @@ def generate_event_list_oscillator_frequency_step(
 
 @generate_event_list.register
 def generate_event_list_root(
-    root_ir: RootIR,
+    root_ir: RootScheduleIR,
     start: int,
     max_events: int,
     id_tracker: Iterator[int],
@@ -738,7 +738,7 @@ def _children_events(
     event_list_nested = []
     assert ir.children_start is not None
     assert ir.length is not None
-    for child, child_start in zip(ir.children, ir.children_start):
+    for child_start, child in ir.iter_children():
         if max_events <= 0:
             break
 

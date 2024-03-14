@@ -21,7 +21,7 @@ class PulseSignature:
 
     # the offset of the pulse in the waveform
     start: int
-    # the pulse function
+    # the pulse UID
     pulse: str
     # the length of the pulse in samples
     length: int

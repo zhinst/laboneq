@@ -39,3 +39,7 @@ class SetupCaps:
     @property
     def result_logger_pipelined(self) -> bool:
         return True
+
+    @property
+    def flexible_feedback(self) -> bool:
+        return False

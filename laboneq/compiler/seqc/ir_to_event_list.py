@@ -4,7 +4,7 @@
 import itertools
 import math
 
-from laboneq.compiler.common.compiler_settings import CompilerSettings
+from laboneq.compiler.common.compiler_settings import CompilerSettings, TINYSAMPLE
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.event_list.event_type import EventType
 from laboneq.compiler.event_list.event_list_generator import generate_event_list
@@ -141,7 +141,7 @@ def generate_event_list_from_ir(
 
     # convert time from units of tiny samples to seconds
     for event in event_list:
-        event["time"] = event["time"] * settings.TINYSAMPLE
+        event["time"] = event["time"] * TINYSAMPLE
 
     _calculate_osc_phase(event_list, ir)
 

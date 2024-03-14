@@ -594,6 +594,7 @@ class DeviceZI(INodeMonitorProvider):
 
     async def get_measurement_data(
         self,
+        recipe_data: RecipeData,
         channel: int,
         rt_execution_info: RtExecutionInfo,
         result_indices: list[int],

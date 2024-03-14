@@ -40,7 +40,7 @@ def zi_mpl_theme():
 
 def _integration_weights_by_signal(
     compiled_experiment: CompiledExperiment,
-) -> dict[str, np.ndarray]:
+) -> dict[str, list]:
     rt_step_by_awg = {}
     assert compiled_experiment.scheduled_experiment is not None
     for (
@@ -59,30 +59,36 @@ def _integration_weights_by_signal(
             continue
 
         if iw["signals"]:
-            # discard all but the first kernel in case of MSD
             for k, v in iw["signals"].items():
                 # ensure no failure if no integration kernel is defined
                 if v:
-                    kernel_name_by_signal.update({k: v[0]})
+                    if not isinstance(v, list):
+                        v = [v]
+                    kernel_name_by_signal.update({k: v})
 
-    kernel_samples_by_signal: dict[str, np.ndarray] = {}
-    for signal, kernel in kernel_name_by_signal.items():
-        waveform: None | np.ndarray = None
-        for scale, suffix in [(1, ".wave"), (1, "_i.wave"), (1j, "_q.wave")]:
-            new_wf = next(
-                iter(
-                    (
-                        w["samples"]
-                        for w in compiled_experiment.waves
-                        if w["filename"] == kernel + suffix
+    kernel_samples_by_signal: dict[str, list] = {
+        signal: [] for signal in kernel_name_by_signal
+    }
+    for signal, kernels in kernel_name_by_signal.items():
+        for kernel in kernels:
+            waveform: None | np.ndarray = None
+            for scale, suffix in [(1, ".wave"), (1, "_i.wave"), (1j, "_q.wave")]:
+                new_wf = next(
+                    iter(
+                        (
+                            w["samples"]
+                            for w in compiled_experiment.waves
+                            if w["filename"] == kernel + suffix
+                        ),
                     ),
-                ),
-                None,
-            )
-            if new_wf is not None:
-                waveform = scale * new_wf + (waveform if waveform is not None else 0)
-        assert waveform is not None, "kernel not found"
-        kernel_samples_by_signal[signal] = waveform
+                    None,
+                )
+                if new_wf is not None:
+                    waveform = scale * new_wf + (
+                        waveform if waveform is not None else 0
+                    )
+            assert waveform is not None, "kernel not found"
+            kernel_samples_by_signal[signal] += [waveform]
 
     return kernel_samples_by_signal
 
@@ -91,10 +97,14 @@ def plot_simulation(
     compiled_experiment: CompiledExperiment,
     start_time: float = 0.0,
     length: float = 10e-6,
-    xaxis_label: str = "Time (s)",
+    xaxis_label: str = "Time ($\\mu$s)",
     yaxis_label: str = "Amplitude",
     plot_width: int = 9,
     plot_height: int = 2,
+    xaxis_scaling=1e6,
+    scientific_notation=False,
+    signal_names_to_show=None,
+    integration_kernels_to_plot="all",
     save: bool = False,
     filename: str = "filename",
     filetype: str = "svg",
@@ -110,13 +120,28 @@ def plot_simulation(
         yaxis_label: The y-axis label.
         plot_width: The width of the plot.
         plot_height: The height of the plot.
+        xaxis_scaling: value by which to scale the time values shown on the x-axis
+        scientific_notation: whether to use scientific notation for the tick labels
+        signal_names_to_show: list of signal names or substrings of signal names.
+            Only signal names that contain the entries in this list are shown, in the
+            order in which they come in the list
+            For example:
+                sort signals: ["drive", "acquire", "measure"]
+                show signals containing qubit names: ["qb1", "qb2", "qb3"]
+                    show panels in a different order: ["qb1", "qb3", "qb2"]
+                subset of the signals: ["drive"] (shows only the drive signals)
+                full signal names: ["drive_qb2"] (shows only this signal).
+        integration_kernels_to_plot: list of integers specifying which integration kernels
+            to show in case of multiple integration kernels. Starts counting at 1,
+            example: [1] - 1st kernel; [2] - 2nd kernel
         save: Whether to save the plot to a file.
         filename: The name of the file to save the plot to without
             the extension (e.g. `"filename"`).
         filetype: The file name extension (e.g. `"svg"`).
         signals: A list of the logical signals to plot (e.g.
-            `["/logical_signal_groups/q0/drive_line"]`). By default
+            `["/logical_signal_groups/q0/drive_line"]`). By default,
             all signals mapped by the experiment are plotted.
+            Note: it might be more convenient to use signal_names_to_show.
 
     Returns:
         None.
@@ -132,15 +157,24 @@ def plot_simulation(
 
     kernel_samples = _integration_weights_by_signal(compiled_experiment)
 
-    xs = []
-    y1s = []
-    labels1 = []
-    y2s = []
-    labels2 = []
-    titles = []
+    # Gather the information to plot in each panel as list of lists:
+    # [
+    #   [line1, line_2, ...],  # for subplot 1
+    #   [line1, line_2, ...],  # for subplot 2
+    #   ...
+    # ]
+    xs = []  # x-axis values
+    y1s = []  # y-axis values - in-phase (I) signals
+    labels1 = []  # labels for the in-phase (I) signals
+    y2s = []  # y-axis values - quadrature (Q) signals
+    labels2 = []  # labels for the quadrature (Q) signals
+    titles = []  # subplot titles: this is not a list of lists: only one title per panel
 
-    physical_channels = {}
-    # extract physical channel info for each logical signal
+    # extract physical channel info for each logical signal as a list of
+    # [(physical_channel_path, {"signal": list_of_logical_signal_names})]
+    # With the exceptions of the drive signals, list_of_logical_signal_names should be
+    # a one-entry list.
+    channels_and_signals = []
     for signal in mapped_signals:
         mapped_path = compiled_experiment.experiment.signals[
             signal
@@ -156,13 +190,38 @@ def plot_simulation(
             .physical_channel
         )
 
-        if physical_channel_path not in physical_channels.keys():
-            physical_channels[physical_channel_path] = {"signals": [signal]}
+        if "sg" in physical_channel_path.name and physical_channel_path in [
+            phys_ch[0] for phys_ch in channels_and_signals
+        ]:
+            idx = [
+                i
+                for i, phys_ch in enumerate(channels_and_signals)
+                if physical_channel_path == phys_ch[0]
+            ][0]
+            channels_and_signals[idx][1]["signals"].append(signal)
         else:
-            physical_channels[physical_channel_path]["signals"].append(signal)
+            channels_and_signals += [(physical_channel_path, {"signals": [signal]})]
+
+    # group according to the names in group_signal_names_as
+    if signal_names_to_show is not None:
+        assert hasattr(signal_names_to_show, "__iter__")
+        channels_and_signals_tmp = []
+        for s in signal_names_to_show:
+            for ch, ch_v in channels_and_signals:
+                for sig in ch_v["signals"]:
+                    if s in sig:
+                        channels_and_signals_tmp += [(ch, ch_v)]
+                        break
+        channels_and_signals = channels_and_signals_tmp
+        if len(channels_and_signals) == 0:
+            raise ValueError(
+                f"None of the signals in group_signal_names_as "
+                f"({signal_names_to_show}) match the signals used in the "
+                f"experiment: {mapped_signals}."
+            )
 
     # simulate output only once for each physical channel
-    for channel, channel_values in physical_channels.items():
+    for channel, channel_values in channels_and_signals:
         my_snippet = simulation.get_snippet(
             channel,
             start=start_time,
@@ -175,6 +234,7 @@ def plot_simulation(
 
         physical_channel_name = channel.uid.replace("_", " ").replace("/", ": ")
 
+        signal = channel_values["signals"][0]
         signal_names = "-".join(channel_values["signals"])
 
         if (
@@ -184,16 +244,17 @@ def plot_simulation(
         ):
             try:
                 if my_snippet.time is not None:
-                    xs.append(my_snippet.time)
+                    xs.append([my_snippet.time])
 
-                    y1s.append(my_snippet.wave.real)
-                    labels1.append(f"{physical_channel_name} - I")
+                    y1s.append([my_snippet.wave.real])
+                    labels1.append(["I"])
 
-                    y2s.append(my_snippet.wave.imag)
-                    labels2.append(f"{physical_channel_name} - Q")
+                    y2s.append([my_snippet.wave.imag])
+                    labels2.append(["Q"])
 
                     titles.append(f"{physical_channel_name} - {signal_names}".upper())
-            except Exception:
+            except Exception as e:
+                print(f"In EXCEPTION: {e}")
                 pass
 
         elif "input" in channel.name or "qas_0_1" in channel.name:
@@ -203,50 +264,74 @@ def plot_simulation(
                     trigger_indices = np.argwhere(my_snippet.wave).flatten()
                     # known issue: the simulator does not extend the QA trigger
                     # waveform past the last trigger, so we make the new waveform longer
-                    if len(trigger_indices) and trigger_indices[-1] + len(
-                        this_kernel_samples
-                    ) > len(my_snippet.wave):
-                        dt: float = my_snippet.time[1] - my_snippet.time[0]  # type: ignore
-                        waveform = np.zeros(
-                            trigger_indices[-1] + len(this_kernel_samples),
-                            dtype=np.complex128,
+                    xs_sublist, y1s_sublist, y2s_sublist = [], [], []
+                    labels1_sublist, labels2_sublist = [], []
+                    if integration_kernels_to_plot == "all":
+                        integration_kernels_to_plot = (
+                            np.arange(len(this_kernel_samples)) + 1
                         )
-                        time = dt * np.arange(len(waveform)) + my_snippet.time[0]  # type: ignore
-                    else:
-                        waveform = np.zeros_like(my_snippet.wave, dtype=np.complex128)
-                        time = my_snippet.time
+                    for k in integration_kernels_to_plot:
+                        kernel = this_kernel_samples[k - 1]
+                        if len(trigger_indices) and trigger_indices[-1] + len(
+                            kernel
+                        ) > len(my_snippet.wave):
+                            dt: float = my_snippet.time[1] - my_snippet.time[0]  # type: ignore
+                            waveform = np.zeros(
+                                trigger_indices[-1] + len(kernel),
+                                dtype=np.complex128,
+                            )
+                            time = dt * np.arange(len(waveform)) + my_snippet.time[0]  # type: ignore
+                        else:
+                            waveform = np.zeros_like(
+                                my_snippet.wave, dtype=np.complex128
+                            )
+                            time = my_snippet.time
 
-                    for i in trigger_indices:
-                        waveform[i : i + len(this_kernel_samples)] = this_kernel_samples
+                        for i in trigger_indices:
+                            waveform[i : i + len(kernel)] = kernel
 
-                    xs.append(time)
+                        xs_sublist.append(time)
 
-                    y1s.append(waveform.real)
-                    labels1.append(f"{physical_channel_name} - I")
+                        y1s_sublist.append(waveform.real)
+                        labels1_sublist.append(
+                            f"w{k}-I" if len(this_kernel_samples) > 1 else "I"
+                        )
 
-                    y2s.append(waveform.imag)
-                    labels2.append(f"{physical_channel_name} - Q")
+                        y2s_sublist.append(waveform.imag)
+                        labels2_sublist.append(
+                            f"w{k}-Q" if len(this_kernel_samples) > 1 else "Q"
+                        )
 
-                    titles.append(f"{physical_channel_name} - {signal_names}".upper())
+                    xs.append(xs_sublist)
 
-            except Exception:
+                    y1s.append(y1s_sublist)
+                    labels1.append(labels1_sublist)
+
+                    y2s.append(y2s_sublist)
+                    labels2.append(labels2_sublist)
+
+                    titles.append(f"{physical_channel_name} - {signal}".upper())
+
+            except Exception as e:
+                print(f"In EXCEPTION: {e}")
                 pass
         elif "iq_channel" not in str(channel.type).lower():
             try:
                 if my_snippet.time is not None:
                     time_length = len(my_snippet.time)
 
-                    xs.append(my_snippet.time)
+                    xs.append([my_snippet.time])
 
-                    y1s.append(my_snippet.wave.real)
-                    labels1.append(f"{physical_channel_name}")
+                    y1s.append([my_snippet.wave.real])
+                    labels1.append([f"{physical_channel_name}"])
 
                     titles.append(f"{physical_channel_name} - {signal_names}".upper())
 
                     empty_array = np.full(time_length, np.nan)
-                    y2s.append(empty_array)
-                    labels2.append(None)
-            except Exception:
+                    y2s.append([empty_array])
+                    labels2.append([None])
+            except Exception as e:
+                print(f"In EXCEPTION: {e}")
                 pass
         elif (
             "qa" not in str(channel.name)
@@ -257,18 +342,19 @@ def plot_simulation(
                 if my_snippet.time is not None:
                     time_length = len(my_snippet.time)
 
-                    xs.append(my_snippet.time)
+                    xs.append([my_snippet.time])
 
-                    y1s.append(my_snippet.trigger)
-                    labels1.append(f"{physical_channel_name} - Trigger")
+                    y1s.append([my_snippet.trigger])
+                    labels1.append(["Trigger"])
 
                     titles.append(f"{physical_channel_name} - Trigger".upper())
 
                     empty_array = np.full(time_length, np.nan)
-                    y2s.append(empty_array)
-                    labels2.append(None)
+                    y2s.append([empty_array])
+                    labels2.append([None])
 
-            except Exception:
+            except Exception as e:
+                print(f"In EXCEPTION: {e}")
                 pass
 
         if np.any(my_snippet.marker):
@@ -276,18 +362,18 @@ def plot_simulation(
                 if my_snippet.time is not None:
                     time_length = len(my_snippet.time)
 
-                    xs.append(my_snippet.time)
+                    xs.append([my_snippet.time])
 
-                    y1s.append(my_snippet.marker.real)
-                    labels1.append(f"{physical_channel_name} - Marker 1")
+                    y1s.append([my_snippet.marker.real])
+                    labels1.append(["Marker 1"])
 
                     if np.any(my_snippet.marker.imag):
-                        y2s.append(my_snippet.marker.imag)
-                        labels2.append(f"{physical_channel_name} - Marker 2")
+                        y2s.append([my_snippet.marker.imag])
+                        labels2.append(["Marker 2"])
                     else:
                         empty_array = np.full(time_length, np.nan)
-                        labels2.append(None)
-                        y2s.append(empty_array)
+                        labels2.append([None])
+                        y2s.append([empty_array])
 
                     titles.append(
                         f"{physical_channel_name} - {signal_names} - Marker".upper()
@@ -303,51 +389,56 @@ def plot_simulation(
             sharex=False,
             figsize=(plot_width, len(y1s) * plot_height),
         )
+        if len(xs) == 1:
+            # ensure axes are always iterable
+            axes = np.array([axes])
 
-        colors = plt.rcParams["axes.prop_cycle"]()
+        c_cycle = plt.rcParams["axes.prop_cycle"]
+        # colormaps for when the number of lines to plot exceeds the number of available
+        # colors in plt.rcParams["axes.prop_cycle"]
+        cmap_i = matplotlib.colormaps["hsv"]
+        cmap_q = matplotlib.colormaps["plasma"]
 
-        if len(xs) > 1:
-            for axs, x, y1, y2, label1, label2, title in zip(
-                axes.flat, xs, y1s, y2s, labels1, labels2, titles
+        for axs, x_all, y1_all, y2_all, label1_all, label2_all, title in zip(
+            axes.flat, xs, y1s, y2s, labels1, labels2, titles
+        ):
+            for i, (x, y1, y2, label1, label2) in enumerate(
+                zip(x_all, y1_all, y2_all, label1_all, label2_all)
             ):
-                # Get the next color from the cycler
-                c = next(colors)["color"]
-                axs.plot(x, y1, label=label1, color=c)
-                c = next(colors)["color"]
-                axs.plot(x, y2, label=label2, color=c)
-                axs.set_ylabel(yaxis_label)
-                axs.set_xlabel(xaxis_label)
-                axs.set_title(title)
-                axs.legend(bbox_to_anchor=(1.0, 1.0))
+                # Color is taken from cmaps if len(x_all) > len(c_cycle), else from
+                # default color cycle
+                c = (
+                    cmap_i(i / len(x_all))
+                    if len(x_all) > len(c_cycle) / 2
+                    else f"C{2*i}"
+                )
+                axs.plot(x * xaxis_scaling, y1, label=label1, color=c)
+                c = (
+                    cmap_q(i / len(x_all))
+                    if len(x_all) > len(c_cycle) / 2
+                    else f"C{2*i+1}"
+                )
+                axs.plot(x * xaxis_scaling, y2, label=label2, color=c)
+            axs.set_ylabel(yaxis_label)
+            axs.set_xlabel(xaxis_label)
+            axs.set_title(title)
+            axs.legend(loc="upper left", bbox_to_anchor=(1.0, 1.0), handlelength=0.75)
+            if scientific_notation:
                 axs.ticklabel_format(axis="both", style="sci", scilimits=(0, 0))
-                axs.grid(True)
-
-        elif len(xs) == 1:
-            for x, y1, y2, label1, label2, title in zip(
-                xs, y1s, y2s, labels1, labels2, titles
-            ):
-                # Get the next color from the cycler
-                c = next(colors)["color"]
-                axes.plot(x, y1, label=label1, color=c)
-                c = next(colors)["color"]
-                axes.plot(x, y2, label=label2, color=c)
-                axes.set_ylabel(yaxis_label)
-                axes.set_xlabel(xaxis_label)
-                axes.set_title(title)
-                axes.legend(bbox_to_anchor=(1.0, 1.0))
-                axes.ticklabel_format(axis="both", style="sci", scilimits=(0, 0))
-                axes.grid(True)
+            axs.grid(True)
 
         # enforce same x-axis scale for all plots
-        if hasattr(axes, "__iter__"):
-            for ax in axes:
-                ax.set_xlim(start_time, start_time + length)
+        for ax in axes:
+            ax.set_xlim(
+                start_time * xaxis_scaling, (start_time + length) * xaxis_scaling
+            )
 
         fig.tight_layout()
+        fig.align_labels()
 
         if save is True:
             fig.savefig(f"{filename}.{filetype}", format=f"{filetype}")
-        # fig.legend(loc="upper left")
+
         plt.show()
 
 

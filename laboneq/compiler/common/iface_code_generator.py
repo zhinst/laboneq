@@ -13,11 +13,16 @@ from laboneq.compiler.common.signal_obj import SignalObj
 
 class ICodeGenerator(abc.ABC):
     @abstractmethod
-    def __init__(self, ir=None, settings: CompilerSettings | dict | None = None):
+    def __init__(
+        self,
+        ir,
+        signals: list[SignalObj],
+        settings: CompilerSettings | dict | None = None,
+    ):
         ...
 
     @abstractmethod
-    def generate_code(self, signal_objs: list[SignalObj]):
+    def generate_code(self):
         ...
 
     @abstractmethod

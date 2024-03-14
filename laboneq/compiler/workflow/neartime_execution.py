@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import abc
+import logging
 from builtins import frozenset
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
+import time
 
 from numpy.typing import ArrayLike
 
@@ -24,14 +26,19 @@ from laboneq.executor.executor import (
     Sequence,
 )
 
+_logger = logging.getLogger(__name__)
+
 
 @dataclass
 class IterationStep:
-    #: The index of this iteration (aka the iteration in this loop)
+    # The number of iterations in this loop
+    count: int
+
+    # The index of this iteration (aka the iteration in this loop)
     index: int
 
-    #: The values of the near-time parameters for this iteration, not including
-    #: parameters from the parent loop
+    # The values of the near-time parameters for this iteration, not including
+    # parameters from the parent loop
     parameter_values: Dict[str, Any]
 
 
@@ -39,8 +46,8 @@ class IterationStep:
 class IterationStack:
     _stack: List[IterationStep] = field(default_factory=list)
 
-    def push(self, index: int, parameter_values: Dict[str, Any]):
-        self._stack.append(IterationStep(index, parameter_values))
+    def push(self, count: int, index: int, parameter_values: Dict[str, Any]):
+        self._stack.append(IterationStep(count, index, parameter_values))
 
     def pop(self):
         return self._stack.pop()
@@ -53,6 +60,19 @@ class IterationStack:
 
     def set_parameter_value(self, name: str, value: Any):
         self._stack[-1].parameter_values[name] = value
+
+    def current_index_flat(self):
+        index_flat = 0
+        for step in self._stack:
+            index_flat *= step.count
+            index_flat += step.index
+        return index_flat
+
+    def total_count(self):
+        count = 1
+        for step in self._stack:
+            count *= step.count
+        return count
 
 
 def legacy_execution_program():
@@ -103,6 +123,8 @@ class NtCompilerExecutor(ExecutorBase):
             Delegate(self._settings) for Delegate in self._delegates_types
         ]
 
+        self._skipped_last_compilation = False
+
     @classmethod
     def register_hook(cls, delegate_class: type[NtCompilerExecutorDelegate]):
         cls._delegates_types.append(delegate_class)
@@ -119,7 +141,7 @@ class NtCompilerExecutor(ExecutorBase):
         self._iteration_stack.set_parameter_value(name, value)
 
     def for_loop_entry_handler(self, count: int, index: int, loop_flags: LoopFlags):
-        self._iteration_stack.push(index, {})
+        self._iteration_stack.push(count, index, {})
         if loop_flags.is_pipeline:
             self._iteration_stack.set_parameter_value("__pipeline_index", index)
 
@@ -133,6 +155,7 @@ class NtCompilerExecutor(ExecutorBase):
         averaging_mode,
         acquisition_type,
     ):
+        time_start = time.perf_counter()
         if self._required_parameters is not None:
             # We already know what subset of the near-time parameters are required
             # by the real-time sequence. If we already have a compiler output for
@@ -147,6 +170,10 @@ class NtCompilerExecutor(ExecutorBase):
                 self._combined_compiler_output.add_total_execution_time(
                     new_compiler_output
                 )
+                if not self._skipped_last_compilation:
+                    _logger.info("Skipping compilation for next step(s)...")
+                self._skipped_last_compilation = True
+
                 return
 
         # We don't have a compiler output for this state yet, so we need to compile
@@ -184,6 +211,15 @@ class NtCompilerExecutor(ExecutorBase):
             delegate.after_compilation_run(new_compiler_output, nt_step_indices)
 
         self._last_compiler_output = new_compiler_output
+
+        time_delta = time.perf_counter() - time_start
+
+        this_index = self._iteration_stack.current_index_flat()
+        total_count = self._iteration_stack.total_count()
+        self._skipped_last_compilation = False
+        _logger.info(
+            f"Completed compilation step {this_index + 1} of {total_count}. [{time_delta:.3f} s]"
+        )
 
     def _frozen_required_parameters(self):
         return frozenset(

@@ -50,14 +50,12 @@ class DeviceCollection:
     def __init__(
         self,
         target_setup: TargetSetup,
-        dry_run: bool,
         ignore_version_mismatch: bool = False,
     ):
         self._ds = DeviceSetupDAO(
             target_setup=target_setup,
             ignore_version_mismatch=ignore_version_mismatch,
         )
-        self._dry_run = dry_run
         self._emulator_state: EmulatorState | None = None
         self._ignore_version_mismatch = ignore_version_mismatch
         self._daqs: dict[str, DaqWrapper] = {}
@@ -65,8 +63,8 @@ class DeviceCollection:
         self._monitor_started = False
 
     @property
-    def emulator_state(self) -> EmulatorState | None:
-        if self._emulator_state is None and self._dry_run:
+    def emulator_state(self) -> EmulatorState:
+        if self._emulator_state is None:
             self._emulator_state = prepare_emulator_state(self._ds)
         return self._emulator_state
 
@@ -113,12 +111,13 @@ class DeviceCollection:
                 return dev
         raise LabOneQControllerException(f"Could not find device for the path '{path}'")
 
-    async def connect(self, reset_devices: bool = False):
-        await self._prepare_daqs()
-        self._validate_dataserver_device_fw_compatibility()  # TODO(2K): Uses zhinst utils -> async api version?
+    async def connect(self, do_emulation: bool, reset_devices: bool = False):
+        await self._prepare_daqs(do_emulation=do_emulation)
+        if not do_emulation:
+            self._validate_dataserver_device_fw_compatibility()  # TODO(2K): Uses zhinst utils -> async api version?
         self._prepare_devices()
         for _, device in self.all:
-            await device.connect(self.emulator_state)
+            await device.connect(self.emulator_state if do_emulation else None)
         await self.start_monitor()
         await self.configure_device_setup(reset_devices)
 
@@ -348,7 +347,7 @@ class DeviceCollection:
 
     def _validate_dataserver_device_fw_compatibility(self):
         """Validate dataserver and device firmware compatibility."""
-        if not self._dry_run and not self._ignore_version_mismatch:
+        if not self._ignore_version_mismatch:
             daq_dev_serials: dict[str, list[str]] = defaultdict(list)
             for device_qualifier in self._ds.instruments:
                 daq_dev_serials[device_qualifier.server_uid].append(
@@ -408,7 +407,7 @@ class DeviceCollection:
                 self._ds.get_device_rf_voltage_offsets(device_qualifier.uid)
             )
 
-    async def _prepare_daqs(self):
+    async def _prepare_daqs(self, do_emulation: bool):
         updated_daqs: dict[str, DaqWrapper] = {}
         for server_uid, server_qualifier in self._ds.servers:
             existing = self._daqs.get(server_uid)
@@ -422,7 +421,7 @@ class DeviceCollection:
                 server_qualifier.port,
             )
             daq: DaqWrapper
-            if self._dry_run:
+            if do_emulation:
                 daq = DaqWrapperDryRun(
                     server_uid, server_qualifier, self.emulator_state
                 )

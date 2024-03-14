@@ -168,10 +168,13 @@ class SweepParameter(_ParameterArithmeticMixin, Parameter):
     def __eq__(self, other):
         if self is other:
             return True
+        if not isinstance(other, self.__class__):
+            return NotImplemented
         return (
-            self.axis_name == other.axis_name
+            self.uid == other.uid
+            and self.axis_name == other.axis_name
+            and self.driven_by == other.driven_by
             and _compare_nested(self.values, other.values)
-            and self.driven_by == getattr(other, "driven_by", None)
         )
 
     def __len__(self) -> int:
@@ -230,8 +233,12 @@ class LinearSweepParameter(_ParameterArithmeticMixin, Parameter):
     def __eq__(self, other):
         if self is other:
             return True
-        return self.axis_name == other.axis_name and _compare_nested(
-            self.values, other.values
+        if not isinstance(other, self.__class__):
+            return NotImplemented
+        return (
+            self.uid == other.uid
+            and self.axis_name == other.axis_name
+            and _compare_nested(self.values, other.values)
         )
 
     def __post_init__(self):

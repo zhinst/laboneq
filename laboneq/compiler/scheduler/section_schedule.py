@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Dict, List, Set, Tuple
 
 from attrs import define, field
 
+from laboneq.compiler.common.compiler_settings import TINYSAMPLE
 from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
 from laboneq.compiler.scheduler.pulse_schedule import PrecompClearSchedule
 from laboneq.compiler.scheduler.utils import ceil_to_grid, floor_to_grid
@@ -213,8 +214,8 @@ class SectionSchedule(IntervalSchedule):
             if force_length < length:
                 raise LabOneQException(
                     f"Content of section '{self.section}' "
-                    f"({length*schedule_data.TINYSAMPLE*1e6:.3e} us) does not fit into "
-                    f"the requested fixed section length ({force_length*schedule_data.TINYSAMPLE*1e6:.3e} us)"
+                    f"({length*TINYSAMPLE*1e6:.3e} us) does not fit into "
+                    f"the requested fixed section length ({force_length*TINYSAMPLE*1e6:.3e} us)"
                 )
             self.length = length
             self.adjust_length(force_length)

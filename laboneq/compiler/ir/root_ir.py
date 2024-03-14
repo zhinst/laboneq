@@ -5,5 +5,5 @@
 from laboneq.compiler.ir.interval_ir import IntervalIR
 
 
-class RootIR(IntervalIR):
+class RootScheduleIR(IntervalIR):
     pass

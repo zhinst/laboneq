@@ -834,7 +834,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         if not rt_execution_info.with_pipeliner:
             return nc
 
-        if not rt_execution_info.result_logger_pipelined and pipeliner_job > 0:
+        if not recipe_data.setup_caps.result_logger_pipelined and pipeliner_job > 0:
             return nc
 
         awg_config = recipe_data.awg_configs[awg_key]
@@ -1078,6 +1078,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
 
     async def get_measurement_data(
         self,
+        recipe_data: RecipeData,
         channel: int,
         rt_execution_info: RtExecutionInfo,
         result_indices: list[int],
@@ -1098,7 +1099,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
 
         pipeliner_jobs = (
             rt_execution_info.pipeliner_jobs
-            if rt_execution_info.result_logger_pipelined
+            if recipe_data.setup_caps.result_logger_pipelined
             else 1
         )
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 from itertools import groupby
 from typing import Optional, TypedDict
+import time
 
 from laboneq._observability.tracing import trace
 from laboneq.compiler import CodeGenerator, CompilerSettings
@@ -74,16 +75,15 @@ class RealtimeCompiler:
             raise Exception("Invalid device class encountered")
 
         for device_class in device_classes:
+            signals = [
+                s
+                for s in self._signal_objects.values()
+                if s.awg.device_class == device_class
+            ]
             self._code_generators[device_class] = self._registered_codegens[
                 device_class
-            ](ir, settings=self._settings)
-            self._code_generators[device_class].generate_code(
-                [
-                    s
-                    for s in self._signal_objects.values()
-                    if s.awg.device_class == device_class
-                ]
-            )
+            ](ir, settings=self._settings, signals=signals)
+            self._code_generators[device_class].generate_code()
 
         _logger.debug("Code generation completed")
 
@@ -103,9 +103,13 @@ class RealtimeCompiler:
     def run(
         self, near_time_parameters: Optional[ParameterStore] = None
     ) -> RTCompilerOutputContainer:
+        time_start = time.perf_counter()
         self._scheduler.run(near_time_parameters)
         schedule = self.prepare_schedule() if self._settings.OUTPUT_EXTRAS else None
+        time_delta = time.perf_counter() - time_start
+        _logger.info(f"Schedule completed. [{time_delta:.3f} s]")
 
+        time_start = time.perf_counter()
         self._generate_code()
 
         outputs = {
@@ -116,6 +120,8 @@ class RealtimeCompiler:
         compiler_output = RTCompilerOutputContainer(
             codegen_output=outputs, schedule=schedule
         )
+        time_delta = time.perf_counter() - time_start
+        _logger.info(f"Code generation completed for all AWGs. [{time_delta:.3f} s]")
 
         return compiler_output
 

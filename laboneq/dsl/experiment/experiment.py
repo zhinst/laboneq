@@ -27,15 +27,6 @@ from .section import AcquireLoopNt, AcquireLoopRt, Case, Match, Section, Sweep
 if TYPE_CHECKING:
     from .. import Parameter
 
-experiment_id = 0
-
-
-def experiment_id_generator():
-    global experiment_id
-    retval = f"exp_{experiment_id}"
-    experiment_id += 1
-    return retval
-
 
 @classformatter
 @dataclass(init=True, repr=True, order=True)
@@ -43,9 +34,12 @@ class Experiment:
     """LabOne Q Experiment.
 
     Attributes:
-        uid (str):
+        uid (str | None):
             Unique identifier for the experiment.
-            If not specified, one will be generated.
+            If not specified, it will remain `None`.
+        name (str):
+            A name for the experiment. The name need not be unique.
+            Default: `"unnamed"`.
         signals (Union[Dict[str, ExperimentSignal], List[ExperimentSignal]]):
             Experiment signals.
             Default: `{}`.
@@ -59,15 +53,24 @@ class Experiment:
         sections (List[Section]):
             Sections defined in the experiment.
             Default: `[]`.
+
+    !!! version-changed "Changed in version 2.27.0"
+
+        The `uid` attribute is not longer automatically generated and
+        will be left as `None` if unspecified.
+
+        The `name` attribute was added.
     """
 
-    uid: str = field(default_factory=experiment_id_generator)
+    uid: str | None = field(default=None)
+    name: str = field(default="unnamed")
     signals: Union[Dict[str, ExperimentSignal], List[ExperimentSignal]] = field(
         default_factory=dict
     )
     version: DSLVersion = field(default=DSLVersion.V3_0_0)
     epsilon: float = field(default=0.0)
     sections: List[Section] = field(default_factory=list)
+
     _section_stack: Deque[Section] = field(
         default_factory=deque, repr=False, compare=False, init=False
     )

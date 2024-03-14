@@ -51,6 +51,9 @@ class CompiledExperiment:
     # The source experiment.
     experiment: Experiment | None = None
 
+    # Settings passed to the compiler
+    compiler_settings: dict[str, Any] | None = None
+
     # A representation of the source experiment, using primitive Python datatypes only
     # (dicts, lists, etc.)
     experiment_dict: dict[str, Any] | None = None

@@ -310,7 +310,12 @@ class CodeGenerator(ICodeGenerator):
 
     _measurement_calculator = MeasurementCalculator
 
-    def __init__(self, ir=None, settings: CompilerSettings | dict | None = None):
+    def __init__(
+        self,
+        ir,
+        signals: list[SignalObj],
+        settings: CompilerSettings | dict | None = None,
+    ):
         if settings is not None:
             if isinstance(settings, CompilerSettings):
                 self._settings = settings
@@ -320,7 +325,10 @@ class CodeGenerator(ICodeGenerator):
             self._settings = CompilerSettings()
 
         self._ir = ir
+        self._awgs: Dict[AwgKey, AWGInfo] = {}
         self._signals: dict[str, SignalObj] = {}
+        for signal_obj in signals:
+            self.add_signal(signal_obj)
         self._code = {}
         self._src: dict[AwgKey, dict[str, str]] = {}
         self._wave_indices_all: dict[AwgKey, dict] = {}
@@ -328,7 +336,6 @@ class CodeGenerator(ICodeGenerator):
         self._command_tables: dict[AwgKey, dict[str, Any]] = {}
         self._pulse_map: Dict[str, PulseMapEntry] = {}
         self._sampled_signatures: Dict[str, Dict[WaveformSignature, Dict]] = {}
-        self._awgs: Dict[AwgKey, AWGInfo] = {}
         self._events_in_samples = {}
         self._integration_times: IntegrationTimes | None = None
         self._signal_delays: SignalDelays | None = None
@@ -345,12 +352,10 @@ class CodeGenerator(ICodeGenerator):
 
         self.EMIT_TIMING_COMMENTS = self._settings.EMIT_TIMING_COMMENTS
 
-    def generate_code(self, signal_objs: list[SignalObj]):
+    def generate_code(self):
         event_list = generate_event_list_from_ir(
             self._ir, self._settings, expand_loops=False, max_events=float("inf")
         )
-        for signal_obj in signal_objs:
-            self.add_signal(signal_obj)
         self.gen_acquire_map(event_list)
         self.gen_seq_c(
             event_list,

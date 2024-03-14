@@ -15,7 +15,9 @@ def hdawg_ports() -> List[Port]:
 
 
 def test_device_ports(ports: list[str]) -> List[Port]:
-    return [Port(path=port, type=PortType.RF, channel=0) for port in ports]
+    return [
+        Port(path=port, type=PortType.RF, channel=i) for i, port in enumerate(ports)
+    ]
 
 
 def pqsc_ports() -> List[Port]:

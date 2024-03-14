@@ -19,7 +19,7 @@ class LoopIterationIR(SectionIR):
     sweep_parameters: List[ParameterInfo]
     num_repeats: int
     shadow: bool
-    prng_sample: str | None
+    prng_sample: str | None = None
 
     def compressed_iteration(self, iteration: int):
         """Make a copy of this schedule, but replace ``iteration`` and set the

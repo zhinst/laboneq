@@ -32,9 +32,10 @@ _logger = logging.getLogger(__name__)
 
 
 class NearTimeRunner(AsyncExecutorBase):
-    def __init__(self, controller: Controller):
+    def __init__(self, controller: Controller, protected_session: ProtectedSession):
         super().__init__(looping_mode=LoopingMode.NEAR_TIME_ONLY)
         self.controller = controller
+        self.protected_session = protected_session
         self.user_set_nodes: dict[DeviceZI, NodeCollector] = defaultdict(NodeCollector)
         self.nt_loop_indices: list[int] = []
         self.pipeliner_job: int = 0
@@ -55,19 +56,9 @@ class NearTimeRunner(AsyncExecutorBase):
             )
         try:
             if iscoroutinefunction(func):
-                res = await func(
-                    ProtectedSession(
-                        self.controller._session, self.controller._results
-                    ),
-                    **args,
-                )
+                res = await func(self.protected_session, **args)
             else:
-                res = func(
-                    ProtectedSession(
-                        self.controller._session, self.controller._results
-                    ),
-                    **args,
-                )
+                res = func(self.protected_session, **args)
         except AbortExecution:
             _logger.warning(f"Execution aborted by near-time callback '{func_name}'")
             raise

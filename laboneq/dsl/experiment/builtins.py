@@ -263,8 +263,8 @@ def for_each(iterable, uid=None, axis_name=None, **kwargs):
     return sweep(uid=uid or axis_name, parameter=param, **kwargs)
 
 
-def experiment(uid=None, signals=None):
-    return ExperimentContextManager(uid=uid, signals=signals)
+def experiment(uid=None, name=None, signals=None):
+    return ExperimentContextManager(uid=uid, name=name, signals=signals)
 
 
 def qubit_experiment(qubits: list, **kwargs):

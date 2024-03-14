@@ -26,16 +26,12 @@ class RunnerLegacy(RunnerAPI, RunnerControlAPI):
 
     def connect(self, setup: TargetSetup, do_emulation: bool = True):
         _logger.debug(f"Connecting to TargetSetup {setup.uid}")
-        run_parameters = ctrl.ControllerRunParameters()
-        run_parameters.dry_run = do_emulation
-        run_parameters.ignore_version_mismatch = do_emulation
-
         controller = ctrl.Controller(
-            run_parameters=run_parameters,
             target_setup=setup,
+            ignore_version_mismatch=do_emulation,
             neartime_callbacks={},
         )
-        controller.connect()
+        controller.connect(do_emulation=do_emulation)
         self._controller = controller
         self._connected = True
 
@@ -50,7 +46,7 @@ class RunnerLegacy(RunnerAPI, RunnerControlAPI):
         if not self._connected:
             self.connect(job.target_setup)
 
-        self._controller.execute_compiled(job)
+        self._controller.execute_compiled(job.scheduled_experiment)
         controller_results = self._controller._results
         self._job_results[job_id] = ExperimentResults(
             acquired_results=controller_results.acquired_results,

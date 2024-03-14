@@ -27,13 +27,13 @@ import numpy as np
 
 from laboneq._observability.tracing import trace
 from laboneq._utils import UIDReference, cached_method
-from laboneq.compiler.common.compiler_settings import CompilerSettings
+from laboneq.compiler.common.compiler_settings import CompilerSettings, TINYSAMPLE
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.ir.acquire_group_ir import AcquireGroupIR
 from laboneq.compiler.ir.case_ir import CaseIR, EmptyBranchIR
 from laboneq.compiler.ir.interval_ir import IntervalIR
-from laboneq.compiler.ir.ir import IR, DeviceIR, SectionInfoIR, SignalIR, PulseDefIR
+from laboneq.compiler.ir.ir import IR, DeviceIR, SectionRefIR, SignalIR, PulseDefIR
 from laboneq.compiler.ir.loop_ir import LoopIR
 from laboneq.compiler.ir.loop_iteration_ir import LoopIterationIR
 from laboneq.compiler.ir.match_ir import MatchIR
@@ -41,7 +41,7 @@ from laboneq.compiler.ir.oscillator_ir import OscillatorFrequencyStepIR
 from laboneq.compiler.ir.phase_reset_ir import PhaseResetIR
 from laboneq.compiler.ir.pulse_ir import PrecompClearIR, PulseIR
 from laboneq.compiler.ir.reserve_ir import ReserveIR
-from laboneq.compiler.ir.root_ir import RootIR
+from laboneq.compiler.ir.root_ir import RootScheduleIR
 from laboneq.compiler.ir.section_ir import SectionIR
 from laboneq.compiler.scheduler.acquire_group_schedule import AcquireGroupSchedule
 from laboneq.compiler.scheduler.case_schedule import CaseSchedule, EmptyBranch
@@ -98,7 +98,7 @@ _schedule_to_ir = {
     PhaseResetSchedule: PhaseResetIR,
     PulseSchedule: PulseIR,
     ReserveSchedule: ReserveIR,
-    RootSchedule: RootIR,
+    RootSchedule: RootScheduleIR,
     SectionSchedule: SectionIR,
     PrecompClearSchedule: PrecompClearIR,
     EmptyBranch: EmptyBranchIR,
@@ -141,13 +141,11 @@ class Scheduler:
     ):
         self._schedule_data = ScheduleData(
             experiment_dao=experiment_dao,
-            settings=settings or CompilerSettings(),
             sampling_rate_tracker=sampling_rate_tracker,
             signal_objects=signal_objects,
         )
         self._experiment_dao = experiment_dao
         self._sampling_rate_tracker = sampling_rate_tracker
-        self._TINYSAMPLE = self._schedule_data.TINYSAMPLE
 
         _, self._system_grid = self.grid(*self._experiment_dao.signals())
         self._root_schedule: Optional[IntervalSchedule] = None
@@ -160,7 +158,6 @@ class Scheduler:
             nt_parameters = ParameterStore()
         self._schedule_data.reset()
         self._root_schedule = self._schedule_root(nt_parameters)
-        _logger.info("Schedule completed")
         for (
             warning_generator,
             warning_data,
@@ -188,8 +185,11 @@ class Scheduler:
     def generate_ir(self):
         root_ir = None
         if self._root_schedule is not None:
-            root_ir = RootIR(
-                **{s: getattr(self._root_schedule, s) for s in _all_slots(RootIR)}
+            root_ir = RootScheduleIR(
+                **{
+                    s: getattr(self._root_schedule, s)
+                    for s in _all_slots(RootScheduleIR)
+                }
             )
             self._schedule_to_ir(root_ir, self._root_schedule)
         exp_info = self._experiment_dao.to_experiment_info()
@@ -216,13 +216,13 @@ class Scheduler:
             pulse_defs=[
                 PulseDefIR.from_pulse_def(pulse) for pulse in exp_info.pulse_defs
             ],
-            root_section=SectionInfoIR.from_section_info(
+            root_section=SectionRefIR.from_section_info(
                 self._experiment_dao.section_info(root_sections_ids[0])
             )
             if has_rt_root
             else None,
             root_section_children=[
-                SectionInfoIR.from_section_info(self._experiment_dao.section_info(id))
+                SectionRefIR.from_section_info(self._experiment_dao.section_info(id))
                 for id in root_section_children_ids
             ]
             if has_rt_root
@@ -439,7 +439,7 @@ class Scheduler:
             sweep_parameters=sweep_parameters,
             iterations=this_chunk_size,
             repetition_mode=repetition_mode,
-            repetition_time=to_tinysample(repetition_time, self._TINYSAMPLE),
+            repetition_time=to_tinysample(repetition_time, TINYSAMPLE),
         )
 
     def _schedule_oscillator_frequency_step(
@@ -474,7 +474,7 @@ class Scheduler:
             device_type = DeviceType.from_device_info_type(device_info.device_type)
             length = max(
                 length,
-                int(device_type.oscillator_set_latency / self._TINYSAMPLE),
+                int(device_type.oscillator_set_latency / TINYSAMPLE),
             )
             signals.add(osc.signal)
 
@@ -513,7 +513,7 @@ class Scheduler:
             device_type = DeviceType.from_device_info_type(device.device_type)
             if not device_type.supports_reset_osc_phase:
                 continue
-            duration = device_type.reset_osc_duration / self._TINYSAMPLE
+            duration = device_type.reset_osc_duration / TINYSAMPLE
             hw_osc_devices[device.uid] = duration
             length = max(length, duration)
             if device_type.lo_frequency_granularity is not None:
@@ -521,11 +521,11 @@ class Scheduler:
                 # By aligning the grid with this (10 ns) we make sure the LO's phase is
                 # consistent after the reset of the NCO.
                 df = device_type.lo_frequency_granularity
-                lo_granularity_tinysamples = round(1 / df / self._TINYSAMPLE)
+                lo_granularity_tinysamples = round(1 / df / TINYSAMPLE)
                 grid = lcm(grid, lo_granularity_tinysamples)
                 _logger.info(
                     f"Phase reset in section '{section_id}' has extended the section's "
-                    f"timing grid to {grid*self._TINYSAMPLE*1e9:.2f} ns, so to be "
+                    f"timing grid to {grid*TINYSAMPLE*1e9:.2f} ns, so to be "
                     f"commensurate with the local oscillator."
                 )
 
@@ -678,7 +678,7 @@ class Scheduler:
         schedule = SectionSchedule(
             grid=grid,
             sequencer_grid=sequencer_grid,
-            length=to_tinysample(section_info.length, self._TINYSAMPLE),
+            length=to_tinysample(section_info.length, TINYSAMPLE),
             signals=signals,
             children=children,
             play_after=play_after,
@@ -719,7 +719,7 @@ class Scheduler:
             if pulse_def.length is not None:
                 length = pulse_def.length
             elif pulse_def.samples is not None:
-                length = len(pulse_def.samples) * grid * self._TINYSAMPLE
+                length = len(pulse_def.samples) * grid * TINYSAMPLE
             else:
                 raise LabOneQException(
                     f"Cannot determine length of pulse '{pulse_def.uid}' in section "
@@ -777,8 +777,8 @@ class Scheduler:
 
         scheduled_length = length + offset
 
-        length_int = round_to_grid(scheduled_length / self._TINYSAMPLE, grid)
-        offset_int = round_to_grid(offset / self._TINYSAMPLE, grid)
+        length_int = round_to_grid(scheduled_length / TINYSAMPLE, grid)
+        offset_int = round_to_grid(offset / TINYSAMPLE, grid)
 
         osc = self._experiment_dao.signal_oscillator(pulse.signal.uid)
         if osc is None:
@@ -942,7 +942,7 @@ class Scheduler:
                     / self._sampling_rate_tracker.sampling_rate_for_device(
                         acquire_device
                     )
-                    / self._TINYSAMPLE
+                    / TINYSAMPLE
                 )
             )
         else:
@@ -954,7 +954,7 @@ class Scheduler:
 
         return MatchSchedule(
             grid=grid,
-            length=to_tinysample(section_info.length, self._schedule_data.TINYSAMPLE),
+            length=to_tinysample(section_info.length, TINYSAMPLE),
             sequencer_grid=grid,
             signals=signals,
             children=children_schedules,
@@ -1136,13 +1136,13 @@ class Scheduler:
             signal_grid = int(
                 lcm(
                     signal_grid,
-                    round(1 / (self._schedule_data.TINYSAMPLE * sample_rate)),
+                    round(1 / (TINYSAMPLE * sample_rate)),
                 )
             )
             sequencer_grid = int(
                 lcm(
                     sequencer_grid,
-                    round(1 / (self._schedule_data.TINYSAMPLE * sequencer_rate)),
+                    round(1 / (TINYSAMPLE * sequencer_rate)),
                 )
             )
         return signal_grid, sequencer_grid

@@ -11,14 +11,13 @@ import socketserver
 import textwrap
 import threading
 from pathlib import Path
-from types import SimpleNamespace
 
 import flask.cli
 import numpy as np
 from flask import Flask, request
 
 from laboneq.core.types.compiled_experiment import CompiledExperiment
-from laboneq.dsl.laboneq_facade import LabOneQFacade
+from laboneq.core.utilities.laboneq_compile import laboneq_compile
 from laboneq.simulator.output_simulator import OutputSimulator
 
 _logger = logging.getLogger(__name__)
@@ -40,14 +39,12 @@ def _fill_maybe_missing_information(
             f"Compile with `OUTPUT_EXTRAS=True` and `MAX_EVENTS_TO_PUBLISH={max_events_to_publish}` "
             "to bypass this step with a small impact on the compilation time."
         )
-        dummy_session = SimpleNamespace()
-        dummy_session.experiment = compiled_experiment.experiment
-        dummy_session.device_setup = compiled_experiment.device_setup
 
-        compiled_experiment_for_psv = LabOneQFacade.compile(
-            dummy_session,
-            _logger,
-            {
+        compiled_experiment_for_psv = laboneq_compile(
+            device_setup=compiled_experiment.device_setup,
+            experiment=compiled_experiment.experiment,
+            compiler_settings={
+                **(compiled_experiment.compiler_settings or {}),
                 "MAX_EVENTS_TO_PUBLISH": max_events_to_publish,
                 "OUTPUT_EXTRAS": True,
                 "LOG_REPORT": False,
@@ -73,7 +70,7 @@ def interactive_psv(
             No signals beyond this time are shown. Default: 10ms.
         max_events_to_publish: Number of events to show
     """
-    name = compiled_experiment.experiment.uid
+    name = compiled_experiment.experiment.name
     compiled_experiment = _fill_maybe_missing_information(
         compiled_experiment, max_events_to_publish
     )

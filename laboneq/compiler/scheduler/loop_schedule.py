@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, List, Optional
 
 from attrs import asdict, define
 
+from laboneq.compiler.common.compiler_settings import TINYSAMPLE
 from laboneq.compiler.scheduler.loop_iteration_schedule import LoopIterationSchedule
 from laboneq.compiler.scheduler.section_schedule import SectionSchedule
 from laboneq.compiler.scheduler.utils import ceil_to_grid, lcm
@@ -41,10 +42,10 @@ class LoopSchedule(SectionSchedule):
                 if child_length > adjusted_rep_time:
                     raise LabOneQException(
                         "Specified repetition time "
-                        f"({self.repetition_time*schedule_data.TINYSAMPLE*1e6:.3f} us) "
+                        f"({self.repetition_time*TINYSAMPLE*1e6:.3f} us) "
                         f"is insufficient to fit the content of '{self.section}', "
                         f"iteration {iteration} "
-                        f"({child_length*schedule_data.TINYSAMPLE*1e6:.3f} us)"
+                        f"({child_length*TINYSAMPLE*1e6:.3f} us)"
                     )
 
         if self.compressed:

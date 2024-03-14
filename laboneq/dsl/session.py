@@ -12,9 +12,12 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Union
 from numpy import typing as npt
 
 from laboneq._observability.tracing import trace
-from laboneq.controller.toolkit_adapter import ToolkitDevices
+from laboneq.controller.protected_session import ProtectedSession
+from laboneq.controller.toolkit_adapter import MockedToolkit, ToolkitDevices
 from laboneq.core.exceptions import AbortExecution, LabOneQException
 from laboneq.core.types import CompiledExperiment
+from laboneq.core.utilities.environment import is_testing
+from laboneq.core.utilities.laboneq_compile import laboneq_compile
 from laboneq.dsl.calibration import Calibration
 from laboneq.dsl.device import DeviceSetup
 from laboneq.dsl.device.io_units.logical_signal import (
@@ -22,12 +25,16 @@ from laboneq.dsl.device.io_units.logical_signal import (
     resolve_logical_signal_ref,
 )
 from laboneq.dsl.experiment import Experiment
-from laboneq.dsl.laboneq_facade import LabOneQFacade
 from laboneq.dsl.result import Results
 from laboneq.dsl.serialization import Serializer
+from laboneq.implementation.legacy_adapters.converters_target_setup import (
+    convert_dsl_to_target_setup,
+)
+from laboneq.laboneq_logging import initialize_logging
+
+from laboneq.controller import Controller
 
 if TYPE_CHECKING:
-    from laboneq.controller import Controller
     from laboneq.dsl.experiment.pulse import Pulse
 
 
@@ -48,6 +55,9 @@ class ConnectionState:
 
     connected: bool = False
     emulated: bool = False
+
+
+_FLEXIBLE_FEEDBACK_SETTING = "FLEXIBLE_FEEDBACK"
 
 
 class Session:
@@ -109,15 +119,16 @@ class Session:
             - Removed `max_simulation_time` instance variable.
         """
         self._device_setup = device_setup if device_setup else DeviceSetup()
-        self._controller: Controller = None
+        self._controller: Controller | None = None
         self._connection_state: ConnectionState = ConnectionState()
         self._experiment_definition = experiment
         self._compiled_experiment = compiled_experiment
         self._last_results = _last_results
         if configure_logging:
-            LabOneQFacade.init_logging(
-                log_level=log_level, performance_log=performance_log
-            )
+            if not is_testing():
+                # Only initialize logging outside pytest
+                # pytest initializes the logging itself
+                initialize_logging(log_level=log_level, performance_log=performance_log)
             self._logger = logging.getLogger("laboneq")
         else:
             self._logger = logging.getLogger("null")
@@ -155,29 +166,15 @@ class Session:
             and self._neartime_callbacks == other._neartime_callbacks
         )
 
-    def _assert_connected(self, fail=True, message=None) -> bool:
-        """Verifies that the session is connected to the devices.
-
-        Args:
-            fail (bool):    If true, the function will throw an exception in case the session is not
-                            connected to the device setup.
-            message (str):  Optional message of the optional exception and the internal log in
-                            case the session is not connected to the devices.
-        """
-        if message is None:
-            message = ""
-        if self._connection_state.connected:
-            return True
-        default_message = (
+    def _assert_connected(self) -> Controller:
+        """Verifies that the session is connected to the devices."""
+        if self._connection_state.connected and self._controller is not None:
+            return self._controller
+        raise LabOneQException(
             "Session not connected.\n"
             "The call requires an established connection to devices in order to execute the experiment.\n"
             "Call connect() first. Use connect(do_emulation=True) if you want to emulate the devices' behavior only."
         )
-        message = message or default_message
-        if fail:
-            raise LabOneQException(message)
-        self.logger.error(message)
-        return False
 
     def register_neartime_callback(self, func, name: str | None = None):
         """Registers a near-time callback to be referred from the experiment's `call` operation.
@@ -252,7 +249,21 @@ class Session:
         ):
             self.disconnect()
         self._connection_state.emulated = do_emulation
-        LabOneQFacade.connect(self, reset_devices)
+        target_setup = convert_dsl_to_target_setup(self._device_setup)
+
+        controller = Controller(
+            target_setup=target_setup,
+            ignore_version_mismatch=ignore_version_mismatch,
+            neartime_callbacks=self._neartime_callbacks,
+        )
+        controller.connect(
+            do_emulation=self._connection_state.emulated, reset_devices=reset_devices
+        )
+        self._controller = controller
+        if self._connection_state.emulated:
+            self._toolkit_devices = MockedToolkit()
+        else:
+            self._toolkit_devices = ToolkitDevices(controller._devices._devices)
         self._connection_state.connected = True
         return self._connection_state
 
@@ -264,7 +275,9 @@ class Session:
                 The connection state of the session.
         """
         self._connection_state.connected = False
-        LabOneQFacade.disconnect(self)
+        self._controller.disconnect()
+        self._controller = None
+        self._toolkit_devices = ToolkitDevices()
         return self._connection_state
 
     def disable_outputs(
@@ -288,6 +301,7 @@ class Session:
                 Optional. If set to True, only outputs not mapped by any logical
                 signals will be disabled. Can't be used together with 'signals'.
         """
+        controller = self._assert_connected()
         if devices is not None and signals is not None:
             raise LabOneQException(
                 "Ambiguous outputs specification: disable_outputs() accepts either 'devices' or "
@@ -302,9 +316,12 @@ class Session:
             devices = [devices]
         if signals is not None and not isinstance(signals, list):
             signals = [signals]
-        if signals is not None:
-            signals = [resolve_logical_signal_ref(s) for s in signals]
-        self._controller.disable_outputs(devices, signals, unused_only)
+        logical_signals = (
+            None
+            if signals is None
+            else [resolve_logical_signal_ref(s) for s in signals]
+        )
+        controller.disable_outputs(devices, logical_signals, unused_only)
 
     @property
     def connection_state(self) -> ConnectionState:
@@ -332,10 +349,21 @@ class Session:
             Removed `do_simulation` argument.
             Use [OutputSimulator][laboneq.simulator.output_simulator.OutputSimulator] instead.
         """
-        self._assert_connected(fail=True)
         self._experiment_definition = experiment
-        self._compiled_experiment = LabOneQFacade.compile(
-            self, self.logger, compiler_settings=compiler_settings
+        internal_compiler_settings = {}
+        if self._controller is not None:
+            internal_compiler_settings.update(
+                {
+                    _FLEXIBLE_FEEDBACK_SETTING: self._controller.setup_caps.flexible_feedback
+                }
+            )
+        self._compiled_experiment = laboneq_compile(
+            device_setup=self.device_setup,
+            experiment=self.experiment,
+            compiler_settings={
+                **(compiler_settings or {}),
+                **internal_compiler_settings,
+            },
         )
         self._last_results = None
         return self._compiled_experiment
@@ -379,12 +407,24 @@ class Session:
         !!! version-changed "Changed in version 2.4"
             Raises error if session is not connected.
         """
-        self._assert_connected(fail=True)
+        controller = self._assert_connected()
         if experiment:
             if isinstance(experiment, CompiledExperiment):
                 self._compiled_experiment = experiment
             else:
                 self.compile(experiment)
+        if self.compiled_experiment is None:
+            raise LabOneQException("No experiment available to run.")
+        compiler_settings = self.compiled_experiment.compiler_settings or {}
+        compiled_flexible_feedback = compiler_settings.get(
+            _FLEXIBLE_FEEDBACK_SETTING, False
+        )
+        if compiled_flexible_feedback != controller.setup_caps.flexible_feedback:
+            with_or_without = {True: "with", False: "without"}
+            raise LabOneQException(
+                f"Attempt to run experiment compiled {with_or_without[compiled_flexible_feedback]} flexible feedback, "
+                f"on a setup {with_or_without[controller.setup_caps.flexible_feedback]} flexible feedback."
+            )
 
         self._last_results = Results(
             experiment=self.experiment,
@@ -394,7 +434,13 @@ class Session:
             neartime_callback_results={},
             execution_errors=[],
         )
-        LabOneQFacade.run(self)
+        results = controller.execute_compiled(
+            self.compiled_experiment.scheduled_experiment, ProtectedSession(self)
+        )
+        self._last_results.acquired_results = results.acquired_results
+        self._last_results.neartime_callback_results = results.neartime_callback_results
+        self._last_results.execution_errors = results.execution_errors
+
         return self.results
 
     def submit(
@@ -424,6 +470,10 @@ class Session:
                 An object with which users can query results. Details depend on the
                 implementation of the queue.
         """
+        if queue is None:
+            raise LabOneQException(
+                "The 'queue' parameter must be provided and cannot be None."
+            )
         if experiment:
             if isinstance(experiment, CompiledExperiment):
                 self._compiled_experiment = experiment
@@ -433,7 +483,7 @@ class Session:
                     self.device_setup,
                 )
             else:
-                self._assert_connected(fail=True)
+                self._assert_connected()
                 self.compile(experiment)
                 return queue(
                     experiment.uid, self.compiled_experiment, self.device_setup
@@ -456,7 +506,7 @@ class Session:
                 Replacement pulse, can be a Pulse object or array of values.
                 Needs to have the same length as the pulse it replaces.
         """
-        LabOneQFacade.replace_pulse(self, pulse_uid, pulse_or_array)
+        self._controller.replace_pulse(pulse_uid, pulse_or_array)
 
     def get_results(self) -> Results:
         """

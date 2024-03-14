@@ -15,8 +15,11 @@ if typing.TYPE_CHECKING:
 
 
 class ProtectedSession(SimpleProxy):
-    def __init__(self, wrapped_session: Any, experiment_results: ExperimentResults):
+    def __init__(self, wrapped_session: Any):
         super().__init__(wrapped_session)
+        self._experiment_results: ExperimentResults | None = None
+
+    def _set_experiment_results(self, experiment_results: ExperimentResults):
         self._experiment_results = experiment_results
 
     # Backwards compatibility after migration to the new architecture
@@ -27,6 +30,7 @@ class ProtectedSession(SimpleProxy):
     # Backwards compatibility after migration to the new architecture
     @property
     def _last_results(self) -> Results:
+        assert self._experiment_results is not None
         from laboneq.dsl.result.results import Results
 
         return Results(

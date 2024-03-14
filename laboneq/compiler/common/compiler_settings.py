@@ -43,6 +43,8 @@ DEFAULT_SHFQA_LEAD_PQSC: float = 80e-9
 DEFAULT_SHFSG_LEAD_PQSC: float = 80e-9
 DEFAULT_TESTDEVICE_LEAD: float = 80e-9
 
+TINYSAMPLE: float = 1 / 3600000e6
+
 
 def round_min_playwave_hint(n: int, multiple: int) -> int:
     return math.ceil(n / multiple) * multiple
@@ -65,7 +67,6 @@ class CompilerSettings:
     EXPAND_LOOPS_FOR_SCHEDULE: bool = True
     OUTPUT_EXTRAS: bool = False
     FORCE_IR_ROUNDTRIP: bool = False
-    TINYSAMPLE: float = 1 / 3600000e6
 
     HDAWG_MIN_PLAYWAVE_HINT: int = 128
     HDAWG_MIN_PLAYZERO_HINT: int = 128
@@ -83,6 +84,8 @@ class CompilerSettings:
     EMIT_TIMING_COMMENTS: bool = False
 
     LOG_REPORT: bool = True
+
+    FLEXIBLE_FEEDBACK: bool = False
 
     @classmethod
     def from_dict(cls, settings: dict | None = None):

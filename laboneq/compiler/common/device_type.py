@@ -165,16 +165,16 @@ class DeviceType(DeviceTraits, Enum):
     )
     PRETTYPRINTERDEVICE = DeviceTraits(
         str_value="prettyprinterdevice",
-        sampling_rate=2.4e9,
-        min_play_wave=32,
-        sample_multiple=16,
+        sampling_rate=2.0e9,
+        min_play_wave=4,
+        sample_multiple=4,
         supports_zsync=False,
         supports_reset_osc_phase=False,
         supports_binary_waves=False,
         supports_complex_waves=False,
         supports_digital_iq_modulation=False,
         supports_precompensation=False,
-        channels_per_awg=2,
+        channels_per_awg=1,
         is_qa_device=False,
         device_class=0x1,
     )

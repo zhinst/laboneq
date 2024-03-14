@@ -42,10 +42,12 @@ class ExperimentContext(Context):
 
 
 class ExperimentContextManager:
-    def __init__(self, *, uid=None, signals=None):
+    def __init__(self, *, uid=None, name=None, signals=None):
         self.kwargs = {}
         if uid is not None:
             self.kwargs["uid"] = uid
+        if name is not None:
+            self.kwargs["name"] = name
         if signals is not None:
             self.kwargs["signals"] = signals
 
@@ -74,6 +76,8 @@ class ExperimentContextManager:
         update_kwargs = {}
         if "uid" not in self.kwargs:
             update_kwargs["uid"] = f.__name__
+        if "name" not in self.kwargs:
+            update_kwargs["name"] = f.__name__
 
         @wraps(f)
         def wrapper(*inner_args, **inner_kwargs):

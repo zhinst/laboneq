@@ -87,7 +87,6 @@ class RtExecutionInfo:
     acquisition_type: AcquisitionType
     pipeliner_job_count: int | None
     pipeliner_repetitions: int
-    result_logger_pipelined: bool
 
     # signal id -> set of section ids
     acquire_sections: dict[str, set[str]] = field(default_factory=dict)
@@ -143,6 +142,7 @@ class RecipeData:
     scheduled_experiment: ScheduledExperiment
     recipe: Recipe
     execution: Sequence
+    setup_caps: SetupCaps
     result_shapes: HandleResultShapes
     rt_execution_infos: RtExecutionInfos
     device_settings: DeviceSettings
@@ -248,10 +248,8 @@ class _LoopStackEntry:
 
 
 class _LoopsPreprocessor(ExecutorBase):
-    def __init__(self, setup_caps: SetupCaps):
+    def __init__(self):
         super().__init__(looping_mode=LoopingMode.ONCE)
-
-        self._setup_caps = setup_caps
 
         self.result_shapes: HandleResultShapes = {}
         self.rt_execution_infos: RtExecutionInfos = {}
@@ -350,7 +348,6 @@ class _LoopsPreprocessor(ExecutorBase):
                 acquisition_type=acquisition_type,
                 pipeliner_job_count=self.pipeliner_job_count,
                 pipeliner_repetitions=self.pipeliner_repetitions,
-                result_logger_pipelined=self._setup_caps.result_logger_pipelined,
             ),
         )
 
@@ -370,7 +367,7 @@ class _LoopsPreprocessor(ExecutorBase):
 
 
 def _calculate_awg_configs(
-    rt_execution_infos: RtExecutionInfos, recipe: Recipe
+    rt_execution_infos: RtExecutionInfos, recipe: Recipe, setup_caps: SetupCaps
 ) -> AwgConfigs:
     awg_configs: AwgConfigs = defaultdict(AwgConfig)
 
@@ -449,7 +446,7 @@ def _calculate_awg_configs(
                 )
                 if (
                     rt_execution_info.with_pipeliner
-                    and not rt_execution_info.result_logger_pipelined
+                    and not setup_caps.result_logger_pipelined
                 ):
                     awg_config.result_length *= rt_execution_info.pipeliner_jobs
 
@@ -511,17 +508,18 @@ def pre_process_compiled(
                 initialization.device_uid
             ].iq_settings = _pre_process_iq_settings_hdawg(initialization)
 
-    lp = _LoopsPreprocessor(setup_caps)
+    lp = _LoopsPreprocessor()
     lp.run(execution)
     rt_execution_infos = lp.rt_execution_infos
 
-    awg_configs = _calculate_awg_configs(rt_execution_infos, recipe)
+    awg_configs = _calculate_awg_configs(rt_execution_infos, recipe, setup_caps)
     attribute_value_tracker, oscillator_ids = _pre_process_attributes(recipe, devices)
 
     recipe_data = RecipeData(
         scheduled_experiment=scheduled_experiment,
         recipe=recipe,
         execution=execution,
+        setup_caps=setup_caps,
         result_shapes=lp.result_shapes,
         rt_execution_infos=rt_execution_infos,
         device_settings=device_settings,

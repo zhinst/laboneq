@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Set, Tuple, Union, TYPE_CHECKING
 from sortedcollections import SortedDict
 
 from laboneq._observability.tracing import trace
+from laboneq.compiler.common.compiler_settings import TINYSAMPLE
 from laboneq.compiler.seqc.measurement_calculator import (
     IntegrationTimes,
     SignalDelays,
@@ -109,9 +110,7 @@ class Compiler:
 
     def _check_tinysamples(self):
         for t in DeviceType:
-            num_tinysamples_per_sample = (
-                1 / t.sampling_rate
-            ) / self._settings.TINYSAMPLE
+            num_tinysamples_per_sample = (1 / t.sampling_rate) / TINYSAMPLE
             delta = abs(round(num_tinysamples_per_sample) - num_tinysamples_per_sample)
             if delta > 1e-11:
                 raise RuntimeError(
@@ -640,6 +639,7 @@ class Compiler:
             )
             signal_objects[signal_id] = signal_obj
             awg.signals.append(signal_obj)
+
         for s in signal_objects.values():
             delay_info = delay_measure_acquire.get(s.awg.key, None)
             if delay_info is None:

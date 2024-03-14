@@ -26,4 +26,7 @@ class IntervalIR:
     signals: Set[str] = field(factory=set)
 
     #: The start points of the children *relative to the start of the interval itself*.
-    children_start: Deferred[List[int]] = None
+    children_start: List[int] = field(factory=list)
+
+    def iter_children(self):
+        return zip(self.children_start, self.children)

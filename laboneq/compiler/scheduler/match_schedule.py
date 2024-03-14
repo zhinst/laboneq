@@ -17,7 +17,10 @@ from zhinst.timing_models import (
     get_feedback_system_description,
 )
 
-from laboneq.compiler.common.compiler_settings import EXECUTETABLEENTRY_LATENCY
+from laboneq.compiler.common.compiler_settings import (
+    EXECUTETABLEENTRY_LATENCY,
+    TINYSAMPLE,
+)
 from laboneq.compiler.scheduler.case_schedule import CaseSchedule
 from laboneq.compiler.scheduler.section_schedule import SectionSchedule
 from laboneq.compiler.scheduler.utils import ceil_to_grid
@@ -103,8 +106,8 @@ def _compute_start_with_latency(
             qa_device_type.str_value
         )
 
-    acq_start = acquire_pulse.absolute_start * schedule_data.TINYSAMPLE
-    acq_length = acquire_pulse.length * schedule_data.TINYSAMPLE
+    acq_start = acquire_pulse.absolute_start * TINYSAMPLE
+    acq_length = acquire_pulse.length * TINYSAMPLE
     qa_lead_time = qa_signal_obj.start_delay or 0.0
     qa_delay_signal = qa_signal_obj.delay_signal or 0.0
     qa_port_delay = qa_signal_obj.port_delay or 0.0
@@ -186,9 +189,7 @@ def _compute_start_with_latency(
             sg_seq_rate = schedule_data.sampling_rate_tracker.sequencer_rate_for_device(
                 sg_signal_obj.awg.device_id
             )
-            sg_seq_dt_for_latency_in_ts = round(
-                1 / (2 * sg_seq_rate * schedule_data.TINYSAMPLE)
-            )
+            sg_seq_dt_for_latency_in_ts = round(1 / (2 * sg_seq_rate * TINYSAMPLE))
             latency_in_ts = time_of_pulse_played * sg_seq_dt_for_latency_in_ts
         else:
             # gen 1 system
@@ -203,7 +204,7 @@ def _compute_start_with_latency(
                     + qa_base_delay_signal
                     + qa_total_port_delay / qa_sampling_rate
                 )
-                / schedule_data.TINYSAMPLE
+                / TINYSAMPLE
             )
 
         # Calculate the shift of compiler zero time for the SG; we may subtract this
@@ -220,8 +221,7 @@ def _compute_start_with_latency(
         earliest_execute_table_entry = max(
             earliest_execute_table_entry,
             ceil_to_grid(
-                latency_in_ts
-                - round((sg_lead_time + sg_delay_signal) / schedule_data.TINYSAMPLE),
+                latency_in_ts - round((sg_lead_time + sg_delay_signal) / TINYSAMPLE),
                 grid,
             ),
         )
@@ -233,7 +233,7 @@ def _compute_start_with_latency(
             (
                 section,
                 handle,
-                (earliest_execute_table_entry - start) * schedule_data.TINYSAMPLE,
+                (earliest_execute_table_entry - start) * TINYSAMPLE,
             )
         )
     return max(earliest_execute_table_entry, start)

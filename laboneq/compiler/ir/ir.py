@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from dataclasses import dataclass, field
 from typing import Optional
+
+import attr
+from attr import field
 from numpy.typing import ArrayLike
 
-from laboneq.compiler.ir.root_ir import RootIR
+from laboneq.compiler.ir.root_ir import RootScheduleIR
 from laboneq.data.compilation_job import (
     DeviceInfo,
     DeviceInfoType,
@@ -17,7 +19,7 @@ from laboneq.data.compilation_job import (
 )
 
 
-@dataclass
+@attr.define(slots=True)
 class DeviceIR:
     uid: str = ""
     device_type: Optional[DeviceInfoType] = None
@@ -27,7 +29,7 @@ class DeviceIR:
         return cls(uid=device_info.uid, device_type=device_info.device_type)
 
 
-@dataclass
+@attr.define(slots=True)
 class SignalIR:
     uid: str = ""
     device: Optional[DeviceIR] = None
@@ -42,7 +44,7 @@ class SignalIR:
         )
 
 
-@dataclass
+@attr.define(slots=True)
 class PulseDefIR:
     uid: str = ""
     amplitude: Optional[float] = None
@@ -63,8 +65,8 @@ class PulseDefIR:
         )
 
 
-@dataclass
-class SectionInfoIR:
+@attr.define(slots=True)
+class SectionRefIR:
     uid: str = ""
 
     @classmethod
@@ -72,16 +74,15 @@ class SectionInfoIR:
         return cls(uid=section_info.uid)
 
 
-@dataclass
+@attr.define(slots=True)
 class IR:
-    uid: str = None
-    devices: list[DeviceIR] = field(default_factory=list)
-    signals: list[SignalIR] = field(default_factory=list)
-    root: Optional[RootIR] = None
-    pulse_defs: list[PulseDefIR] = field(default_factory=list)
-    root_section: Optional[SectionInfoIR] = None
-    root_section_children: list[SectionInfoIR] = field(default_factory=list)
-    section_signals_with_children_ids: dict[str, set[str]] = field(default_factory=dict)
+    devices: list[DeviceIR] = field(factory=list)
+    signals: list[SignalIR] = field(factory=list)
+    root: Optional[RootScheduleIR] = None
+    pulse_defs: list[PulseDefIR] = field(factory=list)
+    root_section: Optional[SectionRefIR] = None
+    root_section_children: list[SectionRefIR] = field(factory=list)
+    section_signals_with_children_ids: dict[str, set[str]] = field(factory=dict)
 
     def round_trip(self):
         from laboneq.dsl.serialization import Serializer
