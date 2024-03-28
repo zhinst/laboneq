@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import copy
 import json
-import logging
 import os
 from collections import Counter, deque
 from pathlib import Path
@@ -34,8 +33,6 @@ from laboneq.data.experiment_description import (
     RepetitionMode,
     SectionAlignment,
 )
-
-_logger = logging.getLogger(__name__)
 
 
 def find_value_or_parameter_dict(

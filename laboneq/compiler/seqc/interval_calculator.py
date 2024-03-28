@@ -8,16 +8,8 @@ from typing import Any, Iterable, List, Optional
 
 from intervaltree import Interval, IntervalTree
 
-from laboneq.compiler.fastlogging import NullLogger, LoggingProtocol
-
-_dlogger: LoggingProtocol
 
 _logger = logging.getLogger(__name__)
-if _logger.getEffectiveLevel() == logging.DEBUG:
-    _dlogger = _logger
-else:
-    _logger.info("Debug logging disabled for %s", __name__)
-    _dlogger = NullLogger()
 
 
 def are_cut_points_valid(interval_tree: IntervalTree, cut_points: List[int]):

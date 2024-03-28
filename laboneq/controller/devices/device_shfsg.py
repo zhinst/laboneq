@@ -66,6 +66,7 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
 
     def _process_dev_opts(self):
         self._check_expected_dev_opts()
+        self._process_shf_opts()
         if OPT_OUTPUT_ROUTER_ADDER in self.dev_opts:
             self._has_opt_rtr = True
         if self.dev_type == "SHFSG8":
@@ -507,6 +508,17 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
                     if output.port_mode is None or output.port_mode == "rf"
                     else 0,  # LF
                 )
+                if self._is_plus:
+                    nc.add(
+                        f"/{self.serial}/sgchannels/{output.channel}/output/muting/enable",
+                        int(output.enable_output_mute),
+                    )
+                else:
+                    if output.enable_output_mute:
+                        _logger.warning(
+                            f"{self.dev_repr}: Device output muting is enabled, but the device is not"
+                            " SHF+ and therefore no mutting will happen. It is suggested to disable it."
+                        )
         nc.extend(self._collect_output_router_initialization_nodes(outputs))
         osc_selects = {
             ch: osc.index for osc in self._allocated_oscs for ch in osc.channels

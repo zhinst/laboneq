@@ -232,6 +232,7 @@ class RecipeGenerator:
         marker_mode=None,
         amplitude=None,
         output_routers: list[CompilerOutputRoute] | None = None,
+        enable_output_mute: bool = False,
     ):
         if output_routers is None:
             output_routers = []
@@ -281,6 +282,7 @@ class RecipeGenerator:
             marker_mode=marker_mode,
             amplitude=amplitude,
             routed_outputs=output_routers,
+            enable_output_mute=enable_output_mute,
         )
         if diagonal is not None and off_diagonal is not None:
             output.gains = Gains(diagonal=diagonal, off_diagonal=off_diagonal)

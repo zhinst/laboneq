@@ -127,3 +127,4 @@ class SignalCalibration:
     amplitude: float | Parameter | None = None
     amplifier_pump: AmplifierPump | None = None
     output_routing: list[OutputRouting] = field(default_factory=list)
+    automute: bool = False

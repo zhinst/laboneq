@@ -9,6 +9,7 @@ from abc import abstractmethod
 from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.iface_compiler_output import RTCompilerOutput
 from laboneq.compiler.common.signal_obj import SignalObj
+from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
 
 
 class ICodeGenerator(abc.ABC):
@@ -17,6 +18,7 @@ class ICodeGenerator(abc.ABC):
         self,
         ir,
         signals: list[SignalObj],
+        feedback_register_layout: FeedbackRegisterLayout,
         settings: CompilerSettings | dict | None = None,
     ):
         ...

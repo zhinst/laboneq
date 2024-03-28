@@ -324,23 +324,17 @@ class ExperimentDAO:
         return self._data["section_parameters"].get(section_id, [])
 
     def validate_experiment(self):
-        all_parameters = set()
-        for section_id in self.sections():
-            for parameter in self.section_parameters(section_id):
-                all_parameters.add(parameter.uid)
-
         for section_id in self.sections():
             for signal_id in self.section_signals(section_id):
                 for section_pulse in self.section_pulses(section_id, signal_id):
                     if section_pulse.pulse is None:
                         continue
                     pulse_id = section_pulse.pulse.uid
-
+                    device_type = DeviceType.from_device_info_type(
+                        section_pulse.signal.device.device_type
+                    )
                     if (
-                        DeviceType.from_device_info_type(
-                            section_pulse.signal.device.device_type
-                        )
-                        == DeviceType.HDAWG
+                        device_type == DeviceType.HDAWG
                         and len(section_pulse.signal.channels) == 1
                         and any(
                             "marker2" == m.marker_selector
@@ -352,11 +346,7 @@ class ExperimentDAO:
                             f" has marker 2 enabled. Please only use marker 1 on RF channels."
                         )
 
-                    if (
-                        DeviceType.from_device_info_type(
-                            section_pulse.signal.device.device_type
-                        ).is_qa_device
-                    ) and not len(section_pulse.markers) == 0:
+                    if device_type.is_qa_device and not len(section_pulse.markers) == 0:
                         raise LabOneQException(
                             f"Pulse {pulse_id} referenced in section {section_id}"
                             f" has markers but is to be played on a QA device. QA"

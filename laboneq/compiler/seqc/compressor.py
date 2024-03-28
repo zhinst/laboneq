@@ -3,12 +3,9 @@
 
 from __future__ import annotations
 
-import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Callable, Hashable, List, Tuple
-
-_logger = logging.getLogger(__name__)
 
 
 @dataclass

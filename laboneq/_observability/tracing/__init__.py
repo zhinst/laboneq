@@ -5,16 +5,9 @@
 
 The module contains tracing API for LabOneQ.
 """
+import os
 
-_TRACING_AVAILABLE = False
-
-
-try:
-    from zhinst.core import _tracing
-
-    _TRACING_AVAILABLE = True
-except (ModuleNotFoundError, ImportError):
-    pass
+_TRACING_AVAILABLE = bool(int(os.getenv("LABONEQ_ENABLE_OBSERVABILITY", 0)))
 
 
 if _TRACING_AVAILABLE:

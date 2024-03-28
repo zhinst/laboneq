@@ -3,13 +3,10 @@
 
 from __future__ import annotations
 
-import logging
 import math
 import warnings
 from dataclasses import dataclass, fields
 from typing import Dict, TypeVar
-
-_logger = logging.getLogger(__name__)
 
 
 _USER_ENABLED_SETTINGS = [
@@ -76,7 +73,7 @@ class CompilerSettings:
     SHFQA_MIN_PLAYZERO_HINT: int = 64
     SHFSG_MIN_PLAYWAVE_HINT: int = 64
     SHFSG_MIN_PLAYZERO_HINT: int = 64
-
+    SHF_OUTPUT_MUTE_MIN_DURATION: float = 280e-9
     HDAWG_FORCE_COMMAND_TABLE: bool = True
     SHFSG_FORCE_COMMAND_TABLE: bool = True
     USE_AMPLITUDE_INCREMENT: bool = True

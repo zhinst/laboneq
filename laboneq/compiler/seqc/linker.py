@@ -8,12 +8,12 @@ from typing import Any, Dict
 
 import numpy as np
 
+from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.seqc.measurement_calculator import (
     SignalDelays,
     IntegrationTimes,
 )
 from laboneq.compiler.common.awg_info import AwgKey
-from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.feedback_register_config import FeedbackRegisterConfig
 from laboneq.compiler.common.iface_linker import ILinker
 from laboneq.compiler.common.iface_compiler_output import (

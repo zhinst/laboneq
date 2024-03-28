@@ -4,7 +4,6 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
 
-import logging
 import math
 import time
 from dataclasses import dataclass, field
@@ -13,8 +12,6 @@ from typing import Any, Iterable
 
 from laboneq._observability.tracing import trace
 from laboneq.controller.util import LabOneQControllerException
-
-_logger = logging.getLogger(__name__)
 
 
 @dataclass

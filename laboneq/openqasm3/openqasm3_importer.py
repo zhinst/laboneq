@@ -962,6 +962,10 @@ def exp_from_qasm_list(
     At this time, the QASM programs must not include any measurements. We automatically
     append a measurement of all qubits to the end of each program.
 
+    The measurement results for each qubit are stored in a handle named
+    `f'meas{qasm_qubit_name}'` where `qasm_qubit_name` is the key specified for the
+    qubit in the `qubits` parameter.
+
     Optionally, a reset operation on all qubits is prepended to each program. The
     duration between the reset and the final readout is fixed and must be specified as
     `repetition_time`. It must be chosen large enough to accommodate the longest of the

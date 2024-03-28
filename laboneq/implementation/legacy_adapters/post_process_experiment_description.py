@@ -1,11 +1,7 @@
 # Copyright 2023 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-import logging
-
 from laboneq.data.experiment_description import Experiment, PlayPulse
-
-_logger = logging.getLogger(__name__)
 
 PULSES = {}
 

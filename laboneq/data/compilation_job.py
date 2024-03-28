@@ -280,6 +280,7 @@ class SignalInfo:
     amplifier_pump: AmplifierPumpInfo | None = None
     kernel_count: int | None = None
     output_routing: list[OutputRoute] | None = field(default_factory=list)
+    automute: bool = False
 
 
 @dataclass

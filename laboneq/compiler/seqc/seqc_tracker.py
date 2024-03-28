@@ -9,6 +9,7 @@ from laboneq.compiler.seqc.prng_tracker import PRNGTracker
 from laboneq.compiler.seqc.seqc_generator import SeqCGenerator
 from laboneq.compiler.seqc.awg_sampled_event import AWGEvent
 from laboneq.compiler.common.device_type import DeviceType
+from laboneq.compiler.seqc.output_mute import OutputMute
 
 
 class SeqCTracker:
@@ -21,6 +22,8 @@ class SeqCTracker:
         device_type: DeviceType,
         emit_timing_comments: bool,
         logger,
+        automute_playzeros_min_duration: float,
+        automute_playzeros: bool = False,
     ) -> None:
         self.deferred_function_calls = deferred_function_calls
         self.loop_stack_generators: List[List[SeqCGenerator]] = [
@@ -33,17 +36,34 @@ class SeqCTracker:
         self.logger = logger
         self.current_time = 0
         self._prng_tracker: PRNGTracker | None = None
+        self._automute: OutputMute | None = None
+        if automute_playzeros:
+            self._automute = OutputMute(
+                device_type=self.device_type,
+                generator=self,
+                duration_min=automute_playzeros_min_duration,
+            )
+
+    @property
+    def automute_playzeros(self) -> bool:
+        if self._automute:
+            return True
+        return False
 
     def current_loop_stack_generator(self):
         return self.loop_stack_generators[-1][-1]
 
-    def add_required_playzeros(self, sampled_event: AWGEvent):
+    def add_required_playzeros(self, sampled_event: AWGEvent) -> int:
         """If `current_time` precedes the scheduled start of the event, emit playZero to catch up.
+        If muting is enabled, the emitted playZeros are muted if possible.
 
-        Also clears deferred function calls within the context of the new playZero."""
+        Also clears deferred function calls within the context of the new playZero.
+
+        Returns:
+            Current time
+        """
         start = sampled_event.start
         signature = sampled_event.type
-
         if start > self.current_time:
             play_zero_samples = start - self.current_time
             self.logger.debug(
@@ -52,11 +72,21 @@ class SeqCTracker:
                 signature,
                 sampled_event,
             )
-
-            self.add_timing_comment(self.current_time + play_zero_samples)
-            self.current_loop_stack_generator().add_play_zero_statement(
-                play_zero_samples, self.device_type, self.deferred_function_calls
-            )
+            if self._automute:
+                if self._automute.can_mute(play_zero_samples):
+                    self._automute.mute_samples(play_zero_samples)
+                else:
+                    self.add_timing_comment(self.current_time + play_zero_samples)
+                    self.current_loop_stack_generator().add_play_zero_statement(
+                        play_zero_samples,
+                        self.device_type,
+                        self.deferred_function_calls,
+                    )
+            else:
+                self.add_timing_comment(self.current_time + play_zero_samples)
+                self.current_loop_stack_generator().add_play_zero_statement(
+                    play_zero_samples, self.device_type, self.deferred_function_calls
+                )
             self.current_time += play_zero_samples
 
         return self.current_time
@@ -112,7 +142,16 @@ class SeqCTracker:
                 name, args, assign_to
             )
 
-    def add_play_zero_statement(self, num_samples):
+    def add_play_zero_statement(self, num_samples: int, increment_counter=False):
+        """Add playZero statement.
+
+        Arguments:
+            num_samples: Number of playZero samples.
+            increment_counter: Increment current time counter.
+                This is handy when using `add_required_playzeros()` within the same event.
+        """
+        if increment_counter:
+            self.current_time += num_samples
         self.current_loop_stack_generator().add_play_zero_statement(
             num_samples, self.device_type, self.deferred_function_calls
         )

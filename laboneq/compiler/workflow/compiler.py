@@ -15,6 +15,10 @@ from sortedcollections import SortedDict
 
 from laboneq._observability.tracing import trace
 from laboneq.compiler.common.compiler_settings import TINYSAMPLE
+from laboneq.compiler.feedback_router.feedback_router import (
+    calculate_feedback_register_layout,
+    assign_feedback_registers,
+)
 from laboneq.compiler.seqc.measurement_calculator import (
     IntegrationTimes,
     SignalDelays,
@@ -30,7 +34,6 @@ from laboneq.compiler.common.device_type import (
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.common.trigger_mode import TriggerMode
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
-from laboneq.compiler.feedback_router.feedback_router import compute_feedback_routing
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.scheduler.scheduler import Scheduler
 from laboneq.compiler.workflow import rt_linker
@@ -131,8 +134,8 @@ class Compiler:
             (instr for instr in device_infos if instr.device_type.value == type)
         )
 
-    def _analyze_setup(self):
-        device_infos = self._experiment_dao.device_infos()
+    def _analyze_setup(self, experiment_dao: ExperimentDAO):
+        device_infos = experiment_dao.device_infos()
         device_type_list = [i.device_type.value for i in device_infos]
         type_counter = Counter(device_type_list)
         has_pqsc = type_counter["pqsc"] > 0
@@ -144,8 +147,8 @@ class Compiler:
 
         # Basic validity checks
         signal_infos = [
-            self._experiment_dao.signal_info(signal_id)
-            for signal_id in self._experiment_dao.signals()
+            experiment_dao.signal_info(signal_id)
+            for signal_id in experiment_dao.signals()
         ]
         used_devices = set(info.device.device_type.value for info in signal_infos)
         if (
@@ -158,8 +161,11 @@ class Compiler:
                 + "instruments are not supported"
             )
 
-        standalone_qc = len(self._experiment_dao.devices()) <= 2 and all(
-            dev.is_qc for dev in device_infos
+        device_infos_without_ppc = [
+            d for d in device_infos if d and d.device_type != DeviceInfoType.SHFPPC
+        ]
+        standalone_qc = len(device_infos_without_ppc) <= 2 and all(
+            dev.is_qc for dev in device_infos_without_ppc
         )
         if "prettyprinterdevice" in used_devices:
             self._leader_properties.is_desktop_setup = True
@@ -183,7 +189,7 @@ class Compiler:
                 f"Unsupported device combination {used_devices} for small setup"
             )
 
-        leader = self._experiment_dao.global_leader_device()
+        leader = experiment_dao.global_leader_device()
         if self._leader_properties.is_desktop_setup:
             if leader is None:
                 if has_hdawg:
@@ -202,8 +208,8 @@ class Compiler:
             # TODO: Check if this is needed for standalone QC, where only SG part is used
             if has_hdawg or (standalone_qc is True and has_shfsg and not has_shfqa):
                 has_signal_on_awg_0_of_leader = False
-                for signal_id in self._experiment_dao.signals():
-                    signal_info = self._experiment_dao.signal_info(signal_id)
+                for signal_id in experiment_dao.signals():
+                    signal_info = experiment_dao.signal_info(signal_id)
                     if signal_info.device.uid == leader and (
                         0 in signal_info.channels or 1 in signal_info.channels
                     ):
@@ -215,7 +221,7 @@ class Compiler:
                     device_id = leader
                     signal_type = "iq"
                     channels = [0, 1]
-                    self._experiment_dao.add_signal(
+                    experiment_dao.add_signal(
                         device_id, channels, signal_id, signal_type
                     )
                     _logger.debug(
@@ -257,10 +263,15 @@ class Compiler:
         )
         self._signal_objects = self._generate_signal_objects()
 
+        feedback_register_layout = calculate_feedback_register_layout(
+            self._integration_unit_allocation
+        )
+
         rt_compiler = RealtimeCompiler(
             self._experiment_dao,
             self._sampling_rate_tracker,
             self._signal_objects,
+            feedback_register_layout,
             self._settings,
         )
         executor = NtCompilerExecutor(rt_compiler, self._settings)
@@ -277,10 +288,8 @@ class Compiler:
             )
         executor.finalize()
 
-        compute_feedback_routing(
-            signal_objs=self._signal_objects,
-            integration_unit_allocation=self._integration_unit_allocation,
-            combined_compiler_output=self._combined_compiler_output,
+        assign_feedback_registers(
+            combined_compiler_output=self._combined_compiler_output
         )
 
     @staticmethod
@@ -357,6 +366,7 @@ class Compiler:
                     for i in range(integrators_per_signal)
                 ],
                 "kernel_count": signal_info.kernel_count,
+                "has_local_bus": signal_info.device.is_qc,
             }
         return integration_unit_allocation
 
@@ -404,7 +414,7 @@ class Compiler:
             Tuple[str, int, int], Dict[str, Union[Set, AWGInfo]]
         ] = {}
         for signal_id in dao.signals():
-            signal_info = dao.signal_info(signal_id)
+            signal_info: SignalInfo = dao.signal_info(signal_id)
             device_id = signal_info.device.uid
             device_type = DeviceType.from_device_info_type(
                 signal_info.device.device_type
@@ -537,7 +547,7 @@ class Compiler:
         delay_measure_acquire: Dict[AwgKey, DelayInfo] = {}
 
         for signal_id in self._experiment_dao.signals():
-            signal_info = self._experiment_dao.signal_info(signal_id)
+            signal_info: SignalInfo = self._experiment_dao.signal_info(signal_id)
             delay_signal = signal_info.delay_signal
 
             device_type = DeviceType.from_device_info_type(
@@ -636,6 +646,7 @@ class Compiler:
                 mixer_type=mixer_type,
                 hw_oscillator=hw_oscillator,
                 is_qc=device_info.is_qc,
+                automute=signal_info.automute,
             )
             signal_objects[signal_id] = signal_obj
             awg.signals.append(signal_obj)
@@ -719,6 +730,7 @@ class Compiler:
                         for router in signal_info.output_routing
                         if router.to_channel == channel
                     ],
+                    "enable_output_mute": signal_info.automute,
                 }
                 signal_is_modulated = signal_info.oscillator is not None
 
@@ -1026,6 +1038,7 @@ class Compiler:
                 marker_mode=output.get("marker_mode"),
                 amplitude=output["amplitude"],
                 output_routers=output["output_routers"],
+                enable_output_mute=output["enable_output_mute"],
             )
 
         for input in self.calc_inputs(combined_output.signal_delays):
@@ -1143,7 +1156,7 @@ class Compiler:
         _logger.debug("ES Compiler run")
 
         self.use_experiment(data)
-        self._analyze_setup()
+        self._analyze_setup(self._experiment_dao)
         self._process_experiment()
 
         self._generate_recipe()

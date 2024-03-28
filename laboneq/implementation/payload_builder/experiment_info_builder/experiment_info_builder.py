@@ -16,7 +16,8 @@ from laboneq.core.path import LogicalSignalGroups_Path, insert_logical_signal_pr
 from laboneq._utils import UIDReference, ensure_list, id_generator
 from laboneq.compiler import DeviceType
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types.enums import AcquisitionType, AveragingMode
+from laboneq.core.types.enums import AveragingMode, PortMode
+from laboneq.core.types.enums import acquisition_type as acq_type
 from laboneq.core.types.units import Quantity
 from laboneq.data.calibration import (
     AmplifierPump,
@@ -370,7 +371,6 @@ class ExperimentInfoBuilder:
                     ):
                         msg = f"Error on signal {mapped_ls_path}: Output routing can be only applied to output SGCHANNELS."
                         raise LabOneQException(msg)
-
             output_routers_per_channel = defaultdict(set)
             for output_router in calibration.output_routing:
                 source_signal = output_router.source_signal
@@ -444,6 +444,21 @@ class ExperimentInfoBuilder:
                         phase=self.opt_param(output_router.phase, nt_only=True),
                     )
                 )
+            if calibration.automute:
+                if physical_channel.direction == IODirection.IN:
+                    raise LabOneQException(
+                        "Automute can only be applied to output channels."
+                    )
+                if calibration.port_mode not in (PortMode.RF, None):
+                    raise LabOneQException(
+                        "Automute can only be applied when with `PortMode.RF`."
+                    )
+                if not DeviceType.from_device_info_type(
+                    signal_info.device.device_type
+                ).supports_output_mute:
+                    msg = f"Automute is not available on device {signal_info.device.device_type.value.upper()}."
+                    raise LabOneQException(msg)
+            signal_info.automute = calibration.automute
 
         signal_info.channels = sorted((port.channel for port in physical_channel.ports))
 
@@ -600,7 +615,19 @@ class ExperimentInfoBuilder:
         assert isinstance(operation, (PlayPulse, Acquire))
         pulses = []
         markers = self._load_markers(operation)
-
+        if signal_info.automute:
+            if markers:
+                msg = f"{signal_info.uid}: Automute cannot be used with markers on a same signal."
+                raise LabOneQException(msg)
+            if acq_type.is_spectroscopy(acquisition_type):
+                msg = (
+                    f"{signal_info.uid}: Automute cannot be used in Spectroscopy mode."
+                )
+                raise LabOneQException(msg)
+            for trigger in section.triggers:
+                if trigger["signal_id"] == signal_info.uid:
+                    msg = f"{signal_info.uid}: Automute cannot be used with triggers on a same signal."
+                    raise LabOneQException(msg)
         length = getattr(operation, "length", None)
         operation_length = self.opt_param(length)
 
@@ -1166,13 +1193,8 @@ class ExperimentInfoBuilder:
             is_qa_device = DeviceType.from_device_info_type(
                 signal.device.device_type
             ).is_qa_device
-            is_spectroscopy_mode = self._acquisition_type in (
-                AcquisitionType.SPECTROSCOPY,
-                AcquisitionType.SPECTROSCOPY_IQ,
-                AcquisitionType.SPECTROSCOPY_PSD,
-            )
             if is_qa_device:
-                osc.is_hardware = is_spectroscopy_mode
+                osc.is_hardware = acq_type.is_spectroscopy(self._acquisition_type)
             else:
                 osc.is_hardware = True
 

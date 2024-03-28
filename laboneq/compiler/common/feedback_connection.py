@@ -7,15 +7,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Set
 
+from laboneq.compiler.common.awg_info import AwgKey
+
 
 @dataclass
 class FeedbackConnection:
-    """A dataclass representing a feedback connection beween signals.
+    """A dataclass representing a feedback connection between AWGs.
 
     Attributes:
-        acquire (Optional[str]): A string that specifies the acquisition signal (source).
-        drive (Set[str]): A set of strings that specifies the reacting signals' names (targets).
+        tx: The transmitter AWG
+        rx: A set of receiver AWGs.
     """
 
-    acquire: str | None
-    drive: Set[str] = field(default_factory=set)
+    tx: AwgKey | None
+    rx: Set[AwgKey] = field(default_factory=set)

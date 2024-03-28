@@ -159,6 +159,7 @@ def convert_calibration(
     uid_formatter: Callable[[str], str] = format_ls_pc_uid,
 ) -> calibration.Calibration:
     cals = {}
+    legacy_ls: legacy_calibration.SignalCalibration
     for uid, legacy_ls in target.calibration_items.items():
         if legacy_ls is None:
             continue
@@ -189,6 +190,7 @@ def convert_calibration(
                         phase=convert_maybe_parameter(router.phase_shift),
                     )
                     new.output_routing.append(routing)
+            new.automute = legacy_ls.automute
         cals[uid_formatter(uid)] = new
 
     return calibration.Calibration(cals)

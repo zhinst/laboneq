@@ -35,6 +35,8 @@ class SignalObj:
       in addition to potential on-device delays.
     - base_port_delay: in case of an acquisition pulse, the port_delay of the
       corresponding measure pulse on the same AWG
+    - automute: The signal output can be automatically muted when no waveforms
+        are played.
     """
 
     id: str
@@ -52,3 +54,4 @@ class SignalObj:
     mixer_type: MixerType | None = None
     hw_oscillator: str | None = None
     is_qc: bool | None = None
+    automute: bool = False

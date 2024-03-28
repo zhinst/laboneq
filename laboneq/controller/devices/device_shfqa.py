@@ -124,6 +124,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
 
     def _process_dev_opts(self):
         self._check_expected_dev_opts()
+        self._process_shf_opts()
         if self.dev_type == "SHFQA4":
             self._channels = 4
         elif self.dev_type == "SHFQA2":
@@ -553,7 +554,17 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
                 nc.add(f"qachannels/{output.channel}/output/range", output.range)
 
             nc.add(f"qachannels/{output.channel}/generator/single", 1)
-
+            if self._is_plus:
+                nc.add(
+                    f"qachannels/{output.channel}/output/muting/enable",
+                    int(output.enable_output_mute),
+                )
+            else:
+                if output.enable_output_mute:
+                    _logger.warning(
+                        f"{self.dev_repr}: Device output muting is enabled, but the device is not"
+                        " SHF+ and therefore no mutting will happen. It is suggested to disable it."
+                    )
         for input in initialization.inputs or []:
             nc.add(
                 f"qachannels/{input.channel}/input/rflfpath",

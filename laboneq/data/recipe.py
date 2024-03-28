@@ -75,6 +75,7 @@ class IO:
     marker_mode: str | None = None
     amplitude: Any = None
     routed_outputs: list[RoutedOutput] = field(default_factory=list)
+    enable_output_mute: bool = False
 
 
 @dataclass

@@ -1,8 +1,6 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from functools import wraps
-
 
 def enable():
     pass
@@ -34,19 +32,12 @@ class _NoopObject:
 _NoopObj = _NoopObject()
 
 
-def get_tracer() -> _NoopObj:
-    """"""
+def get_tracer() -> _NoopObject:
     return _NoopObj
 
 
 def trace(*_, **__):
-    """Noop Decorator to turn function to a span."""
-
     def outer_wrapper(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            return func(*args, **kwargs)
-
-        return wrapper
+        return func
 
     return outer_wrapper

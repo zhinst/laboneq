@@ -16,11 +16,9 @@ from laboneq.core.types.enums import AcquisitionType
 _logger = logging.getLogger(__name__)
 if _logger.getEffectiveLevel() == logging.DEBUG:
     _dlogger = _logger
-    _dlog = True
 else:
     _logger.info("Debug logging disabled for %s", __name__)
     _dlogger = NullLogger()
-    _dlog = False
 
 
 @dataclass(init=True, repr=True, order=True)

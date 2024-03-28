@@ -14,6 +14,8 @@ from laboneq.controller.devices.zi_node_monitor import (
     Response,
 )
 
+OPT_SHF_PLUS = "PLUS"
+
 
 class ReferenceClockSourceSHF(IntEnum):
     INTERNAL = 0
@@ -25,6 +27,10 @@ class DeviceSHFBase(DeviceZI):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._reference_clock_source = ReferenceClockSourceSHF.ZSYNC
+        self._is_plus: bool = False  # SHF+
+
+    def _process_shf_opts(self):
+        self._is_plus = OPT_SHF_PLUS in self.dev_opts
 
     def update_clock_source(self, force_internal: bool | None):
         if self.is_standalone() and force_internal is not False:

@@ -11,6 +11,7 @@ import time
 
 from laboneq._observability.tracing import trace
 from laboneq.compiler import CodeGenerator, CompilerSettings
+from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
 from laboneq.compiler.seqc.ir_to_event_list import generate_event_list_from_ir
 from laboneq.compiler.common.iface_code_generator import (
     ICodeGenerator,
@@ -41,8 +42,10 @@ class RealtimeCompiler:
         experiment_dao: ExperimentDAO,
         sampling_rate_tracker: SamplingRateTracker,
         signal_objects: dict[str, SignalObj],
+        feedback_register_layout: FeedbackRegisterLayout,
         settings: CompilerSettings | None = None,
     ):
+        self._feedback_register_layout = feedback_register_layout
         self._scheduler = Scheduler(
             experiment_dao,
             sampling_rate_tracker,
@@ -82,7 +85,12 @@ class RealtimeCompiler:
             ]
             self._code_generators[device_class] = self._registered_codegens[
                 device_class
-            ](ir, settings=self._settings, signals=signals)
+            ](
+                ir,
+                settings=self._settings,
+                signals=signals,
+                feedback_register_layout=self._feedback_register_layout,
+            )
             self._code_generators[device_class].generate_code()
 
         _logger.debug("Code generation completed")

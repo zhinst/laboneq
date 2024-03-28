@@ -42,6 +42,9 @@ class DeviceTraits:
     integration_dsp_latency: Optional[float] = None
     spectroscopy_dsp_latency: Optional[float] = None
     has_prng: bool = False
+    supports_output_mute: bool = False
+    output_mute_engage_delay: float | None = None
+    output_mute_disengage_delay: float | None = None
     device_class: int = 0x0
 
 
@@ -136,6 +139,13 @@ class DeviceType(DeviceTraits, Enum):
         integration_dsp_latency=212e-9,
         spectroscopy_dsp_latency=220e-9,
         device_class=0x0,
+        supports_output_mute=True,
+        # Verified by MH (2024-03-16) on dev12156 & dev12093, rev 69800.
+        # Marker output setTrigger(1) lead time
+        output_mute_engage_delay=48e-9,
+        # Verified by MH (2024-03-16) on dev12156 & dev12093 rev 69800.
+        # Marker output setTrigger(0) delay time
+        output_mute_disengage_delay=84e-9,
     )
     SHFSG = DeviceTraits(
         str_value="shfsg",
@@ -161,6 +171,11 @@ class DeviceType(DeviceTraits, Enum):
         max_ct_entries=4096,
         is_qa_device=False,
         has_prng=True,
+        supports_output_mute=True,
+        # Marker output setTrigger(1) lead time
+        output_mute_engage_delay=-56e-9,
+        # Marker output setTrigger(0) delay time
+        output_mute_disengage_delay=0,
         device_class=0x0,
     )
     PRETTYPRINTERDEVICE = DeviceTraits(

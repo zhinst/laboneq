@@ -15,6 +15,9 @@ from typing import Any, Dict, List, NamedTuple, Tuple
 import numpy as np
 from engineering_notation import EngNumber
 
+from laboneq.compiler.common.feedback_connection import FeedbackConnection
+from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
+from laboneq.compiler.ir.ir import IR
 from laboneq.compiler.seqc.linker import SeqCGenOutput
 from laboneq._utils import ensure_list
 from laboneq.compiler.seqc.analyze_events import (
@@ -74,7 +77,6 @@ from laboneq.compiler.common.compiler_settings import (
 )
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.event_list.event_type import EventList, EventType
-from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.pulse_parameters import decode_pulse_parameters
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.common.trigger_mode import TriggerMode
@@ -312,8 +314,9 @@ class CodeGenerator(ICodeGenerator):
 
     def __init__(
         self,
-        ir,
+        ir: IR,
         signals: list[SignalObj],
+        feedback_register_layout: FeedbackRegisterLayout | None = None,
         settings: CompilerSettings | dict | None = None,
     ):
         if settings is not None:
@@ -343,10 +346,12 @@ class CodeGenerator(ICodeGenerator):
             AwgKey, dict[str, list[dict[str, Any]]]
         ] | None = None  # awg key -> signal id -> kernel index -> kernel data
         self._simultaneous_acquires: list[Dict[str, str]] = []
+        self._feedback_register_layout = feedback_register_layout or {}
         self._feedback_register_config: Dict[
             AwgKey, FeedbackRegisterConfig
         ] = defaultdict(FeedbackRegisterConfig)
         self._feedback_connections: Dict[str, FeedbackConnection] = {}
+        self._qa_signals_by_handle: dict[str, SignalObj] = {}
         self._feedback_register_allocator: FeedbackRegisterAllocator | None = None
         self._total_execution_time = None
 
@@ -356,6 +361,7 @@ class CodeGenerator(ICodeGenerator):
         event_list = generate_event_list_from_ir(
             self._ir, self._settings, expand_loops=False, max_events=float("inf")
         )
+        self.collect_qa_signals_by_handle(event_list)
         self.gen_acquire_map(event_list)
         self.gen_seq_c(
             event_list,
@@ -658,6 +664,22 @@ class CodeGenerator(ICodeGenerator):
 
         self._simultaneous_acquires = list(simultaneous_acquires.values())
 
+    def collect_qa_signals_by_handle(self, events: EventList):
+        for event in events:
+            if event["event_type"] != EventType.ACQUIRE_START:
+                continue
+            handle = event["acquire_handle"]
+            if handle is None:
+                # Some unit tests omit the handle
+                # this cannot be used for feedback anyway, so ignore
+                continue
+            signal_obj = self._signals[event["signal"]]
+
+            if handle not in self._qa_signals_by_handle:
+                self._qa_signals_by_handle[handle] = signal_obj
+            else:
+                assert self._qa_signals_by_handle[handle] == signal_obj
+
     def gen_seq_c(self, events: List[Any], pulse_defs: Dict[str, PulseDef]):
         signal_info_map = {
             signal_id: {"id": s.id, "delay_signal": s.delay_signal}
@@ -770,8 +792,8 @@ class CodeGenerator(ICodeGenerator):
             global_delay = 0
 
         if (
-            global_delay > 0
-            and global_delay
+            0
+            < global_delay
             < awg.device_type.min_play_wave / awg.device_type.sampling_rate
         ):
             global_delay = 0
@@ -1362,6 +1384,8 @@ class CodeGenerator(ICodeGenerator):
             device_type=awg.device_type,
             emit_timing_comments=self.EMIT_TIMING_COMMENTS,
             logger=_logger,
+            automute_playzeros_min_duration=self._settings.SHF_OUTPUT_MUTE_MIN_DURATION,
+            automute_playzeros=any([sig.automute for sig in awg.signals]),
         )
 
         handler = SampledEventHandler(
@@ -1371,6 +1395,9 @@ class CodeGenerator(ICodeGenerator):
             declarations_generator=declarations_generator,
             wave_indices=WaveIndexTracker(),
             feedback_connections=self._feedback_connections,
+            feedback_register_config=self._feedback_register_config[awg.key],
+            qa_signal_by_handle=self._qa_signals_by_handle,
+            feedback_register_layout=self._feedback_register_layout,
             awg=awg,
             device_type=awg.device_type,
             channels=awg.signals[0].channels,
@@ -1378,6 +1405,7 @@ class CodeGenerator(ICodeGenerator):
             use_command_table=use_command_table,
             emit_timing_comments=self.EMIT_TIMING_COMMENTS,
             use_current_sequencer_step=has_readout_feedback,
+            use_flexible_feedback=self._settings.FLEXIBLE_FEEDBACK,
         )
 
         setup_sine_phase(awg, command_table_tracker, init_generator, use_command_table)
@@ -1394,11 +1422,6 @@ class CodeGenerator(ICodeGenerator):
                 "- Reduce the number of variations in the pulses that are being played\n"
             )
             raise LabOneQException(f"Compiler error. {msg}") from error
-
-        fb_register_config = self._feedback_register_config[awg.key]
-        fb_register_config.command_table_offset = handler.command_table_match_offset
-        if handler.use_zsync_feedback is False:
-            fb_register_config.source_feedback_register = "local"
 
         _logger.debug(
             "***  Finished event processing, loop_stack_generators: %s",
@@ -1779,7 +1802,7 @@ class CodeGenerator(ICodeGenerator):
         # convert defaultdict to dict
         return dict(self._feedback_register_config)
 
-    def feedback_connections(self) -> Dict[str, FeedbackConnection]:
+    def feedback_connections(self) -> dict[str, FeedbackConnection]:
         return self._feedback_connections
 
     @staticmethod

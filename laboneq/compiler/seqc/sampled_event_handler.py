@@ -8,6 +8,14 @@ from functools import cmp_to_key
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional
 
 from laboneq._utils import flatten
+from laboneq.compiler.common.feedback_connection import FeedbackConnection
+from laboneq.compiler.common.feedback_register_config import FeedbackRegisterConfig
+from laboneq.compiler.common.signal_obj import SignalObj
+from laboneq.compiler.feedback_router.feedback_router import (
+    FeedbackRegisterLayout,
+    GlobalFeedbackRegister,
+    LocalFeedbackRegister,
+)
 from laboneq.compiler.seqc.seqc_generator import (
     SeqCGenerator,
     merge_generators,
@@ -23,7 +31,6 @@ from laboneq.compiler.seqc.awg_sampled_event import (
 )
 from laboneq.compiler.common.compiler_settings import EXECUTETABLEENTRY_LATENCY
 from laboneq.compiler.common.device_type import DeviceType
-from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import AcquisitionType
 from laboneq.core.utilities.string_sanitize import string_sanitize
@@ -35,7 +42,6 @@ if TYPE_CHECKING:
     from laboneq.compiler.seqc.seqc_tracker import SeqCTracker
     from laboneq.compiler.seqc.wave_index_tracker import WaveIndexTracker
     from laboneq.compiler.common.awg_info import AWGInfo
-
 
 _logger = logging.getLogger(__name__)
 
@@ -115,7 +121,10 @@ class SampledEventHandler:
         function_defs_generator: SeqCGenerator,
         declarations_generator: SeqCGenerator,
         wave_indices: WaveIndexTracker,
-        feedback_connections: Dict[str, FeedbackConnection],
+        qa_signal_by_handle: dict[str, SignalObj],
+        feedback_connections: dict[str, FeedbackConnection],
+        feedback_register_layout: FeedbackRegisterLayout,
+        feedback_register_config: FeedbackRegisterConfig,
         awg: AWGInfo,
         device_type: DeviceType,
         channels: List[int],
@@ -123,13 +132,17 @@ class SampledEventHandler:
         use_command_table: bool,
         emit_timing_comments: bool,
         use_current_sequencer_step: bool,
+        use_flexible_feedback: bool,
     ):
         self.seqc_tracker = seqc_tracker
         self.command_table_tracker = command_table_tracker
         self.function_defs_generator = function_defs_generator
         self.declarations_generator = declarations_generator
         self.wave_indices = wave_indices
+        self.qa_signal_by_handle = qa_signal_by_handle
         self.feedback_connections = feedback_connections
+        self.feedback_register_layout = feedback_register_layout
+        self.feedback_register_config = feedback_register_config
         self.awg = awg
         self.device_type = device_type
         self.channels = channels
@@ -141,7 +154,6 @@ class SampledEventHandler:
         self.loop_stack: List[AWGEvent] = []
         self.last_event: Optional[AWGEvent] = None
         self.match_parent_event: Optional[AWGEvent] = None
-        self.command_table_match_offset = None
 
         # If true, this AWG sources feedback data from Zsync. If False, it sources data
         # from the local bus. None means neither source is used. Using both is illegal.
@@ -153,6 +165,8 @@ class SampledEventHandler:
         self.match_seqc_generators: dict[int, SeqCGenerator] = {}  # user_register match
         self.current_sequencer_step = 0 if use_current_sequencer_step else None
         self.sequencer_step = 8  # todo(JL): Is this always the case, and how to get it?
+
+        self.use_flexible_feedback = use_flexible_feedback
 
     def _increment_sequencer_step(self):
         if self.current_sequencer_step is not None:
@@ -353,15 +367,6 @@ class SampledEventHandler:
                 sampled_event.start - self.match_parent_event.start,
             )
 
-        if "multiplexed_signal_ids" in sampled_event.params:
-            drive_signal_ids = sampled_event.params["multiplexed_signal_ids"]
-        else:
-            drive_signal_ids = (sampled_event.params["signal_id"],)
-
-        self.feedback_connections.setdefault(
-            self.match_parent_event.params["handle"], FeedbackConnection(None)
-        ).drive.update(drive_signal_ids)
-
     def handle_playwave_on_user_register(
         self,
         signature: PlaybackSignature,
@@ -504,8 +509,6 @@ class SampledEventHandler:
                 self.seqc_tracker.add_function_call_statement(
                     "startQA", args, deferred=True
                 )
-        for h in sampled_event.params["acquire_handles"]:
-            self._add_feedback_connection(h, sampled_event.params["signal_id"])
 
     def handle_qa_event(self, sampled_event: AWGEvent):
         _logger.debug("  Processing QA_EVENT %s", sampled_event)
@@ -567,6 +570,10 @@ class SampledEventHandler:
                 ]
             )
         )
+        self.seqc_tracker.add_required_playzeros(sampled_event)
+        if sampled_event.end > self.seqc_tracker.current_time:
+            self.seqc_tracker.add_timing_comment(sampled_event.end)
+
         if is_spectroscopy:
             mask_val_for_spectroscopy = 0
             args = [mask_val_for_spectroscopy, 0, 0, 0, 1]
@@ -580,21 +587,17 @@ class SampledEventHandler:
             if feedback_register is not None:
                 args.append(feedback_register)
 
-        self.seqc_tracker.add_required_playzeros(sampled_event)
-
-        if sampled_event.end > self.seqc_tracker.current_time:
-            self.seqc_tracker.add_timing_comment(sampled_event.end)
-
         self.seqc_tracker.add_function_call_statement("startQA", args, deferred=True)
+        if self.seqc_tracker.automute_playzeros:
+            # playZero for the waveform, which must not be muted.
+            self.seqc_tracker.add_play_zero_statement(
+                sampled_event.end - sampled_event.start, increment_counter=True
+            )
+            self.seqc_tracker.flush_deferred_function_calls()
         if is_spectroscopy:
             self.seqc_tracker.add_function_call_statement(
                 "setTrigger", [0], deferred=True
             )
-
-        ev: AWGEvent
-        for ev in sampled_event.params["acquire_events"]:
-            for h in ev.params["acquire_handles"]:
-                self._add_feedback_connection(h, ev.params["signal_id"])
 
     def handle_reset_precompensation_filters(self, sampled_event: AWGEvent):
         if sampled_event.params["signal_id"] not in (s.id for s in self.awg.signals):
@@ -909,6 +912,64 @@ class SampledEventHandler:
         prng_tracker.drop_sample()
         self.match_command_table_entries.clear()
 
+    def _register_bitshift(
+        self,
+        register: GlobalFeedbackRegister | LocalFeedbackRegister,
+        qa_signal: str,
+        force_local_alignment: bool = False,
+    ):
+        """Calculate offset and mask into register for given qa_signal"""
+        register_bitshift = 0  # offset into the register
+        for width, signal in self.feedback_register_layout[register]:
+            if signal == qa_signal:
+                break
+            else:
+                register_bitshift += width if not force_local_alignment else 2
+        else:
+            raise AssertionError(f"Signal {qa_signal} not found in register {register}")
+        mask = (1 << width) - 1
+        return register_bitshift, width, mask
+
+    def add_feedback_config(self, handle: str, local: bool):
+        qa_signal = self.qa_signal_by_handle[handle]
+
+        self.feedback_connections.setdefault(
+            handle, FeedbackConnection(tx=qa_signal.awg.key)
+        ).rx.add(self.awg.key)
+
+        if local:
+            register = LocalFeedbackRegister(qa_signal.awg.device_id)
+            codeword_bitshift, width, mask = self._register_bitshift(
+                register, qa_signal=qa_signal.id, force_local_alignment=True
+            )
+            index_select = None
+        else:
+            register = GlobalFeedbackRegister(qa_signal.awg.key)
+            qa_register_bitshift, width, mask = self._register_bitshift(
+                register, qa_signal=qa_signal.id, force_local_alignment=False
+            )
+
+            # feedback through PQSC: assign index based on AWG number
+            index_select = qa_register_bitshift // 2
+            codeword_bitshift = 2 * self.awg.awg_number + qa_register_bitshift % 2
+
+        if local:
+            self.feedback_register_config.source_feedback_register = "local"
+
+        if self.use_flexible_feedback:
+            self.declarations_generator.add_function_call_statement(
+                "configureFeedbackProcessing",
+                args=[
+                    codeword_bitshift,
+                    width,
+                    self.feedback_register_config.command_table_offset,
+                ],
+            )
+
+        self.feedback_register_config.codeword_bitshift = codeword_bitshift
+        self.feedback_register_config.codeword_bitmask = mask
+        self.feedback_register_config.register_index_select = index_select
+
     def close_event_list(self):
         if self.match_parent_event is not None:
             params = self.match_parent_event.params
@@ -933,10 +994,10 @@ class SampledEventHandler:
             )
 
         # Check whether we already have the same states in the command table:
-        if self.command_table_match_offset is not None:
+        if self.feedback_register_config.command_table_offset is not None:
             for idx, (signature, wave_index, _) in sorted_ct_entries:
                 current_ct_entry = self.command_table_tracker[
-                    idx + self.command_table_match_offset
+                    idx + self.feedback_register_config.command_table_offset
                 ]
                 assert current_ct_entry is not None
                 current_wf_idx = current_ct_entry[1]["waveform"].get("index")
@@ -946,11 +1007,15 @@ class SampledEventHandler:
                         f"(handle {handle}), do you use the same pulses and states?"
                     )
         else:
-            self.command_table_match_offset = len(self.command_table_tracker)
+            local = self.match_parent_event.params["local"]
+            self.add_feedback_config(handle, local)
+            self.feedback_register_config.command_table_offset = len(
+                self.command_table_tracker
+            )
             # Allocate command table entries
             for idx, (signature, wave_index, _) in sorted_ct_entries:
                 id2 = self.command_table_tracker.create_entry(signature, wave_index)
-                assert self.command_table_match_offset + idx == id2
+                assert self.feedback_register_config.command_table_offset + idx == id2
 
         ev = self.match_parent_event
         start = ev.start
@@ -1124,18 +1189,3 @@ class SampledEventHandler:
             _logger.debug("-End event list")
             self.handle_sampled_event_list()
         self.seqc_tracker.force_deferred_function_calls()
-
-    def _add_feedback_connection(self, handle: str, acquire_signal: str):
-        if handle is None:
-            return
-        try:
-            fbc = self.feedback_connections[handle]
-            if fbc.acquire is None:
-                fbc.acquire = acquire_signal
-            elif fbc.acquire != acquire_signal:
-                raise LabOneQException(
-                    f"Acquisition handle {handle} may not be "
-                    f"reused with different signal {acquire_signal}"
-                )
-        except KeyError:
-            self.feedback_connections[handle] = FeedbackConnection(acquire_signal)
