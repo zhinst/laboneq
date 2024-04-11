@@ -75,7 +75,13 @@ def convert_mixer_calibration(
     if obj is None:
         return None
     if isinstance(obj, legacy_calibration.MixerCalibration):
-        return calibration.MixerCalibration(**asdict(obj))
+        return calibration.MixerCalibration(
+            uid=obj.uid,
+            voltage_offsets=[
+                convert_maybe_parameter(val) for val in obj.voltage_offsets or []
+            ],
+            correction_matrix=obj.correction_matrix,
+        )
     raise_not_implemented(obj)
 
 

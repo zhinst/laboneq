@@ -62,10 +62,10 @@ class DevicePQSC(DeviceZI):
             Condition(
                 f"/{self.serial}/system/clocks/referenceclock/in/freq", expected_freq
             ),
-            Setting(f"/{self.serial}/system/clocks/referenceclock/in/source", source),
-            Response(
+            Condition(
                 f"/{self.serial}/system/clocks/referenceclock/in/sourceactual", source
             ),
+            Setting(f"/{self.serial}/system/clocks/referenceclock/in/source", source),
             Response(f"/{self.serial}/system/clocks/referenceclock/in/status", 0),
         ]
 

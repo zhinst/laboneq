@@ -1,7 +1,7 @@
 # Copyright 2023 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations  # noqa: I001
+from __future__ import annotations
 
 import math
 import operator
@@ -28,7 +28,12 @@ from laboneq.dsl.quantum.qubit import Qubit
 from laboneq.dsl.quantum.transmon import Transmon
 from laboneq.openqasm3.expression import eval_expression, eval_lvalue
 from laboneq.openqasm3.gate_store import GateStore
-from laboneq.openqasm3.namespace import ClassicalRef, Frame, NamespaceNest, QubitRef
+from laboneq.openqasm3.namespace import (
+    ClassicalRef,
+    Frame,
+    NamespaceNest,
+    QubitRef,
+)
 from laboneq.openqasm3.openqasm_error import OpenQasmException
 
 ALLOWED_NODE_TYPES = {
@@ -45,6 +50,7 @@ ALLOWED_NODE_TYPES = {
     ast.AliasStatement,
     ast.CalibrationGrammarDeclaration,
     ast.CalibrationStatement,
+    ast.ClassicalArgument,
     ast.ClassicalDeclaration,
     ast.CalibrationDefinition,
     ast.ConstantDeclaration,
@@ -104,6 +110,7 @@ class ExternResult:
     addition to returning a result.
 
     Arguments:
+    ---------
         result:
             The result returned by the extern function.
         handle:
@@ -117,12 +124,14 @@ class ExternResult:
             directly a statement or the right-hand side of an assignment.
 
     Attributes:
+    ----------
         result (Any):
             The result returned by the extern funciton.
         handle (str | None):
             The measurement handle holding the result.
         section (Section | None):
             The section the extern function wishes to play.
+
     """
 
     def __init__(self, result=None, handle=None, section=None):
@@ -132,7 +141,7 @@ class ExternResult:
         if self.result is not None and self.handle is not None:
             raise OpenQasmException(
                 f"An external function may return either a result or a handle"
-                f", not both: {self!r}"
+                f", not both: {self!r}",
             )
 
     def __repr__(self):
@@ -153,8 +162,7 @@ class _AllowedNodeTypesVisitor(openqasm3.visitor.QASMVisitor):
 
 
 def _convert_openpulse_span(base_span, relative_span, prefix_length):
-    """
-    Add a relative OpenPulse span to a base OpenQASM parser
+    """Add a relative OpenPulse span to a base OpenQASM parser
     span.
 
     When parsing `cal` and `defcal` blocks the spans returned
@@ -227,7 +235,7 @@ class OpenQasm3Importer:
             msg = "Must specify exactly one of text, file, filename, or stream"
             raise ValueError(msg)
         if filename:
-            with open(filename, "r") as f:
+            with open(filename) as f:
                 return self._import_text(f.read())
         elif file:
             return self._import_text(file.read())
@@ -285,14 +293,17 @@ class OpenQasm3Importer:
         self.scope.close()
 
     def transpile(
-        self, parent: Union[ast.Program, ast.Box, ast.ForInLoop], uid_hint=""
+        self,
+        parent: Union[ast.Program, ast.Box, ast.ForInLoop],
+        uid_hint="",
     ) -> Section:
         sect = Section(uid=id_generator(uid_hint))
 
         if isinstance(parent, ast.Program):
             body = parent.statements
         elif isinstance(
-            parent, (ast.Box, ast.CalibrationStatement, ast.CalibrationDefinition)
+            parent,
+            (ast.Box, ast.CalibrationStatement, ast.CalibrationDefinition),
         ):
             body = parent.body
         elif isinstance(parent, ast.ForInLoop):
@@ -363,7 +374,9 @@ class OpenQasm3Importer:
             if statement.size is not None:
                 try:
                     size = eval_expression(
-                        statement.size, namespace=self.scope, type_=int
+                        statement.size,
+                        namespace=self.scope,
+                        type_=int,
                     )
                 except Exception:
                     msg = "Qubit declaration size must evaluate to an integer."
@@ -385,7 +398,8 @@ class OpenQasm3Importer:
             raise
 
     def _handle_classical_declaration(
-        self, statement: ast.ClassicalDeclaration
+        self,
+        statement: ast.ClassicalDeclaration,
     ) -> None:
         name = statement.identifier.name
         if isinstance(statement.type, ast.BitType):
@@ -455,7 +469,7 @@ class OpenQasm3Importer:
         if statement.io_identifier == ast.IOKeyword.output:
             raise OpenQasmException(
                 "Output declarations are not yet supported by"
-                " LabOne Q's OpenQASM 3 compiler."
+                " LabOne Q's OpenQASM 3 compiler.",
             )
         elif statement.io_identifier == ast.IOKeyword.input:
             # TODO: Handle statement.type
@@ -474,11 +488,12 @@ class OpenQasm3Importer:
                 #       properly supported by the compiler.
                 raise OpenQasmException(f"Missing input {name}")
             self.scope.current.declare_classical_value(
-                name, value=self.supplied_inputs[name]
+                name,
+                value=self.supplied_inputs[name],
             )
         else:
             raise OpenQasmException(
-                f"Invalid IO direction identifier {statement.io_identifier}"
+                f"Invalid IO direction identifier {statement.io_identifier}",
             )
 
     def _handle_constant_declaration(self, statement: ast.ConstantDeclaration) -> None:
@@ -538,7 +553,10 @@ class OpenQasm3Importer:
                 raise OpenQasmException(msg, mark=q.span) from e
         qubit_names = tuple(qubit_names)
         try:
-            return self.gate_store.lookup_gate(name, qubit_names, args=args)
+            section = self.gate_store.lookup_gate(name, qubit_names, args=args)
+            if not isinstance(section, Section):
+                raise (KeyError("Gate lookup returned a non-section"))
+            return section
         except KeyError as e:
             gates = ", ".join(
                 f"{gate[0]} for {gate[1]}" for gate in self.gate_store.gates
@@ -577,53 +595,70 @@ class OpenQasm3Importer:
             raise OpenQasmException(msg, mark=statement.span)
 
     def _handle_calibration_grammar(
-        self, statement: ast.CalibrationGrammarDeclaration
+        self,
+        statement: ast.CalibrationGrammarDeclaration,
     ) -> None:
         if statement.name != "openpulse":
             msg = f"Only 'openpulse' is supported for defcalgrammar, found '{statement.name}'."
             raise OpenQasmException(msg, mark=statement.span)
 
     def _handle_calibration_definition(
-        self, statement: ast.CalibrationDefinition
+        self,
+        statement: ast.CalibrationDefinition,
     ) -> None:
         defcal_name = statement.name.name
-        # TODO: Add support for defcals that return values
-        if statement.return_type is not None:
-            raise OpenQasmException("defcal with return not yet supported")
-        # TODO: Add support for defcals with arguments
-        if statement.arguments:
-            raise OpenQasmException("defcal with arguments not yet supported")
-
         qubit_names = tuple(q.name for q in statement.qubits)
-        # TODO: Add support for placeholder qubits, possibly by just registering
-        #       the gate for all hardware qubits.
-        if any(not name.startswith("$") for name in qubit_names):
-            raise OpenQasmException(
-                "defcal statements for arbitrary qubits not yet supported"
-            )
 
-        try:
-            section = self.transpile(statement, uid_hint="defcal")
-        except OpenQasmException as e:
-            # Spans on exceptions from inside cal and defcal blocks
-            # are relative to the cal block and not the original qasm
-            # source so we need to update them here:
-            prefix_length = len(f"defcal {defcal_name} {' '.join(qubit_names)} {{")
-            e.mark = _convert_openpulse_span(statement.span, e.mark, prefix_length)
-            raise
+        def gate_factory(*args, **kwargs):
+            with self._new_scope():
+                resolved_args = {}
+                for value, arg in zip(args, statement.arguments):
+                    resolved_args[arg.name.name] = value
 
-        reserved_qubits = [self.dsl_qubits[qubit] for qubit in qubit_names]
-        reserved_signals = set()
-        for qubit in reserved_qubits:
-            for exp_signal in qubit.experiment_signals():
-                reserved_signals.add(exp_signal.mapped_logical_signal_path)
-        for signal in reserved_signals:
-            section.reserve(signal)
+                # TODO: Add support for defcals that return values
+                if statement.return_type is not None:
+                    raise OpenQasmException("defcal with return not yet supported")
 
-        def gate_factory(**kwargs):
-            # TODO: The **kw above swallows the handle argument passed to
-            #       measurement.
-            return section
+                if statement.arguments:
+                    for arg in statement.arguments:
+                        name = arg.name.name
+                        self.scope.current.declare_classical_value(
+                            name,
+                            resolved_args[name],
+                        )
+
+                # TODO: Add support for placeholder qubits, possibly by just registering
+                #       the gate for all hardware qubits.
+                if any(not name.startswith("$") for name in qubit_names):
+                    raise OpenQasmException(
+                        "defcal statements for arbitrary qubits not yet supported",
+                    )
+
+                try:
+                    section = self.transpile(statement, uid_hint="defcal")
+                except OpenQasmException as e:
+                    # Spans on exceptions from inside cal and defcal blocks
+                    # are relative to the cal block and not the original qasm
+                    # source so we need to update them here:
+                    prefix_length = len(
+                        f"defcal {defcal_name} {' '.join(qubit_names)} {{",
+                    )
+                    e.mark = _convert_openpulse_span(
+                        statement.span,
+                        e.mark,
+                        prefix_length,
+                    )
+                    raise
+
+                reserved_qubits = [self.dsl_qubits[qubit] for qubit in qubit_names]
+                reserved_signals = set()
+                for qubit in reserved_qubits:
+                    for exp_signal in qubit.experiment_signals():
+                        reserved_signals.add(exp_signal.mapped_logical_signal_path)
+                for signal in reserved_signals:
+                    section.reserve(signal)
+
+                return section
 
         self.gate_store.register_gate_section(defcal_name, qubit_names, gate_factory)
 
@@ -697,9 +732,14 @@ class OpenQasm3Importer:
         freq = eval_expression(
             expr.arguments[1],
             namespace=self.scope,
-            type_=(float, int, SweepParameter),
+            type_=(float, int, SweepParameter, ast.ClassicalArgument),
         )
 
+        # TODO: This handles explicit multiple calls to set_frequency. As long as a
+        #  single call in a for loop is not recogised as a frequency sweep, this will not trigger.
+        if signal in self.implicit_calibration.calibration_items:
+            msg = "Setting the frequency more than once on a given signal is not supported in the current implementation."
+            raise OpenQasmException(msg, mark=expr.span)
         # TODO: this overwrites the frequency for the whole experiment. We should
         #  instead update the existing frequency from this point in time on.
         self.implicit_calibration[signal] = SignalCalibration(
@@ -707,14 +747,14 @@ class OpenQasm3Importer:
                 id_generator(f"osc_{frame.canonical_name}"),
                 frequency=freq,
                 modulation_type=ModulationType.HARDWARE,
-            )
+            ),
         )
 
     def _handle_delay_instruction(self, statement: ast.DelayInstruction):
         duration = eval_expression(
             statement.duration,
             namespace=self.scope,
-            type_=(float, SweepParameter),
+            type_=(float, int, SweepParameter, ast.ClassicalArgument),
         )
         qubits_or_frames = [
             eval_expression(qubit, namespace=self.scope) for qubit in statement.qubits
@@ -736,7 +776,8 @@ class OpenQasm3Importer:
             if selective_frame_delay:
                 for frame in qubits_or_frames:
                     delay_section.delay(
-                        self.gate_store.ports[frame.port], time=duration
+                        self.gate_store.ports[frame.port],
+                        time=duration,
                     )
             else:
                 for role, sig in dsl_qubit.experiment_signals(with_types=True):
@@ -757,12 +798,16 @@ class OpenQasm3Importer:
 
         if isinstance(loop_set_decl, ast.RangeDefinition):
             start = eval_expression(
-                loop_set_decl.start, namespace=self.scope, type_=int
+                loop_set_decl.start,
+                namespace=self.scope,
+                type_=int,
             )
             stop = eval_expression(loop_set_decl.end, namespace=self.scope, type_=int)
             if loop_set_decl.step is not None:
                 step = eval_expression(
-                    loop_set_decl.step, namespace=self.scope, type_=int
+                    loop_set_decl.step,
+                    namespace=self.scope,
+                    type_=int,
                 )
             else:
                 step = 1
@@ -829,14 +874,15 @@ class OpenQasm3Importer:
         bits = statement.target
         if bits is None:
             raise OpenQasmException(
-                "Measurement must be assigned to a classical bit", mark=statement.span
+                "Measurement must be assigned to a classical bit",
+                mark=statement.span,
             )
         bits = eval_lvalue(statement.target, namespace=self.scope)
         if isinstance(qubits, list):
             err_msg = None
             if not isinstance(bits, list):
                 err_msg = "Both bits and qubits must be either scalar or registers."
-            if not len(bits) == len(qubits):
+            if len(bits) != len(qubits):
                 err_msg = "Bit and qubit registers must be same length"
             if err_msg is not None:
                 raise OpenQasmException(err_msg, statement.span)
@@ -854,7 +900,9 @@ class OpenQasm3Importer:
             qubit_name = q.canonical_name
             try:
                 gate_section = self.gate_store.lookup_gate(
-                    "measure", (qubit_name,), kwargs={"handle": handle_name}
+                    "measure",
+                    (qubit_name,),
+                    kwargs={"handle": handle_name},
                 )
             except KeyError as e:
                 raise OpenQasmException(
@@ -870,7 +918,8 @@ class OpenQasm3Importer:
     def _handle_quantum_reset(self, statement: ast.QuantumReset):
         # Although ``qubits`` is plural, only a single qubit is allowed.
         qubit_name = eval_expression(
-            statement.qubits, namespace=self.scope
+            statement.qubits,
+            namespace=self.scope,
         ).canonical_name
         try:
             return self.gate_store.lookup_gate("reset", (qubit_name,))
@@ -893,6 +942,7 @@ def exp_from_qasm(
     """Create an experiment from an OpenQASM program.
 
     Args:
+    ----
         program:
             OpenQASM program
         qubits:
@@ -912,9 +962,13 @@ def exp_from_qasm(
         reset_oscillator_phase:
             When true, reset all oscillators at the start of every
             acquistion loop iteration.
+
     """
     importer = OpenQasm3Importer(
-        qubits=qubits, inputs=inputs, externs=externs, gate_store=gate_store
+        qubits=qubits,
+        inputs=inputs,
+        externs=externs,
+        gate_store=gate_store,
     )
     qasm_section = importer(text=program)
 
@@ -976,6 +1030,7 @@ def exp_from_qasm_list(
     gate. Similarly, the optional reset requires a `reset` gate to be available.
 
     Args:
+    ----
         programs:
             the list of the QASM snippets
         qubits:
@@ -1024,7 +1079,9 @@ def exp_from_qasm_list(
             chunk count.
 
     Returns:
+    -------
         The experiment generated from the OpenQASM programs.
+
     """
     if batch_execution_mode == "pipeline":
         if pipeline_chunk_count is None:
@@ -1038,7 +1095,7 @@ def exp_from_qasm_list(
             # this, then this restriction can be removed.
             raise ValueError(
                 f"Number of programs ({len(programs)}) not divisible"
-                f" by pipeline_chunk_count ({pipeline_chunk_count})"
+                f" by pipeline_chunk_count ({pipeline_chunk_count})",
             )
 
     signals = []
@@ -1051,7 +1108,10 @@ def exp_from_qasm_list(
 
     exp = Experiment(signals=signals)
     experiment_index = LinearSweepParameter(
-        uid="index", start=0, stop=len(programs) - 1, count=len(programs)
+        uid="index",
+        start=0,
+        stop=len(programs) - 1,
+        count=len(programs),
     )
 
     if batch_execution_mode == "nt":
@@ -1080,7 +1140,7 @@ def exp_from_qasm_list(
                     with exp.section(uid="qubit reset") as reset_section:
                         for qasm_qubit_name in qubits:
                             reset_section.add(
-                                gate_store.lookup_gate("reset", (qasm_qubit_name,))
+                                gate_store.lookup_gate("reset", (qasm_qubit_name,)),
                             )
 
                 with exp.section(
@@ -1108,7 +1168,7 @@ def exp_from_qasm_list(
                                 "measure",
                                 (qasm_qubit_name,),
                                 kwargs={"handle": f"meas{qasm_qubit_name}"},
-                            )
+                            ),
                         )
                         with exp.section():
                             # The next shot will immediately start with an active reset.

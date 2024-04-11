@@ -129,6 +129,25 @@ def _slice_set(a: ArrayLike, a_start: int, b, b_start: int, b_len: int):
     a[left - a_start : right - a_start] = b
 
 
+def _array_pad(a, b):
+    """Pad the shortest of the two input arrays a and b with zeros to match the length
+    of the longest array.
+
+    Args:
+        a: An array like to pad if it is shorter than array b.
+        b: An array like to pad if it is shorter than array a.
+
+    Returns:
+        The a and b arrays, having the same length after padding.
+    """
+    if len(a) == len(b):
+        return a, b
+    elif len(a) > len(b):
+        return a, np.pad(b, (0, len(a) - len(b)))
+    else:
+        return np.pad(a, (0, len(b) - len(a))), b
+
+
 class SimTarget(Flag):
     NONE = 0
     PLAY = 1
@@ -380,9 +399,13 @@ class WaveScroller:
                             wave_indices[wave_iter][0], wave_indices[wave_iter][1]
                         )
                     else:
-                        wave += retrieve_wave(
+                        wave_i = retrieve_wave(
                             wave_indices[wave_iter][0], wave_indices[wave_iter][1]
                         )
+                        # Ensure that wave and new_wave have the same length in order
+                        # to add them.
+                        wave, wave_i = _array_pad(wave, wave_i)
+                        wave += wave_i
                     wave_iter = wave_iter + 1
             _slice_copy(
                 self.wave_snippet,

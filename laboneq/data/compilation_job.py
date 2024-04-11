@@ -196,7 +196,7 @@ class SectionInfo:
 
 @dataclass
 class MixerCalibrationInfo:
-    voltage_offsets: tuple[float, float] | list[float] = (0.0, 0.0)
+    voltage_offsets: tuple[float | ParameterInfo, float | ParameterInfo] = (0.0, 0.0)
     correction_matrix: tuple[tuple[float, float], tuple[float, float]] | list[
         list[float]
     ] = (

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Deque, Dict, List, Union
+from typing import TYPE_CHECKING, Any, Callable
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import DSLVersion
@@ -40,7 +40,7 @@ class Experiment:
         name (str):
             A name for the experiment. The name need not be unique.
             Default: `"unnamed"`.
-        signals (Union[Dict[str, ExperimentSignal], List[ExperimentSignal]]):
+        signals (dict[str, ExperimentSignal] | list[ExperimentSignal | str]):
             Experiment signals.
             Default: `{}`.
         version (DSLVersion):
@@ -50,7 +50,7 @@ class Experiment:
         epsilon (float):
             Epsilon. Not used.
             Default: `0.0`.
-        sections (List[Section]):
+        sections (list[Section]):
             Sections defined in the experiment.
             Default: `[]`.
 
@@ -64,19 +64,19 @@ class Experiment:
 
     uid: str | None = field(default=None)
     name: str = field(default="unnamed")
-    signals: Union[Dict[str, ExperimentSignal], List[ExperimentSignal]] = field(
+    signals: dict[str, ExperimentSignal] | list[ExperimentSignal | str] = field(
         default_factory=dict
     )
     version: DSLVersion = field(default=DSLVersion.V3_0_0)
     epsilon: float = field(default=0.0)
-    sections: List[Section] = field(default_factory=list)
+    sections: list[Section] = field(default_factory=list)
 
-    _section_stack: Deque[Section] = field(
+    _section_stack: deque[Section] = field(
         default_factory=deque, repr=False, compare=False, init=False
     )
 
     def __post_init__(self):
-        if self.signals is not None and isinstance(self.signals, List):
+        if self.signals is not None and isinstance(self.signals, list):
             signals_dict = {}
             for s in self.signals:
                 if isinstance(s, str):
@@ -118,7 +118,7 @@ class Experiment:
         self._add_section_to_current_section(section)
 
     @property
-    def experiment_signals_uids(self) -> List[str]:
+    def experiment_signals_uids(self) -> list[str]:
         """A list of experiment signal UIDs defined in this experiment.
 
         Returns:
@@ -128,7 +128,7 @@ class Experiment:
         """
         return self.signals.keys
 
-    def list_experiment_signals(self) -> List[ExperimentSignal]:
+    def list_experiment_signals(self) -> list[ExperimentSignal]:
         """A list of experiment signals defined in this experiment.
 
         Returns:
@@ -188,7 +188,7 @@ class Experiment:
             self.set_signal_map(signal_map)
 
     @property
-    def signal_mapping_status(self) -> Dict[str, Any]:
+    def signal_mapping_status(self) -> dict[str, Any]:
         """Get an overview of the signal mapping.
 
         Returns:
@@ -221,7 +221,7 @@ class Experiment:
             "not_mapped_signals": not_mapped_signals,
         }
 
-    def get_signal_map(self) -> Dict[str, str]:
+    def get_signal_map(self) -> dict[str, str]:
         """Return a dictionary of mapped experiment signals.
 
         Signals that have not yet been mapped are excluded from
@@ -240,7 +240,7 @@ class Experiment:
             if signal.is_mapped()
         }
 
-    def set_signal_map(self, signal_map: Dict[str, LogicalSignalRef]):
+    def set_signal_map(self, signal_map: dict[str, LogicalSignalRef]):
         """Map experiment signals.
 
         Arguments:
@@ -324,7 +324,7 @@ class Experiment:
         if calibration:
             self.set_calibration(calibration)
 
-    def list_calibratables(self) -> Dict[str, dict]:
+    def list_calibratables(self) -> dict[str, dict]:
         """Return a dictionary of calibration creation information
         for the device setup signals mapped to this experiment.
 
@@ -376,7 +376,7 @@ class Experiment:
         increment_oscillator_phase=None,
         set_oscillator_phase=None,
         length=None,
-        pulse_parameters: Dict[str, Any] | None = None,
+        pulse_parameters: dict[str, Any] | None = None,
         precompensation_clear: bool | None = None,
         marker=None,
     ):
@@ -432,7 +432,7 @@ class Experiment:
     def delay(
         self,
         signal: str,
-        time: Union[float, Parameter],
+        time: float | Parameter,
         precompensation_clear: bool | None = None,
     ):
         """Delay execution of next operation on the given experiment signal.
@@ -507,7 +507,7 @@ class Experiment:
         measure_signal: str | None = None,
         measure_pulse: Pulse | None = None,
         measure_pulse_length: float | None = None,
-        measure_pulse_parameters: Dict[str, Any] | None = None,
+        measure_pulse_parameters: dict[str, Any] | None = None,
         measure_pulse_amplitude: float | None = None,
         acquire_delay: float | None = None,
         reset_delay: float | None = None,
@@ -557,7 +557,7 @@ class Experiment:
             reset_delay=reset_delay,
         )
 
-    def call(self, func_name: str, **kwargs):
+    def call(self, func_name: str | Callable[..., Any], **kwargs):
         """Add a near-time callback function in the execution of the experiment.
 
         The near-time callback is called by the LabOne Q software as part of
@@ -577,7 +577,7 @@ class Experiment:
 
     def sweep(
         self,
-        parameter: Parameter | List[Parameter],
+        parameter: Parameter | list[Parameter],
         execution_type: ExecutionType | None = None,
         uid: str | None = None,
         alignment: SectionAlignment | None = None,
@@ -1273,14 +1273,14 @@ class Experiment:
         Serializer.to_json_file(self.get_signal_map(), filename)
 
     @staticmethod
-    def _all_subsections(section):
+    def _all_subsections(section: Section):
         retval = [section]
         for s in section.sections:
             retval.extend(Experiment._all_subsections(s))
 
         return retval
 
-    def all_sections(self) -> List[Section]:
+    def all_sections(self) -> list[Section]:
         """Return a list of all sections contained within this experiment.
 
         The list includes sections recursively, so all subsections are

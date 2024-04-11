@@ -128,7 +128,7 @@ def _compute_start_with_latency(
             qa_device_type.integration_dsp_latency or 0.0,
         ),
         qa_sampling_rate,
-        qa_device_type.sample_multiple,
+        qa_device_type.port_delay_granularity,
     )
 
     acquire_end_in_samples = (
@@ -182,9 +182,8 @@ def _compute_start_with_latency(
                 time_of_arrival_at_register + EXECUTETABLEENTRY_LATENCY
             )
 
-            # Extra slack to avoid issues with marginal model.
-            # See HBAR-1934
-            time_of_pulse_played += 5
+            # Extra slack to avoid issues with marginal model. Resolution: HULK-1726
+            time_of_pulse_played += 5 - 2  # `HBAR-1934` - `HBAR-1945`
 
             sg_seq_rate = schedule_data.sampling_rate_tracker.sequencer_rate_for_device(
                 sg_signal_obj.awg.device_id

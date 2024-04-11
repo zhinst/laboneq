@@ -40,7 +40,7 @@ class Calibration:
 @dataclass
 class MixerCalibration:
     uid: str = None
-    voltage_offsets: list[float] | None = None
+    voltage_offsets: list[float | Parameter] = field(default_factory=list)
     correction_matrix: list[list[float]] | None = None
 
 

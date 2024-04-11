@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from abc import ABC
 from dataclasses import dataclass, field
-from numbers import Number
 
 import numpy as np
 from numpy.lib.mixins import NDArrayOperatorsMixin
@@ -75,7 +74,8 @@ class _ParameterArithmeticMixin(NDArrayOperatorsMixin):
 
         if method == "__call__":
             new_inputs = []
-            driven_by = []
+            driven_by: list[SweepParameter | LinearSweepParameter] = []
+            input: SweepParameter | LinearSweepParameter
             for input in inputs:
                 if isinstance(input, self.__class__):
                     new_inputs.append(input.values)
@@ -147,9 +147,9 @@ class SweepParameter(_ParameterArithmeticMixin, Parameter):
         Support for applying numpy ufuncs (e.g. ``np.sin``) was added.
     """
 
-    values: ArrayLike = field(default=None)
-    axis_name: str = field(default=None)
-    driven_by: list[SweepParameter] | None = field(default=None)
+    values: ArrayLike | None = field(default=None)
+    axis_name: str | None = field(default=None)
+    driven_by: list[SweepParameter | LinearSweepParameter] | None = field(default=None)
 
     def __post_init__(self):
         if self.driven_by:
@@ -217,10 +217,10 @@ class LinearSweepParameter(_ParameterArithmeticMixin, Parameter):
     """
 
     # The starting value of the parameter sweep.
-    start: Number = field(default=None)
+    start: float = field(default=None)
 
     # The final value of the parameter sweep.
-    stop: Number = field(default=None)
+    stop: float = field(default=None)
 
     # The number of sweep steps in the parameter sweep.
     count: int = field(default=None)

@@ -323,7 +323,7 @@ class LogicalSignal(Calibratable):
                 self._on_physical_channel_calibration_changed
             )
 
-    def is_calibrated(self):
+    def is_calibrated(self) -> bool:
         return self._calibration is not None
 
     def reset_calibration(self):

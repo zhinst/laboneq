@@ -12,6 +12,7 @@ class AttributeName(Enum):
     OSCILLATOR_FREQ = auto()
     OUTPUT_SCHEDULER_PORT_DELAY = auto()
     OUTPUT_PORT_DELAY = auto()
+    OUTPUT_VOLTAGE_OFFSET = auto()
     INPUT_SCHEDULER_PORT_DELAY = auto()
     INPUT_PORT_DELAY = auto()
     PPC_CANCELLATION_PHASE = auto()

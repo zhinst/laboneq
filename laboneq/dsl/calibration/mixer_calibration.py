@@ -4,10 +4,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import TYPE_CHECKING
 
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration.observable import Observable
+
+if TYPE_CHECKING:
+    from laboneq.dsl.parameter import Parameter
+
 
 mixer_calib_id = 0
 
@@ -28,10 +32,11 @@ class MixerCalibration(Observable):
         uid (str):
             A unique id for the calibration. If not supplied, one
             will be generated.
-        voltage_offsets (Optional[List[float]]):
+        voltage_offsets (list[float | Parameter] | None):
             DC voltage offsets. Supplied as a list of two values (for I and Q channels)
+            Both I and Q channel can be swept individually.
             Units: Volts. Default: `None`.
-        correction_matrix (Optional[List[List[float]]]):
+        correction_matrix (list[list[float]] | None):
             Matrix for correcting the gain and phase mismatch between I and Q.
             If `None`, no correction is performed.
 
@@ -44,11 +49,6 @@ class MixerCalibration(Observable):
             )
     """
 
-    # Unique identifier. If left blank, a new unique ID will be generated.
     uid: str = field(default_factory=mixer_calib_id_generator)
-
-    # DC voltage offsets, two values (for I and Q channels), expressed in volts.
-    voltage_offsets: Optional[List[float]] = field(default=None)
-
-    # Matrix for correcting gain and phase mismatch between I and Q.
-    correction_matrix: Optional[List[List[float]]] = field(default=None)
+    voltage_offsets: list[float | Parameter] | None = None
+    correction_matrix: list[list[list[float]]] | None = None

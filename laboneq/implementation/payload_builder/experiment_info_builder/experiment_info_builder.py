@@ -261,7 +261,10 @@ class ExperimentInfoBuilder:
 
     def _load_mixer_cal(self, mixer_cal: MixerCalibration) -> MixerCalibrationInfo:
         return MixerCalibrationInfo(
-            mixer_cal.voltage_offsets, mixer_cal.correction_matrix
+            voltage_offsets=tuple(
+                self.opt_param(offset) for offset in mixer_cal.voltage_offsets
+            ),
+            correction_matrix=mixer_cal.correction_matrix,
         )
 
     def _load_precompensation(self, precomp: Precompensation) -> PrecompensationInfo:

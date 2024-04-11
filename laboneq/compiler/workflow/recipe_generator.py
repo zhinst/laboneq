@@ -218,7 +218,7 @@ class RecipeGenerator:
         self,
         device_id,
         channel,
-        offset=0.0,
+        offset: float | ParameterInfo = 0.0,
         diagonal=1.0,
         off_diagonal=0.0,
         precompensation=None,
@@ -267,6 +267,8 @@ class RecipeGenerator:
             port_delay = port_delay.uid
         if isinstance(amplitude, ParameterInfo):
             amplitude = amplitude.uid
+        if isinstance(offset, ParameterInfo):
+            offset = offset.uid
         output = IO(
             channel=channel,
             enable=True,

@@ -21,6 +21,7 @@ class DeviceTraits:
     sampling_rate: float
     min_play_wave: int
     sample_multiple: int
+    port_delay_granularity: int  # Granularity of the port delay in samples
     supports_zsync: bool
     supports_reset_osc_phase: bool
     supports_binary_waves: bool
@@ -70,6 +71,7 @@ class DeviceType(DeviceTraits, Enum):
         sampling_rate_2GHz=2.0e9,
         min_play_wave=32,
         sample_multiple=16,
+        port_delay_granularity=1,
         amplitude_register_count=4,
         supports_zsync=True,
         supports_reset_osc_phase=True,
@@ -100,6 +102,7 @@ class DeviceType(DeviceTraits, Enum):
         sampling_rate=1.8e9,
         min_play_wave=16,
         sample_multiple=8,
+        port_delay_granularity=4,
         supports_zsync=False,
         supports_reset_osc_phase=True,
         supports_binary_waves=True,  # Todo (Pol): useful or not?
@@ -120,6 +123,7 @@ class DeviceType(DeviceTraits, Enum):
         sampling_rate=2.0e9,
         min_play_wave=32,
         sample_multiple=16,
+        port_delay_granularity=4,
         supports_zsync=True,
         supports_reset_osc_phase=True,  # Todo (Pol): useful or not?
         supports_binary_waves=False,
@@ -152,6 +156,7 @@ class DeviceType(DeviceTraits, Enum):
         sampling_rate=2.0e9,
         min_play_wave=32,
         sample_multiple=16,
+        port_delay_granularity=1,
         supports_zsync=True,
         supports_reset_osc_phase=True,
         supports_binary_waves=True,
@@ -183,6 +188,7 @@ class DeviceType(DeviceTraits, Enum):
         sampling_rate=2.0e9,
         min_play_wave=4,
         sample_multiple=4,
+        port_delay_granularity=-(1 << 32),  # FIXME: Unknown or NA
         supports_zsync=False,
         supports_reset_osc_phase=False,
         supports_binary_waves=False,

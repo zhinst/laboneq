@@ -760,7 +760,7 @@ class Compiler:
                     signal_info.type == SignalInfoType.IQ
                     and mixer_calibration is not None
                 ):
-                    if mixer_calibration.voltage_offsets is not None:
+                    if mixer_calibration.voltage_offsets:
                         output["offset"] = mixer_calibration.voltage_offsets[
                             channel - base_channel
                         ]

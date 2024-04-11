@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 from enum import IntEnum
-from typing import Any
+from typing import Any, Iterator
 
 import numpy as np
 
@@ -22,6 +22,7 @@ from laboneq.controller.devices.device_zi import (
     DeviceZI,
     delay_to_rounded_samples,
 )
+from laboneq.controller.attribute_value_tracker import DeviceAttribute
 from laboneq.controller.devices.zi_node_monitor import (
     Command,
     Condition,
@@ -302,7 +303,6 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
                         self.dev_repr,
                     )
                 nc.add(f"sigouts/{output.channel}/range", output.range)
-            nc.add(f"sigouts/{output.channel}/offset", output.offset)
             nc.add(f"awgs/{awg_idx}/single", 1)
 
             awg_ch = output.channel % 2
@@ -434,6 +434,18 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
 
         return await self.maybe_async(nc)
 
+    def pre_process_attributes(
+        self,
+        initialization: Initialization,
+    ) -> Iterator[DeviceAttribute]:
+        yield from super().pre_process_attributes(initialization)
+        for io in initialization.outputs or []:
+            yield DeviceAttribute(
+                name=AttributeName.OUTPUT_VOLTAGE_OFFSET,
+                index=io.channel,
+                value_or_param=io.offset,
+            )
+
     def collect_prepare_nt_step_nodes(
         self, attributes: DeviceAttributesView, recipe_data: RecipeData
     ) -> NodeCollector:
@@ -447,24 +459,27 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
                     (AttributeName.OUTPUT_PORT_DELAY, ch),
                 ]
             )
-            if not updated or scheduler_port_delay is None:
-                continue
-
-            output_delay = scheduler_port_delay + (port_delay or 0.0)
-            output_delay_rounded = (
-                delay_to_rounded_samples(
-                    channel=ch,
-                    dev_repr=self.dev_repr,
-                    delay=output_delay,
-                    sample_frequency_hz=self._sampling_rate,
-                    granularity_samples=DELAY_NODE_GRANULARITY_SAMPLES,
-                    max_node_delay_samples=DELAY_NODE_MAX_SAMPLES,
+            if updated and scheduler_port_delay is not None:
+                output_delay = scheduler_port_delay + (port_delay or 0.0)
+                output_delay_rounded = (
+                    delay_to_rounded_samples(
+                        channel=ch,
+                        dev_repr=self.dev_repr,
+                        delay=output_delay,
+                        sample_frequency_hz=self._sampling_rate,
+                        granularity_samples=DELAY_NODE_GRANULARITY_SAMPLES,
+                        max_node_delay_samples=DELAY_NODE_MAX_SAMPLES,
+                    )
+                    / self._sampling_rate
                 )
-                / self._sampling_rate
+                nc.add(f"sigouts/{ch}/delay", output_delay_rounded)
+            [output_voltage_offset], updated = attributes.resolve(
+                keys=[
+                    (AttributeName.OUTPUT_VOLTAGE_OFFSET, ch),
+                ]
             )
-
-            nc.add(f"sigouts/{ch}/delay", output_delay_rounded)
-
+            if updated and output_voltage_offset is not None:
+                nc.add(f"sigouts/{ch}/offset", output_voltage_offset)
         return nc
 
     async def collect_awg_before_upload_nodes(

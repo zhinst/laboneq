@@ -456,9 +456,8 @@ class Controller:
     async def _execute_compiled_impl(
         self, protected_session: ProtectedSession
     ) -> ExperimentResults:
-        await (
-            self._connect_async()
-        )  # Ensure all connect configurations are still valid!
+        # Ensure all connect configurations are still valid!
+        await self._connect_async()
         self._prepare_result_shapes()
         protected_session._set_experiment_results(self._results)
         try:

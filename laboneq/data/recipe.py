@@ -62,7 +62,7 @@ class IO:
     channel: int
     enable: bool | None = None
     modulation: bool | None = None
-    offset: float | None = None
+    offset: float | None | ParameterUID = None
     gains: Gains | None = None
     range: float | None = None
     range_unit: str | None = None
