@@ -50,7 +50,7 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
         self._output_to_synth_map = [0, 0, 1, 1, 2, 2, 3, 3]
         self._wait_for_awgs = True
         self._emit_trigger = False
-        self.pipeliner_set_node_base(f"/{self.serial}/sgchannels")
+        self.pipeliner_set_node_base(f"/{self.serial}/sgchannels", "SG")
         self._has_opt_rtr = False
         self._warning_nodes = {}
 
@@ -227,7 +227,7 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
 
     async def conditions_for_execution_ready(
         self, with_pipeliner: bool
-    ) -> dict[str, Any]:
+    ) -> dict[str, tuple[Any, str]]:
         if not self._wait_for_awgs:
             return {}
 
@@ -235,28 +235,34 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
             conditions = self.pipeliner_conditions_for_execution_ready()
         else:
             conditions = {
-                f"/{self.serial}/sgchannels/{awg_index}/awg/enable": 1
+                f"/{self.serial}/sgchannels/{awg_index}/awg/enable": (
+                    1,
+                    f"{self.dev_repr}: AWG {awg_index + 1} didn't start.",
+                )
                 for awg_index in self._allocated_awgs
             }
-        return await self.maybe_async_wait(conditions)
+        return conditions  # await self.maybe_async_wait(conditions)
 
     async def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
-    ) -> dict[str, Any]:
+    ) -> dict[str, tuple[Any, str]]:
         if with_pipeliner:
             conditions = self.pipeliner_conditions_for_execution_done()
         else:
             conditions = {
-                f"/{self.serial}/sgchannels/{awg_index}/awg/enable": 0
+                f"/{self.serial}/sgchannels/{awg_index}/awg/enable": (
+                    0,
+                    f"{self.dev_repr}: AWG {awg_index + 1} didn't stop. Missing start trigger? Check ZSync.",
+                )
                 for awg_index in self._allocated_awgs
             }
-        return await self.maybe_async_wait(conditions)
+        return conditions  # await self.maybe_async_wait(conditions)
 
     async def collect_execution_teardown_nodes(
         self, with_pipeliner: bool
     ) -> list[DaqNodeSetAction]:
         nc = NodeCollector(base=f"/{self.serial}/")
-        if not self.is_standalone():
+        if not self.is_standalone() and not self.is_secondary:
             # Deregister this instrument from synchronization via ZSync.
             # HULK-1707: this must happen before disabling the synchronization of the last AWG
             nc.add("system/synchronization/source", 0)

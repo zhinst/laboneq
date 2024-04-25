@@ -7,6 +7,7 @@ This module provides type hinting for the optionals and a helper function
 for importing modules, which can be used for importing optionals, as it also
 provides missing module error handling.
 """
+
 from __future__ import annotations
 
 import importlib

@@ -87,8 +87,7 @@ class Notification:
 
 class Statement(ABC):
     @abstractmethod
-    def run(self, scope: ExecutionScope) -> Iterator[Notification]:
-        ...
+    def run(self, scope: ExecutionScope) -> Iterator[Notification]: ...
 
 
 class Sequence(Statement):

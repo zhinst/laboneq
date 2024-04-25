@@ -6,9 +6,11 @@ from __future__ import annotations
 from typing import Any, Callable, Dict
 
 import numpy as np
+
 from laboneq.core.utilities.pulse_sampler import pulse_function_library
 from laboneq.dsl.experiment.pulse import (
     PulseFunctional,
+    PulseSampled,
     PulseSampledComplex,
     PulseSampledReal,
 )
@@ -295,6 +297,22 @@ def cos2(x, **_):
         pulse (Pulse): Raised cosine pulse.
     """
     return np.cos(x * np.pi / 2) ** 2
+
+
+def sampled_pulse(samples, uid=None, can_compress=False):
+    """Create a pulse based on a array of waveform values.
+
+    Arguments:
+        samples (numpy.ndarray): waveform envelope data.
+        uid (str): Unique identifier of the created pulse.
+
+    Returns:
+        pulse (Pulse): Pulse based on the provided sample values.
+    """
+    if uid is None:
+        return PulseSampled(samples=samples, can_compress=can_compress)
+    else:
+        return PulseSampled(uid=uid, samples=samples, can_compress=can_compress)
 
 
 def sampled_pulse_real(samples, uid=None, can_compress=False):

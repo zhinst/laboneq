@@ -1,8 +1,7 @@
 # Copyright 2020 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-""" Collection of helper functions for plotting simulated output and results data from LabOne Q
-"""
+"""Collection of helper functions for plotting simulated output and results data from LabOne Q"""
 
 from __future__ import annotations
 

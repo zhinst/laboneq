@@ -78,16 +78,13 @@ class NodeMonitorBase(ABC):
         self._nodes: dict[str, Node] = {}
 
     @abstractmethod
-    async def start(self):
-        ...
+    async def start(self): ...
 
     @abstractmethod
-    async def stop(self):
-        ...
+    async def stop(self): ...
 
     @abstractmethod
-    async def poll(self):
-        ...
+    async def poll(self): ...
 
     def _fail_on_missing_node(self, path: str):
         if path not in self._nodes:
@@ -185,13 +182,13 @@ class NodeMonitor(NodeMonitorBase):
 class INodeMonitorProvider(ABC):
     @property
     @abstractmethod
-    def node_monitor(self) -> NodeMonitorBase:
-        ...
+    def node_monitor(self) -> NodeMonitorBase: ...
 
 
 class MultiDeviceHandlerBase:
     def __init__(self):
         self._conditions: dict[NodeMonitorBase, dict[str, Any]] = {}
+        self._messages: dict[str, str] = {}
 
     def add(self, target: INodeMonitorProvider, conditions: dict[str, Any]):
         if conditions:
@@ -199,6 +196,16 @@ class MultiDeviceHandlerBase:
                 target.node_monitor, {}
             )
             daq_conditions.update(conditions)
+
+    def add_with_msg(
+        self, target: INodeMonitorProvider, conditions: dict[str, tuple[Any, str]]
+    ):
+        if conditions:
+            daq_conditions: dict[str, Any] = self._conditions.setdefault(
+                target.node_monitor, {}
+            )
+            daq_conditions.update({path: val[0] for path, val in conditions.items()})
+            self._messages.update({path: val[1] for path, val in conditions.items()})
 
     def add_from(self, other: MultiDeviceHandlerBase):
         for node_monitor, conditions in other._conditions.items():
@@ -291,13 +298,13 @@ class ResponseWaiter(MultiDeviceHandlerBase):
     async def wait_all(self, timeout: float) -> bool:
         start = self._timer()
         while True:
-            remaining: dict[NodeMonitor, dict[str, Any]] = {}
-            for node_monitor, daq_conditions in self._conditions.items():
-                daq_remaining = await node_monitor.poll_and_check_conditions(
-                    daq_conditions
+            remaining: dict[NodeMonitorBase, dict[str, Any]] = {}
+            for node_monitor, node_monitor_conditions in self._conditions.items():
+                node_monitor_remaining = await node_monitor.poll_and_check_conditions(
+                    node_monitor_conditions
                 )
-                if len(daq_remaining) > 0:
-                    remaining[node_monitor] = daq_remaining
+                if len(node_monitor_remaining) > 0:
+                    remaining[node_monitor] = node_monitor_remaining
             if len(remaining) == 0:
                 return True
             if self._timer() - start > timeout:
@@ -311,7 +318,13 @@ class ResponseWaiter(MultiDeviceHandlerBase):
         return all_conditions
 
     def remaining_str(self) -> str:
-        return "\n".join([f"{p}={v}" for p, v in self.remaining().items()])
+        failures: list[str] = []
+        for p, v in self.remaining().items():
+            msg = self._messages.get(p)
+            if msg is None:
+                msg = f"{p}={v}"
+            failures.append(msg)
+        return "\n".join(failures)
 
 
 class NodeControlKind(Enum):

@@ -22,7 +22,6 @@ Example
     ... class Bar(Observable):
     ...     a: int = 2
     ...     b: int = 4
-    ...
     >>> b = Bar()
     >>> def has_changed_callback(observable, key, value):
     ...     print(f"Changed: {observable}, {key}={value}")

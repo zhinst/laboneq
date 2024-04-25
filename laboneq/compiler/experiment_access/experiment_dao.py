@@ -39,20 +39,18 @@ _logger = logging.getLogger(__name__)
 
 class ExperimentDAO:
     def __init__(self, experiment, loader=None):
-        self._data: dict[str, Any] = {}
-        self._acquisition_type: AcquisitionType = None  # type: ignore
-
         if loader is not None:
             assert experiment is None, "Cannot pass both experiment and inject a loader"
             self._loader = loader
+            self._uid = "exp_from_injected_loader"
         elif isinstance(experiment, ExperimentInfo):
             self._loader = self._load_experiment_info(experiment)
             self._uid = experiment.uid
         else:
             self._loader = self._load_experiment(experiment)
             self._uid = "exp_from_json"
-        self._data = self._loader.data()
-        self._acquisition_type = self._loader.acquisition_type
+        self._data: dict[str, Any] = self._loader.data()
+        self._acquisition_type: AcquisitionType = self._loader.acquisition_type
 
         self.validate_experiment()
 

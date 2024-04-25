@@ -220,19 +220,25 @@ class DeviceUHFQA(DeviceZI):
 
     async def conditions_for_execution_ready(
         self, with_pipeliner: bool
-    ) -> dict[str, Any]:
-        conditions: dict[str, Any] = {}
+    ) -> dict[str, tuple[Any, str]]:
+        conditions: dict[str, tuple[Any, str]] = {}
         for awg_index in self._allocated_awgs:
-            conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = 1
-        return await self.maybe_async_wait(conditions)
+            conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = (
+                1,
+                f"{self.dev_repr}: AWG {awg_index + 1} didn't start.",
+            )
+        return conditions  # await self.maybe_async_wait(conditions)
 
     async def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
-    ) -> dict[str, Any]:
-        conditions: dict[str, Any] = {}
+    ) -> dict[str, tuple[Any, str]]:
+        conditions: dict[str, tuple[Any, str]] = {}
         for awg_index in self._allocated_awgs:
-            conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = 0
-        return await self.maybe_async_wait(conditions)
+            conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = (
+                0,
+                f"{self.dev_repr}: AWG {awg_index + 1} didn't stop. Missing start trigger? Check DIO.",
+            )
+        return conditions  # await self.maybe_async_wait(conditions)
 
     def _validate_range(self, io: IO, is_out: bool):
         if io.range is None:

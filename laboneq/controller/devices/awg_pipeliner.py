@@ -10,9 +10,9 @@ from laboneq.controller.devices.device_utils import NodeCollector
 
 class _MixInToDevice(Protocol):
     _allocated_awgs: set[int]
+    dev_repr: str
 
-    def _get_num_awgs(self) -> int:
-        ...
+    def _get_num_awgs(self) -> int: ...
 
 
 if TYPE_CHECKING:
@@ -25,14 +25,16 @@ class AwgPipeliner(_type_base):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._node_base = ""
+        self._unit = ""
         self._pipeliner_slot_tracker: dict[int, int] = {}
 
     @property
     def has_pipeliner(self) -> bool:
         return True
 
-    def pipeliner_set_node_base(self, node_base: str):
+    def pipeliner_set_node_base(self, node_base: str, unit: str):
         self._node_base = node_base
+        self._unit = unit
 
     def pipeliner_control_nodes(self, index: int) -> list[str]:
         return [
@@ -65,15 +67,21 @@ class AwgPipeliner(_type_base):
             nc.add(f"{index}/pipeliner/enable", 1, cache=False)
         return nc
 
-    def pipeliner_conditions_for_execution_ready(self) -> dict[str, Any]:
+    def pipeliner_conditions_for_execution_ready(self) -> dict[str, tuple[Any, str]]:
         return {
-            f"{self._node_base}/{index}/pipeliner/status": 1  # exec
+            f"{self._node_base}/{index}/pipeliner/status": (
+                1,  # exec
+                f"{self.dev_repr}: Pipeliner for {self._unit} channel {index + 1} didn't start.",
+            )
             for index in self._allocated_awgs
         }
 
-    def pipeliner_conditions_for_execution_done(self) -> dict[str, Any]:
+    def pipeliner_conditions_for_execution_done(self) -> dict[str, tuple[Any, str]]:
         return {
-            f"{self._node_base}/{index}/pipeliner/status": 0  # idle
+            f"{self._node_base}/{index}/pipeliner/status": (
+                0,  # idle
+                f"{self.dev_repr}: Pipeliner for {self._unit} channel {index + 1} didn't stop. Missing start trigger? Check HW synchronization participants.",
+            )
             for index in self._allocated_awgs
         }
 

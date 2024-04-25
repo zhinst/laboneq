@@ -22,9 +22,8 @@ from laboneq.data.experiment_description import Match as MatchDATA
 from laboneq.data.experiment_description import PlayPulse as PlayPulseDATA
 from laboneq.data.experiment_description import PulseFunctional as PulseFunctionalDATA
 from laboneq.data.experiment_description import (
-    PulseSampledComplex as PulseSampledComplexDATA,
+    PulseSampled as PulseSampledDATA,
 )
-from laboneq.data.experiment_description import PulseSampledReal as PulseSampledRealDATA
 from laboneq.data.experiment_description import RepetitionMode as RepetitionModeDATA
 from laboneq.data.experiment_description import Reserve as ReserveDATA
 from laboneq.data.experiment_description import Section as SectionDATA
@@ -46,8 +45,9 @@ from laboneq.dsl.experiment.experiment_signal import (
 )
 from laboneq.dsl.experiment.play_pulse import PlayPulse as PlayPulseDSL
 from laboneq.dsl.experiment.pulse import PulseFunctional as PulseFunctionalDSL
-from laboneq.dsl.experiment.pulse import PulseSampledComplex as PulseSampledComplexDSL
+from laboneq.dsl.experiment.pulse import PulseSampled as PulseSampledDSL
 from laboneq.dsl.experiment.pulse import PulseSampledReal as PulseSampledRealDSL
+from laboneq.dsl.experiment.pulse import PulseSampledComplex as PulseSampledComplexDSL
 from laboneq.dsl.experiment.reserve import Reserve as ReserveDSL
 from laboneq.dsl.experiment.section import AcquireLoopNt as AcquireLoopNtDSL
 from laboneq.dsl.experiment.section import AcquireLoopRt as AcquireLoopRtDSL
@@ -299,20 +299,10 @@ def convert_PulseFunctional(orig: PulseFunctionalDSL):
     return post_process(orig, retval, converter_function_directory)
 
 
-def convert_PulseSampledComplex(orig: PulseSampledComplexDSL):
+def convert_PulseSampled(orig: PulseSampledDSL):
     if orig is None:
         return None
-    retval = PulseSampledComplexDATA()
-    retval.samples = convert_dynamic(orig.samples, converter_function_directory)
-    retval.uid = orig.uid
-    retval.can_compress = orig.can_compress
-    return post_process(orig, retval, converter_function_directory)
-
-
-def convert_PulseSampledReal(orig: PulseSampledRealDSL):
-    if orig is None:
-        return None
-    retval = PulseSampledRealDATA()
+    retval = PulseSampledDATA()
     retval.samples = convert_dynamic(orig.samples, converter_function_directory)
     retval.uid = orig.uid
     retval.can_compress = orig.can_compress
@@ -440,8 +430,9 @@ converter_function_directory = {
     PRNGSetupDSL: convert_PRNGSetup,
     PRNGLoopDSL: convert_PRNGLoop,
     PulseFunctionalDSL: convert_PulseFunctional,
-    PulseSampledComplexDSL: convert_PulseSampledComplex,
-    PulseSampledRealDSL: convert_PulseSampledReal,
+    PulseSampledDSL: convert_PulseSampled,
+    PulseSampledRealDSL: convert_PulseSampled,  # todo: walk inheritance tree to automatically fall back to parent converter
+    PulseSampledComplexDSL: convert_PulseSampled,
     ReserveDSL: convert_Reserve,
     SectionDSL: convert_Section,
     SetDSL: convert_Set,

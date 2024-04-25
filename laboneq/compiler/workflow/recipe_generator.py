@@ -42,7 +42,10 @@ from laboneq.data.recipe import (
 )
 
 if TYPE_CHECKING:
-    from laboneq.compiler.workflow.compiler import LeaderProperties
+    from laboneq.compiler.workflow.compiler import (
+        LeaderProperties,
+        _IntegrationUnitAllocation,
+    )
     from laboneq.data.compilation_job import OutputRoute as CompilerOutputRoute
 
 
@@ -77,20 +80,20 @@ class RecipeGenerator:
 
     def add_integrator_allocations(
         self,
-        integration_unit_allocation,
+        integration_unit_allocation: dict[str, _IntegrationUnitAllocation],
         experiment_dao: ExperimentDAO,
     ):
         for signal_id, integrator in integration_unit_allocation.items():
             thresholds = experiment_dao.threshold(signal_id)
-            n = max(1, integrator["kernel_count"] or 0)
+            n = max(1, integrator.kernel_count or 0)
             if not thresholds or thresholds == [None]:
                 thresholds = [0.0] * (n * (n + 1) // 2)
 
             integrator_allocation = IntegratorAllocation(
                 signal_id=signal_id,
-                device_id=integrator["device_id"],
-                awg=integrator["awg_nr"],
-                channels=integrator["channels"],
+                device_id=integrator.device_id,
+                awg=integrator.awg_nr,
+                channels=integrator.channels,
                 thresholds=ensure_list(thresholds),
                 kernel_count=n,
             )
@@ -219,8 +222,8 @@ class RecipeGenerator:
         device_id,
         channel,
         offset: float | ParameterInfo = 0.0,
-        diagonal=1.0,
-        off_diagonal=0.0,
+        diagonal: float | ParameterInfo = 1.0,
+        off_diagonal: float | ParameterInfo = 0.0,
         precompensation=None,
         modulation=False,
         lo_frequency=None,
@@ -269,6 +272,10 @@ class RecipeGenerator:
             amplitude = amplitude.uid
         if isinstance(offset, ParameterInfo):
             offset = offset.uid
+        if isinstance(diagonal, ParameterInfo):
+            diagonal = diagonal.uid
+        if isinstance(off_diagonal, ParameterInfo):
+            off_diagonal = off_diagonal.uid
         output = IO(
             channel=channel,
             enable=True,

@@ -921,13 +921,13 @@ def analyze_play_wave_times(
                 if amplitude_resolution_range >= 1:
                     signature.quantize_amplitude(amplitude_resolution_range)
                 if signature.set_amplitude is not None:
-                    amplitude_register_values[
-                        signature.amplitude_register
-                    ] = signature.set_amplitude
+                    amplitude_register_values[signature.amplitude_register] = (
+                        signature.set_amplitude
+                    )
                 if signature.increment_amplitude is not None:
-                    amplitude_register_values[
-                        signature.amplitude_register
-                    ] += signature.increment_amplitude
+                    amplitude_register_values[signature.amplitude_register] += (
+                        signature.increment_amplitude
+                    )
 
                 if signature.state is not None:
                     # After a conditional playback, we do not know for sure what value
@@ -949,13 +949,13 @@ def analyze_play_wave_times(
                 if amplitude_resolution_range >= 1:
                     signature.quantize_amplitude(amplitude_resolution_range)
                 if signature.set_amplitude is not None:
-                    amplitude_register_values[
-                        signature.amplitude_register
-                    ] = signature.set_amplitude
+                    amplitude_register_values[signature.amplitude_register] = (
+                        signature.set_amplitude
+                    )
                 if signature.increment_amplitude is not None:
-                    amplitude_register_values[
-                        signature.amplitude_register
-                    ] += signature.increment_amplitude
+                    amplitude_register_values[signature.amplitude_register] += (
+                        signature.increment_amplitude
+                    )
 
     if len(signatures) > 0:
         _logger.debug(

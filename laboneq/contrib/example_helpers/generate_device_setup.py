@@ -1,8 +1,7 @@
 # Copyright 2020 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-"""Functions to generate a device setup and a list of qubits from parameters, to use with the tutorials and how_to notebooks in the LabOne Q repository
-"""
+"""Functions to generate a device setup and a list of qubits from parameters, to use with the tutorials and how_to notebooks in the LabOne Q repository"""
 
 from __future__ import annotations
 

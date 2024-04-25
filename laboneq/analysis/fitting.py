@@ -1,8 +1,7 @@
 # Copyright 2020 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fitting functions for modeling results in common quantum computing experiments.
-"""
+"""Fitting functions for modeling results in common quantum computing experiments."""
 
 from __future__ import annotations
 

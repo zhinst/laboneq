@@ -276,9 +276,9 @@ def dump(experiment_dao: ExperimentDAO):
                         "$ref": section_pulse.pulse.uid
                     }
                 if section_pulse.precompensation_clear:
-                    section_signal_pulse_object[
-                        "precompensation_clear"
-                    ] = section_pulse.precompensation_clear
+                    section_signal_pulse_object["precompensation_clear"] = (
+                        section_pulse.precompensation_clear
+                    )
                 for key in [
                     "amplitude",
                     "offset",
@@ -297,17 +297,17 @@ def dump(experiment_dao: ExperimentDAO):
                     if handle is not None:
                         section_signal_pulse_object["readout_handle"] = handle
                 if section_pulse.play_pulse_parameters:
-                    section_signal_pulse_object[
-                        "play_pulse_parameters"
-                    ] = copy.deepcopy(section_pulse.play_pulse_parameters)
+                    section_signal_pulse_object["play_pulse_parameters"] = (
+                        copy.deepcopy(section_pulse.play_pulse_parameters)
+                    )
                 if section_pulse.pulse_pulse_parameters:
-                    section_signal_pulse_object[
-                        "pulse_pulse_parameters"
-                    ] = copy.deepcopy(section_pulse.pulse_pulse_parameters)
+                    section_signal_pulse_object["pulse_pulse_parameters"] = (
+                        copy.deepcopy(section_pulse.pulse_pulse_parameters)
+                    )
                 if section_pulse.pulse_group is not None:
-                    section_signal_pulse_object[
-                        "pulse_group"
-                    ] = section_pulse.pulse_group
+                    section_signal_pulse_object["pulse_group"] = (
+                        section_pulse.pulse_group
+                    )
                 markers = section_pulse.markers
                 if markers is not None:
                     markers_object = {}

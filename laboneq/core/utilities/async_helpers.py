@@ -29,7 +29,7 @@ def run_async(func: Callable[..., Coroutine[None, None, T]], *args, **kwargs) ->
     Args:
         func: Asynchronous callable to be called with `*args` and `*kwargs`
     """
-    if _is_event_loop_running():
-        return unsync(func)(*args, **kwargs).result()
-    else:
-        return asyncio.run(func(*args, **kwargs))
+    # if _is_event_loop_running():
+    return unsync(func)(*args, **kwargs).result()
+    # else:
+    #     return asyncio.run(func(*args, **kwargs))

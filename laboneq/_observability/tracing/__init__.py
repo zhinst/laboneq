@@ -5,6 +5,7 @@
 
 The module contains tracing API for LabOneQ.
 """
+
 import os
 
 _TRACING_AVAILABLE = bool(int(os.getenv("LABONEQ_ENABLE_OBSERVABILITY", 0)))

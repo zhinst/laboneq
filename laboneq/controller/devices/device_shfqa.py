@@ -114,7 +114,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         self._integrators = 16
         self._wait_for_awgs = True
         self._emit_trigger = False
-        self.pipeliner_set_node_base(f"/{self.serial}/qachannels")
+        self.pipeliner_set_node_base(f"/{self.serial}/qachannels", "QA")
 
     @property
     def dev_repr(self) -> str:
@@ -434,7 +434,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
 
     async def conditions_for_execution_ready(
         self, with_pipeliner: bool
-    ) -> dict[str, Any]:
+    ) -> dict[str, tuple[Any, str]]:
         if with_pipeliner:
             conditions = self.pipeliner_conditions_for_execution_ready()
         else:
@@ -442,26 +442,32 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
             # as well. The state of the generator enable wasn't always picked up reliably, so we
             # only check in cases where we rely on external triggering mechanisms.
             conditions = {
-                f"/{self.serial}/qachannels/{awg_index}/generator/enable": 1
+                f"/{self.serial}/qachannels/{awg_index}/generator/enable": (
+                    1,
+                    f"{self.dev_repr}: Readout pulse generator {awg_index + 1} didn't start.",
+                )
                 for awg_index in self._allocated_awgs
             }
-        return await self.maybe_async_wait(conditions)
+        return conditions  # await self.maybe_async_wait(conditions)
 
     async def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
-    ) -> dict[str, Any]:
-        conditions: dict[str, Any] = {}
+    ) -> dict[str, tuple[Any, str]]:
+        conditions: dict[str, tuple[Any, str]] = {}
 
         if with_pipeliner:
             conditions.update(self.pipeliner_conditions_for_execution_done())
         else:
             conditions.update(
                 {
-                    f"/{self.serial}/qachannels/{awg_index}/generator/enable": 0
+                    f"/{self.serial}/qachannels/{awg_index}/generator/enable": (
+                        0,
+                        f"{self.dev_repr}: Generator {awg_index + 1} didn't stop. Missing start trigger? Check ZSync.",
+                    )
                     for awg_index in self._allocated_awgs
                 }
             )
-        return await self.maybe_async_wait(conditions)
+        return conditions  # await self.maybe_async_wait(conditions)
 
     async def collect_execution_teardown_nodes(
         self, with_pipeliner: bool
@@ -950,6 +956,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
 
         nc.add("integration/length", measurement.length)
         nc.add("multistate/qudits/*/enable", 0, cache=False)
+        nc.barrier()
 
         for integrator_allocation in recipe_data.recipe.integrator_allocations:
             if (

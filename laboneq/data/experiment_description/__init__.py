@@ -156,18 +156,12 @@ class PulseFunctional(Pulse):
 
 
 @dataclass
-class PulseSampledComplex(Pulse):
+class PulseSampled(Pulse):
     samples: ArrayLike = None
 
 
 @dataclass
-class PulseSampledReal(Pulse):
-    samples: ArrayLike = None
-
-
-@dataclass
-class Reserve(SignalOperation):
-    ...
+class Reserve(SignalOperation): ...
 
 
 @dataclass

@@ -210,7 +210,11 @@ class Session:
 
     @trace("session.connect()")
     def connect(
-        self, do_emulation=False, ignore_version_mismatch=False, reset_devices=False
+        self,
+        do_emulation=False,
+        ignore_version_mismatch=False,
+        reset_devices=False,
+        use_async_api: bool | None = None,
     ) -> ConnectionState:
         """Connects the session to the QCCS system.
 
@@ -257,7 +261,9 @@ class Session:
             neartime_callbacks=self._neartime_callbacks,
         )
         controller.connect(
-            do_emulation=self._connection_state.emulated, reset_devices=reset_devices
+            do_emulation=self._connection_state.emulated,
+            reset_devices=reset_devices,
+            use_async_api=use_async_api,
         )
         self._controller = controller
         if self._connection_state.emulated:

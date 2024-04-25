@@ -144,7 +144,10 @@ def sample_pulse(
     if signal_type == "iq":
         samples = samples.astype(complex)
     else:
-        assert all(samples.imag == 0.0)
+        if not all(samples.imag == 0.0):
+            _logger.info(
+                "Complex-valued pulse envelope provided for an rf-signal, imaginary part will be dropped."
+            )
         amplitude = amplitude.real
         samples = samples.real
 
@@ -169,6 +172,7 @@ def sample_pulse(
     if signal_type == "iq":
         samples = np.exp(-1.0j * carrier_phase) * samples
     else:
+        # TODO: CM: seems unneccesary to check here again after the previous check in line 147 -> remove?
         if not np.allclose(samples.imag, 0.0):
             raise LabOneQException("Complex samples not permitted for RF signals")
         samples = np.cos(carrier_phase) * samples

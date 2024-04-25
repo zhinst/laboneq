@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-import copy
 import uuid
 
 from laboneq.data.compilation_job import CompilationJob, ExperimentInfo
@@ -38,11 +37,6 @@ class PayloadBuilder(PayloadBuilderAPI):
         """
         Compose an experiment from a setup descriptor and an experiment descriptor.
         """
-
-        experiment = copy.deepcopy(experiment)
-        if experiment.signals is None:
-            experiment.signals = []
-
         job = self.create_compilation_job(
             device_setup, experiment, signal_mappings, compiler_settings
         )

@@ -36,8 +36,9 @@ class MixerCalibration(Observable):
             DC voltage offsets. Supplied as a list of two values (for I and Q channels)
             Both I and Q channel can be swept individually.
             Units: Volts. Default: `None`.
-        correction_matrix (list[list[float]] | None):
+        correction_matrix (list[list[float | Parameter]] | None):
             Matrix for correcting the gain and phase mismatch between I and Q.
+            Each element can be swept individually.
             If `None`, no correction is performed.
 
     Examples:
@@ -51,4 +52,4 @@ class MixerCalibration(Observable):
 
     uid: str = field(default_factory=mixer_calib_id_generator)
     voltage_offsets: list[float | Parameter] | None = None
-    correction_matrix: list[list[list[float]]] | None = None
+    correction_matrix: list[list[float | Parameter]] | None = None

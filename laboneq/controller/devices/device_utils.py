@@ -23,10 +23,20 @@ def calc_dev_type(device_qualifier: DeviceQualifier) -> str:
 
 @dataclass
 class NodeAction:
+    pass
+
+
+@dataclass
+class NodeActionSet(NodeAction):
     path: str
     value: Any
     cache: bool = True
     filename: str | None = None
+
+
+@dataclass
+class NodeActionBarrier(NodeAction):
+    pass
 
 
 class NodeCollector:
@@ -37,7 +47,10 @@ class NodeCollector:
     def add(
         self, path: str, value: Any, cache: bool = True, filename: str | None = None
     ):
-        self._nodes.append(NodeAction(self._base + path, value, cache, filename))
+        self._nodes.append(NodeActionSet(self._base + path, value, cache, filename))
+
+    def barrier(self):
+        self._nodes.append(NodeActionBarrier())
 
     def extend(self, other: NodeCollector):
         for node in other:
@@ -46,6 +59,11 @@ class NodeCollector:
     def __iter__(self) -> Iterator[NodeAction]:
         for node in self._nodes:
             yield node
+
+    def set_actions(self) -> Iterator[NodeActionSet]:
+        for node in self._nodes:
+            if isinstance(node, NodeActionSet):
+                yield node
 
 
 def zhinst_core_version() -> str:

@@ -451,9 +451,9 @@ class WaveScroller:
         value: int = int(event.args[0])
         wave_start_samples = event.start_samples - snippet_start_samples
         if 0 <= wave_start_samples <= len(self.trigger_snippet):
-            self.trigger_snippet[
-                self.last_trig_set_samples : wave_start_samples
-            ] = self.last_trig
+            self.trigger_snippet[self.last_trig_set_samples : wave_start_samples] = (
+                self.last_trig
+            )
         self.last_trig_set_samples = max(0, wave_start_samples)
         self.last_trig = value
 

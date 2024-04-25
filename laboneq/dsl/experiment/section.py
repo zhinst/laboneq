@@ -164,9 +164,9 @@ class Section:
         pulse: Pulse,
         amplitude: float | complex | Parameter | None = None,
         phase: float | None = None,
-        increment_oscillator_phase=None,
-        set_oscillator_phase=None,
-        length=None,
+        increment_oscillator_phase: float | Parameter | None = None,
+        set_oscillator_phase: float | None = None,
+        length: float | Parameter | None = None,
         pulse_parameters: dict[str, Any] | None = None,
         precompensation_clear: bool | None = None,
         marker: dict[str, Any] | None = None,
@@ -174,13 +174,28 @@ class Section:
         """Play a pulse on a signal.
 
         Arguments:
-            signal: Signal the pulse should be played on.
-            pulse: Pulse that should be played on the signal.
-            amplitude: Amplitude of the pulse that should be played.
-            phase: Phase of the pulse that should be played.
-            pulse_parameters: Dictionary with user pulse function parameters (re)binding.
-            precompensation_clear: Clear the precompensation filter during the pulse.
-            marker: Instruction for playing marker signals along with the pulse
+            signal:
+                Signal the pulse should be played on.
+            pulse:
+                Pulse that should be played on the signal.
+            amplitude:
+                Amplitude of the pulse that should be played.
+            phase:
+                Phase of the pulse that should be played.
+            increment_oscillator_phase:
+                Increment the phase angle of the modulating oscillator at the start of
+                playing this pulse by this angle (in radians).
+            set_oscillator_phase:
+                Set the phase of the modulating oscillator at the start of playing this
+                pulse to this angle (in radians).
+            length:
+                Modify the length of the pulse to the given value.
+            pulse_parameters:
+                Dictionary with user pulse function parameters (re)binding.
+            precompensation_clear:
+                Clear the precompensation filter during the pulse.
+            marker:
+                Instruction for playing marker signals along with the pulse.
         """
         self.add(
             PlayPulse(

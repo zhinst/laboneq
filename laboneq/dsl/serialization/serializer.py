@@ -131,6 +131,7 @@ class Serializer:
     def classes_by_short_name():
         dsl_modules = [
             "laboneq.dsl.experiment",
+            "laboneq.dsl.experiment.pulse",
             "laboneq.dsl.calibration.amplifier_pump",
             "laboneq.dsl.calibration.oscillator",
             "laboneq.dsl.calibration.signal_calibration",

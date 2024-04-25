@@ -205,9 +205,9 @@ class Scheduler:
             )
             all_section_ids = [root_sections_ids[0], *root_section_children_ids]
             for section_id in all_section_ids:
-                section_signals_with_chidlren[
-                    section_id
-                ] = self._experiment_dao.section_signals_with_children(section_id)
+                section_signals_with_chidlren[section_id] = (
+                    self._experiment_dao.section_signals_with_children(section_id)
+                )
 
         return IR(
             devices=[DeviceIR.from_device_info(dev) for dev in exp_info.devices],
@@ -312,9 +312,9 @@ class Scheduler:
                 schedule.prng_setup = section_info.prng
 
         if schedule.cacheable:
-            self._scheduled_sections[
-                (section_id, current_parameters.frozen())
-            ] = schedule
+            self._scheduled_sections[(section_id, current_parameters.frozen())] = (
+                schedule
+            )
 
         return schedule
 
@@ -1043,9 +1043,9 @@ class Scheduler:
         schedule = self._schedule_children(section_id, section_info, children_schedules)
         schedule = CaseSchedule.from_section_schedule(schedule, state)
         if schedule.cacheable:
-            self._scheduled_sections[
-                (section_id, current_parameters.frozen())
-            ] = schedule
+            self._scheduled_sections[(section_id, current_parameters.frozen())] = (
+                schedule
+            )
 
         return schedule
 

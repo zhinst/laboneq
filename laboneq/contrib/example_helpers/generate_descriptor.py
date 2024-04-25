@@ -1,8 +1,7 @@
 # Copyright 2020 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-"""Function to generate a descriptor from a list of instruments, making basic assumptions about the type of signals needed
-"""
+"""Function to generate a descriptor from a list of instruments, making basic assumptions about the type of signals needed"""
 
 from __future__ import annotations
 

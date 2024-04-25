@@ -36,75 +36,69 @@ def _compare_nested(a, b):
 class Pulse:
     """A pulse for playing during an experiment."""
 
-    # TODO this should be checked on the pulse itself.
-    def is_complex(self) -> bool:
-        """Return whether this pulse contains complex or real amplitudes.
 
-        Returns:
-            is_complex:
-                True if the amplitudes are complex. False if they are real.
-        """
-        return False
-
-
+# TODO: PulseSampledReal and PulseSampledComplex should be the same function taking a single dimensional np.ndarray.
 @classformatter
 @dataclass(init=True, repr=True, order=True)
-class PulseSampledReal(Pulse):
-    """Pulse based on a list of real-valued samples."""
+class PulseSampled(Pulse):
+    """Pulse envelope based on a list of real or complex-valued samples."""
 
-    #: List of real values.
+    #: List of values for the pulse envelope.
     samples: ArrayLike
     #: Unique identifier of the pulse.
     uid: str = field(default_factory=pulse_id_generator)
     #: Flag indicating whether the compiler should attempt to compress this pulse
-    can_compress: bool = field(default=False)
+    can_compress: bool = False
 
     def __post_init__(self):
         if not isinstance(self.uid, str):
-            raise LabOneQException("PulseSampledReal must have a string uid")
+            raise LabOneQException("PulseSampled must have a string uid")
         self.samples = np.array(self.samples)
+
+    def __eq__(self, other):
+        if self is other:
+            return True
+        return self.uid == other.uid and _compare_nested(self.samples, other.samples)
+
+
+@classformatter
+@dataclass(init=True, repr=True, order=False, eq=False)
+class PulseSampledReal(PulseSampled):
+    """Pulse based on a list of real-valued samples.
+
+    !!! version-changed "Deprecated in version 2.29.0"
+        Use `PulseSampled` instead.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
         shape = np.shape(self.samples)
         if not len(shape) == 1:
             raise LabOneQException(
                 "PulseSampledReal samples must be a one-dimensional array"
             )
 
-    def __eq__(self, other):
-        if self is other:
-            return True
-        return self.uid == other.uid and _compare_nested(self.samples, other.samples)
 
-
-# TODO: PulseSampledReal and PulseSampledComplex should be the same function taking a single dimensional np.ndarray.
 @classformatter
-@dataclass(init=True, repr=True, order=True)
-class PulseSampledComplex(Pulse):
-    """Pulse base on a list of complex-valued samples."""
+@dataclass(init=True, repr=True, order=False, eq=False)
+class PulseSampledComplex(PulseSampled):
+    """Pulse base on a list of complex-valued samples.
 
-    #: Complex-valued data.
-    samples: ArrayLike
-    #: Unique identifier of the pulse.
-    uid: str = field(default_factory=pulse_id_generator)
-    #: Flag indicating whether the compiler should attempt to compress this pulse
-    can_compress: bool = field(default=False)
+    !!! version-changed "Deprecated in version 2.29.0"
+        Use `PulseSampled` instead.
+    """
 
     def __post_init__(self):
-        if not isinstance(self.uid, str):
-            raise LabOneQException("PulseSampledComplex must have a string uid")
-
         if not np.iscomplexobj(self.samples):
             shape = np.shape(self.samples)
             if not (len(shape) == 2 and shape[1] == 2):
                 raise LabOneQException(
-                    "PulseSampledComplex samples must be pairs of real, imaginary values"
+                    "PulseSampledComplex samples must be pairs of real, imaginary values or a complex valued numpy array."
                 )
             raw_array = np.transpose(self.samples)
             self.samples = raw_array[0] + 1j * raw_array[1]
 
-    def __eq__(self, other):
-        if self is other:
-            return True
-        return self.uid == other.uid and _compare_nested(self.samples, other.samples)
+        super().__post_init__()
 
 
 @classformatter

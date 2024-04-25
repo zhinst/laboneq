@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Helper Functions for Randomized Benchmarking examples, containing
-    - Definitions of the basic Clifford gates
-    - Functionality to calculate the recovery gate
+- Definitions of the basic Clifford gates
+- Functionality to calculate the recovery gate
 """
 
 from __future__ import annotations

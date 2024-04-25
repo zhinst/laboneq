@@ -44,8 +44,8 @@ class NtStepKey:
 
 @dataclass
 class Gains:
-    diagonal: float
-    off_diagonal: float
+    diagonal: float | ParameterUID
+    off_diagonal: float | ParameterUID
 
 
 @dataclass

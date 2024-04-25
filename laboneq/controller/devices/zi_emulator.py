@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+import asyncio
 from collections import defaultdict
 
 import functools
 import json
+import logging
 import re
 import sched
 import time
@@ -13,6 +15,7 @@ from abc import ABC, abstractmethod
 from dataclasses import InitVar, dataclass, field
 from enum import Enum
 from functools import partial
+from types import SimpleNamespace
 from typing import Any, Callable, cast, overload
 from weakref import ref
 
@@ -189,8 +192,7 @@ class DevEmu(ABC):
         )
 
     @abstractmethod
-    def _node_def(self) -> dict[str, NodeInfo]:
-        ...
+    def _node_def(self) -> dict[str, NodeInfo]: ...
 
     def _full_path(self, dev_path: str) -> str:
         return f"/{self.serial().lower()}/{dev_path}"
@@ -829,9 +831,9 @@ class DevEmuSHFQABase(Gen2Base):
                     ),
                 )
             for integrator in range(16):
-                nd[
-                    f"qachannels/{channel}/readout/result/data/{integrator}/wave"
-                ] = NodeInfo(type=NodeType.VECTOR_COMPLEX)
+                nd[f"qachannels/{channel}/readout/result/data/{integrator}/wave"] = (
+                    NodeInfo(type=NodeType.VECTOR_COMPLEX)
+                )
             nd[f"qachannels/{channel}/spectroscopy/result/data/wave"] = NodeInfo(
                 type=NodeType.VECTOR_COMPLEX
             )
@@ -1092,12 +1094,10 @@ class ziDAQServerEmulator:
         device.set(dev_path, value)
 
     @overload
-    def set(self, path: str, value: Any, /):
-        ...
+    def set(self, path: str, value: Any, /): ...
 
     @overload
-    def set(self, items: list[list[Any]], /):
-        ...
+    def set(self, items: list[list[Any]], /): ...
 
     def set(self, path_or_items: str | list[list[Any]], value: Any | None = None):
         self._progress_scheduler()
@@ -1191,3 +1191,186 @@ class ziDAQServerEmulator:
                 _delay(remaining)
                 break
             _delay(delay_till_next_event)
+
+
+_node_logger = logging.getLogger("node.log")
+
+
+@dataclass
+class MockAnnotatedValue:
+    path: str
+    value: Any
+    extra_header: Any | None
+    cache: bool = False
+    filename: str | None = None
+
+
+def make_annotated_value(path: str, value: Any) -> MockAnnotatedValue:
+    if isinstance(value, dict) and "value" in value:
+        effective_value = value["value"][-1]
+        extra_header = None
+    elif isinstance(value, list):
+        effective_value = value[0]["vector"]
+        extra_header = SimpleNamespace(**value[0].get("properties"))
+    else:
+        effective_value = value
+        extra_header = None
+    return MockAnnotatedValue(
+        path=path, value=effective_value, extra_header=extra_header
+    )
+
+
+class MockDataQueue:
+    def __init__(self, path: str, kernel_session: KernelSessionEmulator):
+        self._path = path
+        self._kernel_session = kernel_session
+        self._path_events = self._kernel_session._events[self._path]
+
+    def empty(self) -> bool:
+        self._kernel_session._poll()
+        return len(self._path_events) == 0
+
+    async def get(self) -> MockAnnotatedValue:
+        while self.empty():
+            await asyncio.sleep(0.01)
+        value = self._path_events.pop(0)
+        return make_annotated_value(path=self._path, value=value)
+
+
+ASYNC_EMULATE_CACHE = False
+
+
+class KernelSessionEmulator:
+    use_filenames_for_blobs: bool = True
+
+    def __init__(self, serial: str, emulator_state: EmulatorState):
+        self._emulator_state = emulator_state
+        dev_type = _dev_type_map.get(
+            emulator_state.get_device_type(serial), DevEmuNONQC
+        )
+        self._device = dev_type(serial=serial, emulator_state=emulator_state)
+        self._events: dict[str, list[PollEvent]] = defaultdict(list)
+        self._cache: dict[str, Any] = {}
+
+    def dev_path(self, path: str) -> str:
+        if path.startswith("/"):
+            path = path[1:]
+        path = path.lower()
+        serial = self._device.serial().lower()
+        if path.startswith(f"{serial}/"):
+            return path[len(serial) + 1 :]
+        return path
+
+    def _progress_scheduler(self):
+        self._emulator_state.scheduler.run(blocking=False)
+
+    async def list_nodes(
+        self,
+        path: str = "",
+        *,
+        flags: int = 2,  # ABSOLUTE
+    ) -> list[str]:
+        self._progress_scheduler()
+        return []
+
+    def _log_for_testing(self, value: MockAnnotatedValue):
+        def _equal(cached, actual) -> bool:
+            if isinstance(actual, np.ndarray):
+                return np.array_equal(cached, actual)
+            else:
+                return cached == actual
+
+        # Log node set for tests, mimic old cache behaviour
+        # TODO(2K): Use some better mechanism than logger, refrain from cache mimicking.
+        if self.use_filenames_for_blobs or isinstance(value.value, bytes):
+            effective_value = value.value if value.filename is None else value.filename
+        else:
+            effective_value = value.value
+        if (
+            ASYNC_EMULATE_CACHE
+            and value.cache
+            and _equal(self._cache.get(value.path), effective_value)
+        ):
+            effective_value = None
+
+        if effective_value is not None:
+            if "*" in value.path:
+                pattern = re.compile(value.path.replace("*", ".*"))
+                for k in self._cache:
+                    if pattern.fullmatch(k):
+                        self._cache[k] = effective_value
+            else:
+                self._cache[value.path] = effective_value
+
+        if isinstance(effective_value, (int, float, complex, str)):
+            log_repr = f"{effective_value}"
+        elif isinstance(effective_value, np.ndarray):
+            array_repr = np.array2string(
+                effective_value,
+                threshold=30,
+                max_line_width=1000,
+                floatmode="maxprec",
+                precision=3,
+                edgeitems=16,
+            )
+            if "..." in array_repr:
+                log_repr = f"array({array_repr}, shape={effective_value.shape})"
+            else:
+                log_repr = array_repr
+        elif effective_value is not None:
+            log_repr = f"<value of type {type(effective_value)}>"
+        else:
+            log_repr = None
+        if log_repr is not None:
+            _node_logger.debug(
+                f"set {value.path} {log_repr}", extra={"node_value": value.value}
+            )
+
+    async def set(self, value: MockAnnotatedValue) -> MockAnnotatedValue:
+        self._progress_scheduler()
+        self._log_for_testing(value)
+        self._device.set(self.dev_path(value.path), value.value)
+        return value
+
+    async def set_with_expression(
+        self, value: MockAnnotatedValue
+    ) -> list[MockAnnotatedValue]:
+        self._progress_scheduler()
+        self._log_for_testing(value)
+        self._device.set(self.dev_path(value.path), value.value)
+        return []
+
+    async def get(
+        self,
+        path: str,
+    ) -> MockAnnotatedValue:
+        self._progress_scheduler()
+        _node_logger.debug(f"get {path} -")
+        value = self._device.get(self.dev_path(path))
+        return make_annotated_value(path=path, value=value)
+
+    def _poll(self):
+        self._progress_scheduler()
+        events = self._device.poll()
+        for ev in events:
+            self._events[ev.path].append(ev.value)
+
+    async def subscribe(self, path: str, get_initial_value: bool = False):
+        self._progress_scheduler()
+        dev_path = self.dev_path(path)
+        self._device.subscribe(dev_path)
+        if get_initial_value:
+            self._device.getAsEvent(dev_path)
+        return MockDataQueue(path, self)
+
+
+class MockInstrument:
+    def __init__(self, serial: str, emulator_state: EmulatorState):
+        self._session = KernelSessionEmulator(serial, emulator_state)
+
+    @property
+    def kernel_session(self) -> KernelSessionEmulator:
+        return self._session
+
+    def clear_cache(self):  # TODO(2K): Remove once legacy API is gone
+        self.kernel_session._cache.clear()

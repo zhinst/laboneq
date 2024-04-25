@@ -9,6 +9,7 @@ The following functions are provided:
     - `add_instrument()`: Add an instrument to the device setup
     - `add_connection()`: Add an connection the instrument
 """
+
 from __future__ import annotations
 
 import abc
@@ -630,9 +631,9 @@ def add_connection(
                                 f"Signal {connection.uid} already exists."
                             )
                         else:
-                            setup.logical_signal_groups[group].logical_signals[
-                                name
-                            ] = ls
+                            setup.logical_signal_groups[group].logical_signals[name] = (
+                                ls
+                            )
                     else:
                         lsg = LogicalSignalGroup(uid=group)
                         lsg.logical_signals[name] = ls

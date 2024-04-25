@@ -86,6 +86,22 @@ class LeaderProperties:
 _AWGMapping = Dict[str, Dict[int, AWGInfo]]
 
 
+@dataclass
+class _ShfqaGeneratorAllocation:
+    device_id: str
+    awg_nr: int
+    channels: list[int]
+
+
+@dataclass
+class _IntegrationUnitAllocation:
+    device_id: str
+    awg_nr: int
+    channels: list[int]
+    kernel_count: int
+    has_local_bus: bool
+
+
 class Compiler:
     def __init__(self, settings: dict | None = None):
         self._experiment_dao: ExperimentDAO = None
@@ -96,13 +112,13 @@ class Compiler:
         self._combined_compiler_output: CombinedRTCompilerOutputContainer = None
 
         self._leader_properties = LeaderProperties()
-        self._clock_settings: Dict[str, Any] = {}
-        self._integration_unit_allocation = None
-        self._shfqa_generator_allocation = None
+        self._clock_settings: dict[str, Any] = {}
+        self._shfqa_generator_allocation: dict[str, _ShfqaGeneratorAllocation] = {}
+        self._integration_unit_allocation: dict[str, _IntegrationUnitAllocation] = {}
         self._awgs: _AWGMapping = {}
         self._delays_by_signal: dict[str, OnDeviceDelayCompensation] = {}
         self._precompensations: dict[str, PrecompensationInfo] | None = None
-        self._signal_objects: Dict[str, SignalObj] = {}
+        self._signal_objects: dict[str, SignalObj] = {}
 
         _logger.info("Starting LabOne Q Compiler run...")
         self._check_tinysamples()
@@ -317,8 +333,10 @@ class Compiler:
         return delay_rounded
 
     @staticmethod
-    def _calc_integration_unit_allocation(dao: ExperimentDAO):
-        integration_unit_allocation: dict[str, dict] = {}
+    def _calc_integration_unit_allocation(
+        dao: ExperimentDAO,
+    ) -> dict[str, _IntegrationUnitAllocation]:
+        integration_unit_allocation: dict[str, _IntegrationUnitAllocation] = {}
 
         integration_signals: list[SignalInfo] = [
             signal_info
@@ -339,8 +357,7 @@ class Compiler:
                 [
                     x
                     for x in integration_unit_allocation.values()
-                    if x["device_id"] == signal_info.device.uid
-                    and x["awg_nr"] == awg_nr
+                    if x.device_id == signal_info.device.uid and x.awg_nr == awg_nr
                 ]
             )
             if dao.acquisition_type == AcquisitionType.SPECTROSCOPY_PSD:
@@ -358,21 +375,23 @@ class Compiler:
                 or is_spectroscopy(dao.acquisition_type)
                 else 1
             )
-            integration_unit_allocation[signal_info.uid] = {
-                "device_id": signal_info.device.uid,
-                "awg_nr": awg_nr,
-                "channels": [
+            integration_unit_allocation[signal_info.uid] = _IntegrationUnitAllocation(
+                device_id=signal_info.device.uid,
+                awg_nr=awg_nr,
+                channels=[
                     integrators_per_signal * num_acquire_signals + i
                     for i in range(integrators_per_signal)
                 ],
-                "kernel_count": signal_info.kernel_count,
-                "has_local_bus": signal_info.device.is_qc,
-            }
+                kernel_count=signal_info.kernel_count,
+                has_local_bus=signal_info.device.is_qc,
+            )
         return integration_unit_allocation
 
     @staticmethod
-    def _calc_shfqa_generator_allocation(dao: ExperimentDAO):
-        shfqa_generator_allocation: dict[str, dict] = {}
+    def _calc_shfqa_generator_allocation(
+        dao: ExperimentDAO,
+    ) -> dict[str, _ShfqaGeneratorAllocation]:
+        shfqa_generator_allocation: dict[str, _ShfqaGeneratorAllocation] = {}
         for signal_id in dao.signals():
             signal_info = dao.signal_info(signal_id)
             device_type = DeviceType.from_device_info_type(
@@ -389,15 +408,15 @@ class Compiler:
                 [
                     x
                     for x in shfqa_generator_allocation.values()
-                    if x["device_id"] == device_id and x["awg_nr"] == awg_nr
+                    if x.device_id == device_id and x.awg_nr == awg_nr
                 ]
             )
 
-            shfqa_generator_allocation[signal_id] = {
-                "device_id": device_id,
-                "awg_nr": awg_nr,
-                "channels": [num_generator_signals],
-            }
+            shfqa_generator_allocation[signal_id] = _ShfqaGeneratorAllocation(
+                device_id=device_id,
+                awg_nr=awg_nr,
+                channels=[num_generator_signals],
+            )
 
         return shfqa_generator_allocation
 
@@ -508,7 +527,7 @@ class Compiler:
         Returns:
             Signal and device port delays which are adjusted to delays on device.
         """
-        signal_infos: list[SignalInfo] = {info.uid: info for info in signal_infos}
+        signal_infos: dict[str, SignalInfo] = {info.uid: info for info in signal_infos}
         delay_from_output_router = on_device_delays.calculate_output_router_delays(
             {uid: sig.output_routing for uid, sig in signal_infos.items()}
         )
@@ -603,11 +622,11 @@ class Compiler:
             channels = copy.deepcopy(signal_info.channels)
             if signal_id in self._integration_unit_allocation:
                 channels = copy.deepcopy(
-                    self._integration_unit_allocation[signal_id]["channels"]
+                    self._integration_unit_allocation[signal_id].channels
                 )
             elif signal_id in self._shfqa_generator_allocation:
                 channels = copy.deepcopy(
-                    self._shfqa_generator_allocation[signal_id]["channels"]
+                    self._shfqa_generator_allocation[signal_id].channels
                 )
             hw_oscillator = (
                 oscillator_info.uid
@@ -764,7 +783,7 @@ class Compiler:
                         output["offset"] = mixer_calibration.voltage_offsets[
                             channel - base_channel
                         ]
-                    if mixer_calibration.correction_matrix is not None:
+                    if mixer_calibration.correction_matrix:
                         output["diagonal"] = mixer_calibration.correction_matrix[
                             channel - base_channel
                         ][channel - base_channel]
@@ -981,9 +1000,9 @@ class Compiler:
                             for i in integration_time_info.values()
                             if i.awg == awg_nr and i.device_id == device_id
                         )
-                        measurement[
-                            "length"
-                        ] = signal_info_for_section_and_device_awg.length_in_samples
+                        measurement["length"] = (
+                            signal_info_for_section_and_device_awg.length_in_samples
+                        )
                     else:
                         del measurement["length"]
                     _logger.debug(

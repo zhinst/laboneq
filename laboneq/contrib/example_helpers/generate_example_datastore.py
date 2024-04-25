@@ -1,8 +1,7 @@
 # Copyright 2020 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-"""Function to generate and fill a datastore for use with the tutorials and how_to notebooks in the LabOne Q repository
-"""
+"""Function to generate and fill a datastore for use with the tutorials and how_to notebooks in the LabOne Q repository"""
 
 import datetime
 

@@ -197,9 +197,13 @@ class SectionInfo:
 @dataclass
 class MixerCalibrationInfo:
     voltage_offsets: tuple[float | ParameterInfo, float | ParameterInfo] = (0.0, 0.0)
-    correction_matrix: tuple[tuple[float, float], tuple[float, float]] | list[
-        list[float]
-    ] = (
+    correction_matrix: (
+        tuple[
+            tuple[float | ParameterInfo, float | ParameterInfo],
+            tuple[float | ParameterInfo, float | ParameterInfo],
+        ]
+        | list[list[float | ParameterInfo]]
+    ) = (
         (1.0, 0.0),
         (0.0, 1.0),
     )
@@ -262,7 +266,7 @@ class AmplifierPumpInfo:
 
 @dataclass
 class SignalInfo:
-    uid: str = None
+    uid: str
     device: DeviceInfo = None
     oscillator: OscillatorInfo | None = None
     channels: list[int] = field(default_factory=list)

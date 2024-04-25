@@ -26,7 +26,7 @@ class DevicePRETTYPRINTER(DeviceZI):
         super().__init__(device_qualifier=device_qualifier, daq=daq)
         self._device_class = 0x1
 
-    async def connect(self, emulator_state: Any):
+    async def connect(self, emulator_state: Any, use_async_api: bool):
         _logger.info(
             "%s: Connected to %s",
             self.dev_repr,

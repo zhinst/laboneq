@@ -58,6 +58,8 @@ _logger = logging.getLogger(__name__)
 # executed in a batch.
 CONNECT_CHECK_HOLDOFF = 10  # sec
 
+USE_ASYNC_API_BY_DEFAULT = False
+
 
 class Controller:
     def __init__(
@@ -68,6 +70,7 @@ class Controller:
     ):
         self._ignore_version_mismatch = ignore_version_mismatch
         self._do_emulation = True
+        self._use_async_api = USE_ASYNC_API_BY_DEFAULT
         self._devices = DeviceCollection(
             target_setup=target_setup,
             ignore_version_mismatch=ignore_version_mismatch,
@@ -87,9 +90,9 @@ class Controller:
         self._neartime_callbacks: dict[str, Callable] = (
             {} if neartime_callbacks is None else neartime_callbacks
         )
-        self._nodes_from_neartime_callbacks: dict[
-            DeviceZI, NodeCollector
-        ] = defaultdict(NodeCollector)
+        self._nodes_from_neartime_callbacks: dict[DeviceZI, NodeCollector] = (
+            defaultdict(NodeCollector)
+        )
         self._recipe_data: RecipeData = None
         self._results = ExperimentResults()
 
@@ -267,7 +270,7 @@ class Controller:
 
         response_waiter = ResponseWaiter()
         for _, device in self._devices.followers:
-            response_waiter.add(
+            response_waiter.add_with_msg(
                 target=device,
                 conditions=await device.conditions_for_execution_ready(
                     with_pipeliner=with_pipeliner
@@ -312,7 +315,7 @@ class Controller:
 
         response_waiter = ResponseWaiter()
         for _, device in self._devices.followers:
-            response_waiter.add(
+            response_waiter.add_with_msg(
                 target=device,
                 conditions=await device.conditions_for_execution_done(
                     acquisition_type, with_pipeliner=rt_execution_info.with_pipeliner
@@ -385,10 +388,16 @@ class Controller:
 
         _logger.debug("Execution stopped")
 
-    def connect(self, do_emulation: bool = True, reset_devices: bool = False):
-        self._do_emulation = (
-            do_emulation  # Remember mode for later implicit connect check
-        )
+    def connect(
+        self,
+        do_emulation: bool = True,
+        reset_devices: bool = False,
+        use_async_api: bool | None = None,
+    ):
+        # Remember settings for later implicit connect check
+        self._do_emulation = do_emulation
+        if use_async_api is not None:
+            self._use_async_api = use_async_api
         run_async(self._connect_async, reset_devices=reset_devices)
 
     async def _connect_async(self, reset_devices: bool = False):
@@ -398,7 +407,9 @@ class Controller:
             or now - self._last_connect_check_ts > CONNECT_CHECK_HOLDOFF
         ):
             await self._devices.connect(
-                do_emulation=self._do_emulation, reset_devices=reset_devices
+                do_emulation=self._do_emulation,
+                reset_devices=reset_devices,
+                use_async_api=self._use_async_api,
             )
         self._last_connect_check_ts = now
 
@@ -701,30 +712,19 @@ class Controller:
                         (
                             i
                             for i in self._recipe_data.recipe.integrator_allocations
-                            if (
-                                i.signal_id
-                                if isinstance(i.signal_id, str)
-                                else i.signal_id[0]
-                            )
-                            == signal
+                            if i.signal_id == signal
                         ),
                         None,
                     )
                     if not integrator_allocation:
                         continue
-                    is_multistate = not isinstance(integrator_allocation.signal_id, str)
                     assert integrator_allocation.device_id == awg_key.device_uid
                     assert integrator_allocation.awg == awg_key.awg_index
-                    result_indices = (
-                        integrator_allocation.channels[0]
-                        if is_multistate
-                        else integrator_allocation.channels
-                    )
                     raw_results = await device.get_measurement_data(
                         self._recipe_data,
                         awg_key.awg_index,
                         rt_execution_info,
-                        result_indices,
+                        integrator_allocation.channels,
                         awg_config.result_length,
                         effective_averages,
                     )

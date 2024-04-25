@@ -15,9 +15,13 @@ from zhinst.utils.api_compatibility import check_dataserver_device_compatibility
 from laboneq.controller.communication import (
     DaqWrapper,
     DaqWrapperDryRun,
+    DaqWrapperDummy,
     batch_set_multiple,
 )
-from laboneq.controller.devices.async_support import gather_and_apply
+from laboneq.controller.devices.async_support import (
+    async_check_dataserver_device_compatibility,
+    gather_and_apply,
+)
 from laboneq.controller.devices.device_factory import DeviceFactory
 from laboneq.controller.devices.device_setup_dao import DeviceSetupDAO
 from laboneq.controller.devices.device_utils import (
@@ -111,13 +115,23 @@ class DeviceCollection:
                 return dev
         raise LabOneQControllerException(f"Could not find device for the path '{path}'")
 
-    async def connect(self, do_emulation: bool, reset_devices: bool = False):
-        await self._prepare_daqs(do_emulation=do_emulation)
+    async def connect(
+        self,
+        do_emulation: bool,
+        reset_devices: bool = False,
+        use_async_api: bool = False,
+    ):
+        await self._prepare_daqs(do_emulation=do_emulation, use_async_api=use_async_api)
         if not do_emulation:
-            self._validate_dataserver_device_fw_compatibility()  # TODO(2K): Uses zhinst utils -> async api version?
+            await self._validate_dataserver_device_fw_compatibility(
+                use_async_api=use_async_api
+            )
         self._prepare_devices()
         for _, device in self.all:
-            await device.connect(self.emulator_state if do_emulation else None)
+            await device.connect(
+                self.emulator_state if do_emulation else None,
+                use_async_api=use_async_api,
+            )
         await self.start_monitor()
         await self.configure_device_setup(reset_devices)
 
@@ -345,15 +359,26 @@ class DeviceCollection:
             await node_monitor.reset()
         self._monitor_started = False
 
-    def _validate_dataserver_device_fw_compatibility(self):
+    async def _validate_dataserver_device_fw_compatibility(self, use_async_api: bool):
         """Validate dataserver and device firmware compatibility."""
-        if not self._ignore_version_mismatch:
-            daq_dev_serials: dict[str, list[str]] = defaultdict(list)
-            for device_qualifier in self._ds.instruments:
-                daq_dev_serials[device_qualifier.server_uid].append(
-                    device_qualifier.options.serial
+        if self._ignore_version_mismatch:
+            return
+
+        daq_dev_serials: dict[str, list[str]] = defaultdict(list)
+        for device_qualifier in self._ds.instruments:
+            daq_dev_serials[device_qualifier.server_uid].append(
+                device_qualifier.options.serial
+            )
+
+        for server_uid, dev_serials in daq_dev_serials.items():
+            if use_async_api:
+                server_qualifier = next(
+                    s[1] for s in self._ds.servers if s[0] == server_uid
                 )
-            for server_uid, dev_serials in daq_dev_serials.items():
+                await async_check_dataserver_device_compatibility(
+                    server_qualifier.host, server_qualifier.port, dev_serials
+                )
+            else:
                 try:
                     check_dataserver_device_compatibility(
                         self._daqs.get(server_uid)._zi_api_object, dev_serials
@@ -407,7 +432,7 @@ class DeviceCollection:
                 self._ds.get_device_rf_voltage_offsets(device_qualifier.uid)
             )
 
-    async def _prepare_daqs(self, do_emulation: bool):
+    async def _prepare_daqs(self, do_emulation: bool, use_async_api: bool):
         updated_daqs: dict[str, DaqWrapper] = {}
         for server_uid, server_qualifier in self._ds.servers:
             existing = self._daqs.get(server_uid)
@@ -421,13 +446,16 @@ class DeviceCollection:
                 server_qualifier.port,
             )
             daq: DaqWrapper
-            if do_emulation:
-                daq = DaqWrapperDryRun(
-                    server_uid, server_qualifier, self.emulator_state
-                )
+            if use_async_api:
+                daq = DaqWrapperDummy(server_qualifier)
             else:
-                daq = DaqWrapper(server_uid, server_qualifier)
-            await daq.validate_connection()
+                if do_emulation:
+                    daq = DaqWrapperDryRun(
+                        server_uid, server_qualifier, self.emulator_state
+                    )
+                else:
+                    daq = DaqWrapper(server_uid, server_qualifier)
+                await daq.validate_connection()
             updated_daqs[server_uid] = daq
         self._daqs = updated_daqs
 
@@ -465,10 +493,15 @@ class DeviceErrorSeverity(Enum):
 
 def decode_errors(errors: list[str], dev_repr: str) -> list[str]:
     collected_messages: list[str] = []
+    if not isinstance(errors, list):
+        errors = [errors]
     for error in errors:
         # the key in error["vector"] looks like a dict, but it's a string. so we have to use
         # json.loads to convert it into a dict.
-        error_vector = json.loads(error["vector"])
+        val = error.get("vector")
+        if val is None:
+            val = error.get("value")[-1]
+        error_vector = json.loads(val)
         for message in error_vector["messages"]:
             if message["code"] == "AWGRUNTIMEERROR" and message["params"][0] == 1:
                 awg_core = int(message["attribs"][0])

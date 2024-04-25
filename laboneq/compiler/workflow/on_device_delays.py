@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Module for calculating on device delays and adjusting them to the grid."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

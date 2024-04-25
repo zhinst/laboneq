@@ -30,16 +30,18 @@ from laboneq.controller.communication import (
     DaqWrapper,
 )
 from laboneq.controller.devices.async_support import (
+    NodeMonitorAsync,
     create_device_kernel_session,
     get_raw,
     set_parallel,
 )
-from laboneq.controller.devices.zi_emulator import EmulatorState
 from laboneq.controller.devices.device_utils import NodeCollector
+from laboneq.controller.devices.zi_emulator import EmulatorState, MockInstrument
 from laboneq.controller.devices.zi_node_monitor import (
     INodeMonitorProvider,
     NodeControlBase,
     NodeMonitorBase,
+    ResponseWaiter,
 )
 from laboneq.controller.pipeliner_reload_tracker import PipelinerReloadTracker
 from laboneq.controller.recipe_processor import (
@@ -261,12 +263,14 @@ class DeviceZI(INodeMonitorProvider):
                 else CachingStrategy.NO_CACHE,
                 filename=node.filename,
             )
-            for node in nodes
+            for node in nodes.set_actions()
         ]
 
     async def maybe_async_wait(self, nodes: dict[str, Any]) -> dict[str, Any]:
         if self._api is not None:
-            # TODO(2K): wait asynchronously
+            rw = ResponseWaiter()
+            rw.add(target=self, conditions=nodes)
+            await rw.wait_all(timeout=1)
             return {}
         return nodes
 
@@ -274,7 +278,8 @@ class DeviceZI(INodeMonitorProvider):
         if self._api is not None:
             # TODO(2K): the code below is only needed to keep async API behavior
             # in emulation mode matching that of legacy API with L1Q cache.
-            pass  # stub
+            if isinstance(self._api, MockInstrument):
+                self._api.clear_cache()
         else:
             self.daq.clear_cache()
 
@@ -417,18 +422,22 @@ class DeviceZI(INodeMonitorProvider):
     ) -> list[DaqNodeSetAction]:
         return []
 
-    async def _connect_to_data_server(self, emulator_state: EmulatorState | None):
+    async def _connect_to_data_server(
+        self, emulator_state: EmulatorState | None, use_async_api: bool
+    ):
         if self._connected:
             return
 
         _logger.debug("%s: Connecting to %s interface.", self.dev_repr, self.interface)
         try:
-            self._api = await create_device_kernel_session(
-                device_qualifier=self._device_qualifier,
-                server_qualifier=self.daq.server_qualifier,
-                emulator_state=emulator_state,
-            )
-            if self._api is None:
+            if use_async_api:
+                self._api = await create_device_kernel_session(
+                    device_qualifier=self._device_qualifier,
+                    server_qualifier=self.daq.server_qualifier,
+                    emulator_state=emulator_state,
+                )
+                self._node_monitor = NodeMonitorAsync(self._api)
+            else:
                 self.daq.connectDevice(self.serial, self.interface)
                 self._node_monitor = self.daq.node_monitor
         except RuntimeError as exc:
@@ -451,8 +460,8 @@ class DeviceZI(INodeMonitorProvider):
 
         self._connected = True
 
-    async def connect(self, emulator_state: EmulatorState | None):
-        await self._connect_to_data_server(emulator_state)
+    async def connect(self, emulator_state: EmulatorState | None, use_async_api: bool):
+        await self._connect_to_data_server(emulator_state, use_async_api=use_async_api)
         if self._node_monitor is not None:
             self.node_monitor.add_nodes(self.nodes_to_monitor())
 
@@ -608,12 +617,12 @@ class DeviceZI(INodeMonitorProvider):
 
     async def conditions_for_execution_ready(
         self, with_pipeliner: bool
-    ) -> dict[str, Any]:
+    ) -> dict[str, tuple[Any, str]]:
         return {}
 
     async def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
-    ) -> dict[str, Any]:
+    ) -> dict[str, tuple[Any, str]]:
         return {}
 
     async def collect_execution_setup_nodes(
@@ -979,9 +988,9 @@ class DeviceZI(INodeMonitorProvider):
                 param = m.group(2)
                 for osc in self._allocated_oscs:
                     if osc.param == param:
-                        seqc_lines[
-                            i
-                        ] = f"{m.group(1)}{m.group(2)}{m.group(3)}{osc.index}{m.group(4)}"
+                        seqc_lines[i] = (
+                            f"{m.group(1)}{m.group(2)}{m.group(3)}{osc.index}{m.group(4)}"
+                        )
 
         # Substitute oscillator index by actual assignment
         for osc in self._allocated_oscs:

@@ -73,7 +73,7 @@ AwgConfigs = dict[AwgKey, AwgConfig]
 
 @dataclass
 class DeviceRecipeData:
-    iq_settings: dict[int, npt.ArrayLike] = field(default_factory=dict)
+    iq_settings: dict[int, tuple[int, int]] = field(default_factory=dict)
 
 
 DeviceId = str
@@ -176,7 +176,9 @@ class RecipeData:
         )
 
 
-def _pre_process_iq_settings_hdawg(initialization: Initialization):
+def _pre_process_iq_settings_hdawg(
+    initialization: Initialization,
+) -> dict[int, tuple[int, int]]:
     # TODO(2K): Every pair of outputs with adjacent even+odd channel numbers (starting from 0)
     # is treated as an I/Q pair. I/Q pairs should be specified explicitly instead.
 
@@ -213,20 +215,7 @@ def _pre_process_iq_settings_hdawg(initialization: Initialization):
 
         if i_out.gains is None or q_out.gains is None:
             continue  # No pair with valid gains found? This is not an IQ signal.
-
-        iq_mixer_calib_mx = np.array(
-            [
-                [i_out.gains.diagonal, q_out.gains.off_diagonal],
-                [i_out.gains.off_diagonal, q_out.gains.diagonal],
-            ]
-        )
-
-        # Normalize resulting matrix to its inf-norm, to avoid clamping
-        iq_mixer_calib_normalized = iq_mixer_calib_mx / np.linalg.norm(
-            iq_mixer_calib_mx, np.inf
-        )
-
-        iq_settings[awg_idx] = iq_mixer_calib_normalized
+        iq_settings[awg_idx] = (i_out.channel, q_out.channel)
 
     return iq_settings
 
@@ -378,12 +367,9 @@ def _calculate_awg_configs(
             if signal_id in awg_config.acquire_signals
         )
 
-    for a in recipe.integrator_allocations:
-        if isinstance(a.signal_id, str):
-            awg_configs[AwgKey(a.device_id, a.awg)].acquire_signals.add(a.signal_id)
-        else:
-            assert isinstance(a.signal_id, list) or isinstance(a.signal_id, tuple)
-            awg_configs[AwgKey(a.device_id, a.awg)].acquire_signals.update(a.signal_id)
+    for integrator_allocation in recipe.integrator_allocations:
+        awg_key = AwgKey(integrator_allocation.device_id, integrator_allocation.awg)
+        awg_configs[awg_key].acquire_signals.add(integrator_allocation.signal_id)
 
     for initialization in recipe.initializations:
         device_id = initialization.device_uid

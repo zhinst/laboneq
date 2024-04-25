@@ -1,8 +1,7 @@
 # Copyright 2020 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-"""Common helper functions for setting up a threshold for state discrimination and for feedback experiments
-"""
+"""Common helper functions for setting up a threshold for state discrimination and for feedback experiments"""
 
 import numpy as np
 

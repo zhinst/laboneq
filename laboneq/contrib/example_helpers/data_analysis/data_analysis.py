@@ -1,8 +1,7 @@
 # Copyright 2020 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-"""Collection of functions for data analysis in a quantum computing tuneup experiment
-"""
+"""Collection of functions for data analysis in a quantum computing tuneup experiment"""
 
 import warnings
 

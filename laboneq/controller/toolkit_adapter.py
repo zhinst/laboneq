@@ -7,7 +7,9 @@ from typing import Dict, Optional
 from unittest.mock import MagicMock
 
 import numpy
+import zhinst.core
 from zhinst.toolkit.driver.devices import DeviceType
+from zhinst.toolkit import Session as TKSession
 
 from laboneq.controller.devices.device_zi import DeviceZI
 
@@ -32,21 +34,40 @@ class ToolkitDevices(Mapping):
 
     def __init__(self, devices: Optional[Dict[str, DeviceZI]] = None):
         self._devices = devices if devices else {}
+        self._tk_sessions: dict[tuple[str, int], TKSession] = {}
 
-    def __getitem__(self, key) -> DeviceType:
+    def _tk_session(
+        self, host: str, port: int, daq: zhinst.core.ziDAQServer | None
+    ) -> TKSession:
+        """Toolkit session from the initialized DAQ session."""
+        tk_session = self._tk_sessions.get((host, port))
+        if tk_session is None:
+            tk_session = TKSession(server_host=host, server_port=port, connection=daq)
+            self._tk_sessions[(host, port)] = tk_session
+        return tk_session
+
+    def __getitem__(self, key: str) -> DeviceType:
         """Get item.
 
         Both device serial (DEV1234) and instrument UID in device setup descriptor are
         recognized. Instrument UID takes precedence and is preferred.
         """
-        try:
-            device = self._devices[key]
-            return device.daq.toolkit_session.devices[device.serial]
-        except KeyError as error:
-            for device in self._devices.values():
-                if device.serial.lower() == key.lower():
-                    return device.daq.toolkit_session.devices[key]
-            raise error
+        device = self._devices.get(key)
+        if device is None:
+            device = next(
+                (d for d in self._devices.values() if d.serial == key.lower()), None
+            )
+
+        if device is None:
+            raise KeyError(f"No device found with serial or uid '{key}'")
+
+        tk_session = self._tk_session(
+            device.daq.server_qualifier.host,
+            device.daq.server_qualifier.port,
+            device.daq._zi_api_object if device._api is None else None,
+        )
+
+        return tk_session.devices[device.serial]
 
     def __iter__(self):
         return iter(self._devices)

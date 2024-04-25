@@ -264,7 +264,12 @@ class ExperimentInfoBuilder:
             voltage_offsets=tuple(
                 self.opt_param(offset) for offset in mixer_cal.voltage_offsets
             ),
-            correction_matrix=mixer_cal.correction_matrix,
+            correction_matrix=tuple(
+                [
+                    [self.opt_param(ij) for ij in row]
+                    for row in mixer_cal.correction_matrix
+                ]
+            ),
         )
 
     def _load_precompensation(self, precomp: Precompensation) -> PrecompensationInfo:

@@ -76,7 +76,7 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
             if self.options.gen2
             else DEFAULT_SAMPLE_FREQUENCY_HZ
         )
-        self.pipeliner_set_node_base(f"/{self.serial}/awgs")
+        self.pipeliner_set_node_base(f"/{self.serial}/awgs", "AWG")
 
     def _process_dev_opts(self):
         self._check_expected_dev_opts()
@@ -230,27 +230,33 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
 
     async def conditions_for_execution_ready(
         self, with_pipeliner: bool
-    ) -> dict[str, Any]:
+    ) -> dict[str, tuple[Any, str]]:
         if with_pipeliner:
             conditions = self.pipeliner_conditions_for_execution_ready()
         else:
             conditions = {
-                f"/{self.serial}/awgs/{awg_index}/enable": 1
+                f"/{self.serial}/awgs/{awg_index}/enable": (
+                    1,
+                    f"{self.dev_repr}: AWG {awg_index + 1} didn't start.",
+                )
                 for awg_index in self._allocated_awgs
             }
-        return await self.maybe_async_wait(conditions)
+        return conditions  # await self.maybe_async_wait(conditions)
 
     async def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
-    ) -> dict[str, Any]:
+    ) -> dict[str, tuple[Any, str]]:
         if with_pipeliner:
             conditions = self.pipeliner_conditions_for_execution_done()
         else:
             conditions = {
-                f"/{self.serial}/awgs/{awg_index}/enable": 0
+                f"/{self.serial}/awgs/{awg_index}/enable": (
+                    0,
+                    f"{self.dev_repr}: AWG {awg_index + 1} didn't stop. Missing start trigger? Check ZSync.",
+                )
                 for awg_index in self._allocated_awgs
             }
-        return await self.maybe_async_wait(conditions)
+        return conditions  # await self.maybe_async_wait(conditions)
 
     async def collect_execution_setup_nodes(
         self, with_pipeliner: bool, has_awg_in_use: bool
@@ -279,7 +285,6 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
         recipe_data: RecipeData,
     ) -> list[DaqNodeSetAction]:
         _logger.debug("%s: Initializing device...", self.dev_repr)
-
         nc = NodeCollector(base=f"/{self.serial}/")
 
         outputs = initialization.outputs or []
@@ -306,47 +311,20 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
             nc.add(f"awgs/{awg_idx}/single", 1)
 
             awg_ch = output.channel % 2
-            iq_idx = output.channel // 2
-            iq_gains_mx = device_recipe_data.iq_settings.get(iq_idx, None)
-
-            if iq_gains_mx is None:
-                # Fall back to old behavior (suitable for single channel output)
-                diagonal_channel_index = awg_ch
-                off_diagonal_channel_index = int(not diagonal_channel_index)
-
-                modulation_mode = (
-                    (ModulationMode.SINE_00 if awg_ch == 0 else ModulationMode.SINE_11)
-                    if output.modulation
-                    else ModulationMode.OFF
-                )
-                nc.add(
-                    f"awgs/{awg_idx}/outputs/{awg_ch}/modulation/mode", modulation_mode
-                )
-                nc.add(
-                    f"awgs/{awg_idx}/outputs/{awg_ch}/gains/{diagonal_channel_index}",
-                    output.gains.diagonal,
-                )
-                nc.add(
-                    f"awgs/{awg_idx}/outputs/{awg_ch}/gains/{off_diagonal_channel_index}",
-                    output.gains.off_diagonal,
-                )
-            else:
-                # I/Q output
+            if awg_idx in device_recipe_data.iq_settings:
                 modulation_mode = (
                     ModulationMode.MIXER_CAL
                     if output.modulation
                     else ModulationMode.OFF
                 )
-                nc.add(
-                    f"awgs/{awg_idx}/outputs/{awg_ch}/modulation/mode", modulation_mode
-                )
-                nc.add(
-                    f"awgs/{awg_idx}/outputs/{awg_ch}/gains/0", iq_gains_mx[0][awg_ch]
-                )
-                nc.add(
-                    f"awgs/{awg_idx}/outputs/{awg_ch}/gains/1", iq_gains_mx[1][awg_ch]
+            else:
+                modulation_mode = (
+                    (ModulationMode.SINE_00 if awg_ch == 0 else ModulationMode.SINE_11)
+                    if output.modulation
+                    else ModulationMode.OFF
                 )
 
+            nc.add(f"awgs/{awg_idx}/outputs/{awg_ch}/modulation/mode", modulation_mode)
             precomp_p = f"sigouts/{output.channel}/precompensation/"
             has_pc = "PC" in self.dev_opts
             try:
@@ -445,6 +423,16 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
                 index=io.channel,
                 value_or_param=io.offset,
             )
+            yield DeviceAttribute(
+                name=AttributeName.OUTPUT_GAIN_DIAGONAL,
+                index=io.channel,
+                value_or_param=io.gains.diagonal,
+            )
+            yield DeviceAttribute(
+                name=AttributeName.OUTPUT_GAIN_OFF_DIAGONAL,
+                index=io.channel,
+                value_or_param=io.gains.off_diagonal,
+            )
 
     def collect_prepare_nt_step_nodes(
         self, attributes: DeviceAttributesView, recipe_data: RecipeData
@@ -452,6 +440,7 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
         nc = NodeCollector(base=f"/{self.serial}/")
         nc.extend(super().collect_prepare_nt_step_nodes(attributes, recipe_data))
 
+        awg_iq_pair_set: set[int] = set()
         for ch in range(self._channels):
             [scheduler_port_delay, port_delay], updated = attributes.resolve(
                 keys=[
@@ -480,6 +469,96 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
             )
             if updated and output_voltage_offset is not None:
                 nc.add(f"sigouts/{ch}/offset", output_voltage_offset)
+
+            awg_idx = ch // 2
+            output_i = output_iq = ch % 2
+            output_q = output_i ^ 1
+            if (
+                awg_idx
+                not in recipe_data.device_settings[
+                    self.device_qualifier.uid
+                ].iq_settings
+            ):
+                # Fall back to old behavior (suitable for single channel output)
+                (
+                    [output_gain_i_diagonal, output_gain_i_off_diagonal],
+                    updated,
+                ) = attributes.resolve(
+                    keys=[
+                        (AttributeName.OUTPUT_GAIN_DIAGONAL, ch),
+                        (AttributeName.OUTPUT_GAIN_OFF_DIAGONAL, ch),
+                    ]
+                )
+                if (
+                    updated
+                    and output_gain_i_diagonal is not None
+                    and output_gain_i_off_diagonal is not None
+                ):
+                    nc.add(
+                        f"awgs/{awg_idx}/outputs/{output_iq}/gains/{output_i}",
+                        output_gain_i_diagonal,
+                    )
+                    nc.add(
+                        f"awgs/{awg_idx}/outputs/{output_iq}/gains/{output_q}",
+                        output_gain_i_off_diagonal,
+                    )
+            else:
+                if awg_idx in awg_iq_pair_set:
+                    continue
+                # Set both I and Q channels at one loop
+                ch_i, ch_q = recipe_data.device_settings[
+                    self.device_qualifier.uid
+                ].iq_settings[awg_idx]
+                (
+                    [
+                        output_gain_i_diagonal,
+                        output_gain_i_off_diagonal,
+                        output_gain_q_diagonal,
+                        output_gain_q_off_diagnoal,
+                    ],
+                    updated,
+                ) = attributes.resolve(
+                    keys=[
+                        (AttributeName.OUTPUT_GAIN_DIAGONAL, ch_i),
+                        (AttributeName.OUTPUT_GAIN_OFF_DIAGONAL, ch_i),
+                        (AttributeName.OUTPUT_GAIN_DIAGONAL, ch_q),
+                        (AttributeName.OUTPUT_GAIN_OFF_DIAGONAL, ch_q),
+                    ]
+                )
+                if (
+                    updated
+                    and output_gain_i_diagonal is not None
+                    and output_gain_i_off_diagonal is not None
+                    and output_gain_q_diagonal is not None
+                    and output_gain_q_off_diagnoal is not None
+                ):
+                    iq_mixer_calib_mx = np.array(
+                        [
+                            [output_gain_i_diagonal, output_gain_q_off_diagnoal],
+                            [output_gain_i_off_diagonal, output_gain_q_diagonal],
+                        ]
+                    )
+                    # Normalize resulting matrix to its inf-norm, to avoid clamping
+                    iq_mixer_calib_normalized = iq_mixer_calib_mx / np.linalg.norm(
+                        iq_mixer_calib_mx, np.inf
+                    )
+                    nc.add(
+                        f"awgs/{awg_idx}/outputs/{output_i}/gains/0",
+                        iq_mixer_calib_normalized[0][output_i],
+                    )
+                    nc.add(
+                        f"awgs/{awg_idx}/outputs/{output_i}/gains/1",
+                        iq_mixer_calib_normalized[1][output_i],
+                    )
+                    nc.add(
+                        f"awgs/{awg_idx}/outputs/{output_q}/gains/0",
+                        iq_mixer_calib_normalized[0][output_q],
+                    )
+                    nc.add(
+                        f"awgs/{awg_idx}/outputs/{output_q}/gains/1",
+                        iq_mixer_calib_normalized[1][output_q],
+                    )
+                awg_iq_pair_set.add(awg_idx)
         return nc
 
     async def collect_awg_before_upload_nodes(
@@ -583,6 +662,7 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
         nc = NodeCollector(base=f"/{self.serial}/")
         # Reset pipeliner first, attempt to set AWG enable leads to FW error if pipeliner was enabled.
         nc.extend(self.pipeliner_reset_nodes())
+        nc.barrier()
         nc.add("awgs/*/enable", 0, cache=False)
         nc.add("system/synchronization/source", 0, cache=False)  # internal
         reset_nodes = await self.maybe_async(nc)

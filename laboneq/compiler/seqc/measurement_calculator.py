@@ -234,9 +234,9 @@ class MeasurementCalculator:
                 delays_per_awg[awg_key]["delays"].add(round(delay_time * sampling_rate))
                 delays_per_awg[awg_key]["signals"].append(signal)
                 delays_per_awg[awg_key]["sections"].append(section_name)
-                delays_per_awg[awg_key][
-                    "device_type"
-                ] = DeviceType.from_device_info_type(signal_info["device_type"])
+                delays_per_awg[awg_key]["device_type"] = (
+                    DeviceType.from_device_info_type(signal_info["device_type"])
+                )
 
         _dlogger.debug("Delays per awg: %s", delays_per_awg)
         for awg_key, delays in delays_per_awg.items():

@@ -115,9 +115,9 @@ class NtCompilerExecutor(ExecutorBase):
         ] = {}
         self._last_compiler_output: Optional[RTCompilerOutputContainer] = None
         self._required_parameters: Optional[Set[str]] = None
-        self._combined_compiler_output: Optional[
-            CombinedRTCompilerOutputContainer
-        ] = None
+        self._combined_compiler_output: Optional[CombinedRTCompilerOutputContainer] = (
+            None
+        )
 
         self._delegates = [
             Delegate(self._settings) for Delegate in self._delegates_types

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """LabOne Q serialization support for external package objects."""
+
 from __future__ import annotations
 
 from laboneq._optional_deps import (

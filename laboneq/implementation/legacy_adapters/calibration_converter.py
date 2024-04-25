@@ -80,7 +80,10 @@ def convert_mixer_calibration(
             voltage_offsets=[
                 convert_maybe_parameter(val) for val in obj.voltage_offsets or []
             ],
-            correction_matrix=obj.correction_matrix,
+            correction_matrix=[
+                [convert_maybe_parameter(ij) for ij in row]
+                for row in obj.correction_matrix or []
+            ],
         )
     raise_not_implemented(obj)
 

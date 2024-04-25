@@ -1,8 +1,7 @@
 # Copyright 2020 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-""" Helper functions for definition of device setup and calibration settings
-"""
+"""Helper functions for definition of device setup and calibration settings"""
 
 import numpy as np
 

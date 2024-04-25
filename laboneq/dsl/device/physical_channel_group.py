@@ -45,9 +45,9 @@ class PhysicalChannelGroup:
         calibratables = dict()
         for signal in self.channels.values():
             if isinstance(signal, Calibratable):
-                calibratables[
-                    qct_path.concat(current_path, signal.uid)
-                ] = signal.create_info()
+                calibratables[qct_path.concat(current_path, signal.uid)] = (
+                    signal.create_info()
+                )
         return calibratables
 
     @property

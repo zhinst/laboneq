@@ -8,12 +8,10 @@ import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from functools import cached_property
 from typing import TYPE_CHECKING, Any, Dict, List
 
 import numpy as np
 import zhinst.core
-from zhinst.toolkit import Session as TKSession
 from laboneq.controller.devices.device_utils import zhinst_core_version
 
 from laboneq.controller.devices.zi_emulator import EmulatorState, ziDAQServerEmulator
@@ -293,15 +291,6 @@ class DaqWrapper(ZiApiWrapperBase):
                         f"Exception {ex} when calling method {method_name} with {d_args} and {d_kwargs}"
                     ) from ex
 
-    @cached_property
-    def toolkit_session(self) -> TKSession:
-        """Toolkit session from the initialized DAQ session."""
-        return TKSession(
-            server_host=self.server_qualifier.host,
-            server_port=self.server_qualifier.port,
-            connection=self._zi_api_object,
-        )
-
     @property
     def server_qualifier(self):
         return self._server_qualifier
@@ -418,3 +407,8 @@ async def batch_set(all_actions: List[DaqNodeSetAction]):
 
 async def batch_set_multiple(results: list[list[DaqNodeSetAction]]):
     await batch_set([value for values in results for value in values])
+
+
+class DaqWrapperDummy:
+    def __init__(self, server_qualifier: ServerQualifier):
+        self.server_qualifier = server_qualifier

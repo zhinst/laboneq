@@ -13,7 +13,6 @@ from .operation import Operation
 @classformatter
 @dataclass(init=True, repr=True, order=True)
 class SetNode(Operation):
-
     """Operation that sets a value at a node."""
 
     #: Path to the node whose value should be set.

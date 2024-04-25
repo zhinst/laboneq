@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """General utility functions for development."""
+
 import functools
 from collections import defaultdict
 from dataclasses import dataclass

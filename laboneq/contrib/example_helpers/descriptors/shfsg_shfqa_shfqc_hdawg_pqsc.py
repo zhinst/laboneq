@@ -1,8 +1,7 @@
 # Copyright 2020 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-"""Descriptor for a QCCS consisting of SHFSG, SHFQA, SHFQC, HDAWG, and PQSC
-"""
+"""Descriptor for a QCCS consisting of SHFSG, SHFQA, SHFQC, HDAWG, and PQSC"""
 
 descriptor_shfsg_shfqa_shfqc_hdawg_pqsc = """
 instruments:

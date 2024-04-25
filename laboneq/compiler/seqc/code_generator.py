@@ -342,14 +342,14 @@ class CodeGenerator(ICodeGenerator):
         self._events_in_samples = {}
         self._integration_times: IntegrationTimes | None = None
         self._signal_delays: SignalDelays | None = None
-        self._integration_weights: dict[
-            AwgKey, dict[str, list[dict[str, Any]]]
-        ] | None = None  # awg key -> signal id -> kernel index -> kernel data
+        self._integration_weights: (
+            dict[AwgKey, dict[str, list[dict[str, Any]]]] | None
+        ) = None  # awg key -> signal id -> kernel index -> kernel data
         self._simultaneous_acquires: list[Dict[str, str]] = []
         self._feedback_register_layout = feedback_register_layout or {}
-        self._feedback_register_config: Dict[
-            AwgKey, FeedbackRegisterConfig
-        ] = defaultdict(FeedbackRegisterConfig)
+        self._feedback_register_config: Dict[AwgKey, FeedbackRegisterConfig] = (
+            defaultdict(FeedbackRegisterConfig)
+        )
         self._feedback_connections: Dict[str, FeedbackConnection] = {}
         self._qa_signals_by_handle: dict[str, SignalObj] = {}
         self._feedback_register_allocator: FeedbackRegisterAllocator | None = None
@@ -1008,18 +1008,18 @@ class CodeGenerator(ICodeGenerator):
                         #   - length entry in the instances stored in the signature pulse map
 
                         for old_name, new_name in pulse_name_mapping.items():
-                            new_signature_pulse_map[
-                                new_name
-                            ] = new_signature_pulse_map.pop(old_name)
+                            new_signature_pulse_map[new_name] = (
+                                new_signature_pulse_map.pop(old_name)
+                            )
 
                         for sp_map in new_signature_pulse_map.values():
                             sp_map.length_samples = new_length
                             for signature in sp_map.instances:
                                 signature.length = new_length
 
-                        self._sampled_signatures[signal_id][
-                            new_waveform
-                        ] = new_sampled_signature
+                        self._sampled_signatures[signal_id][new_waveform] = (
+                            new_sampled_signature
+                        )
 
         # evict waveforms that have been compressed, and thus replaced with one or more, shorter, waves
         for waveform_signature in compressed_waveform_signatures:
@@ -1151,10 +1151,10 @@ class CodeGenerator(ICodeGenerator):
                     signal_obj.id,
                     len(acquire_events.sequence),
                 )
-                self._integration_weights.setdefault(awg.key, {})[
-                    signal_obj.id
-                ] = calculate_integration_weights(
-                    acquire_events, signal_obj, pulse_defs
+                self._integration_weights.setdefault(awg.key, {})[signal_obj.id] = (
+                    calculate_integration_weights(
+                        acquire_events, signal_obj, pulse_defs
+                    )
                 )
 
             sampled_events.merge(acquire_events)

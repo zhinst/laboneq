@@ -5,11 +5,14 @@ from __future__ import annotations
 
 from collections import defaultdict
 from functools import singledispatch
-from typing import NamedTuple, Union
+from typing import TYPE_CHECKING, NamedTuple, Union
 
 from laboneq.compiler.common.awg_info import AwgKey
 from laboneq.compiler.seqc.linker import CombinedRTOutputSeqC
 from laboneq.compiler.workflow.compiler_output import CombinedRTCompilerOutputContainer
+
+if TYPE_CHECKING:
+    from laboneq.compiler.workflow.compiler import _IntegrationUnitAllocation
 
 
 class LocalFeedbackRegister(NamedTuple):
@@ -29,7 +32,7 @@ FeedbackRegisterLayout = dict[
 
 
 def calculate_feedback_register_layout(
-    integration_unit_allocation: dict[str, dict],
+    integration_unit_allocation: dict[str, _IntegrationUnitAllocation],
 ) -> FeedbackRegisterLayout:
     feedback_register_layouts: FeedbackRegisterLayout = defaultdict(
         SingleFeedbackRegisterLayout
@@ -37,14 +40,14 @@ def calculate_feedback_register_layout(
 
     for signal_id, integration_unit in sorted(
         integration_unit_allocation.items(),
-        key=lambda i: i[1]["channels"],
+        key=lambda i: i[1].channels,
     ):
-        device_id = integration_unit["device_id"]
-        awg_nr = integration_unit["awg_nr"]
+        device_id = integration_unit.device_id
+        awg_nr = integration_unit.awg_nr
         qa_awg_key = AwgKey(device_id, awg_nr)
 
         for local in (True, False):
-            if local and not integration_unit["has_local_bus"]:
+            if local and not integration_unit.has_local_bus:
                 continue
 
             register_key = (
@@ -54,13 +57,13 @@ def calculate_feedback_register_layout(
             )
 
             bit_width = 1
-            is_msd = (integration_unit["kernel_count"] or 0) > 1
+            is_msd = (integration_unit.kernel_count or 0) > 1
             if is_msd or local:
                 bit_width = 2
 
             feedback_register_layouts[register_key].append((bit_width, signal_id))
 
-            if bit_width < len(integration_unit["channels"]):
+            if bit_width < len(integration_unit.channels):
                 # On UHFQA, with `AcquisitionType.INTEGRATION`, we have 2 integrators
                 # per signal. For discrimination, that 2nd integrator is irrelevant, so
                 # we mark that bit as a 'dummy' field.

@@ -349,10 +349,10 @@ def serialize_to_dict_with_entities(
                     entities_collector[entity_typename_short] = {}
 
                 if item.uid not in entities_collector[entity_typename_short]:
-                    entities_collector[entity_typename_short][
-                        item.uid
-                    ] = serialize_to_dict_with_entities(
-                        item, entity_classes, **serialize_kwargs
+                    entities_collector[entity_typename_short][item.uid] = (
+                        serialize_to_dict_with_entities(
+                            item, entity_classes, **serialize_kwargs
+                        )
                     )
                     entities_collector[entity_typename_short][item.uid][ID_KEY] = id(
                         item
@@ -446,10 +446,10 @@ def serialize_to_dict_with_entities(
             if entity_typename_short not in entities_collector:
                 entities_collector[entity_typename_short] = {}
             if v.uid not in entities_collector[entity_typename_short]:
-                entities_collector[entity_typename_short][
-                    v.uid
-                ] = serialize_to_dict_with_entities(
-                    v, entity_classes, **serialize_kwargs
+                entities_collector[entity_typename_short][v.uid] = (
+                    serialize_to_dict_with_entities(
+                        v, entity_classes, **serialize_kwargs
+                    )
                 )
                 entities_collector[entity_typename_short][v.uid][ID_KEY] = id(v)
             else:
@@ -485,14 +485,14 @@ def serialize_to_dict_with_entities(
                     if entity_typename_short not in entities_collector:
                         entities_collector[entity_typename_short] = {}
                     if item.uid not in entities_collector[entity_typename_short]:
-                        entities_collector[entity_typename_short][
-                            item.uid
-                        ] = serialize_to_dict_with_entities(
-                            item, entity_classes, **serialize_kwargs
+                        entities_collector[entity_typename_short][item.uid] = (
+                            serialize_to_dict_with_entities(
+                                item, entity_classes, **serialize_kwargs
+                            )
                         )
-                        entities_collector[entity_typename_short][item.uid][
-                            ID_KEY
-                        ] = id(item)
+                        entities_collector[entity_typename_short][item.uid][ID_KEY] = (
+                            id(item)
+                        )
 
                     else:
                         if entities_collector[entity_typename_short][item.uid][
