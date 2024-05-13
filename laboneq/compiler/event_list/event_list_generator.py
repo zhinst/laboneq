@@ -7,7 +7,7 @@ from functools import singledispatch
 from typing import Iterator
 
 from laboneq.compiler.common.compiler_settings import CompilerSettings
-from laboneq.compiler.event_list.event_type import EventType
+from laboneq.compiler.event_list.event_type import EventList, EventType
 from laboneq.compiler.common.play_wave_type import PlayWaveType
 from laboneq.compiler.common.pulse_parameters import encode_pulse_parameters
 from laboneq.compiler.ir.acquire_group_ir import AcquireGroupIR
@@ -33,7 +33,7 @@ def generate_event_list(
     id_tracker: Iterator[int],
     expand_loops,
     settings: CompilerSettings,
-) -> list[dict]:
+) -> EventList:
     raise NotImplementedError
 
 
@@ -45,7 +45,7 @@ def generate_event_list_section(
     id_tracker: Iterator[int],
     expand_loops,
     settings: CompilerSettings,
-) -> list[dict]:
+) -> EventList:
     assert section_ir.length is not None
 
     # We'll wrap the child events in the section start and end events
@@ -135,7 +135,7 @@ def generate_event_list_acquire_group(
     id_tracker: Iterator[int],
     _expand_loops,
     _settings: CompilerSettings,
-) -> list[dict]:
+) -> EventList:
     assert acquire_group_ir.length is not None
     assert (
         len(acquire_group_ir.pulses)
@@ -218,7 +218,7 @@ def generate_event_list_oscillator_frequency_step(
     id_tracker: Iterator[int],
     _expand_loops: bool,
     _settings: CompilerSettings,
-) -> list[dict]:
+) -> EventList:
     assert ir.length is not None
     retval = []
     for param, osc, value in zip(ir.params, ir.oscillators, ir.values):
@@ -257,7 +257,7 @@ def generate_event_list_root(
     id_tracker: Iterator[int],
     expand_loops: bool,
     settings: CompilerSettings,
-) -> list[dict]:
+) -> EventList:
     assert root_ir.length is not None
     children_events = _children_events(
         root_ir, start, max_events - 2, settings, id_tracker, expand_loops
@@ -274,7 +274,7 @@ def generate_event_list_loop(
     id_tracker: Iterator[int],
     expand_loops,
     settings: CompilerSettings,
-) -> list[dict]:
+) -> EventList:
     assert loop_ir.children_start is not None
     assert loop_ir.length is not None
 
@@ -363,7 +363,7 @@ def generate_event_list_match(
     id_tracker: Iterator[int],
     expand_loops,
     settings: CompilerSettings,
-) -> list[dict]:
+) -> EventList:
     assert match_ir.length is not None
     events = generate_event_list_section(
         match_ir, start, max_events, id_tracker, expand_loops, settings
@@ -391,7 +391,7 @@ def generate_event_list_case(
     id_tracker: Iterator[int],
     expand_loops,
     settings: CompilerSettings,
-) -> list[dict]:
+) -> EventList:
     assert case_ir.length is not None
 
     events = generate_event_list_section(
@@ -410,7 +410,7 @@ def generate_event_list_empty_branch(
     id_tracker: Iterator[int],
     expand_loops,
     settings: CompilerSettings,
-) -> list[dict]:
+) -> EventList:
     section_start, *rest, section_end = generate_event_list_case(
         ir, start, max_events, id_tracker, expand_loops, settings
     )
@@ -465,7 +465,7 @@ def generate_event_list_loop_iteration(
     id_tracker: Iterator[int],
     expand_loops,
     settings: CompilerSettings,
-) -> list[dict]:
+) -> EventList:
     assert loop_iteration_ir.length is not None
     common = {
         "section_name": loop_iteration_ir.section,
@@ -543,7 +543,7 @@ def generate_event_list_pulse(
     id_tracker: Iterator[int],
     expand_loops,
     settings: CompilerSettings,
-) -> list[dict]:
+) -> EventList:
     assert pulse_ir.length is not None
     params_list = [
         getattr(pulse_ir.pulse, f).uid
@@ -663,7 +663,7 @@ def generate_event_list_precomp_clear(
     id_tracker: Iterator[int],
     expand_loops,
     settings: CompilerSettings,
-) -> list[dict]:
+) -> EventList:
     assert ir.length is not None
     return [
         {
@@ -677,7 +677,7 @@ def generate_event_list_precomp_clear(
 
 
 @generate_event_list.register
-def generate_event_list_reserve(ir: ReserveIR, *_, **__) -> list[dict]:
+def generate_event_list_reserve(ir: ReserveIR, *_, **__) -> EventList:
     assert ir.length is not None
     return []
 
@@ -690,7 +690,7 @@ def generate_event_list_phase_reset(
     id_tracker: Iterator[int],
     expand_loops,
     settings: CompilerSettings,
-) -> list[dict]:
+) -> EventList:
     assert ir.length is not None
     events = [
         {
@@ -725,7 +725,7 @@ def _children_events(
     id_tracker: Iterator[int],
     expand_loops: bool,
     subsection_events=True,
-) -> list[list[dict]]:
+) -> list[EventList]:
     assert ir.children_start is not None
 
     if not isinstance(ir, SectionIR):

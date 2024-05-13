@@ -6,12 +6,12 @@ import math
 
 from laboneq.compiler.common.compiler_settings import CompilerSettings, TINYSAMPLE
 from laboneq.compiler.common.device_type import DeviceType
-from laboneq.compiler.event_list.event_type import EventType
+from laboneq.compiler.event_list.event_type import EventList, EventType
 from laboneq.compiler.event_list.event_list_generator import generate_event_list
 from laboneq.compiler.ir.ir import IR
 
 
-def _calculate_osc_phase(event_list, ir: IR):
+def _calculate_osc_phase(event_list: EventList, ir: IR):
     """Traverse the event list, and elaborate the phase of each played pulse.
 
     For SW oscillators, calculate the time since the last set/reset of that oscillator,
@@ -92,7 +92,7 @@ def _calculate_osc_phase(event_list, ir: IR):
                     event["oscillator_phase"] = 0.0
 
 
-def _start_events(ir: IR):
+def _start_events(ir: IR) -> EventList:
     retval = []
 
     # Add initial events to reset the NCOs.
@@ -118,7 +118,7 @@ def _start_events(ir: IR):
 
 def generate_event_list_from_ir(
     ir: IR, settings: CompilerSettings, expand_loops: bool, max_events: int
-):
+) -> EventList:
     event_list = _start_events(ir)
 
     if ir.root is not None:

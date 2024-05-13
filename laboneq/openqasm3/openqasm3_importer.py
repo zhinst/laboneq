@@ -938,11 +938,10 @@ def exp_from_qasm(
     averaging_mode: AveragingMode = AveragingMode.CYCLIC,
     acquisition_type: AcquisitionType = AcquisitionType.INTEGRATION,
     reset_oscillator_phase: bool = False,
-):
+) -> Experiment:
     """Create an experiment from an OpenQASM program.
 
-    Args:
-    ----
+    Arguments:
         program:
             OpenQASM program
         qubits:
@@ -963,6 +962,8 @@ def exp_from_qasm(
             When true, reset all oscillators at the start of every
             acquistion loop iteration.
 
+    Returns:
+        The experiment generated from the OpenQASM program.
     """
     importer = OpenQasm3Importer(
         qubits=qubits,
@@ -1006,8 +1007,8 @@ def exp_from_qasm_list(
     acquisition_type: AcquisitionType = AcquisitionType.INTEGRATION,
     reset_oscillator_phase: bool = False,
     repetition_time: float = 1e-3,
-    batch_execution_mode="pipeline",
-    do_reset=False,
+    batch_execution_mode: str = "pipeline",
+    do_reset: bool = False,
     pipeline_chunk_count: int | None = None,
 ) -> Experiment:
     """Process a list of openQASM programs into a single LabOne Q experiment that
@@ -1029,8 +1030,7 @@ def exp_from_qasm_list(
     For the measurement we require the gate store to be loaded with a `measurement`
     gate. Similarly, the optional reset requires a `reset` gate to be available.
 
-    Args:
-    ----
+    Arguments:
         programs:
             the list of the QASM snippets
         qubits:
@@ -1079,9 +1079,7 @@ def exp_from_qasm_list(
             chunk count.
 
     Returns:
-    -------
         The experiment generated from the OpenQASM programs.
-
     """
     if batch_execution_mode == "pipeline":
         if pipeline_chunk_count is None:

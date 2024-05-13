@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 from copy import deepcopy
 from numbers import Complex
-from typing import Any, Dict, Optional
+from typing import Any, Callable
 
 import numpy as np
 
@@ -71,8 +71,8 @@ def sample_pulse(
     modulation_frequency: float | None = None,
     phase: float | None = None,
     samples: np.ndarray | None = None,
-    mixer_type: Optional[MixerType] = MixerType.IQ,
-    pulse_parameters: Dict[str, Any] | None = None,
+    mixer_type: MixerType | None = MixerType.IQ,
+    pulse_parameters: dict[str, Any] | None = None,
     markers=None,
 ):
     """Create a waveform from a pulse definition.
@@ -134,6 +134,9 @@ def sample_pulse(
             sampling_rate=sampling_rate,
             **pulse_parameters,
         )
+    elif samples is None:
+        raise AssertionError("Must provide either samples or a function")
+
     assert isinstance(samples, (list, np.ndarray))
     samples = np.array(samples[:num_samples])
     shape = samples.shape
@@ -209,11 +212,11 @@ def sample_pulse(
     return retval
 
 
-pulse_function_library = dict()
+pulse_function_library: dict[str, Callable[..., Any]] = dict()
 
 
 def verify_amplitude_no_clipping(
-    samples, pulse_id: str | None, mixer_type: MixerType, signal_id: str | None
+    samples, pulse_id: str | None, mixer_type: MixerType | None, signal_id: str | None
 ):
     max_amplitude = np.max(
         np.abs(samples["samples_i"] + 1j * samples.get("samples_j", 0))

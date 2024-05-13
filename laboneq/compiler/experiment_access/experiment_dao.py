@@ -131,8 +131,8 @@ class ExperimentDAO:
         return self.device_info(self.signal_info(signal_id).device.uid)
 
     @cached_method()
-    def signal_info(self, signal_id) -> SignalInfo | None:
-        return self._data["signals"].get(signal_id)
+    def signal_info(self, signal_id: str) -> SignalInfo:
+        return self._data["signals"][signal_id]
 
     def sections(self) -> List[str]:
         return list(self._data["sections"].keys())

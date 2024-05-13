@@ -479,7 +479,8 @@ class Compiler:
 
         for dev_awgs in awgs.values():
             for awg in dev_awgs.values():
-                if len(awg.signal_channels) > 1 and awg.signal_type not in [
+                occupied_channels = {sc[1] for sc in awg.signal_channels}
+                if len(occupied_channels) == 2 and awg.signal_type not in [
                     AWGSignalType.IQ,
                     AWGSignalType.MULTI,
                 ]:

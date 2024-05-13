@@ -7,16 +7,18 @@ import functools
 from collections import defaultdict
 from dataclasses import dataclass
 from itertools import count
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable, TypeVar
+
+T = TypeVar("T", bound=Callable[..., Any])
 
 
-def cached_method(maxsize: int = 128, typed=False) -> Any:
+def cached_method(maxsize: int = 128, typed=False) -> Callable[[T], T]:
     """Cache method decorator.
 
     Arguments are forwarded to `functools.lru_cache`
     """
 
-    def outer_wrapper(func):
+    def outer_wrapper(func: T) -> T:
         method_cache = f"__cache_cls_{func.__name__}"
 
         @functools.wraps(func)
@@ -32,7 +34,7 @@ def cached_method(maxsize: int = 128, typed=False) -> Any:
                 cached = cached_func
             return cached(*args, **kwargs)
 
-        return wrapper
+        return wrapper  # type: ignore
 
     return outer_wrapper
 

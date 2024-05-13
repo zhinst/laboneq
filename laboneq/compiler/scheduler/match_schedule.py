@@ -16,6 +16,7 @@ from zhinst.timing_models import (
     SGType,
     get_feedback_system_description,
 )
+from importlib.metadata import version as package_version
 
 from laboneq.compiler.common.compiler_settings import (
     EXECUTETABLEENTRY_LATENCY,
@@ -29,6 +30,46 @@ from laboneq.core.utilities.compressed_formatter import CompressableLogEntry
 
 if TYPE_CHECKING:
     from laboneq.compiler.scheduler.schedule_data import ScheduleData
+
+
+if (
+    ZHINST_TIMING_MODELS_VERSION := tuple(
+        map(int, package_version("zhinst-timing-models").split("."))
+    )
+) < (24, 4):
+    # Prior to 24.04, the feedback latency model did not distinguish
+    # configurations with respect to the trigger source (ZSYNC or local).
+    # This is where we handle this case.
+    from functools import wraps
+    from laboneq.controller.versioning import LabOneVersion
+
+    from zhinst.timing_models import get_feedback_system_description as original_gfsd
+
+    try:
+        _ = LabOneVersion.V_24_01
+    except AttributeError:
+        # If we dropped support for LabOne 24.01, we should also drop support
+        # for the corresponding timing model. This assertion ensures that by
+        # enforcing failure on our CI pipeline. Remove this whole if block when
+        # this error is encountered.
+        raise LabOneQException(
+            "Timing model for LabOne versions older than 24.04 is not supported."
+        ) from None
+
+    @wraps(original_gfsd)
+    def _get_feedback_system_description(*args, **kwargs):
+        kwargs.pop("trigger_source")
+        return original_gfsd(*args, **kwargs)
+
+    get_feedback_system_description = _get_feedback_system_description
+
+    class TriggerSource:  # Mock
+        ZSYNC = 1
+        INTERNAL = 2
+
+else:
+    from zhinst.timing_models import TriggerSource
+
 
 _logger = logging.getLogger(__name__)
 
@@ -162,6 +203,7 @@ def _compute_start_with_latency(
                 description=get_feedback_system_description(
                     generator_type=toolkit_sgtype,
                     analyzer_type=toolkit_qatype,
+                    trigger_source=TriggerSource.ZSYNC,
                     pqsc_mode=None if local else PQSCMode.REGISTER_FORWARD,
                     feedback_path=FeedbackPath.INTERNAL
                     if local
@@ -182,8 +224,9 @@ def _compute_start_with_latency(
                 time_of_arrival_at_register + EXECUTETABLEENTRY_LATENCY
             )
 
-            # Extra slack to avoid issues with marginal model. Resolution: HULK-1726
-            time_of_pulse_played += 5 - 2  # `HBAR-1934` - `HBAR-1945`
+            if ZHINST_TIMING_MODELS_VERSION < (24, 4):
+                # Extra slack to avoid issues with marginal model. Resolution: HULK-1726
+                time_of_pulse_played += 5 - 2  # `HBAR-1934` - `HBAR-1945`
 
             sg_seq_rate = schedule_data.sampling_rate_tracker.sequencer_rate_for_device(
                 sg_signal_obj.awg.device_id

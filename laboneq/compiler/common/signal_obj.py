@@ -6,7 +6,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, List
 
-from laboneq.compiler.common.awg_signal_type import AWGSignalType
 from laboneq.core.types.enums.mixer_type import MixerType
 
 if TYPE_CHECKING:
@@ -42,7 +41,7 @@ class SignalObj:
     id: str
     start_delay: float
     delay_signal: float
-    signal_type: AWGSignalType | str
+    signal_type: str  # One of "iq" / "single" / "integration" - see SignalInfoType
     base_delay_signal: float | None = None
     oscillator_frequency: float = None  # for software modulation only
     channels: List = field(default_factory=list)

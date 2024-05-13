@@ -339,7 +339,7 @@ class Session:
         self,
         experiment: Experiment,
         compiler_settings: Dict | None = None,
-    ) -> CompiledExperiment | None:
+    ) -> CompiledExperiment:
         """Compiles the specified experiment and stores it in the compiled_experiment property.
 
         Requires connected LabOne Q session (`session.connect()`) either with or without emulation mode.

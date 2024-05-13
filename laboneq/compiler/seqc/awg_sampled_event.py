@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable
 
 from sortedcollections import SortedDict
 
@@ -39,10 +39,10 @@ class AWGEventType(Enum):
 @dataclass
 class AWGEvent:
     type: AWGEventType
-    start: int = None
-    end: int = None
+    start: int | None = None
+    end: int | None = None
     priority: int | None = None
-    params: Dict[str, Any] = field(default_factory=dict)
+    params: dict[str, Any] = field(default_factory=dict)
 
     def frozen(self) -> frozenset:
         return frozenset(
@@ -54,7 +54,7 @@ class AWGEvent:
 class AWGSampledEventSequence:
     """Ordered mapping of the AWG timestamp in device samples to the events at that sample."""
 
-    sequence: Dict[int, List[AWGEvent]] = field(default_factory=SortedDict)
+    sequence: dict[int, list[AWGEvent]] = field(default_factory=SortedDict)
 
     def add(self, ts: int, event: AWGEvent):
         events_at_ts = self.sequence.setdefault(ts, [])

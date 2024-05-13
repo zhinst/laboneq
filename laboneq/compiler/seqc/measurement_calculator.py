@@ -2,14 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+from collections import defaultdict
 import logging
 from dataclasses import dataclass, field
 from itertools import groupby
-from typing import Any, Dict, Iterator, Tuple
+from typing import Any, Iterator
 
 from engineering_notation import EngNumber
 
+from laboneq.compiler.common.awg_info import AwgKey
 from laboneq.compiler.common.device_type import DeviceType
+from laboneq.compiler.common.signal_obj import SignalObj
+from laboneq.compiler.event_list.event_type import EventList, SchedulerEvent
 from laboneq.compiler.fastlogging import NullLogger
 from laboneq.core.types.enums import AcquisitionType
 
@@ -38,7 +42,7 @@ class SignalIntegrationInfo:
 
 @dataclass(init=True, repr=True, order=True)
 class SectionIntegrationInfo:
-    signals: Dict[str, SignalIntegrationInfo] = field(default_factory=dict)
+    signals: dict[str, SignalIntegrationInfo] = field(default_factory=dict)
     section_start: float = field(default=0.0)
 
     def signal_info(self, signal_id: str):
@@ -46,7 +50,7 @@ class SectionIntegrationInfo:
             self.signals[signal_id] = SignalIntegrationInfo()
         return self.signals[signal_id]
 
-    def items(self) -> Iterator[Tuple[str, SignalIntegrationInfo]]:
+    def items(self) -> Iterator[tuple[str, SignalIntegrationInfo]]:
         return self.signals.items()
 
     def values(self) -> Iterator[SignalIntegrationInfo]:
@@ -55,7 +59,7 @@ class SectionIntegrationInfo:
 
 @dataclass(init=True, repr=True, order=True)
 class IntegrationTimes:
-    section_infos: Dict[str, SectionIntegrationInfo] = field(default_factory=dict)
+    section_infos: dict[str, SectionIntegrationInfo] = field(default_factory=dict)
 
     def get_or_create_section_info(self, section_name) -> SectionIntegrationInfo:
         if section_name not in self.section_infos:
@@ -65,7 +69,7 @@ class IntegrationTimes:
     def section_info(self, section_name) -> SectionIntegrationInfo | None:
         return self.section_infos.get(section_name)
 
-    def items(self) -> Iterator[Tuple[str, SectionIntegrationInfo]]:
+    def items(self) -> Iterator[tuple[str, SectionIntegrationInfo]]:
         return self.section_infos.items()
 
     def values(self) -> Iterator[SectionIntegrationInfo]:
@@ -78,49 +82,42 @@ class SignalDelay:
     on_device: float
 
 
-SignalDelays = Dict[str, SignalDelay]
+SignalDelays = dict[str, SignalDelay]
 
 
 class MeasurementCalculator:
     @classmethod
     def calculate_integration_times(
-        cls, signal_info_map, events
-    ) -> Tuple[IntegrationTimes, SignalDelays]:
+        cls, signals: dict[str, SignalObj], events: EventList
+    ) -> tuple[IntegrationTimes, SignalDelays]:
         integration_times = IntegrationTimes()
         acquire_and_play_events = cls._filter_event_types(
             events, {"ACQUIRE_START", "ACQUIRE_END", "PLAY_START", "PLAY_END"}
         )
 
         acquire_and_play_events = [
-            event
-            for event in acquire_and_play_events
-            if event["signal"] in signal_info_map.keys()
+            event for event in acquire_and_play_events if event["signal"] in signals
         ]
 
-        signals_on_awg = {}
+        signals_on_awg: dict[AwgKey, set[Any]] = defaultdict(set)
 
-        def calc_awg_key(signal_id):
-            acquire_signal_info = signal_info_map.get(signal_id)
-            return (acquire_signal_info["device_id"], acquire_signal_info["awg_number"])
+        def awg_key_from_event(event: SchedulerEvent) -> AwgKey:
+            return signals[event["signal"]].awg.key
 
-        def group_by_awg_key(event):
-            return (calc_awg_key(event.get("signal", "")),)
-
-        def group_by_signal_and_section(event):
-            return (event.get("signal", ""), event.get("section_name", ""))
+        def signal_and_section_from_event(event: SchedulerEvent) -> tuple[str, str]:
+            return (event["signal"], event.get("section_name", ""))
 
         for awg_key, events_for_awg_iterator in groupby(
-            sorted(acquire_and_play_events, key=group_by_awg_key), key=group_by_awg_key
+            sorted(acquire_and_play_events, key=awg_key_from_event),
+            key=awg_key_from_event,
         ):
             events_for_awg = list(events_for_awg_iterator)
-            if awg_key not in signals_on_awg:
-                signals_on_awg[awg_key] = set()
 
             if "ACQUIRE_START" in (e["event_type"] for e in events_for_awg):
                 # there are acquire events on this AWG
                 for k, events_for_signal_and_section in groupby(
-                    sorted(events_for_awg, key=group_by_signal_and_section),
-                    key=group_by_signal_and_section,
+                    sorted(events_for_awg, key=signal_and_section_from_event),
+                    key=signal_and_section_from_event,
                 ):
                     signal_id = k[0]
                     section_name = k[1]
@@ -133,10 +130,7 @@ class MeasurementCalculator:
 
                     signals_on_awg[awg_key].add(signal_id)
 
-                    delay_signal = 0
-                    signal_info = signal_info_map[signal_id]
-                    if signal_info.get("delay_signal") is not None:
-                        delay_signal = signal_info.get("delay_signal")
+                    delay_signal = signals[signal_id].delay_signal
 
                     for event in sorted(
                         events_for_signal_and_section, key=lambda x: x["time"]
@@ -191,22 +185,20 @@ class MeasurementCalculator:
                             f"There are multiple play operations in section {section_name} on signal {signal_id}, which is not allowed in a section with acquire signals on the same awg sequencer. Acquire signals: {acquire_signals_on_same_sequencer} "
                         )
 
-        for event in cls._filter_event_types(events, "SECTION_START"):
+        for event in cls._filter_event_types(events, {"SECTION_START"}):
             section_info = integration_times.section_info(event["section_name"])
             if section_info is not None and not event["shadow"]:
                 section_info.section_start = event["time"]
 
         delays_per_awg = {}
         for section_name, section_info in integration_times.items():
-            for signal, signal_integration_info in section_info.items():
-                signal_info = signal_info_map[signal]
-                device_type = DeviceType.from_device_info_type(
-                    signal_info["device_type"]
-                )
+            for signal_id, signal_integration_info in section_info.items():
+                signal = signals[signal_id]
+                device_type = DeviceType.from_device_info_type(signal.awg.device_type)
                 sampling_rate = device_type.sampling_rate
-                signal_integration_info.awg = signal_info["awg_number"]
+                signal_integration_info.awg = signal.awg.awg_number
 
-                signal_integration_info.device_id = signal_info["device_id"]
+                signal_integration_info.device_id = signal.awg.device_id
 
                 signal_integration_info.length = (
                     signal_integration_info.end - signal_integration_info.start
@@ -221,7 +213,7 @@ class MeasurementCalculator:
                 delay_time = signal_integration_info.start - section_info.section_start
 
                 awg_key = (
-                    signal_info["device_id"],
+                    signal.awg.device_id,
                     signal_integration_info.awg,
                     "PLAY" if signal_integration_info.is_play else "ACQUIRE",
                 )
@@ -232,10 +224,10 @@ class MeasurementCalculator:
                         "sections": [],
                     }
                 delays_per_awg[awg_key]["delays"].add(round(delay_time * sampling_rate))
-                delays_per_awg[awg_key]["signals"].append(signal)
+                delays_per_awg[awg_key]["signals"].append(signal_id)
                 delays_per_awg[awg_key]["sections"].append(section_name)
                 delays_per_awg[awg_key]["device_type"] = (
-                    DeviceType.from_device_info_type(signal_info["device_type"])
+                    DeviceType.from_device_info_type(signal.awg.device_type)
                 )
 
         _dlogger.debug("Delays per awg: %s", delays_per_awg)
@@ -259,12 +251,12 @@ class MeasurementCalculator:
                 play_delay = next(d for d in play["delays"])
                 acquire_delay = next(d for d in acquire["delays"])
 
-                def calc_and_round_delay(signal, delay_in_samples):
-                    signal_info = signal_info_map[signal]
+                def calc_and_round_delay(signal_id: str, delay_in_samples):
+                    signal = signals[signal_id]
                     device_type = DeviceType.from_device_info_type(
-                        signal_info["device_type"]
+                        signal.awg.device_type
                     )
-                    sampling_rate = signal_info["sampling_rate"]
+                    sampling_rate = signal.awg.sampling_rate
                     rest = delay_in_samples % device_type.sample_multiple
                     _dlogger.debug(
                         "rounding delay_in_samples %s  with rest %s to %s for device_type %s with sample multiple %s",
@@ -290,26 +282,26 @@ class MeasurementCalculator:
                             play_delay,
                             acquire_delay,
                         )
-                        for signal in play["signals"]:
+                        for signal_id in play["signals"]:
                             play_delay_in_s, rounding_error_play = calc_and_round_delay(
-                                signal, play_delay
+                                signal_id, play_delay
                             )
                             (
                                 acquire_delay_in_s,
                                 rounding_error_acquire,
-                            ) = calc_and_round_delay(signal, acquire_delay)
+                            ) = calc_and_round_delay(signal_id, acquire_delay)
 
-                            signal_delays[signal] = SignalDelay(
+                            signal_delays[signal_id] = SignalDelay(
                                 code_generation=acquire_delay_in_s - play_delay_in_s,
                                 on_device=-(acquire_delay_in_s - play_delay_in_s),
                             )
-                        for signal in acquire["signals"]:
+                        for signal_id in acquire["signals"]:
                             (
                                 acquire_delay_in_s,
                                 rounding_error_acquire,
-                            ) = calc_and_round_delay(signal, acquire_delay)
+                            ) = calc_and_round_delay(signal_id, acquire_delay)
 
-                            signal_delays[signal] = SignalDelay(
+                            signal_delays[signal_id] = SignalDelay(
                                 code_generation=0,
                                 on_device=rounding_error_acquire,
                             )
@@ -321,23 +313,23 @@ class MeasurementCalculator:
                             acquire_delay,
                         )
 
-                        for signal in play["signals"]:
-                            signal_delays[signal] = SignalDelay(
+                        for signal_id in play["signals"]:
+                            signal_delays[signal_id] = SignalDelay(
                                 code_generation=0,
                                 on_device=0,
                             )
 
-                        for signal in acquire["signals"]:
+                        for signal_id in acquire["signals"]:
                             (
                                 acquire_delay_in_s,
                                 rounding_error_acquire,
-                            ) = calc_and_round_delay(signal, acquire_delay)
+                            ) = calc_and_round_delay(signal_id, acquire_delay)
 
                             play_delay_in_s, rounding_error_play = calc_and_round_delay(
-                                signal, play_delay
+                                signal_id, play_delay
                             )
 
-                            signal_delays[signal] = SignalDelay(
+                            signal_delays[signal_id] = SignalDelay(
                                 code_generation=-(acquire_delay_in_s - play_delay_in_s),
                                 on_device=(acquire_delay_in_s - play_delay_in_s)
                                 + rounding_error_acquire,
@@ -349,19 +341,19 @@ class MeasurementCalculator:
                         acquire_delay,
                     )
 
-                    for signal in play["signals"]:
-                        signal_delays[signal] = SignalDelay(
+                    for signal_id in play["signals"]:
+                        signal_delays[signal_id] = SignalDelay(
                             code_generation=0,
                             on_device=0,
                         )
 
-                    for signal in acquire["signals"]:
+                    for signal_id in acquire["signals"]:
                         (
                             acquire_delay_in_s,
                             rounding_error_acquire,
-                        ) = calc_and_round_delay(signal, acquire_delay)
+                        ) = calc_and_round_delay(signal_id, acquire_delay)
                         play_delay_in_s, rounding_error_play = calc_and_round_delay(
-                            signal, play_delay
+                            signal_id, play_delay
                         )
 
                         _dlogger.debug(
@@ -371,7 +363,7 @@ class MeasurementCalculator:
                             EngNumber(play_delay_in_s),
                         )
 
-                        signal_delays[signal] = SignalDelay(
+                        signal_delays[signal_id] = SignalDelay(
                             code_generation=-acquire_delay_in_s,
                             on_device=acquire_delay_in_s + rounding_error_acquire,
                         )
@@ -386,8 +378,8 @@ class MeasurementCalculator:
 
         for signal_id, signal_delay in signal_delays.items():
             _dlogger.debug("Signal delay for %s:", signal_id)
-            signal_info = signal_info_map[signal_id]
-            sampling_rate = signal_info["sampling_rate"]
+            signal = signals[signal_id]
+            sampling_rate = signal.awg.sampling_rate
             _dlogger.debug(
                 " code_generation %s %s samples ",
                 EngNumber(signal_delay.code_generation),
@@ -402,7 +394,7 @@ class MeasurementCalculator:
         return integration_times, signal_delays
 
     @classmethod
-    def _filter_event_types(cls, events, types):
+    def _filter_event_types(cls, events: EventList, types: set[str]) -> EventList:
         return [
             dict(
                 zip(
@@ -419,24 +411,15 @@ class MeasurementCalculator:
                     (
                         event["id"],
                         event["time"],
-                        itemgetter_robust("section_name")(event),
+                        event.get("section_name"),
                         event["event_type"],
-                        itemgetter_robust("signal")(event),
-                        itemgetter_robust("iteration")(event),
-                        itemgetter_robust("shadow")(event),
-                        itemgetter_robust("acquisition_type")(event),
+                        event.get("signal"),
+                        event.get("iteration"),
+                        event.get("shadow"),
+                        event.get("acquisition_type"),
                     ),
                 )
             )
             for event in events
             if event["event_type"] in types
         ]
-
-
-def itemgetter_robust(item):
-    def retval(obj):
-        if item in obj:
-            return obj[item]
-        return None
-
-    return retval

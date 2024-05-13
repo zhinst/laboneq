@@ -560,7 +560,11 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
                 nc.add(f"qachannels/{output.channel}/output/range", output.range)
 
             nc.add(f"qachannels/{output.channel}/generator/single", 1)
-            if self._is_plus:
+            if self._is_plus and (
+                # Temporary workaround for in-house testing with a partially updated device
+                # DEV12093 only has the new up-converter installed in channel 3
+                self.serial.lower() != "dev12093" or output.channel == 3
+            ):
                 nc.add(
                     f"qachannels/{output.channel}/output/muting/enable",
                     int(output.enable_output_mute),
@@ -569,7 +573,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
                 if output.enable_output_mute:
                     _logger.warning(
                         f"{self.dev_repr}: Device output muting is enabled, but the device is not"
-                        " SHF+ and therefore no mutting will happen. It is suggested to disable it."
+                        " SHF+ and therefore no muting will happen. It is suggested to disable it."
                     )
         for input in initialization.inputs or []:
             nc.add(
@@ -1211,6 +1215,9 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         nc.add("qachannels/*/spectroscopy/psd/enable", 0, cache=False)
         nc.add("qachannels/*/spectroscopy/result/enable", 0, cache=False)
         nc.add("qachannels/*/output/rflfinterlock", 1, cache=False)
+        # Factory value after reset is 0.5 to avoid clipping during interpolation.
+        # We set it to 1.0 for consistency with integration mode.
+        nc.add("qachannels/*/oscs/0/gain", 1.0, cache=False)
         nc.add("scopes/0/enable", 0, cache=False)
         nc.add("scopes/0/channels/*/enable", 0, cache=False)
         reset_nodes = await super().collect_reset_nodes()

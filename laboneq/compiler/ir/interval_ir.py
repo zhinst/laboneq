@@ -19,7 +19,7 @@ class IntervalIR:
     #: The children of this interval.
     children: List[IntervalIR] = field(factory=list)
 
-    #: The length of the interval. Expressed in tiny samples
+    #: The length of the interval. Typically expressed in tiny samples.
     length: Deferred[int] = None
 
     #: The signals reserved by this interval.

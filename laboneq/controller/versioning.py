@@ -6,12 +6,15 @@ from __future__ import annotations
 from enum import Enum
 from functools import total_ordering
 
+import laboneq
+
 
 @total_ordering
 class LabOneVersion(Enum):
     UNKNOWN = "0"
     V_24_01 = "24.01"
-    LATEST = V_24_01
+    V_24_04 = "24.04"
+    LATEST = V_24_04
 
     def __eq__(self, other):
         return float(self.value) == float(other.value)
@@ -25,7 +28,11 @@ class LabOneVersion(Enum):
             labone_version = LabOneVersion(version)
         except ValueError as e:
             if raise_if_unsupported:
-                err_msg = f"Version {version} is not supported by LabOne Q."
+                err_msg = (
+                    f"LabOne version {version} is not supported by LabOne Q {laboneq.__version__}."
+                    f" Please downgrade/upgrade your LabOne installation, instruments'"
+                    f" firmware and API to version {cls.LATEST.value}."
+                )
                 raise ValueError(err_msg) from e
             else:
                 labone_version = LabOneVersion.UNKNOWN
