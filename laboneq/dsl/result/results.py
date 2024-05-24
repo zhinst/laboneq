@@ -40,6 +40,7 @@ class Results:
                 * the indices of the loops where the error occurred
                 * the experiment section uid
                 * the error message
+        pipeline_jobs_timestamps (dict[str, list[float]]): The timestamps of all pipeline jobs, in seconds.  Organized by signal, then pipeline job id.
 
     !!! version-changed "Deprecated in version 2.19.0"
         The `user_func_results` attribute was deprecated in version 2.19.0.
@@ -52,6 +53,7 @@ class Results:
     acquired_results: AcquiredResults = field(default=AcquiredResults)
     neartime_callback_results: dict[str, list[Any]] = field(default=None)
     execution_errors: list[tuple[list[int], str, str]] = field(default=None)
+    pipeline_jobs_timestamps: dict[str, list[float]] = field(default_factory=dict)
 
     def __init__(
         self,
@@ -62,6 +64,7 @@ class Results:
         neartime_callback_results: dict[str, list[Any]] | None = None,
         execution_errors: list[tuple[list[int], str, str]] | None = None,
         user_func_results: dict[str, list[Any]] | None = None,
+        pipeline_jobs_timestamps: dict[str, list[float]] | None = None,
     ):
         self.experiment = experiment
         self.device_setup = device_setup
@@ -78,6 +81,9 @@ class Results:
                     "Results can only be initialized with either 'neartime_callback_results' or 'user_func_results', not both."
                 )
             self.neartime_callback_results = user_func_results
+        if pipeline_jobs_timestamps is None:
+            pipeline_jobs_timestamps = {}
+        self.pipeline_jobs_timestamps = pipeline_jobs_timestamps
 
     @property
     def user_func_results(self):

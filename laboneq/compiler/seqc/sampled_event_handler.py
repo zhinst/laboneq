@@ -575,8 +575,15 @@ class SampledEventHandler:
             self.seqc_tracker.add_timing_comment(sampled_event.end)
 
         if is_spectroscopy:
-            mask_val_for_spectroscopy = 0
-            args = [mask_val_for_spectroscopy, 0, 0, 0, 1]
+            generator_mask = 0
+
+            # In spectroscopy mode, there are no distinct integrators that can be,
+            # triggered, so the mask is ignored. By setting it to a non-null value
+            # however, we ensure that the timestamp of the acquisition is correctly
+            # latched.
+            integrator_mask = 1
+
+            args = [generator_mask, integrator_mask, 0, 0, 1]
         else:
             args = [
                 generator_mask,

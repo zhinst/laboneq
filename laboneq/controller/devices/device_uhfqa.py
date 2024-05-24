@@ -21,6 +21,7 @@ from laboneq.controller.devices.device_zi import (
     delay_to_rounded_samples,
     IntegrationWeights,
     IntegrationWeightItem,
+    RawReadoutData,
 )
 from laboneq.controller.devices.zi_node_monitor import (
     Command,
@@ -605,7 +606,7 @@ class DeviceUHFQA(DeviceZI):
         result_indices: list[int],
         num_results: int,
         hw_averages: int,
-    ):
+    ) -> RawReadoutData:
         averages_divider = (
             1
             if rt_execution_info.acquisition_type == AcquisitionType.DISCRIMINATION
@@ -613,9 +614,10 @@ class DeviceUHFQA(DeviceZI):
         )
         assert len(result_indices) <= 2
         if len(result_indices) == 1:
-            return await self._get_integrator_measurement_data(
+            data = await self._get_integrator_measurement_data(
                 result_indices[0], num_results, averages_divider
             )
+            return RawReadoutData(data)
         else:
             in_phase = await self._get_integrator_measurement_data(
                 result_indices[0], num_results, averages_divider
@@ -623,16 +625,24 @@ class DeviceUHFQA(DeviceZI):
             quadrature = await self._get_integrator_measurement_data(
                 result_indices[1], num_results, averages_divider
             )
-            return [complex(real, imag) for real, imag in zip(in_phase, quadrature)]
+            return RawReadoutData(
+                np.array(
+                    [complex(real, imag) for real, imag in zip(in_phase, quadrature)]
+                )
+            )
 
-    async def get_input_monitor_data(self, channel: int, num_results: int):
+    async def get_input_monitor_data(
+        self, channel: int, num_results: int
+    ) -> RawReadoutData:
         result_path_ch0 = f"/{self.serial}/qas/0/monitor/inputs/0/wave".lower()
         result_path_ch1 = f"/{self.serial}/qas/0/monitor/inputs/1/wave".lower()
         data = await self.get_raw(",".join([result_path_ch0, result_path_ch1]))
         # Truncate returned vectors to the expected length -> hotfix for GCE-681
         ch0 = data[result_path_ch0][0]["vector"][0:num_results]
         ch1 = data[result_path_ch1][0]["vector"][0:num_results]
-        return [complex(real, imag) for real, imag in zip(ch0, ch1)]
+        return RawReadoutData(
+            np.array([complex(real, imag) for real, imag in zip(ch0, ch1)])
+        )
 
     async def check_results_acquired_status(
         self, channel, acquisition_type: AcquisitionType, result_length, hw_averages

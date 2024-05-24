@@ -24,7 +24,7 @@ from laboneq.controller.communication import (
 from laboneq.controller.devices.async_support import gather_and_apply
 from laboneq.controller.devices.device_collection import DeviceCollection
 from laboneq.controller.devices.device_utils import NodeCollector, zhinst_core_version
-from laboneq.controller.devices.device_zi import DeviceZI
+from laboneq.controller.devices.device_zi import DeviceZI, RawReadoutData
 from laboneq.controller.devices.zi_node_monitor import ResponseWaiter
 from laboneq.controller.near_time_runner import NearTimeRunner
 from laboneq.controller.protected_session import ProtectedSession
@@ -683,7 +683,7 @@ class Controller:
         for awg_key, awg_config in self._recipe_data.awgs_producing_results():
             device = self._devices.find_by_uid(awg_key.device_uid)
             if rt_execution_info.acquisition_type == AcquisitionType.RAW:
-                raw_results = await device.get_input_monitor_data(
+                raw_results: RawReadoutData = await device.get_input_monitor_data(
                     awg_key.awg_index, awg_config.raw_acquire_length
                 )
                 # Copy to all result handles, but actually only one handle is supported for now
@@ -694,7 +694,7 @@ class Controller:
                         if handle is None:
                             continue  # Ignore unused acquire signal if any
                         result = self._results.acquired_results[handle]
-                        for raw_result_idx, raw_result in enumerate(raw_results):
+                        for raw_result_idx, raw_result in enumerate(raw_results.vector):
                             result.data[raw_result_idx] = raw_result
             else:
                 if rt_execution_info.averaging_mode == AveragingMode.SINGLE_SHOT:
@@ -720,7 +720,7 @@ class Controller:
                         continue
                     assert integrator_allocation.device_id == awg_key.device_uid
                     assert integrator_allocation.awg == awg_key.awg_index
-                    raw_results = await device.get_measurement_data(
+                    raw_results: RawReadoutData = await device.get_measurement_data(
                         self._recipe_data,
                         awg_key.awg_index,
                         rt_execution_info,
@@ -735,8 +735,19 @@ class Controller:
                             continue  # unused entries in sparse result vector map to None handle
                         result = self._results.acquired_results[handle]
                         build_partial_result(
-                            result, nt_step, raw_results, mapping, handle
+                            result, nt_step, raw_results.vector, mapping, handle
                         )
+
+                    timestamps = self._results.pipeline_jobs_timestamps.setdefault(
+                        signal, []
+                    )
+
+                    for job_id, v in raw_results.metadata.items():
+                        # make sure the list is long enough for this job id
+                        timestamps.extend(
+                            [float("nan")] * (job_id - len(timestamps) + 1)
+                        )
+                        timestamps[job_id] = v["timestamp"]
 
     def _report_step_error(self, nt_step: NtStepKey, rt_section_uid: str, message: str):
         self._results.execution_errors.append(

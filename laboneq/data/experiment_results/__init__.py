@@ -166,7 +166,7 @@ class AcquiredResults(UserDict[str, AcquiredResult]):
         except xr.MergeError as error:
             # NOTE: Sweep parameters are allowed to have duplicate `axis_name`, but not `uid`.
             #   If duplicate `axis_name` is used for different parallel sweep parameters, it is not
-            #   compatibile with `xarray`.
+            #   compatible with `xarray`.
             raise LabOneQException(
                 "Cannot merge results. Use `results['<handle>'].to_array()` instead."
             ) from error
@@ -191,6 +191,9 @@ class ExperimentResults:
     #: * the section uid,
     #: * the error message.
     execution_errors: list[tuple[list[int], str, str]] = field(default_factory=list)
+
+    # Pipeline job timestamps, by device channel id, then job id
+    pipeline_jobs_timestamps: dict[str, list[float]] = field(default_factory=dict)
 
     experiment_hash: str = None
     compiled_experiment_hash: str = None

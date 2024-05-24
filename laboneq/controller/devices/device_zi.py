@@ -9,12 +9,13 @@ import logging
 import math
 import re
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Iterator
 from weakref import ReferenceType, ref
 
 import numpy as np
+from numpy.typing import ArrayLike
 import zhinst.core
 import zhinst.utils
 from numpy import typing as npt
@@ -128,6 +129,14 @@ class IntegrationWeightItem:
     index: int
     name: str
     samples: npt.ArrayLike
+
+
+@dataclass
+class RawReadoutData:
+    vector: ArrayLike
+
+    # metadata by job_id
+    metadata: dict[int, dict[str, Any]] = field(default_factory=dict)
 
 
 Waveforms = list[WaveformItem]
@@ -609,10 +618,14 @@ class DeviceZI(INodeMonitorProvider):
         result_indices: list[int],
         num_results: int,
         hw_averages: int,
-    ):
-        return None  # default -> no results available from the device
+    ) -> RawReadoutData:
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support result retrieval"
+        )
 
-    async def get_input_monitor_data(self, channel: int, num_results: int):
+    async def get_input_monitor_data(
+        self, channel: int, num_results: int
+    ) -> RawReadoutData | None:
         return None  # default -> no results available from the device
 
     async def conditions_for_execution_ready(

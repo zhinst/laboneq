@@ -716,28 +716,45 @@ class DevEmuSHFQABase(Gen2Base):
             pipeliner_stop_hook=self._pipeliner_done,
         )
 
-    def _push_readout_result(self, channel: int, length: int, averages: int):
+    def _make_measurement_properties(self, job_id=0):
+        return {
+            "jobid": job_id,
+            # 1 ms per job, in 0.25 ns time base
+            "firstSampleTimestamp": 4_000_000 * job_id,
+        }
+
+    def _push_readout_result(
+        self, channel: int, length: int, averages: int, job_id: int = 0
+    ):
         self._set_val(
             f"qachannels/{channel}/readout/result/acquired", length * averages
         )
         for integrator in range(16):
             self._set_val(
                 f"qachannels/{channel}/readout/result/data/{integrator}/wave",
-                ((42 + integrator + 1j * np.arange(length)) / averages, {}),
+                (
+                    (42 + integrator + 1j * np.arange(length)) / averages,
+                    self._make_measurement_properties(job_id),
+                ),
             )
 
-    def _push_spectroscopy_result(self, channel: int, length: int, averages: int):
+    def _push_spectroscopy_result(
+        self, channel: int, length: int, averages: int, job_id: int = 0
+    ):
         self._set_val(
             f"qachannels/{channel}/spectroscopy/result/acquired", length * averages
         )
         self._set_val(
             f"qachannels/{channel}/spectroscopy/result/data/wave",
-            (np.array([(42 + 42j)] * length), {}),
+            (
+                np.array([(42 + 42j)] * length),
+                self._make_measurement_properties(job_id),
+            ),
         )
 
     def _pipeliner_done(self, channel: int):
         pipelined_nodes: dict[str, Any] = {}
-        for slot in self._qa_pipeliner._pipelined[channel]:
+        for job_id, slot in enumerate(self._qa_pipeliner._pipelined[channel]):
             for path, value in slot.items():
                 pipelined_nodes[path] = value
 
@@ -749,12 +766,12 @@ class DevEmuSHFQABase(Gen2Base):
             if readout_enable != 0:
                 length = pipelined_nodes.get("readout/result/length", 0)
                 averages = pipelined_nodes.get("readout/result/averages", 0)
-                self._push_readout_result(channel, length, averages)
+                self._push_readout_result(channel, length, averages, job_id)
 
             if spectroscopy_enable != 0:
                 length = pipelined_nodes.get("spectroscopy/result/length", 0)
                 averages = pipelined_nodes.get("spectroscopy/result/averages", 0)
-                self._push_spectroscopy_result(channel, length, averages)
+                self._push_spectroscopy_result(channel, length, averages, job_id)
 
     def _measurement_done(self, channel: int):
         readout_enable = self._get_node(

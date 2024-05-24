@@ -515,31 +515,45 @@ class Experiment:
         """
         Execute a measurement.
 
-        Unifies the optional playback of a measurement pulse, the acquisition of the return signal and an optional delay after the signal acquisition.
+        Unifies the optional playback of a measurement pulse, the acquisition of the return signal
+        and an optional delay after the signal acquisition.
 
         For pulsed spectroscopy, set `integration_length` and either `measure_pulse` or `measure_pulse_length`.
+
         For CW spectroscopy, set only `integration_length` and do not specify the measure signal.
+
         For multistate discrimination, use lists of equal length for integration_kernel and integration_kernel_parameters.
+
         For all other measurements, set either length or pulse for both the measure pulse and integration kernel.
 
         Arguments:
-
-            acquire_signal: A string that specifies the signal for the data acquisition.
-            handle: A string that specifies the handle of the acquired results.
-            integration_kernel: An optional Pulse object or list of Pulse objects that specifies the kernel(s) for integration.
-            integration_kernel_parameters: An optional dictionary (or list thereof) that contains pulse parameters for the integration kernel.
-            integration_length: An optional float that specifies the integration length.
-            measure_signal: An optional string that specifies the signal to measure.
-            measure_pulse: An optional Pulse object that specifies the readout pulse for measurement.
+            acquire_signal:
+                A string that specifies the signal for the data acquisition.
+            handle:
+                A string that specifies the handle of the acquired results.
+            integration_kernel:
+                An optional Pulse object or list of Pulse objects that specifies the kernel(s) for integration.
+            integration_kernel_parameters:
+                An optional dictionary (or list thereof) that contains pulse parameters for the integration kernel.
+            integration_length:
+                An optional float that specifies the integration length.
+            measure_signal:
+                An optional string that specifies the signal to measure.
+            measure_pulse:
+                An optional Pulse object that specifies the readout pulse for measurement.
 
                 If this parameter is not supplied, no pulse will be played back for the measurement,
                 which enables CW spectroscopy on SHFQA instruments.
-
-            measure_pulse_length: An optional float that specifies the length of the measurement pulse.
-            measure_pulse_parameters: An optional dictionary that contains parameters for the measurement pulse.
-            measure_pulse_amplitude: An optional float that specifies the amplitude of the measurement pulse.
-            acquire_delay: An optional float that specifies the delay between the acquisition and the measurement.
-            reset_delay: An optional float that specifies the delay after the acquisition to allow for state relaxation or signal processing.
+            measure_pulse_length:
+                An optional float that specifies the length of the measurement pulse.
+            measure_pulse_parameters:
+                An optional dictionary that contains parameters for the measurement pulse.
+            measure_pulse_amplitude:
+                An optional float that specifies the amplitude of the measurement pulse.
+            acquire_delay:
+                An optional float that specifies the delay between the acquisition and the measurement.
+            reset_delay:
+                An optional float that specifies the delay after the acquisition to allow for state relaxation or signal processing.
         """
         current_section = self._peek_section()
         current_section.measure(

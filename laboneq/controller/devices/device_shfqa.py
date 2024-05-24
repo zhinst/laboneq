@@ -29,6 +29,7 @@ from laboneq.controller.devices.device_zi import (
     delay_to_rounded_samples,
     IntegrationWeightItem,
     IntegrationWeights,
+    RawReadoutData,
 )
 from laboneq.controller.recipe_processor import (
     AwgConfig,
@@ -76,6 +77,9 @@ MAX_WAVEFORM_LENGTH_SPECTROSCOPY = 65536
 MAX_AVERAGES_SCOPE = 1 << 16
 MAX_AVERAGES_RESULT_LOGGER = 1 << 17
 MAX_RESULT_VECTOR_LENGTH = 1 << 19
+
+# value reported by /system/properties/timebase
+TIME_STAMP_TIMEBASE = 0.25e-9
 
 
 def calc_theoretical_assignment_vec(num_weights: int) -> np.ndarray:
@@ -1106,7 +1110,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         result_indices: list[int],
         num_results: int,
         hw_averages: int,
-    ):
+    ) -> RawReadoutData:
         assert len(result_indices) == 1
         result_path = f"/{self.serial}/qachannels/{channel}/" + (
             "spectroscopy/result/data/wave"
@@ -1125,10 +1129,9 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
             else 1
         )
 
-        rt_result: npt.ArrayLike = np.empty(
-            pipeliner_jobs * num_results, dtype=np.complex128
+        rt_result = RawReadoutData(
+            np.full(pipeliner_jobs * num_results, np.nan, dtype=np.complex128)
         )
-        rt_result[:] = np.nan
         jobs_processed: set[int] = set()
 
         expected_job_id = 0  # TODO(2K): For compatibility with 23.10
@@ -1154,7 +1157,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
             else:
                 last_result_received = None
 
-            job_id = job_result["properties"].get("jobid", expected_job_id)
+            job_id = job_result["properties"]["jobid"]
             expected_job_id += 1
             if job_id in jobs_processed:
                 _logger.error(
@@ -1181,10 +1184,15 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
 
             valid_samples = min(num_results, num_samples)
             np.put(
-                rt_result,
+                rt_result.vector,
                 range(job_id * num_results, job_id * num_results + valid_samples),
                 job_result["vector"][:valid_samples],
                 mode="clip",
+            )
+
+            timestamp_clock_cycles = job_result["properties"]["firstSampleTimestamp"]
+            rt_result.metadata.setdefault(job_id, {})["timestamp"] = (
+                timestamp_clock_cycles * TIME_STAMP_TIMEBASE
             )
 
         missing_jobs = set(range(pipeliner_jobs)) - jobs_processed
@@ -1194,14 +1202,16 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
             )
 
         if rt_execution_info.acquisition_type == AcquisitionType.DISCRIMINATION:
-            return rt_result.real
+            rt_result.vector = rt_result.vector.real
         return rt_result
 
-    async def get_input_monitor_data(self, channel: int, num_results: int):
+    async def get_input_monitor_data(
+        self, channel: int, num_results: int
+    ) -> RawReadoutData:
         result_path_ch = f"/{self.serial}/scopes/0/channels/{channel}/wave"
         node_data = await self.get_raw(result_path_ch)
         data = node_data[result_path_ch][0]["vector"][0:num_results]
-        return data
+        return RawReadoutData(data)
 
     async def collect_reset_nodes(self) -> list[DaqNodeSetAction]:
         nc = NodeCollector(base=f"/{self.serial}/")

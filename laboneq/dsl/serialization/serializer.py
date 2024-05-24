@@ -101,9 +101,7 @@ class Serializer:
                 json_dump = orjson.dumps(json_struct, option=options)
             return json_dump.decode()
         except TypeError as ex:
-            raise LabOneQException(
-                f"Serializing dictionaries with non integer keys is not supported: {ex}"
-            ) from ex
+            raise LabOneQException("Cannot serialize object to json") from ex
 
     @staticmethod
     def to_dict(serializable_object, omit_none_fields=False) -> Dict:

@@ -446,6 +446,7 @@ class Session:
         self._last_results.acquired_results = results.acquired_results
         self._last_results.neartime_callback_results = results.neartime_callback_results
         self._last_results.execution_errors = results.execution_errors
+        self._last_results.pipeline_jobs_timestamps = results.pipeline_jobs_timestamps
 
         return self.results
 
