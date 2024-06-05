@@ -106,14 +106,16 @@ class FeedbackIntervalData:
     prng_sample: str | None
 
 
-def _analyze_branches(events, delay, sampling_rate, playwave_max_hint):
+def _analyze_branches(
+    events, delay, sampling_rate, playwave_max_hint
+) -> tuple[dict[str, list[MutableInterval]], dict[str, int], set[int]]:
     """For feedback, the pulses in the branches create a single waveform which spans
     the whole duration of the section; also keep the state to be able to split
     later.
     """
     cut_points = set()
-    branching_intervals: Dict[str, List[MutableInterval]] = {}
-    states: Dict[str, int] = {}
+    branching_intervals = {}
+    states = {}
     for ev in events:
         if ev["event_type"] == "SECTION_START":
             handle = ev.get("handle", None)
@@ -479,6 +481,7 @@ def _oscillator_switch_cut_points(
     signals: Dict[str, SignalObj],
     sample_multiple,
     oscillator_phase_increment_times: set[int],
+    branching_intervals: dict[str, list[MutableInterval]],
 ) -> Tuple[AWGSampledEventSequence, Set]:
     cut_points = set()
 
@@ -531,14 +534,21 @@ def _oscillator_switch_cut_points(
             },
         )
 
-    def reducer(a, b):
-        if a["oscillator"] != b["oscillator"]:
+    for branching_interval_list in branching_intervals.values():
+        for branching_interval in branching_interval_list:
+            begin, end = branching_interval.begin, branching_interval.end
+            if osc_intervals.overlaps_range(begin, end):
+                osc_intervals.addi(begin, end, {})
+
+    def reducer(a: dict[str, Any], b: dict[str, Any]):
+        osc_a, osc_b = a.get("oscillator"), b.get("oscillator")
+        if osc_a != osc_b and None not in (osc_a, osc_b):
             raise LabOneQException(
                 f"Overlapping HW oscillators: "
-                f"'{a['oscillator']}' on signal '{a['signal']}' and "
-                f"'{b['oscillator']}' on signal '{b['signal']}'"
+                f"'{osc_a}' on signal '{a['signal']}' and "
+                f"'{osc_b}' on signal '{b['signal']}'"
             )
-        return a
+        return a | b
 
     osc_intervals.merge_overlaps(reducer)
 
@@ -732,7 +742,11 @@ def analyze_play_wave_times(
         oscillator_switch_events,
         oscillator_switch_cut_points,
     ) = _oscillator_switch_cut_points(
-        interval_tree, signals, sample_multiple, prelim_oscillator_phase_increments
+        interval_tree,
+        signals,
+        sample_multiple,
+        prelim_oscillator_phase_increments,
+        branching_intervals,
     )
 
     cut_points.update(oscillator_switch_cut_points)

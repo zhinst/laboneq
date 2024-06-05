@@ -7,6 +7,8 @@ import copy
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
+import numpy as np
+from numpy import typing as npt
 
 from laboneq.core.validators import dicts_equal
 from laboneq.data import EnumReprMixin
@@ -65,38 +67,65 @@ class CompilerArtifact:
     pass
 
 
+WeightInfo = str
+SignalWeights = list[WeightInfo]
+AwgWeights = dict[str, SignalWeights]
+
+
+@dataclass
+class CodegenWaveform:
+    samples: npt.NDArray[Any]
+    hold_start: int | None = None
+    hold_length: int | None = None
+    downsampling_factor: int | None = None
+
+    def __eq__(self, other) -> bool:
+        if other is self:
+            return True
+        if not isinstance(other, CodegenWaveform):
+            return False
+        return (self.hold_start, self.hold_length, self.downsampling_factor) == (
+            other.hold_start,
+            other.hold_length,
+            other.downsampling_factor,
+        ) and np.allclose(self.samples, other.samples)
+
+
 @dataclass
 class ArtifactsCodegen(CompilerArtifact):
     # The SeqC source code, per device.
-    src: list[dict[str, str]] = None
+    src: list[dict[str, str]] | None = None
 
     # The waveforms that will be uploaded to the devices.
-    waves: list[dict[str, Any]] = None
+    waves: dict[str, CodegenWaveform] = field(default_factory=dict)
+
+    # Device ID -> True if requires long readout
+    requires_long_readout: dict[str, list[str]] = field(default_factory=dict)
 
     # Data structure for storing the indices or filenames by which the waveforms are
     # referred to during and after upload.
-    wave_indices: list[dict[str, Any]] = None
+    wave_indices: list[dict[str, Any]] | None = None
 
     # Data structure for storing the command table data
     command_tables: list[dict[str, Any]] = field(default_factory=list)
 
     # Data structure for mapping pulses (in the experiment) to waveforms (on the
     # device).
-    pulse_map: dict[str, PulseMapEntry] = None
+    pulse_map: dict[str, PulseMapEntry] | None = None
 
     # Data structure for referencing the waveforms used as integration kernels.
-    integration_weights: list[dict[str, Any]] = field(default_factory=list)
+    integration_weights: dict[str, AwgWeights] = field(default_factory=dict)
 
 
 @dataclass
 class ScheduledExperiment:
-    uid: str = None
+    uid: str | None = None
 
     #: Instructions to the controller for running the experiment.
-    recipe: Recipe = None
+    recipe: Recipe | None = None
 
     #: Compiler artifacts specific to backend(s)
-    artifacts: CompilerArtifact | dict[int, CompilerArtifact] = None
+    artifacts: CompilerArtifact | dict[int, CompilerArtifact] | None = None
 
     def __getattr__(self, attr):
         return getattr(self.artifacts, attr)  # @IgnoreException
@@ -114,19 +143,19 @@ class ScheduledExperiment:
         return new_scheduled_experiment
 
     #: list of events as scheduled by the compiler.
-    schedule: dict[str, Any] = None
+    schedule: dict[str, Any] | None = None
 
     #: Experiment execution model
     execution: Any = None  # TODO(2K): 'Statement' type after refactoring
 
-    compilation_job_hash: str = None
-    experiment_hash: str = None
+    compilation_job_hash: str | None = None
+    experiment_hash: str | None = None
 
     def __eq__(self, other):
         if other is self:
             return True
 
-        if type(other) is not ScheduledExperiment:
+        if not isinstance(other, ScheduledExperiment):
             return NotImplemented
 
         if len(other.waves) != len(self.waves):
@@ -142,4 +171,7 @@ class ScheduledExperiment:
             other.artifacts,
             self.compilation_job_hash,
             self.experiment_hash,
-        ) and dicts_equal(other.waves, self.waves)
+        ) and dicts_equal(
+            {n: w.samples for n, w in other.waves.items()},
+            {n: w.samples for n, w in self.waves.items()},
+        )

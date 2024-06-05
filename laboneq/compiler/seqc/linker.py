@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any
 
 import numpy as np
 
@@ -23,6 +24,8 @@ from laboneq.compiler.common.iface_compiler_output import (
 )
 from laboneq.core.exceptions import LabOneQException
 from laboneq.data.scheduled_experiment import (
+    AwgWeights,
+    CodegenWaveform,
     PulseMapEntry,
     CompilerArtifact,
     ArtifactsCodegen,
@@ -33,13 +36,17 @@ from laboneq.data.scheduled_experiment import (
 class CombinedRTOutputSeqC(CombinedOutput):
     feedback_connections: dict[str, FeedbackConnection] = field(default_factory=dict)
     signal_delays: SignalDelays = field(default_factory=dict)
-    integration_weights: list[dict[str, Any]] = field(default_factory=list)
-    integration_times: IntegrationTimes = None
+    # key - SeqC name
+    integration_weights: dict[str, AwgWeights] = field(default_factory=dict)
+    integration_times: IntegrationTimes | None = None
     simultaneous_acquires: list[dict[str, str]] = field(default_factory=list)
-    src: list[dict[str, Any]] = field(default_factory=dict)
-    waves: dict[str, dict[str, Any]] = field(default_factory=list)
-    wave_indices: list[dict[str, Any]] = field(default_factory=dict)
-    command_tables: list[dict[str, Any]] = field(default_factory=dict)
+    src: list[dict[str, Any]] = field(default_factory=list)
+    waves: dict[str, CodegenWaveform] = field(default_factory=dict)
+    requires_long_readout: dict[str, list[str]] = field(
+        default_factory=lambda: defaultdict(list)
+    )
+    wave_indices: list[dict[str, Any]] = field(default_factory=list)
+    command_tables: list[dict[str, Any]] = field(default_factory=list)
     pulse_map: dict[str, PulseMapEntry] = field(default_factory=dict)
     feedback_register_configurations: dict[AwgKey, FeedbackRegisterConfig] = field(
         default_factory=dict
@@ -52,7 +59,8 @@ class CombinedRTOutputSeqC(CombinedOutput):
     def get_artifacts(self) -> CompilerArtifact:
         return ArtifactsCodegen(
             src=self.src,
-            waves=list(self.waves.values()),
+            waves=self.waves,
+            requires_long_readout=self.requires_long_readout,
             wave_indices=self.wave_indices,
             command_tables=self.command_tables,
             pulse_map=self.pulse_map,
@@ -62,17 +70,18 @@ class CombinedRTOutputSeqC(CombinedOutput):
 
 @dataclass
 class SeqCGenOutput(RTCompilerOutput):
-    feedback_connections: Dict[str, FeedbackConnection]
+    feedback_connections: dict[str, FeedbackConnection]
     signal_delays: SignalDelays
-    integration_weights: dict[AwgKey, dict[str, list[str]]]
+    integration_weights: dict[AwgKey, AwgWeights]
     integration_times: IntegrationTimes
-    simultaneous_acquires: list[Dict[str, str]]
-    src: Dict[AwgKey, Dict[str, Any]]
-    waves: Dict[str, Dict[str, Any]]
-    wave_indices: Dict[AwgKey, Dict[str, Any]]
-    command_tables: Dict[AwgKey, Dict[str, Any]]
-    pulse_map: Dict[str, PulseMapEntry]
-    feedback_register_configurations: Dict[AwgKey, FeedbackRegisterConfig]
+    simultaneous_acquires: list[dict[str, str]]
+    src: dict[AwgKey, dict[str, Any]]
+    waves: dict[str, CodegenWaveform]
+    requires_long_readout: dict[str, list[str]]
+    wave_indices: dict[AwgKey, dict[str, Any]]
+    command_tables: dict[AwgKey, dict[str, Any]]
+    pulse_map: dict[str, PulseMapEntry]
+    feedback_register_configurations: dict[AwgKey, FeedbackRegisterConfig]
 
     total_execution_time: float = 0
 
@@ -102,13 +111,12 @@ def _check_compatibility(this, new):
 
 class SeqCLinker(ILinker):
     @staticmethod
-    def combined_from_single_run(output, step_indices: list[int]):
+    def combined_from_single_run(output: SeqCGenOutput, step_indices: list[int]):
         src = []
         command_tables = []
         wave_indices = []
-        integration_weights = []
+        integration_weights: dict[str, AwgWeights] = {}
         for awg, awg_src in output.src.items():
-            awg: AwgKey
             seqc_name = _make_seqc_name(awg, step_indices)
             src.append({"filename": seqc_name, **awg_src})
             ct = output.command_tables.get(awg)
@@ -122,9 +130,7 @@ class SeqCLinker(ILinker):
                 }
             )
             if awg in output.integration_weights:
-                integration_weights.append(
-                    {"filename": seqc_name, "signals": output.integration_weights[awg]}
-                )
+                integration_weights[seqc_name] = output.integration_weights[awg]
 
         return CombinedRTOutputSeqC(
             feedback_connections=output.feedback_connections,
@@ -136,6 +142,7 @@ class SeqCLinker(ILinker):
             max_execution_time_per_step=output.total_execution_time,
             src=src,
             waves=output.waves,
+            requires_long_readout=defaultdict(list, output.requires_long_readout),
             command_tables=command_tables,
             wave_indices=wave_indices,
             pulse_map=output.pulse_map,
@@ -165,14 +172,14 @@ class SeqCLinker(ILinker):
             previous_wave_indices = previous.wave_indices.get(awg)
             new_wave_indices = new.wave_indices.get(awg)
 
-            previous_waves = {
+            previous_waves: dict[str, CodegenWaveform] = {
                 name: wave
                 for name, wave in previous.waves.items()
                 if any(
                     index_name in name for index_name in previous_wave_indices["value"]
                 )
             }
-            new_waves = {
+            new_waves: dict[str, CodegenWaveform] = {
                 name: wave
                 for name, wave in new.waves.items()
                 if any(index_name in name for index_name in new_wave_indices["value"])
@@ -229,13 +236,20 @@ class SeqCLinker(ILinker):
             if new_wave_indices is not None:
                 this.wave_indices.append({"filename": seqc_name, **new_wave_indices})
             if new_integration_weights is not None:
-                this.integration_weights.append(
-                    {"filename": seqc_name, "signals": new_integration_weights}
-                )
+                this.integration_weights[seqc_name] = new_integration_weights
             this.waves.update(new_waves)
             this.max_execution_time_per_step = max(
                 this.max_execution_time_per_step, new.total_execution_time
             )
+
+        for (
+            new_device_id,
+            new_requires_long_readout,
+        ) in new.requires_long_readout.items():
+            dev_requires_long_readout = this.requires_long_readout[new_device_id]
+            for signal_id in new_requires_long_readout:
+                if signal_id not in dev_requires_long_readout:
+                    dev_requires_long_readout.append(signal_id)
 
         for new_realtime_step in SeqCLinker.make_realtime_step(new, step_indices):
             if (

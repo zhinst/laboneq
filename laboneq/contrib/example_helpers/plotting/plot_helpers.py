@@ -40,8 +40,11 @@ def zi_mpl_theme():
 def _integration_weights_by_signal(
     compiled_experiment: CompiledExperiment,
 ) -> dict[str, list]:
-    rt_step_by_awg = {}
     assert compiled_experiment.scheduled_experiment is not None
+    assert hasattr(
+        compiled_experiment.scheduled_experiment.artifacts, "integration_weights"
+    )
+    rt_step_by_awg = {}
     for (
         rt_init
     ) in compiled_experiment.scheduled_experiment.recipe.realtime_execution_init:
@@ -50,20 +53,14 @@ def _integration_weights_by_signal(
             rt_step_by_awg[key] = rt_init.kernel_indices_ref
     kernel_indices_ref = set(rt_step_by_awg.values())
     kernel_name_by_signal = {}
-    assert hasattr(
-        compiled_experiment.scheduled_experiment.artifacts, "integration_weights"
-    )
-    for iw in compiled_experiment.scheduled_experiment.artifacts.integration_weights:
-        if iw["filename"] not in kernel_indices_ref:
-            continue
-
-        if iw["signals"]:
-            for k, v in iw["signals"].items():
-                # ensure no failure if no integration kernel is defined
-                if v:
-                    if not isinstance(v, list):
-                        v = [v]
-                    kernel_name_by_signal.update({k: v})
+    for ref in kernel_indices_ref:
+        iw = compiled_experiment.scheduled_experiment.artifacts.integration_weights[ref]
+        for k, v in iw.items():
+            # ensure no failure if no integration kernel is defined
+            if v:
+                if not isinstance(v, list):
+                    v = [v]
+                kernel_name_by_signal.update({k: v})
 
     kernel_samples_by_signal: dict[str, list] = {
         signal: [] for signal in kernel_name_by_signal
@@ -72,18 +69,9 @@ def _integration_weights_by_signal(
         for kernel in kernels:
             waveform: None | np.ndarray = None
             for scale, suffix in [(1, ".wave"), (1, "_i.wave"), (1j, "_q.wave")]:
-                new_wf = next(
-                    iter(
-                        (
-                            w["samples"]
-                            for w in compiled_experiment.waves
-                            if w["filename"] == kernel + suffix
-                        ),
-                    ),
-                    None,
-                )
+                new_wf = compiled_experiment.waves.get(kernel + suffix)
                 if new_wf is not None:
-                    waveform = scale * new_wf + (
+                    waveform = scale * new_wf.samples + (
                         waveform if waveform is not None else 0
                     )
             assert waveform is not None, "kernel not found"

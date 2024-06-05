@@ -125,8 +125,9 @@ class OscillatorParam:
     id: str
     device_id: str
     channel: int
-    frequency: float = None
-    param: str = None
+    signal_id: str
+    frequency: float | None = None
+    param: str | None = None
 
 
 @dataclass
@@ -152,7 +153,7 @@ class RealtimeExecutionInit:
     awg_id: int
     seqc_ref: str | None
     wave_indices_ref: str | None
-    kernel_indices_ref: str | None
+    kernel_indices_ref: str
     nt_step: NtStepKey
 
 

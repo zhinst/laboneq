@@ -9,16 +9,19 @@ import logging
 from collections import defaultdict, namedtuple
 from dataclasses import dataclass
 from itertools import groupby
+import math
 from numbers import Number
 from typing import Any, NamedTuple
 
 import numpy as np
+from numpy import typing as npt
 from engineering_notation import EngNumber
+import scipy.signal
 
 from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
 from laboneq.compiler.ir.ir import IR
-from laboneq.compiler.seqc.linker import SeqCGenOutput
+from laboneq.compiler.seqc.linker import AwgWeights, SeqCGenOutput
 from laboneq._utils import ensure_list
 from laboneq.compiler.seqc.analyze_events import (
     analyze_acquire_times,
@@ -89,6 +92,7 @@ from laboneq.core.utilities.pulse_sampler import (
 )
 from laboneq.data.compilation_job import PulseDef
 from laboneq.data.scheduled_experiment import (
+    CodegenWaveform,
     MixerType,
     PulseInstance,
     PulseMapEntry,
@@ -187,12 +191,20 @@ def stable_hash(integration_weight):
     )
 
 
+@dataclass
+class IntegrationWeight:
+    basename: str
+    samples_i: npt.ArrayLike
+    samples_q: npt.ArrayLike
+    downsampling_factor: int | None
+
+
 def calculate_integration_weights(
     acquire_events: AWGSampledEventSequence,
     signal_obj: SignalObj,
     pulse_defs: dict[str, PulseDef],
-):
-    integration_weights_by_pulse: dict[str, Any] = {}
+) -> list[IntegrationWeight]:
+    integration_weights_by_pulse: dict[str, IntegrationWeight] = {}
     signal_id = signal_obj.id
 
     nr_of_weights_per_event = None
@@ -259,7 +271,7 @@ def calculate_integration_weights(
 
                 pulse_parameters = combine_pulse_parameters(pulse_par, None, play_par)
                 pulse_parameters = decode_pulse_parameters(pulse_parameters)
-                integration_weight = sample_pulse(
+                iw_samples = sample_pulse(
                     signal_type="iq",
                     sampling_rate=signal_obj.awg.sampling_rate,
                     length=length,
@@ -271,21 +283,41 @@ def calculate_integration_weights(
                     pulse_parameters=pulse_parameters,
                 )
 
+                if (
+                    signal_obj.awg.device_type == DeviceType.SHFQA
+                    and (weight_len := len(iw_samples["samples_i"])) > 4096
+                ):  # TODO(2K): get via device_type
+                    downsampling_factor = math.ceil(weight_len / 4096)
+                    if downsampling_factor > 16:  # TODO(2K): get via device_type
+                        raise LabOneQException(
+                            "Integration weight length exceeds the maximum supported by HW"
+                        )
+                else:
+                    downsampling_factor = None
+
                 verify_amplitude_no_clipping(
-                    integration_weight,
+                    iw_samples,
                     pulse_def.uid,
                     signal_obj.mixer_type,
                     signal_obj.id,
                 )
 
                 # 128-bit hash as waveform name
-                digest = stable_hash(integration_weight).hexdigest()[:32]
-                integration_weight["basename"] = f"kernel_{digest}"
+                digest = stable_hash(iw_samples).hexdigest()[:32]
+                integration_weight = IntegrationWeight(
+                    basename=f"kernel_{digest}",
+                    samples_i=iw_samples["samples_i"],
+                    samples_q=iw_samples["samples_q"],
+                    downsampling_factor=downsampling_factor,
+                )
 
                 if existing_weight := integration_weights_by_pulse.get(play_wave_id):
-                    for key in ["samples_i", "samples_q"]:
-                        if np.any(existing_weight[key] != integration_weight[key]):
-                            if np.any(np.isnan(integration_weight[key])):
+                    for existing, new in zip(
+                        [existing_weight.samples_i, existing_weight.samples_q],
+                        [integration_weight.samples_i, integration_weight.samples_q],
+                    ):
+                        if np.any(existing != new):
+                            if np.any(np.isnan(new)):
                                 # this is because nan != nan is always true
                                 raise LabOneQException(
                                     "Encountered NaN in an integration kernel."
@@ -335,19 +367,19 @@ class CodeGenerator(ICodeGenerator):
         self._signals: dict[str, SignalObj] = {}
         for signal_obj in signals:
             self.add_signal(signal_obj)
-        self._code = {}
         self._src: dict[AwgKey, dict[str, str]] = {}
         self._wave_indices_all: dict[AwgKey, dict] = {}
-        self._waves: dict[str, Any] = {}
+        self._waves: dict[str, CodegenWaveform] = {}
+        self._requires_long_readout: dict[str, list[str]] = defaultdict(list)
         self._command_tables: dict[AwgKey, dict[str, Any]] = {}
         self._pulse_map: dict[str, PulseMapEntry] = {}
         self._sampled_signatures: dict[str, dict[WaveformSignature, dict]] = {}
-        self._events_in_samples = {}
         self._integration_times: IntegrationTimes | None = None
         self._signal_delays: SignalDelays | None = None
-        self._integration_weights: (
-            dict[AwgKey, dict[str, list[dict[str, Any]]]] | None
-        ) = None  # awg key -> signal id -> kernel index -> kernel data
+        # awg key -> signal id -> kernel index -> kernel data
+        self._integration_weights: dict[AwgKey, dict[str, list[IntegrationWeight]]] = (
+            defaultdict(dict)
+        )
         self._simultaneous_acquires: list[dict[str, str]] = []
         self._feedback_register_layout = feedback_register_layout or {}
         self._feedback_register_config: dict[AwgKey, FeedbackRegisterConfig] = (
@@ -382,15 +414,16 @@ class CodeGenerator(ICodeGenerator):
             src=self.src(),
             total_execution_time=self.total_execution_time(),
             waves=self.waves(),
+            requires_long_readout=self.requires_long_readout(),
             wave_indices=self.wave_indices(),
             command_tables=self.command_tables(),
             pulse_map=self.pulse_map(),
             feedback_register_configurations=self.feedback_register_config(),
         )
 
-    def integration_weights(self):
+    def integration_weights(self) -> dict[AwgKey, AwgWeights]:
         return {
-            awg: {signal: [iw["basename"] for iw in l] for signal, l in d.items()}
+            awg: {signal: [iw.basename for iw in l] for signal, l in d.items()}
             for awg, d in self._integration_weights.items()
         }
 
@@ -420,40 +453,63 @@ class CodeGenerator(ICodeGenerator):
             pulse_map_entry.waveforms[sig_string] = pulse_waveform_map
 
     def _save_wave_bin(
-        self, samples, signature_pulse_map, sig_string: str, suffix: str
+        self,
+        samples,
+        signature_pulse_map,
+        sig_string: str,
+        suffix: str,
+        device_id: str | None = None,
+        signal_id: str | None = None,
+        hold_start: int | None = None,
+        hold_length: int | None = None,
+        downsampling_factor: int | None = None,
     ):
         filename = sig_string + suffix + ".wave"
-        wave = {"filename": filename, "samples": samples}
+        wave = CodegenWaveform(
+            samples=samples,
+            hold_start=hold_start,
+            hold_length=hold_length,
+            downsampling_factor=downsampling_factor,
+        )
         assert filename not in self._waves or np.allclose(
-            self._waves[filename]["samples"], wave["samples"]
+            self._waves[filename].samples, wave.samples
         )
         self._waves[filename] = wave
+        if (
+            hold_start is not None
+            or hold_length is not None
+            or downsampling_factor is not None
+        ):
+            assert device_id is not None
+            assert signal_id is not None
+            device_long_readout_signals = self._requires_long_readout[device_id]
+            if signal_id not in device_long_readout_signals:
+                device_long_readout_signals.append(signal_id)
         self._append_to_pulse_map(signature_pulse_map, sig_string)
 
     def gen_waves(self):
         for awg in self._awgs.values():
             # Handle integration weights separately
             for signal_obj in awg.signals:
-                assert self._integration_weights is not None
-                if signal_obj.id in self._integration_weights.get(awg.key, {}):
-                    signal_weights = self._integration_weights[awg.key][signal_obj.id]
-                    for weight in signal_weights:
-                        basename = weight["basename"]
-                        if signal_obj.awg.device_type.supports_complex_waves:
-                            self._save_wave_bin(
-                                CodeGenerator.SHFQA_COMPLEX_SAMPLE_SCALING
-                                * (weight["samples_i"] - 1j * weight["samples_q"]),
-                                None,
-                                basename,
-                                "",
-                            )
-                        else:
-                            self._save_wave_bin(
-                                weight["samples_i"], None, basename, "_i"
-                            )
-                            self._save_wave_bin(
-                                weight["samples_q"], None, basename, "_q"
-                            )
+                for weight in self._integration_weights[awg.key].get(signal_obj.id, []):
+                    if awg.device_type.supports_complex_waves:
+                        self._save_wave_bin(
+                            CodeGenerator.SHFQA_COMPLEX_SAMPLE_SCALING
+                            * (weight.samples_i - 1j * weight.samples_q),
+                            None,
+                            weight.basename,
+                            "",
+                            device_id=awg.device_id,
+                            signal_id=signal_obj.id,
+                            downsampling_factor=weight.downsampling_factor,
+                        )
+                    else:
+                        self._save_wave_bin(
+                            weight.samples_i, None, weight.basename, "_i"
+                        )
+                        self._save_wave_bin(
+                            weight.samples_q, None, weight.basename, "_q"
+                        )
 
             signals_to_process = awg.signals
             virtual_signal_id = None
@@ -545,6 +601,10 @@ class CodeGenerator(ICodeGenerator):
                                     sampled_signature["signature_pulse_map"],
                                     sig_string,
                                     "",
+                                    device_id=awg.device_id,
+                                    signal_id=signal_obj.id,
+                                    hold_start=sampled_signature.get("hold_start"),
+                                    hold_length=sampled_signature.get("hold_length"),
                                 )
                             else:
                                 raise RuntimeError(
@@ -594,7 +654,7 @@ class CodeGenerator(ICodeGenerator):
 
         # check that there are no duplicate filenames in the wave pool (QCSW-1079)
         waves = sorted(
-            [(filename, wave["samples"]) for filename, wave in self._waves.items()],
+            [(filename, wave.samples) for filename, wave in self._waves.items()],
             key=lambda w: w[0],
         )
         for _, group in groupby(waves, key=lambda w: w[0]):
@@ -716,7 +776,7 @@ class CodeGenerator(ICodeGenerator):
 
         self._total_execution_time = events[-1].get("time") if len(events) > 0 else None
         self.sort_signals()
-        self._integration_weights = {}
+        self._integration_weights.clear()
 
         self._feedback_register_allocator = FeedbackRegisterAllocator(
             self._signals, events
@@ -890,6 +950,8 @@ class CodeGenerator(ICodeGenerator):
                     assert all(pulse is None for pulse in pulses_not_in_pulsedef)
                     if len(pulses_not_in_pulsedef) > 0:
                         continue
+
+                    # SHFQA long readout measure pulses
                     if (
                         any(
                             pulse_defs[pulse.pulse].can_compress
@@ -897,16 +959,66 @@ class CodeGenerator(ICodeGenerator):
                         )
                         and device_type.is_qa_device
                     ):
-                        pulse_names = [
-                            pulse.pulse
-                            for pulse in wave_form.pulses
-                            if pulse_defs[pulse.pulse].can_compress
-                        ]
-                        _logger.warning(
-                            "Requested to compress pulse(s) %s which are to be played on a QA device, which does not support playHold",
-                            ",".join(pulse_names),
+                        sampled_signature = sampled_signatures.get(wave_form)
+                        if sampled_signature is None:  # Non-matching channel
+                            continue
+                        orig_i = sampled_signature["samples_i"]
+                        if len(orig_i) <= 4096:  # TODO(2K): get via device_type
+                            # Measure pulse is fitting into memory, no additional processing needed
+                            continue
+                        orig_q = sampled_signature["samples_q"]
+                        sample_dict = {
+                            "i": orig_i,
+                            "q": orig_q,
+                        }
+                        new_events = wave_compressor.compress_wave(sample_dict, 1)
+                        if new_events is None:
+                            raise LabOneQException(
+                                "SHFQA measure pulse exceeds 4096 samples and is not compressible."
+                            )
+                        lead_and_hold = len(new_events) == 2
+                        lead_hold_tail = len(new_events) == 3
+                        if (
+                            (
+                                lead_and_hold
+                                or lead_hold_tail
+                                and isinstance(new_events[2], PlaySamples)
+                            )
+                            and isinstance(new_events[0], PlaySamples)
+                            and isinstance(new_events[1], PlayHold)
+                        ):
+                            if lead_hold_tail:
+                                assert isinstance(new_events[2], PlaySamples)
+                                new_i = np.concatenate(
+                                    [
+                                        new_events[0].samples["i"],
+                                        new_events[2].samples["i"],
+                                    ]
+                                )
+                                new_q = np.concatenate(
+                                    [
+                                        new_events[0].samples["q"],
+                                        new_events[2].samples["q"],
+                                    ]
+                                )
+                            else:
+                                new_i = new_events[0].samples["i"]
+                                new_q = new_events[0].samples["q"]
+                            if len(new_i) > 4096:  # TODO(2K): get via device_type
+                                raise LabOneQException(
+                                    "SHFQA measure pulse exceeds 4096 samples after compression."
+                                )
+                            sampled_signature["samples_i"] = new_i
+                            sampled_signature["samples_q"] = new_q
+                            sampled_signature["hold_start"] = len(
+                                new_events[0].samples["i"]
+                            )
+                            sampled_signature["hold_length"] = new_events[1].num_samples
+                            continue
+                        raise LabOneQException(
+                            "Unexpected SHFQA long measure pulse: only a single const region is allowed."
                         )
-                        continue
+
                     if all(
                         not pulse_defs[pulse.pulse].can_compress
                         for pulse in wave_form.pulses
@@ -1144,19 +1256,38 @@ class CodeGenerator(ICodeGenerator):
                 )
 
             if signal_obj.signal_type == "integration":
-                assert self._integration_weights is not None
                 _logger.debug(
                     "Calculating integration weights for signal %s. There are %d acquire events.",
                     signal_obj.id,
                     len(acquire_events.sequence),
                 )
-                self._integration_weights.setdefault(awg.key, {})[signal_obj.id] = (
+                self._integration_weights[awg.key][signal_obj.id] = (
                     calculate_integration_weights(
                         acquire_events, signal_obj, pulse_defs
                     )
                 )
 
             sampled_events.merge(acquire_events)
+
+        # Perform the actual downsampling of integration weights using a common factor for the AWG
+        common_downsampling_factor = max(
+            (
+                iw.downsampling_factor or 1
+                for iws in self._integration_weights[awg.key].values()
+                for iw in iws
+            ),
+            default=1,
+        )
+        if common_downsampling_factor > 1:
+            for iws in self._integration_weights[awg.key].values():
+                for iw in iws:
+                    iw.samples_i = scipy.signal.resample(
+                        iw.samples_i, len(iw.samples_i) // common_downsampling_factor
+                    )
+                    iw.samples_q = scipy.signal.resample(
+                        iw.samples_q, len(iw.samples_q) // common_downsampling_factor
+                    )
+                    iw.downsampling_factor = common_downsampling_factor
 
         if awg.signal_type == AWGSignalType.MULTI:
             _logger.debug("Multi signal %s", awg)
@@ -1486,7 +1617,10 @@ class CodeGenerator(ICodeGenerator):
         multi_iq_signal=False,
     ):
         sampled_signatures: dict[WaveformSignature, dict] = {}
-        signatures = set()
+        # To produce deterministic SeqC, the playback signature order
+        # needs to be but PlaybackSignatures are comparable, so we
+        # use a dict for signatures as an easy insertion ordered set:
+        signatures: dict[PlaybackSignature, type(None)] = {}
         for interval_event_list in interval_events.sequence.values():
             for interval_event in interval_event_list:
                 if interval_event.type != AWGEventType.PLAY_WAVE:
@@ -1496,10 +1630,10 @@ class CodeGenerator(ICodeGenerator):
                 ]
                 _logger.debug("Signature found %s in %s", signature, interval_event)
                 if any(p.pulse for p in signature.waveform.pulses):
-                    signatures.add(signature)
+                    signatures[signature] = None
                 else:
                     sampled_signatures[signature.waveform] = None
-        _logger.debug("Signatures: %s", signatures)
+        _logger.debug("Signatures: %s", signatures.keys())
 
         needs_conjugate = device_type == DeviceType.SHFSG
         for signature in signatures:
@@ -1526,6 +1660,9 @@ class CodeGenerator(ICodeGenerator):
             has_marker2 = False
 
             has_q = False
+
+            assert signature.waveform is not None
+            assert signature.waveform.pulses is not None
 
             for pulse_part, (play_pulse_parameters, pulse_pulse_parameters) in zip(
                 signature.waveform.pulses, signature.pulse_parameters
@@ -1759,8 +1896,11 @@ class CodeGenerator(ICodeGenerator):
 
         return sampled_signatures
 
-    def waves(self):
+    def waves(self) -> dict[str, CodegenWaveform]:
         return self._waves
+
+    def requires_long_readout(self) -> dict[str, list[str]]:
+        return self._requires_long_readout
 
     def src(self):
         return self._src

@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, NoReturn
 
 import numpy as np
 
@@ -17,10 +17,9 @@ from laboneq.controller.communication import (
 )
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import (
+    AllocatedOscillator,
     DeviceZI,
     delay_to_rounded_samples,
-    IntegrationWeights,
-    IntegrationWeightItem,
     RawReadoutData,
 )
 from laboneq.controller.devices.zi_node_monitor import (
@@ -35,13 +34,20 @@ from laboneq.controller.recipe_processor import (
     DeviceRecipeData,
     RecipeData,
     RtExecutionInfo,
+    get_initialization_by_device_uid,
     get_wave,
 )
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
-from laboneq.data.recipe import IO, Initialization, IntegratorAllocation, TriggeringMode
-from laboneq.data.scheduled_experiment import CompilerArtifact, ArtifactsCodegen
+from laboneq.data.recipe import (
+    IO,
+    Initialization,
+    IntegratorAllocation,
+    OscillatorParam,
+    TriggeringMode,
+)
+from laboneq.data.scheduled_experiment import ArtifactsCodegen, ScheduledExperiment
 
 _logger = logging.getLogger(__name__)
 
@@ -67,12 +73,31 @@ class DeviceUHFQA(DeviceZI):
     def _get_num_awgs(self) -> int:
         return 1
 
-    def _osc_group_by_channel(self, channel: int) -> int:
-        return channel
+    def validate_scheduled_experiment(
+        self, device_uid: str, scheduled_experiment: ScheduledExperiment
+    ):
+        initialization = get_initialization_by_device_uid(
+            scheduled_experiment.recipe, device_uid
+        )
+        if initialization is not None:
+            for output in initialization.outputs:
+                if output.port_delay is not None:
+                    if output.port_delay != 0:
+                        raise LabOneQControllerException(
+                            f"{self.dev_repr}'s output does not support port delay"
+                        )
+                    _logger.debug(
+                        "%s's output port delay should be set to None, not 0",
+                        self.dev_repr,
+                    )
 
     def _get_next_osc_index(
-        self, osc_group: int, previously_allocated: int
+        self,
+        osc_group_oscs: list[AllocatedOscillator],
+        osc_param: OscillatorParam,
+        recipe_data: RecipeData,
     ) -> int | None:
+        previously_allocated = len(osc_group_oscs)
         if previously_allocated >= 1:
             return None
         return previously_allocated
@@ -93,7 +118,7 @@ class DeviceUHFQA(DeviceZI):
             nodes.append(f"/{self.serial}/awgs/{awg}/ready")
         return nodes
 
-    def _error_ambiguous_upstream(self):
+    def _error_ambiguous_upstream(self) -> NoReturn:
         raise LabOneQControllerException(
             f"{self.dev_repr}: Can't determine unambiguously upstream device for UHFQA, ensure "
             f"correct DIO connection in the device setup"
@@ -144,6 +169,7 @@ class DeviceUHFQA(DeviceZI):
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
         with_pipeliner: bool,
+        recipe_data: RecipeData,
     ) -> list[DaqNodeSetAction]:
         nc = NodeCollector()
         nc.extend(
@@ -268,19 +294,6 @@ class DeviceUHFQA(DeviceZI):
                 io.range,
                 range_list,
             )
-
-    def _validate_initialization(self, initialization: Initialization):
-        super()._validate_initialization(initialization)
-        outputs = initialization.outputs or []
-        for output in outputs:
-            if output.port_delay is not None:
-                if output.port_delay != 0:
-                    raise LabOneQControllerException(
-                        f"{self.dev_repr}'s output does not support port delay"
-                    )
-                _logger.debug(
-                    "%s's output port delay should be set to None, not 0", self.dev_repr
-                )
 
     async def collect_initialization_nodes(
         self,
@@ -452,62 +465,43 @@ class DeviceUHFQA(DeviceZI):
         nc.add("qas/0/rotations/1", -1 - 1j)
         return nc
 
-    def prepare_integration_weights(
+    def prepare_upload_all_integration_weights(
         self,
-        artifacts: CompilerArtifact | dict[int, CompilerArtifact],
+        recipe_data: RecipeData,
+        device_uid: str,
+        awg_index: int,
+        artifacts: ArtifactsCodegen,
         integrator_allocations: list[IntegratorAllocation],
-        kernel_ref: str | None,
-    ) -> IntegrationWeights | None:
-        if isinstance(artifacts, dict):
-            artifacts: ArtifactsCodegen = artifacts[self._device_class]
-        integration_weights = next(
-            (s for s in artifacts.integration_weights if s["filename"] == kernel_ref),
-            None,
-        )
-        if integration_weights is None:
-            return
+        kernel_ref: str,
+    ) -> NodeCollector:
+        nc = NodeCollector(base=f"/{self.serial}/")
 
-        bin_waves: IntegrationWeights = []
-        for signal_id, weight_names in integration_weights["signals"].items():
+        integration_weights = artifacts.integration_weights.get(kernel_ref, {})
+        for signal_id, weight_names in integration_weights.items():
             integrator_allocation = next(
                 ia for ia in integrator_allocations if ia.signal_id == signal_id
             )
 
-            for index, weight_name in enumerate(weight_names):
+            for weight_name in weight_names:
                 for channel in integrator_allocation.channels:
-                    weight_vector_real = get_wave(
+                    weight_wave_real = get_wave(
                         weight_name + "_i.wave", artifacts.waves
                     )
-                    weight_vector_imag = get_wave(
+                    weight_wave_imag = get_wave(
                         weight_name + "_q.wave", artifacts.waves
                     )
-                    bin_waves.append(
-                        IntegrationWeightItem(
-                            integration_unit=channel,
-                            index=index,
-                            name=weight_name,
-                            # Note conjugation here:
-                            samples=weight_vector_real - 1j * weight_vector_imag,
-                        )
+                    nc.add(
+                        f"qas/0/integration/weights/{channel}/real",
+                        np.ascontiguousarray(weight_wave_real.samples),
+                        filename=weight_name + "_i.wave",
+                    )
+                    nc.add(
+                        f"qas/0/integration/weights/{channel}/imag",
+                        # Note conjugation here
+                        -np.ascontiguousarray(weight_wave_imag.samples),
+                        filename=weight_name + "_q.wave",
                     )
 
-        return bin_waves
-
-    def prepare_upload_all_integration_weights(
-        self, awg_index, integration_weights: IntegrationWeights
-    ) -> NodeCollector:
-        nc = NodeCollector(base=f"/{self.serial}/")
-        for iw in integration_weights:
-            nc.add(
-                f"qas/0/integration/weights/{iw.integration_unit}/real",
-                iw.samples.real,
-                filename=iw.name + "_i.wave",
-            )
-            nc.add(
-                f"qas/0/integration/weights/{iw.integration_unit}/imag",
-                iw.samples.imag,
-                filename=iw.name + "_q.wave",
-            )
         return nc
 
     async def collect_awg_before_upload_nodes(
@@ -531,7 +525,7 @@ class DeviceUHFQA(DeviceZI):
         nc = NodeCollector(base=f"/{self.serial}/")
         inputs = initialization.inputs
         if len(initialization.measurements) > 0:
-            measurement = initialization.measurements[0]
+            [measurement] = initialization.measurements
 
             _logger.debug(
                 "%s: Setting measurement sample length to %d",

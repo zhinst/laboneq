@@ -44,7 +44,7 @@ from laboneq.core.utilities.replace_pulse import ReplacementType, calc_wave_repl
 from laboneq.data.execution_payload import TargetSetup
 from laboneq.data.experiment_results import ExperimentResults
 from laboneq.data.recipe import NtStepKey
-from laboneq.data.scheduled_experiment import ScheduledExperiment
+from laboneq.data.scheduled_experiment import CodegenWaveform, ScheduledExperiment
 
 if TYPE_CHECKING:
     from laboneq.dsl.experiment.pulse import Pulse
@@ -86,7 +86,7 @@ class Controller:
         self._last_connect_check_ts: float | None = None
 
         # Waves which are uploaded to the devices via pulse replacements
-        self._current_waves = []
+        self._current_waves: dict[str, CodegenWaveform] = {}
         self._neartime_callbacks: dict[str, Callable] = (
             {} if neartime_callbacks is None else neartime_callbacks
         )
@@ -109,7 +109,9 @@ class Controller:
         self._devices.free_allocations()
         osc_params = self._recipe_data.recipe.oscillator_params
         for osc_param in sorted(osc_params, key=lambda p: p.id):
-            self._devices.find_by_uid(osc_param.device_id).allocate_osc(osc_param)
+            self._devices.find_by_uid(osc_param.device_id).allocate_osc(
+                osc_param, self._recipe_data
+            )
 
     async def _reset_to_idle_state(self):
         async with gather_and_apply(batch_set_multiple) as awaitables:
@@ -184,7 +186,6 @@ class Controller:
         _logger.debug("Finished upload.")
 
     async def _upload_awg_programs(self, nt_step: NtStepKey, rt_section_uid: str):
-        # Mise en place:
         recipe_data = self._recipe_data
 
         async with gather_and_apply(self._perform_awg_upload) as awaitables:
@@ -345,6 +346,16 @@ class Controller:
                         with_pipeliner=with_pipeliner, has_awg_in_use=has_awg_in_use
                     )
                 )
+        response_waiter = ResponseWaiter()
+        for _, device in self._devices.leaders:
+            response_waiter.add_with_msg(
+                target=device,
+                conditions=await device.conditions_for_sync_ready(
+                    with_pipeliner=with_pipeliner
+                ),
+            )
+        if not await response_waiter.wait_all(timeout=1.0):
+            raise LabOneQControllerException(response_waiter.remaining_str())
 
     async def _teardown_one_step_execution(self, with_pipeliner: bool):
         async with gather_and_apply(batch_set_multiple) as awaitables:
@@ -455,10 +466,7 @@ class Controller:
         protected_session: ProtectedSession | None = None,
     ) -> ExperimentResults:
         self._recipe_data = pre_process_compiled(
-            scheduled_experiment,
-            self._devices,
-            scheduled_experiment.execution,
-            self._setup_caps,
+            scheduled_experiment, self._devices, self._setup_caps
         )
         return await self._execute_compiled_impl(
             protected_session=protected_session or ProtectedSession(None)
@@ -475,7 +483,7 @@ class Controller:
             await self._initialize_devices()
 
             # Ensure no side effects from the previous execution in the same session
-            self._current_waves = []
+            self._current_waves.clear()
             self._nodes_from_neartime_callbacks.clear()
             _logger.info("Starting near-time execution...")
             try:
@@ -621,6 +629,7 @@ class Controller:
                     effective_averaging_mode,
                     rt_execution_info.acquisition_type,
                     rt_execution_info.with_pipeliner,
+                    self._recipe_data,
                 )
             )
         return nodes_to_prepare_rt

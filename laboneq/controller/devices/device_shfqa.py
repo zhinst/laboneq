@@ -24,11 +24,10 @@ from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
 from laboneq.controller.devices.device_shf_base import DeviceSHFBase
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import (
+    AllocatedOscillator,
     SequencerPaths,
     Waveforms,
     delay_to_rounded_samples,
-    IntegrationWeightItem,
-    IntegrationWeights,
     RawReadoutData,
 )
 from laboneq.controller.recipe_processor import (
@@ -37,6 +36,8 @@ from laboneq.controller.recipe_processor import (
     DeviceRecipeData,
     RecipeData,
     RtExecutionInfo,
+    get_artifacts,
+    get_initialization_by_device_uid,
     get_wave,
 )
 from laboneq.controller.util import LabOneQControllerException
@@ -48,9 +49,10 @@ from laboneq.data.recipe import (
     Initialization,
     IntegratorAllocation,
     Measurement,
+    OscillatorParam,
     TriggeringMode,
 )
-from laboneq.data.scheduled_experiment import CompilerArtifact, ArtifactsCodegen
+from laboneq.data.scheduled_experiment import ArtifactsCodegen, ScheduledExperiment
 
 _logger = logging.getLogger(__name__)
 
@@ -116,6 +118,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         self.dev_opts = []
         self._channels = 4
         self._integrators = 16
+        self._long_readout_available = True
         self._wait_for_awgs = True
         self._emit_trigger = False
         self.pipeliner_set_node_base(f"/{self.serial}/qachannels", "QA")
@@ -146,6 +149,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
             self._integrators = 16
         else:
             self._integrators = 8
+        self._long_readout_available = "LRT" in self.dev_opts
 
     def _get_sequencer_type(self) -> str:
         return "qa"
@@ -190,12 +194,61 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
                 range_list,
             )
 
-    def _osc_group_by_channel(self, channel: int) -> int:
-        return channel
+    def validate_scheduled_experiment(
+        self, device_uid: str, scheduled_experiment: ScheduledExperiment
+    ):
+        artifacts = get_artifacts(
+            scheduled_experiment.artifacts, self._device_class, ArtifactsCodegen
+        )
+        long_readout_signals = artifacts.requires_long_readout.get(device_uid, [])
+        if len(long_readout_signals) > 0:
+            if not self._long_readout_available:
+                raise LabOneQControllerException(
+                    f"{self.dev_repr}: Experiment requires long readout that is not available on the device."
+                )
+            # for iw in artifacts.integration_weights.items()
+            # nc.add("qachannels/?/modulation/enable", 1)
+
+        initialization = get_initialization_by_device_uid(
+            scheduled_experiment.recipe, device_uid
+        )
+        if initialization is not None:
+            for input in initialization.inputs:
+                output = next(
+                    (
+                        output
+                        for output in initialization.outputs
+                        if output.channel == input.channel
+                    ),
+                    None,
+                )
+                if output is None:
+                    continue
+                assert input.port_mode == output.port_mode, (
+                    f"{self.dev_repr}: Port mode mismatch between input and output of"
+                    f" channel {input.channel}."
+                )
 
     def _get_next_osc_index(
-        self, osc_group: int, previously_allocated: int
+        self,
+        osc_group_oscs: list[AllocatedOscillator],
+        osc_param: OscillatorParam,
+        recipe_data: RecipeData,
     ) -> int | None:
+        if self._long_readout_available:
+            # See https://zhinst.atlassian.net/wiki/spaces/GRIM/pages/1579024831/SHFQA+long+readout+integration+implementation+concept
+            integrator_allocation = next(
+                (
+                    ia
+                    for ia in recipe_data.recipe.integrator_allocations
+                    if ia.signal_id == osc_param.signal_id
+                ),
+                None,
+            )
+            if integrator_allocation is not None:
+                return integrator_allocation.channels[0]
+            # Fall back to default behavior for the case with no matching integrator (spectroscopy mode)
+        previously_allocated = len(osc_group_oscs)
         if previously_allocated >= 1:
             return None
         return previously_allocated
@@ -248,6 +301,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
         with_pipeliner: bool,
+        recipe_data: RecipeData,
     ) -> list[DaqNodeSetAction]:
         nc = NodeCollector()
         if not with_pipeliner:
@@ -260,6 +314,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
                     integrator_allocations,
                     averages,
                     average_mode,
+                    recipe_data,
                 )
             )
             nc.extend(
@@ -289,6 +344,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         integrator_allocations: list[IntegratorAllocation],
         averages: int,
         average_mode: int,
+        recipe_data: RecipeData,
     ) -> NodeCollector:
         enable = acquisition_type in [
             AcquisitionType.INTEGRATION,
@@ -307,20 +363,23 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
                     f"Number of distinct readouts {result_length} on device {self.dev_repr},"
                     f" channel {channel}, exceeds the allowed maximum {MAX_RESULT_VECTOR_LENGTH}"
                 )
-            nc.add(f"qachannels/{channel}/readout/result/length", result_length)
-            nc.add(f"qachannels/{channel}/readout/result/averages", averages)
+
             nc.add(
                 f"qachannels/{channel}/readout/result/source",
                 # 1 - result_of_integration
                 # 3 - result_of_discrimination
                 3 if acquisition_type == AcquisitionType.DISCRIMINATION else 1,
             )
+            nc.add(f"qachannels/{channel}/readout/result/length", result_length)
+            nc.add(f"qachannels/{channel}/readout/result/averages", averages)
+
             nc.add(f"qachannels/{channel}/readout/result/mode", average_mode)
             nc.add(f"qachannels/{channel}/readout/result/enable", 0)
             if acquisition_type in [
                 AcquisitionType.INTEGRATION,
                 AcquisitionType.DISCRIMINATION,
             ]:
+                uses_lrt = self._uses_lrt(awg_key.device_uid, channel, recipe_data)
                 for integrator in integrator_allocations:
                     if (
                         integrator.device_id != awg_key.device_uid
@@ -329,7 +388,19 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
                         continue
                     assert len(integrator.channels) == 1
                     integrator_idx = integrator.channels[0]
-                    assert self._integrator_has_consistent_msd_num_state(integrator)
+                    if uses_lrt:
+                        assert len(integrator.thresholds) <= 1
+                        threshold = (
+                            0.0
+                            if len(integrator.thresholds) == 0
+                            else integrator.thresholds[0]
+                        )
+                        nc.add(
+                            f"qachannels/{channel}/readout/discriminators/{integrator_idx}/threshold",
+                            threshold,
+                        )
+                        continue
+                    self._integrator_has_consistent_msd_num_state(integrator)
                     for state_i, threshold in enumerate(integrator.thresholds):
                         nc.add(
                             f"qachannels/{channel}/readout/multistate/qudits/{integrator_idx}/thresholds/{state_i}/value",
@@ -484,24 +555,6 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
             nc.add("system/synchronization/source", 0)
 
         return await self.maybe_async(nc)
-
-    def _validate_initialization(self, initialization: Initialization):
-        super()._validate_initialization(initialization)
-        for input in initialization.inputs or []:
-            output = next(
-                (
-                    output
-                    for output in initialization.outputs or []
-                    if output.channel == input.channel
-                ),
-                None,
-            )
-            if output is None:
-                continue
-            assert input.port_mode == output.port_mode, (
-                f"{self.dev_repr}: Port mode mismatch between input and output of"
-                f" channel {input.channel}."
-            )
 
     def pre_process_attributes(
         self,
@@ -695,53 +748,6 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
 
         return nc
 
-    def prepare_integration_weights(
-        self,
-        artifacts: CompilerArtifact | dict[int, CompilerArtifact],
-        integrator_allocations: list[IntegratorAllocation],
-        kernel_ref: str | None,
-    ) -> IntegrationWeights | None:
-        if isinstance(artifacts, dict):
-            artifacts: ArtifactsCodegen = artifacts[self._device_class]
-        integration_weights = next(
-            (s for s in artifacts.integration_weights if s["filename"] == kernel_ref),
-            None,
-        )
-        if integration_weights is None:
-            return
-
-        max_len = MAX_INTEGRATION_WEIGHT_LENGTH
-
-        bin_waves: IntegrationWeights = []
-        for signal_id, weight_names in integration_weights["signals"].items():
-            integrator_allocation = next(
-                ia for ia in integrator_allocations if ia.signal_id == signal_id
-            )
-            [channel] = integrator_allocation.channels
-
-            for index, weight_name in enumerate(weight_names):
-                wave_name = weight_name + ".wave"
-                # Note conjugation here:
-                weight_vector = np.conjugate(get_wave(wave_name, artifacts.waves))
-                wave_len = len(weight_vector)
-                if wave_len > max_len:
-                    max_pulse_len = max_len / SAMPLE_FREQUENCY_HZ
-                    raise LabOneQControllerException(
-                        f"{self.dev_repr}: Length {wave_len} of the integration weight"
-                        f" '{channel}' of channel {integrator_allocation.awg} exceeds"
-                        f" maximum of {max_len} samples ({max_pulse_len * 1e6:.3f} us)."
-                    )
-                bin_waves.append(
-                    IntegrationWeightItem(
-                        integration_unit=channel,
-                        index=index,
-                        name=wave_name,
-                        samples=weight_vector,
-                    )
-                )
-
-        return bin_waves
-
     def prepare_upload_binary_wave(
         self,
         filename: str,
@@ -823,6 +829,14 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
                         acquisition_type=acquisition_type,
                     )
                 )
+                if wave.hold_start is not None:
+                    assert wave.hold_length is not None
+                    hold_base = f"/{self.serial}/qachannels/{awg_index}/generator/waveforms/{wave.index}/hold"
+                    nc.add(f"{hold_base}/enable", 1, cache=False)
+                    nc.add(
+                        f"{hold_base}/samples/startindex", wave.hold_start, cache=False
+                    )
+                    nc.add(f"{hold_base}/samples/length", wave.hold_length, cache=False)
         nc.add(
             f"/{self.serial}/qachannels/{awg_index}/spectroscopy/envelope/enable",
             1 if has_spectroscopy_envelope else 0,
@@ -830,18 +844,76 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         return nc
 
     def prepare_upload_all_integration_weights(
-        self, awg_index, integration_weights: IntegrationWeights
+        self,
+        recipe_data: RecipeData,
+        device_uid: str,
+        awg_index: int,
+        artifacts: ArtifactsCodegen,
+        integrator_allocations: list[IntegratorAllocation],
+        kernel_ref: str,
     ) -> NodeCollector:
-        nc = NodeCollector(
-            base=f"/{self.serial}/qachannels/{awg_index}/readout/multistate/"
-        )
+        nc = NodeCollector(base=f"/{self.serial}/qachannels/{awg_index}/readout/")
 
-        for iw in integration_weights:
-            nc.add(
-                f"qudits/{iw.integration_unit}/weights/{iw.index}/wave",
-                iw.samples,
-                filename=iw.name,
+        uses_lrt = self._uses_lrt(device_uid, awg_index, recipe_data)
+
+        max_len = MAX_INTEGRATION_WEIGHT_LENGTH
+
+        integration_weights = artifacts.integration_weights.get(kernel_ref, {})
+        used_downsampling_factor = None
+        integration_length = None
+        for signal_id, weight_names in integration_weights.items():
+            integrator_allocation = next(
+                ia for ia in integrator_allocations if ia.signal_id == signal_id
             )
+            [channel] = integrator_allocation.channels
+
+            if uses_lrt and len(weight_names) > 1:
+                raise LabOneQControllerException(
+                    f"{self.dev_repr}: Multistate discrimination cannot be used with a long readout."
+                )
+
+            for index, weight_name in enumerate(weight_names):
+                wave_name = weight_name + ".wave"
+                # Note conjugation here:
+                wave = get_wave(wave_name, artifacts.waves)
+                weight_vector = np.conjugate(np.ascontiguousarray(wave.samples))
+                wave_len = len(weight_vector)
+                integration_length = max(integration_length or 0, wave_len)
+                if wave_len > max_len:
+                    max_pulse_len = max_len / SAMPLE_FREQUENCY_HZ
+                    raise LabOneQControllerException(
+                        f"{self.dev_repr}: Length {wave_len} of the integration weight"
+                        f" '{channel}' of channel {integrator_allocation.awg} exceeds"
+                        f" maximum of {max_len} samples ({max_pulse_len * 1e6:.3f} us)."
+                    )
+                if uses_lrt:
+                    nc.add(
+                        f"integration/weights/{channel}/wave",
+                        weight_vector,
+                        filename=wave_name,
+                        cache=False,
+                    )
+                    if (
+                        used_downsampling_factor is None
+                        and wave.downsampling_factor is not None
+                    ):
+                        used_downsampling_factor = wave.downsampling_factor
+                        nc.add(
+                            "integration/downsampling/factor",
+                            wave.downsampling_factor,
+                            cache=False,
+                        )
+                    else:
+                        assert wave.downsampling_factor == used_downsampling_factor
+                else:
+                    nc.add(
+                        f"multistate/qudits/{channel}/weights/{index}/wave",
+                        weight_vector,
+                        filename=wave_name,
+                    )
+
+        if integration_length is not None:
+            nc.add("integration/length", integration_length)
 
         return nc
 
@@ -882,6 +954,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
                 recipe_data.recipe.integrator_allocations,
                 effective_averages,
                 average_mode,
+                recipe_data,
             )
         )
         nc.extend(
@@ -914,7 +987,6 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
                 f" {pluralize(num_thresholds, 'threshold')}.\n"
                 "For n states, there should be n-1 kernels, and (n-1)*n/2 thresholds."
             )
-        return True
 
     def _configure_readout_mode_nodes_multi_state(
         self,
@@ -922,7 +994,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         measurement: Measurement,
     ) -> NodeCollector:
         num_states = integrator_allocation.kernel_count + 1
-        assert self._integrator_has_consistent_msd_num_state(integrator_allocation)
+        self._integrator_has_consistent_msd_num_state(integrator_allocation)
 
         assert len(integrator_allocation.channels) == 1, (
             f"{self.dev_repr}: Internal error - expected 1 integrator for "
@@ -962,7 +1034,6 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
             base=f"/{self.serial}/qachannels/{measurement.channel}/readout/"
         )
 
-        nc.add("integration/length", measurement.length)
         nc.add("multistate/qudits/*/enable", 0, cache=False)
         nc.barrier()
 
@@ -971,6 +1042,8 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
                 integrator_allocation.device_id != device_uid
                 or integrator_allocation.awg != measurement.channel
             ):
+                continue
+            if self._uses_lrt(device_uid, measurement.channel, recipe_data):
                 continue
             readout_nodes = self._configure_readout_mode_nodes_multi_state(
                 integrator_allocation, measurement
@@ -995,6 +1068,22 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
 
         return nc
 
+    def _uses_lrt(self, device_uid: str, channel: int, recipe_data: RecipeData) -> bool:
+        artifacts = recipe_data.get_artifacts(self._device_class, ArtifactsCodegen)
+        osc_signals = set(
+            o.signal_id
+            for o in recipe_data.recipe.oscillator_params
+            if o.device_id == device_uid and o.channel == channel
+        )
+        return (
+            len(
+                osc_signals.intersection(
+                    artifacts.requires_long_readout.get(device_uid, [])
+                )
+            )
+            > 0
+        )
+
     async def collect_awg_before_upload_nodes(
         self, initialization: Initialization, recipe_data: RecipeData
     ) -> list[DaqNodeSetAction]:
@@ -1005,6 +1094,10 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         )
 
         for measurement in initialization.measurements:
+            if self._uses_lrt(
+                initialization.device_uid, measurement.channel, recipe_data
+            ):
+                nc.add(f"qachannels/{measurement.channel}/modulation/enable", 1)
             nc.add(
                 f"qachannels/{measurement.channel}/mode",
                 0 if is_spectroscopy(acquisition_type) else 1,
@@ -1225,9 +1318,15 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         nc.add("qachannels/*/spectroscopy/psd/enable", 0, cache=False)
         nc.add("qachannels/*/spectroscopy/result/enable", 0, cache=False)
         nc.add("qachannels/*/output/rflfinterlock", 1, cache=False)
+        if self._long_readout_available:
+            nc.add("qachannels/*/modulation/enable", 0, cache=False)
+            nc.add("qachannels/*/generator/waveforms/*/hold/enable", 0, cache=False)
+            nc.add(
+                "qachannels/*/readout/integration/downsampling/factor", 1, cache=False
+            )
         # Factory value after reset is 0.5 to avoid clipping during interpolation.
         # We set it to 1.0 for consistency with integration mode.
-        nc.add("qachannels/*/oscs/0/gain", 1.0, cache=False)
+        nc.add("qachannels/*/oscs/*/gain", 1.0, cache=False)
         nc.add("scopes/0/enable", 0, cache=False)
         nc.add("scopes/0/channels/*/enable", 0, cache=False)
         reset_nodes = await super().collect_reset_nodes()

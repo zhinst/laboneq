@@ -120,7 +120,8 @@ def gaussian(
             - length ([float][]): Length of the pulse in seconds
             - amplitude ([float][]): Amplitude of the pulse
         sigma (float):
-            Std. deviation, relative to pulse length, default is 1/3
+            Standard deviation relative to the interval the pulse is sampled from, here [-1, 1]. Defaults
+                to 1/3.
         order (int):
             Order of the Gaussian pulse, must be even and positive, default is 2
         zero_boundaries (bool):
@@ -263,7 +264,7 @@ def drag(x, sigma=1 / 3, beta=0.2, zero_boundaries=False, **_):
             - length ([float][]): Length of the pulse in seconds
             - amplitude ([float][]): Amplitude of the pulse
         sigma (float):
-            Std. deviation, relative to pulse length
+            Standard deviation relative to the interval the pulse is sampled from, here [-1, 1]. Defaults
         beta (float):
             Relative amplitude of the quadrature component
         zero_boundaries (bool):

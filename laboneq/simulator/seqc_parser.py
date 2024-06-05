@@ -36,6 +36,7 @@ from pycparser.c_parser import CParser
 from laboneq.compiler.common.compiler_settings import EXECUTETABLEENTRY_LATENCY
 from laboneq.core.utilities.prng import PRNG
 from laboneq.data.recipe import Recipe, TriggeringMode, RoutedOutput
+from laboneq.data.scheduled_experiment import ArtifactsCodegen
 
 if TYPE_CHECKING:
     from laboneq.core.types.compiled_experiment import CompiledExperiment
@@ -1215,17 +1216,19 @@ def _analyze_compiled(
                 wave_indices=compiled["wave_indices"],
             )
         )
+
+    recipe = compiled.scheduled_experiment.recipe
+    artifacts = compiled.scheduled_experiment.artifacts
+    assert recipe is not None
+    assert isinstance(artifacts, ArtifactsCodegen)
+
     seqc_descriptors = analyze_recipe(
-        compiled.scheduled_experiment.recipe,
-        compiled.scheduled_experiment.src,
-        compiled.scheduled_experiment.wave_indices,
-        compiled.scheduled_experiment.command_tables,
+        recipe, artifacts.src, artifacts.wave_indices, artifacts.command_tables
     )
 
-    read_wave_bin = lambda w: w if w.ndim == 1 else np.array([[s] for s in w])
     waves = {
-        w["filename"]: read_wave_bin(w["samples"])
-        for w in compiled.scheduled_experiment.waves
+        n: w.samples if w.samples.ndim == 1 else np.array([[s] for s in w.samples])
+        for n, w in artifacts.waves.items()
     }
     return seqc_descriptors, waves
 

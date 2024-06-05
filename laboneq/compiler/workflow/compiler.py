@@ -975,7 +975,7 @@ class Compiler:
         measurements = {}
 
         for info in section_measurement_infos:
-            for device_awg_nr in info["devices"]:
+            for device_awg_nr, device_details in info["devices"].items():
                 device_id, awg_nr = device_awg_nr
                 if (device_id, awg_nr) in measurements:
                     _logger.debug(
@@ -996,14 +996,16 @@ class Compiler:
                             "Found integration_time_info %s", integration_time_info
                         )
 
-                        signal_info_for_section_and_device_awg = next(
-                            i
-                            for i in integration_time_info.values()
-                            if i.awg == awg_nr and i.device_id == device_id
-                        )
-                        measurement["length"] = (
-                            signal_info_for_section_and_device_awg.length_in_samples
-                        )
+                        lengths_in_samples = [
+                            signal_info.length_in_samples
+                            for signal, signal_info in integration_time_info.signals.items()
+                            if signal in device_details["signals"]
+                        ]
+
+                        # We communicate only the maximum length to the rest of the compiler.
+                        # Other parts of the compiler should check that the maximum length
+                        # is supported by the device and adjust shorter integrations as needed.
+                        measurement["length"] = max(lengths_in_samples)
                     else:
                         del measurement["length"]
                     _logger.debug(

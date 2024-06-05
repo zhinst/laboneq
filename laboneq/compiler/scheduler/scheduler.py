@@ -495,20 +495,28 @@ class Scheduler:
         section_id: str,
         grid: int,
         signals: FrozenSet[str],
-        hw_signals: FrozenSet[str],
     ) -> List[PhaseResetSchedule]:
         section_info = self._experiment_dao.section_info(section_id)
-        reset_sw_oscillators = len(hw_signals) > 0 or (
+        hw_osc_reset_signals = set()
+        if section_info.reset_oscillator_phase:
+            for signal in self._experiment_dao.section_signals_with_children(
+                section_id
+            ):
+                osc_info = self._experiment_dao.signal_oscillator(signal)
+                if osc_info is not None and osc_info.is_hardware:
+                    hw_osc_reset_signals.add(signal)
+
+        reset_sw_oscillators = section_info.reset_oscillator_phase or (
             section_info.execution_type == "hardware"
             and section_info.averaging_mode is not None
         )
 
-        if not reset_sw_oscillators and len(hw_signals) == 0:
+        if not reset_sw_oscillators and len(hw_osc_reset_signals) == 0:
             return []
 
         length = 0
         hw_osc_devices = {}
-        for signal in hw_signals:
+        for signal in hw_osc_reset_signals:
             device = self._experiment_dao.device_from_signal(signal)
             device_type = DeviceType.from_device_info_type(device.device_type)
             if not device_type.supports_reset_osc_phase:
@@ -541,7 +549,7 @@ class Scheduler:
             PhaseResetSchedule(
                 grid=grid,
                 length=length,
-                signals={*hw_signals, *sw_signals},
+                signals={*hw_osc_reset_signals, *sw_signals},
                 section=section_id,
                 hw_osc_devices=hw_osc_devices,
                 reset_sw_oscillators=reset_sw_oscillators,
@@ -580,15 +588,6 @@ class Scheduler:
             signals.update(c.signals)
 
         section_info = self._experiment_dao.section_info(section_id)
-        hw_osc_reset_signals = set()
-        if section_info.reset_oscillator_phase:
-            for signal in self._experiment_dao.section_signals_with_children(
-                section_id
-            ):
-                osc_info = self._experiment_dao.signal_oscillator(signal)
-                if osc_info is not None and osc_info.is_hardware:
-                    hw_osc_reset_signals.add(signal)
-
         for osc in swept_hw_oscillators.values():
             signals.add(osc.signal)
 
@@ -599,9 +598,7 @@ class Scheduler:
 
         # Deepcopy here because of caching
         osc_phase_reset = copy.deepcopy(
-            self._schedule_phase_reset(
-                section_id, grid, frozenset(signals), frozenset(hw_osc_reset_signals)
-            )
+            self._schedule_phase_reset(section_id, grid, frozenset(signals))
         )
 
         if len(swept_hw_oscillators):

@@ -20,6 +20,7 @@ from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
 from laboneq.controller.devices.device_shf_base import DeviceSHFBase
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import (
+    AllocatedOscillator,
     SequencerPaths,
     delay_to_rounded_samples,
 )
@@ -27,7 +28,13 @@ from laboneq.controller.devices.zi_node_monitor import NodeControlBase
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
-from laboneq.data.recipe import IO, Initialization, TriggeringMode, ParameterUID
+from laboneq.data.recipe import (
+    IO,
+    Initialization,
+    OscillatorParam,
+    TriggeringMode,
+    ParameterUID,
+)
 
 
 _logger = logging.getLogger(__name__)
@@ -161,12 +168,13 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
                 range_list,
             )
 
-    def _osc_group_by_channel(self, channel: int) -> int:
-        return channel
-
     def _get_next_osc_index(
-        self, osc_group: int, previously_allocated: int
+        self,
+        osc_group_oscs: list[AllocatedOscillator],
+        osc_param: OscillatorParam,
+        recipe_data: RecipeData,
     ) -> int | None:
+        previously_allocated = len(osc_group_oscs)
         if previously_allocated >= 8:
             return None
         return previously_allocated

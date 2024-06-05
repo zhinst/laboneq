@@ -1,7 +1,7 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Dict
+from typing import Any
 
 import numpy as np
 
@@ -18,7 +18,7 @@ def assert_args_not_ambiguous(
             )
 
 
-def validating_allowed_values(allowed_values: Dict[str, Any]):
+def validating_allowed_values(allowed_values: dict[str, Any]):
     def f(cls):
         orig_setattr = cls.__setattr__
 
@@ -36,7 +36,7 @@ def validating_allowed_values(allowed_values: Dict[str, Any]):
     return f
 
 
-def dicts_equal(actual: Dict[Any, Any], desired: Dict[Any, Any]) -> bool:
+def dicts_equal(actual: dict[Any, Any], desired: dict[Any, Any]) -> bool:
     """Checks if two dicts are equal."""
     try:
         np.testing.assert_equal(actual, desired)

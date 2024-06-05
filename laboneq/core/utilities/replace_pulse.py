@@ -19,7 +19,12 @@ from laboneq.core.utilities.pulse_sampler import (
     sample_pulse,
     verify_amplitude_no_clipping,
 )
-from laboneq.data.scheduled_experiment import PulseWaveformMap, ScheduledExperiment
+from laboneq.data.scheduled_experiment import (
+    ArtifactsCodegen,
+    CodegenWaveform,
+    PulseWaveformMap,
+    ScheduledExperiment,
+)
 
 if TYPE_CHECKING:
     from laboneq.core.types.compiled_experiment import CompiledExperiment
@@ -40,25 +45,23 @@ def _replace_pulse_in_wave(
     wave_name: str,
     pulse_or_array: ArrayLike | Pulse,
     pwm: PulseWaveformMap,
+    current_waves: dict[str, CodegenWaveform] | None,
     component: Component = Component.COMPLEX,
     is_complex: bool = True,
-    current_waves: list | None = None,
 ):
     current_wave = None
     if current_waves is not None:
-        current_wave = next(
-            (w for w in current_waves if w["filename"] == wave_name), None
-        )
+        current_wave = current_waves.get(wave_name)
     if current_wave is None:
-        specified_wave = next(
-            w for w in scheduled_experiment.waves if w["filename"] == wave_name
-        )
+        artifacts = scheduled_experiment.artifacts
+        assert isinstance(artifacts, ArtifactsCodegen)
+        specified_wave = artifacts.waves[wave_name]
         # TODO(2K): Avoid deepcopy on every iteration, create working copy once per execution
         current_wave = deepcopy(specified_wave)
         if current_waves is not None:
-            current_waves.append(current_wave)
+            current_waves[wave_name] = current_wave
 
-    new_samples = current_wave["samples"]  # Reference
+    new_samples = current_wave.samples  # Reference
     input_samples = None
     amplitude = 1.0
     function = None
@@ -157,7 +160,7 @@ def calc_wave_replacements(
     scheduled_experiment: ScheduledExperiment,
     pulse_uid: str | Pulse,
     pulse_or_array: ArrayLike | Pulse,
-    current_waves: list | None = None,
+    current_waves: dict[str, CodegenWaveform] | None = None,
 ) -> list[WaveReplacement]:
     if not isinstance(pulse_uid, str):
         pulse_uid = pulse_uid.uid
@@ -182,9 +185,9 @@ def calc_wave_replacements(
                     sig_string + ".wave",
                     pulse_or_array,
                     pwm,
+                    current_waves=current_waves,
                     component=Component.REAL,
                     is_complex=False,
-                    current_waves=current_waves,
                 )
                 samples = [samples_i]
             elif wave_type != "complex":
@@ -194,18 +197,18 @@ def calc_wave_replacements(
                     sig_string + "_i.wave",
                     pulse_or_array,
                     pwm,
+                    current_waves=current_waves,
                     component=Component.REAL,
                     is_complex=is_complex,
-                    current_waves=current_waves,
                 )
                 samples_q = _replace_pulse_in_wave(
                     scheduled_experiment,
                     sig_string + "_q.wave",
                     pulse_or_array,
                     pwm,
+                    current_waves=current_waves,
                     component=Component.IMAG,
                     is_complex=is_complex,
-                    current_waves=current_waves,
                 )
                 samples = [samples_i, samples_q]
             else:
@@ -215,9 +218,9 @@ def calc_wave_replacements(
                     sig_string + ".wave",
                     pulse_or_array,
                     pwm,
+                    current_waves=current_waves,
                     component=Component.COMPLEX,
                     is_complex=is_complex,
-                    current_waves=current_waves,
                 )
             replacements.append(
                 WaveReplacement(
@@ -251,27 +254,16 @@ def replace_pulse(
         wave_replacements = calc_wave_replacements(
             scheduled_experiment, pulse_uid, pulse_or_array
         )
+        artifacts = scheduled_experiment.artifacts
+        assert isinstance(artifacts, ArtifactsCodegen)
         for repl in wave_replacements:
             if repl.replacement_type == ReplacementType.I_Q:
                 if len(repl.samples) == 2:
-                    wave_i = next(
-                        w
-                        for w in scheduled_experiment.waves
-                        if w["filename"] == repl.sig_string + "_i.wave"
-                    )
-                    wave_q = next(
-                        w
-                        for w in scheduled_experiment.waves
-                        if w["filename"] == repl.sig_string + "_q.wave"
-                    )
-                    wave_i["samples"] = repl.samples[0]
-                    wave_q["samples"] = repl.samples[1]
+                    wave_i = artifacts.waves[repl.sig_string + "_i.wave"]
+                    wave_q = artifacts.waves[repl.sig_string + "_q.wave"]
+                    wave_i.samples = repl.samples[0]
+                    wave_q.samples = repl.samples[1]
                 else:
-                    wave = next(
-                        w
-                        for w in scheduled_experiment.waves
-                        if w["filename"] == repl.sig_string + ".wave"
-                    )
-                    wave["samples"] = repl.samples[0]
+                    artifacts.waves[repl.sig_string + ".wave"].samples = repl.samples[0]
     else:
         target.replace_pulse(pulse_uid, pulse_or_array)

@@ -51,6 +51,7 @@ from laboneq.controller.recipe_processor import (
     DeviceRecipeData,
     RecipeData,
     RtExecutionInfo,
+    get_wave,
 )
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
@@ -63,7 +64,11 @@ from laboneq.data.recipe import (
     NtStepKey,
     OscillatorParam,
 )
-from laboneq.data.scheduled_experiment import CompilerArtifact
+from laboneq.data.scheduled_experiment import (
+    ArtifactsCodegen,
+    CodegenWaveform,
+    ScheduledExperiment,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -121,14 +126,8 @@ class WaveformItem:
     index: int
     name: str
     samples: npt.ArrayLike
-
-
-@dataclass
-class IntegrationWeightItem:
-    integration_unit: int
-    index: int
-    name: str
-    samples: npt.ArrayLike
+    hold_start: int | None = None
+    hold_length: int | None = None
 
 
 @dataclass
@@ -140,7 +139,6 @@ class RawReadoutData:
 
 
 Waveforms = list[WaveformItem]
-IntegrationWeights = list[IntegrationWeightItem]
 
 
 def delay_to_rounded_samples(
@@ -384,14 +382,10 @@ class DeviceZI(INodeMonitorProvider):
         no_ppc_uplinks = [u for u in self._uplinks if u() and not is_ppc(u())]
         return len(no_ppc_uplinks) == 0 and len(self._downlinks) == 0
 
-    def _validate_initialization(self, initialization: Initialization):
-        pass
-
     def pre_process_attributes(
         self,
         initialization: Initialization,
     ) -> Iterator[DeviceAttribute]:
-        self._validate_initialization(initialization)
         outputs = initialization.outputs or []
         for output in outputs:
             yield DeviceAttribute(
@@ -417,6 +411,11 @@ class DeviceZI(INodeMonitorProvider):
                 index=input.channel,
                 value_or_param=input.port_delay,
             )
+
+    def validate_scheduled_experiment(
+        self, device_uid: str, scheduled_experiment: ScheduledExperiment
+    ):
+        pass
 
     async def collect_initialization_nodes(
         self,
@@ -548,20 +547,23 @@ class DeviceZI(INodeMonitorProvider):
         return channel
 
     def _get_next_osc_index(
-        self, osc_group: int, previously_allocated: int
+        self,
+        osc_group_oscs: list[AllocatedOscillator],
+        osc_param: OscillatorParam,
+        recipe_data: RecipeData,
     ) -> int | None:
         return None
 
     def _make_osc_path(self, channel: int, index: int) -> str:
         return f"/{self.serial}/oscs/{index}/freq"
 
-    def allocate_osc(self, osc_param: OscillatorParam):
+    def allocate_osc(self, osc_param: OscillatorParam, recipe_data: RecipeData):
         osc_group = self._osc_group_by_channel(osc_param.channel)
         osc_group_oscs = [o for o in self._allocated_oscs if o.group == osc_group]
         same_id_osc = next((o for o in osc_group_oscs if o.id == osc_param.id), None)
         if same_id_osc is None:
             # pylint: disable=E1128
-            new_index = self._get_next_osc_index(osc_group, len(osc_group_oscs))
+            new_index = self._get_next_osc_index(osc_group_oscs, osc_param, recipe_data)
             if new_index is None:
                 raise LabOneQControllerException(
                     f"{self.dev_repr}: exceeded the number of available oscillators for "
@@ -599,6 +601,7 @@ class DeviceZI(INodeMonitorProvider):
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
         with_pipeliner: bool,
+        recipe_data: RecipeData,
     ) -> list[DaqNodeSetAction]:
         return []
 
@@ -648,6 +651,11 @@ class DeviceZI(INodeMonitorProvider):
     ) -> list[DaqNodeSetAction]:
         return []
 
+    async def conditions_for_sync_ready(
+        self, with_pipeliner: bool
+    ) -> dict[str, tuple[Any, str]]:
+        return {}
+
     async def check_results_acquired_status(
         self, channel, acquisition_type: AcquisitionType, result_length, hw_averages
     ):
@@ -690,7 +698,7 @@ class DeviceZI(INodeMonitorProvider):
         DeviceZI, list[DaqNodeSetAction], list[DaqNodeSetAction], dict[str, Any]
     ]:
         # TODO(2K): Interface need to be more generic, abstract away DaqNodeSetAction
-        artifacts = recipe_data.scheduled_experiment.artifacts
+        artifacts = recipe_data.get_artifacts(self._device_class, ArtifactsCodegen)
         rt_execution_info = recipe_data.rt_execution_infos[rt_section_uid]
 
         if rt_execution_info.with_pipeliner and not self.has_pipeliner:
@@ -770,17 +778,17 @@ class DeviceZI(INodeMonitorProvider):
                     self.prepare_upload_command_table(awg_index, command_table)
                 )
 
-            integration_weights = self.prepare_integration_weights(
-                artifacts,
-                recipe_data.recipe.integrator_allocations,
-                rt_exec_step.kernel_indices_ref,
-            )
-            if integration_weights is not None:
-                wf_eff.extend(
-                    self.prepare_upload_all_integration_weights(
-                        awg_index, integration_weights
-                    )
+            wf_eff.extend(
+                # TODO(2K): Cleanup arguments to prepare_upload_all_integration_weights
+                self.prepare_upload_all_integration_weights(
+                    recipe_data,
+                    initialization.device_uid,
+                    awg_index,
+                    artifacts,
+                    recipe_data.recipe.integrator_allocations,
+                    rt_exec_step.kernel_indices_ref,
                 )
+            )
 
             wf_eff.extend(
                 self.prepare_pipeliner_job_nodes(
@@ -810,156 +818,133 @@ class DeviceZI(INodeMonitorProvider):
             return True
         return not np.any(a * (1 - a))
 
-    def _prepare_markers_iq(self, waves, sig: str) -> npt.ArrayLike:
-        marker1_samples = None
-        marker2_samples = None
-        try:
-            marker1_samples = next(
-                (w for w in waves if w["filename"] == f"{sig}_marker1.wave")
-            )["samples"]
-        except StopIteration:
-            pass
-
-        try:
-            marker2_samples = next(
-                (w for w in waves if w["filename"] == f"{sig}_marker2.wave")
-            )["samples"]
-        except StopIteration:
-            pass
+    def _prepare_markers_iq(
+        self, waves: dict[str, CodegenWaveform], sig: str
+    ) -> npt.NDArray[Any] | None:
+        marker1_wave = get_wave(f"{sig}_marker1.wave", waves, optional=True)
+        marker2_wave = get_wave(f"{sig}_marker2.wave", waves, optional=True)
 
         marker_samples = None
-        if marker1_samples is not None:
-            if not self._contains_only_zero_or_one(marker1_samples):
+        if marker1_wave is not None:
+            if not self._contains_only_zero_or_one(marker1_wave.samples):
                 raise LabOneQControllerException(
                     "Marker samples must only contain ones and zeros"
                 )
-            marker_samples = np.array(marker1_samples)
-        if marker2_samples is not None:
+            marker_samples = np.array(marker1_wave.samples, order="C")
+        if marker2_wave is not None:
+            marker2_len = len(marker2_wave.samples)
             if marker_samples is None:
-                marker_samples = np.zeros(len(marker2_samples), dtype=np.int32)
-            elif len(marker1_samples) != len(marker2_samples):
+                marker_samples = np.zeros(marker2_len, dtype=np.int32)
+            elif len(marker_samples) != marker2_len:
                 raise LabOneQControllerException(
                     "Samples for marker1 and marker2 must have the same length"
                 )
-            if not self._contains_only_zero_or_one(marker2_samples):
+            if not self._contains_only_zero_or_one(marker2_wave.samples):
                 raise LabOneQControllerException(
                     "Marker samples must only contain ones and zeros"
                 )
-            marker2_samples = np.array(marker2_samples)
             # we want marker 2 to be played on output 2, marker 1
             # bits 0/1 = marker 1/2 of output 1, bit 2/4 = marker 1/2 output 2
             # bit 2 is factor 4
             factor = 4
-            marker_samples += factor * marker2_samples
+            marker_samples += factor * np.asarray(marker2_wave.samples, order="C")
         return marker_samples
 
-    def _prepare_markers_single(self, waves, sig: str) -> npt.ArrayLike:
-        marker_samples = None
-        try:
-            marker_samples = next(
-                (w for w in waves if w["filename"] == f"{sig}_marker1.wave")
-            )["samples"]
-        except StopIteration:
-            pass
+    def _prepare_markers_single(
+        self, waves: dict[str, CodegenWaveform], sig: str
+    ) -> npt.NDArray[Any] | None:
+        marker_wave = get_wave(f"{sig}_marker1.wave", waves, optional=True)
 
-        if marker_samples is not None:
-            if not self._contains_only_zero_or_one(marker_samples):
-                raise LabOneQControllerException(
-                    "Marker samples must only contain ones and zeros"
-                )
-            marker_samples = np.array(marker_samples)
-        return marker_samples
-
-    def _prepare_wave_iq(self, waves, sig: str) -> tuple[str, npt.ArrayLike]:
-        wave_i = next((w for w in waves if w["filename"] == f"{sig}_i.wave"), None)
-        if not wave_i:
+        if marker_wave is None:
+            return None
+        if not self._contains_only_zero_or_one(marker_wave.samples):
             raise LabOneQControllerException(
-                f"I wave not found, IQ wave signature '{sig}'"
+                "Marker samples must only contain ones and zeros"
             )
+        return np.array(marker_wave.samples, order="C")
 
-        wave_q = next((w for w in waves if w["filename"] == f"{sig}_q.wave"), None)
-        if not wave_q:
-            raise LabOneQControllerException(
-                f"Q wave not found, IQ wave signature '{sig}'"
-            )
-
+    def _prepare_wave_iq(
+        self, waves: dict[str, CodegenWaveform], sig: str, index: int
+    ) -> WaveformItem:
+        wave_i = get_wave(f"{sig}_i.wave", waves)
+        wave_q = get_wave(f"{sig}_q.wave", waves)
         marker_samples = self._prepare_markers_iq(waves, sig)
-
-        return (
-            sig,
-            zhinst.utils.convert_awg_waveform(
-                np.clip(wave_i["samples"], -1, 1),
-                np.clip(wave_q["samples"], -1, 1),
+        return WaveformItem(
+            index=index,
+            name=sig,
+            samples=zhinst.utils.convert_awg_waveform(
+                np.clip(np.ascontiguousarray(wave_i.samples), -1, 1),
+                np.clip(np.ascontiguousarray(wave_q.samples), -1, 1),
                 markers=marker_samples,
             ),
         )
 
-    def _prepare_wave_single(self, waves, sig: str) -> tuple[str, npt.ArrayLike]:
-        wave = next((w for w in waves if w["filename"] == f"{sig}.wave"), None)
-
+    def _prepare_wave_single(
+        self, waves: dict[str, CodegenWaveform], sig: str, index: int
+    ) -> WaveformItem:
+        wave = get_wave(f"{sig}.wave", waves)
         marker_samples = self._prepare_markers_single(waves, sig)
-
-        if not wave:
-            raise LabOneQControllerException(f"Wave not found, signature '{sig}'")
-
-        return sig, zhinst.utils.convert_awg_waveform(
-            np.clip(wave["samples"], -1, 1), markers=marker_samples
+        return WaveformItem(
+            index=index,
+            name=sig,
+            samples=zhinst.utils.convert_awg_waveform(
+                np.clip(np.ascontiguousarray(wave.samples), -1, 1),
+                markers=marker_samples,
+            ),
         )
 
-    def _prepare_wave_complex(self, waves, sig: str) -> tuple[str, npt.ArrayLike]:
-        filename_to_find = f"{sig}.wave"
-        wave = next((w for w in waves if w["filename"] == filename_to_find), None)
-
-        if not wave:
-            raise LabOneQControllerException(
-                f"Wave not found, signature '{sig}' filename '{filename_to_find}'"
-            )
-
-        return sig, np.array(wave["samples"], dtype=np.complex128)
+    def _prepare_wave_complex(
+        self, waves: dict[str, CodegenWaveform], sig: str, index: int
+    ) -> WaveformItem:
+        wave = get_wave(f"{sig}.wave", waves)
+        return WaveformItem(
+            index=index,
+            name=sig,
+            samples=np.ascontiguousarray(wave.samples, dtype=np.complex128),
+            hold_start=wave.hold_start,
+            hold_length=wave.hold_length,
+        )
 
     def prepare_waves(
         self,
-        artifacts: CompilerArtifact | dict[int, CompilerArtifact],
+        artifacts: ArtifactsCodegen,
         wave_indices_ref: str | None,
     ) -> Waveforms | None:
         if wave_indices_ref is None:
             return None
-        if isinstance(artifacts, dict):
-            artifacts = artifacts[self._device_class]
         wave_indices: dict[str, list[int | str]] = next(
             (i for i in artifacts.wave_indices if i["filename"] == wave_indices_ref),
             {"value": {}},
         )["value"]
 
-        waves = artifacts.waves or []
-        bin_waves: Waveforms = []
+        waves: Waveforms = []
+        index: int
+        sig_type: str
         for sig, [index, sig_type] in wave_indices.items():
             if sig.startswith("precomp_reset"):
                 continue  # precomp reset waveform is bundled with ELF
             if sig_type in ("iq", "double", "multi"):
-                name, samples = self._prepare_wave_iq(waves, sig)
+                wave = self._prepare_wave_iq(artifacts.waves, sig, index)
             elif sig_type == "single":
-                name, samples = self._prepare_wave_single(waves, sig)
+                wave = self._prepare_wave_single(artifacts.waves, sig, index)
             elif sig_type == "complex":
-                name, samples = self._prepare_wave_complex(waves, sig)
+                wave = self._prepare_wave_complex(artifacts.waves, sig, index)
             else:
                 raise LabOneQControllerException(
                     f"Unexpected signal type for binary wave for '{sig}' in '{wave_indices_ref}' - "
                     f"'{sig_type}', should be one of [iq, double, multi, single, complex]"
                 )
-            bin_waves.append(WaveformItem(index=index, name=name, samples=samples))
+            waves.append(wave)
 
-        return bin_waves
+        return waves
 
     def prepare_command_table(
         self,
-        artifacts: CompilerArtifact | dict[int, CompilerArtifact],
+        artifacts: ArtifactsCodegen,
         ct_ref: str | None,
     ) -> dict | None:
         if ct_ref is None:
             return None
-        if isinstance(artifacts, dict):
-            artifacts = artifacts[self._device_class]
 
         command_table_body = next(
             (ct["ct"] for ct in artifacts.command_tables if ct["seqc"] == ct_ref),
@@ -981,13 +966,11 @@ class DeviceZI(INodeMonitorProvider):
 
     def prepare_seqc(
         self,
-        artifacts: CompilerArtifact | dict[int, CompilerArtifact],
+        artifacts: ArtifactsCodegen,
         seqc_ref: str | None,
     ) -> str | None:
         if seqc_ref is None:
             return None
-        if isinstance(artifacts, dict):
-            artifacts = artifacts[self._device_class]
 
         seqc = next((s for s in artifacts.src if s["filename"] == seqc_ref), None)
         if seqc is None:
@@ -1017,14 +1000,6 @@ class DeviceZI(INodeMonitorProvider):
         seqc_text = "\n".join(seqc_lines)
 
         return seqc_text
-
-    def prepare_integration_weights(
-        self,
-        artifacts: CompilerArtifact | dict[int, CompilerArtifact],
-        integrator_allocations: list[IntegratorAllocation],
-        kernel_ref: str | None,
-    ) -> IntegrationWeights | None:
-        pass  # implemented in subclasses of QA instruments
 
     def prepare_upload_elf(
         self, elf: bytes, awg_index: int, filename: str
@@ -1089,9 +1064,15 @@ class DeviceZI(INodeMonitorProvider):
         return nc
 
     def prepare_upload_all_integration_weights(
-        self, awg_index, integration_weights: IntegrationWeights
+        self,
+        recipe_data: RecipeData,
+        device_uid: str,
+        awg_index: int,
+        artifacts: ArtifactsCodegen,
+        integrator_allocations: list[IntegratorAllocation],
+        kernel_ref: str,
     ) -> NodeCollector:
-        raise NotImplementedError
+        return NodeCollector()
 
     def prepare_pipeliner_job_nodes(
         self,

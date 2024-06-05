@@ -6,7 +6,7 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator, TypeVar, overload
 
 import numpy as np
 from numpy import typing as npt
@@ -21,13 +21,12 @@ from laboneq.controller.versioning import SetupCaps
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.data.recipe import IO, Initialization, Recipe, SignalType
-from laboneq.data.scheduled_experiment import ScheduledExperiment
+from laboneq.data.scheduled_experiment import CodegenWaveform, ScheduledExperiment
 from laboneq.executor.executor import (
     ExecutorBase,
     LoopFlags,
     LoopingMode,
     Sequence,
-    Statement,
 )
 
 if TYPE_CHECKING:
@@ -136,6 +135,29 @@ class RtExecutionInfo:
 RtSectionId = str
 RtExecutionInfos = dict[RtSectionId, RtExecutionInfo]
 
+T = TypeVar("T")
+
+
+def get_artifacts(artifacts: Any, device_class: int, artifacts_class: type[T]) -> T:
+    if isinstance(artifacts, artifacts_class):
+        return artifacts
+    if isinstance(artifacts, dict):
+        dev_class_artifacts = artifacts[device_class]
+        if isinstance(dev_class_artifacts, artifacts_class):
+            return dev_class_artifacts
+    raise LabOneQControllerException(
+        "Internal error: Unexpected artifacts structure in compiled experiment."
+    )
+
+
+def get_initialization_by_device_uid(
+    recipe: Recipe, device_uid: str
+) -> Initialization | None:
+    for initialization in recipe.initializations:
+        if initialization.device_uid == device_uid:
+            return initialization
+    return None
+
 
 @dataclass
 class RecipeData:
@@ -155,10 +177,15 @@ class RecipeData:
         for initialization in self.recipe.initializations:
             yield initialization
 
-    def get_initialization_by_device_uid(self, device_uid: str) -> Initialization:
-        for initialization in self.initializations:
-            if initialization.device_uid == device_uid:
-                return initialization
+    def get_artifacts(self, device_class: int, artifacts_class: type[T]) -> T:
+        return get_artifacts(
+            self.scheduled_experiment.artifacts, device_class, artifacts_class
+        )
+
+    def get_initialization_by_device_uid(
+        self, device_uid: str
+    ) -> Initialization | None:
+        return get_initialization_by_device_uid(self.recipe, device_uid)
 
     def awgs_producing_results(self) -> Iterator[tuple[AwgKey, AwgConfig]]:
         for awg_key, awg_config in self.awg_configs.items():
@@ -482,10 +509,14 @@ def _pre_process_attributes(
 def pre_process_compiled(
     scheduled_experiment: ScheduledExperiment,
     devices: DeviceCollection,
-    execution: Statement,
     setup_caps: SetupCaps,
 ) -> RecipeData:
+    for device_uid, device in devices.all:
+        device.validate_scheduled_experiment(device_uid, scheduled_experiment)
+
     recipe = scheduled_experiment.recipe
+    assert recipe is not None
+    execution = scheduled_experiment.execution
 
     device_settings: DeviceSettings = defaultdict(DeviceRecipeData)
     for initialization in recipe.initializations:
@@ -517,12 +548,24 @@ def pre_process_compiled(
     return recipe_data
 
 
-def get_wave(wave_name, waves: list[dict[str, Any]]):
-    wave = next(
-        (wave for wave in waves if wave.get("filename", None) == wave_name), None
-    )
+@overload
+def get_wave(wave_name, waves: dict[str, CodegenWaveform]) -> CodegenWaveform: ...
+
+
+@overload
+def get_wave(
+    wave_name, waves: dict[str, CodegenWaveform], optional: bool = True
+) -> CodegenWaveform | None: ...
+
+
+def get_wave(
+    wave_name, waves: dict[str, CodegenWaveform], optional: bool = False
+) -> CodegenWaveform | None:
+    wave = waves.get(wave_name)
     if wave is None:
+        if optional:
+            return None
         raise LabOneQControllerException(
             f"Wave '{wave_name}' is not found in the compiled waves collection."
         )
-    return np.ascontiguousarray(wave["samples"])
+    return wave

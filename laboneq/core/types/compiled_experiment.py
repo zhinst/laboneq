@@ -3,11 +3,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from laboneq.core.validators import dicts_equal
-from laboneq.data.scheduled_experiment import ScheduledExperiment
+from laboneq.data.scheduled_experiment import CodegenWaveform, ScheduledExperiment
 
 if TYPE_CHECKING:
     from numpy.typing import ArrayLike
@@ -59,7 +59,9 @@ class CompiledExperiment:
     experiment_dict: dict[str, Any] | None = None
 
     # Compiled
-    scheduled_experiment: ScheduledExperiment | None = None
+    scheduled_experiment: ScheduledExperiment = field(
+        default_factory=ScheduledExperiment
+    )
 
     # Proxy props for backwards compatibility
     @property
@@ -80,7 +82,7 @@ class CompiledExperiment:
         return self.scheduled_experiment.src
 
     @property
-    def waves(self) -> list[dict]:
+    def waves(self) -> dict[str, CodegenWaveform]:
         """The list of sampled pulses generated for use within the
         Sequencer C programs.
 

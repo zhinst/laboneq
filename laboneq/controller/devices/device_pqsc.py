@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 from enum import IntEnum
+from typing import Any
 
 from laboneq.controller.communication import (
     DaqNodeSetAction,
@@ -40,6 +41,7 @@ class DevicePQSC(DeviceZI):
     def _nodes_to_monitor_impl(self) -> list[str]:
         nodes = super()._nodes_to_monitor_impl()
         nodes.append(f"/{self.serial}/execution/enable")
+        nodes.append(f"/{self.serial}/execution/synchronization/enable")
         return nodes
 
     def load_factory_preset_control_nodes(self) -> list[NodeControlBase]:
@@ -188,6 +190,18 @@ class DevicePQSC(DeviceZI):
         if with_pipeliner:
             nc.add("execution/synchronization/enable", 0)
         return await self.maybe_async(nc)
+
+    async def conditions_for_sync_ready(
+        self, with_pipeliner: bool
+    ) -> dict[str, tuple[Any, str]]:
+        if not with_pipeliner:
+            return {}
+        return {
+            f"/{self.serial}/execution/synchronization/enable": (
+                1,  # sync enabled
+                "Failed to enable synchronization",
+            )
+        }
 
     async def collect_trigger_configuration_nodes(
         self, initialization: Initialization, recipe_data: RecipeData

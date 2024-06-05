@@ -20,6 +20,7 @@ from laboneq.compiler.common.awg_info import AwgKey
 from laboneq.compiler.workflow.compiler_output import (
     CombinedRTCompilerOutputContainer,
 )
+from laboneq.data.scheduled_experiment import CodegenWaveform
 from laboneq.laboneq_logging import get_logger
 
 _logger = get_logger(__name__)
@@ -31,7 +32,7 @@ from laboneq.compiler.workflow.neartime_execution import (
 )
 
 
-def _count_samples(waves, wave_index):
+def _count_samples(waves: dict[str, CodegenWaveform], wave_index):
     multiplier = 1
     wave_name, (_, wave_type) = wave_index
     if wave_name == "precomp_reset":
@@ -52,7 +53,7 @@ def _count_samples(waves, wave_index):
         raise ValueError("invalid wave type")
 
     waveform = waves[waveform_name]
-    return len(waveform["samples"]) * multiplier
+    return len(waveform.samples) * multiplier
 
 
 @dataclass(order=True)
@@ -70,6 +71,7 @@ class CompilationReportGenerator(NtCompilerExecutorDelegate):
         self._settings = settings
         self._data: list[ReportEntry] = []
         self._total: ReportEntry | None = None
+        self._require_long_readout: str | None = None
 
         self._pulse_waveform_count = {}
         self._pulse_map = {}
@@ -144,6 +146,13 @@ class CompilationReportGenerator(NtCompilerExecutorDelegate):
             wave_indices=total_wave_idx,
             waveform_samples=total_samples,
         )
+        require_long_readout = [
+            id
+            for id, lrt in compiler_output.requires_long_readout.items()
+            if len(lrt) > 0
+        ]
+        if len(require_long_readout) > 0:
+            self._require_long_readout = ", ".join(require_long_readout)
 
     def compute_pulse_map_statistics(self, compiler_output: CombinedOutput):
         from laboneq.compiler.seqc.linker import CombinedRTOutputSeqC
@@ -263,6 +272,8 @@ class CompilationReportGenerator(NtCompilerExecutorDelegate):
             return buffer.getvalue()
 
     def log_report(self):
+        if self._require_long_readout is not None:
+            _logger.info(f"Require(s) long readout: {self._require_long_readout}")
         for line in self.resource_table_as_str().splitlines():
             _logger.info(line)
 

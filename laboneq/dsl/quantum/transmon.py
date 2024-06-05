@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -156,12 +157,12 @@ class Transmon(QuantumElement):
         drive_lo = None
         readout_lo = None
         if set_local_oscillators:
-            if self.parameters.drive_lo_frequency:
+            if self.parameters.drive_lo_frequency is not None:
                 drive_lo = Oscillator(
                     uid=f"{self.uid}_drive_local_osc",
                     frequency=self.parameters.drive_lo_frequency,
                 )
-            if self.parameters.readout_lo_frequency:
+            if self.parameters.readout_lo_frequency is not None:
                 readout_lo = Oscillator(
                     uid=f"{self.uid}_readout_local_osc",
                     frequency=self.parameters.readout_lo_frequency,
@@ -181,7 +182,7 @@ class Transmon(QuantumElement):
             calib[self.signals["drive"]] = sig_cal
         if "drive_ef" in self.signals:
             sig_cal = SignalCalibration()
-            if self.parameters.drive_frequency_ef:
+            if self.parameters.drive_frequency_ef is not None:
                 sig_cal.oscillator = Oscillator(
                     uid=f"{self.uid}_drive_ef_osc",
                     frequency=self.parameters.drive_frequency_ef,
@@ -192,7 +193,7 @@ class Transmon(QuantumElement):
             calib[self.signals["drive_ef"]] = sig_cal
         if "measure" in self.signals:
             sig_cal = SignalCalibration()
-            if self.parameters.readout_frequency:
+            if self.parameters.readout_frequency is not None:
                 sig_cal.oscillator = Oscillator(
                     uid=f"{self.uid}_measure_osc",
                     frequency=self.parameters.readout_frequency,
@@ -203,7 +204,7 @@ class Transmon(QuantumElement):
             calib[self.signals["measure"]] = sig_cal
         if "acquire" in self.signals:
             sig_cal = SignalCalibration()
-            if self.parameters.readout_frequency:
+            if self.parameters.readout_frequency is not None:
                 sig_cal.oscillator = Oscillator(
                     uid=f"{self.uid}_acquire_osc",
                     frequency=self.parameters.readout_frequency,

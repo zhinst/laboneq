@@ -19,6 +19,7 @@ from laboneq.controller.communication import (
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import (
+    AllocatedOscillator,
     DeviceZI,
     delay_to_rounded_samples,
 )
@@ -35,7 +36,12 @@ from laboneq.controller.devices.zi_node_monitor import (
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
-from laboneq.data.recipe import Initialization, SignalType, TriggeringMode
+from laboneq.data.recipe import (
+    Initialization,
+    OscillatorParam,
+    SignalType,
+    TriggeringMode,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -103,8 +109,13 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
         return channel // 2
 
     def _get_next_osc_index(
-        self, osc_group: int, previously_allocated: int
+        self,
+        osc_group_oscs: list[AllocatedOscillator],
+        osc_param: OscillatorParam,
+        recipe_data: RecipeData,
     ) -> int | None:
+        osc_group = self._osc_group_by_channel(osc_param.channel)
+        previously_allocated = len(osc_group_oscs)
         # With MF option 4 oscillators per channel pair are available,
         # and only 1 oscillator per channel pair without MF option.
         max_per_group = 4 if self._multi_freq else 1

@@ -73,6 +73,7 @@ class RecipeGenerator:
                             id=oscillator_info.uid,
                             device_id=signal_info.device.uid,
                             channel=ch,
+                            signal_id=signal_id,
                             frequency=frequency,
                             param=param,
                         )
