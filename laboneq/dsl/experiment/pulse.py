@@ -146,7 +146,10 @@ class PulseFunctional(Pulse):
         if x is None:
             x = np.linspace(-1, 1, 201)
         pulse_function = pulse_function_library[self.function]
-        return pulse_function(x=x, **self.pulse_parameters)
+        pulse_parameters = (
+            self.pulse_parameters if self.pulse_parameters is not None else {}
+        )
+        return pulse_function(x=x, **pulse_parameters)
 
     def generate_sampled_pulse(self, sampling_rate=None):
         """Sample a pulse functional.

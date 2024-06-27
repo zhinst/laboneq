@@ -230,7 +230,7 @@ class TargetSetupGenerator:
 
     @classmethod
     def _split_shfqc_zsync(cls, instruments: list[TargetDevice], setup: Setup):
-        """After splitting any SHFQCs, also look for PQSC and updates its ZSync connection
+        """After splitting any SHFQCs, also look for PQSC/QHUB and updates its ZSync connection
         to also represent both parts."""
 
         split_qcs = {
@@ -238,7 +238,7 @@ class TargetSetupGenerator:
         }
 
         for d in instruments:
-            if d.device_type != TargetDeviceType.PQSC:
+            if d.device_type not in (TargetDeviceType.PQSC, TargetDeviceType.QHUB):
                 continue
 
             extra_connections = []

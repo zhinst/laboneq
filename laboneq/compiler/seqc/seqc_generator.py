@@ -271,34 +271,49 @@ class SeqCGenerator:
             statement_factory(half_samples)
             flush_deferred_calls()
             statement_factory(num_samples - half_samples)
-        else:  # non-unrolled loop
-            num_segments, rest = divmod(num_samples, max_play_fun)
-            if 0 < rest < MIN_PLAY_ZERO_HOLD:
+        else:
+            # Non-unrolled loop.
+            # There's some subtlety here: If there are any pending deferred calls,
+            # we must place at least one playZero() _before_ the loop, and the pending
+            # calls after that.
+            # In addition, on UHFQA, there must be a non-looped playZero after the loop.
+            # Otherwise, a following startQA() might be delayed by the sequencer exiting
+            # the loop (HBAR-2075).
+            num_segments, head = divmod(num_samples, max_play_fun)
+            assert num_segments >= 2, "shorter loops should be unrolled"
+            tail = 0
+            if 0 < head < MIN_PLAY_ZERO_HOLD:
                 chunk = (max_play_fun // 2 // 16) * 16
                 statement_factory(chunk)
                 flush_deferred_calls()
                 num_samples -= chunk
-                num_segments, rest = divmod(num_samples, max_play_fun)
-            if rest > 0:
-                statement_factory(rest)
+                num_segments, head = divmod(num_samples, max_play_fun)
+            if device_type == DeviceType.UHFQA and num_segments > 1:
+                num_segments -= 1
+                tail += max_play_fun
+            if head > 0:
+                statement_factory(head)
                 flush_deferred_calls()
-            if deferred_calls.num_statements() > 0:
+            elif deferred_calls.num_statements() > 0:
                 statement_factory(max_play_fun)
                 flush_deferred_calls()
                 num_segments -= 1
-            if num_segments == 1:
+            if num_segments == 0:
+                pass
+            elif num_segments == 1:
                 statement_factory(max_play_fun)
-                return
-
-            loop_body = SeqCGenerator()
-            loop_body.add_statement(
-                {
-                    "type": f"{fname}",
-                    "device_type": device_type,
-                    "num_samples": max_play_fun,
-                }
-            )
-            self.add_repeat(num_segments, loop_body)
+            else:
+                loop_body = SeqCGenerator()
+                loop_body.add_statement(
+                    {
+                        "type": f"{fname}",
+                        "device_type": device_type,
+                        "num_samples": max_play_fun,
+                    }
+                )
+                self.add_repeat(num_segments, loop_body)
+            if tail:
+                statement_factory(tail)
 
     def add_play_zero_statement(
         self,
@@ -542,7 +557,14 @@ class SeqCGenerator:
 
         def cost_function(r: Run):
             complexity = sum(statement_by_hash[h].get("complexity", 1) for h in r.word)
-            return -(r.count - 1) * complexity + 2
+            cost = -(r.count - 1) * complexity + 2
+
+            # Never separate startQA from the preceding playWave or playZero (HBAR-2075)
+            first_statement = statement_by_hash[r.word[0]]
+            if first_statement.get("function") == "startQA":
+                cost += 1e6
+
+            return cost
 
         compressed_statements = compressor_core(statement_hashes, cost_function)
         retval = SeqCGenerator()

@@ -30,6 +30,7 @@ from laboneq.dsl.device.device_setup_helper import DeviceSetupHelper
 from laboneq.dsl.device.instruments import (
     HDAWG,
     PQSC,
+    QHUB,
     SHFPPC,
     SHFQA,
     SHFQC,

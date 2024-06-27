@@ -110,7 +110,8 @@ def add_wait_trigger_statements(
     if awg.trigger_mode == TriggerMode.DIO_TRIGGER:
         if awg.awg_number == 0:
             init_generator.add_function_call_statement("setDIO", ["0"])
-            init_generator.add_function_call_statement("wait", ["2000000"])
+            # Delay the leader core by ca 28 ms, so the followers are reliably armed.
+            init_generator.add_function_call_statement("wait", ["0x800000"])
             init_generator.add_function_call_statement("playZero", ["512"])
             if awg.reference_clock_source != "internal":
                 init_generator.add_function_call_statement("waitDigTrigger", ["1"])

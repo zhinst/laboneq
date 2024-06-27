@@ -964,11 +964,16 @@ class SampledEventHandler:
             self.feedback_register_config.source_feedback_register = "local"
 
         if self.use_flexible_feedback:
+            if not local:
+                path = "FB_PATH_ZSYNC_A"
+            else:
+                path = "FB_PATH_INTERNAL"
             self.declarations_generator.add_function_call_statement(
                 "configureFeedbackProcessing",
                 args=[
+                    path,
                     codeword_bitshift,
-                    width,
+                    width,  # todo: According to docs, should be decremented
                     self.feedback_register_config.command_table_offset,
                 ],
             )
@@ -1015,10 +1020,10 @@ class SampledEventHandler:
                     )
         else:
             local = self.match_parent_event.params["local"]
-            self.add_feedback_config(handle, local)
             self.feedback_register_config.command_table_offset = len(
                 self.command_table_tracker
             )
+            self.add_feedback_config(handle, local)
             # Allocate command table entries
             for idx, (signature, wave_index, _) in sorted_ct_entries:
                 id2 = self.command_table_tracker.create_entry(signature, wave_index)
@@ -1036,6 +1041,7 @@ class SampledEventHandler:
             - self.current_sequencer_step
             - EXECUTETABLEENTRY_LATENCY
         )
+
         self.seqc_tracker.add_command_table_execution(
             "QA_DATA_PROCESSED" if ev.params["local"] else "ZSYNC_DATA_PQSC_REGISTER",
             latency="current_seq_step "

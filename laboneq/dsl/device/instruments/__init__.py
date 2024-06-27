@@ -4,6 +4,7 @@
 from .hdawg import HDAWG
 from .nonqc import NonQC
 from .pqsc import PQSC
+from .qhub import QHUB
 from .shfppc import SHFPPC
 from .shfqa import SHFQA
 from .shfqc import SHFQC
@@ -14,7 +15,9 @@ from .uhfqa import UHFQA
 __all__ = [
     "HDAWG",
     "PQSC",
+    "QHUB",
     "SHFQA",
+    "SHFQC",
     "SHFSG",
     "UHFQA",
     "NonQC",

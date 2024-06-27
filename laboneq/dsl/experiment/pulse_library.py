@@ -113,6 +113,25 @@ def gaussian(
 ):
     """Create a Gaussian pulse.
 
+    Returns a generalised Gaussian pulse with order parameter $n$, defined by:
+
+    $$ g(x, \\sigma, n) = e^{-\\left(\\frac{x^2}{2\\sigma^2}\\right)^{\\frac{n}{2}}} $$.
+
+    When the order $n = 2$, the formula simplifies to the standard Gaussian:
+
+    $$ g(x, \\sigma_0) = e^{-\\frac{x^2}{2\\sigma_0^2}} $$
+
+    For higher orders ($n > 2$), the value of $\\sigma$ is adjusted so that the
+    pulse has the same near-zero values at the edges as the ordinary Gaussian.
+
+    In general, for $x \\in [-L, L]$, the adjusted $\\sigma$ can be written as:
+
+    $$\\sigma = \\frac{\\sigma_0^{\\frac{2}{n}}}{2^{\\left(\\frac{n-2}{2 n}\\right)} L^{\\left(\\frac{2-n}{n}\\right)}}$$
+
+    Considering here $x \\in [-1, 1]$, the adjusted $\\sigma$ simplifies to:
+
+    $$\\sigma = \\frac{\\sigma_0^{\\frac{2}{n}}}{2^{\\left(\\frac{n-2}{2 n}\\right)}}$$
+
     Arguments:
         **_ (Any):
             All pulses accept the following keyword arguments:
@@ -123,26 +142,33 @@ def gaussian(
             Standard deviation relative to the interval the pulse is sampled from, here [-1, 1]. Defaults
                 to 1/3.
         order (int):
-            Order of the Gaussian pulse, must be even and positive, default is 2
+            Order of the Gaussian pulse, must be positive and even, default is 2 (standard Gaussian), order > 2 will create a super Gaussian pulse
         zero_boundaries (bool):
             Whether to zero the pulse at the boundaries, default is False
 
     Returns:
         pulse (Pulse): Gaussian pulse.
     """
-
-    # Check if order is even and positive
-    if order <= 0 or order % 2 != 0:
-        raise ValueError("The order must be positive and even.")
-
-    gauss = np.exp(-((x**order) / (2 * sigma**2)))
+    if order < 2 or order % 2 != 0:
+        raise ValueError("The order must be a positive and even integer.")
+    elif order == 2:
+        gauss = np.exp(-(x**2 / (2 * sigma**2)))
+    elif order > 2:
+        sigma_updated = (sigma ** (2 / order)) / (2 ** ((order - 2) / (2 * order)))
+        gauss = np.exp(-((x**2 / (2 * sigma_updated**2)) ** (order / 2)))
 
     if zero_boundaries:
         dt = x[0] - (x[1] - x[0])
-        delta = np.exp(-((dt**order) / (2 * sigma**2)))
+        dt = np.abs(dt)
+        if order == 2:
+            delta = np.exp(-(dt**2 / (2 * sigma**2)))
+        else:
+            sigma_updated = (sigma ** (2 / order)) / (
+                2 ** ((order - 2) / (2 * order)) * dt ** ((2 - order) / order)
+            )
+            delta = np.exp(-((dt**2 / (2 * sigma_updated**2)) ** (order / 2)))
         gauss -= delta
         gauss /= 1 - delta
-
     return gauss
 
 

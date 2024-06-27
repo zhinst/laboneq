@@ -200,7 +200,9 @@ class ExperimentDAO:
 
     def pqscs(self) -> list[str]:
         return [
-            d.uid for d in self.device_infos() if d.device_type == DeviceInfoType.PQSC
+            d.uid
+            for d in self.device_infos()
+            if d.device_type in [DeviceInfoType.PQSC, DeviceInfoType.QHUB]
         ]
 
     def pqsc_ports(self, pqsc_device_uid: str):
@@ -213,12 +215,12 @@ class ExperimentDAO:
             follower.device.uid
             for leader in self.device_infos()
             for follower in leader.followers
-            if leader.device_type != DeviceInfoType.PQSC
+            if leader.device_type not in [DeviceInfoType.PQSC, DeviceInfoType.QHUB]
         ]
 
     def dio_leader(self, device_id) -> str | None:
         for d in self.device_infos():
-            if d.device_type == DeviceInfoType.PQSC:
+            if d.device_type in [DeviceInfoType.PQSC, DeviceInfoType.QHUB]:
                 continue
             for f in d.followers:
                 if f.device.uid == device_id:
@@ -231,7 +233,7 @@ class ExperimentDAO:
             (leader.uid, follower.device.uid)
             for leader in self.device_infos()
             for follower in leader.followers
-            if leader.device_type != DeviceInfoType.PQSC
+            if leader.device_type not in [DeviceInfoType.PQSC, DeviceInfoType.QHUB]
         ]
 
     def section_signals(self, section_id):
@@ -323,6 +325,15 @@ class ExperimentDAO:
 
     def validate_experiment(self):
         for section_id in self.sections():
+            section_info = self.section_info(section_id=section_id)
+
+            if len(section_info.triggers) > 0:
+                for trigger in section_info.triggers:
+                    if trigger["signal_id"] not in self.signals():
+                        raise LabOneQException(
+                            f"Trigger on section {section_id} played on signal {trigger['signal_id']} not present in experiment. Available signal(s) are {', '.join(self.signals())}."
+                        )
+
             for signal_id in self.section_signals(section_id):
                 for section_pulse in self.section_pulses(section_id, signal_id):
                     if section_pulse.pulse is None:

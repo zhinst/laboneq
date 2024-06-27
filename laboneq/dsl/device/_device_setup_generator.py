@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 import warnings
-from typing import TYPE_CHECKING, Callable, Dict, List, Tuple, Union
+from typing import TYPE_CHECKING, Callable, Union
 
 import jsonschema
 from yaml import load
@@ -23,6 +23,7 @@ from laboneq.dsl.device.connection import InternalConnection, SignalConnection
 from laboneq.dsl.device.instruments import (
     HDAWG,
     PQSC,
+    QHUB,
     SHFPPC,
     SHFQA,
     SHFQC,
@@ -51,6 +52,7 @@ T_SHFSG_DEVICE = "SHFSG"
 T_SHFQC_DEVICE = "SHFQC"
 T_SHFPPC_DEVICE = "SHFPPC"
 T_PQSC_DEVICE = "PQSC"
+T_QHUB_DEVICE = "QHUB"
 T_ALL_DEVICE_TYPES = [
     T_HDAWG_DEVICE,
     T_PRETTYPRINTER_DEVICE,
@@ -60,6 +62,7 @@ T_ALL_DEVICE_TYPES = [
     T_SHFQC_DEVICE,
     T_SHFPPC_DEVICE,
     T_PQSC_DEVICE,
+    T_QHUB_DEVICE,
 ]
 T_UID = "uid"
 T_ADDRESS = "address"
@@ -88,7 +91,7 @@ T_PORTS = "ports"
 #       PQSC:
 #       - address: DEV10001
 #         uid: device_pqsc
-InstrumentsType = Dict[str, List[Dict[str, str]]]
+InstrumentsType = dict[str, list[dict[str, str]]]
 
 # Models 'connections' part of the descriptor:
 #     connections:
@@ -104,7 +107,7 @@ InstrumentsType = Dict[str, List[Dict[str, str]]]
 #       device_pqsc:
 #         - to: device_hdawg
 #           port: ZSYNCS/0
-ConnectionsType = Dict[str, List[Dict[str, Union[str, List[str]]]]]
+ConnectionsType = dict[str, list[dict[str, Union[str, list[str]]]]]
 
 # Models 'dataservers' part of the descriptor:
 #     dataservers:
@@ -112,7 +115,7 @@ ConnectionsType = Dict[str, List[Dict[str, Union[str, List[str]]]]]
 #         host: 127.0.0.1
 #         port: 8004
 #         instruments: [device_hdawg, device_uhfqa, device_pqsc]
-DataServersType = Dict[str, Dict[str, Union[str, List[str]]]]
+DataServersType = dict[str, dict[str, Union[str, list[str]]]]
 
 
 def _iterate_over_descriptors_of_type(instruments: InstrumentsType, device_type: str):
@@ -129,7 +132,7 @@ def _skip_nones(**kwargs):
     return {k: v for k, v in kwargs.items() if v is not None}
 
 
-def _make_ppc_connection(_: str, remote_path: str, local_ports: str):
+def _make_ppc_connection(_: str, remote_path: str, local_ports: list[str]):
     # In the descriptor SHFPPC has `T_TO` signal type keyword, but is actually a signal connection without a type.
     return SignalConnection(
         uid=qct_path.remove_logical_signal_prefix(remote_path),
@@ -138,21 +141,20 @@ def _make_ppc_connection(_: str, remote_path: str, local_ports: str):
     )
 
 
-def _make_connection(signal_type_kw: str, remote_path: str, local_ports: str):
+def _make_connection(signal_type_kw: str, remote_path: str, local_ports: list[str]):
     SIGTYPE_T_TO_CONNECTION_TYPE = {
         T_IQ_SIGNAL: "iq",
         T_RF_SIGNAL: "rf",
         T_ACQUIRE_SIGNAL: "acquire",
     }
     if signal_type_kw == T_TO:
-        conn = InternalConnection(to=remote_path, from_port=local_ports)
+        return InternalConnection(to=remote_path, from_port=local_ports)
     else:
-        conn = SignalConnection(
+        return SignalConnection(
             uid=qct_path.remove_logical_signal_prefix(remote_path),
             type=SIGTYPE_T_TO_CONNECTION_TYPE[signal_type_kw],
             ports=local_ports,
         )
-    return conn
 
 
 def _is_valid_remote_path(path: str) -> bool:
@@ -163,7 +165,10 @@ def _is_valid_remote_path(path: str) -> bool:
     return True
 
 
-def _port_decoder(port_desc, additional_switch_keys=None) -> Tuple[str, str, List[str]]:
+def _port_decoder(
+    port_desc: dict[str, str | list[str]],
+    additional_switch_keys: list[str] | None = None,
+) -> tuple[str, str, list[str]]:
     if additional_switch_keys is None:
         additional_switch_keys = []
     if isinstance(port_desc, dict):
@@ -177,15 +182,15 @@ def _port_decoder(port_desc, additional_switch_keys=None) -> Tuple[str, str, Lis
         raise LabOneQException(
             f"Both ports and port specified, but only one is allowed: {port_desc}"
         )
+    local_ports: list[str] = []
     if ports is None:
-        if port is None:
-            local_ports = []
-        else:
-            local_ports = [port]
+        if port is not None:
+            assert isinstance(port, str)
+            local_ports.append(port)
     elif isinstance(ports, str):
-        local_ports = [ports]
+        local_ports.append(ports)
     else:
-        local_ports = ports
+        local_ports.extend(ports)
 
     signal_keys = [T_IQ_SIGNAL, T_ACQUIRE_SIGNAL, T_RF_SIGNAL]
     trigger_keys = []
@@ -211,7 +216,8 @@ def _port_decoder(port_desc, additional_switch_keys=None) -> Tuple[str, str, Lis
         raise LabOneQException(
             f"Missing path: specify '{signal_type_keyword}: <group>{qct_path.Separator}<line>'"
         )
-    if signal_type_keyword in signal_keys:
+    assert isinstance(remote_path, str)
+    if signal_type_keyword in signal_keys:  # signal_keys is a subset of path_keys
         if not _is_valid_remote_path(remote_path):
             raise LabOneQException(
                 f"Invalid path: specify '{signal_type_keyword}: <group>{qct_path.Separator}<line>'"
@@ -236,6 +242,7 @@ def make_zi_devices(
         T_PRETTYPRINTER_DEVICE: (PRETTYPRINTERDEVICE, T_EXTCLK, _make_connection),
         T_SHFPPC_DEVICE: (SHFPPC, T_EXTCLK, _make_ppc_connection),
         T_PQSC_DEVICE: (PQSC, T_INTCLK, _make_connection),
+        T_QHUB_DEVICE: (QHUB, T_INTCLK, _make_connection),
     }
     ref_clk_types = {
         T_EXTCLK: ReferenceClockSource.EXTERNAL,
@@ -464,23 +471,35 @@ class _DeviceSetupGenerator:
                 "At least one server must be defined either in the descriptor or in the constructor."
             )
 
+        def _make_server_entry(
+            server_uid: str, server_def: dict[str, str | list[str]]
+        ) -> tuple[DataServer, list[str]]:
+            host = server_def.get("host")
+            port = server_def.get("port")
+            instruments = server_def.get("instruments")
+            # server_def might incorrectly contain None values
+            if host is None:
+                host = ""
+            if port is None:
+                port = 8004
+            if instruments is None:
+                instruments = []
+            assert isinstance(host, str)
+            assert isinstance(port, (str, int))
+            assert isinstance(instruments, list)
+            return DataServer(
+                uid=server_uid, host=host, port=port, api_level=6
+            ), instruments
+
         # Construct servers
-        servers: List[Tuple[DataServer, List[str]]] = [
-            (
-                DataServer(
-                    uid=server_uid,
-                    host=server_def["host"],
-                    port=server_def.get("port", 8004),
-                    api_level=6,
-                ),
-                server_def.get("instruments", []),
-            )
+        servers: list[tuple[DataServer, list[str]]] = [
+            _make_server_entry(server_uid, server_def)
             for server_uid, server_def in dataservers.items()
         ]
 
         def server_finder(device_uid: str) -> str:
-            default_data_server: DataServer = None
-            explicit_data_server: DataServer = None
+            default_data_server: DataServer | None = None
+            explicit_data_server: DataServer | None = None
             for data_server, devices in servers:
                 if default_data_server is None and len(devices) == 0:
                     default_data_server = data_server

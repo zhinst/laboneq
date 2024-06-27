@@ -161,14 +161,17 @@ class RealtimeCompiler:
             ir.root_section,
             *ir.root_section_children,
         ):
-            section_display_name = section_info.uid
-            section_signals_with_children[section_info.uid] = list(
-                ir.section_signals_with_children_ids[section_info.uid]
-            )
-            section_info_out[section_info.uid] = {
-                "section_display_name": section_display_name,
-                "preorder": preorder_map[section_info.uid],
-            }
+            try:  # pulse may be missing in case of experiments using match case
+                section_display_name = section_info.uid
+                section_signals_with_children[section_info.uid] = list(
+                    ir.section_signals_with_children_ids[section_info.uid]
+                )
+                section_info_out[section_info.uid] = {
+                    "section_display_name": section_display_name,
+                    "preorder": preorder_map[section_info.uid],
+                }
+            except KeyError:  # noqa: PERF203
+                continue
 
         sampling_rate_tuples = []
         for signal_info in ir.signals:

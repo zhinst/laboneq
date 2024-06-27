@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import Union
+from dataclasses import dataclass
 
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 
@@ -20,10 +19,10 @@ class DataServer(Server):
     """
 
     #: Unique identifier.
-    uid: str = field(default=None)
-    #: API level that is used to communicate with the data server.
-    api_level: int = field(default=None)
+    uid: str
     #: IP address or hostname of the data server.
-    host: str = field(default=None)
+    host: str
     #: Port number.
-    port: Union[str, int] = field(default=None)
+    port: str | int
+    #: API level that is used to communicate with the data server.
+    api_level: int

@@ -42,17 +42,16 @@ def compressor_core(
         if len(plaintext) <= 1:
             output.extend(plaintext)
             return output
-        next_seen_map = {}
-        offsets = []
-        for i, c in list(enumerate(plaintext))[::-1]:
-            next_seen_index = next_seen_map.get(c)
-            if next_seen_index is None:
-                offsets.append(None)
-            else:
-                offsets.append(next_seen_index - i)
-            next_seen_map[c] = i
 
-        offsets = reversed(offsets)
+        # first, we compute `offsets`, which, for each character in the plaintext, gives
+        # the relative position to the next place the same character appears again
+        offsets: list[int | None] = [None for _ in plaintext]
+        next_seen_map = {}
+        for i, c in reversed(list(enumerate(plaintext))):
+            next_seen_index = next_seen_map.get(c)
+            if next_seen_index is not None:
+                offsets[i] = next_seen_index - i
+            next_seen_map[c] = i
 
         runs = defaultdict(list)  # word -> List[(start, Run)]
         best_run = None

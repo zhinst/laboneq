@@ -95,7 +95,7 @@ def prepare_emulator_state(ds: DeviceSetupDAO) -> EmulatorState:
                     options.serial, "features/options", "\n".join(exp_opts)
                 )
 
-        if dev_type == "PQSC":
+        if dev_type in ["PQSC", "QHUB"]:
             enabled_zsyncs: dict[str, str] = {}
             for from_port, to_dev_uid in ds.downlinks_by_device_uid(
                 device_qualifier.uid

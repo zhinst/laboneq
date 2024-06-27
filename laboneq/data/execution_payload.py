@@ -27,6 +27,7 @@ class TargetDeviceType(EnumReprMixin, Enum):
     SHFSG = auto()
     SHFPPC = auto()
     PQSC = auto()
+    QHUB = auto()
     NONQC = auto()
     PRETTYPRINTERDEVICE = auto()
 

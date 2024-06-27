@@ -155,6 +155,7 @@ class Compiler:
         device_type_list = [i.device_type.value for i in device_infos]
         type_counter = Counter(device_type_list)
         has_pqsc = type_counter["pqsc"] > 0
+        has_qhub = type_counter["qhub"] > 0
         has_hdawg = type_counter["hdawg"] > 0
         has_shfsg = type_counter["shfsg"] > 0
         has_shfqa = type_counter["shfqa"] > 0
@@ -186,16 +187,21 @@ class Compiler:
         if "prettyprinterdevice" in used_devices:
             self._leader_properties.is_desktop_setup = True
         else:
-            self._leader_properties.is_desktop_setup = not has_pqsc and (
-                used_devices == {"hdawg"}
-                or used_devices == {"shfsg"}
-                or used_devices == {"shfqa"}
-                or (used_devices == {"shfqa", "shfsg"} and standalone_qc)
-                or used_devices == {"hdawg", "uhfqa"}
-                or (used_devices == {"uhfqa"} and has_hdawg)  # No signal on leader
+            self._leader_properties.is_desktop_setup = (
+                not has_pqsc
+                and not has_qhub
+                and (
+                    used_devices == {"hdawg"}
+                    or used_devices == {"shfsg"}
+                    or used_devices == {"shfqa"}
+                    or (used_devices == {"shfqa", "shfsg"} and standalone_qc)
+                    or used_devices == {"hdawg", "uhfqa"}
+                    or (used_devices == {"uhfqa"} and has_hdawg)  # No signal on leader
+                )
             )
         if (
             not has_pqsc
+            and not has_qhub
             and not self._leader_properties.is_desktop_setup
             and used_devices != {"uhfqa"}
             and bool(used_devices)  # Allow empty experiment (used in tests)
@@ -615,11 +621,14 @@ class Compiler:
                 "Adding signal %s with signal type %s", signal_id, signal_type
             )
 
-            oscillator_frequency = None
+            oscillator_frequency_sw = None
+            oscillator_frequency_hw = None
 
             oscillator_info = self._experiment_dao.signal_oscillator(signal_id)
             if oscillator_info is not None and not oscillator_info.is_hardware:
-                oscillator_frequency = oscillator_info.frequency
+                oscillator_frequency_sw = oscillator_info.frequency
+            if oscillator_info is not None and oscillator_info.is_hardware:
+                oscillator_frequency_hw = oscillator_info.frequency
             channels = copy.deepcopy(signal_info.channels)
             if signal_id in self._integration_unit_allocation:
                 channels = copy.deepcopy(
@@ -660,7 +669,8 @@ class Compiler:
                 delay_signal=delay_signal,
                 signal_type=signal_type,
                 awg=awg,
-                oscillator_frequency=oscillator_frequency,
+                oscillator_frequency_sw=oscillator_frequency_sw,
+                oscillator_frequency_hw=oscillator_frequency_hw,
                 channels=channels,
                 port_delay=port_delay,
                 mixer_type=mixer_type,

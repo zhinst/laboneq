@@ -4,15 +4,37 @@
 from __future__ import annotations
 
 from collections import defaultdict
-import logging
+from collections.abc import ItemsView
 from dataclasses import dataclass, field
-from typing import Any, Iterator
-
-from typing import List, Tuple
+from typing import Any, List, Tuple
 
 from laboneq.compiler.common.device_type import DeviceType
 
-_logger = logging.getLogger(__name__)
+
+class _SamplingRateConversions:
+    def __init__(self, sampling_rate: float, sample_multiple: int) -> None:
+        self.sampling_rate = sampling_rate
+        self.sample_multiple = sample_multiple
+
+    def signal_delay_from_samples(
+        self, code_generation: int, on_device: int
+    ) -> SignalDelay:
+        return SignalDelay(
+            code_generation=code_generation / self.sampling_rate,
+            on_device=on_device / self.sampling_rate,
+        )
+
+    def time_to_samples(self, time: float) -> int:
+        return round(time * self.sampling_rate)
+
+    def calc_and_round_delay(self, delay_in_samples: int) -> tuple[int, int]:
+        """Convert a delay into a device sample-multiple aligned part and a remaining part.
+
+        The input `delay_in_samples` is in units of samples. The
+        two outputs are in seconds.
+        """
+        rest = delay_in_samples % self.sample_multiple
+        return delay_in_samples - rest, rest
 
 
 @dataclass(init=True, repr=True, order=True)
@@ -76,7 +98,7 @@ class SectionIntegrationInfo:
             self.signals[signal_id] = SignalIntegrationInfo()
         return self.signals[signal_id]
 
-    def items(self) -> Iterator[tuple[str, SignalIntegrationInfo]]:
+    def items(self) -> ItemsView[str, SignalIntegrationInfo]:
         return self.signals.items()
 
 
@@ -92,7 +114,7 @@ class IntegrationTimes:
     def section_info(self, section_uid) -> SectionIntegrationInfo | None:
         return self.section_infos.get(section_uid)
 
-    def items(self) -> Iterator[tuple[str, SectionIntegrationInfo]]:
+    def items(self) -> ItemsView[str, SectionIntegrationInfo]:
         return self.section_infos.items()
 
 
@@ -117,10 +139,7 @@ class MeasurementCalculator:
 
         cls._validate_measurement_starts(measurement_infos)
 
-        signal_delays = cls._signal_delays(
-            measurement_infos,
-            signal_info_map,
-        )
+        signal_delays = cls._signal_delays(measurement_infos, signal_info_map)
 
         return integration_times, signal_delays
 
@@ -331,11 +350,7 @@ class MeasurementCalculator:
                             )
 
     @classmethod
-    def _signal_delays(
-        cls,
-        measurement_infos,
-        signal_info_map,
-    ):
+    def _signal_delays(cls, measurement_infos, signal_info_map):
         """Calculate the signal delays."""
         signal_delays = {}
         for key, measurement_info in measurement_infos.items():
@@ -353,19 +368,31 @@ class MeasurementCalculator:
             plays = measurement_info.play_signals
             device_type = measurement_info.device_type
             section_start = measurement_info.section_start
+            # As tested above, there is at least one play
+            sampling_rate = signal_info_map[plays[0]].awg.sampling_rate
+            sample_multiple = device_type.sample_multiple
+            srconv = _SamplingRateConversions(sampling_rate, sample_multiple)
 
-            play_delay = round((play_start - section_start) * device_type.sampling_rate)
-            acquire_delay = round(
-                (acquire_start - section_start) * device_type.sampling_rate
-            )
+            play_delay = srconv.time_to_samples(play_start - section_start)
+            acquire_delay = srconv.time_to_samples(acquire_start - section_start)
 
             if device_type == DeviceType.UHFQA:
                 section_delays = cls._signal_delays_uhfqa(
-                    acquires, acquire_delay, plays, play_delay, device_type
+                    acquires,
+                    acquire_delay,
+                    plays,
+                    play_delay,
+                    sampling_rate,
+                    sample_multiple,
                 )
             else:
                 section_delays = cls._signal_delays_non_uhfqa(
-                    acquires, acquire_delay, plays, play_delay, device_type
+                    acquires,
+                    acquire_delay,
+                    plays,
+                    play_delay,
+                    sampling_rate,
+                    sample_multiple,
                 )
 
             # The check below catches different delays on the same signal. The restriction
@@ -388,86 +415,71 @@ class MeasurementCalculator:
 
     @classmethod
     def _signal_delays_uhfqa(
-        cls, acquires, acquire_delay, plays, play_delay, device_type
+        cls, acquires, acquire_delay, plays, _play_delay, sampling_rate, sample_multiple
     ):
         """Return the signal delays for a set of acquires and plays that have common delays on a UHFQA device."""
-        play_delay_in_s, rounding_error_play = cls._calc_and_round_delay(
-            device_type, play_delay
-        )
-        acquire_delay_in_s, rounding_error_acquire = cls._calc_and_round_delay(
-            device_type, acquire_delay
+        srconv = _SamplingRateConversions(sampling_rate, sample_multiple)
+
+        acquire_delay_samples, rounding_error_acquire = srconv.calc_and_round_delay(
+            acquire_delay
         )
 
         signal_delays = {}
 
         for signal in plays:
-            signal_delays[signal] = SignalDelay(
-                code_generation=0.0,
-                on_device=0.0,
+            signal_delays[signal] = srconv.signal_delay_from_samples(
+                code_generation=0, on_device=0
             )
 
         for signal in acquires:
-            signal_delays[signal] = SignalDelay(
-                code_generation=-acquire_delay_in_s,
-                on_device=acquire_delay_in_s + rounding_error_acquire,
+            signal_delays[signal] = srconv.signal_delay_from_samples(
+                code_generation=-acquire_delay_samples,
+                on_device=acquire_delay_samples + rounding_error_acquire,
             )
 
         return signal_delays
 
     @classmethod
     def _signal_delays_non_uhfqa(
-        cls, acquires, acquire_delay, plays, play_delay, device_type
+        cls, acquires, acquire_delay, plays, play_delay, sampling_rate, sample_multiple
     ):
         """Return the signal delays for a set of acquires and plays that have common delays on a non-UHFQA device."""
-        play_delay_in_s, rounding_error_play = cls._calc_and_round_delay(
-            device_type, play_delay
+        srconv = _SamplingRateConversions(sampling_rate, sample_multiple)
+
+        play_delay_samples, _rounding_error_play = srconv.calc_and_round_delay(
+            play_delay
         )
-        acquire_delay_in_s, rounding_error_acquire = cls._calc_and_round_delay(
-            device_type, acquire_delay
+        acquire_delay_samples, rounding_error_acquire = srconv.calc_and_round_delay(
+            acquire_delay
         )
 
         signal_delays = {}
 
         if play_delay > acquire_delay:
             for signal in plays:
-                signal_delays[signal] = SignalDelay(
-                    code_generation=acquire_delay_in_s - play_delay_in_s,
-                    on_device=play_delay_in_s - acquire_delay_in_s,
+                signal_delays[signal] = srconv.signal_delay_from_samples(
+                    code_generation=acquire_delay_samples - play_delay_samples,
+                    on_device=-(acquire_delay_samples - play_delay_samples),
                 )
             for signal in acquires:
-                signal_delays[signal] = SignalDelay(
+                signal_delays[signal] = srconv.signal_delay_from_samples(
                     code_generation=0,
                     on_device=rounding_error_acquire,
                 )
         else:
             for signal in plays:
-                signal_delays[signal] = SignalDelay(
-                    code_generation=0.0,
-                    on_device=0.0,
+                signal_delays[signal] = srconv.signal_delay_from_samples(
+                    code_generation=0,
+                    on_device=0,
                 )
             for signal in acquires:
-                signal_delays[signal] = SignalDelay(
-                    code_generation=play_delay_in_s - acquire_delay_in_s,
-                    on_device=(acquire_delay_in_s - play_delay_in_s)
+                signal_delays[signal] = srconv.signal_delay_from_samples(
+                    code_generation=play_delay_samples - acquire_delay_samples,
+                    on_device=-(play_delay_samples - acquire_delay_samples)
                     + rounding_error_acquire,
                 )
 
         return signal_delays
-
-    @classmethod
-    def _calc_and_round_delay(cls, device_type, delay_in_samples):
-        """Convert a delay into a device sample-multiple aligned part and a remaining part.
-
-        The input `delay_in_samples` is in units of samples. The
-        two outputs are in seconds.
-        """
-        sampling_rate = device_type.sampling_rate
-        sample_multiple = device_type.sample_multiple
-        rest = delay_in_samples % sample_multiple
-        return (
-            (delay_in_samples - rest) / sampling_rate,
-            rest / sampling_rate,
-        )
 
     @classmethod
     def _filter_events(cls, events, event_types, signals):

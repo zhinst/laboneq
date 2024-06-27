@@ -9,6 +9,10 @@ from functools import total_ordering
 import laboneq
 
 
+class InternalDroppedSupportError(Exception):
+    pass
+
+
 @total_ordering
 class LabOneVersion(Enum):
     UNKNOWN = "0"
@@ -39,6 +43,15 @@ class LabOneVersion(Enum):
         return labone_version
 
 
+try:
+    LATEST_NON_FLEXIBLE_FEEDBACK_VERSION = LabOneVersion.V_24_04
+    # Latest released version with non-flexible feedback.
+except AttributeError as e:
+    raise InternalDroppedSupportError(
+        "Non-flexible feedback support can be dropped in the codebase."
+    ) from e
+
+
 class SetupCaps:
     def __init__(self, version: LabOneVersion):
         self._version = version
@@ -49,4 +62,4 @@ class SetupCaps:
 
     @property
     def flexible_feedback(self) -> bool:
-        return False
+        return self._version > LATEST_NON_FLEXIBLE_FEEDBACK_VERSION

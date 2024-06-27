@@ -6,7 +6,7 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Iterator, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Iterator, Literal, TypeVar, overload
 
 import numpy as np
 from numpy import typing as npt
@@ -60,7 +60,7 @@ class AwgConfig:
     target_feedback_register: int | None = None
     # SG
     command_table_match_offset: int | None = None
-    source_feedback_register: int | None = None
+    source_feedback_register: int | Literal["local"] | None = None
     fb_reg_source_index: int | None = None
     fb_reg_target_index: int | None = None
     register_selector_bitmask: int = 0b11
@@ -383,7 +383,10 @@ class _LoopsPreprocessor(ExecutorBase):
 
 
 def _calculate_awg_configs(
-    rt_execution_infos: RtExecutionInfos, recipe: Recipe, setup_caps: SetupCaps
+    rt_execution_infos: RtExecutionInfos,
+    recipe: Recipe,
+    setup_caps: SetupCaps,
+    has_qhub: bool,
 ) -> AwgConfigs:
     awg_configs: AwgConfigs = defaultdict(AwgConfig)
 
@@ -407,6 +410,10 @@ def _calculate_awg_configs(
             awg_config.target_feedback_register = awg.target_feedback_register
             awg_config.source_feedback_register = awg.source_feedback_register
             if awg_config.source_feedback_register not in (None, "local"):
+                if has_qhub:
+                    raise LabOneQControllerException(
+                        "Global feedback over QHub is not implemented."
+                    )
                 awg_config.fb_reg_source_index = awg.feedback_register_index_select
                 awg_config.fb_reg_target_index = awg.awg
             awg_config.register_selector_shift = awg.codeword_bitshift
@@ -440,7 +447,7 @@ def _calculate_awg_configs(
             # All integrators occupy an entry in the respective result vectors per startQA event,
             # regardless of the given integrators mask. Masked-out integrators just leave the
             # value at NaN (corresponds to None in the map).
-            awg_result_map: dict[str, list[str]] = defaultdict(list)
+            awg_result_map: dict[str, list[str | None]] = defaultdict(list)
             for acquires in recipe.simultaneous_acquires:
                 if any(signal in acquires for signal in awg_config.acquire_signals):
                     for signal in awg_config.acquire_signals:
@@ -529,7 +536,9 @@ def pre_process_compiled(
     lp.run(execution)
     rt_execution_infos = lp.rt_execution_infos
 
-    awg_configs = _calculate_awg_configs(rt_execution_infos, recipe, setup_caps)
+    awg_configs = _calculate_awg_configs(
+        rt_execution_infos, recipe, setup_caps, devices.has_qhub
+    )
     attribute_value_tracker, oscillator_ids = _pre_process_attributes(recipe, devices)
 
     recipe_data = RecipeData(

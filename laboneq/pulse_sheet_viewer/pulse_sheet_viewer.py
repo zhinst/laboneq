@@ -138,10 +138,21 @@ def interactive_psv(
         app.run()
 
 
+class NpEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super(NpEncoder, self).default(obj)
+
+
 class PulseSheetViewer:
     @staticmethod
     def generate_viewer_html_text(events, title, interactive: bool = False):
-        events_json = json.dumps(events["event_list"], indent=2)
+        events_json = json.dumps(events["event_list"], indent=2, cls=NpEncoder)
         section_info_json = json.dumps(events["section_info"], indent=2)
         section_signals_with_children_json = json.dumps(
             events["section_signals_with_children"], indent=2

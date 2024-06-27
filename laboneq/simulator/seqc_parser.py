@@ -100,6 +100,7 @@ def get_frequency(device_type: str) -> float:
             "SHFSG": 2e9,
             "SHFQC": 2e9,
             "PQSC": 0.0,
+            "QHUB": 0.0,
             "SHFPPC": 0.0,
         }[device_type]
     except KeyError:
@@ -1018,6 +1019,9 @@ def analyze_recipe(
 ) -> list[SeqCDescriptor]:
     outputs: dict[str, list[int]] = {}
     seqc_descriptors_from_recipe: dict[str, SeqCDescriptor] = {}
+
+    src_fname_to_text = {source["filename"]: source["text"] for source in sources}
+
     for init in recipe.initializations:
         device_uid = init.device_uid
         device_type = init.device_type
@@ -1126,13 +1130,12 @@ def analyze_recipe(
                 }
 
     seqc_descriptors = []
-    for src in sources:
-        name = src["filename"]
+    for name, seqc_descriptor in seqc_descriptors_from_recipe.items():
         command_table = next(
             (table["ct"] for table in command_tables if table["seqc"] == name), {}
         )
         seqc_descriptor = seqc_descriptors_from_recipe[name]
-        seqc_descriptor.source = src["text"]
+        seqc_descriptor.source = src_fname_to_text[name]
         seqc_descriptor.channels = outputs[name]
         seqc_descriptor.wave_index = seq_c_wave_indices.get(name, {})
         seqc_descriptor.command_table = command_table

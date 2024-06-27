@@ -6,7 +6,7 @@ from dataclasses import asdict, is_dataclass
 from typing import Any, Callable, Optional
 
 from laboneq.core.types import enums as legacy_enums
-from laboneq.data import calibration, parameter
+from laboneq.data import calibration
 from laboneq.dsl import calibration as legacy_calibration
 from laboneq.dsl import parameter as legacy_parameter
 from laboneq.implementation.legacy_adapters.utils import (
@@ -27,17 +27,19 @@ def convert_maybe_parameter(obj: Any) -> Any:
     if obj is None:
         return None
     if isinstance(obj, legacy_parameter.SweepParameter):
-        return parameter.SweepParameter(
-            uid=obj.uid, values=obj.values, axis_name=obj.axis_name
+        # local import to avoid circular dependency:
+        from laboneq.implementation.legacy_adapters.converters_experiment_description import (
+            convert_SweepParameter,
         )
+
+        return convert_SweepParameter(obj)
     if isinstance(obj, legacy_parameter.LinearSweepParameter):
-        return parameter.LinearSweepParameter(
-            uid=obj.uid,
-            start=obj.start,
-            stop=obj.stop,
-            count=obj.count,
-            axis_name=obj.axis_name,
+        # local import to avoid circular dependency:
+        from laboneq.implementation.legacy_adapters.converters_experiment_description import (
+            convert_LinearSweepParameter,
         )
+
+        return convert_LinearSweepParameter(obj)
     if isinstance(obj, (float, int)):
         return obj
     raise_not_implemented(obj)

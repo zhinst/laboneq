@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum, IntFlag
 import json
+import time
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, TypeVar
 
 import numpy as np
@@ -19,6 +20,8 @@ from labone import DataServer, Instrument
 from labone.core import AnnotatedValue
 from labone.core.subscription import DataQueue
 from labone.core.shf_vector_data import preprocess_complex_shf_waveform_vector
+
+from laboneq.controller.util import LabOneQControllerException
 
 if TYPE_CHECKING:
     from laboneq.controller.communication import ServerQualifier
@@ -259,3 +262,18 @@ class NodeMonitorAsync(NodeMonitorBase):
                     no_more_data = False
             if no_more_data:
                 break
+
+    async def wait_for_state_by_get(self, path: str, expected: int):
+        if not isinstance(expected, int):
+            # Non-int nodes are not important, included only for consistency check.
+            # Skip it for this workaround.
+            return
+        t0 = time.time()
+        while time.time() - t0 < 3:  # hard-coded timeout of 3s
+            val = (await self._api.kernel_session.get(path)).value
+            if val == expected:
+                return
+            await asyncio.sleep(0.005)
+        raise LabOneQControllerException(
+            f"Condition {path}=={expected} is not fulfilled within 3s. Last value: {val}"
+        )

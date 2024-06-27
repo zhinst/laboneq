@@ -319,7 +319,7 @@ class DeviceZI(INodeMonitorProvider):
         if self.options.expected_installed_options is None:
             _logger.warning(
                 f"{self.dev_repr}: Include the device options '{actual_opts}' in the"
-                f" device setup ('options' field of the 'instruments' list in the device"
+                f" device setup ('device_options' field of the 'instruments' list in the device"
                 f" setup descriptor). This will become a strict requirement in the future."
             )
         elif actual_opts != self.options.expected_installed_options.upper():

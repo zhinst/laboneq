@@ -651,33 +651,39 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
 
         nc = NodeCollector(base=f"/{self.serial}/")
 
-        if not recipe_data.setup_caps.flexible_feedback:
-            for awg_key, awg_config in recipe_data.awg_configs.items():
-                if awg_key.device_uid != initialization.device_uid:
-                    continue
+        is_not_flexible_feedback = not recipe_data.setup_caps.flexible_feedback
+        for awg_key, awg_config in recipe_data.awg_configs.items():
+            if awg_key.device_uid != initialization.device_uid:
+                continue
 
-                if awg_config.source_feedback_register is None:
-                    continue
+            if awg_config.source_feedback_register is None:
+                continue
 
-                if awg_config.source_feedback_register == "local" and self.is_secondary:
-                    # local feedback
-                    nc.add(
-                        f"sgchannels/{awg_key.awg_index}/awg/intfeedback/direct/shift",
-                        awg_config.register_selector_shift,
-                    )
-                    nc.add(
-                        f"sgchannels/{awg_key.awg_index}/awg/intfeedback/direct/mask",
-                        awg_config.register_selector_bitmask,
-                    )
-                    nc.add(
-                        f"sgchannels/{awg_key.awg_index}/awg/intfeedback/direct/offset",
-                        awg_config.command_table_match_offset,
-                    )
-                else:
-                    # global feedback
-                    nc.add(
-                        f"sgchannels/{awg_key.awg_index}/awg/diozsyncswitch", 1
-                    )  # ZSync Trigger
+            if (
+                awg_config.source_feedback_register == "local"
+                and self.is_secondary
+                and is_not_flexible_feedback
+            ):
+                # local feedback
+                nc.add(
+                    f"sgchannels/{awg_key.awg_index}/awg/intfeedback/direct/shift",
+                    awg_config.register_selector_shift,
+                )
+                nc.add(
+                    f"sgchannels/{awg_key.awg_index}/awg/intfeedback/direct/mask",
+                    awg_config.register_selector_bitmask,
+                )
+                nc.add(
+                    f"sgchannels/{awg_key.awg_index}/awg/intfeedback/direct/offset",
+                    awg_config.command_table_match_offset,
+                )
+            else:
+                # global feedback
+                nc.add(
+                    f"sgchannels/{awg_key.awg_index}/awg/diozsyncswitch", 1
+                )  # ZSync Trigger
+
+                if is_not_flexible_feedback:
                     nc.add(
                         f"sgchannels/{awg_key.awg_index}/awg/zsync/register/shift",
                         awg_config.register_selector_shift,

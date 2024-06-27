@@ -35,7 +35,7 @@ class SignalConnection:
 
     uid: str
     # Optional: inferred from device and ports
-    type: str = field(default=None)
+    type: str | None = field(default=None)
     ports: list[str] = field(default_factory=list)
 
     def __post_init__(self):
@@ -66,11 +66,14 @@ class InternalConnection:
     to: str
     from_port: str
 
-    def __post_init__(self):
-        if not isinstance(self.from_port, str) and self.from_port is not None:
-            if len(self.from_port) != 1:
+    def __init__(self, to: str, from_port: str | list[str]):
+        self.to = to
+        if isinstance(from_port, list):
+            if len(from_port) != 1:
                 raise ValueError("To instrument connection takes only one port.")
-            self.from_port = self.from_port[0]
+            self.from_port = from_port[0]
+        else:
+            self.from_port = from_port
 
     @property
     def ports(self) -> list[str]:

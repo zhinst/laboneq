@@ -24,6 +24,10 @@ def pqsc_ports() -> List[Port]:
     return [Port(path=f"ZSYNCS/{i}", type=PortType.ZSYNC, channel=i) for i in range(18)]
 
 
+def qhub_ports() -> List[Port]:
+    return [Port(path=f"ZSYNCS/{i}", type=PortType.ZSYNC, channel=i) for i in range(56)]
+
+
 def shfppc_ports() -> List[Port]:
     outputs = [
         Port(path=f"PPCHANNELS/{ch}", type=PortType.RF, channel=ch) for ch in range(4)

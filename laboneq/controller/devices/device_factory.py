@@ -5,6 +5,7 @@ from laboneq.controller.communication import DaqWrapper
 from laboneq.controller.devices.device_hdawg import DeviceHDAWG
 from laboneq.controller.devices.device_nonqc import DeviceNonQC
 from laboneq.controller.devices.device_pqsc import DevicePQSC
+from laboneq.controller.devices.device_qhub import DeviceQHUB
 from laboneq.controller.devices.device_shfppc import DeviceSHFPPC
 from laboneq.controller.devices.device_shfqa import DeviceSHFQA
 from laboneq.controller.devices.device_shfsg import DeviceSHFSG
@@ -24,6 +25,7 @@ class DeviceFactory:
             "SHFSG": DeviceSHFSG,
             "SHFPPC": DeviceSHFPPC,
             "PQSC": DevicePQSC,
+            "QHUB": DeviceQHUB,
             "NONQC": DeviceNonQC,
             "PRETTYPRINTERDEVICE": DevicePRETTYPRINTER,
         }.get(device_qualifier.driver.upper())

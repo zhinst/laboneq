@@ -10,7 +10,7 @@ from laboneq.compiler.ir.interval_ir import IntervalIR
 
 
 @define(kw_only=True, slots=True)
-class OscillatorFrequencyStepIR(IntervalIR):
+class SetOscillatorFrequencyIR(IntervalIR):
     section: str
     oscillators: List[SweptHardwareOscillator]
     params: List[str]

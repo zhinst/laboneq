@@ -16,7 +16,7 @@ from laboneq.compiler.ir.interval_ir import IntervalIR
 from laboneq.compiler.ir.loop_ir import LoopIR
 from laboneq.compiler.ir.loop_iteration_ir import LoopIterationIR
 from laboneq.compiler.ir.match_ir import MatchIR
-from laboneq.compiler.ir.oscillator_ir import OscillatorFrequencyStepIR
+from laboneq.compiler.ir.oscillator_ir import SetOscillatorFrequencyIR
 from laboneq.compiler.ir.phase_reset_ir import PhaseResetIR
 from laboneq.compiler.ir.pulse_ir import PulseIR, PrecompClearIR
 from laboneq.compiler.ir.reserve_ir import ReserveIR
@@ -212,7 +212,7 @@ def generate_event_list_acquire_group(
 
 @generate_event_list.register
 def generate_event_list_oscillator_frequency_step(
-    ir: OscillatorFrequencyStepIR,
+    ir: SetOscillatorFrequencyIR,
     start: int,
     _max_events: int,
     id_tracker: Iterator[int],

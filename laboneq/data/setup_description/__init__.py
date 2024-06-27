@@ -27,6 +27,7 @@ class DeviceType(EnumReprMixin, Enum):
 
     HDAWG = "hdawg"
     PQSC = "pqsc"
+    QHUB = "qhub"
     SHFQA = "shfqa"
     SHFSG = "shfsg"
     UHFQA = "uhfqa"

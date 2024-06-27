@@ -43,7 +43,8 @@ class SignalObj:
     delay_signal: float
     signal_type: str  # One of "iq" / "single" / "integration" - see SignalInfoType
     base_delay_signal: float | None = None
-    oscillator_frequency: float = None  # for software modulation only
+    oscillator_frequency_sw: float | None = None
+    oscillator_frequency_hw: float | None = None
     channels: List = field(default_factory=list)
     awg: AWGInfo = None
     total_delay: float = None

@@ -42,6 +42,7 @@ class DeviceInfoType(EnumReprMixin, Enum):
     SHFQA = "shfqa"
     SHFSG = "shfsg"
     PQSC = "pqsc"
+    QHUB = "qhub"
     SHFPPC = "shfppc"
     PRETTYPRINTERDEVICE = "prettyprinterdevice"
     NONQC = "nonqc"

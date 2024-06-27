@@ -4,6 +4,7 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
 
+import asyncio
 import math
 import time
 from dataclasses import dataclass, field
@@ -85,6 +86,9 @@ class NodeMonitorBase(ABC):
 
     @abstractmethod
     async def poll(self): ...
+
+    @abstractmethod
+    async def wait_for_state_by_get(self, path: str, expected: int): ...
 
     def _fail_on_missing_node(self, path: str):
         if path not in self._nodes:
@@ -177,6 +181,22 @@ class NodeMonitor(NodeMonitorBase):
                 break
             for path, val in data.items():
                 self._get_node(path).append(val)
+
+    async def wait_for_state_by_get(self, path: str, expected: int):
+        if not isinstance(expected, int):
+            # Non-int nodes are not important, included only for consistency check.
+            # Skip it for this workaround.
+            return
+        val = next(iter(self._daq.get(path, flat=True).values()))["value"][0]  # deep
+        t0 = time.time()
+        while time.time() - t0 < 3:  # hard-coded timeout of 3s
+            if val == expected:
+                return
+            await asyncio.sleep(0.005)
+            val = self._daq.getInt(path)  # shallow
+        raise LabOneQControllerException(
+            f"Condition {path}=={expected} is not fulfilled within 3s. Last value: {val}"
+        )
 
 
 class INodeMonitorProvider(ABC):

@@ -229,146 +229,122 @@ def plot_simulation(
             and "input" not in channel.name
             and "qas_0_1" not in channel.name
         ):
-            try:
-                if my_snippet.time is not None:
-                    xs.append([my_snippet.time])
+            if my_snippet.time is not None:
+                xs.append([my_snippet.time])
 
-                    y1s.append([my_snippet.wave.real])
-                    labels1.append(["I"])
+                y1s.append([my_snippet.wave.real])
+                labels1.append(["I"])
 
-                    y2s.append([my_snippet.wave.imag])
-                    labels2.append(["Q"])
+                y2s.append([my_snippet.wave.imag])
+                labels2.append(["Q"])
 
-                    titles.append(f"{physical_channel_name} - {signal_names}".upper())
-            except Exception as e:
-                print(f"In EXCEPTION: {e}")
-                pass
+                titles.append(f"{physical_channel_name} - {signal_names}".upper())
 
         elif "input" in channel.name or "qas_0_1" in channel.name:
-            try:
-                if my_snippet.time is not None:
-                    this_kernel_samples = kernel_samples[signal]
-                    trigger_indices = np.argwhere(my_snippet.wave).flatten()
-                    # known issue: the simulator does not extend the QA trigger
-                    # waveform past the last trigger, so we make the new waveform longer
-                    xs_sublist, y1s_sublist, y2s_sublist = [], [], []
-                    labels1_sublist, labels2_sublist = [], []
-                    if integration_kernels_to_plot == "all":
-                        integration_kernels_to_plot = (
-                            np.arange(len(this_kernel_samples)) + 1
+            if my_snippet.time is not None:
+                this_kernel_samples = kernel_samples[signal]
+                trigger_indices = np.argwhere(my_snippet.wave).flatten()
+                # known issue: the simulator does not extend the QA trigger
+                # waveform past the last trigger, so we make the new waveform longer
+                xs_sublist, y1s_sublist, y2s_sublist = [], [], []
+                labels1_sublist, labels2_sublist = [], []
+                if integration_kernels_to_plot == "all":
+                    integration_kernels_to_plot = (
+                        np.arange(len(this_kernel_samples)) + 1
+                    )
+                for k in integration_kernels_to_plot:
+                    kernel = this_kernel_samples[k - 1]
+                    if len(trigger_indices) and trigger_indices[-1] + len(kernel) > len(
+                        my_snippet.wave
+                    ):
+                        dt: float = my_snippet.time[1] - my_snippet.time[0]  # type: ignore
+                        waveform = np.zeros(
+                            trigger_indices[-1] + len(kernel),
+                            dtype=np.complex128,
                         )
-                    for k in integration_kernels_to_plot:
-                        kernel = this_kernel_samples[k - 1]
-                        if len(trigger_indices) and trigger_indices[-1] + len(
-                            kernel
-                        ) > len(my_snippet.wave):
-                            dt: float = my_snippet.time[1] - my_snippet.time[0]  # type: ignore
-                            waveform = np.zeros(
-                                trigger_indices[-1] + len(kernel),
-                                dtype=np.complex128,
-                            )
-                            time = dt * np.arange(len(waveform)) + my_snippet.time[0]  # type: ignore
-                        else:
-                            waveform = np.zeros_like(
-                                my_snippet.wave, dtype=np.complex128
-                            )
-                            time = my_snippet.time
+                        time = dt * np.arange(len(waveform)) + my_snippet.time[0]  # type: ignore
+                    else:
+                        waveform = np.zeros_like(my_snippet.wave, dtype=np.complex128)
+                        time = my_snippet.time
 
-                        for i in trigger_indices:
-                            waveform[i : i + len(kernel)] = kernel
+                    for i in trigger_indices:
+                        waveform[i : i + len(kernel)] = kernel
 
-                        xs_sublist.append(time)
+                    xs_sublist.append(time)
 
-                        y1s_sublist.append(waveform.real)
-                        labels1_sublist.append(
-                            f"w{k}-I" if len(this_kernel_samples) > 1 else "I"
-                        )
+                    y1s_sublist.append(waveform.real)
+                    labels1_sublist.append(
+                        f"w{k}-I" if len(this_kernel_samples) > 1 else "I"
+                    )
 
-                        y2s_sublist.append(waveform.imag)
-                        labels2_sublist.append(
-                            f"w{k}-Q" if len(this_kernel_samples) > 1 else "Q"
-                        )
+                    y2s_sublist.append(waveform.imag)
+                    labels2_sublist.append(
+                        f"w{k}-Q" if len(this_kernel_samples) > 1 else "Q"
+                    )
 
-                    xs.append(xs_sublist)
+                xs.append(xs_sublist)
 
-                    y1s.append(y1s_sublist)
-                    labels1.append(labels1_sublist)
+                y1s.append(y1s_sublist)
+                labels1.append(labels1_sublist)
 
-                    y2s.append(y2s_sublist)
-                    labels2.append(labels2_sublist)
+                y2s.append(y2s_sublist)
+                labels2.append(labels2_sublist)
 
-                    titles.append(f"{physical_channel_name} - {signal}".upper())
+                titles.append(f"{physical_channel_name} - {signal}".upper())
 
-            except Exception as e:
-                print(f"In EXCEPTION: {e}")
-                pass
         elif "iq_channel" not in str(channel.type).lower():
-            try:
-                if my_snippet.time is not None:
-                    time_length = len(my_snippet.time)
+            if my_snippet.time is not None:
+                time_length = len(my_snippet.time)
 
-                    xs.append([my_snippet.time])
+                xs.append([my_snippet.time])
 
-                    y1s.append([my_snippet.wave.real])
-                    labels1.append([f"{physical_channel_name}"])
+                y1s.append([my_snippet.wave.real])
+                labels1.append([f"{physical_channel_name}"])
 
-                    titles.append(f"{physical_channel_name} - {signal_names}".upper())
+                titles.append(f"{physical_channel_name} - {signal_names}".upper())
 
-                    empty_array = np.full(time_length, np.nan)
-                    y2s.append([empty_array])
-                    labels2.append([None])
-            except Exception as e:
-                print(f"In EXCEPTION: {e}")
-                pass
-        elif (
+                empty_array = np.full(time_length, np.nan)
+                y2s.append([empty_array])
+                labels2.append([None])
+        if (
             "qa" not in str(channel.name)
             and np.sum(my_snippet.trigger) != 0
             and f"{physical_channel_name} - Trigger".upper() not in titles
         ):
-            try:
-                if my_snippet.time is not None:
-                    time_length = len(my_snippet.time)
+            if my_snippet.time is not None:
+                time_length = len(my_snippet.time)
 
-                    xs.append([my_snippet.time])
+                xs.append([my_snippet.time])
 
-                    y1s.append([my_snippet.trigger])
-                    labels1.append(["Trigger"])
+                y1s.append([my_snippet.trigger])
+                labels1.append(["Trigger"])
 
-                    titles.append(f"{physical_channel_name} - Trigger".upper())
+                titles.append(f"{physical_channel_name} - Trigger".upper())
 
-                    empty_array = np.full(time_length, np.nan)
-                    y2s.append([empty_array])
-                    labels2.append([None])
-
-            except Exception as e:
-                print(f"In EXCEPTION: {e}")
-                pass
+                empty_array = np.full(time_length, np.nan)
+                y2s.append([empty_array])
+                labels2.append([None])
 
         if np.any(my_snippet.marker):
-            try:
-                if my_snippet.time is not None:
-                    time_length = len(my_snippet.time)
+            if my_snippet.time is not None:
+                time_length = len(my_snippet.time)
 
-                    xs.append([my_snippet.time])
+                xs.append([my_snippet.time])
 
-                    y1s.append([my_snippet.marker.real])
-                    labels1.append(["Marker 1"])
+                y1s.append([my_snippet.marker.real])
+                labels1.append(["Marker 1"])
 
-                    if np.any(my_snippet.marker.imag):
-                        y2s.append([my_snippet.marker.imag])
-                        labels2.append(["Marker 2"])
-                    else:
-                        empty_array = np.full(time_length, np.nan)
-                        labels2.append([None])
-                        y2s.append([empty_array])
+                if np.any(my_snippet.marker.imag):
+                    y2s.append([my_snippet.marker.imag])
+                    labels2.append(["Marker 2"])
+                else:
+                    empty_array = np.full(time_length, np.nan)
+                    labels2.append([None])
+                    y2s.append([empty_array])
 
-                    titles.append(
-                        f"{physical_channel_name} - {signal_names} - Marker".upper()
-                    )
-
-            except Exception:
-                pass
-                raise
+                titles.append(
+                    f"{physical_channel_name} - {signal_names} - Marker".upper()
+                )
 
     with zi_mpl_theme():
         fig, axes = plt.subplots(

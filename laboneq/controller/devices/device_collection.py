@@ -16,6 +16,7 @@ from laboneq.controller.communication import (
     DaqWrapper,
     DaqWrapperDryRun,
     DaqWrapperDummy,
+    batch_set,
     batch_set_multiple,
 )
 from laboneq.controller.devices.async_support import (
@@ -23,6 +24,7 @@ from laboneq.controller.devices.async_support import (
     gather_and_apply,
 )
 from laboneq.controller.devices.device_factory import DeviceFactory
+from laboneq.controller.devices.device_qhub import DeviceQHUB
 from laboneq.controller.devices.device_setup_dao import DeviceSetupDAO
 from laboneq.controller.devices.device_utils import (
     NodeCollector,
@@ -33,6 +35,7 @@ from laboneq.controller.devices.zi_emulator import EmulatorState
 from laboneq.controller.devices.zi_node_monitor import (
     ConditionsChecker,
     NodeControlBase,
+    NodeControlKind,
     ResponseWaiter,
     filter_commands,
     filter_settings,
@@ -45,6 +48,15 @@ from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
 
 if TYPE_CHECKING:
     from laboneq.data.execution_payload import TargetSetup
+
+
+SUPPRESSED_WARNINGS = frozenset(
+    {
+        "AWGDIOTIMING",  # SVT-120, has no consequence for LabOne Q usage of DIO.
+        "PIPEJOBSTAGE",  # HBAR-2083
+        "RLSCALING",  # HBAR-2084
+    }
+)
 
 
 _logger = logging.getLogger(__name__)
@@ -60,6 +72,8 @@ class DeviceCollection:
             target_setup=target_setup,
             ignore_version_mismatch=ignore_version_mismatch,
         )
+        if self._ds.has_uhf and self._ds.has_qhub:
+            raise LabOneQControllerException("Gen1 setup with QHub is not supported.")
         self._emulator_state: EmulatorState | None = None
         self._ignore_version_mismatch = ignore_version_mismatch
         self._daqs: dict[str, DaqWrapper] = {}
@@ -94,6 +108,10 @@ class DeviceCollection:
         for device in self._devices.values():
             if device._node_monitor is not None:
                 yield device
+
+    @property
+    def has_qhub(self) -> bool:
+        return self._ds.has_qhub
 
     def find_by_uid(self, device_uid) -> DeviceZI:
         device = self._devices.get(device_uid)
@@ -224,18 +242,86 @@ class DeviceCollection:
 
         await self.flush_monitor()  # Ensure status is up-to-date
 
+        def _followers_of(parents: list[DeviceZI]) -> list[DeviceZI]:
+            children = []
+            for parent_dev in parents:
+                for down_stream_devices in parent_dev._downlinks.values():
+                    for _, dev_ref in down_stream_devices:
+                        if (dev := dev_ref()) is not None:
+                            children.append(dev)
+            return children
+
         if reset_devices:
             await self._configure_parallel(
                 [d for d in self._devices.values() if not d.is_secondary],
                 lambda d: cast(DeviceZI, d).load_factory_preset_control_nodes(),
                 "Reset to factory defaults",
             )
-            await (
-                self.flush_monitor()
-            )  # Consume any updates resulted from the above reset
+            # Consume any updates resulted from the above reset
+            await self.flush_monitor()
             # TODO(2K): Error check
             for _, device in self.all:
                 device.clear_cache()
+
+        if self.has_qhub:
+            leaders = [dev for _, dev in self.leaders]
+            followers = _followers_of(leaders)
+            # Switch QHUB to the external clock as usual
+            await self._configure_parallel(
+                leaders,
+                lambda d: cast(DeviceZI, d).clock_source_control_nodes(),
+                "QHUB: Reference clock switching",
+            )
+            # Check if zsync link is already established
+            check_zsync_link = ConditionsChecker()
+            for dev in followers:
+                check_zsync_link.add(
+                    target=dev,
+                    conditions={
+                        n.path: n.value
+                        for n in filter_conditions(dev.clock_source_control_nodes())
+                    },
+                )
+            for dev in leaders:
+                check_zsync_link.add(
+                    target=dev,
+                    conditions={
+                        n.path: n.value
+                        for n in filter_conditions(dev.zsync_link_control_nodes())
+                    },
+                )
+            failed = check_zsync_link.check_all()
+            if len(failed) > 0:
+                # Switch followers to ZSync, but don't wait for completion yet
+                for dev in followers:
+                    ref_set = next(
+                        (
+                            c
+                            for c in dev.clock_source_control_nodes()
+                            if c.kind == NodeControlKind.Setting
+                        ),
+                        None,
+                    )
+                    if ref_set is not None:
+                        nc = NodeCollector()
+                        nc.add(ref_set.path, ref_set.value)
+                        await batch_set(await dev.maybe_async(nc))
+                # Reset the QHub phy. TODO(2K): This is the actual workaround, remove this whole block once fixed.
+                for dev in leaders:
+                    if isinstance(dev, DeviceQHUB):
+                        await dev.qhub_reset_zsync_phy()
+                # Wait for completion using the dumb get method, as the streamed state sequence may be unreliable
+                # with this workaround due to unexpected state bouncing.
+                for (
+                    node_monitor,
+                    daq_conditions,
+                ) in check_zsync_link._conditions.items():
+                    for path, expected in daq_conditions.items():
+                        await node_monitor.wait_for_state_by_get(path, expected)
+                # Consume any updates resulted from the above manipulations
+                await self.flush_monitor()
+            # From here we will continue with the regular config. Since the ZSync link is now established,
+            # the respective actions from the regular config will be skipped.
 
         configs = {
             "Reference clock switching": lambda d: cast(
@@ -267,13 +353,7 @@ class DeviceCollection:
                 await self._configure_parallel(
                     targets, control_nodes_getter, config_name
                 )
-                children = []
-                for parent_dev in targets:
-                    for down_stream_devices in parent_dev._downlinks.values():
-                        for _, dev_ref in down_stream_devices:
-                            if (dev := dev_ref()) is not None:
-                                children.append(dev)
-                targets = children
+                targets = _followers_of(targets)
         _logger.info("The device setup is configured")
 
     async def disconnect(self):
@@ -503,12 +583,18 @@ def decode_errors(errors: list[str], dev_repr: str) -> list[str]:
             val = error.get("value")[-1]
         error_vector = json.loads(val)
         for message in error_vector["messages"]:
+            severity = DeviceErrorSeverity(message["severity"])
             if message["code"] == "AWGRUNTIMEERROR" and message["params"][0] == 1:
                 awg_core = int(message["attribs"][0])
                 program_counter = int(message["params"][1])
                 collected_messages.append(
                     f"{dev_repr}: Gap detected on AWG core {awg_core}, program counter {program_counter}"
                 )
-            if message["severity"] >= DeviceErrorSeverity.error.value:
-                collected_messages.append(f'{dev_repr}: {message["message"]}')
+            if severity in [
+                DeviceErrorSeverity.warning,
+                DeviceErrorSeverity.error,
+            ] and (message["code"] not in SUPPRESSED_WARNINGS):
+                collected_messages.append(
+                    f'{dev_repr}: ({message["code"]}) {message["message"]}'
+                )
     return collected_messages

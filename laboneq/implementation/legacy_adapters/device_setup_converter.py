@@ -99,6 +99,8 @@ def convert_device_type(target: ZIStandardInstrument) -> DeviceType:
         return DeviceType.SHFQC
     if isinstance(target, legacy_instruments.PQSC):
         return DeviceType.PQSC
+    if isinstance(target, legacy_instruments.QHUB):
+        return DeviceType.QHUB
     if isinstance(target, legacy_instruments.UHFQA):
         return DeviceType.UHFQA
     if isinstance(target, legacy_instruments.SHFPPC):
@@ -165,6 +167,8 @@ class PortConverter:
             return devices.shfsg_ports()
         elif isinstance(target, legacy_instruments.PQSC):
             return devices.pqsc_ports()
+        elif isinstance(target, legacy_instruments.QHUB):
+            return devices.qhub_ports()
         elif isinstance(target, legacy_instruments.PRETTYPRINTERDEVICE):
             return devices.test_device_ports([port.uid for port in target.ports])
         elif isinstance(target, legacy_instruments.NonQC):

@@ -37,7 +37,7 @@ from laboneq.compiler.ir.ir import IR, DeviceIR, SectionRefIR, SignalIR, PulseDe
 from laboneq.compiler.ir.loop_ir import LoopIR
 from laboneq.compiler.ir.loop_iteration_ir import LoopIterationIR
 from laboneq.compiler.ir.match_ir import MatchIR
-from laboneq.compiler.ir.oscillator_ir import OscillatorFrequencyStepIR
+from laboneq.compiler.ir.oscillator_ir import SetOscillatorFrequencyIR
 from laboneq.compiler.ir.phase_reset_ir import PhaseResetIR
 from laboneq.compiler.ir.pulse_ir import PrecompClearIR, PulseIR
 from laboneq.compiler.ir.reserve_ir import ReserveIR
@@ -94,7 +94,7 @@ _schedule_to_ir = {
     LoopSchedule: LoopIR,
     LoopIterationSchedule: LoopIterationIR,
     MatchSchedule: MatchIR,
-    OscillatorFrequencyStepSchedule: OscillatorFrequencyStepIR,
+    OscillatorFrequencyStepSchedule: SetOscillatorFrequencyIR,
     PhaseResetSchedule: PhaseResetIR,
     PulseSchedule: PulseIR,
     ReserveSchedule: ReserveIR,

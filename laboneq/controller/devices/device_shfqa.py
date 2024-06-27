@@ -936,6 +936,10 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
 
         awg_config = recipe_data.awg_configs[awg_key]
 
+        if awg_config.result_length is None:
+            # AWG is not producing results
+            return nc
+
         # TODO(2K): code duplication with Controller._prepare_rt_execution
         if rt_execution_info.averaging_mode == AveragingMode.SINGLE_SHOT:
             effective_averages = 1

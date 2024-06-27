@@ -386,7 +386,7 @@ class Session:
     def run(
         self,
         experiment: Union[Experiment, CompiledExperiment] | None = None,
-    ) -> Results | None:
+    ) -> Results:
         """Executes the compiled experiment.
 
         Requires connected LabOne Q session (`session.connect()`) either with or without emulation mode.
@@ -407,8 +407,7 @@ class Session:
 
         Returns:
             results:
-                A `Results` object in case of success. `None` if the session is not
-                connected.
+                A `Results` object.
 
         !!! version-changed "Changed in version 2.4"
             Raises error if session is not connected.

@@ -74,13 +74,18 @@ class DeviceSetupDAO:
         }
 
         has_shf = False
+        self._has_uhf = False
+        self._has_qhub = False
         for device in target_setup.devices:
             if device.device_type in (
                 TargetDeviceType.SHFQA,
                 TargetDeviceType.SHFSG,
             ):
                 has_shf = True
-                break
+            if device.device_type == TargetDeviceType.UHFQA:
+                self._has_uhf = True
+            if device.device_type == TargetDeviceType.QHUB:
+                self._has_qhub = True
 
         self._devices: list[DeviceQualifier] = [
             _make_device_qualifier(target_device=device, has_shf=has_shf)
@@ -105,6 +110,14 @@ class DeviceSetupDAO:
     @property
     def instruments(self) -> Iterator[DeviceQualifier]:
         return iter(self._devices)
+
+    @property
+    def has_uhf(self) -> bool:
+        return self._has_uhf
+
+    @property
+    def has_qhub(self) -> bool:
+        return self._has_qhub
 
     def downlinks_by_device_uid(self, device_uid: str) -> list[tuple[str, str]]:
         return self._downlinks[device_uid]

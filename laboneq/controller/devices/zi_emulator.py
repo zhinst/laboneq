@@ -16,7 +16,7 @@ from dataclasses import InitVar, dataclass, field
 from enum import Enum
 from functools import partial
 from types import SimpleNamespace
-from typing import Any, Callable, cast, overload
+from typing import Any, Callable, Iterator, cast, overload
 from weakref import ref
 
 import numpy as np
@@ -211,6 +211,22 @@ class DevEmu(ABC):
             node = self._make_node(dev_path)
             self._node_tree[dev_path] = node
         return node
+
+    def resolve_wildcards(self, dev_path_wildcard: str) -> Iterator[str]:
+        if "*" in dev_path_wildcard:
+            path_pattern = re.compile(
+                dev_path_wildcard.replace("*", ".*"), flags=re.IGNORECASE
+            )
+            node_def = self._cached_node_def()
+            matched = False
+            for dev_path in node_def.keys():
+                if path_pattern.match(dev_path):
+                    matched = True
+                    yield dev_path
+            if not matched:
+                yield dev_path_wildcard
+        else:
+            yield dev_path_wildcard
 
     def get(self, dev_path: str) -> Any:
         node = self._get_node(dev_path)
@@ -679,7 +695,11 @@ class Gen2Base(DevEmuHW):
         }
 
 
-class DevEmuPQSC(Gen2Base):
+class DevEmuLeader(Gen2Base):
+    def __init__(self, serial: str, emulator_state: EmulatorState):
+        super().__init__(serial=serial, emulator_state=emulator_state)
+        self._zsync_ports: int | None = None
+
     def _trig_stop(self):
         self._set_val("execution/enable", 0)
 
@@ -693,7 +713,8 @@ class DevEmuPQSC(Gen2Base):
                 type=NodeType.INT, default=0, handler=self._trig_execute
             ),
         }
-        for zsync in range(18):
+        assert self._zsync_ports is not None
+        for zsync in range(self._zsync_ports):
             nd[f"zsyncs/{zsync}/connection/status"] = NodeInfo(
                 type=NodeType.INT, default=2
             )
@@ -705,6 +726,18 @@ class DevEmuPQSC(Gen2Base):
                 ),
             )
         return nd
+
+
+class DevEmuPQSC(DevEmuLeader):
+    def __init__(self, serial: str, emulator_state: EmulatorState):
+        super().__init__(serial=serial, emulator_state=emulator_state)
+        self._zsync_ports = 18
+
+
+class DevEmuQHUB(DevEmuLeader):
+    def __init__(self, serial: str, emulator_state: EmulatorState):
+        super().__init__(serial=serial, emulator_state=emulator_state)
+        self._zsync_ports = 56
 
 
 class DevEmuSHFQABase(Gen2Base):
@@ -954,6 +987,8 @@ def _serial_to_device_type(serial: str):
             return DevEmuPQSC
         elif num < 13:  # SHF* 12000 ... 12999 # Attention! Only QA supported, no SG
             return DevEmuSHFQA
+        elif num >= 24 and num < 25:  # QHUB 24000 ... 24999
+            return DevEmuQHUB
         else:
             return DevEmuDummy
     else:
@@ -973,6 +1008,7 @@ _dev_type_map: dict[str | None, type[DevEmu]] = {
     "HDAWG": DevEmuHDAWG,
     "UHFQA": DevEmuUHFQA,
     "PQSC": DevEmuPQSC,
+    "QHUB": DevEmuQHUB,
     "SHFQA": DevEmuSHFQA,
     "SHFSG": DevEmuSHFSG,
     "SHFQC": DevEmuSHFQC,
@@ -1046,7 +1082,7 @@ class ziDAQServerEmulator:
             path = path[1:]
         path_parts = path.split("/")
         devices = []
-        dev_path = ""
+        dev_path_wildcard = ""
         if "*" in path_parts[0]:
             serial_pattern = re.compile(
                 path_parts[0].replace("*", ".*"), flags=re.IGNORECASE
@@ -1055,25 +1091,28 @@ class ziDAQServerEmulator:
                 if serial_pattern.match(serial):
                     devices.append(device)
             if len(path_parts) == 1 and path_parts[0] == "*":
-                dev_path = "*"
+                dev_path_wildcard = "*"
         else:
             path_dev = self._device_lookup(path_parts[0])
             assert path_dev is not None
             devices.append(path_dev)
-            dev_path = "/".join(path_parts[1:]).lower()
-        return devices, dev_path
+            dev_path_wildcard = "/".join(path_parts[1:]).lower()
+        return devices, dev_path_wildcard
 
     def _resolve_paths_and_perform(
         self, path: str | list[str], handler: Callable[[DevEmu, str], Any]
     ) -> dict[str, Any]:
         results: dict[str, Any] = {}
         for p in _canonical_path_list(path):
-            devices, dev_path = self._resolve_dev(p)
-            dev_path_suffix = "" if len(dev_path) == 0 else f"/{dev_path}"
+            devices, dev_path_wildcard = self._resolve_dev(p)
             for device in devices:
-                results[f"/{device.serial().lower()}{dev_path_suffix}"] = handler(
-                    device, dev_path
-                )
+                for dev_path in device.resolve_wildcards(dev_path_wildcard):
+                    dev_path_suffix = (
+                        "" if len(dev_path_wildcard) == 0 else f"/{dev_path}"
+                    )
+                    results[f"/{device.serial().lower()}{dev_path_suffix}"] = handler(
+                        device, dev_path
+                    )
         return results
 
     def connectDevice(self, dev: str, interface: str, params: str = ""):
@@ -1354,7 +1393,9 @@ class KernelSessionEmulator:
     ) -> list[MockAnnotatedValue]:
         self._progress_scheduler()
         self._log_for_testing(value)
-        self._device.set(self.dev_path(value.path), value.value)
+        dev_path_wildcard = self.dev_path(value.path)
+        for dev_path in self._device.resolve_wildcards(dev_path_wildcard):
+            self._device.set(dev_path, value.value)
         return []
 
     async def get(

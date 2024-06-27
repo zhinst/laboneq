@@ -14,6 +14,7 @@ from laboneq.dsl.device import _device_setup_modifier as setup_modifier
 from laboneq.dsl.device._device_setup_modifier import DeviceSetupInternalException
 from laboneq.dsl.device.connection import InternalConnection, SignalConnection
 from laboneq.dsl.device.instruments import PQSC
+from laboneq.dsl.device.instruments.qhub import QHUB
 from laboneq.dsl.device.logical_signal_group import LogicalSignalGroup
 from laboneq.dsl.device.physical_channel_group import PhysicalChannelGroup
 from laboneq.dsl.device.servers import DataServer
@@ -488,6 +489,6 @@ class DeviceSetup:
     def _server_leader_instrument(self, server_uid: str) -> str | None:
         """Return a leader instrument for the given Dataserver UID."""
         for dev in self.instruments:
-            if isinstance(dev, PQSC):
+            if isinstance(dev, (PQSC, QHUB)):
                 if dev.server_uid == server_uid:
                     return dev.uid

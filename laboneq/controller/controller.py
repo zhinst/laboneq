@@ -379,7 +379,7 @@ class Controller:
             with_pipeliner=rt_execution_info.with_pipeliner
         )
 
-        # Can't batch everything together, because PQSC needs to be executed after HDs
+        # Can't batch everything together, because PQSC/QHUB needs to be executed after HDs
         # otherwise it can finish before AWGs are started, and the trigger is lost
         await self._execute_one_step_followers(
             with_pipeliner=rt_execution_info.with_pipeliner

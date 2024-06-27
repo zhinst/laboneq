@@ -29,6 +29,7 @@ from laboneq.dsl.device.instrument import Instrument
 from laboneq.dsl.device.instruments import (
     HDAWG,
     PQSC,
+    QHUB,
     SHFPPC,
     SHFQA,
     SHFQC,
@@ -54,19 +55,20 @@ class DeviceSetupInternalException(LabOneQException):
 
 
 class _InstrumentGenerator(abc.ABC):
-    @abc.abstractstaticmethod
+    @staticmethod
+    @abc.abstractmethod
     def make_connections(
         connection: InternalConnection | SignalConnection,
     ) -> list[Connection]:
         """Make instrument connections."""
         pass
 
-    @abc.abstractstaticmethod
+    @staticmethod
     def make_logical_signal(
         connection: InternalConnection | SignalConnection, pc: PhysicalChannel
-    ) -> LogicalSignal:
+    ) -> LogicalSignal | None:
         """Make logical signal which is associated with the connection."""
-        pass
+        return None
 
     @classmethod
     def determine_signal_type(cls, ports: list[str]) -> str:
@@ -132,9 +134,12 @@ class _HDAWGGenerator(_InstrumentGenerator):
                 return "acquire"
             else:
                 return "rf"
+        return "<unknown>"
 
     @staticmethod
-    def make_connections(connection: InternalConnection | SignalConnection):
+    def make_connections(
+        connection: InternalConnection | SignalConnection,
+    ) -> list[Connection]:
         connections = []
         if isinstance(connection, SignalConnection):
             if connection.type == "iq":
@@ -184,7 +189,10 @@ class _HDAWGGenerator(_InstrumentGenerator):
         return connections
 
     @staticmethod
-    def make_logical_signal(connection, pc):
+    def make_logical_signal(
+        connection: InternalConnection | SignalConnection, pc: PhysicalChannel
+    ) -> LogicalSignal | None:
+        assert isinstance(connection, SignalConnection)
         ls = LogicalSignal(
             uid=connection.uid,
             name=connection.name,
@@ -206,7 +214,9 @@ class _PRETTYPRINTERDEVICEGenerator(_InstrumentGenerator):
         return "rf"
 
     @staticmethod
-    def make_connections(connection: InternalConnection | SignalConnection):
+    def make_connections(
+        connection: InternalConnection | SignalConnection,
+    ) -> list[Connection]:
         connections = []
         if isinstance(connection, SignalConnection):
             if connection.type != "rf" or len(connection.ports) != 1:
@@ -227,7 +237,10 @@ class _PRETTYPRINTERDEVICEGenerator(_InstrumentGenerator):
         return connections
 
     @staticmethod
-    def make_logical_signal(connection, pc):
+    def make_logical_signal(
+        connection: InternalConnection | SignalConnection, pc: PhysicalChannel
+    ) -> LogicalSignal | None:
+        assert isinstance(connection, SignalConnection)
         ls = LogicalSignal(
             uid=connection.uid,
             name=connection.name,
@@ -300,7 +313,10 @@ class _UHFQAGenerator(_InstrumentGenerator):
         return connections
 
     @staticmethod
-    def make_logical_signal(connection, pc: PhysicalChannel) -> LogicalSignal:
+    def make_logical_signal(
+        connection: InternalConnection | SignalConnection, pc: PhysicalChannel
+    ) -> LogicalSignal | None:
+        assert isinstance(connection, SignalConnection)
         is_output = True
         if _UHFQAGenerator.determine_signal_type(connection.ports) == "acquire":
             is_output = False
@@ -318,8 +334,10 @@ class _UHFQAGenerator(_InstrumentGenerator):
         )
         return ls
 
-    @staticmethod
-    def make_physical_channel(instrument: str, ports: list[str]):
+    @classmethod
+    def make_physical_channel(
+        cls, instrument: str, ports: list[str], channel_type: str | None = None
+    ) -> PhysicalChannel | None:
         connection_type = _UHFQAGenerator.determine_signal_type(ports)
         if connection_type == "acquire":
             ports = ["QAS/0", "QAS/1"]
@@ -330,7 +348,9 @@ class _UHFQAGenerator(_InstrumentGenerator):
 
 class _SHFPPCGenerator(_InstrumentGenerator):
     @staticmethod
-    def make_connections(connection: SignalConnection) -> list[Connection]:
+    def make_connections(
+        connection: InternalConnection | SignalConnection,
+    ) -> list[Connection]:
         # TODO: Can SHFPPC port be connected to multiple logical signals? Currently no tests for it.
         connections = []
         if not isinstance(connection, SignalConnection):
@@ -359,12 +379,10 @@ class _SHFPPCGenerator(_InstrumentGenerator):
         )
         return connections
 
-    @staticmethod
-    def make_logical_signal(connection, pc: PhysicalChannel) -> LogicalSignal:
-        return None
-
-    @staticmethod
-    def make_physical_channel(instrument: str, ports: list[str]):
+    @classmethod
+    def make_physical_channel(
+        cls, instrument: str, ports: list[str], channel_type: str | None = None
+    ) -> PhysicalChannel | None:
         return None
 
 
@@ -373,11 +391,14 @@ class _SHFQAGenerator(_InstrumentGenerator):
     def determine_signal_type(ports: list[str]) -> str:
         if ports[0].endswith("INPUT"):
             return "acquire"
-        elif ports[0].endswith("OUTPUT"):
+        if ports[0].endswith("OUTPUT"):
             return "iq"
+        return "<unknown>"
 
     @staticmethod
-    def make_connections(connection: InternalConnection) -> list[Connection]:
+    def make_connections(
+        connection: InternalConnection | SignalConnection,
+    ) -> list[Connection]:
         if not isinstance(connection, SignalConnection):
             raise DeviceSetupInternalException(
                 "Only signal connections are supported on QA channels."
@@ -421,7 +442,10 @@ class _SHFQAGenerator(_InstrumentGenerator):
         return connections
 
     @staticmethod
-    def make_logical_signal(connection, pc: PhysicalChannel) -> LogicalSignal:
+    def make_logical_signal(
+        connection: InternalConnection | SignalConnection, pc: PhysicalChannel
+    ) -> LogicalSignal | None:
+        assert isinstance(connection, SignalConnection)
         is_output = _SHFQAGenerator.determine_signal_type(connection.ports) != "acquire"
         return LogicalSignal(
             uid=connection.uid,
@@ -442,9 +466,12 @@ class _SHFSGGenerator(_InstrumentGenerator):
     def determine_signal_type(ports: list[str]) -> str:
         if ports[0].endswith("OUTPUT"):
             return "iq"
+        return "<unknown>"
 
     @staticmethod
-    def make_connections(connection: InternalConnection) -> list[Connection]:
+    def make_connections(
+        connection: InternalConnection | SignalConnection,
+    ) -> list[Connection]:
         if not isinstance(connection, SignalConnection):
             raise DeviceSetupInternalException(
                 "Only signal connections are supported on SG channels."
@@ -477,7 +504,10 @@ class _SHFSGGenerator(_InstrumentGenerator):
         return connections
 
     @staticmethod
-    def make_logical_signal(connection, pc: PhysicalChannel) -> LogicalSignal:
+    def make_logical_signal(
+        connection: InternalConnection | SignalConnection, pc: PhysicalChannel
+    ) -> LogicalSignal | None:
+        assert isinstance(connection, SignalConnection)
         return LogicalSignal(
             uid=connection.uid,
             name=connection.name,
@@ -506,7 +536,9 @@ class _SHFQCGenerator(_InstrumentGenerator):
             return _SHFSGGenerator.determine_signal_type(ports)
 
     @staticmethod
-    def make_connections(connection: SignalConnection) -> list[Connection]:
+    def make_connections(
+        connection: InternalConnection | SignalConnection,
+    ) -> list[Connection]:
         connections = []
         is_qa = False
         for ports in connection.ports:
@@ -522,7 +554,9 @@ class _SHFQCGenerator(_InstrumentGenerator):
         return connections
 
     @staticmethod
-    def make_logical_signal(connection, pc: PhysicalChannel) -> LogicalSignal:
+    def make_logical_signal(
+        connection: InternalConnection | SignalConnection, pc: PhysicalChannel
+    ) -> LogicalSignal | None:
         is_qa = False
         for ports in connection.ports:
             if "QACHANNELS" in ports:
@@ -536,7 +570,9 @@ class _SHFQCGenerator(_InstrumentGenerator):
 
 class _PQSCGenerator(_InstrumentGenerator):
     @staticmethod
-    def make_connections(connection: InternalConnection) -> list[Connection]:
+    def make_connections(
+        connection: InternalConnection | SignalConnection,
+    ) -> list[Connection]:
         if not isinstance(connection, InternalConnection):
             raise DeviceSetupInternalException(
                 "Only to device connections are supported on PQSC."
@@ -550,12 +586,27 @@ class _PQSCGenerator(_InstrumentGenerator):
             )
         ]
 
+
+class _QHUBGenerator(_InstrumentGenerator):
     @staticmethod
-    def make_logical_signal(connection, pc: PhysicalChannel) -> LogicalSignal:
-        pass
+    def make_connections(
+        connection: InternalConnection | SignalConnection,
+    ) -> list[Connection]:
+        if not isinstance(connection, InternalConnection):
+            raise DeviceSetupInternalException(
+                "Only to device connections are supported on QHUB."
+            )
+        return [
+            Connection(
+                local_port=connection.from_port,
+                remote_path=connection.to,
+                remote_port="0",
+                signal_type=IOSignalType.ZSYNC,
+            )
+        ]
 
 
-def _raise_for_invalid_ports(instr: ZIStandardInstrument, ports: list[str]):
+def _raise_for_invalid_ports(instr: Instrument, ports: list[str]):
     port_uids = [port.uid for port in instr.ports]
     for port in ports:
         if port not in port_uids:
@@ -576,7 +627,7 @@ def add_connection(
         - Updates `DeviceSetup.logical_signal_groups`
         - Updates `DeviceSetup.physical_signal_groups`
     """
-    HANDLERS = {
+    HANDLERS: dict[type[Instrument], type[_InstrumentGenerator]] = {
         HDAWG: _HDAWGGenerator,
         UHFQA: _UHFQAGenerator,
         SHFPPC: _SHFPPCGenerator,
@@ -584,10 +635,11 @@ def add_connection(
         SHFQC: _SHFQCGenerator,
         SHFSG: _SHFSGGenerator,
         PQSC: _PQSCGenerator,
+        QHUB: _QHUBGenerator,
         PRETTYPRINTERDEVICE: _PRETTYPRINTERDEVICEGenerator,
     }
     if dev := setup.instrument_by_uid(instrument):
-        handler: _InstrumentGenerator = HANDLERS[dev.__class__]
+        handler = HANDLERS[dev.__class__]
         if isinstance(dev, PRETTYPRINTERDEVICE):
             dev._ports.extend(connection.ports)
         else:
