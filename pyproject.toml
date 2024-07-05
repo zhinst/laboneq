@@ -54,7 +54,7 @@ dependencies = [
     "attrs >= 20.1.0",
     "sortedcontainers >= 2.4.0",
     "typing_extensions >= 4.10.0",
-    "zhinst-core ~= 24.4.59173",
+    "zhinst-core ~= 24.4.60606",
     "zhinst-toolkit ~= 0.6.3",
     "zhinst-utils == 0.4.1",
     "zhinst-timing-models ~= 24.4.57831",
