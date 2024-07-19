@@ -13,15 +13,27 @@ from .namespace import ClassicalRef, Frame, NamespaceNest, QubitRef
 from .openqasm_error import OpenQasmException
 
 binary_ops = {
+    # Arithmetic operators:
     "+": operator.add,
     "-": operator.sub,
     "*": operator.mul,
     "/": operator.truediv,
+    # Logical operators:
+    "||": operator.or_,
+    "&&": operator.and_,
+    # Comparison operators:
+    "==": operator.eq,
+    "!=": operator.ne,
+    "<": operator.lt,
+    "<=": operator.le,
+    ">": operator.gt,
+    ">=": operator.ge,
     # todo: add other operators as required
 }
 
 unary_ops = {
     "-": operator.neg,
+    "!": operator.not_,
     # todo: add other operators as required
 }
 

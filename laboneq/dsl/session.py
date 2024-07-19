@@ -274,7 +274,7 @@ class Session:
         return self._connection_state
 
     def disconnect(self) -> ConnectionState:
-        """Disconnects the session from the devices.
+        """Disconnects instruments from the data server and closes the connection for this session.
 
         Returns:
             connection_state:
@@ -439,13 +439,20 @@ class Session:
             neartime_callback_results={},
             execution_errors=[],
         )
-        results = controller.execute_compiled(
-            self.compiled_experiment.scheduled_experiment, ProtectedSession(self)
-        )
-        self._last_results.acquired_results = results.acquired_results
-        self._last_results.neartime_callback_results = results.neartime_callback_results
-        self._last_results.execution_errors = results.execution_errors
-        self._last_results.pipeline_jobs_timestamps = results.pipeline_jobs_timestamps
+        try:
+            controller.execute_compiled(
+                self.compiled_experiment.scheduled_experiment, ProtectedSession(self)
+            )
+        finally:
+            results = controller.results()
+            self._last_results.acquired_results = results.acquired_results
+            self._last_results.neartime_callback_results = (
+                results.neartime_callback_results
+            )
+            self._last_results.execution_errors = results.execution_errors
+            self._last_results.pipeline_jobs_timestamps = (
+                results.pipeline_jobs_timestamps
+            )
 
         return self.results
 
@@ -513,6 +520,24 @@ class Session:
                 Needs to have the same length as the pulse it replaces.
         """
         self._controller.replace_pulse(pulse_uid, pulse_or_array)
+
+    def replace_phase_increment(
+        self,
+        parameter_uid: str,
+        new_value: int | float,
+    ):
+        """Replace the value of a parameter that drives phase increments value.
+
+        If the parameter spans multiple iterations of a loop, it will replace the
+        parameter by the same value in _all_ the iterations.
+
+
+        Args:
+            parameter_uid: The name of the parameter to replace.
+            new_value: The new replacement value.
+
+        """
+        self._controller.replace_phase_increment(parameter_uid, new_value)
 
     def get_results(self) -> Results:
         """

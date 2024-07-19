@@ -43,7 +43,7 @@ class SHFQC(ZIStandardInstrument):
                 physical_port_ids=[f"{ch}"],
                 connector_labels=[f"Signal Input {ch+1}"],
             )
-            for ch in range(4)
+            for ch in range(1)
         )
 
         outputs = [
@@ -54,7 +54,7 @@ class SHFQC(ZIStandardInstrument):
                 physical_port_ids=[f"{ch}"],
                 connector_labels=[f"Signal Output {ch+1}"],
             )
-            for ch in range(4)
+            for ch in range(1)
         ]
         outputs.extend(
             Port(

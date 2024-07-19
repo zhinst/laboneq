@@ -69,12 +69,13 @@ def _integration_weights_by_signal(
         for kernel in kernels:
             waveform: None | np.ndarray = None
             for scale, suffix in [(1, ".wave"), (1, "_i.wave"), (1j, "_q.wave")]:
-                new_wf = compiled_experiment.waves.get(kernel + suffix)
+                new_wf = compiled_experiment.waves.get(kernel.id + suffix)
                 if new_wf is not None:
                     waveform = scale * new_wf.samples + (
                         waveform if waveform is not None else 0
                     )
             assert waveform is not None, "kernel not found"
+            waveform = np.repeat(waveform, kernel.downsampling_factor)
             kernel_samples_by_signal[signal] += [waveform]
 
     return kernel_samples_by_signal
@@ -240,7 +241,9 @@ def plot_simulation(
 
                 titles.append(f"{physical_channel_name} - {signal_names}".upper())
 
-        elif "input" in channel.name or "qas_0_1" in channel.name:
+        elif (
+            "input" in channel.name or "qas_0_1" in channel.name
+        ) and not compiled_experiment.recipe.is_spectroscopy:
             if my_snippet.time is not None:
                 this_kernel_samples = kernel_samples[signal]
                 trigger_indices = np.argwhere(my_snippet.wave).flatten()

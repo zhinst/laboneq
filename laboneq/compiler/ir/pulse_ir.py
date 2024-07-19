@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from attrs import define
 
@@ -18,12 +18,13 @@ class PulseIR(IntervalIR):
     amp_param_name: str | None = None
     phase: float
     offset: int
-    oscillator_frequency: Optional[float] = None
-    set_oscillator_phase: Optional[float] = None
-    increment_oscillator_phase: Optional[float] = None
+    oscillator_frequency: float | None = None
+    set_oscillator_phase: float | None = None
+    increment_oscillator_phase: float | None = None
+    incr_phase_param_name: str | None = None
     section: str
-    play_pulse_params: Optional[Dict[str, Any]] = None
-    pulse_pulse_params: Optional[Dict[str, Any]] = None
+    play_pulse_params: Dict[str, Any] | None = None
+    pulse_pulse_params: Dict[str, Any] | None = None
     is_acquire: bool
     markers: Any = None
 

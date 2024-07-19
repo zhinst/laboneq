@@ -7,6 +7,7 @@ from laboneq.data.execution_payload import ExecutionPayload
 from laboneq.data.experiment_description import (
     Acquire,
     AcquireLoopRt,
+    Delay,
     ExecutionType,
     Experiment,
     PlayPulse,
@@ -201,6 +202,10 @@ class ExperimentAdapter:
 
     def acquire(self, signal, handle, length):
         operation = Acquire(signal=signal, handle=handle, length=length)
+        self._push_operation(operation)
+
+    def delay(self, signal, time):
+        operation = Delay(signal=signal, time=time)
         self._push_operation(operation)
 
     def _push_section(self, section):

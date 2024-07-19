@@ -358,6 +358,9 @@ class JsonLoader(LoaderBase):
                     averaging_mode=averaging_mode,
                     repetition_mode=repetition_mode,
                     repetition_time=repetition_time,
+                    parameters=self._section_parameters[instance_id]
+                    if instance_id in self._section_parameters
+                    else [],
                     play_after=section.get("play_after"),
                     reset_oscillator_phase=reset_oscillator_phase,
                     triggers=trigger_output,

@@ -341,7 +341,8 @@ class Scheduler:
                     and oscillator_param_lookup[param.uid].id != oscillator.uid
                 ):
                     raise LabOneQException(
-                        "Hardware frequency sweep may drive only a single oscillator"
+                        "Hardware frequency sweep parameter may drive only a single"
+                        " oscillator"
                     )
                 oscillator_param_lookup[param.uid] = SweptHardwareOscillator(
                     id=oscillator.uid, device=signal_info.device.uid, signal=signal
@@ -737,7 +738,7 @@ class Scheduler:
         set_oscillator_phase, _ = resolve_value_or_parameter(
             "set_oscillator_phase", None
         )
-        increment_oscillator_phase, _ = resolve_value_or_parameter(
+        increment_oscillator_phase, incr_phase_param_name = resolve_value_or_parameter(
             "increment_oscillator_phase", None
         )
 
@@ -809,6 +810,7 @@ class Scheduler:
             offset=offset_int,
             set_oscillator_phase=set_oscillator_phase,
             increment_oscillator_phase=increment_oscillator_phase,
+            incr_phase_param_name=incr_phase_param_name,
             oscillator_frequency=freq,
             play_pulse_params=play_pulse_params,
             pulse_pulse_params=pulse_pulse_params,

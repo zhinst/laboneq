@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import math
-from typing import Dict, Optional
+from typing import Dict, Optional, Literal
 
-from laboneq.compiler.seqc.signatures import PlaybackSignature
 from laboneq.compiler.common.device_type import DeviceType
+from laboneq.compiler.seqc.signatures import PlaybackSignature
+from laboneq.data.scheduled_experiment import COMPLEX_USAGE
 
 
 class InvalidCommandTableError(Exception):
@@ -27,6 +28,9 @@ class CommandTableTracker:
         self._command_table: list[Dict] = []
         self._table_index_by_signature: Dict[PlaybackSignature, int] = {}
         self._device_type = device_type
+        self._parameter_phase_increment_map: dict[
+            str, list[int | Literal[COMPLEX_USAGE]]
+        ] = {}
 
     def lookup_index_by_signature(self, signature: PlaybackSignature) -> int | None:
         return self._table_index_by_signature.get(signature)
@@ -67,6 +71,17 @@ class CommandTableTracker:
             raise EntryLimitExceededError(
                 f"Invalid command table index: '{index}' for device {self._device_type}."
             )
+
+        if signature.increment_phase_params:
+            [_first, *rest] = signature.increment_phase_params
+            complex_phase_increment = any(r is not None for r in rest)
+            for param in signature.increment_phase_params:
+                if param is None:
+                    continue
+                self._parameter_phase_increment_map.setdefault(param, []).append(
+                    index if not complex_phase_increment else COMPLEX_USAGE
+                )
+
         ct_entry: dict[str, bool | int | dict] = {"index": index}
         if wave_index is None:
             if signature.waveform is not None:
@@ -157,3 +172,17 @@ class CommandTableTracker:
 
     def command_table(self) -> list[dict]:
         return self._command_table
+
+    def get_or_create_entry(
+        self,
+        signature: PlaybackSignature,
+        wave_index: int | None,
+    ) -> int:
+        if (idx := self.lookup_index_by_signature(signature)) is not None:
+            return idx
+        return self.create_entry(signature, wave_index)
+
+    def parameter_phase_increment_map(
+        self,
+    ) -> dict[str, list[int | Literal[COMPLEX_USAGE]]]:
+        return self._parameter_phase_increment_map

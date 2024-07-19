@@ -319,8 +319,10 @@ class DeviceZI(INodeMonitorProvider):
         if self.options.expected_installed_options is None:
             _logger.warning(
                 f"{self.dev_repr}: Include the device options '{actual_opts}' in the"
-                f" device setup ('device_options' field of the 'instruments' list in the device"
-                f" setup descriptor). This will become a strict requirement in the future."
+                f" device setup ('options' field of the 'instruments' list in the device"
+                f" setup descriptor, 'device_options' argument when constructing"
+                f" instrument objects to be added to 'DeviceSetup' instances)."
+                f" This will become a strict requirement in the future."
             )
         elif actual_opts != self.options.expected_installed_options.upper():
             _logger.warning(
@@ -457,7 +459,8 @@ class DeviceZI(INodeMonitorProvider):
 
         dev_type_path = f"/{self.serial}/features/devtype"
         dev_opts_path = f"/{self.serial}/features/options"
-        dev_traits = await self.get_raw_values(f"{dev_type_path},{dev_opts_path}")
+        dev_traits_raw = await self.get_raw(f"{dev_type_path},{dev_opts_path}")
+        dev_traits = {p: v["value"][-1] for p, v in dev_traits_raw.items()}
         dev_type = dev_traits.get(dev_type_path)
         dev_opts = dev_traits.get(dev_opts_path)
         if isinstance(dev_type, str):
@@ -592,7 +595,7 @@ class DeviceZI(INodeMonitorProvider):
     ) -> list[DaqNodeSetAction]:
         return []
 
-    async def configure_acquisition(
+    def configure_acquisition(
         self,
         awg_key: AwgKey,
         awg_config: AwgConfig,
@@ -600,18 +603,15 @@ class DeviceZI(INodeMonitorProvider):
         averages: int,
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
-        with_pipeliner: bool,
+        pipeliner_job: int | None,
         recipe_data: RecipeData,
-    ) -> list[DaqNodeSetAction]:
-        return []
+    ) -> NodeCollector:
+        return NodeCollector()
 
     async def get_raw(self, path: str) -> dict[str, Any]:
         if self._api is not None:
             return await get_raw(self._api, path)
         return self.daq.get_raw(path)
-
-    async def get_raw_values(self, path: str) -> dict[str, Any]:
-        return {p: v["value"][-1] for p, v in (await self.get_raw(path)).items()}
 
     async def get_measurement_data(
         self,
@@ -628,8 +628,10 @@ class DeviceZI(INodeMonitorProvider):
 
     async def get_input_monitor_data(
         self, channel: int, num_results: int
-    ) -> RawReadoutData | None:
-        return None  # default -> no results available from the device
+    ) -> RawReadoutData:
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support result retrieval"
+        )
 
     async def conditions_for_execution_ready(
         self, with_pipeliner: bool
@@ -712,6 +714,7 @@ class DeviceZI(INodeMonitorProvider):
         upload_ready_conditions: dict[str, Any] = {}
 
         if rt_execution_info.with_pipeliner:
+            # enable pipeliner
             elf_nodes.extend(self.pipeliner_prepare_for_upload(awg_index))
 
         for pipeliner_job in range(rt_execution_info.pipeliner_jobs):
@@ -736,6 +739,17 @@ class DeviceZI(INodeMonitorProvider):
                     pipeliner_job=pipeliner_job,
                     rt_exec_step=rt_exec_step,
                 )
+            # Todo (PW): This currently needlessly reconfigures the acquisition in every
+            #  NT step. The acquisition parameters really are constant across NT steps,
+            #  we only care about re-enabling the result logger.
+            wf_eff.extend(
+                self.prepare_readout_config_nodes(
+                    recipe_data,
+                    rt_section_uid,
+                    AwgKey(initialization.device_uid, awg_index),
+                    pipeliner_job if rt_execution_info.with_pipeliner else None,
+                )
+            )
 
             if rt_exec_step is None:
                 continue
@@ -1083,11 +1097,45 @@ class DeviceZI(INodeMonitorProvider):
     ) -> NodeCollector:
         return NodeCollector()
 
+    def prepare_readout_config_nodes(
+        self,
+        recipe_data: RecipeData,
+        rt_section_uid: str,
+        awg_key: AwgKey,
+        pipeliner_job: int | None,
+    ) -> NodeCollector:
+        nc = NodeCollector()
+        rt_execution_info = recipe_data.rt_execution_infos[rt_section_uid]
+        awg_config = recipe_data.awg_configs[awg_key]
+
+        if rt_execution_info.averaging_mode == AveragingMode.SINGLE_SHOT:
+            effective_averages = 1
+            effective_averaging_mode = AveragingMode.CYCLIC
+            # TODO(2K): handle sequential
+        else:
+            effective_averages = rt_execution_info.averages
+            effective_averaging_mode = rt_execution_info.averaging_mode
+
+        nc.extend(
+            self.configure_acquisition(
+                awg_key,
+                awg_config,
+                recipe_data.recipe.integrator_allocations,
+                effective_averages,
+                effective_averaging_mode,
+                rt_execution_info.acquisition_type,
+                pipeliner_job,
+                recipe_data,
+            )
+        )
+
+        return nc
+
     def pipeliner_prepare_for_upload(self, index: int) -> NodeCollector:
-        return []
+        return NodeCollector()
 
     def pipeliner_commit(self, index: int) -> NodeCollector:
-        return []
+        return NodeCollector()
 
     def pipeliner_ready_conditions(self, index: int) -> dict[str, Any]:
         return {}

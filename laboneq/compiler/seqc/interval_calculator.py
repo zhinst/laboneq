@@ -142,7 +142,7 @@ def calculate_intervals(
     play_wave_max_hint: int,
     cut_points: List[int],
     granularity: int = 16,
-    force_command_table_intervals: Iterable[MutableInterval] = {},
+    force_command_table_intervals: Iterable[MutableInterval] = (),
 ) -> list[Interval]:
     """
     Compute intervals (corresponding to eventual playWave statements in the code) from

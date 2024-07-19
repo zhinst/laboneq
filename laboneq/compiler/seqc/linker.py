@@ -29,6 +29,9 @@ from laboneq.data.scheduled_experiment import (
     PulseMapEntry,
     CompilerArtifact,
     ArtifactsCodegen,
+    ParameterPhaseIncrementMap,
+    COMPLEX_USAGE,
+    CommandTableMapEntry,
 )
 
 
@@ -48,6 +51,9 @@ class CombinedRTOutputSeqC(CombinedOutput):
     wave_indices: list[dict[str, Any]] = field(default_factory=list)
     command_tables: list[dict[str, Any]] = field(default_factory=list)
     pulse_map: dict[str, PulseMapEntry] = field(default_factory=dict)
+    parameter_phase_increment_map: dict[str, ParameterPhaseIncrementMap] = field(
+        default_factory=dict
+    )
     feedback_register_configurations: dict[AwgKey, FeedbackRegisterConfig] = field(
         default_factory=dict
     )
@@ -65,6 +71,7 @@ class CombinedRTOutputSeqC(CombinedOutput):
             command_tables=self.command_tables,
             pulse_map=self.pulse_map,
             integration_weights=self.integration_weights,
+            parameter_phase_increment_map=self.parameter_phase_increment_map,
         )
 
 
@@ -81,6 +88,7 @@ class SeqCGenOutput(RTCompilerOutput):
     wave_indices: dict[AwgKey, dict[str, Any]]
     command_tables: dict[AwgKey, dict[str, Any]]
     pulse_map: dict[str, PulseMapEntry]
+    parameter_phase_increment_map: dict[str, list]
     feedback_register_configurations: dict[AwgKey, FeedbackRegisterConfig]
 
     total_execution_time: float = 0
@@ -109,6 +117,20 @@ def _check_compatibility(this, new):
         )
 
 
+def _extend_parameter_phase_increment_map(
+    ppim: dict[str, ParameterPhaseIncrementMap], new: SeqCGenOutput, ct_ref: str
+):
+    for param_name, targets in new.parameter_phase_increment_map.items():
+        this_param_targets = ppim.setdefault(param_name, ParameterPhaseIncrementMap())
+        for target in targets:
+            entry = (
+                CommandTableMapEntry(ct_ref, target)
+                if target != COMPLEX_USAGE
+                else target
+            )
+            this_param_targets.entries.append(entry)
+
+
 class SeqCLinker(ILinker):
     @staticmethod
     def combined_from_single_run(output: SeqCGenOutput, step_indices: list[int]):
@@ -116,6 +138,7 @@ class SeqCLinker(ILinker):
         command_tables = []
         wave_indices = []
         integration_weights: dict[str, AwgWeights] = {}
+        parameter_phase_increment_map: dict[str, ParameterPhaseIncrementMap] = {}
         for awg, awg_src in output.src.items():
             seqc_name = _make_seqc_name(awg, step_indices)
             src.append({"filename": seqc_name, **awg_src})
@@ -131,6 +154,9 @@ class SeqCLinker(ILinker):
             )
             if awg in output.integration_weights:
                 integration_weights[seqc_name] = output.integration_weights[awg]
+            _extend_parameter_phase_increment_map(
+                parameter_phase_increment_map, output, seqc_name
+            )
 
         return CombinedRTOutputSeqC(
             feedback_connections=output.feedback_connections,
@@ -148,6 +174,7 @@ class SeqCLinker(ILinker):
             pulse_map=output.pulse_map,
             feedback_register_configurations=output.feedback_register_configurations,
             realtime_steps=SeqCLinker.make_realtime_step(output, step_indices),
+            parameter_phase_increment_map=parameter_phase_increment_map,
         )
 
     @staticmethod
@@ -191,7 +218,7 @@ class SeqCLinker(ILinker):
                     name: wave
                     for name, wave in previous.waves.items()
                     if any(
-                        index_name in name
+                        index_name.id in name
                         for l in previous_integration_weights.values()
                         for index_name in l
                     )
@@ -203,7 +230,7 @@ class SeqCLinker(ILinker):
                     name: wave
                     for name, wave in new.waves.items()
                     if any(
-                        index_name in name
+                        index_name.id in name
                         for l in new_integration_weights.values()
                         for index_name in l
                     )
@@ -229,6 +256,10 @@ class SeqCLinker(ILinker):
                     this.pulse_map[pulse_id] = entry
                 else:
                     this.pulse_map[pulse_id].waveforms.update(entry.waveforms)
+
+            _extend_parameter_phase_increment_map(
+                this.parameter_phase_increment_map, new, seqc_name
+            )
 
             this.src.append({"filename": seqc_name, **awg_src})
             if new_ct is not None:

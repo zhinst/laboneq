@@ -66,8 +66,6 @@ class Oscillator:
                 FutureWarning,
                 stacklevel=2,
             )
-        else:
-            self.carrier_type = CarrierType.RF
 
     def __hash__(self):
         return hash(self.uid)

@@ -4,6 +4,7 @@
 from laboneq.controller.devices.device_leader_base import DeviceLeaderBase
 from laboneq.controller.devices.zi_node_monitor import (
     Command,
+    WaitCondition,
     NodeControlBase,
     Response,
 )
@@ -19,4 +20,7 @@ class DevicePQSC(DeviceLeaderBase):
         return [
             Command(f"/{self.serial}/system/preset/load", 1),
             Response(f"/{self.serial}/system/preset/busy", 0),
+            # TODO(2K): Remove once https://zhinst.atlassian.net/browse/HULK-1800 is resolved
+            WaitCondition(f"/{self.serial}/system/clocks/referenceclock/in/source", 0),
+            WaitCondition(f"/{self.serial}/system/clocks/referenceclock/in/status", 0),
         ]

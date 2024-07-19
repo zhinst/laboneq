@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from itertools import groupby
 import math
 from numbers import Number
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, Literal
 
 import numpy as np
 from numpy import typing as npt
@@ -97,6 +97,8 @@ from laboneq.data.scheduled_experiment import (
     PulseInstance,
     PulseMapEntry,
     PulseWaveformMap,
+    WeightInfo,
+    COMPLEX_USAGE,
 )
 
 _logger = logging.getLogger(__name__)
@@ -108,10 +110,10 @@ def add_wait_trigger_statements(
     deferred_function_calls: SeqCGenerator,
 ):
     if awg.trigger_mode == TriggerMode.DIO_TRIGGER:
+        # HDAWG (with optional downstream UHFQA connected via DIO), no PQSC
         if awg.awg_number == 0:
             init_generator.add_function_call_statement("setDIO", ["0"])
-            # Delay the leader core by ca 28 ms, so the followers are reliably armed.
-            init_generator.add_function_call_statement("wait", ["0x800000"])
+            init_generator.add_function_call_statement("wait", ["1"])
             init_generator.add_function_call_statement("playZero", ["512"])
             if awg.reference_clock_source != "internal":
                 init_generator.add_function_call_statement("waitDigTrigger", ["1"])
@@ -137,6 +139,7 @@ def add_wait_trigger_statements(
                 deferred_function_calls.add_function_call_statement("waitWave")
 
     elif awg.trigger_mode == TriggerMode.DIO_WAIT:
+        # UHFQA triggered by HDAWG
         init_generator.add_variable_declaration("dio", "0xffffffff")
         body = SeqCGenerator()
         body.add_function_call_statement("getDIO", args=None, assign_to="dio")
@@ -152,36 +155,16 @@ def add_wait_trigger_statements(
             init_generator.add_function_call_statement("waitWave")
 
     elif awg.trigger_mode == TriggerMode.INTERNAL_TRIGGER_WAIT:
+        # SHFQC, internally triggered
         init_generator.add_function_call_statement("waitDigTrigger", ["1"])
 
     else:
         if CodeGenerator.USE_ZSYNC_TRIGGER and awg.device_type.supports_zsync:
+            # Any instrument triggered directly via ZSync
             init_generator.add_function_call_statement("waitZSyncTrigger")
         else:
+            # UHFQA triggered by PQSC (forwarded over DIO)
             init_generator.add_function_call_statement("waitDIOTrigger")
-
-
-def setup_sine_phase(
-    awg: AWGInfo,
-    command_table_tracker: CommandTableTracker,
-    init_generator: SeqCGenerator,
-    use_ct: bool,
-):
-    if awg.device_type != DeviceType.HDAWG or not use_ct:
-        return
-
-    index = command_table_tracker.create_entry(
-        PlaybackSignature(
-            waveform=None,
-            hw_oscillator=None,
-            pulse_parameters=(),
-            state=None,
-            set_phase=0,
-            increment_phase=None,
-        ),
-        None,
-    )
-    init_generator.add_command_table_execution(index)
 
 
 def stable_hash(integration_weight):
@@ -374,6 +357,9 @@ class CodeGenerator(ICodeGenerator):
         self._requires_long_readout: dict[str, list[str]] = defaultdict(list)
         self._command_tables: dict[AwgKey, dict[str, Any]] = {}
         self._pulse_map: dict[str, PulseMapEntry] = {}
+        self._parameter_phase_increment_map: dict[
+            str, list[int | Literal[COMPLEX_USAGE]]
+        ] = {}
         self._sampled_signatures: dict[str, dict[WaveformSignature, dict]] = {}
         self._integration_times: IntegrationTimes | None = None
         self._signal_delays: SignalDelays | None = None
@@ -419,12 +405,18 @@ class CodeGenerator(ICodeGenerator):
             wave_indices=self.wave_indices(),
             command_tables=self.command_tables(),
             pulse_map=self.pulse_map(),
+            parameter_phase_increment_map=self.parameter_phase_increment_map(),
             feedback_register_configurations=self.feedback_register_config(),
         )
 
     def integration_weights(self) -> dict[AwgKey, AwgWeights]:
         return {
-            awg: {signal: [iw.basename for iw in l] for signal, l in d.items()}
+            awg: {
+                signal: [
+                    WeightInfo(iw.basename, iw.downsampling_factor or 1) for iw in l
+                ]
+                for signal, l in d.items()
+            }
             for awg, d in self._integration_weights.items()
         }
 
@@ -1522,8 +1514,6 @@ class CodeGenerator(ICodeGenerator):
             use_flexible_feedback=self._settings.FLEXIBLE_FEEDBACK,
         )
 
-        setup_sine_phase(awg, command_table_tracker, init_generator, use_command_table)
-
         add_wait_trigger_statements(awg, init_generator, deferred_function_calls)
         try:
             handler.handle_sampled_events(sampled_events)
@@ -1573,6 +1563,9 @@ class CodeGenerator(ICodeGenerator):
             self._command_tables[awg_key] = {
                 "ct": handler.command_table_tracker.command_table()
             }
+            self._parameter_phase_increment_map = (
+                handler.command_table_tracker.parameter_phase_increment_map()
+            )
 
     def waveform_size_hints(self, device: DeviceType):
         settings = self._settings
@@ -1688,7 +1681,9 @@ class CodeGenerator(ICodeGenerator):
                 if pulse_part.amplitude is not None:
                     amplitude *= pulse_part.amplitude
 
-                oscillator_phase = pulse_part.oscillator_phase
+                assert (
+                    not pulse_part.oscillator_phase
+                ), "oscillator phase should have been baked into pulse phase"
 
                 baseband_phase = pulse_part.increment_oscillator_phase
                 used_oscillator_frequency = pulse_part.oscillator_frequency
@@ -1708,8 +1703,6 @@ class CodeGenerator(ICodeGenerator):
                 # In case oscillator phase can't be set at runtime (e.g. HW oscillator without
                 # phase control from a sequencer), apply oscillator phase on a baseband (iq) signal
                 iq_phase += baseband_phase or 0.0
-
-                iq_phase += oscillator_phase or 0.0
 
                 iq_phase = normalize_phase(iq_phase)
 
@@ -1850,7 +1843,6 @@ class CodeGenerator(ICodeGenerator):
                         amplitude=amplitude_multiplier,
                         length=pulse_part.length,
                         modulation_frequency=used_oscillator_frequency,
-                        modulation_phase=oscillator_phase,
                         iq_phase=iq_phase,
                         channel=pulse_part.channel,
                         needs_conjugate=needs_conjugate,
@@ -1914,6 +1906,9 @@ class CodeGenerator(ICodeGenerator):
 
     def pulse_map(self) -> dict[str, PulseMapEntry]:
         return self._pulse_map
+
+    def parameter_phase_increment_map(self) -> dict[str, int | Literal[COMPLEX_USAGE]]:
+        return self._parameter_phase_increment_map
 
     def integration_times(self) -> IntegrationTimes:
         return self._integration_times

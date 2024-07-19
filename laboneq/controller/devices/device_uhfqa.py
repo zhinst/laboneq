@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from typing import Any, NoReturn
 
 import numpy as np
@@ -68,6 +70,7 @@ class DeviceUHFQA(DeviceZI):
         self.dev_type = "UHFQA"
         self.dev_opts = ["AWG", "DIG", "QA"]
         self._channels = 2
+        self._integrators = 10
         self._use_internal_clock = True
 
     def _get_num_awgs(self) -> int:
@@ -116,6 +119,10 @@ class DeviceUHFQA(DeviceZI):
         for awg in range(self._get_num_awgs()):
             nodes.append(f"/{self.serial}/awgs/{awg}/enable")
             nodes.append(f"/{self.serial}/awgs/{awg}/ready")
+        for result_index in range(self._integrators):
+            nodes.append(f"/{self.serial}/qas/0/result/data/{result_index}/wave")
+        nodes.append(f"/{self.serial}/qas/0/monitor/inputs/0/wave")
+        nodes.append(f"/{self.serial}/qas/0/monitor/inputs/1/wave")
         return nodes
 
     def _error_ambiguous_upstream(self) -> NoReturn:
@@ -160,7 +167,7 @@ class DeviceUHFQA(DeviceZI):
             Response(f"/{self.serial}/system/preset/busy", 0),
         ]
 
-    async def configure_acquisition(
+    def configure_acquisition(
         self,
         awg_key: AwgKey,
         awg_config: AwgConfig,
@@ -168,10 +175,11 @@ class DeviceUHFQA(DeviceZI):
         averages: int,
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
-        with_pipeliner: bool,
+        pipeliner_job: int | None,
         recipe_data: RecipeData,
-    ) -> list[DaqNodeSetAction]:
+    ) -> NodeCollector:
         nc = NodeCollector()
+        assert pipeliner_job is None, "Pipelining not supported on UHFQA"
         nc.extend(
             self._configure_result_logger(
                 awg_key,
@@ -189,7 +197,7 @@ class DeviceUHFQA(DeviceZI):
                 acquire_length=awg_config.raw_acquire_length,
             )
         )
-        return await self.maybe_async(nc)
+        return nc
 
     def _configure_result_logger(
         self,
@@ -201,6 +209,8 @@ class DeviceUHFQA(DeviceZI):
         acquisition_type: AcquisitionType,
     ) -> NodeCollector:
         nc = NodeCollector(base=f"/{self.serial}/")
+        if awg_config.result_length is None:
+            return nc  # this instrument is unused for acquiring results
         enable = acquisition_type != AcquisitionType.RAW
         if enable:
             if averaging_mode != AveragingMode.SINGLE_SHOT:
@@ -226,7 +236,9 @@ class DeviceUHFQA(DeviceZI):
             nc.add("qas/0/result/enable", 0)
             nc.add("qas/0/result/reset", 1, cache=False)
         _logger.debug("Turning %s result logger...", "on" if enable else "off")
+        nc.barrier()
         nc.add("qas/0/result/enable", 1 if enable else 0)
+        nc.barrier()
         return nc
 
     def _configure_input_monitor(
@@ -240,7 +252,7 @@ class DeviceUHFQA(DeviceZI):
                 )
             nc.add("qas/0/monitor/length", acquire_length)
             nc.add("qas/0/monitor/averages", averages)
-            nc.add("qas/0/monitor/enable", 0)
+            nc.add("qas/0/monitor/enable", 0)  # todo: barrier needed?
             nc.add("qas/0/monitor/reset", 1, cache=False)
         nc.add("qas/0/monitor/enable", 1 if enable else 0)
         return nc
@@ -482,24 +494,20 @@ class DeviceUHFQA(DeviceZI):
                 ia for ia in integrator_allocations if ia.signal_id == signal_id
             )
 
-            for weight_name in weight_names:
+            for weight in weight_names:
                 for channel in integrator_allocation.channels:
-                    weight_wave_real = get_wave(
-                        weight_name + "_i.wave", artifacts.waves
-                    )
-                    weight_wave_imag = get_wave(
-                        weight_name + "_q.wave", artifacts.waves
-                    )
+                    weight_wave_real = get_wave(weight.id + "_i.wave", artifacts.waves)
+                    weight_wave_imag = get_wave(weight.id + "_q.wave", artifacts.waves)
                     nc.add(
                         f"qas/0/integration/weights/{channel}/real",
                         np.ascontiguousarray(weight_wave_real.samples),
-                        filename=weight_name + "_i.wave",
+                        filename=weight.id + "_i.wave",
                     )
                     nc.add(
                         f"qas/0/integration/weights/{channel}/imag",
                         # Note conjugation here
                         -np.ascontiguousarray(weight_wave_imag.samples),
-                        filename=weight_name + "_q.wave",
+                        filename=weight.id + "_q.wave",
                     )
 
         return nc
@@ -583,14 +591,33 @@ class DeviceUHFQA(DeviceZI):
         self, result_index, num_results, averages_divider: int
     ):
         result_path = f"/{self.serial}/qas/0/result/data/{result_index}/wave"
-        # @TODO(andreyk): replace the raw daq reply parsing on site here and hide it inside
-        # Communication class
-        data_node_query = await self.get_raw(result_path)
-        assert len(data_node_query[result_path][0]["vector"]) == num_results, (
-            f"{self.dev_repr}: number of measurement points returned"
-            " does not match length of recipe measurement_map"
-        )
-        return data_node_query[result_path][0]["vector"] / averages_divider
+        ch_repr = f"{self.dev_repr}:readout{result_index}"
+        read_result_timeout_s = 5
+        last_result_received = None
+        while True:
+            node_data = self.node_monitor.pop(result_path)
+            if node_data is not None:
+                node_val = node_data["vector"]
+                num_samples = len(node_val)
+                if num_samples != num_results:
+                    _logger.error(
+                        f"{ch_repr}: The number of measurements acquired ({num_samples}) "
+                        f"does not match the number of measurements defined ({num_results}). "
+                        "Possibly the time between measurements within a loop is too short, "
+                        "or the measurement was not started."
+                    )
+                # Not dividing by averages_divider - it appears poll data is already divided.
+                return node_val[0:num_results]
+            now = time.monotonic()
+            if last_result_received is None:
+                last_result_received = now
+            if now - last_result_received > read_result_timeout_s:
+                _logger.error(
+                    f"{ch_repr}: Failed to receive all results within {read_result_timeout_s} s, timing out."
+                )
+                return np.array([], dtype=np.complex128)
+            await asyncio.sleep(0.1)
+            await self.node_monitor.poll()
 
     async def get_measurement_data(
         self,
@@ -625,27 +652,41 @@ class DeviceUHFQA(DeviceZI):
                 )
             )
 
+    async def _get_input_monitor_data(self, ch: int, num_results: int):
+        result_path = f"/{self.serial}/qas/0/monitor/inputs/{ch}/wave"
+        ch_repr = f"{self.dev_repr}:monitor{ch}"
+        read_result_timeout_s = 5
+        last_result_received = None
+        while True:
+            node_data = self.node_monitor.pop(result_path)
+            if node_data is not None:
+                node_val = node_data["vector"]
+                num_samples = len(node_val)
+                if num_samples != num_results:
+                    _logger.error(
+                        f"{ch_repr}: The number of measurements acquired ({num_samples}) "
+                        f"does not match the number of measurements defined ({num_results}). "
+                        "Possibly the time between measurements within a loop is too short, "
+                        "or the measurement was not started."
+                    )
+                # Truncate returned vectors to the expected length -> hotfix for GCE-681
+                return node_val[0:num_results]
+            now = time.monotonic()
+            if last_result_received is None:
+                last_result_received = now
+            if now - last_result_received > read_result_timeout_s:
+                _logger.error(
+                    f"{ch_repr}: Failed to receive all results within {read_result_timeout_s} s, timing out."
+                )
+                return np.array([], dtype=np.complex128)
+            await asyncio.sleep(0.1)
+            await self.node_monitor.poll()
+
     async def get_input_monitor_data(
         self, channel: int, num_results: int
     ) -> RawReadoutData:
-        result_path_ch0 = f"/{self.serial}/qas/0/monitor/inputs/0/wave".lower()
-        result_path_ch1 = f"/{self.serial}/qas/0/monitor/inputs/1/wave".lower()
-        data = await self.get_raw(",".join([result_path_ch0, result_path_ch1]))
-        # Truncate returned vectors to the expected length -> hotfix for GCE-681
-        ch0 = data[result_path_ch0][0]["vector"][0:num_results]
-        ch1 = data[result_path_ch1][0]["vector"][0:num_results]
+        ch0 = await self._get_input_monitor_data(0, num_results)
+        ch1 = await self._get_input_monitor_data(1, num_results)
         return RawReadoutData(
             np.array([complex(real, imag) for real, imag in zip(ch0, ch1)])
         )
-
-    async def check_results_acquired_status(
-        self, channel, acquisition_type: AcquisitionType, result_length, hw_averages
-    ):
-        results_acquired_path = f"/{self.serial}/qas/0/result/acquired"
-        batch_get_results = await self.get_raw_values(results_acquired_path)
-        if batch_get_results[results_acquired_path] != 0:
-            raise LabOneQControllerException(
-                f"The number of measurements executed for device {self.serial} does not match "
-                f"the number of measurements defined. Probably the time between measurements or "
-                f"within a loop is too short. Please contact Zurich Instruments."
-            )

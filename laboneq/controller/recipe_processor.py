@@ -464,11 +464,6 @@ def _calculate_awg_configs(
                 awg_config.result_length = (
                     len(any_awg_signal_result_map) * mapping_repeats
                 )
-                if (
-                    rt_execution_info.with_pipeliner
-                    and not setup_caps.result_logger_pipelined
-                ):
-                    awg_config.result_length *= rt_execution_info.pipeliner_jobs
 
     return awg_configs
 

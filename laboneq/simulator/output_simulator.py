@@ -90,10 +90,25 @@ class _AWG_ID:
     def _decode_sgchannels(
         self, chs: list[str], realtime_inits: list[RealtimeExecutionInit]
     ):
-        internal_device_name = (
-            self._dev_uid if not self._is_qc() else f"{self._dev_uid}_sg"
-        )
-
+        internal_device_name = self._dev_uid
+        if self._is_qc():
+            qc_channels = {
+                ch.name
+                for ch in self._device_setup.physical_channel_groups[
+                    self._dev_uid
+                ].channels.values()
+            }
+            qa_channels = {
+                f"qachannels_{ch}_{suffix}"
+                for ch in range(4)
+                for suffix in ("output", "input")
+            }
+            # only add the _sg suffix if qc was split into sg and qa (which only happens if qa channels are present)
+            internal_device_name = (
+                self._dev_uid
+                if qc_channels.isdisjoint(qa_channels)
+                else f"{self._dev_uid}_sg"
+            )
         self.is_out = True
         self.channels = [0, 1]
         self.find_seqc(internal_device_name, int(chs[0]), realtime_inits)

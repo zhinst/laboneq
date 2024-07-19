@@ -39,7 +39,7 @@ from laboneq.controller.devices.zi_node_monitor import (
     ResponseWaiter,
     filter_commands,
     filter_settings,
-    filter_conditions,
+    filter_states,
     filter_responses,
     filter_wait_conditions,
 )
@@ -53,8 +53,6 @@ if TYPE_CHECKING:
 SUPPRESSED_WARNINGS = frozenset(
     {
         "AWGDIOTIMING",  # SVT-120, has no consequence for LabOne Q usage of DIO.
-        "PIPEJOBSTAGE",  # HBAR-2083
-        "RLSCALING",  # HBAR-2084
     }
 )
 
@@ -174,23 +172,32 @@ class DeviceCollection:
         for device in devices:
             dev_nodes = control_nodes_getter(device)
 
+            # 1. Collect all nodes that are not in the desired state for the device
+            dev_conditions_checker = ConditionsChecker()
+            dev_conditions_checker.add(
+                target=device,
+                conditions={n.path: n.value for n in filter_states(dev_nodes)},
+            )
+            conditions_checker.add_from(dev_conditions_checker)
+            failed = dev_conditions_checker.check_all()
+
             commands = filter_commands(dev_nodes)
             if len(commands) > 0:
-                # 1a. Unconditional command
+                # 1a. Has unconditional commands? Use simplified flow.
                 _add_set_nodes(device, commands)
                 response_waiter.add(
                     target=device,
                     conditions={n.path: n.value for n in filter_responses(dev_nodes)},
                 )
+                if failed:
+                    response_waiter.add(
+                        target=device,
+                        conditions={
+                            n.path: n.value for n in filter_wait_conditions(dev_nodes)
+                        },
+                    )
             else:
-                # 1b. Verify if device is already configured as desired
-                dev_conditions_checker = ConditionsChecker()
-                dev_conditions_checker.add(
-                    target=device,
-                    conditions={n.path: n.value for n in filter_conditions(dev_nodes)},
-                )
-                conditions_checker.add_from(dev_conditions_checker)
-                failed = dev_conditions_checker.check_all()
+                # 1b. Is device already in the desired state?
                 if not failed:
                     continue
 
@@ -215,7 +222,7 @@ class DeviceCollection:
                 for device, nc in set_nodes.items():
                     awaitables.append(device.maybe_async(nc))
 
-        # 3. Wait for responses to the changes in step 2 and settling of conditions resulting from earlier config stages
+        # 3. Wait for responses to the changes in step 2 and settling of dependent states
         if len(response_waiter.remaining()) == 0:
             # Nothing to wait for, e.g. all devices were already configured as desired?
             return
@@ -279,7 +286,7 @@ class DeviceCollection:
                     target=dev,
                     conditions={
                         n.path: n.value
-                        for n in filter_conditions(dev.clock_source_control_nodes())
+                        for n in filter_states(dev.clock_source_control_nodes())
                     },
                 )
             for dev in leaders:
@@ -287,7 +294,7 @@ class DeviceCollection:
                     target=dev,
                     conditions={
                         n.path: n.value
-                        for n in filter_conditions(dev.zsync_link_control_nodes())
+                        for n in filter_states(dev.zsync_link_control_nodes())
                     },
                 )
             failed = check_zsync_link.check_all()

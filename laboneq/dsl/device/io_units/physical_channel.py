@@ -27,6 +27,7 @@ PHYSICAL_CHANNEL_CALIBRATION_FIELDS = (
     "precompensation",
     "amplitude",
     "added_outputs",
+    "amplifier_pump",
 )
 
 

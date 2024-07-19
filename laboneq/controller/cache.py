@@ -44,7 +44,7 @@ class Cache:
 
     def force_set(self, key: str, value):
         if "*" in key:
-            pattern = re.compile(key.replace("*", ".*"))
+            pattern = re.compile(key.replace("*", "[^/]*"))
             for k in self._cache:
                 if pattern.fullmatch(k):
                     self._cache[k] = value

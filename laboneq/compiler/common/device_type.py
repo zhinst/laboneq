@@ -146,10 +146,10 @@ class DeviceType(DeviceTraits, Enum):
         supports_output_mute=True,
         # Verified by MH (2024-03-16) on dev12156 & dev12093, rev 69800.
         # Marker output setTrigger(1) lead time
-        output_mute_engage_delay=48e-9,
+        output_mute_engage_delay=128e-9,
         # Verified by MH (2024-03-16) on dev12156 & dev12093 rev 69800.
         # Marker output setTrigger(0) delay time
-        output_mute_disengage_delay=84e-9,
+        output_mute_disengage_delay=-16e-9,
     )
     SHFSG = DeviceTraits(
         str_value="shfsg",
@@ -177,10 +177,11 @@ class DeviceType(DeviceTraits, Enum):
         is_qa_device=False,
         has_prng=True,
         supports_output_mute=True,
-        # Marker output setTrigger(1) lead time
-        output_mute_engage_delay=-56e-9,
-        # Marker output setTrigger(0) delay time
-        output_mute_disengage_delay=0,
+        # Verified by MH (2024-03-16) on dev12156 & dev12093, rev 69800.
+        # PW (2024-07-02) bump by 26 ns, account for possible RTR delay
+        output_mute_engage_delay=24e-9 + 26e-9,
+        # Verified by MH (2024-03-16) on dev12156 & dev12093 rev 69800.
+        output_mute_disengage_delay=-100e-9,
         device_class=0x0,
     )
     PRETTYPRINTERDEVICE = DeviceTraits(

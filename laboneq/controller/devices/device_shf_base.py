@@ -12,6 +12,7 @@ from laboneq.controller.devices.zi_node_monitor import (
     Condition,
     NodeControlBase,
     Response,
+    WaitCondition,
 )
 
 OPT_SHF_PLUS = "PLUS"
@@ -47,6 +48,9 @@ class DeviceSHFBase(DeviceZI):
         return [
             Command(f"/{self.serial}/system/preset/load", 1),
             Response(f"/{self.serial}/system/preset/busy", 0),
+            # TODO(2K): Remove once https://zhinst.atlassian.net/browse/HULK-1800 is resolved
+            WaitCondition(f"/{self.serial}/system/clocks/referenceclock/in/source", 0),
+            WaitCondition(f"/{self.serial}/system/clocks/referenceclock/in/status", 0),
         ]
 
     def clock_source_control_nodes(self) -> list[NodeControlBase]:

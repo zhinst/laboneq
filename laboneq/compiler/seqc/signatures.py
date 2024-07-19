@@ -26,15 +26,15 @@ class PulseSignature:
     # the length of the pulse in samples
     length: int
     # the amplitude of the pulse
-    amplitude: Optional[float]
+    amplitude: float | None
     # the phase of the pulse
-    phase: Optional[float]
+    phase: float | None
     # the oscillator phase of the pulse (for SW oscillators)
-    oscillator_phase: Optional[float]
+    oscillator_phase: float | None
     # the oscillator frequency of the pulse (for SW oscillators)
-    oscillator_frequency: Optional[float]
+    oscillator_frequency: float | None
     # if present, the pulse increments the HW oscillator phase
-    increment_oscillator_phase: Optional[float]
+    increment_oscillator_phase: float | None
     # the channel of the pulse (for HDAWG)
     channel: Optional[int]
     # the sub-channel of the pulse (for SHFQA)
@@ -45,6 +45,9 @@ class PulseSignature:
     markers: Any
     # the preferred amplitude register for this pulse, will be aggregated into PlaybackSignature
     preferred_amplitude_register: Optional[int]
+    # if this pulse increments the oscillator phase, this field indicates the name of
+    # the sweep parameters that determine the increment (if applicable)
+    incr_phase_params: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -174,10 +177,13 @@ class PlaybackSignature:
     hw_oscillator: str | None
     pulse_parameters: Tuple[Tuple[frozenset, ...], ...]
     state: Optional[int] = None
-    set_phase: Optional[float] = None
-    increment_phase: Optional[float] = None
-    set_amplitude: Optional[float] = None
-    increment_amplitude: Optional[float] = None
+    set_phase: float | None = None
+    increment_phase: float | None = None
+    # A collection of the pulse parameters that drive the phase increment. If some phase
+    # increment is not associated with a parameter, this is indicated by the special value `None`
+    increment_phase_params: tuple[None | str, ...] = field(default_factory=tuple)
+    set_amplitude: float | None = None
+    increment_amplitude: float | None = None
     amplitude_register: int = 0
     clear_precompensation: bool = False
 
@@ -192,11 +198,13 @@ class PlaybackSignature:
         PHASE_RESOLUTION_CT = (1 << 24) / (2 * math.pi)
         phase_resolution_range /= 2 * math.pi
 
-        for pulse in self.waveform.pulses:
-            if pulse.phase is not None:
-                pulse.phase = normalize_phase(
-                    round(pulse.phase * phase_resolution_range) / phase_resolution_range
-                )
+        if self.waveform is not None:
+            for pulse in self.waveform.pulses:
+                if pulse.phase is not None:
+                    pulse.phase = normalize_phase(
+                        round(pulse.phase * phase_resolution_range)
+                        / phase_resolution_range
+                    )
         if self.set_phase is not None:
             self.set_phase = normalize_phase(
                 round(self.set_phase * PHASE_RESOLUTION_CT) / PHASE_RESOLUTION_CT
@@ -241,7 +249,6 @@ class PlaybackSignature:
 def reduce_signature_phase(
     signature: PlaybackSignature,
     use_ct_phase: bool,
-    after_phase_reset: bool = False,
 ) -> PlaybackSignature:
     """Reduces the phase of the signature.
 
@@ -250,13 +257,15 @@ def reduce_signature_phase(
     total_phase_increment = sum(
         pulse.increment_oscillator_phase or 0.0 for pulse in signature.waveform.pulses
     )
-    if total_phase_increment:
+    increment_phase_params = []
+
+    has_phase_increment_param = any(
+        pulse.incr_phase_params for pulse in signature.waveform.pulses
+    )
+    if total_phase_increment != 0 or has_phase_increment_param:
         assert use_ct_phase, "cannot increment oscillator phase w/o command table"
 
-        if after_phase_reset:
-            signature.set_phase = total_phase_increment
-        else:
-            signature.increment_phase = total_phase_increment
+        signature.increment_phase = total_phase_increment
 
     # absorb the partial phase increment into the pulse phase (ie the phase baked into the samples)
     running_increment = 0
@@ -264,18 +273,22 @@ def reduce_signature_phase(
         running_increment += pulse.increment_oscillator_phase or 0.0
         pulse.increment_oscillator_phase = None
 
-        if running_increment - total_phase_increment:
+        if running_increment - total_phase_increment != 0.0:
             pulse.oscillator_phase = (
                 (pulse.oscillator_phase or 0.0)
                 + running_increment
                 - total_phase_increment
             )
+            pulse.incr_phase_params = tuple([None, *pulse.incr_phase_params])
 
-        # todo: this seems wrong - it will break pulse replacement
         if pulse.oscillator_phase is not None:
             pulse.phase = (pulse.phase or 0.0) + pulse.oscillator_phase
             pulse.oscillator_phase = None
 
+        increment_phase_params.extend(pulse.incr_phase_params)
+        pulse.incr_phase_params = ()
+
+    signature.increment_phase_params = tuple(increment_phase_params)
     return signature
 
 

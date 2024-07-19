@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.data.calibration import CancellationSource
+from laboneq.dsl.calibration.observable import Observable
 from laboneq.dsl.parameter import Parameter
 
 amplifier_pump_id = 0
@@ -21,7 +22,7 @@ def amplifier_pump_id_generator():
 
 @classformatter
 @dataclass(init=True, repr=True, order=True)
-class AmplifierPump:
+class AmplifierPump(Observable):
     """Settings for the SHF Parametric Pump Controller (SHFPPC).
 
     Attributes:

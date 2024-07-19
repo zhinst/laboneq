@@ -23,9 +23,12 @@ import numpy as np
 from numpy import typing as npt
 
 
+_logger = logging.getLogger(__name__)
+
+
 @dataclass
 class NodeBase:
-    "A class modeling a single node. Specialized for specific node types."
+    """A class modeling a single node. Specialized for specific node types."""
 
     read_only: bool = False
     subscribed: bool = False
@@ -215,7 +218,7 @@ class DevEmu(ABC):
     def resolve_wildcards(self, dev_path_wildcard: str) -> Iterator[str]:
         if "*" in dev_path_wildcard:
             path_pattern = re.compile(
-                dev_path_wildcard.replace("*", ".*"), flags=re.IGNORECASE
+                dev_path_wildcard.replace("*", "[^/]*"), flags=re.IGNORECASE
             )
             node_def = self._cached_node_def()
             matched = False
@@ -236,12 +239,20 @@ class DevEmu(ABC):
         node = self._get_node(dev_path)
         return str(node.value)
 
-    def _set_val(self, dev_path: str, value: Any) -> NodeBase:
+    def _set_val(
+        self,
+        dev_path: str,
+        value: Any,
+        poll_transform: Callable[[Any], Any] | None = None,
+    ) -> NodeBase:
         node = self._get_node(dev_path)
         node.value = value
         if node.subscribed:
+            poll_data = node.node_value()
+            if poll_transform is not None:
+                poll_data = poll_transform(poll_data)
             self._poll_queue.append(
-                PollEvent(path=self._full_path(dev_path), value=node.node_value())
+                PollEvent(path=self._full_path(dev_path), value=poll_data)
             )
         return node
 
@@ -405,8 +416,8 @@ class DevEmuZI(DevEmu):
                 read_only=True,
             ),
             "about/revision": NodeInfo(
-                type=NodeType.STR,
-                default=self._dev_opts.get("about/revision", "99999"),
+                type=NodeType.INT,
+                default=self._dev_opts.get("about/revision", 99999),
                 read_only=True,
             ),
             "about/dataserver": NodeInfo(
@@ -607,15 +618,21 @@ class DevEmuUHFQA(DevEmuHW):
             for result_index in range(10):
                 user_readout_data = self._dev_opts.get("user_readout_data")
                 res = None
+                averages = self._get_node("qas/0/result/averages").value
                 if callable(user_readout_data):
-                    averages = self._get_node("qas/0/result/averages").value
                     res = user_readout_data(result_index, length, averages)
                 if res is None:
                     integrator = result_index // 2
                     res_c = (42 + integrator + 1j * np.arange(length)).view(float)
                     res = res_c[result_index % 2 :: 2]
+
+                def _apply_averages_on_poll(v, averages):
+                    return [{"vector": v[0]["vector"] / averages, "properties": {}}]
+
                 self._set_val(
-                    f"qas/0/result/data/{result_index}/wave", (np.array(res), {})
+                    f"qas/0/result/data/{result_index}/wave",
+                    (np.array(res), {}),
+                    poll_transform=partial(_apply_averages_on_poll, averages=averages),
                 )
         if monitor_enable != 0:
             length = self._get_node("qas/0/monitor/length").value
@@ -798,12 +815,14 @@ class DevEmuSHFQABase(Gen2Base):
 
             if readout_enable != 0:
                 length = pipelined_nodes.get("readout/result/length", 0)
-                averages = pipelined_nodes.get("readout/result/averages", 0)
+                # use default 1 for averages, to avoid division by zero if undefined
+                averages = pipelined_nodes.get("readout/result/averages", 1)
                 self._push_readout_result(channel, length, averages, job_id)
 
             if spectroscopy_enable != 0:
                 length = pipelined_nodes.get("spectroscopy/result/length", 0)
-                averages = pipelined_nodes.get("spectroscopy/result/averages", 0)
+                # use default 1 for averages, to avoid division by zero if undefined
+                averages = pipelined_nodes.get("spectroscopy/result/averages", 1)
                 self._push_spectroscopy_result(channel, length, averages, job_id)
 
     def _measurement_done(self, channel: int):
@@ -853,26 +872,61 @@ class DevEmuSHFQABase(Gen2Base):
         self._measurement_done(channel)
 
     def _awg_execute_qa(self, node: NodeBase, channel: int):
+        if node.value == 0:
+            return
         if not self._qa_pipeliner.is_active(channel):
             self.schedule(delay=0.001, action=self._awg_stop_qa, argument=(channel,))
 
+    def _enable_result_logger(self, node: NodeBase, channel: int, spectroscopy: bool):
+        if node.value:
+            spectroscopy_mode_enabled = self.get(f"qachannels/{channel}/mode")[
+                "value"
+            ] == [0]
+
+            if spectroscopy:
+                path = f"qachannels/{channel}/spectroscopy/result/enable"
+            else:
+                path = f"qachannels/{channel}/readout/result/enable"
+
+            if spectroscopy ^ spectroscopy_mode_enabled:
+                # the user attempted to enable the spectroscopy result logger while the
+                # instrument is in readout mode (or vice-versa).
+                current_mode_str = (
+                    "spectroscopy" if spectroscopy_mode_enabled else "readout"
+                )
+                _logger.warning(
+                    "Attempting to set /%s/%s to %d while the instrument is in %s mode.",
+                    self.serial(),
+                    path,
+                    node.value,
+                    current_mode_str,
+                )
+                self.set(path, 0)
+
+        # the node is also pipelined
+        self._qa_pipeliner._pipeline(
+            node,
+            item="spectroscopy/result/enable"
+            if spectroscopy
+            else "readout/result/enable",
+            channel=channel,
+        )
+
     def _node_def_qa(self) -> dict[str, NodeInfo]:
-        pipelineable_nodes: list[str] = [
-            "readout/result/enable",
-            "readout/result/length",
-            "readout/result/averages",
-            "spectroscopy/result/enable",
-            "spectroscopy/result/length",
-            "spectroscopy/result/averages",
-        ]
         nd = self._qa_pipeliner._node_def_pipeliner()
         for channel in range(4):
+            nd[f"qachannels/{channel}/mode"] = NodeInfo(type=NodeType.INT, default=0)
             nd[f"qachannels/{channel}/generator/enable"] = NodeInfo(
                 type=NodeType.INT,
                 default=0,
                 handler=partial(self._awg_execute_qa, channel=channel),
             )
-            for path_part in pipelineable_nodes:
+            for path_part in [
+                "readout/result/length",
+                "readout/result/averages",
+                "spectroscopy/result/length",
+                "spectroscopy/result/averages",
+            ]:
                 nd[f"qachannels/{channel}/{path_part}"] = NodeInfo(
                     type=NodeType.INT,
                     default=0,
@@ -880,6 +934,21 @@ class DevEmuSHFQABase(Gen2Base):
                         self._qa_pipeliner._pipeline, item=path_part, channel=channel
                     ),
                 )
+
+            nd[f"qachannels/{channel}/spectroscopy/result/enable"] = NodeInfo(
+                type=NodeType.INT,
+                default=0,
+                handler=partial(
+                    self._enable_result_logger, channel=channel, spectroscopy=True
+                ),
+            )
+            nd[f"qachannels/{channel}/readout/result/enable"] = NodeInfo(
+                type=NodeType.INT,
+                default=0,
+                handler=partial(
+                    self._enable_result_logger, channel=channel, spectroscopy=False
+                ),
+            )
             for integrator in range(16):
                 nd[f"qachannels/{channel}/readout/result/data/{integrator}/wave"] = (
                     NodeInfo(type=NodeType.VECTOR_COMPLEX)
@@ -1085,7 +1154,7 @@ class ziDAQServerEmulator:
         dev_path_wildcard = ""
         if "*" in path_parts[0]:
             serial_pattern = re.compile(
-                path_parts[0].replace("*", ".*"), flags=re.IGNORECASE
+                path_parts[0].replace("*", "[^/]*"), flags=re.IGNORECASE
             )
             for serial, device in self._devices.items():
                 if serial_pattern.match(serial):
@@ -1351,7 +1420,7 @@ class KernelSessionEmulator:
 
         if effective_value is not None:
             if "*" in value.path:
-                pattern = re.compile(value.path.replace("*", ".*"))
+                pattern = re.compile(value.path.replace("*", "[^/]*"))
                 for k in self._cache:
                     if pattern.fullmatch(k):
                         self._cache[k] = effective_value

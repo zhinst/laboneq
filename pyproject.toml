@@ -4,7 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "laboneq"
-dynamic = ["version", "readme"]
+version = "2.34.0"
+dynamic = ["readme"]
 description = "Zurich Instruments LabOne Q software framework for quantum computing control"
 license = { text = "Apache 2.0" }
 requires-python = ">=3.9"
@@ -58,7 +59,7 @@ dependencies = [
     "zhinst-toolkit ~= 0.6.3",
     "zhinst-utils == 0.4.1",
     "zhinst-timing-models ~= 24.4.57831",
-    "labone == 1.1.0",
+    "labone == 2.0.0",
     "unsync == 1.4.0",
 ]
 
@@ -69,7 +70,6 @@ Homepage = "https://github.com/zhinst/laboneq"
 zip-safe = false
 
 [tool.setuptools.dynamic]
-version = { file = "laboneq/VERSION.txt" }
 readme = { file = "README.md", content-type = "text/markdown" }
 
 [tool.setuptools.packages.find]
@@ -81,7 +81,6 @@ namespaces = false
 laboneq = [
     "compiler/qccs-schema_2_5_0.json",
     "pulse_sheet_viewer/pulse_sheet_viewer_template.html",
-    "VERSION.txt"
 ]
 
 

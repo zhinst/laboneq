@@ -539,10 +539,10 @@ def generate_event_list_loop_iteration(
 def generate_event_list_pulse(
     pulse_ir: PulseIR,
     start: int,
-    max_events: int,
+    _max_events: int,
     id_tracker: Iterator[int],
-    expand_loops,
-    settings: CompilerSettings,
+    _expand_loops,
+    _settings: CompilerSettings,
 ) -> EventList:
     assert pulse_ir.length is not None
     params_list = [
@@ -575,6 +575,9 @@ def generate_event_list_pulse(
 
     if pulse_ir.amp_param_name:
         d_start["amplitude_parameter"] = pulse_ir.amp_param_name
+
+    if pulse_ir.incr_phase_param_name:
+        d_start["phase_increment_parameter"] = pulse_ir.incr_phase_param_name
 
     if pulse_ir.markers is not None and len(pulse_ir.markers) > 0:
         d_start["markers"] = [vars(m) for m in pulse_ir.markers]

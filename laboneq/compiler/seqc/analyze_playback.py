@@ -7,10 +7,9 @@ from __future__ import annotations
 import itertools
 import logging
 import math
-from bisect import bisect_left
 from dataclasses import dataclass
 from math import ceil
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Set, Tuple
 
 from intervaltree import Interval, IntervalTree
 
@@ -69,6 +68,7 @@ class _IntervalStartEvent:
     state: int | None
     markers: Any
     amp_param: str | None
+    incr_phase_param: str | None
 
 
 @dataclass
@@ -96,6 +96,7 @@ class _PlayIntervalData:
     start_rounding_error: float
     markers: Any
     amp_param: str | None
+    incr_phase_param: str | None
 
 
 @dataclass
@@ -205,6 +206,7 @@ def _interval_list(events, states, signal_ids, delay, sub_channel):
                     state=states.get(start["section_name"], None),
                     markers=start.get("markers"),
                     amp_param=start.get("amplitude_parameter"),
+                    incr_phase_param=start.get("phase_increment_parameter"),
                 ),
                 _IntervalEndEvent(
                     event_type=end["event_type"],
@@ -240,6 +242,7 @@ def _interval_list(events, states, signal_ids, delay, sub_channel):
                     state=states.get(start["section_name"], None),
                     markers=None,
                     amp_param=None,
+                    incr_phase_param=None,
                 ),
                 _IntervalEndEvent(
                     event_type="DELAY_END",
@@ -280,9 +283,6 @@ def _make_interval_tree(
     for interval_start, interval_end in interval_zip:
         oscillator_phase = interval_start.oscillator_phase
 
-        increment_oscillator_phase: Optional[float] = None
-        if interval_start.increment_oscillator_phase is not None:
-            increment_oscillator_phase = interval_start.increment_oscillator_phase
         # Note: the scheduler will already align all the pulses with the sample grid,
         # and the rounding error should be 0 except for some floating point epsilon.
         (
@@ -303,7 +303,7 @@ def _make_interval_tree(
                     channel=interval_start.index,
                     oscillator_phase=oscillator_phase,
                     oscillator_frequency=interval_start.oscillator_frequency,
-                    increment_oscillator_phase=increment_oscillator_phase,
+                    increment_oscillator_phase=interval_start.increment_oscillator_phase,
                     phase=interval_start.phase,
                     sub_channel=interval_start.sub_channel,
                     play_pulse_parameters=interval_start.play_pulse_parameters,
@@ -312,6 +312,7 @@ def _make_interval_tree(
                     start_rounding_error=start_rounding_error,
                     markers=interval_start.markers,
                     amp_param=interval_start.amp_param,
+                    incr_phase_param=interval_start.incr_phase_param,
                 ),
             )
 
@@ -344,6 +345,7 @@ def _oscillator_phase_increment_points(
 class _FrameChange:
     time: int
     phase: float | None
+    parameter: str | None
     signal: str
     priority: int
     state: int | None = None
@@ -363,6 +365,7 @@ def _find_frame_changes(events, delay, sampling_rate):
                 _FrameChange(
                     time=time_samples,
                     phase=incr_phase,
+                    parameter=delay_start.get("phase_increment_parameter"),
                     signal=delay_start["signal"],
                     state=delay_start.get("state"),
                     priority=index,
@@ -383,6 +386,7 @@ def _make_virtual_z_gate_event(frame_change: _FrameChange, signal: SignalObj):
             "oscillator": signal.hw_oscillator
             if signal.awg.device_type.supports_oscillator_switching
             else None,
+            "parameter": frame_change.parameter,
         },
     )
 
@@ -464,6 +468,9 @@ def _insert_frame_changes(
             pulse.increment_oscillator_phase = (
                 pulse.increment_oscillator_phase or 0.0
             ) + frame_change.phase
+            pulse.incr_phase_params = tuple(
+                list(pulse.incr_phase_params) + [frame_change.parameter]
+            )
             break
         else:
             # Insert the phase increment into the last pulse anyway, and rewind its
@@ -473,6 +480,9 @@ def _insert_frame_changes(
             pulse.oscillator_phase = pulse.oscillator_phase or 0.0
             pulse.increment_oscillator_phase += frame_change.phase
             pulse.oscillator_phase -= frame_change.phase
+            pulse.incr_phase_params = tuple(
+                (list(pulse.incr_phase_params) or [None]) + [frame_change.parameter]
+            )
     return frame_change_events
 
 
@@ -623,6 +633,10 @@ def _make_pulse_signature(
         oscillator_phase = normalize_phase(oscillator_phase)
 
     increment_oscillator_phase = data.increment_oscillator_phase
+    if increment_oscillator_phase:
+        incr_phase_params = (data.incr_phase_param,)
+    else:
+        incr_phase_params = ()
 
     combined_pulse_parameters = combine_pulse_parameters(
         data.pulse_pulse_parameters, None, data.play_pulse_parameters
@@ -648,38 +662,13 @@ def _make_pulse_signature(
         else frozenset(combined_pulse_parameters.items()),
         markers=None if not markers else tuple(frozenset(m.items()) for m in markers),
         preferred_amplitude_register=amplitude_register,
+        incr_phase_params=incr_phase_params,
     )
     pulse_parameters = (
         frozenset((data.play_pulse_parameters or {}).items()),
         frozenset((data.pulse_pulse_parameters or {}).items()),
     )
     return signature, pulse_parameters
-
-
-def _interval_start_after_oscillator_reset(
-    events, signals, compacted_intervals: list[Interval], delay, sampling_rate
-) -> set[int]:
-    device_id = next(iter(signals.values())).awg.device_id
-
-    osc_reset_event_time = [
-        length_to_samples(event["time"] + delay, sampling_rate)
-        for event in events
-        if event["event_type"] == "RESET_HW_OSCILLATOR_PHASE"
-        and event["device_id"] == device_id
-    ]
-
-    interval_start_times = sorted(iv.begin for iv in compacted_intervals)
-    if len(interval_start_times) == 0:
-        return set()
-    return set(
-        interval_start_times[
-            bisect_left(
-                interval_start_times,
-                event,
-            )
-        ]
-        for event in osc_reset_event_time
-    )
 
 
 def analyze_play_wave_times(
@@ -820,10 +809,6 @@ def analyze_play_wave_times(
 
     _logger.debug("Calculating waveform signatures for signal %s", signal_id)
 
-    interval_start_after_oscillator_reset = _interval_start_after_oscillator_reset(
-        events, signals, compacted_intervals, delay, sampling_rate
-    )
-
     amplitude_register_count = (
         device_type.amplitude_register_count if use_command_table else 1
     )
@@ -923,12 +908,7 @@ def analyze_play_wave_times(
                     amplitude_register_values if use_amplitude_increment else None,
                 )
 
-                # after a reset we force an absolute phase
-                after_phase_reset = event.start in interval_start_after_oscillator_reset
-
-                signature = reduce_signature_phase(
-                    signature, use_ct_phase, after_phase_reset
-                )
+                signature = reduce_signature_phase(signature, use_ct_phase)
                 if phase_resolution_range >= 1:
                     signature.quantize_phase(phase_resolution_range)
 

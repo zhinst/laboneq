@@ -2,12 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Iterator
 
-import zhinst.core
+from dataclasses import dataclass
+from importlib.metadata import version
+from typing import TYPE_CHECKING, Any, Iterator, Iterable
 
 from laboneq.controller.devices.zi_emulator import EmulatorState
+from laboneq.controller.versioning import LabOneVersion
 
 if TYPE_CHECKING:
     from laboneq.controller.devices.device_setup_dao import DeviceSetupDAO
@@ -52,7 +53,7 @@ class NodeCollector:
     def barrier(self):
         self._nodes.append(NodeActionBarrier())
 
-    def extend(self, other: NodeCollector):
+    def extend(self, other: Iterable[NodeAction]):
         for node in other:
             self._nodes.append(node)
 
@@ -67,15 +68,19 @@ class NodeCollector:
 
 
 def zhinst_core_version() -> str:
-    [major, minor] = zhinst.core.__version__.split(".")[0:2]
-    return f"{major}.{minor}"
+    return version("zhinst-core")
 
 
 def prepare_emulator_state(ds: DeviceSetupDAO) -> EmulatorState:
     emulator_state = EmulatorState()
 
     # Ensure emulated data server version matches installed zhinst.core
-    emulator_state.set_option("ZI", "about/version", zhinst_core_version())
+    #
+    labonever = LabOneVersion.from_version_string(zhinst_core_version())
+    emulator_state.set_option("ZI", "about/version", labonever.as_dataserver_version())
+    emulator_state.set_option(
+        "ZI", "about/revision", labonever.as_dataserver_revision()
+    )
 
     for device_qualifier in ds.instruments:
         options = device_qualifier.options

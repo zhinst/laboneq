@@ -112,7 +112,7 @@ class OscillatorInfo:
     is_hardware: bool = None
 
 
-@dataclass
+@dataclass()
 class PulseDef:
     uid: str = None
     function: str | None = None
@@ -152,6 +152,23 @@ class PulseDef:
                 other.set_oscillator_phase,
             ) and samples_equal
         return NotImplemented
+
+    def __hash__(self) -> int:
+        samples_tuple = tuple(self.samples) if self.samples is not None else None
+
+        return hash(
+            (
+                self.uid,
+                self.function,
+                self.length,
+                self.amplitude,
+                self.phase,
+                self.can_compress,
+                self.increment_oscillator_phase,
+                self.set_oscillator_phase,
+                samples_tuple,
+            )
+        )
 
 
 @dataclass
@@ -248,7 +265,7 @@ class SignalRange:
 
 @dataclass
 class AmplifierPumpInfo:
-    device: DeviceInfo | None = None
+    ppc_device: DeviceInfo | None = None
     pump_frequency: float | ParameterInfo | None = None
     pump_power: float | ParameterInfo | None = None
     pump_on: bool = True

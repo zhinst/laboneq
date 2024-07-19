@@ -36,7 +36,6 @@ from laboneq.compiler.common.trigger_mode import TriggerMode
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.scheduler.scheduler import Scheduler
-from laboneq.compiler.workflow import rt_linker
 from laboneq.compiler.workflow.neartime_execution import (
     NtCompilerExecutor,
     legacy_execution_program,
@@ -300,14 +299,8 @@ class Compiler:
         executor.run(self._execution)
         self._combined_compiler_output = executor.combined_compiler_output()
         if self._combined_compiler_output is None:
-            # Some of our tests do not have an RT averaging loop, so the RT compiler will
-            # not have been run. For backwards compatibility, we still run it once.
-            _logger.warning("Experiment has no real-time averaging loop")
-            rt_compiler_output = rt_compiler.run()
+            raise LabOneQException("Experiment has no real-time averaging loop")
 
-            self._combined_compiler_output = rt_linker.from_single_run(
-                rt_compiler_output, [0]
-            )
         executor.finalize()
 
         assign_feedback_registers(

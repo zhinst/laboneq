@@ -14,7 +14,7 @@ from openpulse import ast
 
 from laboneq._utils import id_generator
 from laboneq.core.exceptions import LabOneQException
-from laboneq.dsl import LinearSweepParameter, SweepParameter
+from laboneq.dsl import LinearSweepParameter, Parameter, SweepParameter
 from laboneq.dsl.calibration import Calibration, Oscillator, SignalCalibration
 from laboneq.dsl.enums import (
     AcquisitionType,
@@ -48,6 +48,7 @@ ALLOWED_NODE_TYPES = {
     ast.QuantumMeasurement,
     # auxiliary
     ast.AliasStatement,
+    ast.BranchingStatement,
     ast.CalibrationGrammarDeclaration,
     ast.CalibrationStatement,
     ast.ClassicalArgument,
@@ -345,6 +346,8 @@ class OpenQasm3Importer:
                     subsect = self._handle_barrier(child)
                 elif isinstance(child, ast.DelayInstruction):
                     subsect = self._handle_delay_instruction(child)
+                elif isinstance(child, ast.BranchingStatement):
+                    subsect = self._handle_branching_statement(child)
                 elif isinstance(child, ast.ForInLoop):
                     subsect = self._handle_for_in_loop(child)
                 elif isinstance(child, ast.ClassicalAssignment):
@@ -458,7 +461,10 @@ class OpenQasm3Importer:
             self.gate_store.register_waveform(name, value)
             self.scope.current.declare_classical_value(name, value)
         else:
-            value = eval_expression(statement.init_expression, namespace=self.scope)
+            if statement.init_expression is not None:
+                value = eval_expression(statement.init_expression, namespace=self.scope)
+            else:
+                value = None
             self.scope.current.declare_classical_value(name, value)
 
     def _handle_io_declaration(self, statement: ast.IODeclaration):
@@ -791,6 +797,45 @@ class OpenQasm3Importer:
             raise OpenQasmException(msg, mark=statement.span)
 
         return delay_section
+
+    def _handle_branching_statement(self, statement: ast.BranchingStatement):
+        condition = eval_expression(statement.condition, namespace=self.scope)
+        if_block = None
+        if statement.if_block:
+            if_block = ast.Box(body=statement.if_block, duration=None)
+        else_block = None
+        if statement.else_block:
+            else_block = ast.Box(body=statement.else_block, duration=None)
+
+        if isinstance(condition, Parameter):
+            raise OpenQasmException(
+                "Branching on a sweep parameter is not"
+                " yet supported by the LabOne Q OpenQASM importer.",
+                mark=statement.condition.span,
+            )
+
+        if isinstance(condition, MeasurementResult):
+            raise OpenQasmException(
+                "Branching on a measurement result is not"
+                " yet supported by the LabOne Q OpenQASM importer.",
+                mark=statement.condition.span,
+            )
+
+        if not isinstance(condition, (int, float)):
+            raise OpenQasmException(
+                f"OpenQASM if conditions must be castable to bool."
+                f" Got {type(condition).__name__} {condition!r} instead.",
+                mark=statement.condition.span,
+            )
+
+        if condition:
+            if if_block:
+                with self._new_scope():
+                    return self.transpile(if_block, uid_hint="if_block")
+        else:
+            if else_block:
+                with self._new_scope():
+                    return self.transpile(else_block, uid_hint="else_block")
 
     def _handle_for_in_loop(self, statement: ast.ForInLoop):
         loop_var = statement.identifier.name

@@ -378,17 +378,19 @@ class WaveScroller:
         if self.is_spectroscopy:
             spectroscopy_mask = 0
             assert generator_mask == spectroscopy_mask
-            wave = retrieve_wave(
-                wave_indices[spectroscopy_mask][0], wave_indices[spectroscopy_mask][1]
-            )
-            _slice_copy(
-                self.wave_snippet,
-                snippet_start_samples,
-                wave,
-                event.start_samples,
-                event.length_samples,
-            )
-            self.last_played_value = wave[event.length_samples - 1]
+            if wave_indices is not None:
+                wave = retrieve_wave(
+                    wave_indices[spectroscopy_mask][0],
+                    wave_indices[spectroscopy_mask][1],
+                )
+                _slice_copy(
+                    self.wave_snippet,
+                    snippet_start_samples,
+                    wave,
+                    event.start_samples,
+                    event.length_samples,
+                )
+                self.last_played_value = wave[event.length_samples - 1]
         else:
             wave_iter = 0
             wave = None
@@ -407,14 +409,15 @@ class WaveScroller:
                         wave, wave_i = _array_pad(wave, wave_i)
                         wave += wave_i
                     wave_iter = wave_iter + 1
-            _slice_copy(
-                self.wave_snippet,
-                snippet_start_samples,
-                wave,
-                event.start_samples,
-                event.length_samples,
-            )
-            self.last_played_value = wave[event.length_samples - 1]
+            if wave is not None:
+                _slice_copy(
+                    self.wave_snippet,
+                    snippet_start_samples,
+                    wave,
+                    event.start_samples,
+                    event.length_samples,
+                )
+                self.last_played_value = wave[event.length_samples - 1]
 
     def _process_acquire(self, event: SeqCEvent, snippet_start_samples: int):
         if SimTarget.ACQUIRE in self.sim_targets:
@@ -507,21 +510,22 @@ class WaveScroller:
         # overlap the interval, keeping only the last of each kind of
         # operation
         pre_events = {}
+        interval_events_in_target_ops = []
         interval_events = []
         target_ops = self.target_ops()
         for ev in self.sim.events:
             if ev.start_samples > end_samples:
                 break
-            if ev.operation not in target_ops:
-                continue
             if _overlaps(
                 start_samples,
                 length_samples,
                 ev.start_samples,
                 ev.length_samples,
             ):
+                if ev.operation in target_ops:
+                    interval_events_in_target_ops.append(ev)
                 interval_events.append(ev)
-            else:
+            elif ev.operation in target_ops:
                 pre_events[ev.operation] = ev
         pre_events = sorted(pre_events.values(), key=lambda ev: ev.start_samples)
 
@@ -540,7 +544,7 @@ class WaveScroller:
         self.prepare(start_samples, length_samples)
         for ev in pre_events:
             self.process(ev, start_samples)
-        for ev in interval_events:
+        for ev in interval_events_in_target_ops:
             self.process(ev, start_samples)
         self.finalize()
 

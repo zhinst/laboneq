@@ -91,7 +91,7 @@ def _replace_pulse_in_wave(
             and instance.channel is not None
         ):
             continue
-        phase = (instance.modulation_phase or 0.0) + (instance.iq_phase or 0.0)
+        phase = instance.iq_phase or 0.0
         combined_pulse_parameters = combine_pulse_parameters(
             decode_pulse_parameters(instance.pulse_pulse_parameters),
             pulse_parameters,

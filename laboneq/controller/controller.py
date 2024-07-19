@@ -35,16 +35,26 @@ from laboneq.controller.recipe_processor import (
 )
 from laboneq.controller.results import build_partial_result, make_acquired_result
 from laboneq.controller.util import LabOneQControllerException, SweepParamsTracker
-from laboneq.controller.versioning import SetupCaps, LabOneVersion
+from laboneq.controller.versioning import (
+    MINIMUM_SUPPORTED_LABONE_VERSION,
+    RECOMMENDED_LABONE_VERSION,
+    LabOneVersion,
+    SetupCaps,
+)
 from laboneq.core.exceptions import AbortExecution
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.core.utilities.async_helpers import run_async
+from laboneq.core.utilities.replace_phase_increment import calc_ct_replacement
 from laboneq.core.utilities.replace_pulse import ReplacementType, calc_wave_replacements
 from laboneq.data.execution_payload import TargetSetup
 from laboneq.data.experiment_results import ExperimentResults
 from laboneq.data.recipe import NtStepKey
-from laboneq.data.scheduled_experiment import CodegenWaveform, ScheduledExperiment
+from laboneq.data.scheduled_experiment import (
+    ArtifactsCodegen,
+    CodegenWaveform,
+    ScheduledExperiment,
+)
 
 if TYPE_CHECKING:
     from laboneq.dsl.experiment.pulse import Pulse
@@ -76,12 +86,9 @@ class Controller:
             ignore_version_mismatch=ignore_version_mismatch,
         )
 
-        self._setup_caps = SetupCaps(
-            LabOneVersion.cast(
-                zhinst_core_version(),
-                raise_if_unsupported=not ignore_version_mismatch,
-            )
-        )
+        _zhinst_core_version = LabOneVersion.from_version_string(zhinst_core_version())
+        self._check_zhinst_core_version_support(_zhinst_core_version)
+        self._setup_caps = SetupCaps(_zhinst_core_version)
 
         self._last_connect_check_ts: float | None = None
 
@@ -90,7 +97,7 @@ class Controller:
         self._neartime_callbacks: dict[str, Callable] = (
             {} if neartime_callbacks is None else neartime_callbacks
         )
-        self._nodes_from_neartime_callbacks: dict[DeviceZI, NodeCollector] = (
+        self._nodes_from_artifact_replacement: dict[DeviceZI, NodeCollector] = (
             defaultdict(NodeCollector)
         )
         self._recipe_data: RecipeData = None
@@ -100,6 +107,16 @@ class Controller:
         _logger.debug("Controller debug logging is on")
 
         _logger.info("VERSION: laboneq %s", __version__)
+
+    def _check_zhinst_core_version_support(self, version: LabOneVersion):
+        if version < MINIMUM_SUPPORTED_LABONE_VERSION:
+            err_msg = f"'zhinst.core' version '{version}' is not supported. We recommend {RECOMMENDED_LABONE_VERSION}."
+            if not self._ignore_version_mismatch:
+                LabOneQControllerException(err_msg)
+            else:
+                _logger.debug(
+                    f"Ignoring because `ignore_version_mismatch=True`: {err_msg}"
+                )
 
     @property
     def setup_caps(self) -> SetupCaps:
@@ -207,6 +224,20 @@ class Controller:
                         )
                     )
 
+    async def _replace_artifacts(self, rt_section_uid: str):
+        rt_execution_info = self._recipe_data.rt_execution_infos[rt_section_uid]
+        with_pipeliner = rt_execution_info.with_pipeliner
+        if with_pipeliner and self._nodes_from_artifact_replacement:
+            raise LabOneQControllerException(
+                "Cannot replace waveforms in combination with the pipeliner"
+            )
+
+        nodes_to_replace_artifacts = []
+        for device, nc in self._nodes_from_artifact_replacement.items():
+            nodes_to_replace_artifacts.extend(await device.maybe_async(nc))
+        self._nodes_from_artifact_replacement.clear()
+        await batch_set(nodes_to_replace_artifacts)
+
     async def _set_nodes_after_awg_program_upload(self):
         async with gather_and_apply(batch_set_multiple) as awaitables:
             for initialization in self._recipe_data.initializations:
@@ -216,6 +247,7 @@ class Controller:
     async def _initialize_awgs(self, nt_step: NtStepKey, rt_section_uid: str):
         await self._set_nodes_before_awg_program_upload()
         await self._upload_awg_programs(nt_step=nt_step, rt_section_uid=rt_section_uid)
+        await self._replace_artifacts(rt_section_uid=rt_section_uid)
         await self._set_nodes_after_awg_program_upload()
 
     async def _configure_triggers(self):
@@ -379,8 +411,8 @@ class Controller:
             with_pipeliner=rt_execution_info.with_pipeliner
         )
 
-        # Can't batch everything together, because PQSC/QHUB needs to be executed after HDs
-        # otherwise it can finish before AWGs are started, and the trigger is lost
+        # Can't batch everything together, because PQSC/QHUB needs to start execution after HDs
+        # otherwise it can finish before AWGs are started, and the trigger is lost.
         await self._execute_one_step_followers(
             with_pipeliner=rt_execution_info.with_pipeliner
         )
@@ -455,26 +487,22 @@ class Controller:
         self,
         scheduled_experiment: ScheduledExperiment,
         protected_session: ProtectedSession | None = None,
-    ) -> ExperimentResults:
-        return run_async(
-            self._execute_compiled_async, scheduled_experiment, protected_session
-        )
+    ):
+        run_async(self._execute_compiled_async, scheduled_experiment, protected_session)
 
     async def _execute_compiled_async(
         self,
         scheduled_experiment: ScheduledExperiment,
         protected_session: ProtectedSession | None = None,
-    ) -> ExperimentResults:
+    ):
         self._recipe_data = pre_process_compiled(
             scheduled_experiment, self._devices, self._setup_caps
         )
-        return await self._execute_compiled_impl(
+        await self._execute_compiled_impl(
             protected_session=protected_session or ProtectedSession(None)
         )
 
-    async def _execute_compiled_impl(
-        self, protected_session: ProtectedSession
-    ) -> ExperimentResults:
+    async def _execute_compiled_impl(self, protected_session: ProtectedSession):
         # Ensure all connect configurations are still valid!
         await self._connect_async()
         self._prepare_result_shapes()
@@ -484,7 +512,8 @@ class Controller:
 
             # Ensure no side effects from the previous execution in the same session
             self._current_waves.clear()
-            self._nodes_from_neartime_callbacks.clear()
+            self._nodes_from_artifact_replacement.clear()
+
             _logger.info("Starting near-time execution...")
             try:
                 with tracing.get_tracer().start_span("near-time-execution"):
@@ -496,7 +525,6 @@ class Controller:
                 # eat the exception
                 pass
             _logger.info("Finished near-time execution.")
-            await self._devices.check_errors()
         except LabOneQControllerException:
             # Report device errors if any - it maybe useful to diagnose the original exception
             device_errors = await self._devices.check_errors(raise_on_error=False)
@@ -509,6 +537,7 @@ class Controller:
 
         await self._devices.on_experiment_end()
 
+    def results(self) -> ExperimentResults:
         return self._results
 
     def _find_awg(self, seqc_name: str) -> tuple[str, int]:
@@ -573,7 +602,7 @@ class Controller:
             if repl.replacement_type == ReplacementType.I_Q:
                 clipped = np.clip(repl.samples, -1.0, 1.0)
                 bin_wave = zhinst.utils.convert_awg_waveform(*clipped)
-                self._nodes_from_neartime_callbacks[device].extend(
+                self._nodes_from_artifact_replacement[device].extend(
                     device.prepare_upload_binary_wave(
                         filename=repl.sig_string + " (repl)",
                         waveform=bin_wave,
@@ -585,7 +614,7 @@ class Controller:
             elif repl.replacement_type == ReplacementType.COMPLEX:
                 np.clip(repl.samples.real, -1.0, 1.0, out=repl.samples.real)
                 np.clip(repl.samples.imag, -1.0, 1.0, out=repl.samples.imag)
-                self._nodes_from_neartime_callbacks[device].extend(
+                self._nodes_from_artifact_replacement[device].extend(
                     device.prepare_upload_binary_wave(
                         filename=repl.sig_string + " (repl)",
                         waveform=repl.samples,
@@ -595,42 +624,31 @@ class Controller:
                     )
                 )
 
+    def replace_phase_increment(self, parameter_uid: str, new_value: int | float):
+        ct_replacements = calc_ct_replacement(
+            self._recipe_data.scheduled_experiment, parameter_uid, new_value
+        )
+        dummy_artifact = ArtifactsCodegen(command_tables=ct_replacements)
+        for repl in ct_replacements:
+            seqc_name = repl["seqc"]
+            device_id, awg_index = self._find_awg(seqc_name)
+            assert device_id is not None and awg_index is not None
+            device = self._devices.find_by_uid(device_id)
+
+            command_table = device.prepare_command_table(dummy_artifact, seqc_name)
+            nodes = device.prepare_upload_command_table(awg_index, command_table)
+            self._nodes_from_artifact_replacement[device].extend(nodes)
+
     async def _prepare_rt_execution(
         self, rt_section_uid: str
     ) -> list[DaqNodeSetAction]:
         if rt_section_uid is None:
             return [], []  # Old recipe-based execution - skip RT preparation
-        rt_execution_info = self._recipe_data.rt_execution_infos[rt_section_uid]
 
         nodes_to_prepare_rt = []
-        for device, nc in self._nodes_from_neartime_callbacks.items():
-            nodes_to_prepare_rt.extend(await device.maybe_async(nc))
-        self._nodes_from_neartime_callbacks.clear()
-
         for _, device in self._devices.leaders:
             nodes_to_prepare_rt.extend(
                 await device.configure_feedback(self._recipe_data)
-            )
-        for awg_key, awg_config in self._recipe_data.awgs_producing_results():
-            device = self._devices.find_by_uid(awg_key.device_uid)
-            if rt_execution_info.averaging_mode == AveragingMode.SINGLE_SHOT:
-                effective_averages = 1
-                effective_averaging_mode = AveragingMode.CYCLIC
-                # TODO(2K): handle sequential
-            else:
-                effective_averages = rt_execution_info.averages
-                effective_averaging_mode = rt_execution_info.averaging_mode
-            nodes_to_prepare_rt.extend(
-                await device.configure_acquisition(
-                    awg_key,
-                    awg_config,
-                    self._recipe_data.recipe.integrator_allocations,
-                    effective_averages,
-                    effective_averaging_mode,
-                    rt_execution_info.acquisition_type,
-                    rt_execution_info.with_pipeliner,
-                    self._recipe_data,
-                )
             )
         return nodes_to_prepare_rt
 
@@ -692,7 +710,7 @@ class Controller:
         for awg_key, awg_config in self._recipe_data.awgs_producing_results():
             device = self._devices.find_by_uid(awg_key.device_uid)
             if rt_execution_info.acquisition_type == AcquisitionType.RAW:
-                raw_results: RawReadoutData = await device.get_input_monitor_data(
+                raw_results = await device.get_input_monitor_data(
                     awg_key.awg_index, awg_config.raw_acquire_length
                 )
                 # Copy to all result handles, but actually only one handle is supported for now
@@ -729,7 +747,7 @@ class Controller:
                         continue
                     assert integrator_allocation.device_id == awg_key.device_uid
                     assert integrator_allocation.awg == awg_key.awg_index
-                    raw_results: RawReadoutData = await device.get_measurement_data(
+                    raw_readout: RawReadoutData = await device.get_measurement_data(
                         self._recipe_data,
                         awg_key.awg_index,
                         rt_execution_info,
@@ -744,14 +762,14 @@ class Controller:
                             continue  # unused entries in sparse result vector map to None handle
                         result = self._results.acquired_results[handle]
                         build_partial_result(
-                            result, nt_step, raw_results.vector, mapping, handle
+                            result, nt_step, raw_readout.vector, mapping, handle
                         )
 
                     timestamps = self._results.pipeline_jobs_timestamps.setdefault(
                         signal, []
                     )
 
-                    for job_id, v in raw_results.metadata.items():
+                    for job_id, v in raw_readout.metadata.items():
                         # make sure the list is long enough for this job id
                         timestamps.extend(
                             [float("nan")] * (job_id - len(timestamps) + 1)

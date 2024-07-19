@@ -218,7 +218,7 @@ class WaveCompressor:
         compressible_segments: List[Tuple[int, int]] | None = None,
     ) -> Union[List[Union[PlayHold, PlaySamples]], None]:
         ref_length = len(list(samples.values())[0])
-        num_sample_channles = len(list(samples.values()))
+        num_sample_channels = len(list(samples.values()))
         if not all(len(v) == ref_length for v in samples.values()):
             raise ValueError("All sample arrays must have the same length")
         num_frames = int(ref_length / sample_multiple)
@@ -237,7 +237,7 @@ class WaveCompressor:
                 samples,
                 stacked_samples,
                 compressible_segments,
-                num_sample_channles,
+                num_sample_channels,
                 num_frames,
                 num_samples,
                 sample_multiple,
@@ -258,7 +258,7 @@ class WaveCompressor:
             samples,
             stacked_samples,
             compressible_segments,
-            num_sample_channles,
+            num_sample_channels,
             num_frames,
             num_samples,
             sample_multiple,

@@ -65,7 +65,12 @@ def classformatter(cls):
     def __format__(self, _):
         return original_repr(self)
 
+    def repr_pretty(self, p, _cycle):  # noqa: ANN001, ANN202
+        # For Notebooks
+        p.text(str(self))
+
     cls.__str__ = __str__
     cls.__format__ = __format__
+    cls._repr_pretty_ = repr_pretty  # pylint: disable=protected-access
 
     return cls

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import logging
-import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
@@ -12,14 +11,18 @@ from typing import TYPE_CHECKING, Any, Dict, List
 
 import numpy as np
 import zhinst.core
-from laboneq.controller.devices.device_utils import zhinst_core_version
 
+from laboneq.controller.devices.device_utils import zhinst_core_version
 from laboneq.controller.devices.zi_emulator import EmulatorState, ziDAQServerEmulator
 from laboneq.controller.devices.zi_node_monitor import NodeMonitor
 
 from .cache import Cache
 from .util import LabOneQControllerException
-from .versioning import LabOneVersion
+from .versioning import (
+    MINIMUM_SUPPORTED_LABONE_VERSION,
+    RECOMMENDED_LABONE_VERSION,
+    LabOneVersion,
+)
 
 if TYPE_CHECKING:
     pass
@@ -216,7 +219,7 @@ class DaqWrapper(ZiApiWrapperBase):
     def __init__(self, name, server_qualifier: ServerQualifier):
         super().__init__(name)
         self._server_qualifier = server_qualifier
-        self._dataserver_version = LabOneVersion.LATEST
+        self._dataserver_version = RECOMMENDED_LABONE_VERSION
         self._vector_counter = 0
         self._zi_api_object = self._make_zi_api()
         self.node_monitor = NodeMonitor(self._zi_api_object)
@@ -232,26 +235,37 @@ class DaqWrapper(ZiApiWrapperBase):
             raise LabOneQControllerException(str(exp)) from None
 
     async def validate_connection(self):
-        zhinst_core_version_str = zhinst_core_version()
+        python_api_version = LabOneVersion.from_version_string(zhinst_core_version())
 
-        path = "/zi/about/version"
-        result = await self.batch_get([DaqNodeGetAction(self, path)])
-        version_str = result[path]
-        try:
-            self._dataserver_version = LabOneVersion.cast(version_str)
-        except ValueError as e:
-            err_msg = e.args[0]
-            if self._server_qualifier.ignore_version_mismatch:
-                _logger.warning("Ignoring that %s", err_msg)
-            else:
-                raise LabOneQControllerException(err_msg) from e
+        version_node_path = "/zi/about/version"
+        revision_node_path = "/zi/about/revision"
+        result = await self.batch_get(
+            [
+                DaqNodeGetAction(self, version_node_path),
+                DaqNodeGetAction(self, revision_node_path),
+            ]
+        )
+        version_str = result[version_node_path]
+        revision_int = result[revision_node_path]
+        dataserver_version = LabOneVersion.from_dataserver_version_information(
+            version=version_str, revision=revision_int
+        )
 
-        if zhinst_core_version_str != version_str:
-            err_msg = f"Version of LabOne Data Server ({version_str}) and Python API ({zhinst_core_version_str}) do not match."
+        if dataserver_version != python_api_version:
+            err_msg = f"Version of LabOne Data Server ({dataserver_version}) and Python API ({python_api_version}) do not match."
             if self.server_qualifier.ignore_version_mismatch:
                 _logger.warning("Ignoring that %s", err_msg)
             else:
                 raise LabOneQControllerException(err_msg)
+        elif dataserver_version < MINIMUM_SUPPORTED_LABONE_VERSION:
+            err_msg = (
+                f"Version of LabOne Data Server '{dataserver_version}' is not supported. "
+                f"We recommend {RECOMMENDED_LABONE_VERSION}."
+            )
+            if not self.server_qualifier.ignore_version_mismatch:
+                LabOneQControllerException(err_msg)
+            else:
+                _logger.warning("Ignoring that %s", err_msg)
 
         _logger.info(
             "Connected to Zurich Instruments LabOne Data Server version %s at %s:%s",
@@ -259,6 +273,7 @@ class DaqWrapper(ZiApiWrapperBase):
             self.server_qualifier.host,
             self.server_qualifier.port,
         )
+        self._dataserver_version = dataserver_version
 
     def __str__(self):
         return f"DAQ - {self._server_qualifier.host}:{self._server_qualifier.port}"
@@ -283,10 +298,10 @@ class DaqWrapper(ZiApiWrapperBase):
                 ):
                     _logger.warning("Exception '%s', retrying...", ex)
                 else:
-                    d_args = "<big args>" if sys.getsizeof(args, 101) > 100 else args
-                    d_kwargs = (
-                        "<big kwargs>" if sys.getsizeof(kwargs, 101) > 100 else kwargs
-                    )
+                    d_args = str(args)
+                    d_kwargs = str(kwargs)
+                    d_args = "<big args>" if len(d_args) > 10 else d_args
+                    d_kwargs = "<big kwargs>" if len(d_kwargs) > 10 else d_kwargs
                     raise LabOneQControllerException(
                         f"Exception {ex} when calling method {method_name} with {d_args} and {d_kwargs}"
                     ) from ex

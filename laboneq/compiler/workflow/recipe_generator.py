@@ -149,6 +149,24 @@ class RecipeGenerator:
                 initialization = self._find_initialization(f)
                 initialization.config.triggering_mode = TriggeringMode.INTERNAL_FOLLOWER
 
+        # ppc device uid -> acquire signal ids
+        ppc_signals: dict[str, list[str]] = {}
+        for signal_id in experiment_dao.signals():
+            amplifier_pump = experiment_dao.signal_info(signal_id).amplifier_pump
+            if amplifier_pump is None:
+                continue
+            device_id = amplifier_pump.ppc_device.uid
+
+            for other_signal in ppc_signals.get(device_id, []):
+                other_amplifier_pump = experiment_dao.amplifier_pump(other_signal)
+                if amplifier_pump.channel == other_amplifier_pump.channel:
+                    assert other_amplifier_pump == amplifier_pump, (
+                        f"Mismatched amplifier_pump configuration between signals"
+                        f" {other_signal} and {signal_id}, which are connected to the same"
+                        f" PPC channel"
+                    )
+            ppc_signals.setdefault(device_id, []).append(signal_id)
+
         for device in experiment_dao.device_infos():
             device_uid = device.uid
             initialization = self._find_initialization(device_uid)
@@ -167,7 +185,7 @@ class RecipeGenerator:
 
             if device.device_type.value == "shfppc":
                 ppchannels = []
-                for signal in experiment_dao.signals():
+                for signal in ppc_signals.get(device_uid, []):
                     amplifier_pump = experiment_dao.amplifier_pump(signal)
                     if amplifier_pump is None:
                         continue

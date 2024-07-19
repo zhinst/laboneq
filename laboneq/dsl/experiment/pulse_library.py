@@ -133,11 +133,6 @@ def gaussian(
     $$\\sigma = \\frac{\\sigma_0^{\\frac{2}{n}}}{2^{\\left(\\frac{n-2}{2 n}\\right)}}$$
 
     Arguments:
-        **_ (Any):
-            All pulses accept the following keyword arguments:
-            - uid ([str][]): Unique identifier of the pulse
-            - length ([float][]): Length of the pulse in seconds
-            - amplitude ([float][]): Amplitude of the pulse
         sigma (float):
             Standard deviation relative to the interval the pulse is sampled from, here [-1, 1]. Defaults
                 to 1/3.
@@ -145,6 +140,12 @@ def gaussian(
             Order of the Gaussian pulse, must be positive and even, default is 2 (standard Gaussian), order > 2 will create a super Gaussian pulse
         zero_boundaries (bool):
             Whether to zero the pulse at the boundaries, default is False
+
+    Keyword Arguments:
+        uid ([str][]): Unique identifier of the pulse
+        length ([float][]): Length of the pulse in seconds
+        amplitude ([float][]): Amplitude of the pulse
+
 
     Returns:
         pulse (Pulse): Gaussian pulse.
@@ -173,16 +174,13 @@ def gaussian(
 
 
 @register_pulse_functional
-def gaussian_square(x, sigma=1 / 3, width=None, zero_boundaries=False, **_):
+def gaussian_square(x, sigma=1 / 3, width=None, zero_boundaries=False, *, length, **_):
     """Create a gaussian square waveform with a square portion of length
     ``width`` and Gaussian shaped sides.
 
     Arguments:
-        **_ (Any):
-            All pulses accept the following keyword arguments:
-            - uid ([str][]): Unique identifier of the pulse
-            - length ([float][]): Length of the pulse in seconds
-            - amplitude ([float][]): Amplitude of the pulse
+        length (float):
+            Length of the pulse in seconds
         width (float):
             Width of the flat portion of the pulse in seconds. Dynamically set to 90% of `length` if not provided.
         sigma (float):
@@ -190,11 +188,13 @@ def gaussian_square(x, sigma=1 / 3, width=None, zero_boundaries=False, **_):
         zero_boundaries (bool):
             Whether to zero the pulse at the boundaries
 
+    Keyword Arguments:
+        uid ([str][]): Unique identifier of the pulse
+        amplitude ([float][]): Amplitude of the pulse
+
     Returns:
         pulse (Pulse): Gaussian square pulse.
     """
-
-    length = _["length"]
 
     if width is not None and width >= length:
         raise ValueError(
@@ -227,12 +227,10 @@ def gaussian_square(x, sigma=1 / 3, width=None, zero_boundaries=False, **_):
 def const(x, **_):
     """Create a constant pulse.
 
-    Args:
-        **_ (Any):
-            All pulses accept the following keyword arguments:
-            - uid ([str][]): Unique identifier of the pulse
-            - length ([float][]): Length of the pulse in seconds
-            - amplitude ([float][]): Amplitude of the pulse
+    Keyword Arguments:
+        uid ([str][]): Unique identifier of the pulse
+        length ([float][]): Length of the pulse in seconds
+        amplitude ([float][]): Amplitude of the pulse
 
     Returns:
         pulse (Pulse): Constant pulse.
@@ -248,12 +246,10 @@ def triangle(x, **_):
     zero, to a maximum amplitude of one in the middle of the pulse,
     and then back to a final amplitude of zero.
 
-    Arguments:
-        **_ (Any):
-            All pulses accept the following keyword arguments:
-            - uid ([str][]): Unique identifier of the pulse
-            - length ([float][]): Length of the pulse in seconds
-            - amplitude ([float][]): Amplitude of the pulse
+    Keyword Arguments:
+        uid ([str][]): Unique identifier of the pulse
+        length ([float][]): Length of the pulse in seconds
+        amplitude ([float][]): Amplitude of the pulse
 
     Returns:
         pulse (Pulse): Triangle pulse.
@@ -265,12 +261,10 @@ def triangle(x, **_):
 def sawtooth(x, **_):
     """Create a sawtooth pulse.
 
-    Arguments:
-        **_ (Any):
-            All pulses accept the following keyword arguments:
-            - uid ([str][]): Unique identifier of the pulse
-            - length ([float][]): Length of the pulse in seconds
-            - amplitude ([float][]): Amplitude of the pulse
+    Keyword Arguments:
+        uid ([str][]): Unique identifier of the pulse
+        length ([float][]): Length of the pulse in seconds
+        amplitude ([float][]): Amplitude of the pulse
 
     Returns:
         pulse (Pulse): Sawtooth pulse.
@@ -284,17 +278,17 @@ def drag(x, sigma=1 / 3, beta=0.2, zero_boundaries=False, **_):
     """Create a DRAG pulse.
 
     Arguments:
-        **_ (Any):
-            All pulses accept the following keyword arguments:
-            - uid ([str][]): Unique identifier of the pulse
-            - length ([float][]): Length of the pulse in seconds
-            - amplitude ([float][]): Amplitude of the pulse
         sigma (float):
             Standard deviation relative to the interval the pulse is sampled from, here [-1, 1]. Defaults
         beta (float):
             Relative amplitude of the quadrature component
         zero_boundaries (bool):
             Whether to zero the pulse at the boundaries
+
+    Keyword Arguments:
+        uid ([str][]): Unique identifier of the pulse
+        length ([float][]): Length of the pulse in seconds
+        amplitude ([float][]): Amplitude of the pulse
 
     Returns:
         pulse (Pulse): DRAG pulse.
@@ -313,12 +307,10 @@ def drag(x, sigma=1 / 3, beta=0.2, zero_boundaries=False, **_):
 def cos2(x, **_):
     """Create a raised cosine pulse.
 
-    Arguments:
-        **_ (Any):
-            All pulses accept the following keyword arguments:
-            - uid ([str][]): Unique identifier of the pulse
-            - length ([float][]): Length of the pulse in seconds
-            - amplitude ([float][]): Amplitude of the pulse
+    Keyword Arguments:
+        uid ([str][]): Unique identifier of the pulse
+        length ([float][]): Length of the pulse in seconds
+        amplitude ([float][]): Amplitude of the pulse
 
     Returns:
         pulse (Pulse): Raised cosine pulse.

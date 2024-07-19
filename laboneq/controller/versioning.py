@@ -3,53 +3,102 @@
 
 from __future__ import annotations
 
-from enum import Enum
-from functools import total_ordering
-
-import laboneq
+import attrs
 
 
-class InternalDroppedSupportError(Exception):
-    pass
+@attrs.define(order=True)
+class LabOneVersion:
+    """Class to represent LabOne product versions.
 
+    If build is 0, str conversion of LabOneVersion will omit the build
+    part, which is useful for clean error messages.
+    """
 
-@total_ordering
-class LabOneVersion(Enum):
-    UNKNOWN = "0"
-    V_24_01 = "24.01"
-    V_24_04 = "24.04"
-    LATEST = V_24_04
+    major: int
+    minor: int
+    build: int
 
-    def __eq__(self, other):
-        return float(self.value) == float(other.value)
+    def __str__(self):
+        # Use zero-padding for minor to distinguish CalVer.
+        version = f"{self.major}.{self.minor:02d}"
+        if self.build == 0:
+            # Omit build number if it's zero
+            return version
+        else:
+            return f"{version}.{self.build}"
 
-    def __lt__(self, other):
-        return float(self.value) < float(other.value)
+    def as_tuple(
+        self, *, omit_build: bool = False
+    ) -> tuple[int, int, int] | tuple[int, int]:
+        """Return version as a tuple of integers. Particularly useful if one
+        wants to compare up to the build number.
+
+        Args:
+            omit_build: If `True` returned tuple is (major, minor).
+                Otherwise, returns (major, minor, build).
+
+        """
+        if omit_build:
+            return (self.major, self.minor)
+        else:
+            return (self.major, self.minor, self.build)
+
+    def as_dataserver_revision(self) -> int:
+        """Pack revision information similar to how LabOne data server does it."""
+        return int(f"{self.major}{self.minor:02d}{self.build}")
+
+    def as_dataserver_version(self) -> str:
+        """Pack version information similar to how LabOne data server does it."""
+        return f"{self.major}.{self.minor:02d}"
+
+    @property
+    def supports_flexible_feedback(self):
+        return self.as_tuple(omit_build=True) > (24, 4)
 
     @classmethod
-    def cast(cls, version: str, raise_if_unsupported: bool = True) -> LabOneVersion:
+    def from_version_string(cls, s: str):
+        major, minor, build = map(int, s.split("."))
+        return cls(major, minor, build)
+
+    @classmethod
+    def from_dataserver_version_information(cls, version: str, revision: int):
+        """Constructs a version object using information that can be retrieved
+        from a running LabOne data server instance.
+
+        Args:
+            version: Version string of the form: {major}.{minor}.
+            revision: An integer containing the version and the build number
+                information. When represented in decimal as a string, must have the form:
+                {major}{minor}{build}.
+
+        Raises:
+            ValueError: If one of the assumptions for version and revision fail.
+        """
+        revision_str = str(revision)
+        if revision_str.find(version.replace(".", "")) != 0:
+            raise ValueError(
+                "Data server revision does not contain version information."
+            )
         try:
-            labone_version = LabOneVersion(version)
+            major, minor = map(int, version.split("."))
         except ValueError as e:
-            if raise_if_unsupported:
-                err_msg = (
-                    f"LabOne version {version} is not supported by LabOne Q {laboneq.__version__}."
-                    f" Please downgrade/upgrade your LabOne installation, instruments'"
-                    f" firmware and API to version {cls.LATEST.value}."
-                )
-                raise ValueError(err_msg) from e
-            else:
-                labone_version = LabOneVersion.UNKNOWN
-        return labone_version
+            raise ValueError(
+                "Data server version string is not '<major>.<version>'."
+            ) from e
+        build = int(revision_str[len(version) - 1 :])  # -1 for the dot.
+        return cls(major, minor, build)
 
 
-try:
-    LATEST_NON_FLEXIBLE_FEEDBACK_VERSION = LabOneVersion.V_24_04
-    # Latest released version with non-flexible feedback.
-except AttributeError as e:
-    raise InternalDroppedSupportError(
-        "Non-flexible feedback support can be dropped in the codebase."
-    ) from e
+# TODO: Parse importlib.metadata.requires("laboneq") to generate this.
+RECOMMENDED_LABONE_VERSION = LabOneVersion(24, 4, 0)
+"""This variable holds the version what we currently support and actively test against."""
+
+MINIMUM_SUPPORTED_LABONE_VERSION = LabOneVersion(24, 1, 0)
+"""This variable holds the minimum version that we expect LabOne Q to work
+reliably, but may not be testing against anymore. Most of the time, this will
+be equal to `RECOMMENDED_LABONE_VERSION` with the exceptions happening
+typically around new LabOne releases to be able to support previous release in
+case an issue is found."""
 
 
 class SetupCaps:
@@ -57,9 +106,5 @@ class SetupCaps:
         self._version = version
 
     @property
-    def result_logger_pipelined(self) -> bool:
-        return True
-
-    @property
     def flexible_feedback(self) -> bool:
-        return self._version > LATEST_NON_FLEXIBLE_FEEDBACK_VERSION
+        return self._version.supports_flexible_feedback

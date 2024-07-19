@@ -125,7 +125,7 @@ class SignalCalibration(Observable):
         self.port_mode = port_mode
         self.range = range
         self.threshold = threshold
-        self.amplifier_pump = amplifier_pump
+        self._amplifier_pump = amplifier_pump
         self.added_outputs = added_outputs
         self.automute = automute
 
@@ -137,6 +137,10 @@ class SignalCalibration(Observable):
         if self._precompensation is not None:
             self._precompensation.has_changed().connect(
                 self._precompensation_changed_callback
+            )
+        if self._amplifier_pump is not None:
+            self._amplifier_pump.has_changed().connect(
+                self._amplifier_pump_changed_callback
             )
 
     @property
@@ -186,3 +190,27 @@ class SignalCalibration(Observable):
         self, calibration: Precompensation, key: str, value
     ):
         self.has_changed().fire("precompensation", calibration)
+
+    @property
+    def amplifier_pump(self):
+        return self._amplifier_pump
+
+    @amplifier_pump.setter
+    def amplifier_pump(self, value: AmplifierPump | None):
+        if value is self._amplifier_pump:
+            return
+
+        if self._amplifier_pump is not None:
+            self._amplifier_pump.has_changed().disconnect(
+                self._amplifier_pump_changed_callback
+            )
+        self._amplifier_pump = value
+        if self._amplifier_pump is not None:
+            self._amplifier_pump.has_changed().connect(
+                self._amplifier_pump_changed_callback
+            )
+
+    def _amplifier_pump_changed_callback(
+        self, calibration: Precompensation, key: str, value
+    ):
+        self.has_changed().fire("amplifer_pump", calibration)

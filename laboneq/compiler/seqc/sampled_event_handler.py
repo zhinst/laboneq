@@ -7,6 +7,7 @@ import logging
 from functools import cmp_to_key
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional
 
+
 from laboneq._utils import flatten
 from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.feedback_register_config import FeedbackRegisterConfig
@@ -20,10 +21,7 @@ from laboneq.compiler.seqc.seqc_generator import (
     SeqCGenerator,
     merge_generators,
 )
-from laboneq.compiler.seqc.signatures import (
-    PlaybackSignature,
-    WaveformSignature,
-)
+from laboneq.compiler.seqc.signatures import PlaybackSignature, WaveformSignature
 from laboneq.compiler.seqc.awg_sampled_event import (
     AWGEvent,
     AWGEventType,
@@ -633,11 +631,12 @@ class SampledEventHandler:
         )
 
     def handle_reset_phase(self, sampled_event: AWGEvent):
+        if not self.awg.device_type.supports_reset_osc_phase:
+            return
+
         # If multiple phase reset events are scheduled at the same time,
-        # only process the *last* one. This way, `reset_phase` takes
-        # precedence.
-        # TODO (PW): Remove this check, once we no longer force oscillator
-        # resets at the start of the sequence.
+        # only process the *last* one. This way, RESET_PHASE takes
+        # precedence over INITIAL_RESET_PHASE.
         last_reset = [
             event
             for event in self.sampled_event_list
@@ -647,24 +646,39 @@ class SampledEventHandler:
         if last_reset is not sampled_event:
             return
 
+        if self.use_command_table:
+            # `resetOscPhase()` resets the DDS phase, but it does not clear the phase
+            # offset from the command table. We do that via a zero-length CT entry.
+            signature = PlaybackSignature(
+                waveform=None,
+                hw_oscillator=None,
+                pulse_parameters=(),
+                set_phase=0.0,
+            )
+
+            ct_index = self.command_table_tracker.get_or_create_entry(
+                signature, wave_index=None
+            )
+        else:
+            ct_index = None
+
         _logger.debug("  Processing RESET PHASE event %s", sampled_event)
-        signature = sampled_event.type
         start = sampled_event.start
-        if signature == AWGEventType.INITIAL_RESET_PHASE:
+        if sampled_event.type == AWGEventType.INITIAL_RESET_PHASE:
             if start > self.seqc_tracker.current_time:
                 self.seqc_tracker.add_required_playzeros(sampled_event)
-            if self.awg.device_type.supports_reset_osc_phase:
-                # Hack: we do not defer, and emit as early as possible.
-                # This way it is hidden in the lead time.
-                self.seqc_tracker.add_function_call_statement("resetOscPhase")
-        elif (
-            signature == AWGEventType.RESET_PHASE
-            and self.awg.device_type.supports_reset_osc_phase
-        ):
+            # Hack: we do not defer, and emit as early as possible.
+            # This way it is hidden in the lead time.
+            self.seqc_tracker.add_function_call_statement("resetOscPhase")
+            if ct_index is not None:
+                self.seqc_tracker.add_command_table_execution(ct_index)
+        elif sampled_event.type == AWGEventType.RESET_PHASE:
             self.seqc_tracker.add_required_playzeros(sampled_event)
             self.seqc_tracker.add_function_call_statement(
                 "resetOscPhase", deferred=True
             )
+            if ct_index is not None:
+                self.seqc_tracker.add_command_table_execution(ct_index)
 
     def handle_set_oscillator_frequency(self, sampled_event: AWGEvent):
         if self.device_type == DeviceType.HDAWG:
@@ -863,11 +877,14 @@ class SampledEventHandler:
             hw_oscillator=sampled_event.params["oscillator"],
             pulse_parameters=(),
             increment_phase=sampled_event.params["phase"],
+            increment_phase_params=(sampled_event.params["parameter"],),
         )
 
-        ct_index = self.command_table_tracker.lookup_index_by_signature(signature)
-        if ct_index is None:
-            ct_index = self.command_table_tracker.create_entry(signature, None)
+        # The `phase_resolution_range` is irrelevant here; for the CT phase a fixed
+        # precision is used.
+        signature.quantize_phase(0)
+
+        ct_index = self.command_table_tracker.get_or_create_entry(signature, None)
         self.seqc_tracker.add_command_table_execution(
             ct_index, comment=self._make_command_table_comment(signature)
         )
@@ -965,9 +982,9 @@ class SampledEventHandler:
 
         if self.use_flexible_feedback:
             if not local:
-                path = "FB_PATH_ZSYNC_A"
+                path = "ZSYNC_DATA_PROCESSED_A"
             else:
-                path = "FB_PATH_INTERNAL"
+                path = "QA_DATA_PROCESSED"
             self.declarations_generator.add_function_call_statement(
                 "configureFeedbackProcessing",
                 args=[
@@ -1042,8 +1059,13 @@ class SampledEventHandler:
             - EXECUTETABLEENTRY_LATENCY
         )
 
+        ete_global_feedback_source = (
+            "ZSYNC_DATA_PROCESSED_A"
+            if self.use_flexible_feedback
+            else "ZSYNC_DATA_PQSC_REGISTER"
+        )
         self.seqc_tracker.add_command_table_execution(
-            "QA_DATA_PROCESSED" if ev.params["local"] else "ZSYNC_DATA_PQSC_REGISTER",
+            "QA_DATA_PROCESSED" if ev.params["local"] else ete_global_feedback_source,
             latency="current_seq_step "
             + (f"+ {latency}" if latency >= 0 else f"- {-latency}"),
             comment="Match handle " + handle,

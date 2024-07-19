@@ -837,7 +837,11 @@ class SimpleRuntime:
 
         if self.descriptor.is_spectroscopy:
             assert generators_mask == self.predefined_consts["QA_GEN_NONE"]
-            wave_data_idx, event_length = add_wave(0, wave_data_idx, event_length)
+            try:
+                wave_data_idx, event_length = add_wave(0, wave_data_idx, event_length)
+            except KeyError:
+                # measure pulse may be missing, e.g. CW mode, or being played on another AWG
+                wave_data_idx = None
         else:
             for gen_index in range(16):
                 if (generators_mask & (1 << gen_index)) != 0:

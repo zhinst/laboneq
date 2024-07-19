@@ -203,7 +203,11 @@ async def set_parallel(api: Instrument, nodes: NodeCollector):
 
 
 def parse_annotated_value(annotated_value: AnnotatedValue) -> Any:
-    key_translate = {"job_id": "jobid", "samples": "numsamples"}
+    key_translate = {
+        "job_id": "jobid",
+        "samples": "numsamples",
+        "first_sample_timestamp": "firstSampleTimestamp",
+    }
     value = annotated_value.value
     extra_header = annotated_value.extra_header
     effective_value: Any
@@ -218,7 +222,10 @@ def parse_annotated_value(annotated_value: AnnotatedValue) -> Any:
             }
         ]
     else:
-        effective_value = {"value": [value]}
+        if isinstance(value, np.ndarray):
+            effective_value = [{"vector": value}]
+        else:
+            effective_value = {"value": [value]}
     return effective_value
 
 

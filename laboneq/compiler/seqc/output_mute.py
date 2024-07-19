@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 from laboneq.core.utilities.pulse_sampler import length_to_samples
 from laboneq.core.exceptions import LabOneQException
@@ -13,11 +14,8 @@ if TYPE_CHECKING:
     from laboneq.compiler.common.device_type import DeviceType
 
 
-DURATION_MUTE_MARKER_TO_FULL_ENGAGE = 80e-9
-DURATION_MUTE_MARKER_TO_FULL_DISENGAGE = 100e-9
-OUTPUT_MUTE_DURATION_MIN = (
-    DURATION_MUTE_MARKER_TO_FULL_ENGAGE + DURATION_MUTE_MARKER_TO_FULL_DISENGAGE
-)
+def ceil(value: int, grid: int):
+    return value + (-value) % grid
 
 
 class OutputMute:
@@ -42,35 +40,36 @@ class OutputMute:
         ), f"Device {device_type.name.upper()} does not support output mute."
         self._device_type = device_type
         self._generator = generator
-        if duration_min <= OUTPUT_MUTE_DURATION_MIN:
-            msg = f"Output mute duration must be larger than {OUTPUT_MUTE_DURATION_MIN} s."
+
+        # The minimum time for the muting required by the instrument
+        device_duration_min = (
+            # latency of just turning on and off the blanking...
+            self._device_type.output_mute_engage_delay
+            - self._device_type.output_mute_disengage_delay
+            # ... plus a minimal playZero
+            + self._device_type.min_play_wave / self._device_type.sampling_rate
+        )
+        if duration_min <= device_duration_min:
+            msg = f"Output mute duration must be larger than {device_duration_min} s."
             raise LabOneQException(msg)
         samples_min = length_to_samples(
             duration_min,
             self._device_type.sampling_rate,
         )
         self._samples_min = (
-            round(samples_min / self._device_type.sample_multiple)
+            math.ceil(samples_min / self._device_type.sample_multiple)
             * self._device_type.sample_multiple
         )
         delay_engage = length_to_samples(
-            DURATION_MUTE_MARKER_TO_FULL_ENGAGE
-            + self._device_type.output_mute_engage_delay,
+            self._device_type.output_mute_engage_delay,
             self._device_type.sampling_rate,
         )
-        self.delay_engage = (
-            round(delay_engage / self._device_type.sample_multiple)
-            * self._device_type.sample_multiple
-        )
+        self.delay_engage = ceil(delay_engage, self._device_type.sample_multiple)
         delay_disengage = length_to_samples(
-            DURATION_MUTE_MARKER_TO_FULL_DISENGAGE
-            - self._device_type.output_mute_disengage_delay,
+            -self._device_type.output_mute_disengage_delay,
             self._device_type.sampling_rate,
         )
-        self.delay_disengage = (
-            round(delay_disengage / self._device_type.sample_multiple)
-            * self._device_type.sample_multiple
-        )
+        self.delay_disengage = ceil(delay_disengage, self._device_type.sample_multiple)
 
     @property
     def samples_min(self) -> int:

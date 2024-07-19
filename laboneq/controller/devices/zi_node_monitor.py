@@ -258,7 +258,9 @@ class ConditionsChecker(MultiDeviceHandlerBase):
                     return cond
             return "<no condition found for the path>"
 
-        return "\n".join([f"{p}: {v} != {_find_condition(p)}" for p, v in failed])
+        return "\n".join(
+            [f"{p}: {v}  (expected: {_find_condition(p)})" for p, v in failed]
+        )
 
 
 class ResponseWaiter(MultiDeviceHandlerBase):
@@ -446,7 +448,7 @@ def _filter_nodes(
     return [n for n in nodes if n.kind in filter]
 
 
-def filter_conditions(nodes: list[NodeControlBase]) -> list[NodeControlBase]:
+def filter_states(nodes: list[NodeControlBase]) -> list[NodeControlBase]:
     return _filter_nodes(
         nodes,
         [

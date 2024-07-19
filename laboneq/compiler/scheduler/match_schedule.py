@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import math
+from importlib.metadata import version as package_version
 from typing import TYPE_CHECKING, Iterable, List, Tuple
 
 from attrs import define
@@ -16,7 +17,6 @@ from zhinst.timing_models import (
     SGType,
     get_feedback_system_description,
 )
-from importlib.metadata import version as package_version
 
 from laboneq.compiler.common.compiler_settings import (
     EXECUTETABLEENTRY_LATENCY,
@@ -41,20 +41,18 @@ if (
     # configurations with respect to the trigger source (ZSYNC or local).
     # This is where we handle this case.
     from functools import wraps
-    from laboneq.controller.versioning import LabOneVersion
 
-    from zhinst.timing_models import get_feedback_system_description as original_gfsd
+    from laboneq.controller.versioning import MINIMUM_SUPPORTED_LABONE_VERSION
 
-    try:
-        _ = LabOneVersion.V_24_01
-    except AttributeError:
+    if MINIMUM_SUPPORTED_LABONE_VERSION.as_tuple(omit_build=True) > (24, 1):
         # If we dropped support for LabOne 24.01, we should also drop support
         # for the corresponding timing model. This assertion ensures that by
         # enforcing failure on our CI pipeline. Remove this whole if block when
         # this error is encountered.
         raise LabOneQException(
             "Timing model for LabOne versions older than 24.04 is not supported."
-        ) from None
+        )
+    from zhinst.timing_models import get_feedback_system_description as original_gfsd
 
     @wraps(original_gfsd)
     def _get_feedback_system_description(*args, **kwargs):

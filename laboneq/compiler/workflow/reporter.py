@@ -252,7 +252,7 @@ class CompilationReportGenerator(NtCompilerExecutorDelegate):
         for pulse_id, (waveform_count, instances) in self._pulse_map.items():
             offsets_count = len({inst.offset_samples for inst in instances})
             amplitudes_count = len({inst.amplitude for inst in instances})
-            phases_count = len({inst.modulation_phase for inst in instances})
+            phases_count = len({inst.iq_phase for inst in instances})
             lengths_count = len({inst.length for inst in instances})
             fields = [
                 str(n) if n > 1 else ""

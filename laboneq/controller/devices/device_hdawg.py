@@ -32,6 +32,7 @@ from laboneq.controller.devices.zi_node_monitor import (
     Prepare,
     Response,
     Setting,
+    WaitCondition,
 )
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.controller.util import LabOneQControllerException
@@ -175,6 +176,9 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
         return [
             Command(f"/{self.serial}/system/preset/load", 1),
             Response(f"/{self.serial}/system/preset/busy", 0),
+            # TODO(2K): Remove once https://zhinst.atlassian.net/browse/HULK-1800 is resolved
+            WaitCondition(f"/{self.serial}/system/clocks/referenceclock/source", 0),
+            WaitCondition(f"/{self.serial}/system/clocks/referenceclock/status", 0),
         ]
 
     def system_freq_control_nodes(self) -> list[NodeControlBase]:
@@ -273,7 +277,7 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
         self, with_pipeliner: bool, has_awg_in_use: bool
     ) -> list[DaqNodeSetAction]:
         nc = NodeCollector(base=f"/{self.serial}/")
-        if with_pipeliner and has_awg_in_use:
+        if with_pipeliner and has_awg_in_use and not self.is_standalone():
             nc.add("system/synchronization/source", 1)  # external
         return await self.maybe_async(nc)
 
@@ -282,9 +286,8 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
     ) -> list[DaqNodeSetAction]:
         nc = NodeCollector(base=f"/{self.serial}/")
 
-        if not self.is_standalone():
+        if with_pipeliner and not self.is_standalone():
             # Deregister this instrument from synchronization via ZSync.
-            # HULK-1707: this must happen before disabling the synchronization of the last AWG
             nc.add("system/synchronization/source", 0)
 
         return await self.maybe_async(nc)
@@ -612,6 +615,7 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
             # Loop over at least one AWG instance to cover the case that the instrument is only used
             # as a communication proxy. Some of the nodes on the AWG branch are needed to get
             # proper communication between HDAWG and UHFQA.
+            is_not_flexible_feedback = not recipe_data.setup_caps.flexible_feedback
             for awg_index in (
                 self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
             ):
@@ -630,7 +634,7 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
                     ),
                     None,
                 )
-                if awg_config is not None:
+                if (awg_config is not None) and is_not_flexible_feedback:
                     nc.add(
                         f"{awg_path}/zsync/register/shift",
                         awg_config.register_selector_shift,
@@ -655,7 +659,7 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
             nc.add("dios/0/mode", 1)
             nc.add("dios/0/drive", 15)
 
-            # Loop over at least AWG instance to cover the case that the instrument is only used
+            # Loop over at least one AWG instance to cover the case that the instrument is only used
             # as a communication proxy. Some of the nodes on the AWG branch are needed to get
             # proper communication between HDAWG and UHFQA.
             for awg_index in (
@@ -666,6 +670,11 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
                 nc.add(f"awgs/{awg_index}/dio/valid/index", 0)
                 nc.add(f"awgs/{awg_index}/dio/mask/value", 0x3FF)
                 nc.add(f"awgs/{awg_index}/dio/mask/shift", 1)
+
+            # To align execution on all AWG cores on same instrument, enable  HW
+            # synchronization even in absence of pipeliner usage.
+            for awg_index in self._allocated_awgs:
+                nc.add(f"awgs/{awg_index}/synchronization/enable", 1)
 
         return nc
 

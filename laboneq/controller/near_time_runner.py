@@ -105,9 +105,7 @@ class NearTimeRunner(AsyncExecutorBase):
             return
 
         await self.controller._devices.update_warning_nodes()
-        await self.controller._initialize_awgs(
-            nt_step=self.nt_step(), rt_section_uid=uid
-        )
+
         await self.controller._configure_triggers()
 
         user_set_node_actions: list[DaqNodeSetAction] = []
@@ -125,23 +123,24 @@ class NearTimeRunner(AsyncExecutorBase):
 
         await batch_set([*user_set_node_actions, *nt_sweep_nodes, *step_prepare_nodes])
         self.sweep_params_tracker.clear_for_next_step()
-        for retry in range(3):  # Up to 3 retries
-            if retry > 0:
-                _logger.info("Step retry %s of 3...", retry + 1)
-                await batch_set(step_prepare_nodes)
-            try:
-                await self.controller._execute_one_step(
-                    acquisition_type, rt_section_uid=uid
-                )
-                await self.controller._read_one_step_results(
-                    nt_step=self.nt_step(), rt_section_uid=uid
-                )
-                break
-            except LabOneQControllerException:
-                # TODO(2K): introduce "hard" controller exceptions
-                self.controller._report_step_error(
-                    nt_step=self.nt_step(),
-                    rt_section_uid=uid,
-                    message=traceback.format_exc(),
-                )
+
+        await self.controller._initialize_awgs(
+            nt_step=self.nt_step(), rt_section_uid=uid
+        )
+
+        try:
+            await self.controller._execute_one_step(
+                acquisition_type, rt_section_uid=uid
+            )
+            await self.controller._read_one_step_results(
+                nt_step=self.nt_step(), rt_section_uid=uid
+            )
+        except LabOneQControllerException:
+            # TODO(2K): introduce "hard" controller exceptions
+            self.controller._report_step_error(
+                nt_step=self.nt_step(),
+                rt_section_uid=uid,
+                message=traceback.format_exc(),
+            )
         await self.controller._devices.update_warning_nodes()
+        await self.controller._devices.check_errors()

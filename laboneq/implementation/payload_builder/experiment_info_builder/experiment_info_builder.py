@@ -44,6 +44,7 @@ from laboneq.data.compilation_job import (
     SignalInfoType,
     SignalRange,
     PRNGInfo,
+    DeviceInfo,
 )
 from laboneq.data.experiment_description import (
     Acquire,
@@ -149,9 +150,9 @@ class ExperimentInfoBuilder:
             "voltage_offset",
             "amplitude",
             # # skip validation of these structured fields
-            # "mixer_calibration",
-            # "precompensation",
-            # "amplifier_pump"
+            "mixer_calibration",
+            "precompensation",
+            "amplifier_pump",
         )
 
         exp_signals_by_pc = {}
@@ -205,9 +206,9 @@ class ExperimentInfoBuilder:
                 if unique_value is not None:
                     # Make sure all the experiment signals agree.
                     for exp_signal in exp_signals:
-                        exp_cal = self._experiment.calibration.items.get(exp_signal.uid)
-                        if exp_cal is None:
-                            continue
+                        exp_cal = self._experiment.calibration.items.setdefault(
+                            exp_signal.uid, SignalCalibration()
+                        )
                         setattr(exp_cal, field_, unique_value)
 
     def _get_signal_calibration(
@@ -281,9 +282,10 @@ class ExperimentInfoBuilder:
         )
 
     def _load_amplifier_pump(
-        self, amp_pump: AmplifierPump, channel
+        self, amp_pump: AmplifierPump, channel, ppc_device: DeviceInfo
     ) -> AmplifierPumpInfo:
         return AmplifierPumpInfo(
+            ppc_device=ppc_device,
             pump_frequency=self.opt_param(amp_pump.pump_frequency, nt_only=True),
             pump_power=self.opt_param(amp_pump.pump_power, nt_only=True),
             pump_on=amp_pump.pump_on,
@@ -366,8 +368,9 @@ class ExperimentInfoBuilder:
                     )
                 else:
                     channel = ppc_connection.channel
+                    device = self._device_info.device_mapping[ppc_connection.device.uid]
                     signal_info.amplifier_pump = self._load_amplifier_pump(
-                        amp_pump, channel
+                        amp_pump, channel, device
                     )
 
             # Output router and adder (RTR SHFSG/QC). Requires: RTR option

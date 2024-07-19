@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from laboneq.dsl.device.device_setup import DeviceSetup
     from laboneq.dsl.experiment import Experiment
     from laboneq.dsl.experiment.pulse import Pulse
+    from laboneq.dsl.parameter import Parameter
 
 
 @dataclass(init=True, repr=True, order=True)
@@ -201,6 +202,24 @@ class CompiledExperiment:
         from laboneq.core.utilities.replace_pulse import replace_pulse
 
         replace_pulse(self, pulse_uid, pulse_or_array)
+
+    def replace_phase_increment(
+        self, parameter: str | Parameter, new_value: int | float
+    ):
+        """Permanently replaces the phase increment driven by the specified parameter
+        with the new value. Previous pulse data is lost.
+
+        Args:
+            parameter:
+                The [Parameter][laboneq.dsl.parameter.Parameter] to replace.
+            new_value:
+                Replacement value in radians
+        """
+        from laboneq.core.utilities.replace_phase_increment import (
+            replace_phase_increment,
+        )
+
+        replace_phase_increment(self, parameter, new_value)
 
     @classmethod
     def load(cls, filename: str) -> CompiledExperiment:

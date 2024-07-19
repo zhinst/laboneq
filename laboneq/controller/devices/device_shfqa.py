@@ -283,6 +283,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
                     f"/{self.serial}/qachannels/{awg}/spectroscopy/result/enable",
                     f"/{self.serial}/qachannels/{awg}/spectroscopy/result/data/wave",
                     f"/{self.serial}/qachannels/{awg}/readout/result/enable",
+                    f"/{self.serial}/scopes/0/channels/{awg}/wave",  # 1:1 mapping of QA channels to scope channels
                 ]
             )
             for result_index in range(self._integrators):
@@ -292,7 +293,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
             nodes.extend(self.pipeliner_control_nodes(awg))
         return nodes
 
-    async def configure_acquisition(
+    def configure_acquisition(
         self,
         awg_key: AwgKey,
         awg_config: AwgConfig,
@@ -300,41 +301,45 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         averages: int,
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
-        with_pipeliner: bool,
+        pipeliner_job: int | None,
         recipe_data: RecipeData,
-    ) -> list[DaqNodeSetAction]:
+    ) -> NodeCollector:
         nc = NodeCollector()
-        if not with_pipeliner:
-            average_mode = 0 if averaging_mode == AveragingMode.CYCLIC else 1
-            nc.extend(
-                self._configure_readout(
-                    acquisition_type,
-                    awg_key,
-                    awg_config,
-                    integrator_allocations,
-                    averages,
-                    average_mode,
-                    recipe_data,
-                )
-            )
-            nc.extend(
-                self._configure_spectroscopy(
-                    acquisition_type,
-                    awg_key.awg_index,
-                    awg_config.result_length,
-                    averages,
-                    average_mode,
-                )
-            )
+        average_mode = 0 if averaging_mode == AveragingMode.CYCLIC else 1
         nc.extend(
-            self._configure_scope(
-                enable=acquisition_type == AcquisitionType.RAW,
-                channel=awg_key.awg_index,
-                averages=averages,
-                acquire_length=awg_config.raw_acquire_length,
+            self._configure_readout(
+                acquisition_type,
+                awg_key,
+                awg_config,
+                integrator_allocations,
+                averages,
+                average_mode,
+                recipe_data,
+                pipeliner_job,
             )
         )
-        return await self.maybe_async(nc)
+        nc.extend(
+            self._configure_spectroscopy(
+                acquisition_type,
+                awg_key.awg_index,
+                awg_config.result_length,
+                averages,
+                average_mode,
+                pipeliner_job,
+            )
+        )
+        if pipeliner_job in [None, 0]:
+            # The scope is not pipelined, so any job beyond the first cannot reconfigure
+            # it.
+            nc.extend(
+                self._configure_scope(
+                    enable=acquisition_type == AcquisitionType.RAW,
+                    channel=awg_key.awg_index,
+                    averages=averages,
+                    acquire_length=awg_config.raw_acquire_length,
+                )
+            )
+        return nc
 
     def _configure_readout(
         self,
@@ -345,6 +350,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         averages: int,
         average_mode: int,
         recipe_data: RecipeData,
+        pipeliner_job: int | None,
     ) -> NodeCollector:
         enable = acquisition_type in [
             AcquisitionType.INTEGRATION,
@@ -352,12 +358,18 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         ]
         channel = awg_key.awg_index
         nc = NodeCollector(base=f"/{self.serial}/")
+        first_job_in_pipeline = pipeliner_job in [0, None]
         if enable:
+            nc.add(f"qachannels/{channel}/readout/result/enable", 0, cache=False)
+        if enable and first_job_in_pipeline:
             if averages > MAX_AVERAGES_RESULT_LOGGER:
                 raise LabOneQControllerException(
                     f"Number of averages {averages} exceeds the allowed maximum {MAX_AVERAGES_RESULT_LOGGER}"
                 )
             result_length = awg_config.result_length
+            if result_length is None:
+                # this AWG core does not acquire results
+                return nc
             if result_length > MAX_RESULT_VECTOR_LENGTH:
                 raise LabOneQControllerException(
                     f"Number of distinct readouts {result_length} on device {self.dev_repr},"
@@ -374,7 +386,6 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
             nc.add(f"qachannels/{channel}/readout/result/averages", averages)
 
             nc.add(f"qachannels/{channel}/readout/result/mode", average_mode)
-            nc.add(f"qachannels/{channel}/readout/result/enable", 0)
             if acquisition_type in [
                 AcquisitionType.INTEGRATION,
                 AcquisitionType.DISCRIMINATION,
@@ -389,7 +400,10 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
                     assert len(integrator.channels) == 1
                     integrator_idx = integrator.channels[0]
                     if uses_lrt:
-                        assert len(integrator.thresholds) <= 1
+                        if len(integrator.thresholds) > 1:
+                            raise LabOneQControllerException(
+                                f"{self.dev_repr}: Multistate discrimination cannot be used with a long readout."
+                            )
                         threshold = (
                             0.0
                             if len(integrator.thresholds) == 0
@@ -406,7 +420,12 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
                             f"qachannels/{channel}/readout/multistate/qudits/{integrator_idx}/thresholds/{state_i}/value",
                             threshold or 0.0,
                         )
-        nc.add(f"qachannels/{channel}/readout/result/enable", 1 if enable else 0)
+        nc.barrier()
+        nc.add(
+            f"qachannels/{channel}/readout/result/enable",
+            1 if enable else 0,
+            cache=False,
+        )
         return nc
 
     def _configure_spectroscopy(
@@ -416,9 +435,13 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         result_length: int,
         averages: int,
         average_mode: int,
+        pipeliner_job: int | None,
     ) -> NodeCollector:
         nc = NodeCollector(base=f"/{self.serial}/")
-        if is_spectroscopy(acq_type):
+        if result_length is None:
+            return nc  # this AWG does not acquire results
+        first_job_in_pipeline = pipeliner_job in [0, None]
+        if is_spectroscopy(acq_type) and first_job_in_pipeline:
             if averages > MAX_AVERAGES_RESULT_LOGGER:
                 raise LabOneQControllerException(
                     f"Number of averages {averages} exceeds the allowed maximum {MAX_AVERAGES_RESULT_LOGGER}"
@@ -432,9 +455,11 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
             nc.add(f"qachannels/{channel}/spectroscopy/result/averages", averages)
             nc.add(f"qachannels/{channel}/spectroscopy/result/mode", average_mode)
             nc.add(f"qachannels/{channel}/spectroscopy/psd/enable", 0)
+        if is_spectroscopy(acq_type):
             nc.add(f"qachannels/{channel}/spectroscopy/result/enable", 0)
         if acq_type == AcquisitionType.SPECTROSCOPY_PSD:
             nc.add(f"qachannels/{channel}/spectroscopy/psd/enable", 1)
+        nc.barrier()
         nc.add(
             f"qachannels/{channel}/spectroscopy/result/enable",
             1 if is_spectroscopy(acq_type) else 0,
@@ -468,7 +493,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
                 "scopes/0/trigger/channel", 64 + channel
             )  # channelN_sequencer_monitor0
             nc.add("scopes/0/trigger/enable", 1)
-            nc.add("scopes/0/enable", 0)
+            nc.add("scopes/0/enable", 0)  # todo: barrier needed?
             nc.add("scopes/0/single", 1, cache=False)
         nc.add("scopes/0/enable", 1 if enable else 0)
         return nc
@@ -617,11 +642,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
                 nc.add(f"qachannels/{output.channel}/output/range", output.range)
 
             nc.add(f"qachannels/{output.channel}/generator/single", 1)
-            if self._is_plus and (
-                # Temporary workaround for in-house testing with a partially updated device
-                # DEV12093 only has the new up-converter installed in channel 3
-                self.serial.lower() != "dev12093" or output.channel == 3
-            ):
+            if self._is_plus:
                 nc.add(
                     f"qachannels/{output.channel}/output/muting/enable",
                     int(output.enable_output_mute),
@@ -639,6 +660,11 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
                 if input.port_mode is None or input.port_mode == PortMode.RF.value
                 else 0,  # LF
             )
+
+            nc.add(f"qachannels/{input.channel}/input/on", 1)
+            if input.range is not None:
+                self._validate_range(input, is_out=False)
+                nc.add(f"qachannels/{input.channel}/input/range", input.range)
 
         return await self.maybe_async(nc)
 
@@ -867,13 +893,10 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
             )
             [channel] = integrator_allocation.channels
 
-            if uses_lrt and len(weight_names) > 1:
-                raise LabOneQControllerException(
-                    f"{self.dev_repr}: Multistate discrimination cannot be used with a long readout."
-                )
+            assert not (uses_lrt and len(weight_names) > 1)
 
-            for index, weight_name in enumerate(weight_names):
-                wave_name = weight_name + ".wave"
+            for index, weight in enumerate(weight_names):
+                wave_name = weight.id + ".wave"
                 # Note conjugation here:
                 wave = get_wave(wave_name, artifacts.waves)
                 weight_vector = np.conjugate(np.ascontiguousarray(wave.samples))
@@ -915,61 +938,6 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         if integration_length is not None:
             nc.add("integration/length", integration_length)
 
-        return nc
-
-    def prepare_pipeliner_job_nodes(
-        self,
-        recipe_data: RecipeData,
-        rt_section_uid: str,
-        awg_key: AwgKey,
-        pipeliner_job: int,
-    ) -> NodeCollector:
-        nc = NodeCollector()
-
-        rt_execution_info = recipe_data.rt_execution_infos[rt_section_uid]
-
-        if not rt_execution_info.with_pipeliner:
-            return nc
-
-        if not recipe_data.setup_caps.result_logger_pipelined and pipeliner_job > 0:
-            return nc
-
-        awg_config = recipe_data.awg_configs[awg_key]
-
-        if awg_config.result_length is None:
-            # AWG is not producing results
-            return nc
-
-        # TODO(2K): code duplication with Controller._prepare_rt_execution
-        if rt_execution_info.averaging_mode == AveragingMode.SINGLE_SHOT:
-            effective_averages = 1
-            effective_averaging_mode = AveragingMode.CYCLIC
-            # TODO(2K): handle sequential
-        else:
-            effective_averages = rt_execution_info.averages
-            effective_averaging_mode = rt_execution_info.averaging_mode
-
-        average_mode = 0 if effective_averaging_mode == AveragingMode.CYCLIC else 1
-        nc.extend(
-            self._configure_readout(
-                rt_execution_info.acquisition_type,
-                awg_key,
-                awg_config,
-                recipe_data.recipe.integrator_allocations,
-                effective_averages,
-                average_mode,
-                recipe_data,
-            )
-        )
-        nc.extend(
-            self._configure_spectroscopy(
-                rt_execution_info.acquisition_type,
-                awg_key.awg_index,
-                awg_config.result_length,
-                effective_averages,
-                average_mode,
-            )
-        )
         return nc
 
     def _integrator_has_consistent_msd_num_state(
@@ -1097,15 +1065,17 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
             recipe_data.rt_execution_infos
         )
 
+        for channel in range(self._channels):
+            nc.add(
+                f"qachannels/{channel}/mode",
+                0 if is_spectroscopy(acquisition_type) else 1,
+            )
+
         for measurement in initialization.measurements:
             if self._uses_lrt(
                 initialization.device_uid, measurement.channel, recipe_data
             ):
                 nc.add(f"qachannels/{measurement.channel}/modulation/enable", 1)
-            nc.add(
-                f"qachannels/{measurement.channel}/mode",
-                0 if is_spectroscopy(acquisition_type) else 1,
-            )
 
             dev_input = next(
                 (
@@ -1140,33 +1110,6 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
 
         return await self.maybe_async(nc)
 
-    async def collect_awg_after_upload_nodes(
-        self, initialization: Initialization
-    ) -> list[DaqNodeSetAction]:
-        nc = NodeCollector(base=f"/{self.serial}/")
-        inputs = initialization.inputs or []
-        for dev_input in inputs:
-            nc.add(f"qachannels/{dev_input.channel}/input/on", 1)
-            if dev_input.range is not None:
-                self._validate_range(dev_input, is_out=False)
-                nc.add(f"qachannels/{dev_input.channel}/input/range", dev_input.range)
-
-        for measurement in initialization.measurements:
-            channel = 0
-            if initialization.config.triggering_mode == TriggeringMode.DESKTOP_LEADER:
-                # standalone QA oder QC
-                channel = (
-                    SOFTWARE_TRIGGER_CHANNEL
-                    if self.options.is_qc
-                    else INTERNAL_TRIGGER_CHANNEL
-                )
-            nc.add(
-                f"qachannels/{measurement.channel}/generator/auxtriggers/0/channel",
-                channel,
-            )
-
-        return await self.maybe_async(nc)
-
     async def collect_trigger_configuration_nodes(
         self, initialization: Initialization, recipe_data: RecipeData
     ) -> list[DaqNodeSetAction]:
@@ -1197,6 +1140,21 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
             src = 32 + awg_index
             nc.add(f"qachannels/{awg_index}/markers/0/source", src)
             nc.add(f"qachannels/{awg_index}/markers/1/source", src)
+
+        for measurement in initialization.measurements:
+            channel = 0
+            if initialization.config.triggering_mode == TriggeringMode.DESKTOP_LEADER:
+                # standalone QA oder QC
+                channel = (
+                    SOFTWARE_TRIGGER_CHANNEL
+                    if self.options.is_qc
+                    else INTERNAL_TRIGGER_CHANNEL
+                )
+            nc.add(
+                f"qachannels/{measurement.channel}/generator/auxtriggers/0/channel",
+                channel,
+            )
+
         return await self.maybe_async(nc)
 
     async def get_measurement_data(
@@ -1220,11 +1178,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
             else f"{self.dev_repr}:ch{channel}:readout{result_indices[0]}"
         )
 
-        pipeliner_jobs = (
-            rt_execution_info.pipeliner_jobs
-            if recipe_data.setup_caps.result_logger_pipelined
-            else 1
-        )
+        pipeliner_jobs = rt_execution_info.pipeliner_jobs
 
         rt_result = RawReadoutData(
             np.full(pipeliner_jobs * num_results, np.nan, dtype=np.complex128)
@@ -1306,9 +1260,24 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         self, channel: int, num_results: int
     ) -> RawReadoutData:
         result_path_ch = f"/{self.serial}/scopes/0/channels/{channel}/wave"
-        node_data = await self.get_raw(result_path_ch)
-        data = node_data[result_path_ch][0]["vector"][0:num_results]
-        return RawReadoutData(data)
+        ch_repr = f"{self.dev_repr}:scope:ch{channel}"
+        read_result_timeout_s = 5
+        last_result_received = None
+        while True:
+            node_data = self.node_monitor.pop(result_path_ch)
+            if node_data is not None:
+                data = node_data["vector"][0:num_results]
+                return RawReadoutData(data)
+            now = time.monotonic()
+            if last_result_received is None:
+                last_result_received = now
+            if now - last_result_received > read_result_timeout_s:
+                _logger.error(
+                    f"{ch_repr}: Failed to receive all raw results within {read_result_timeout_s} s, timing out."
+                )
+                return RawReadoutData(np.array([], dtype=np.complex128))
+            await asyncio.sleep(0.1)
+            await self.node_monitor.poll()
 
     async def collect_reset_nodes(self) -> list[DaqNodeSetAction]:
         nc = NodeCollector(base=f"/{self.serial}/")

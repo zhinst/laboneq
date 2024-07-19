@@ -6,7 +6,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 import numpy as np
 from numpy import typing as npt
 
@@ -29,14 +29,11 @@ class PulseInstance:
     length: float = None  # instance (final) length
     iq_phase: float = None
     modulation_frequency: float = None
-    modulation_phase: float = None
     channel: int = None  # The AWG channel for rf_signals
     needs_conjugate: bool = False  # SHF devices need that for now
     play_pulse_parameters: dict[str, Any] = field(default_factory=dict)
     pulse_pulse_parameters: dict[str, Any] = field(default_factory=dict)
 
-    # uid of pulses that this instance overlaps with
-    overlaps: list[str] = None
     has_marker1: bool = False
     has_marker2: bool = False
     can_compress: bool = False
@@ -59,15 +56,35 @@ class PulseMapEntry:
     """Data structure to store the :py:class:`PulseWaveformMap` of each AWG waveform."""
 
     # key: waveform signature string
-    #: A mapping of signals to :py:class:`PulseWaveformMap`
     waveforms: dict[str, PulseWaveformMap] = field(default_factory=dict)
+
+
+COMPLEX_USAGE = "complex_usage"
+
+
+@dataclass
+class ParameterPhaseIncrementMap:
+    entries: list[CommandTableMapEntry | Literal[COMPLEX_USAGE]] = field(
+        default_factory=list
+    )
+
+
+@dataclass
+class CommandTableMapEntry:
+    ct_ref: str
+    ct_index: int
 
 
 class CompilerArtifact:
     pass
 
 
-WeightInfo = str
+@dataclass
+class WeightInfo:
+    id: str
+    downsampling_factor: int | None
+
+
 SignalWeights = list[WeightInfo]
 AwgWeights = dict[str, SignalWeights]
 
@@ -112,6 +129,11 @@ class ArtifactsCodegen(CompilerArtifact):
     # Data structure for mapping pulses (in the experiment) to waveforms (on the
     # device).
     pulse_map: dict[str, PulseMapEntry] | None = None
+
+    # Data structure mapping pulse parameters for phase increments to command table entries
+    parameter_phase_increment_map: dict[str, ParameterPhaseIncrementMap] = field(
+        default_factory=dict
+    )
 
     # Data structure for referencing the waveforms used as integration kernels.
     integration_weights: dict[str, AwgWeights] = field(default_factory=dict)
