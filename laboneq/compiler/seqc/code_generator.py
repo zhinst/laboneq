@@ -19,6 +19,7 @@ from engineering_notation import EngNumber
 import scipy.signal
 
 from laboneq.compiler.common.feedback_connection import FeedbackConnection
+from laboneq.compiler.common.shfppc_sweeper_config import SHFPPCSweeperConfig
 from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
 from laboneq.compiler.ir.ir import IR
 from laboneq.compiler.seqc.linker import AwgWeights, SeqCGenOutput
@@ -32,6 +33,7 @@ from laboneq.compiler.seqc.analyze_events import (
     analyze_set_oscillator_times,
     analyze_trigger_events,
     analyze_prng_times,
+    analyze_ppc_sweep_events,
 )
 from laboneq.compiler.seqc.analyze_playback import analyze_play_wave_times
 from laboneq.compiler.seqc.command_table_tracker import (
@@ -55,6 +57,9 @@ from laboneq.compiler.seqc.seqc_generator import (
     merge_generators,
 )
 from laboneq.compiler.seqc.seqc_tracker import SeqCTracker
+from laboneq.compiler.seqc.shfppc_sweeper_config_tracker import (
+    SHFPPCSweeperConfigTracker,
+)
 from laboneq.compiler.seqc.signatures import (
     PlaybackSignature,
     SamplesSignature,
@@ -374,6 +379,7 @@ class CodeGenerator(ICodeGenerator):
         )
         self._feedback_connections: dict[str, FeedbackConnection] = {}
         self._qa_signals_by_handle: dict[str, SignalObj] = {}
+        self._shfppc_sweep_configs: dict[AwgKey, SHFPPCSweeperConfig] = {}
         self._feedback_register_allocator: FeedbackRegisterAllocator | None = None
         self._total_execution_time = None
 
@@ -407,6 +413,7 @@ class CodeGenerator(ICodeGenerator):
             pulse_map=self.pulse_map(),
             parameter_phase_increment_map=self.parameter_phase_increment_map(),
             feedback_register_configurations=self.feedback_register_config(),
+            shfppc_sweep_configurations=self.shfppc_sweep_configs(),
         )
 
     def integration_weights(self) -> dict[AwgKey, AwgWeights]:
@@ -964,7 +971,9 @@ class CodeGenerator(ICodeGenerator):
                             "i": orig_i,
                             "q": orig_q,
                         }
-                        new_events = wave_compressor.compress_wave(sample_dict, 1)
+                        new_events = wave_compressor.compress_wave(
+                            sample_dict, sample_multiple=4, threshold=12
+                        )
                         if new_events is None:
                             raise LabOneQException(
                                 "SHFQA measure pulse exceeds 4096 samples and is not compressible."
@@ -981,22 +990,33 @@ class CodeGenerator(ICodeGenerator):
                             and isinstance(new_events[1], PlayHold)
                         ):
                             if lead_hold_tail:
-                                assert isinstance(new_events[2], PlaySamples)
                                 new_i = np.concatenate(
                                     [
                                         new_events[0].samples["i"],
+                                        [new_events[0].samples["i"][-1]] * 4,
                                         new_events[2].samples["i"],
                                     ]
                                 )
                                 new_q = np.concatenate(
                                     [
                                         new_events[0].samples["q"],
+                                        [new_events[0].samples["q"][-1]] * 4,
                                         new_events[2].samples["q"],
                                     ]
                                 )
                             else:
-                                new_i = new_events[0].samples["i"]
-                                new_q = new_events[0].samples["q"]
+                                new_i = np.concatenate(
+                                    [
+                                        new_events[0].samples["i"],
+                                        [new_events[0].samples["i"][-1]] * 4,
+                                    ]
+                                )
+                                new_q = np.concatenate(
+                                    [
+                                        new_events[0].samples["q"],
+                                        [new_events[0].samples["q"][-1]] * 4,
+                                    ]
+                                )
                             if len(new_i) > 4096:  # TODO(2K): get via device_type
                                 raise LabOneQException(
                                     "SHFQA measure pulse exceeds 4096 samples after compression."
@@ -1006,7 +1026,12 @@ class CodeGenerator(ICodeGenerator):
                             sampled_signature["hold_start"] = len(
                                 new_events[0].samples["i"]
                             )
-                            sampled_signature["hold_length"] = new_events[1].num_samples
+                            assert (
+                                new_events[1].num_samples >= 12
+                            )  # Ensured by previous conditions
+                            sampled_signature["hold_length"] = (
+                                new_events[1].num_samples - 4
+                            )
                             continue
                         raise LabOneQException(
                             "Unexpected SHFQA long measure pulse: only a single const region is allowed."
@@ -1222,6 +1247,9 @@ class CodeGenerator(ICodeGenerator):
         prng_setup = analyze_prng_times(events, global_sampling_rate, global_delay)
         sampled_events.merge(prng_setup)
 
+        ppc_sweep_events = analyze_ppc_sweep_events(events, awg, global_delay)
+        sampled_events.merge(ppc_sweep_events)
+
         for signal_obj in awg.signals:
             set_oscillator_events = analyze_set_oscillator_times(
                 events, signal_obj, global_delay
@@ -1236,17 +1264,6 @@ class CodeGenerator(ICodeGenerator):
                 signal_obj,
                 feedback_register_allocator=self._feedback_register_allocator,
             )
-
-            if (
-                trigger_events.sequence
-                and awg.device_type == DeviceType.SHFQA
-                and acquire_events.has_matching_event(
-                    lambda ev: "spectroscopy" in ev.get("acquisition_type")
-                )
-            ):
-                raise LabOneQException(
-                    "Trigger signals cannot be used on SHFQA in spectroscopy mode"
-                )
 
             if signal_obj.signal_type == "integration":
                 _logger.debug(
@@ -1494,9 +1511,12 @@ class CodeGenerator(ICodeGenerator):
             automute_playzeros=any([sig.automute for sig in awg.signals]),
         )
 
+        shfppc_sweeper_config_tracker = SHFPPCSweeperConfigTracker()
+
         handler = SampledEventHandler(
             seqc_tracker=seqc_tracker,
             command_table_tracker=command_table_tracker,
+            shfppc_sweeper_config_tracker=shfppc_sweeper_config_tracker,
             function_defs_generator=function_defs_generator,
             declarations_generator=declarations_generator,
             wave_indices=WaveIndexTracker(),
@@ -1566,6 +1586,10 @@ class CodeGenerator(ICodeGenerator):
             self._parameter_phase_increment_map = (
                 handler.command_table_tracker.parameter_phase_increment_map()
             )
+
+        if shfppc_sweeper_config_tracker.has_sweep_commands():
+            shfppc_config = shfppc_sweeper_config_tracker.finish()
+            self._shfppc_sweep_configs[awg_key] = shfppc_config
 
     def waveform_size_hints(self, device: DeviceType):
         settings = self._settings
@@ -1922,6 +1946,9 @@ class CodeGenerator(ICodeGenerator):
 
     def feedback_connections(self) -> dict[str, FeedbackConnection]:
         return self._feedback_connections
+
+    def shfppc_sweep_configs(self) -> dict[AwgKey, SHFPPCSweeperConfig]:
+        return self._shfppc_sweep_configs
 
     @staticmethod
     def stencil_samples(start, source, target):

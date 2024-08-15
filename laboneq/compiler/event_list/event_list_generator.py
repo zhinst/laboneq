@@ -14,10 +14,17 @@ from laboneq.compiler.ir.acquire_group_ir import AcquireGroupIR
 from laboneq.compiler.ir.case_ir import CaseIR, EmptyBranchIR
 from laboneq.compiler.ir.interval_ir import IntervalIR
 from laboneq.compiler.ir.loop_ir import LoopIR
-from laboneq.compiler.ir.loop_iteration_ir import LoopIterationIR
+from laboneq.compiler.ir.loop_iteration_ir import (
+    LoopIterationIR,
+    LoopIterationPreambleIR,
+)
 from laboneq.compiler.ir.match_ir import MatchIR
-from laboneq.compiler.ir.oscillator_ir import SetOscillatorFrequencyIR
+from laboneq.compiler.ir.oscillator_ir import (
+    InitialOscillatorFrequencyIR,
+    SetOscillatorFrequencyIR,
+)
 from laboneq.compiler.ir.phase_reset_ir import PhaseResetIR
+from laboneq.compiler.ir.ppc_step_ir import PPCStepIR
 from laboneq.compiler.ir.pulse_ir import PulseIR, PrecompClearIR
 from laboneq.compiler.ir.reserve_ir import ReserveIR
 from laboneq.compiler.ir.root_ir import RootScheduleIR
@@ -141,7 +148,6 @@ def generate_event_list_acquire_group(
         len(acquire_group_ir.pulses)
         == len(acquire_group_ir.amplitudes)
         == len(acquire_group_ir.phases)
-        == len(acquire_group_ir.oscillator_frequencies)
         == len(acquire_group_ir.play_pulse_params)
         == len(acquire_group_ir.pulse_pulse_params)
     )
@@ -171,9 +177,6 @@ def generate_event_list_acquire_group(
         ],
         "acquire_handle": acquire_group_ir.pulses[0].acquire_params.handle,
     }
-
-    if acquire_group_ir.oscillator_frequencies is not None:
-        d["oscillator_frequency"] = acquire_group_ir.oscillator_frequencies
 
     if acquire_group_ir.pulse_pulse_params:
         d["pulse_pulse_parameters"] = [
@@ -243,6 +246,33 @@ def generate_event_list_oscillator_frequency_step(
                     "time": start + ir.length,
                     "id": next(id_tracker),
                     "chain_element_id": start_id,
+                },
+            ]
+        )
+    return retval
+
+
+@generate_event_list.register
+def generate_event_list_initial_oscillator_frequency(
+    ir: InitialOscillatorFrequencyIR,
+    start: int,
+    _max_events: int,
+    id_tracker: Iterator[int],
+    _expand_loops: bool,
+    _settings: CompilerSettings,
+) -> EventList:
+    retval = []
+    for osc, value in zip(ir.oscillators, ir.values):
+        start_id = next(id_tracker)
+        retval.extend(
+            [
+                {
+                    "event_type": EventType.INITIAL_OSCILLATOR_FREQUENCY,
+                    "time": start,
+                    "value": value,
+                    "signal": osc.signal,
+                    "oscillator_id": osc.id,
+                    "id": start_id,
                 },
             ]
         )
@@ -536,6 +566,31 @@ def generate_event_list_loop_iteration(
 
 
 @generate_event_list.register
+def generate_event_list_loop_iteration_preamble(
+    preamble: LoopIterationPreambleIR,
+    start: int,
+    max_events: int,
+    id_tracker: Iterator[int],
+    expand_loops,
+    settings: CompilerSettings,
+):
+    # The preamble is not represented in the event list. We transparently pass through
+    # all child events.
+
+    events = []
+    for child, child_start in zip(preamble.children, preamble.children_start):
+        child_events = generate_event_list(
+            child, start + child_start, max_events, id_tracker, expand_loops, settings
+        )
+        max_events -= len(child_events)
+        if max_events <= 0:
+            break
+        events.extend(child_events)
+
+    return events
+
+
+@generate_event_list.register
 def generate_event_list_pulse(
     pulse_ir: PulseIR,
     start: int,
@@ -581,9 +636,6 @@ def generate_event_list_pulse(
 
     if pulse_ir.markers is not None and len(pulse_ir.markers) > 0:
         d_start["markers"] = [vars(m) for m in pulse_ir.markers]
-
-    if pulse_ir.oscillator_frequency is not None:
-        d_start["oscillator_frequency"] = pulse_ir.oscillator_frequency
 
     if pulse_ir.pulse_pulse_params:
         d_start["pulse_pulse_parameters"] = encode_pulse_parameters(
@@ -718,6 +770,49 @@ def generate_event_list_phase_reset(
         )
 
     return events
+
+
+@generate_event_list.register
+def generate_event_list_ppc_step(
+    ir: PPCStepIR,
+    start: int,
+    max_events: int,
+    id_tracker: Iterator[int],
+    _expand_loops,
+    _settings: CompilerSettings,
+) -> EventList:
+    if max_events < 2:
+        return []
+
+    start_id = next(id_tracker)
+    start_event = {
+        "event_type": EventType.PPC_SWEEP_STEP_START,
+        "time": start,
+        "section_name": ir.section,
+        "id": start_id,
+        "qa_device": ir.qa_device,
+        "qa_channel": ir.qa_channel,
+        "ppc_device": ir.ppc_device,
+        "ppc_channel": ir.ppc_channel,
+    }
+    end_event = {
+        "event_type": EventType.PPC_SWEEP_STEP_END,
+        "time": start + ir.trigger_duration,
+        "id": start_id,
+        "chain_element_id": start_id,
+    }
+
+    for field in [
+        "pump_power",
+        "pump_frequency",
+        "probe_power",
+        "probe_frequency",
+        "cancellation_phase",
+        "cancellation_attenuation",
+    ]:
+        if (value := getattr(ir, field)) is not None:
+            start_event[field] = value
+    return [start_event, end_event]
 
 
 def _children_events(

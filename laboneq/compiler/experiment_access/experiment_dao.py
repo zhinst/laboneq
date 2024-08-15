@@ -10,8 +10,7 @@ from typing import Any, List
 from jsonschema import ValidationError
 
 from laboneq._utils import cached_method
-from laboneq.compiler import DeviceType
-from laboneq.compiler.experiment_access import json_dumper
+from laboneq.compiler.experiment_access import json_dumper, validators
 from laboneq.compiler.experiment_access.experiment_info_loader import (
     ExperimentInfoLoader,
 )
@@ -324,91 +323,10 @@ class ExperimentDAO:
         return self._data["section_parameters"].get(section_id, [])
 
     def validate_experiment(self):
-        pulses_on_qa_out = {}
-        for section_id in self.sections():
-            for signal_id in self.section_signals(section_id):
-                for section_pulse in self.section_pulses(section_id, signal_id):
-                    signal_info = self.signal_info(signal_id=signal_id)
-                    if (
-                        signal_info.type != SignalInfoType.INTEGRATION
-                        and signal_info.device.device_type == DeviceInfoType.SHFQA
-                    ):
-                        if section_pulse.pulse is not None:
-                            pulses_on_qa_out.setdefault(signal_info.uid, set()).add(
-                                section_pulse.pulse
-                            )
-
-        for signal, pulses in pulses_on_qa_out.items():
-            if len(pulses) > 1:
-                raise LabOneQException(
-                    f"Using different pulses on the same SHFQA output signal ({signal})"
-                )
-
-        for section_id in self.sections():
-            section_info = self.section_info(section_id=section_id)
-
-            if len(section_info.triggers) > 0:
-                for trigger in section_info.triggers:
-                    if trigger["signal_id"] not in self.signals():
-                        raise LabOneQException(
-                            f"Trigger on section {section_id} played on signal {trigger['signal_id']} not present in experiment. Available signal(s) are {', '.join(self.signals())}."
-                        )
-
-            for signal_id in self.section_signals(section_id):
-                for section_pulse in self.section_pulses(section_id, signal_id):
-                    if section_pulse.pulse is None:
-                        continue
-                    pulse_id = section_pulse.pulse.uid
-                    device_type = DeviceType.from_device_info_type(
-                        section_pulse.signal.device.device_type
-                    )
-                    if (
-                        device_type == DeviceType.HDAWG
-                        and len(section_pulse.signal.channels) == 1
-                        and any(
-                            "marker2" == m.marker_selector
-                            for m in section_pulse.markers
-                        )
-                    ):
-                        raise LabOneQException(
-                            f"Single channel RF Pulse {pulse_id} referenced in section {section_id}"
-                            f" has marker 2 enabled. Please only use marker 1 on RF channels."
-                        )
-
-                    if device_type.is_qa_device and not len(section_pulse.markers) == 0:
-                        raise LabOneQException(
-                            f"Pulse {pulse_id} referenced in section {section_id}"
-                            f" has markers but is to be played on a QA device. QA"
-                            f" devices do not support markers."
-                        )
-
-        for section_id in self.sections():
-            for signal_id in self.section_signals(section_id):
-                signal_info = self.signal_info(signal_id=signal_id)
-
-                if signal_info.oscillator is not None and isinstance(
-                    signal_info.oscillator.frequency, ParameterInfo
-                ):
-                    param_id = signal_info.oscillator.frequency.uid
-                    cur_section = self.section_info(section_id)
-                    param_found = False
-                    while cur_section is not None:
-                        if param_id in [s.uid for s in cur_section.parameters]:
-                            param_found = True
-                            break
-                        parent_section_id = self.section_parent(cur_section.uid)
-                        cur_section = (
-                            self.section_info(parent_section_id)
-                            if parent_section_id is not None
-                            else None
-                        )
-
-                    if not param_found:
-                        raise LabOneQException(
-                            f"Pulse {signal_id} referenced in section {section_id}"
-                            f" is trying to use sweep parameter {param_id} that"
-                            f" is not present in any parent sections"
-                        )
+        validators.shfqa_unique_measure_pulse(self)
+        validators.check_triggers_and_markers(self)
+        validators.missing_sweep_parameter_for_play(self)
+        validators.check_ppc_sweeper(self)
 
     def acquisition_signal(self, handle: str) -> str | None:
         return self._data["handle_acquires"][handle]

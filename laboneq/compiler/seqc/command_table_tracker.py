@@ -109,6 +109,7 @@ class CommandTableTracker:
         do_incr = None
         set_phase = signature.set_phase
         if set_phase is not None:
+            assert signature.set_phase == 0.0
             ct_phase = set_phase
             do_incr = False
         incr_phase = signature.increment_phase

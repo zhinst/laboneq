@@ -228,7 +228,7 @@ class Session:
                 - Check LabOne and LabOne Q version compatibility.
                 - Check LabOne and Zurich Instruments' devices firmware version compatibility.
 
-                The following states raises an exception:
+                The following states raise an exception:
 
                 - Device firmware requires an update
                 - Device firmware requires an downgrade

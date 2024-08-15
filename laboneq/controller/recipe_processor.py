@@ -17,7 +17,6 @@ from laboneq.controller.attribute_value_tracker import (
     DeviceAttribute,
 )
 from laboneq.controller.util import LabOneQControllerException
-from laboneq.controller.versioning import SetupCaps
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.data.recipe import IO, Initialization, Recipe, SignalType
@@ -164,7 +163,6 @@ class RecipeData:
     scheduled_experiment: ScheduledExperiment
     recipe: Recipe
     execution: Sequence
-    setup_caps: SetupCaps
     result_shapes: HandleResultShapes
     rt_execution_infos: RtExecutionInfos
     device_settings: DeviceSettings
@@ -385,7 +383,6 @@ class _LoopsPreprocessor(ExecutorBase):
 def _calculate_awg_configs(
     rt_execution_infos: RtExecutionInfos,
     recipe: Recipe,
-    setup_caps: SetupCaps,
     has_qhub: bool,
 ) -> AwgConfigs:
     awg_configs: AwgConfigs = defaultdict(AwgConfig)
@@ -419,6 +416,8 @@ def _calculate_awg_configs(
             awg_config.register_selector_shift = awg.codeword_bitshift
             awg_config.register_selector_bitmask = awg.codeword_bitmask
             awg_config.command_table_match_offset = awg.command_table_match_offset
+            if initialization.device_type == "PRETTYPRINTERDEVICE":
+                awg_config.result_length = -1  # result shape determined by device
 
     # As currently just a single RT execution per experiment is supported,
     # AWG configs are not cloned per RT execution. May need to be changed in the future.
@@ -428,14 +427,11 @@ def _calculate_awg_configs(
         # device_id -> set of raw acquisition lengths
         raw_acquire_lengths: dict[str, set[int]] = defaultdict(set)
         if rt_execution_info.acquisition_type == AcquisitionType.RAW:
-            for signal, sections in rt_execution_info.acquire_sections.items():
+            for signal in rt_execution_info.acquire_sections:
                 awg_key = awg_key_by_acquire_signal(signal)
-                for section in sections:
-                    for al in recipe.acquire_lengths:
-                        if al.signal_id == signal and al.section_id == section:
-                            raw_acquire_lengths[awg_key.device_uid].add(
-                                al.acquire_length
-                            )
+                for al in recipe.acquire_lengths:
+                    if al.signal_id == signal:
+                        raw_acquire_lengths[awg_key.device_uid].add(al.acquire_length)
         for awg_key, awg_config in awg_configs.items():
             # Use dummy raw_acquire_length 4096 if there's no acquire statements in experiment
             awg_config.raw_acquire_length = max(
@@ -511,7 +507,6 @@ def _pre_process_attributes(
 def pre_process_compiled(
     scheduled_experiment: ScheduledExperiment,
     devices: DeviceCollection,
-    setup_caps: SetupCaps,
 ) -> RecipeData:
     for device_uid, device in devices.all:
         device.validate_scheduled_experiment(device_uid, scheduled_experiment)
@@ -531,16 +526,13 @@ def pre_process_compiled(
     lp.run(execution)
     rt_execution_infos = lp.rt_execution_infos
 
-    awg_configs = _calculate_awg_configs(
-        rt_execution_infos, recipe, setup_caps, devices.has_qhub
-    )
+    awg_configs = _calculate_awg_configs(rt_execution_infos, recipe, devices.has_qhub)
     attribute_value_tracker, oscillator_ids = _pre_process_attributes(recipe, devices)
 
     recipe_data = RecipeData(
         scheduled_experiment=scheduled_experiment,
         recipe=recipe,
         execution=execution,
-        setup_caps=setup_caps,
         result_shapes=lp.result_shapes,
         rt_execution_infos=rt_execution_infos,
         device_settings=device_settings,

@@ -813,11 +813,6 @@ class SimpleRuntime:
         result_addr=0,
         trigger=None,
     ):
-        if generators_mask is None:
-            generators_mask = self.resolve("QA_GEN_ALL")
-        if integrators_mask is None:
-            generators_mask = self.resolve("QA_INT_ALL")
-
         wave_data_idx = []
         event_length = 0
 

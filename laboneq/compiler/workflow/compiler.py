@@ -665,6 +665,9 @@ class Compiler:
                 oscillator_frequency_sw=oscillator_frequency_sw,
                 oscillator_frequency_hw=oscillator_frequency_hw,
                 channels=channels,
+                channel_to_port={
+                    int(c): p for c, p in signal_info.channel_to_port.items()
+                },
                 port_delay=port_delay,
                 mixer_type=mixer_type,
                 hw_oscillator=hw_oscillator,
@@ -742,9 +745,9 @@ class Compiler:
                     "lo_frequency": lo_frequency,
                     "port_mode": port_mode.value if port_mode is not None else None,
                     "range": signal_range.value if signal_range is not None else None,
-                    "range_unit": signal_range.unit
-                    if signal_range is not None
-                    else None,
+                    "range_unit": (
+                        signal_range.unit if signal_range is not None else None
+                    ),
                     "port_delay": port_delay,
                     "scheduler_port_delay": scheduler_port_delay,
                     "amplitude": self._experiment_dao.amplitude(signal_id),
@@ -908,9 +911,9 @@ class Compiler:
                     "channel": channel,
                     "lo_frequency": lo_frequency,
                     "range": signal_range.value if signal_range is not None else None,
-                    "range_unit": signal_range.unit
-                    if signal_range is not None
-                    else None,
+                    "range_unit": (
+                        signal_range.unit if signal_range is not None else None
+                    ),
                     "port_delay": port_delay,
                     "scheduler_port_delay": scheduler_port_delay,
                     "port_mode": port_mode.value if port_mode is not None else None,
@@ -991,20 +994,14 @@ class Compiler:
                 else:
                     measurement = {"length": None}
 
-                    integration_time_info = integration_times.section_info(
-                        info["section_name"]
-                    )
-                    if integration_time_info is not None:
-                        _logger.debug(
-                            "Found integration_time_info %s", integration_time_info
-                        )
+                    lengths_in_samples = [
+                        signal_info.length_in_samples
+                        for signal_id in device_details["signals"]
+                        if (signal_info := integration_times.signal_info(signal_id))
+                        is not None
+                    ]
 
-                        lengths_in_samples = [
-                            signal_info.length_in_samples
-                            for signal, signal_info in integration_time_info.signals.items()
-                            if signal in device_details["signals"]
-                        ]
-
+                    if lengths_in_samples:
                         # We communicate only the maximum length to the rest of the compiler.
                         # Other parts of the compiler should check that the maximum length
                         # is supported by the device and adjust shorter integrations as needed.
@@ -1124,6 +1121,13 @@ class Compiler:
                     awg_number=awg.awg_number,
                     signal_type=signal_type.value,
                     feedback_register_config=combined_outputs.get_feedback_register_configurations(
+                        awg.key
+                    ),
+                    signals={
+                        s.id: {str(c): p for c, p in s.channel_to_port.items()}
+                        for s in awg.signals
+                    },
+                    shfppc_sweep_configuration=combined_outputs.get_shfppc_sweep_configuration(
                         awg.key
                     ),
                 )

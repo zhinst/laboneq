@@ -100,20 +100,28 @@ class IntervalSchedule:
                 self.cacheable = False
 
     def calculate_timing(
-        self, schedule_data: ScheduleData, start: int, start_may_change: bool
+        self, schedule_data: ScheduleData, suggested_start: int, start_may_change: bool
     ) -> int:
         if self.children_start is not None:
             # We have already calculated the timing.
-            return start
+            return suggested_start
+
         self.children_start = [0] * len(self.children)
         # Timing calculation may find that the suggested start is too early to fulfill
         # constraints; give it a chance to return a better suiting start time
-        start = self._calculate_timing(schedule_data, start, start_may_change)
+        suggested_start = self._calculate_timing(
+            schedule_data, suggested_start, start_may_change
+        )
         if not start_may_change:
-            self.on_absolute_start_time_fixed(start, schedule_data)
-        return start
+            self.on_absolute_start_time_fixed(suggested_start, schedule_data)
+        return suggested_start
 
-    def _calculate_timing(self, *_, **__) -> int:
+    def _calculate_timing(
+        self,
+        _schedule_data: ScheduleData,  # type: ignore # noqa: F821
+        _suggested_start: int,
+        _start_may_change: bool,
+    ) -> int:
         raise NotImplementedError()
 
     def on_absolute_start_time_fixed(self, start: int, schedule_data: ScheduleData):

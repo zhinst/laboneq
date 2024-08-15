@@ -9,6 +9,7 @@ from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.event_list.event_type import EventList, EventType
 from laboneq.compiler.event_list.event_list_generator import generate_event_list
 from laboneq.compiler.ir.ir import IR
+from laboneq.data.compilation_job import OscillatorInfo
 
 
 def _calculate_osc_phase(event_list: EventList, ir: IR):
@@ -92,6 +93,70 @@ def _calculate_osc_phase(event_list: EventList, ir: IR):
                     event["oscillator_phase"] = 0.0
 
 
+def _remove_handled_oscillator_events(
+    event_list: EventList, oscillator_map: dict[str, OscillatorInfo]
+) -> EventList:
+    handled_event_id: set[int] = set()
+    for event in event_list:
+        if event["event_type"] == EventType.SET_OSCILLATOR_FREQUENCY_START:
+            signal_id = event["signal"]
+            oscillator_info = oscillator_map[signal_id]
+            is_hw_osc = oscillator_info.is_hardware if oscillator_info else False
+            if not is_hw_osc:
+                handled_event_id.add(event["id"])
+        if event["event_type"] == EventType.INITIAL_OSCILLATOR_FREQUENCY:
+            handled_event_id.add(event["id"])
+
+    for event in event_list:
+        if event["event_type"] == EventType.SET_OSCILLATOR_FREQUENCY_END:
+            if event["chain_element_id"] in handled_event_id:
+                handled_event_id.add(event["id"])
+
+    # note(mr): potentially expensive call
+    filtered_events = [
+        event for event in event_list if event["id"] not in handled_event_id
+    ]
+
+    return filtered_events
+
+
+def _calculate_osc_freq(event_list: EventList, ir: IR):
+    """Traverse the event list, and elaborate the frequency of each played pulse."""
+
+    priority_map = {
+        EventType.PLAY_START: 0,
+        EventType.ACQUIRE_START: 0,
+        EventType.SET_OSCILLATOR_FREQUENCY_START: -15,
+        EventType.INITIAL_OSCILLATOR_FREQUENCY: -30,
+    }
+    sorted_events = sorted(
+        (e for e in event_list if e["event_type"] in priority_map),
+        key=lambda e: (e["time"], priority_map[e["event_type"]]),
+    )
+
+    oscillator_map = {signal.uid: signal.oscillator for signal in ir.signals}
+    current_frequency_map = {}
+
+    for event in sorted_events:
+        signal_id = event["signal"]
+        oscillator_info = oscillator_map[signal_id]
+        is_hw_osc = oscillator_info.is_hardware if oscillator_info else False
+        if event["event_type"] == EventType.SET_OSCILLATOR_FREQUENCY_START:
+            current_frequency_map[signal_id] = event["value"]
+        elif (
+            event["event_type"] == EventType.INITIAL_OSCILLATOR_FREQUENCY
+            and not is_hw_osc
+        ):
+            current_frequency_map[signal_id] = event["value"]
+        elif not is_hw_osc:
+            if signal_id in current_frequency_map:
+                event["oscillator_frequency"] = current_frequency_map[signal_id]
+
+    return _remove_handled_oscillator_events(
+        event_list=event_list, oscillator_map=oscillator_map
+    )
+
+
 def _start_events(ir: IR) -> EventList:
     retval = []
 
@@ -143,6 +208,7 @@ def generate_event_list_from_ir(
     for event in event_list:
         event["time"] = event["time"] * TINYSAMPLE
 
+    event_list = _calculate_osc_freq(event_list, ir)
     _calculate_osc_phase(event_list, ir)
 
     return event_list

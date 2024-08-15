@@ -44,6 +44,7 @@ from laboneq.controller.devices.zi_node_monitor import (
     filter_wait_conditions,
 )
 from laboneq.controller.util import LabOneQControllerException
+from laboneq.controller.versioning import SetupCaps
 from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
 
 if TYPE_CHECKING:
@@ -64,11 +65,13 @@ class DeviceCollection:
     def __init__(
         self,
         target_setup: TargetSetup,
+        setup_caps: SetupCaps,
         ignore_version_mismatch: bool = False,
     ):
         self._ds = DeviceSetupDAO(
             target_setup=target_setup,
             ignore_version_mismatch=ignore_version_mismatch,
+            setup_caps=setup_caps,
         )
         if self._ds.has_uhf and self._ds.has_qhub:
             raise LabOneQControllerException("Gen1 setup with QHub is not supported.")
@@ -479,7 +482,9 @@ class DeviceCollection:
             device = self._devices.get(device_qualifier.uid)
             if device is None or device.device_qualifier != device_qualifier:
                 daq = self._daqs[device_qualifier.server_uid]
-                device = DeviceFactory.create(device_qualifier, daq)
+                device = DeviceFactory.create(
+                    device_qualifier, daq, self._ds.setup_caps
+                )
             device.remove_all_links()
             updated_devices[device_qualifier.uid] = device
         self._devices = updated_devices

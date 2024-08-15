@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING
 
 from laboneq.core.types.enums.mixer_type import MixerType
 
@@ -45,7 +45,8 @@ class SignalObj:
     base_delay_signal: float | None = None
     oscillator_frequency_sw: float | None = None
     oscillator_frequency_hw: float | None = None
-    channels: List = field(default_factory=list)
+    channels: list[int] = field(default_factory=list)
+    channel_to_port: dict[int, str] = field(default_factory=dict)
     awg: AWGInfo = None
     total_delay: float = None
     on_device_delay: float = 0

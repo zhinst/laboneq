@@ -418,8 +418,8 @@ class AcquireLoopRt(Section):
 
     Attributes:
         acquisition_type (AcquisitionType):
-            Type of the acquisition. One of integration trigger, spectroscopy,
-            discrimination, demodulation and RAW.
+            Type of the acquisition. One of integration, spectroscopy,
+            discrimination and RAW.
             Default: [AcquisitionType.INTEGRATION][laboneq.core.types.enums.AcquisitionType.INTEGRATION].
         averaging_mode (AveragingMode):
             Averaging method. One of sequential, cyclic or single shot.

@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-from abc import ABC
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -34,7 +33,7 @@ def _compare_nested(a, b):
 
 @classformatter
 @dataclass(init=True, repr=True, order=True)
-class Parameter(ABC):
+class Parameter:
     """Parent class for sweep parameters in a LabOne Q Experiment.
 
     Attributes:

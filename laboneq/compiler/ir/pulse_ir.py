@@ -18,7 +18,6 @@ class PulseIR(IntervalIR):
     amp_param_name: str | None = None
     phase: float
     offset: int
-    oscillator_frequency: float | None = None
     set_oscillator_phase: float | None = None
     increment_oscillator_phase: float | None = None
     incr_phase_param_name: str | None = None

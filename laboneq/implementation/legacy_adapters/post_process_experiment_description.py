@@ -11,11 +11,11 @@ def post_process(source, target, conversion_function_lookup: dict):
 
     # todo(Pol): replace both of these by Pulse?
 
-    if type(target) == Experiment:
+    if type(target) is Experiment:
         target.pulses = list(PULSES.values())
         PULSES = {}
         return target
-    elif type(target) == PlayPulse:
+    elif type(target) is PlayPulse:
         if source.pulse is not None:
             if source.pulse.uid not in PULSES:
                 PULSES[source.pulse.uid] = conversion_function_lookup.get(

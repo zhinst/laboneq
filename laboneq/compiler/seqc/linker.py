@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 
 from laboneq.compiler.common.feedback_connection import FeedbackConnection
+from laboneq.compiler.common.shfppc_sweeper_config import SHFPPCSweeperConfig
 from laboneq.compiler.seqc.measurement_calculator import (
     SignalDelays,
     IntegrationTimes,
@@ -58,6 +59,9 @@ class CombinedRTOutputSeqC(CombinedOutput):
         default_factory=dict
     )
     realtime_steps: list[RealtimeStep] = field(default_factory=list)
+    shfppc_sweep_configurations: dict[AwgKey, SHFPPCSweeperConfig] = field(
+        default_factory=dict
+    )
 
     total_execution_time: float = 0
     max_execution_time_per_step: float = 0
@@ -90,6 +94,7 @@ class SeqCGenOutput(RTCompilerOutput):
     pulse_map: dict[str, PulseMapEntry]
     parameter_phase_increment_map: dict[str, list]
     feedback_register_configurations: dict[AwgKey, FeedbackRegisterConfig]
+    shfppc_sweep_configurations: dict[AwgKey, SHFPPCSweeperConfig]
 
     total_execution_time: float = 0
 
@@ -114,6 +119,10 @@ def _check_compatibility(this, new):
     if this.feedback_register_configurations != new.feedback_register_configurations:
         raise LabOneQException(
             "Feedback register configurations do not match between real-time iterations"
+        )
+    if this.shfppc_sweep_configurations != new.shfppc_sweep_configurations:
+        raise LabOneQException(
+            "SHFPPC sweep configurations do not match between real-time iterations"
         )
 
 
@@ -175,6 +184,7 @@ class SeqCLinker(ILinker):
             feedback_register_configurations=output.feedback_register_configurations,
             realtime_steps=SeqCLinker.make_realtime_step(output, step_indices),
             parameter_phase_increment_map=parameter_phase_increment_map,
+            shfppc_sweep_configurations=output.shfppc_sweep_configurations,
         )
 
     @staticmethod
@@ -314,7 +324,7 @@ def _make_seqc_name(awg: AwgKey, step_indices: list[int]) -> str:
 
 
 def _deep_compare(a: Any, b: Any) -> bool:
-    if type(a) != type(b):
+    if type(a) is not type(b):
         return False
     if isinstance(a, list):
         if len(a) != len(b):

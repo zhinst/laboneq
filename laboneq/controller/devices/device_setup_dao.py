@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, ItemsView, Iterator
 
 from laboneq.controller.communication import ServerQualifier
 from laboneq.controller.devices.device_zi import DeviceOptions, DeviceQualifier
+from laboneq.controller.versioning import SetupCaps
 from laboneq.data.execution_payload import (
     TargetChannelCalibration,
     TargetChannelType,
@@ -62,6 +63,7 @@ class DeviceSetupDAO:
     def __init__(
         self,
         target_setup: TargetSetup,
+        setup_caps: SetupCaps,
         ignore_version_mismatch: bool = False,
     ):
         self._target_setup = target_setup
@@ -102,6 +104,8 @@ class DeviceSetupDAO:
             device.uid: copy.deepcopy(device.calibrations)
             for device in target_setup.devices
         }
+
+        self._setup_caps = setup_caps
 
     @property
     def servers(self) -> ItemsView[str, ServerQualifier]:
@@ -170,3 +174,7 @@ class DeviceSetupDAO:
                 if sigout is not None:
                     add_voltage_offset(sigout, calib.voltage_offset)
         return voltage_offsets
+
+    @property
+    def setup_caps(self):
+        return self._setup_caps

@@ -37,6 +37,7 @@ class SeqCTracker:
         self.current_time = 0
         self._prng_tracker: PRNGTracker | None = None
         self._automute: OutputMute | None = None
+        self._active_trigger_outputs: int = 0
         if automute_playzeros:
             self._automute = OutputMute(
                 device_type=self.device_type,
@@ -253,3 +254,36 @@ class SeqCTracker:
 
     def prng_tracker(self):
         return self._prng_tracker
+
+    def add_set_trigger_statement(self, value: int, deferred=True):
+        self.add_function_call_statement(
+            name="setTrigger", args=[value], deferred=deferred
+        )
+        self._active_trigger_outputs = value
+
+    def add_startqa_shfqa_statement(
+        self,
+        generator_mask: str,
+        integrator_mask: str,
+        monitor: int | bool | None = None,
+        feedback_register: int | None = None,
+        trigger: int | None = None,
+    ):
+        args: list[str] = [generator_mask, integrator_mask]
+        if monitor is not None:
+            args.append(str(monitor))
+        if feedback_register is not None:
+            assert monitor is not None
+            args.append(str(feedback_register))
+        if trigger is not None:
+            assert monitor is not None
+            assert feedback_register is not None
+            args.append(str(trigger))
+        else:
+            trigger = 0
+        self.add_function_call_statement("startQA", args, deferred=True)
+
+        self._active_trigger_outputs = trigger
+
+    def trigger_output_state(self):
+        return self._active_trigger_outputs

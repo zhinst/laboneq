@@ -290,6 +290,9 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
             # Deregister this instrument from synchronization via ZSync.
             nc.add("system/synchronization/source", 0)
 
+        if with_pipeliner:
+            nc.extend(self.pipeliner_reset_nodes())
+
         return await self.maybe_async(nc)
 
     async def collect_initialization_nodes(
@@ -615,7 +618,7 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
             # Loop over at least one AWG instance to cover the case that the instrument is only used
             # as a communication proxy. Some of the nodes on the AWG branch are needed to get
             # proper communication between HDAWG and UHFQA.
-            is_not_flexible_feedback = not recipe_data.setup_caps.flexible_feedback
+            is_not_flexible_feedback = not self._setup_caps.flexible_feedback
             for awg_index in (
                 self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
             ):

@@ -15,15 +15,11 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
-    FrozenSet,
     Iterable,
-    List,
     Optional,
     Set,
     Tuple,
 )
-
-import numpy as np
 
 from laboneq._observability.tracing import trace
 from laboneq._utils import UIDReference, cached_method
@@ -35,10 +31,17 @@ from laboneq.compiler.ir.case_ir import CaseIR, EmptyBranchIR
 from laboneq.compiler.ir.interval_ir import IntervalIR
 from laboneq.compiler.ir.ir import IR, DeviceIR, SectionRefIR, SignalIR, PulseDefIR
 from laboneq.compiler.ir.loop_ir import LoopIR
-from laboneq.compiler.ir.loop_iteration_ir import LoopIterationIR
+from laboneq.compiler.ir.loop_iteration_ir import (
+    LoopIterationIR,
+    LoopIterationPreambleIR,
+)
 from laboneq.compiler.ir.match_ir import MatchIR
-from laboneq.compiler.ir.oscillator_ir import SetOscillatorFrequencyIR
+from laboneq.compiler.ir.oscillator_ir import (
+    InitialOscillatorFrequencyIR,
+    SetOscillatorFrequencyIR,
+)
 from laboneq.compiler.ir.phase_reset_ir import PhaseResetIR
+from laboneq.compiler.ir.ppc_step_ir import PPCStepIR
 from laboneq.compiler.ir.pulse_ir import PrecompClearIR, PulseIR
 from laboneq.compiler.ir.reserve_ir import ReserveIR
 from laboneq.compiler.ir.root_ir import RootScheduleIR
@@ -46,15 +49,20 @@ from laboneq.compiler.ir.section_ir import SectionIR
 from laboneq.compiler.scheduler.acquire_group_schedule import AcquireGroupSchedule
 from laboneq.compiler.scheduler.case_schedule import CaseSchedule, EmptyBranch
 from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
-from laboneq.compiler.scheduler.loop_iteration_schedule import LoopIterationSchedule
+from laboneq.compiler.scheduler.loop_iteration_schedule import (
+    LoopIterationSchedule,
+    LoopIterationPreambleSchedule,
+)
 from laboneq.compiler.scheduler.loop_schedule import LoopSchedule
 from laboneq.compiler.scheduler.match_schedule import MatchSchedule
 from laboneq.compiler.scheduler.oscillator_schedule import (
+    InitialOscillatorFrequencySchedule,
     OscillatorFrequencyStepSchedule,
-    SweptHardwareOscillator,
+    SweptOscillator,
 )
 from laboneq.compiler.scheduler.parameter_store import ParameterStore
 from laboneq.compiler.scheduler.phase_reset_schedule import PhaseResetSchedule
+from laboneq.compiler.scheduler.ppc_step_schedule import PPCStepSchedule
 from laboneq.compiler.scheduler.preorder_map import calculate_preorder_map
 from laboneq.compiler.scheduler.pulse_schedule import (
     PrecompClearSchedule,
@@ -75,10 +83,12 @@ from laboneq.compiler.scheduler.utils import (
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import RepetitionMode
 from laboneq.data.compilation_job import (
+    OscillatorInfo,
     ParameterInfo,
     SectionAlignment,
     SectionInfo,
     SectionSignalPulse,
+    SignalInfo,
     SignalInfoType,
 )
 
@@ -93,8 +103,10 @@ _schedule_to_ir = {
     IntervalSchedule: IntervalIR,
     LoopSchedule: LoopIR,
     LoopIterationSchedule: LoopIterationIR,
+    LoopIterationPreambleSchedule: LoopIterationPreambleIR,
     MatchSchedule: MatchIR,
     OscillatorFrequencyStepSchedule: SetOscillatorFrequencyIR,
+    InitialOscillatorFrequencySchedule: InitialOscillatorFrequencyIR,
     PhaseResetSchedule: PhaseResetIR,
     PulseSchedule: PulseIR,
     ReserveSchedule: ReserveIR,
@@ -102,6 +114,7 @@ _schedule_to_ir = {
     SectionSchedule: SectionIR,
     PrecompClearSchedule: PrecompClearIR,
     EmptyBranch: EmptyBranchIR,
+    PPCStepSchedule: PPCStepIR,
 }
 
 
@@ -167,15 +180,9 @@ class Scheduler:
     def _schedule_to_ir(self, ir_node: IntervalIR, schedule_node: IntervalSchedule):
         ir_children = []
         for c in schedule_node.children:
-            if hasattr(c, "to_ir"):
-                c_ir = c.to_ir()
-            else:
-                c_ir = _schedule_to_ir[c.__class__](
-                    **{
-                        s: getattr(c, s)
-                        for s in _all_slots(_schedule_to_ir[c.__class__])
-                    }
-                )
+            c_ir = _schedule_to_ir[c.__class__](
+                **{s: getattr(c, s) for s in _all_slots(_schedule_to_ir[c.__class__])}
+            )
             ir_children.append(c_ir)
         ir_node.children = ir_children
 
@@ -197,7 +204,7 @@ class Scheduler:
         root_sections_ids = self._experiment_dao.root_rt_sections()
         has_rt_root = len(root_sections_ids) != 0
 
-        section_signals_with_chidlren = {}
+        section_signals_with_children = {}
         root_section_children_ids = None
         if has_rt_root:
             root_section_children_ids = self._experiment_dao.all_section_children(
@@ -205,7 +212,7 @@ class Scheduler:
             )
             all_section_ids = [root_sections_ids[0], *root_section_children_ids]
             for section_id in all_section_ids:
-                section_signals_with_chidlren[section_id] = (
+                section_signals_with_children[section_id] = (
                     self._experiment_dao.section_signals_with_children(section_id)
                 )
 
@@ -227,7 +234,7 @@ class Scheduler:
             ]
             if has_rt_root
             else None,
-            section_signals_with_children_ids=section_signals_with_chidlren,
+            section_signals_with_children_ids=section_signals_with_children,
         )
 
     def _schedule_root(
@@ -249,6 +256,89 @@ class Scheduler:
             signals.update(c.signals)
 
         root_schedule = RootSchedule(grid=1, signals=signals, children=schedules)  # type: ignore
+
+        # handle setting of initial oscillator frequencies
+        set_osc_freq = []
+        oscs = [
+            self._experiment_dao.oscillator_info(osc)
+            for osc in self._experiment_dao.oscillators()
+        ]
+        signal_infos = [
+            self._experiment_dao.signal_info(s) for s in self._experiment_dao.signals()
+        ]
+        osc_to_signals: dict[str, list[SignalInfo]] = {}
+        for signal in signal_infos:
+            if signal.oscillator is not None:
+                osc_to_signals.setdefault(signal.oscillator.uid, []).append(signal)
+        param_id_to_osc: dict[str, list[OscillatorInfo]] = {}
+
+        # oscillators with fixed frequency
+        for osc in oscs:
+            if (
+                osc.frequency is not None
+                and not isinstance(osc.frequency, ParameterInfo)
+                and osc.uid in osc_to_signals
+            ):
+                osc_id = osc.uid
+                osc_signals = osc_to_signals[osc.uid]
+                swept_oscs = [
+                    SweptOscillator(
+                        osc_id,
+                        signal.uid,
+                        signal.device.uid,
+                        osc.is_hardware,
+                    )
+                    for signal in osc_signals
+                ]
+                set_osc_freq.append(
+                    InitialOscillatorFrequencySchedule(
+                        length=0,
+                        signals={signal.uid for signal in osc_to_signals[osc_id]},
+                        grid=self._system_grid,
+                        section="preamble",
+                        oscillators=swept_oscs,
+                        values=[osc.frequency] * len(osc_signals),
+                    )
+                )
+
+        # nt frequency swept oscillators
+        for osc in oscs:
+            if isinstance(osc.frequency, ParameterInfo):
+                param_id_to_osc.setdefault(osc.frequency.uid, []).append(osc)
+        nt_swept_param_osc = [
+            (param, osc)
+            for param, oscs in param_id_to_osc.items()
+            if param in nt_parameters
+            for osc in oscs
+            if not osc.is_hardware
+        ]
+        for param, osc in nt_swept_param_osc:
+            osc_id = osc.uid
+            osc_signals = osc_to_signals[osc.uid]
+            swept_oscs = [
+                SweptOscillator(
+                    osc_id,
+                    signal.uid,
+                    signal.device.uid,
+                    osc.is_hardware,
+                )
+                for signal in osc_signals
+            ]
+            value = nt_parameters[param]
+            set_osc_freq.append(
+                InitialOscillatorFrequencySchedule(
+                    length=0,
+                    signals={signal.uid for signal in osc_to_signals[osc_id]},
+                    grid=self._system_grid,
+                    section="preamble",
+                    oscillators=swept_oscs,
+                    values=[value] * len(osc_signals),
+                )
+            )
+
+        if set_osc_freq:
+            root_schedule.children = set_osc_freq + root_schedule.children
+
         root_schedule.calculate_timing(self._schedule_data, 0, False)
 
         for handle, acquire_pulses in self._schedule_data.acquire_pulses.items():
@@ -282,9 +372,6 @@ class Scheduler:
 
         section_info = self._experiment_dao.section_info(section_id)
         sweep_parameters = self._experiment_dao.section_parameters(section_id)
-        for param in sweep_parameters:
-            if param.values is None:
-                param.values = param.start + np.arange(section_info.count) * param.step
 
         is_loop = section_info.count is not None
         if not is_loop:
@@ -318,10 +405,10 @@ class Scheduler:
 
         return schedule
 
-    def _swept_hw_oscillators(
+    def _swept_oscillators(
         self, sweep_parameters: Set[str], signals: Set[str]
-    ) -> Dict[str, SweptHardwareOscillator]:
-        """Collect all hardware oscillators with a frequency swept by one of the
+    ) -> Dict[str, SweptOscillator]:
+        """Collect all oscillators with a frequency swept by one of the
         given parameters, and that modulate one of the given signals. The keys of the
         returned dict are the parameter names."""
         oscillator_param_lookup = dict()
@@ -335,17 +422,20 @@ class Scheduler:
             if not isinstance(oscillator.frequency, ParameterInfo):
                 continue
             param = oscillator.frequency
-            if param.uid in sweep_parameters and oscillator.is_hardware:
+            if param.uid in sweep_parameters:
                 if (
                     param.uid in oscillator_param_lookup
                     and oscillator_param_lookup[param.uid].id != oscillator.uid
                 ):
                     raise LabOneQException(
-                        "Hardware frequency sweep parameter may drive only a single"
+                        "Frequency sweep parameter may drive only a single"
                         " oscillator"
                     )
-                oscillator_param_lookup[param.uid] = SweptHardwareOscillator(
-                    id=oscillator.uid, device=signal_info.device.uid, signal=signal
+                oscillator_param_lookup[param.uid] = SweptOscillator(
+                    id=oscillator.uid,
+                    device=signal_info.device.uid,
+                    signal=signal,
+                    is_hardware=oscillator.is_hardware,
                 )
 
         return oscillator_param_lookup
@@ -355,7 +445,7 @@ class Scheduler:
         section_id,
         section_info: SectionInfo,
         current_parameters: ParameterStore[str, float],
-        sweep_parameters: List[ParameterInfo],
+        sweep_parameters: list[ParameterInfo],
     ) -> LoopSchedule:
         """Schedule the individual iterations of the loop ``section_id``.
 
@@ -376,6 +466,7 @@ class Scheduler:
         this_chunk_size = section_info.count
 
         children_schedules = []
+
         for param in sweep_parameters:
             if param.values is not None:
                 assert len(param.values) >= section_info.count
@@ -389,13 +480,13 @@ class Scheduler:
                 num_repeats=section_info.count,
                 all_parameters=current_parameters,
                 sweep_parameters=[],
-                swept_hw_oscillators={},
+                swept_oscillators={},
             )
             children_schedules.append(prototype)
         else:
             compressed = False
             signals = self._experiment_dao.section_signals_with_children(section_id)
-            swept_hw_oscillators = self._swept_hw_oscillators(
+            swept_oscillators = self._swept_oscillators(
                 {p.uid for p in sweep_parameters}, signals
             )
 
@@ -428,7 +519,7 @@ class Scheduler:
                             this_chunk_size,
                             current_parameters,
                             sweep_parameters,
-                            swept_hw_oscillators,
+                            swept_oscillators,
                         )
                     )
 
@@ -445,27 +536,26 @@ class Scheduler:
 
     def _schedule_oscillator_frequency_step(
         self,
-        swept_hw_oscillators: Dict[str, SweptHardwareOscillator],
+        swept_oscillators: Dict[str, SweptOscillator],
         global_iteration: int,
         local_iteration: int,
-        sweep_parameters: List[ParameterInfo],
-        signals: Set[str],
-        grid: int,
+        sweep_parameters: list[ParameterInfo],
         section_id: str,
     ) -> OscillatorFrequencyStepSchedule:
+        grid = self._system_grid
         length = 0
 
-        # Include the signals from the loop body proper, so that the oscillator set
-        # is not scheduled in parallel to the loop body (in the unlikely event that
-        # the loop body does not depend on the oscillator's signal)
-        signals = signals.copy()
+        oscs_are_hw = [osc.is_hardware for osc in swept_oscillators.values()]
+        assert oscs_are_hw.count(oscs_are_hw[0]) == len(oscs_are_hw)
+        oscs_are_hw = oscs_are_hw[0]
 
         swept_oscs_list = []
         values = []
         params = []
+        signals: set[str] = set()
         for param in sweep_parameters:
-            osc = swept_hw_oscillators.get(param.uid)
-            if osc is None:
+            osc = swept_oscillators.get(param.uid)
+            if osc is None:  # just keep looking in case of derived param
                 continue
             values.append(param.values[global_iteration])
             swept_oscs_list.append(osc)
@@ -473,9 +563,15 @@ class Scheduler:
             device_id = osc.device
             device_info = self._experiment_dao.device_info(device_id)
             device_type = DeviceType.from_device_info_type(device_info.device_type)
-            length = max(
-                length,
-                int(device_type.oscillator_set_latency / TINYSAMPLE),
+            length = (
+                max(
+                    length,
+                    ceil_to_grid(
+                        int(device_type.oscillator_set_latency / TINYSAMPLE), grid
+                    ),
+                )
+                if oscs_are_hw
+                else 0
             )
             signals.add(osc.signal)
 
@@ -494,11 +590,10 @@ class Scheduler:
     def _schedule_phase_reset(
         self,
         section_id: str,
-        grid: int,
-        signals: FrozenSet[str],
-    ) -> List[PhaseResetSchedule]:
+    ) -> list[PhaseResetSchedule]:
         section_info = self._experiment_dao.section_info(section_id)
         hw_osc_reset_signals = set()
+        grid = 1
         if section_info.reset_oscillator_phase:
             for signal in self._experiment_dao.section_signals_with_children(
                 section_id
@@ -525,6 +620,7 @@ class Scheduler:
             duration = device_type.reset_osc_duration / TINYSAMPLE
             hw_osc_devices[device.uid] = duration
             length = max(length, duration)
+            grid = lcm(grid, self._system_grid)
             if device_type.lo_frequency_granularity is not None:
                 # The frequency of SHF's LO in RF mode is a multiple of 100 MHz.
                 # By aligning the grid with this (10 ns) we make sure the LO's phase is
@@ -542,7 +638,7 @@ class Scheduler:
         length = ceil_to_grid(length, grid)
 
         if reset_sw_oscillators:
-            sw_signals = signals
+            sw_signals = self._experiment_dao.section_signals_with_children(section_id)
         else:
             sw_signals = ()
 
@@ -557,6 +653,116 @@ class Scheduler:
             )
         ]
 
+    def _schedule_ppc_sweep_steps(
+        self,
+        section_info: SectionInfo,
+        grid: int,
+        sweep_parameters: list[ParameterInfo],
+        global_iteration: int,
+    ) -> list[PPCStepSchedule]:
+        # indexed by device_id and channel
+        ppc_steps_by_awg: dict[tuple[str, int], PPCStepSchedule] = {}
+
+        SWEEP_FIELDS = [
+            "pump_power",
+            "pump_frequency",
+            "probe_power",
+            "probe_frequency",
+            "cancellation_phase",
+            "cancellation_attenuation",
+        ]
+
+        for signal in self._experiment_dao.signals():
+            signal_info = self._experiment_dao.signal_info(signal)
+            amplifier_pump = signal_info.amplifier_pump
+            if amplifier_pump is None:
+                continue
+            qa_device_id, [qa_channel] = signal_info.device.uid, signal_info.channels
+            ppc_device_id = amplifier_pump.ppc_device.uid
+            ppc_channel = amplifier_pump.channel
+            for field in SWEEP_FIELDS:
+                val = getattr(amplifier_pump, field)
+                if isinstance(val, ParameterInfo) and val in sweep_parameters:
+                    key = (qa_device_id, qa_channel)
+                    try:
+                        ppc_step = ppc_steps_by_awg[key]
+                    except KeyError:
+                        grid = lcm(grid, self._system_grid)
+
+                        # We currently assert the trigger for 25 ms. We then deassert
+                        # it for 0.1 ms. This guarantees that, if the next sweep step
+                        # were to occur shortly after, there is sufficient time for
+                        # PPC to register the falling edge.
+                        # todo (PW) look up duration from table?
+                        trigger_duration = round_to_grid(25e-3 / TINYSAMPLE, grid)
+                        length = (
+                            round_to_grid(0.1e-3 / TINYSAMPLE, grid) + trigger_duration
+                        )
+
+                        ppc_step = ppc_steps_by_awg[key] = PPCStepSchedule(
+                            trigger_duration=trigger_duration,
+                            length=length,
+                            grid=grid,
+                            signals={signal},
+                            section=section_info.uid,
+                            qa_device=qa_device_id,
+                            qa_channel=qa_channel,
+                            ppc_device=ppc_device_id,
+                            ppc_channel=ppc_channel,
+                        )
+
+                    setattr(ppc_step, field, val.values[global_iteration])
+
+        ppc_step_schedules = list(ppc_steps_by_awg.values())
+
+        return ppc_step_schedules
+
+    def _schedule_loop_iteration_preamble(
+        self,
+        section_id: str,
+        local_iteration: int,
+        global_iteration: int,
+        sweep_parameters: list[ParameterInfo],
+        swept_hw_oscillators: Dict[str, SweptOscillator],
+    ) -> LoopIterationPreambleSchedule:
+        section_info = self._experiment_dao.section_info(section_id)
+
+        grid = 1
+
+        # Deepcopy here because of caching
+        osc_phase_resets = copy.deepcopy(self._schedule_phase_reset(section_id))
+
+        if len(swept_hw_oscillators):
+            osc_sweep = [
+                self._schedule_oscillator_frequency_step(
+                    swept_hw_oscillators,
+                    global_iteration,
+                    local_iteration,
+                    sweep_parameters,
+                    section_id,
+                ),
+            ]
+        else:
+            osc_sweep = []
+
+        if osc_phase_resets and osc_phase_resets[0].grid != grid:
+            # On SHFxx, we align the phase reset with the LO granularity (100 MHz)
+            grid = lcm(grid, osc_phase_resets[0].grid)
+
+        ppc_sweep_steps = self._schedule_ppc_sweep_steps(
+            section_info, grid, sweep_parameters, global_iteration
+        )
+
+        children = [*ppc_sweep_steps, *osc_sweep, *osc_phase_resets]
+        for child in children:
+            grid = lcm(grid, child.grid)
+
+        signals = {s for child in children for s in child.signals}
+
+        return LoopIterationPreambleSchedule(
+            children=children, grid=grid, signals=signals
+        )
+
     def _schedule_loop_iteration(
         self,
         section_id: str,
@@ -564,8 +770,8 @@ class Scheduler:
         global_iteration: int,
         num_repeats: int,
         all_parameters: ParameterStore[str, float],
-        sweep_parameters: List[ParameterInfo],
-        swept_hw_oscillators: Dict[str, SweptHardwareOscillator],
+        sweep_parameters: list[ParameterInfo],
+        swept_oscillators: Dict[str, SweptOscillator],
     ) -> LoopIterationSchedule:
         """Schedule a single iteration of a loop.
 
@@ -579,49 +785,31 @@ class Scheduler:
             swept_hw_oscillators: The hardware oscillators driven by the sweep parameters.
         """
 
-        # add child sections
-        signals = set()
-        children_schedules = self._collect_children_schedules(
-            section_id, all_parameters
-        )
-
-        for c in children_schedules:
-            signals.update(c.signals)
-
-        section_info = self._experiment_dao.section_info(section_id)
-        for osc in swept_hw_oscillators.values():
-            signals.add(osc.signal)
-
         # escalate the grid to system grid
         # todo: Currently we do this unconditionally. This is something we might want to
         #  relax in the future
         grid = self._system_grid
 
-        # Deepcopy here because of caching
-        osc_phase_reset = copy.deepcopy(
-            self._schedule_phase_reset(section_id, grid, frozenset(signals))
+        preamble = self._schedule_loop_iteration_preamble(
+            section_id,
+            local_iteration,
+            global_iteration,
+            sweep_parameters,
+            swept_oscillators,
         )
 
-        if len(swept_hw_oscillators):
-            osc_sweep = [
-                self._schedule_oscillator_frequency_step(
-                    swept_hw_oscillators,
-                    global_iteration,
-                    local_iteration,
-                    sweep_parameters,
-                    signals,
-                    grid,
-                    section_id,
-                ),
-            ]
-        else:
-            osc_sweep = []
+        # add child sections
+        children_schedules = self._collect_children_schedules(
+            section_id, all_parameters
+        )
 
-        if osc_phase_reset and osc_phase_reset[0].grid != grid:
-            # On SHFxx, we align the phase reset with the LO granularity (100 MHz)
-            grid = osc_phase_reset[0].grid
+        # force the preamble to go _before_ any part of the loop body
+        for c in children_schedules:
+            preamble.signals.update(c.signals)
 
-        children_schedules = [*osc_phase_reset, *osc_sweep, *children_schedules]
+        section_info = self._experiment_dao.section_info(section_id)
+
+        children_schedules = [preamble, *children_schedules]
         schedule = self._schedule_children(
             section_id, section_info, children_schedules, grid
         )
@@ -638,7 +826,7 @@ class Scheduler:
         self,
         section_id,
         section_info: SectionInfo,
-        children: List[IntervalSchedule],
+        children: list[IntervalSchedule],
         grid=1,
     ) -> SectionSchedule:
         """Schedule the given children of a section, arranging them in the required
@@ -778,25 +966,21 @@ class Scheduler:
         length_int = round_to_grid(scheduled_length / TINYSAMPLE, grid)
         offset_int = round_to_grid(offset / TINYSAMPLE, grid)
 
-        osc = self._experiment_dao.signal_oscillator(pulse.signal.uid)
-        if osc is None:
-            freq = None
-        elif not osc.is_hardware and isinstance(osc.frequency, ParameterInfo):
-            try:
-                freq = current_parameters[osc.frequency.uid]
-            except KeyError as e:
-                raise LabOneQException(
-                    f"Playback of pulse '{pulse.pulse.uid}' in section '{section} "
-                    f"requires the parameter '{osc.frequency.uid}' to set the frequency."
-                ) from e
-        elif osc is None or osc.is_hardware:
-            freq = None
-        else:
-            freq = osc.frequency if osc is not None else None
-
         signal_info = self._experiment_dao.signal_info(pulse.signal.uid)
         is_acquire = signal_info.type == SignalInfoType.INTEGRATION
         markers = pulse.markers
+
+        osc = self._experiment_dao.signal_oscillator(pulse.signal.uid)
+        if (
+            osc is not None
+            and not osc.is_hardware
+            and isinstance(osc.frequency, ParameterInfo)
+            and osc.frequency.uid not in current_parameters
+        ):
+            raise LabOneQException(
+                f"Playback of pulse '{pulse.pulse.uid}' in section '{section} "
+                f"requires the parameter '{osc.frequency.uid}' to set the frequency."
+            )
 
         return PulseSchedule(
             grid=grid,
@@ -811,7 +995,6 @@ class Scheduler:
             set_oscillator_phase=set_oscillator_phase,
             increment_oscillator_phase=increment_oscillator_phase,
             incr_phase_param_name=incr_phase_param_name,
-            oscillator_frequency=freq,
             play_pulse_params=play_pulse_params,
             pulse_pulse_params=pulse_pulse_params,
             is_acquire=is_acquire,
@@ -832,7 +1015,6 @@ class Scheduler:
         phases = []
         play_pulse_params = []
         pulse_pulse_params = []
-        freqs = []
 
         for pulse in pulses:
             pulse_schedule = self._schedule_pulse(pulse, section, current_parameters)
@@ -843,7 +1025,6 @@ class Scheduler:
             phases.append(pulse_schedule.phase)
             pulse_pulse_params.append(pulse_schedule.pulse_pulse_params)
             play_pulse_params.append(pulse_schedule.play_pulse_params)
-            freqs.append(pulse_schedule.oscillator_frequency)
 
             assert pulse_schedule.is_acquire
             assert not pulse.markers
@@ -866,7 +1047,6 @@ class Scheduler:
             amplitudes=amplitudes,
             phases=phases,
             offset=offsets_int[0],
-            oscillator_frequencies=freqs,
             play_pulse_params=play_pulse_params,
             pulse_pulse_params=pulse_pulse_params,
         )

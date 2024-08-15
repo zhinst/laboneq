@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -77,9 +77,13 @@ class ParameterInfo:
         if isinstance(other, ParameterInfo):
             if (self.values is None) != (other.values is None):
                 return False
-            values_equal = (
-                self.values is None and other.values is None
-            ) or np.allclose(self.values, other.values)
+            try:
+                values_equal = (
+                    self.values is None and other.values is None
+                ) or np.allclose(self.values, other.values)
+            except ValueError:
+                # numpy raises ValueError if the shapes mismatch
+                return False
             return (self.uid, self.start, self.step, self.axis_name) == (
                 other.uid,
                 other.start,
@@ -120,8 +124,6 @@ class PulseDef:
     amplitude: float = 1.0
     phase: float = 0.0
     can_compress: bool = False
-    increment_oscillator_phase: float = None
-    set_oscillator_phase: float = None
     samples: ArrayLike | None = None
 
     # auto generated __eq__ fails to compare array-likes correctly
@@ -139,8 +141,6 @@ class PulseDef:
                 self.amplitude,
                 self.phase,
                 self.can_compress,
-                self.increment_oscillator_phase,
-                self.set_oscillator_phase,
             ) == (
                 other.uid,
                 other.function,
@@ -148,8 +148,6 @@ class PulseDef:
                 other.amplitude,
                 other.phase,
                 other.can_compress,
-                other.increment_oscillator_phase,
-                other.set_oscillator_phase,
             ) and samples_equal
         return NotImplemented
 
@@ -164,8 +162,6 @@ class PulseDef:
                 self.amplitude,
                 self.phase,
                 self.can_compress,
-                self.increment_oscillator_phase,
-                self.set_oscillator_phase,
                 samples_tuple,
             )
         )
@@ -207,7 +203,7 @@ class SectionInfo:
 
     acquisition_type: AcquisitionType | None = None
     reset_oscillator_phase: bool = False
-    triggers: list = field(default_factory=list)
+    triggers: list[dict[str, Any]] = field(default_factory=list)
     parameters: list[ParameterInfo] = field(default_factory=list)
     play_after: list[str] = field(default_factory=list)
 
@@ -288,6 +284,7 @@ class SignalInfo:
     device: DeviceInfo = None
     oscillator: OscillatorInfo | None = None
     channels: list[int] = field(default_factory=list)
+    channel_to_port: dict[str, str] = field(default_factory=dict)
     type: SignalInfoType = None
     voltage_offset: float | None = None
     mixer_calibration: MixerCalibrationInfo | None = None

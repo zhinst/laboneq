@@ -6,6 +6,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+import numpy as np
+
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import AcquisitionType
 from laboneq.data.compilation_job import (
@@ -93,13 +95,17 @@ class LoaderBase:
         parameter_id,
         start=None,
         step=None,
+        count: int | None = None,
         values_list=None,
         axis_name=None,
     ):
         param = self._get_or_create_parameter(parameter_id)
         param.start = start
         param.step = step
-        param.values = values_list
+        if values_list is not None:
+            param.values = values_list
+        elif start is not None and count is not None and step is not None:
+            param.values = list(np.arange(count) * step + start)
         param.axis_name = axis_name
 
         self._section_parameters.setdefault(section_id, []).append(param)

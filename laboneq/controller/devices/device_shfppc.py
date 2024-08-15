@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import math
-from typing import Iterator
+from typing import Iterator, Any
 
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.controller.attribute_value_tracker import (
@@ -16,6 +16,7 @@ from laboneq.controller.communication import DaqNodeSetAction
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
+from laboneq.core.types.enums import AcquisitionType
 from laboneq.data.calibration import CancellationSource
 from laboneq.data.recipe import Initialization
 
@@ -35,7 +36,37 @@ class DeviceSHFPPC(DeviceZI):
         self.dev_type = "SHFPPC"
         self.dev_opts = []
         self._use_internal_clock = False
-        self._channels = 4  # TODO(2K): Update from device
+        self._channels = 4
+        self._allocated_sweepers = set()
+
+    def is_follower(self):
+        return True
+
+    def is_leader(self):
+        return False
+
+    def _process_dev_opts(self):
+        if self.dev_type == "SHFPPC4":
+            self._channels = 4
+        elif self.dev_type == "SHFPPC2":
+            self._channels = 2
+        else:
+            raise ValueError(f"Invalid device type: {self.dev_type}")
+
+    def free_allocations(self):
+        super().free_allocations()
+        self._allocated_sweepers.clear()
+
+    def _nodes_to_monitor_impl(self):
+        nodes = super()._nodes_to_monitor_impl()
+        if self._setup_caps.ppc_sweeper:
+            nodes.extend(
+                [
+                    f"/{self.serial}/ppchannels/{channel}/sweeper/enable"
+                    for channel in range(self._channels)
+                ]
+            )
+        return nodes
 
     def _key_to_path(self, key: str, ch: int):
         keys_to_paths = {
@@ -52,8 +83,9 @@ class DeviceSHFPPC(DeviceZI):
             "probe_on": f"/{self.serial}/ppchannels/{ch}/synthesizer/probe/on",
             "probe_frequency": f"/{self.serial}/ppchannels/{ch}/synthesizer/probe/freq",
             "probe_power": f"/{self.serial}/ppchannels/{ch}/synthesizer/probe/power",
+            "sweep_config": f"/{self.serial}/ppchannels/{ch}/sweeper/json/data",
         }
-        return keys_to_paths.get(key)
+        return keys_to_paths[key]
 
     def update_clock_source(self, force_internal: bool | None):
         self._use_internal_clock = force_internal is True
@@ -73,7 +105,12 @@ class DeviceSHFPPC(DeviceZI):
                     )
 
     async def collect_reset_nodes(self) -> list[DaqNodeSetAction]:
-        return []
+        nc = NodeCollector(base=f"/{self.serial}/")
+        if self._setup_caps.ppc_sweeper:
+            nc.add("ppchannels/*/sweeper/enable", 0, cache=False)
+        reset_nodes = await super().collect_reset_nodes()
+        reset_nodes.extend(await self.maybe_async(nc))
+        return reset_nodes
 
     async def collect_initialization_nodes(
         self,
@@ -123,6 +160,8 @@ class DeviceSHFPPC(DeviceZI):
                     # Skip not set values, or values that are bound to sweep params and will
                     # be set during the NT execution.
                     continue
+                if key == "sweep_config":
+                    self._allocated_sweepers.add(ch)
                 nc.add(self._key_to_path(key, ch), _convert(value))
         return await self.maybe_async(nc)
 
@@ -140,3 +179,37 @@ class DeviceSHFPPC(DeviceZI):
                     path = self._key_to_path(key, ch)
                     nc.add(path, value)
         return nc
+
+    async def collect_execution_nodes(
+        self, with_pipeliner: bool
+    ) -> list[DaqNodeSetAction]:
+        nc = NodeCollector(base=f"/{self.serial}/")
+
+        for channel in sorted(self._allocated_sweepers):
+            nc.add(f"ppchannels/{channel}/sweeper/enable", 1, cache=False)
+
+        return await self.maybe_async(nc)
+
+    async def conditions_for_execution_ready(
+        self, with_pipeliner: bool
+    ) -> dict[str, tuple[Any, str]]:
+        conditions = {
+            f"/{self.serial}/ppchannels/{channel}/sweeper/enable": (
+                1,
+                f"{self.dev_repr}: Sweeper {channel} didn't start.",
+            )
+            for channel in self._allocated_sweepers
+        }
+        return conditions  # await self.maybe_async_wait(conditions)
+
+    async def conditions_for_execution_done(
+        self, acquisition_type: AcquisitionType, with_pipeliner: bool
+    ) -> dict[str, tuple[Any, str]]:
+        conditions = {
+            f"/{self.serial}/ppchannels/{sweeper_index}/sweeper/enable": (
+                0,
+                f"{self.dev_repr}: Sweeper on channel {sweeper_index} didn't stop. Check trigger connection.",
+            )
+            for sweeper_index in self._allocated_sweepers
+        }
+        return conditions  # await self.maybe_async_wait(conditions)

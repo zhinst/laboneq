@@ -188,7 +188,7 @@ def convert_calibration(
             new.port_delay = convert_maybe_parameter(legacy_ls.port_delay)
             new.delay_signal = legacy_ls.delay_signal
             new.port_mode = convert_port_mode(legacy_ls.port_mode)
-            new.voltage_offset = legacy_ls.voltage_offset
+            new.voltage_offset = convert_maybe_parameter(legacy_ls.voltage_offset)
             new.range = legacy_ls.range
             new.threshold = legacy_ls.threshold
             new.amplitude = convert_maybe_parameter(legacy_ls.amplitude)

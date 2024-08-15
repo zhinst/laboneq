@@ -279,6 +279,7 @@ class JsonLoader(LoaderBase):
                             parameter["id"],
                             parameter.get("start"),
                             parameter.get("step"),
+                            count,
                             values,
                         )
 

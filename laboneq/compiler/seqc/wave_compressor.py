@@ -216,6 +216,7 @@ class WaveCompressor:
         samples: Dict[str, np.array],
         sample_multiple: int,
         compressible_segments: List[Tuple[int, int]] | None = None,
+        threshold: int = 32,
     ) -> Union[List[Union[PlayHold, PlaySamples]], None]:
         ref_length = len(list(samples.values())[0])
         num_sample_channels = len(list(samples.values()))
@@ -245,7 +246,7 @@ class WaveCompressor:
 
         compr_start, compr_end = compressible_segments[0]
         runs = self._runs_longer_than_threshold(
-            stacked_samples[:, compr_start:compr_end], 32
+            stacked_samples[:, compr_start:compr_end], threshold
         )
         if len(runs) == 0:
             return None

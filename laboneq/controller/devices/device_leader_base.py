@@ -143,7 +143,6 @@ class DeviceLeaderBase(DeviceZI):
     ) -> list[DaqNodeSetAction]:
         _logger.debug("Starting execution...")
         nc = NodeCollector(base=f"/{self.serial}/")
-        nc.add("execution/enable", 1, cache=False)
 
         nc.add("triggers/out/0/enable", 1, cache=False)
 
@@ -163,6 +162,8 @@ class DeviceLeaderBase(DeviceZI):
         except StopIteration:
             # Do not touch any setting if there is no valid ZSYNC connection
             pass
+
+        nc.add("execution/enable", 1, cache=False)
 
         return await self.maybe_async(nc)
 

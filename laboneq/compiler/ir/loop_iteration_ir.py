@@ -7,8 +7,14 @@ from typing import List
 
 from attrs import define, evolve
 
+from laboneq.compiler.ir.interval_ir import IntervalIR
 from laboneq.compiler.ir.section_ir import SectionIR
 from laboneq.data.compilation_job import ParameterInfo
+
+
+@define(kw_only=True, slots=True)
+class LoopIterationPreambleIR(IntervalIR):
+    pass
 
 
 @define(kw_only=True, slots=True)

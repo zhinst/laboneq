@@ -275,6 +275,9 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
             # HULK-1707: this must happen before disabling the synchronization of the last AWG
             nc.add("system/synchronization/source", 0)
 
+        if with_pipeliner:
+            nc.extend(self.pipeliner_reset_nodes())
+
         return await self.maybe_async(nc)
 
     def pre_process_attributes(
@@ -651,7 +654,7 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
 
         nc = NodeCollector(base=f"/{self.serial}/")
 
-        is_not_flexible_feedback = not recipe_data.setup_caps.flexible_feedback
+        is_not_flexible_feedback = not self._setup_caps.flexible_feedback
         for awg_key, awg_config in recipe_data.awg_configs.items():
             if awg_key.device_uid != initialization.device_uid:
                 continue

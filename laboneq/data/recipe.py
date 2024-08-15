@@ -82,6 +82,8 @@ class IO:
 class AWG:
     awg: int
     signal_type: SignalType = SignalType.SINGLE
+    # signal id -> channel (casted to str for compat with json) -> port
+    signals: dict[str, dict[str, str]] = field(default_factory=dict)
 
     # receiver (SG instruments)
     source_feedback_register: int | Literal["local"] | None = None
@@ -142,7 +144,6 @@ class IntegratorAllocation:
 
 @dataclass
 class AcquireLength:
-    section_id: str
     signal_id: str
     acquire_length: int
 

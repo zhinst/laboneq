@@ -331,7 +331,9 @@ class ExperimentInfoBuilder:
             if (oscillator := calibration.oscillator) is not None:
                 signal_info.oscillator = self._load_oscillator(oscillator)
 
-            signal_info.voltage_offset = calibration.voltage_offset
+            signal_info.voltage_offset = self.opt_param(
+                calibration.voltage_offset, nt_only=True
+            )
 
             if (mixer_cal := calibration.mixer_calibration) is not None:
                 signal_info.mixer_calibration = self._load_mixer_cal(mixer_cal)
@@ -472,6 +474,9 @@ class ExperimentInfoBuilder:
             signal_info.automute = calibration.automute
 
         signal_info.channels = sorted((port.channel for port in physical_channel.ports))
+        signal_info.channel_to_port = {
+            str(port.channel): port.path for port in physical_channel.ports
+        }
 
         self._signal_infos[signal.uid] = signal_info
 
@@ -488,6 +493,7 @@ class ExperimentInfoBuilder:
                 start=value.start,
                 step=step,
                 axis_name=value.axis_name,
+                values=np.linspace(value.start, value.stop, value.count),
             )
         else:
             assert isinstance(value, SweepParameter)
@@ -628,16 +634,11 @@ class ExperimentInfoBuilder:
         markers = self._load_markers(operation)
         if signal_info.automute:
             if markers:
-                msg = f"{signal_info.uid}: Automute cannot be used with markers on a same signal."
-                raise LabOneQException(msg)
-            if acq_type.is_spectroscopy(acquisition_type):
-                msg = (
-                    f"{signal_info.uid}: Automute cannot be used in Spectroscopy mode."
-                )
+                msg = f"{signal_info.uid}: Automute cannot be used with markers on same signal."
                 raise LabOneQException(msg)
             for trigger in section.triggers:
                 if trigger["signal_id"] == signal_info.uid:
-                    msg = f"{signal_info.uid}: Automute cannot be used with triggers on a same signal."
+                    msg = f"{signal_info.uid}: Automute cannot be used with triggers on same signal."
                     raise LabOneQException(msg)
         length = getattr(operation, "length", None)
         operation_length = self.opt_param(length)

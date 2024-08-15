@@ -10,6 +10,7 @@ from laboneq.compiler.common.awg_info import AwgKey
 from laboneq.compiler.common.iface_compiler_output import (
     CombinedOutput,
 )
+from laboneq.compiler.common.shfppc_sweeper_config import SHFPPCSweeperConfig
 
 
 @dataclass
@@ -32,6 +33,11 @@ class CombinedRTCompilerOutputContainer:
         for output in self.combined_output.values():
             if key in output.feedback_register_configurations:
                 return output.feedback_register_configurations[key]
+
+    def get_shfppc_sweep_configuration(self, key: AwgKey) -> SHFPPCSweeperConfig | None:
+        for output in self.combined_output.values():
+            if key in output.shfppc_sweep_configurations:
+                return output.shfppc_sweep_configurations[key]
 
     def add_total_execution_time(self, other):
         for device_class, combined_output in self.combined_output.items():

@@ -54,6 +54,7 @@ from laboneq.controller.recipe_processor import (
     get_wave,
 )
 from laboneq.controller.util import LabOneQControllerException
+from laboneq.controller.versioning import SetupCaps
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.core.utilities.seqc_compile import SeqCCompileItem, seqc_compile_async
@@ -181,7 +182,10 @@ def delay_to_rounded_samples(
 
 
 class DeviceZI(INodeMonitorProvider):
-    def __init__(self, device_qualifier: DeviceQualifier, daq: DaqWrapper):
+    def __init__(
+        self, device_qualifier: DeviceQualifier, daq: DaqWrapper, setup_caps: SetupCaps
+    ):
+        self._setup_caps = setup_caps
         self._device_qualifier = device_qualifier
         self._downlinks: dict[str, list[tuple[str, ReferenceType[DeviceZI]]]] = {}
         self._uplinks: list[ReferenceType[DeviceZI]] = []
@@ -471,7 +475,11 @@ class DeviceZI(INodeMonitorProvider):
 
         self._connected = True
 
-    async def connect(self, emulator_state: EmulatorState | None, use_async_api: bool):
+    async def connect(
+        self,
+        emulator_state: EmulatorState | None,
+        use_async_api: bool,
+    ):
         await self._connect_to_data_server(emulator_state, use_async_api=use_async_api)
         if self._node_monitor is not None:
             self.node_monitor.add_nodes(self.nodes_to_monitor())
@@ -661,6 +669,9 @@ class DeviceZI(INodeMonitorProvider):
     async def check_results_acquired_status(
         self, channel, acquisition_type: AcquisitionType, result_length, hw_averages
     ):
+        pass
+
+    async def get_result_data(self) -> Any:
         pass
 
     def _adjust_frequency(self, freq):

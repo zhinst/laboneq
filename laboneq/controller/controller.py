@@ -81,14 +81,16 @@ class Controller:
         self._ignore_version_mismatch = ignore_version_mismatch
         self._do_emulation = True
         self._use_async_api = USE_ASYNC_API_BY_DEFAULT
-        self._devices = DeviceCollection(
-            target_setup=target_setup,
-            ignore_version_mismatch=ignore_version_mismatch,
-        )
 
         _zhinst_core_version = LabOneVersion.from_version_string(zhinst_core_version())
         self._check_zhinst_core_version_support(_zhinst_core_version)
         self._setup_caps = SetupCaps(_zhinst_core_version)
+
+        self._devices = DeviceCollection(
+            target_setup=target_setup,
+            ignore_version_mismatch=ignore_version_mismatch,
+            setup_caps=self._setup_caps,
+        )
 
         self._last_connect_check_ts: float | None = None
 
@@ -495,9 +497,7 @@ class Controller:
         scheduled_experiment: ScheduledExperiment,
         protected_session: ProtectedSession | None = None,
     ):
-        self._recipe_data = pre_process_compiled(
-            scheduled_experiment, self._devices, self._setup_caps
-        )
+        self._recipe_data = pre_process_compiled(scheduled_experiment, self._devices)
         await self._execute_compiled_impl(
             protected_session=protected_session or ProtectedSession(None)
         )
@@ -707,8 +707,31 @@ class Controller:
 
     async def _read_one_step_results(self, nt_step: NtStepKey, rt_section_uid: str):
         rt_execution_info = self._recipe_data.rt_execution_infos[rt_section_uid]
+        processed_devices: set[str] = set()
         for awg_key, awg_config in self._recipe_data.awgs_producing_results():
             device = self._devices.find_by_uid(awg_key.device_uid)
+            if awg_config.result_length == -1:
+                if awg_key.device_uid in processed_devices:
+                    # AWGs are not relevant, only process once per device
+                    continue
+                processed_devices.add(awg_key.device_uid)
+                # result shape determined by device
+                # TODO(2K): Result types are currently violated. The code below
+                # temporarily collects and transfers the results from the device
+                # as is for debugging purposes.
+                raw_result_data = await device.get_result_data()
+                handle = device.device_qualifier.uid
+                results = self._results.acquired_results.get(handle)
+                if results is None:
+                    results = make_acquired_result(
+                        data=[],  # Type violated
+                        axis_name=[],
+                        axis=[],
+                        handle=handle,
+                    )
+                    self._results.acquired_results[handle] = results
+                results.data.append(raw_result_data)
+                continue
             if rt_execution_info.acquisition_type == AcquisitionType.RAW:
                 raw_results = await device.get_input_monitor_data(
                     awg_key.awg_index, awg_config.raw_acquire_length

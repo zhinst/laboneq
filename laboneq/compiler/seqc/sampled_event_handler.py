@@ -21,6 +21,9 @@ from laboneq.compiler.seqc.seqc_generator import (
     SeqCGenerator,
     merge_generators,
 )
+from laboneq.compiler.seqc.shfppc_sweeper_config_tracker import (
+    SHFPPCSweeperConfigTracker,
+)
 from laboneq.compiler.seqc.signatures import PlaybackSignature, WaveformSignature
 from laboneq.compiler.seqc.awg_sampled_event import (
     AWGEvent,
@@ -116,6 +119,7 @@ class SampledEventHandler:
         self,
         seqc_tracker: SeqCTracker,
         command_table_tracker: CommandTableTracker,
+        shfppc_sweeper_config_tracker: SHFPPCSweeperConfigTracker,
         function_defs_generator: SeqCGenerator,
         declarations_generator: SeqCGenerator,
         wave_indices: WaveIndexTracker,
@@ -134,6 +138,7 @@ class SampledEventHandler:
     ):
         self.seqc_tracker = seqc_tracker
         self.command_table_tracker = command_table_tracker
+        self.shfppc_sweeper_config_tracker = shfppc_sweeper_config_tracker
         self.function_defs_generator = function_defs_generator
         self.declarations_generator = declarations_generator
         self.wave_indices = wave_indices
@@ -509,21 +514,14 @@ class SampledEventHandler:
                 )
 
     def handle_qa_event(self, sampled_event: AWGEvent):
-        _logger.debug("  Processing QA_EVENT %s", sampled_event)
         generator_channels = set()
         play_event: AWGEvent
         for play_event in sampled_event.params["play_events"]:
-            _logger.debug("  play_event %s", play_event)
             signature: PlaybackSignature = play_event.params["playback_signature"]
             play_signature = signature.waveform
             signal_id = play_event.params.get("signal_id")
             if signal_id is not None:
                 if play_signature in self.sampled_signatures[signal_id]:
-                    _logger.debug(
-                        "  Found matching signature %s for event %s",
-                        play_signature,
-                        play_event,
-                    )
                     current_signal_obj = next(
                         signal_obj
                         for signal_obj in self.awg.signals
@@ -546,14 +544,14 @@ class SampledEventHandler:
         )
 
         if len(integration_channels) > 0:
-            integrator_mask = "|".join(
+            integrator_mask: str = "|".join(
                 map(lambda x: "QA_INT_" + str(x), integration_channels)
             )
         else:
             integrator_mask = "QA_INT_NONE"
 
         if len(generator_channels) > 0:
-            generator_mask = "|".join(
+            generator_mask: str = "|".join(
                 map(lambda x: "QA_GEN_" + str(x), generator_channels)
             )
         else:
@@ -573,36 +571,41 @@ class SampledEventHandler:
             self.seqc_tracker.add_timing_comment(sampled_event.end)
 
         if is_spectroscopy:
-            generator_mask = 0
+            generator_mask = "0"
 
             # In spectroscopy mode, there are no distinct integrators that can be,
             # triggered, so the mask is ignored. By setting it to a non-null value
             # however, we ensure that the timestamp of the acquisition is correctly
             # latched.
-            integrator_mask = 1
+            integrator_mask = "1"
 
-            args = [generator_mask, integrator_mask, 0, 0, 1]
-        else:
-            args = [
+            self.seqc_tracker.add_startqa_shfqa_statement(
                 generator_mask,
                 integrator_mask,
-                "1" if "RAW" in sampled_event.params["acquisition_type"] else "0",
-            ]
-            feedback_register = sampled_event.params["feedback_register"]
-            if feedback_register is not None:
-                args.append(feedback_register)
-
-        self.seqc_tracker.add_function_call_statement("startQA", args, deferred=True)
+                monitor=0,
+                feedback_register=0,
+                trigger=0b10 | self.seqc_tracker.trigger_output_state(),
+            )
+        else:
+            monitor = 1 if "RAW" in sampled_event.params["acquisition_type"] else 0
+            feedback_register = sampled_event.params["feedback_register"] or 0
+            self.seqc_tracker.add_startqa_shfqa_statement(
+                generator_mask,
+                integrator_mask,
+                monitor=monitor,
+                feedback_register=feedback_register,
+                trigger=self.seqc_tracker.trigger_output_state(),
+            )
+        if is_spectroscopy:
+            self.seqc_tracker.add_set_trigger_statement(
+                value=self.seqc_tracker.trigger_output_state() & 0b1
+            )
         if self.seqc_tracker.automute_playzeros:
             # playZero for the waveform, which must not be muted.
             self.seqc_tracker.add_play_zero_statement(
                 sampled_event.end - sampled_event.start, increment_counter=True
             )
             self.seqc_tracker.flush_deferred_function_calls()
-        if is_spectroscopy:
-            self.seqc_tracker.add_function_call_statement(
-                "setTrigger", [0], deferred=True
-            )
 
     def handle_reset_precompensation_filters(self, sampled_event: AWGEvent):
         if sampled_event.params["signal_id"] not in (s.id for s in self.awg.signals):
@@ -764,9 +767,7 @@ class SampledEventHandler:
     def handle_trigger_output(self, sampled_event: AWGEvent):
         _logger.debug("  Processing trigger event %s", sampled_event)
         self.seqc_tracker.add_required_playzeros(sampled_event)
-        self.seqc_tracker.add_function_call_statement(
-            name="setTrigger", args=[sampled_event.params["state"]], deferred=True
-        )
+        self.seqc_tracker.add_set_trigger_statement(value=sampled_event.params["state"])
 
     def handle_loop_step_start(self, sampled_event: AWGEvent):
         _logger.debug("  Processing LOOP_STEP_START EVENT %s", sampled_event)
@@ -801,6 +802,9 @@ class SampledEventHandler:
             )
 
         self.loop_stack.append(sampled_event)
+        self.shfppc_sweeper_config_tracker.enter_loop(
+            sampled_event.params["num_repeats"]
+        )
 
     def handle_iterate(self, sampled_event: AWGEvent):
         if (
@@ -849,6 +853,8 @@ class SampledEventHandler:
         else:
             self.seqc_tracker.pop_loop_stack_generators()
             self.loop_stack.pop()
+
+        self.shfppc_sweeper_config_tracker.exit_loop()
 
     def handle_match(self, sampled_event: AWGEvent):
         if (this_sample := sampled_event.params.get("prng_sample")) is not None:
@@ -935,6 +941,17 @@ class SampledEventHandler:
         assert prng_tracker.active_sample == sampled_event.params["sample_name"]
         prng_tracker.drop_sample()
         self.match_command_table_entries.clear()
+
+    def handle_ppc_step_start(self, sampled_event: AWGEvent):
+        assert sampled_event.type == AWGEventType.PPC_SWEEP_STEP_START
+        self.seqc_tracker.add_required_playzeros(sampled_event)
+        self.seqc_tracker.add_function_call_statement("setTrigger", [1], deferred=True)
+        self.shfppc_sweeper_config_tracker.add_step(**sampled_event.params)
+
+    def handle_ppc_step_end(self, sampled_event: AWGEvent):
+        assert sampled_event.type == AWGEventType.PPC_SWEEP_STEP_END
+        self.seqc_tracker.add_required_playzeros(sampled_event)
+        self.seqc_tracker.add_function_call_statement("setTrigger", [0], deferred=True)
 
     def _register_bitshift(
         self,
@@ -1205,6 +1222,10 @@ class SampledEventHandler:
             self.handle_sample_prng(sampled_event)
         elif signature == AWGEventType.DROP_PRNG_SAMPLE:
             self.handle_drop_prng_sample(sampled_event)
+        elif signature == AWGEventType.PPC_SWEEP_STEP_START:
+            self.handle_ppc_step_start(sampled_event)
+        elif signature == AWGEventType.PPC_SWEEP_STEP_END:
+            self.handle_ppc_step_end(sampled_event)
         self.last_event = sampled_event
 
     def handle_sampled_event_list(self):

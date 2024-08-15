@@ -34,6 +34,10 @@ class Cache:
         return None
 
     def set(self, key, value):
+        if "*" in key:
+            # Writing to a path with a wildcard, we always bypass the cache, in turn
+            # flushing the cached value for any node that matches the path.
+            return self.force_set(key, value)
         if key in self._cache and np.array_equal(self._cache[key], value):
             self._log(f"{self.name}: set hit: {key} = {value}")
             return value

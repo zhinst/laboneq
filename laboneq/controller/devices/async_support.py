@@ -100,6 +100,8 @@ def _check_dataserver_device_compatibility(statuses: dict[str, _DeviceStatusFlag
 async def async_check_dataserver_device_compatibility(
     host: str, port: int, serials: list[str]
 ):
+    if port == -1:  # Dummy server
+        return
     dataserver = await DataServer.create(host=host, port=port)
     statuses = await _get_device_statuses(dataserver, serials)
     _check_dataserver_device_compatibility(statuses)
@@ -260,7 +262,11 @@ class NodeMonitorAsync(NodeMonitorBase):
     async def poll(self):
         while True:
             # Yield to the event loop to fill queues with pending data
-            await asyncio.sleep(0)
+            # Note: asyncio.sleep(0) is not sufficient. See:
+            # https://stackoverflow.com/questions/74493571/asyncio-sleep0-does-not-yield-control-to-the-event-loop
+            # https://bugs.python.org/issue40800
+            # TODO(2K): rework the logic to use proper async once the legacy API is removed.
+            await asyncio.sleep(0.0001)
             no_more_data = True
             for path, queue in self._queues.items():
                 while not queue.empty():

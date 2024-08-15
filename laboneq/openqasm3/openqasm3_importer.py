@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import operator
+import re
 from contextlib import contextmanager, nullcontext
 from typing import Any, Callable, Optional, TextIO, Union
 
@@ -36,6 +38,8 @@ from laboneq.openqasm3.namespace import (
 )
 from laboneq.openqasm3.openqasm_error import OpenQasmException
 
+_logger = logging.getLogger(__name__)
+
 ALLOWED_NODE_TYPES = {
     # quantum logic
     ast.Box,
@@ -65,6 +69,7 @@ ALLOWED_NODE_TYPES = {
     ast.Identifier,
     ast.Include,
     ast.IODeclaration,
+    ast.Pragma,
     ast.Program,
     ast.RangeDefinition,
     ast.Span,
@@ -212,11 +217,15 @@ class OpenQasm3Importer:
         #       the importer to allow the scope and inputs
         #       to be specified at appropriate points (regardless
         #       of what the L1Q DSL is currently capable of).
+        #
+        #       Likewise, implicit_calibration and acquire_loop_options
+        #       are specific to a particular program.
         self.gate_store = gate_store
         self.dsl_qubits = qubits
         self.supplied_inputs = inputs
         self.supplied_externs = externs
         self.implicit_calibration = Calibration()
+        self.acquire_loop_options = {}
         self.scope = NamespaceNest()
 
         # TODO: Derive hardware qubits directly from supplied qubits
@@ -356,6 +365,8 @@ class OpenQasm3Importer:
                     subsect = self._handle_measurement(child)
                 elif isinstance(child, ast.QuantumReset):
                     subsect = self._handle_quantum_reset(child)
+                elif isinstance(child, ast.Pragma):
+                    subsect = self._handle_pragma(child)
                 else:
                     msg = f"Statement type {type(child)} not supported"
                     raise OpenQasmException(msg, mark=child.span)
@@ -561,7 +572,7 @@ class OpenQasm3Importer:
         try:
             section = self.gate_store.lookup_gate(name, qubit_names, args=args)
             if not isinstance(section, Section):
-                raise (KeyError("Gate lookup returned a non-section"))
+                raise KeyError("Gate lookup returned a non-section")
             return section
         except KeyError as e:
             gates = ", ".join(
@@ -972,6 +983,47 @@ class OpenQasm3Importer:
             msg = f"Reset gate for qubit '{qubit_name}' not found."
             raise OpenQasmException(msg, mark=statement.span) from e
 
+    _PRAGMA_ZI_PREFIX = "zi."
+
+    _PRAGMA_ZI_STATEMENTS_RE = re.compile(
+        r"""
+        # ORed list of supported statements:
+        (zi\.acquisition_type[ \t]+(?P<acquisition_type>[^ \t]*))
+    """,
+        re.VERBOSE,
+    )
+
+    def _handle_pragma(self, statement: ast.Pragma):
+        pragma = statement.command
+
+        if not pragma.startswith(self._PRAGMA_ZI_PREFIX):
+            # we only process pragmas marked for Zurich Instruments
+            return
+
+        match = self._PRAGMA_ZI_STATEMENTS_RE.fullmatch(pragma)
+        if match is None:
+            msg = f"Invalid Zurich Instruments (zi.) pragma body: {pragma!r}"
+            raise OpenQasmException(msg)
+        if acquisition_type := match.group("acquisition_type"):
+            return self._pragma_acquisition_type(acquisition_type)
+        # The RuntimeError below should be unreachable -- it is a sanity
+        # check to guard against cases from _PRAGMA_ZI_STATEMENTS_RE not being
+        # handled in the lines above:
+        raise RuntimeError(f"Unknown zhinst.com pragma statement: {pragma!r}")
+
+    def _pragma_acquisition_type(self, acquisition_type: str):
+        """Set the acquisition type specified via a pragma."""
+        try:
+            acquisition_type = AcquisitionType[acquisition_type.upper()]
+        except Exception:
+            msg = f"Invalid acquisition type {acquisition_type!r}"
+            raise OpenQasmException(msg) from None
+        if existing_type := self.acquire_loop_options.get("acquisition_type"):
+            if existing_type != acquisition_type:
+                msg = f"Attempt to change acquisition_type from {existing_type!r} to {acquisition_type!r}"
+                raise OpenQasmException(msg)
+        self.acquire_loop_options["acquisition_type"] = acquisition_type
+
 
 def exp_from_qasm(
     program: str,
@@ -981,7 +1033,7 @@ def exp_from_qasm(
     externs: dict[str, Callable] | None = None,
     count: int = 1,
     averaging_mode: AveragingMode = AveragingMode.CYCLIC,
-    acquisition_type: AcquisitionType = AcquisitionType.INTEGRATION,
+    acquisition_type: AcquisitionType | None = None,
     reset_oscillator_phase: bool = False,
 ) -> Experiment:
     """Create an experiment from an OpenQASM program.
@@ -1003,6 +1055,16 @@ def exp_from_qasm(
             The mode of how to average the acquired data.
         acquisition_type:
             The type of acquisition to perform.
+
+            The acquisition type may also be specified within the
+            OpenQASM program using `pragma zi.acqusition_type raw`,
+            for example.
+
+            If an acquisition type is passed here, it overrides
+            any value set by a pragma.
+
+            If the acquisition type is not specified, it defaults
+            to [AcquisitionType.INTEGRATION]().
         reset_oscillator_phase:
             When true, reset all oscillators at the start of every
             acquistion loop iteration.
@@ -1017,6 +1079,18 @@ def exp_from_qasm(
         gate_store=gate_store,
     )
     qasm_section = importer(text=program)
+
+    if "acquisition_type" in importer.acquire_loop_options:
+        importer_acquisition_type = importer.acquire_loop_options["acquisition_type"]
+        if acquisition_type is None:
+            acquisition_type = importer_acquisition_type
+        else:
+            _logger.warning(
+                f"Overriding the acqusition type supplied via a pragma "
+                f"({importer_acquisition_type}) with: {acquisition_type}"
+            )
+    if acquisition_type is None:
+        acquisition_type = AcquisitionType.INTEGRATION
 
     signals = []
     for qubit in qubits.values():
@@ -1054,13 +1128,15 @@ def exp_from_qasm_list(
     repetition_time: float = 1e-3,
     batch_execution_mode: str = "pipeline",
     do_reset: bool = False,
+    add_measurement: bool = True,
     pipeline_chunk_count: int | None = None,
 ) -> Experiment:
     """Process a list of openQASM programs into a single LabOne Q experiment that
     executes the QASM snippets sequentially.
 
-    At this time, the QASM programs must not include any measurements. We automatically
+    At this time, the QASM programs should not include any measurements. By default, we automatically
     append a measurement of all qubits to the end of each program.
+    This behavior may be changed by specifying `add_measurement=False`.
 
     The measurement results for each qubit are stored in a handle named
     `f'meas{qasm_qubit_name}'` where `qasm_qubit_name` is the key specified for the
@@ -1074,6 +1150,10 @@ def exp_from_qasm_list(
 
     For the measurement we require the gate store to be loaded with a `measurement`
     gate. Similarly, the optional reset requires a `reset` gate to be available.
+
+    Note that using `set_frequency` or specifying the acquisition type via a
+    `pragma zi.acquisition_type` statement within an OpenQASM program is not
+    supported by `exp_from_qasm_list`. It will log a warning if these are encountered.
 
     Arguments:
         programs:
@@ -1109,6 +1189,8 @@ def exp_from_qasm_list(
             programs of up to a few 100 microseconds. "nt" is the slowest.
         do_reset:
             If `True`,  an active reset operation is added to the beginning of each program.
+        add_measurement:
+            If `True`, add measurement at the end for all qubits used.
         pipeline_chunk_count:
             The number of pipeline chunks to divide the experiment into.
 
@@ -1201,27 +1283,38 @@ def exp_from_qasm_list(
                                     externs=externs,
                                     gate_store=gate_store,
                                 )
-                                c.add(importer(text=program))
+                                qasm_section = importer(text=program)
+                                if importer.implicit_calibration:
+                                    _logger.warning(
+                                        "Implicit calibration (e.g. use of set_frequency in an OpenQASM program) is not supported by exp_from_qasm_list."
+                                    )
+                                if importer.acquire_loop_options:
+                                    _logger.warning(
+                                        "OpenQASM setting of acquire loop parameters via pragmas is not supported by exp_from_qasm_list."
+                                    )
+                                c.add(qasm_section)
 
                 # read out all qubits
-                with exp.section(uid="qubit_readout") as readout_section:
-                    for qasm_qubit_name, qubit in qubits.items():
-                        readout_section.add(
-                            gate_store.lookup_gate(
-                                "measure",
-                                (qasm_qubit_name,),
-                                kwargs={"handle": f"meas{qasm_qubit_name}"},
-                            ),
-                        )
-                        with exp.section():
-                            # The next shot will immediately start with an active reset.
-                            # SHFQA needs some time to process previous results before
-                            # it can trigger the next measurement. So we add a delay
-                            # here to have sufficient margin between the two readouts.
-                            # In the future, we'll ideally not have resort to two
-                            # measurements (one for readout, one for reset) in the
-                            # first place.
-                            exp.delay(qubit.signals["measure"], 500e-9)
+                if add_measurement:
+                    with exp.section(uid="qubit_readout") as readout_section:
+                        for qasm_qubit_name, qubit in qubits.items():
+                            readout_section.add(
+                                gate_store.lookup_gate(
+                                    "measure",
+                                    (qasm_qubit_name,),
+                                    kwargs={"handle": f"meas{qasm_qubit_name}"},
+                                ),
+                            )
+                            if do_reset:
+                                with exp.section():
+                                    # The next shot will immediately start with an active reset.
+                                    # SHFQA needs some time to process previous results before
+                                    # it can trigger the next measurement. So we add a delay
+                                    # here to have sufficient margin between the two readouts.
+                                    # In the future, we'll ideally not have resort to two
+                                    # measurements (one for readout, one for reset) in the
+                                    # first place.
+                                    exp.delay(qubit.signals["measure"], 500e-9)
 
     exp.set_calibration(importer.implicit_calibration)
 

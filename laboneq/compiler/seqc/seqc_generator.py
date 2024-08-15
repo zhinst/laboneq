@@ -15,9 +15,6 @@ from laboneq.core.exceptions import LabOneQException
 _logger = logging.getLogger(__name__)
 
 
-MAX_PLAY_ZERO_HOLD_UHFQA = 131056
-MAX_PLAY_ZERO_HOLD_HDAWG = 1048560
-
 MIN_PLAY_ZERO_HOLD = 512 + 128
 
 SeqCStatement = Dict[str, Any]
@@ -243,11 +240,6 @@ class SeqCGenerator:
                 f"minimum waveform length {device_type.min_play_wave} of device "
                 f"'{device_type.value}' (sample multiple is {device_type.sample_multiple})"
             )
-        max_play_fun = (
-            MAX_PLAY_ZERO_HOLD_HDAWG
-            if device_type == DeviceType.HDAWG
-            else MAX_PLAY_ZERO_HOLD_UHFQA
-        )
 
         def statement_factory(samples):
             self.add_statement(
@@ -258,14 +250,16 @@ class SeqCGenerator:
                 }
             )
 
+        max_play_len = device_type.max_play_zero_hold
+
         def flush_deferred_calls():
             self.append_statements_from(deferred_calls)
             deferred_calls.clear()
 
-        if num_samples <= max_play_fun:
+        if num_samples <= max_play_len:
             statement_factory(num_samples)
             flush_deferred_calls()
-        elif num_samples <= 2 * max_play_fun:
+        elif num_samples <= 2 * max_play_len:
             # split in the middle
             half_samples = (num_samples // 2 // 16) * 16
             statement_factory(half_samples)
@@ -279,36 +273,36 @@ class SeqCGenerator:
             # In addition, on UHFQA, there must be a non-looped playZero after the loop.
             # Otherwise, a following startQA() might be delayed by the sequencer exiting
             # the loop (HBAR-2075).
-            num_segments, head = divmod(num_samples, max_play_fun)
+            num_segments, head = divmod(num_samples, max_play_len)
             assert num_segments >= 2, "shorter loops should be unrolled"
             tail = 0
             if 0 < head < MIN_PLAY_ZERO_HOLD:
-                chunk = (max_play_fun // 2 // 16) * 16
+                chunk = (max_play_len // 2 // 16) * 16
                 statement_factory(chunk)
                 flush_deferred_calls()
                 num_samples -= chunk
-                num_segments, head = divmod(num_samples, max_play_fun)
+                num_segments, head = divmod(num_samples, max_play_len)
             if device_type == DeviceType.UHFQA and num_segments > 1:
                 num_segments -= 1
-                tail += max_play_fun
+                tail += max_play_len
             if head > 0:
                 statement_factory(head)
                 flush_deferred_calls()
             elif deferred_calls.num_statements() > 0:
-                statement_factory(max_play_fun)
+                statement_factory(max_play_len)
                 flush_deferred_calls()
                 num_segments -= 1
             if num_segments == 0:
                 pass
             elif num_segments == 1:
-                statement_factory(max_play_fun)
+                statement_factory(max_play_len)
             else:
                 loop_body = SeqCGenerator()
                 loop_body.add_statement(
                     {
                         "type": f"{fname}",
                         "device_type": device_type,
-                        "num_samples": max_play_fun,
+                        "num_samples": max_play_len,
                     }
                 )
                 self.add_repeat(num_segments, loop_body)
@@ -594,11 +588,13 @@ def merge_generators(generators, compress=True) -> SeqCGenerator:
 
         compressed_generators = compressor_core(generator_hashes, cost_function)
 
+        did_compress = False
         for cg in compressed_generators:
             if isinstance(cg, Run):
                 if len(cg.word) == 1:
                     body = generator_by_hash[cg.word[0]]
                 else:
+                    did_compress = True
                     body = SeqCGenerator()
                     for gen_hash in cg.word:
                         body.append_statements_from(generator_by_hash[gen_hash])
@@ -606,9 +602,10 @@ def merge_generators(generators, compress=True) -> SeqCGenerator:
             else:
                 retval.append_statements_from(generator_by_hash[cg])
 
-        # optional: we might add a 2nd pass here on the merged generator, finding patterns
-        # that partially span across multiple of the original parts.
-        # retval = retval.compressed()
+        if did_compress:
+            # 2nd pass on the merged generator, finding patterns that partially span across
+            # multiple of the original parts.
+            retval = retval.compressed()
     else:
         for g in generators:
             retval.append_statements_from(g)

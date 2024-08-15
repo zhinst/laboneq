@@ -109,7 +109,7 @@ class NodeDynamic(NodeBase):
             self.value = value
 
     @property  # type: ignore
-    def value(self) -> Any:
+    def value(self) -> Any:  # noqa: F811
         return None if self.getter is None else self.getter()
 
     @value.setter
@@ -805,8 +805,7 @@ class DevEmuSHFQABase(Gen2Base):
     def _pipeliner_done(self, channel: int):
         pipelined_nodes: dict[str, Any] = {}
         for job_id, slot in enumerate(self._qa_pipeliner._pipelined[channel]):
-            for path, value in slot.items():
-                pipelined_nodes[path] = value
+            pipelined_nodes |= slot
 
             readout_enable = pipelined_nodes.get("readout/result/enable", 0)
             spectroscopy_enable = pipelined_nodes.get("spectroscopy/result/enable", 0)
@@ -1037,6 +1036,43 @@ class DevEmuSHFQC(DevEmuSHFQABase, DevEmuSHFSGBase):
         return nd
 
 
+class DevEmuSHFPPC(DevEmu):
+    def _node_def(self) -> dict[str, NodeInfo]:
+        nd = {
+            "raw/error/json/errors": NodeInfo(
+                type=NodeType.VECTOR_STR,
+                read_only=True,
+                default=('{"messages":[]}', {}),
+            ),
+            "features/devtype": NodeInfo(
+                type=NodeType.STR,
+                default=self._dev_opts.get("features/devtype", "SHFPPC4"),
+            ),
+            "features/options": NodeInfo(
+                type=NodeType.STR,
+                default=self._dev_opts.get("features/options", ""),
+            ),
+        }
+
+        for sweeper_idx in range(4):
+            nd[f"ppchannels/{sweeper_idx}/sweeper/enable"] = NodeInfo(
+                type=NodeType.INT,
+                default=0,
+                handler=partial(self._sweeper_start, sweeper_idx=sweeper_idx),
+            )
+
+        return nd
+
+    def _sweeper_stop(self, sweeper_idx):
+        self._set_val(f"ppchannels/{sweeper_idx}/sweeper/enable", 0)
+
+    def _sweeper_start(self, node: NodeBase, sweeper_idx):
+        if node.value == 1:
+            self.schedule(
+                delay=0.001, action=self._sweeper_stop, argument=(sweeper_idx,)
+            )
+
+
 class DevEmuNONQC(DevEmuHW):
     def _node_def(self) -> dict[str, NodeInfo]:
         return self._node_def_common()
@@ -1081,6 +1117,7 @@ _dev_type_map: dict[str | None, type[DevEmu]] = {
     "SHFQA": DevEmuSHFQA,
     "SHFSG": DevEmuSHFSG,
     "SHFQC": DevEmuSHFQC,
+    "SHFPPC": DevEmuSHFPPC,
     "NONQC": DevEmuNONQC,
 }
 

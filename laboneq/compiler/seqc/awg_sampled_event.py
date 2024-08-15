@@ -34,6 +34,8 @@ class AWGEventType(Enum):
     DROP_PRNG_SETUP = auto()
     PRNG_SAMPLE = auto()
     DROP_PRNG_SAMPLE = auto()
+    PPC_SWEEP_STEP_START = auto()
+    PPC_SWEEP_STEP_END = auto()
 
 
 @dataclass

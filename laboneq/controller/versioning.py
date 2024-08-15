@@ -55,6 +55,10 @@ class LabOneVersion:
     def supports_flexible_feedback(self):
         return self.as_tuple(omit_build=True) > (24, 4)
 
+    @property
+    def supports_ppc_sweeper(self):
+        return self.as_tuple(omit_build=True) > (24, 4)
+
     @classmethod
     def from_version_string(cls, s: str):
         major, minor, build = map(int, s.split("."))
@@ -108,3 +112,7 @@ class SetupCaps:
     @property
     def flexible_feedback(self) -> bool:
         return self._version.supports_flexible_feedback
+
+    @property
+    def ppc_sweeper(self) -> bool:
+        return self._version.supports_ppc_sweeper

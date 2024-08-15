@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import ItemsView
 from dataclasses import dataclass, field
 from typing import Any, List, Tuple
 
@@ -90,32 +89,11 @@ class SignalIntegrationInfo:
 
 
 @dataclass(init=True, repr=True, order=True)
-class SectionIntegrationInfo:
-    signals: dict[str, SignalIntegrationInfo] = field(default_factory=dict)
-
-    def signal_info(self, signal_id: str):
-        if signal_id not in self.signals:
-            self.signals[signal_id] = SignalIntegrationInfo()
-        return self.signals[signal_id]
-
-    def items(self) -> ItemsView[str, SignalIntegrationInfo]:
-        return self.signals.items()
-
-
-@dataclass(init=True, repr=True, order=True)
 class IntegrationTimes:
-    section_infos: dict[str, SectionIntegrationInfo] = field(default_factory=dict)
+    signal_infos: dict[str, SignalIntegrationInfo] = field(default_factory=dict)
 
-    def get_or_create_section_info(self, section_uid) -> SectionIntegrationInfo:
-        if section_uid not in self.section_infos:
-            self.section_infos[section_uid] = SectionIntegrationInfo()
-        return self.section_infos[section_uid]
-
-    def section_info(self, section_uid) -> SectionIntegrationInfo | None:
-        return self.section_infos.get(section_uid)
-
-    def items(self) -> ItemsView[str, SectionIntegrationInfo]:
-        return self.section_infos.items()
+    def signal_info(self, signal_id: str) -> SignalIntegrationInfo | None:
+        return self.signal_infos.get(signal_id)
 
 
 @dataclass
@@ -299,15 +277,26 @@ class MeasurementCalculator:
         integration_times = IntegrationTimes()
 
         for (section_uid, signal_id), inter_info in intermediate_signal_infos.items():
-            section_info = integration_times.get_or_create_section_info(section_uid)
             signal_info = signal_info_map[signal_id]
             length = inter_info.end - inter_info.start
 
-            signal_integration_info = section_info.signal_info(signal_id)
-            signal_integration_info.is_play = inter_info.is_play
-            signal_integration_info.length_in_samples = round(
-                length * signal_info.awg.sampling_rate
+            signal_integration_info = SignalIntegrationInfo(
+                is_play=inter_info.is_play,
+                length_in_samples=round(length * signal_info.awg.sampling_rate),
             )
+
+            if signal_id in integration_times.signal_infos:
+                existing_signal_integration_info = integration_times.signal_infos[
+                    signal_id
+                ]
+                if existing_signal_integration_info != signal_integration_info:
+                    raise ValueError(
+                        f"Signal {signal_id!r} has two different integration lengths:"
+                        f" {signal_integration_info!r} from section {section_uid} and"
+                        f" {existing_signal_integration_info!r} from an earlier section."
+                    )
+            else:
+                integration_times.signal_infos[signal_id] = signal_integration_info
 
         return integration_times, measurement_infos
 

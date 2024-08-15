@@ -149,7 +149,6 @@ class Qubit(QuantumElement):
         Returns:
             Prefilled calibration object from Qubit parameters.
         """
-        calib = {}
         drive_lo = None
         readout_lo = None
         if self.parameters.drive_lo_frequency is not None:
@@ -162,14 +161,21 @@ class Qubit(QuantumElement):
                 uid=f"{self.uid}_readout_local_osc",
                 frequency=self.parameters.readout_lo_frequency,
             )
+        if self.parameters.readout_frequency is not None:
+            readout_oscillator = Oscillator(
+                uid=f"{self.uid}_readout_acquire_osc",
+                frequency=self.parameters.readout_frequency,
+                modulation_type=ModulationType.AUTO,
+            )
 
+        calib = {}
         if "drive" in self.signals:
             sig_cal = SignalCalibration()
             if self.parameters.drive_frequency is not None:
                 sig_cal.oscillator = Oscillator(
                     uid=f"{self.uid}_drive_osc",
                     frequency=self.parameters.drive_frequency,
-                    modulation_type=ModulationType.HARDWARE,
+                    modulation_type=ModulationType.AUTO,
                 )
             sig_cal.local_oscillator = drive_lo
             sig_cal.range = self.parameters.drive_range
@@ -177,22 +183,14 @@ class Qubit(QuantumElement):
         if "measure" in self.signals:
             sig_cal = SignalCalibration()
             if self.parameters.readout_frequency is not None:
-                sig_cal.oscillator = Oscillator(
-                    uid=f"{self.uid}_measure_osc",
-                    frequency=self.parameters.readout_frequency,
-                    modulation_type=ModulationType.SOFTWARE,
-                )
+                sig_cal.oscillator = readout_oscillator
             sig_cal.local_oscillator = readout_lo
             sig_cal.range = self.parameters.readout_range_out
             calib[self.signals["measure"]] = sig_cal
         if "acquire" in self.signals:
             sig_cal = SignalCalibration()
             if self.parameters.readout_frequency is not None:
-                sig_cal.oscillator = Oscillator(
-                    uid=f"{self.uid}_acquire_osc",
-                    frequency=self.parameters.readout_frequency,
-                    modulation_type=ModulationType.SOFTWARE,
-                )
+                sig_cal.oscillator = readout_oscillator
             sig_cal.local_oscillator = readout_lo
             sig_cal.range = self.parameters.readout_range_out
             calib[self.signals["acquire"]] = sig_cal

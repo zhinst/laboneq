@@ -5,7 +5,8 @@ from attrs import define
 
 
 @define
-class SweptHardwareOscillator:
+class SweptOscillator:
     id: str
     signal: str
     device: str
+    is_hardware: bool

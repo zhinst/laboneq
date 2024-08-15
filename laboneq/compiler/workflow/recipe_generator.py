@@ -15,6 +15,7 @@ from laboneq.compiler.common.feedback_register_config import (
 )
 from laboneq._version import get_version
 from laboneq.compiler.common.iface_compiler_output import RealtimeStepBase
+from laboneq.compiler.common.shfppc_sweeper_config import SHFPPCSweeperConfig
 from laboneq.compiler.seqc.measurement_calculator import IntegrationTimes
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
@@ -104,12 +105,10 @@ class RecipeGenerator:
         self._recipe.acquire_lengths.extend(
             [
                 AcquireLength(
-                    section_id=section_id,
                     signal_id=signal_id,
                     acquire_length=integration_info.length_in_samples,
                 )
-                for section_id, section_integration_time in integration_times.items()
-                for signal_id, integration_info in section_integration_time.items()
+                for signal_id, integration_info in integration_times.signal_infos.items()
                 if not integration_info.is_play
             ]
         )
@@ -184,7 +183,7 @@ class RecipeGenerator:
                 )
 
             if device.device_type.value == "shfppc":
-                ppchannels = []
+                ppchannels: dict[int, dict[str, Any]] = {}  # keyed by ppc channel idx
                 for signal in ppc_signals.get(device_uid, []):
                     amplifier_pump = experiment_dao.amplifier_pump(signal)
                     if amplifier_pump is None:
@@ -217,8 +216,10 @@ class RecipeGenerator:
                         else:
                             amplifier_pump_dict[field] = val
 
-                    ppchannels.append(amplifier_pump_dict)
-                initialization.ppchannels = ppchannels
+                    ppchannels.setdefault(amplifier_pump.channel, {}).update(
+                        amplifier_pump_dict
+                    )
+                initialization.ppchannels = list(ppchannels.values())
 
             for follower in experiment_dao.dio_followers():
                 initialization = self._find_initialization(follower)
@@ -262,12 +263,16 @@ class RecipeGenerator:
             output_routers = [
                 RoutedOutput(
                     from_channel=route.from_channel,
-                    amplitude=route.amplitude
-                    if not isinstance(route.amplitude, ParameterInfo)
-                    else route.amplitude.uid,
-                    phase=route.phase
-                    if not isinstance(route.phase, ParameterInfo)
-                    else route.phase.uid,
+                    amplitude=(
+                        route.amplitude
+                        if not isinstance(route.amplitude, ParameterInfo)
+                        else route.amplitude.uid
+                    ),
+                    phase=(
+                        route.phase
+                        if not isinstance(route.phase, ParameterInfo)
+                        else route.phase.uid
+                    ),
                 )
                 for route in output_routers
             ]
@@ -380,10 +385,13 @@ class RecipeGenerator:
         awg_number: int,
         signal_type: str,
         feedback_register_config: FeedbackRegisterConfig | None,
+        signals: dict[str, dict[str, str]],
+        shfppc_sweep_configuration: SHFPPCSweeperConfig | None,
     ):
         awg = AWG(
             awg=awg_number,
             signal_type=SignalType(signal_type),
+            signals=signals,
         )
         if feedback_register_config is not None:
             awg.command_table_match_offset = (
@@ -403,6 +411,18 @@ class RecipeGenerator:
 
         initialization = self._find_initialization(device_id)
         initialization.awgs.append(awg)
+
+        if shfppc_sweep_configuration is not None:
+            ppc_device = shfppc_sweep_configuration.ppc_device
+            ppc_channel_idx = shfppc_sweep_configuration.ppc_channel
+            ppc_initialization = self._find_initialization(ppc_device)
+            ppchannel = ppc_initialization.ppchannels[ppc_channel_idx]
+
+            # remove the swept fields from the initialization; no need to set it in NT
+            for field in shfppc_sweep_configuration.swept_fields():
+                del ppchannel[field]
+
+            ppchannel["sweep_config"] = shfppc_sweep_configuration.build_table()
 
     @singledispatchmethod
     def add_realtime_step(self, rt_step: RealtimeStepBase):

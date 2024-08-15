@@ -579,6 +579,9 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
             # HULK-1707: this must happen before disabling the synchronization of the last AWG
             nc.add("system/synchronization/source", 0)
 
+        if with_pipeliner:
+            nc.extend(self.pipeliner_reset_nodes())
+
         return await self.maybe_async(nc)
 
     def pre_process_attributes(
@@ -1032,7 +1035,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         nc = NodeCollector(base=f"/{self.serial}/")
         nc.add(
             f"qachannels/{measurement.channel}/spectroscopy/trigger/channel",
-            32 + measurement.channel,
+            36 + measurement.channel,
         )
         nc.add(
             f"qachannels/{measurement.channel}/spectroscopy/length", measurement.length
@@ -1137,9 +1140,9 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         for awg_index in (
             self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
         ):
-            src = 32 + awg_index
-            nc.add(f"qachannels/{awg_index}/markers/0/source", src)
-            nc.add(f"qachannels/{awg_index}/markers/1/source", src)
+            # Configure the marker outputs to reflect sequencer trigger outputs 1 and 2
+            nc.add(f"qachannels/{awg_index}/markers/0/source", 32 + awg_index)
+            nc.add(f"qachannels/{awg_index}/markers/1/source", 36 + awg_index)
 
         for measurement in initialization.measurements:
             channel = 0

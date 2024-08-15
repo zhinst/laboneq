@@ -218,11 +218,11 @@ def dump(experiment_dao: ExperimentDAO):
                 out_section["repeat"]["parameters"] = []
                 for parameter in section_parameters:
                     param_object = {"id": parameter.uid}
-                    keys = ["start", "step", "values"]
-                    for key in keys:
-                        if getattr(parameter, key) is not None:
-                            param_object[key] = getattr(parameter, key)
-
+                    for key in ["start", "step"]:
+                        if (val := getattr(parameter, key)) is not None:
+                            param_object[key] = val
+                    if parameter.start is None and parameter.step is None:
+                        param_object["values"] = parameter.values
                     out_section["repeat"]["parameters"].append(param_object)
 
         if len(direct_children) > 0:

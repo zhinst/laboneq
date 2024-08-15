@@ -294,7 +294,7 @@ def analyze_set_oscillator_times(
     set_oscillator_events = [
         (index, event)
         for index, event in enumerate(events)
-        if event["event_type"] == "SET_OSCILLATOR_FREQUENCY_START"
+        if event["event_type"] == EventType.SET_OSCILLATOR_FREQUENCY_START
         and event.get("device_id") == device_id
         and event.get("signal") == signal_id
     ]
@@ -342,6 +342,70 @@ def analyze_set_oscillator_times(
         )
 
         retval.add(event_time_in_samples, set_oscillator_event)
+
+    return retval
+
+
+def analyze_ppc_sweep_events(events: list[Any], awg: AWGInfo, global_delay: float):
+    if awg.device_type != DeviceType.SHFQA:
+        return AWGSampledEventSequence()
+    ppc_sweep_start_events = [
+        (index, event)
+        for index, event in enumerate(events)
+        if event["event_type"] == EventType.PPC_SWEEP_STEP_START
+        and event.get("qa_device") == awg.device_id
+        and event.get("qa_channel") == awg.awg_number
+    ]
+    ppc_start_ids = {e["id"] for _, e in ppc_sweep_start_events}
+    ppc_sweep_end_events = [
+        (index, event)
+        for index, event in enumerate(events)
+        if event["event_type"] == EventType.PPC_SWEEP_STEP_END
+        and event["chain_element_id"] in ppc_start_ids
+    ]
+
+    retval = AWGSampledEventSequence()
+
+    sampling_rate = awg.sampling_rate
+
+    for index, event in ppc_sweep_start_events:
+        event_time_in_samples = length_to_samples(
+            event["time"] + global_delay, sampling_rate
+        )
+        fields = [
+            "ppc_device",
+            "ppc_channel",
+            # the actual data fields:
+            "pump_power",
+            "pump_frequency",
+            "probe_power",
+            "probe_frequency",
+            "cancellation_phase",
+            "cancellation_attenuation",
+        ]
+        params = {field: event[field] for field in fields if field in event}
+        ppc_sweep_start_event = AWGEvent(
+            type=AWGEventType.PPC_SWEEP_STEP_START,
+            start=event_time_in_samples,
+            priority=index,
+            params=params,
+        )
+
+        retval.add(event_time_in_samples, ppc_sweep_start_event)
+
+    for index, event in ppc_sweep_end_events:
+        event_time_in_samples = length_to_samples(
+            event["time"] + global_delay, sampling_rate
+        )
+
+        ppc_sweep_end_event = AWGEvent(
+            type=AWGEventType.PPC_SWEEP_STEP_END,
+            start=event_time_in_samples,
+            priority=index,
+            params={},
+        )
+
+        retval.add(event_time_in_samples, ppc_sweep_end_event)
 
     return retval
 

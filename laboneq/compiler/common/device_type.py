@@ -20,6 +20,7 @@ class DeviceTraits:
     str_value: str
     sampling_rate: float
     min_play_wave: int
+    max_play_zero_hold: int
     sample_multiple: int
     port_delay_granularity: int  # Granularity of the port delay in samples
     supports_zsync: bool
@@ -70,6 +71,7 @@ class DeviceType(DeviceTraits, Enum):
         sampling_rate=2.4e9,
         sampling_rate_2GHz=2.0e9,
         min_play_wave=32,
+        max_play_zero_hold=(1 << 19) - 16,
         sample_multiple=16,
         port_delay_granularity=1,
         amplitude_register_count=4,
@@ -101,6 +103,7 @@ class DeviceType(DeviceTraits, Enum):
         str_value="uhfqa",
         sampling_rate=1.8e9,
         min_play_wave=16,
+        max_play_zero_hold=131056,
         sample_multiple=8,
         port_delay_granularity=4,
         supports_zsync=False,
@@ -121,7 +124,16 @@ class DeviceType(DeviceTraits, Enum):
     SHFQA = DeviceTraits(
         str_value="shfqa",
         sampling_rate=2.0e9,
+        # TODO(2K):
+        # https://docs.zhinst.com/shfqa_user_manual/specifications.html#digital-signal-processing-specifications
+        # - minimum waveform length
+        # - waveform granularity
+        # - minimum weight length
+        # - integration weight granularity
+        # min_play_wave=4,
+        # sample_multiple=4,
         min_play_wave=32,
+        max_play_zero_hold=(1 << 19) - 16,
         sample_multiple=16,
         port_delay_granularity=4,
         supports_zsync=True,
@@ -155,6 +167,7 @@ class DeviceType(DeviceTraits, Enum):
         str_value="shfsg",
         sampling_rate=2.0e9,
         min_play_wave=32,
+        max_play_zero_hold=(1 << 19) - 16,
         sample_multiple=16,
         port_delay_granularity=1,
         supports_zsync=True,
@@ -188,6 +201,7 @@ class DeviceType(DeviceTraits, Enum):
         str_value="prettyprinterdevice",
         sampling_rate=2.0e9,
         min_play_wave=4,
+        max_play_zero_hold=0,
         sample_multiple=4,
         port_delay_granularity=-(1 << 32),  # FIXME: Unknown or NA
         supports_zsync=False,
@@ -199,6 +213,7 @@ class DeviceType(DeviceTraits, Enum):
         channels_per_awg=1,
         is_qa_device=False,
         device_class=0x1,
+        oscillator_set_latency=36e-9,  # NOTE: rough value identified visually on the scope
     )
 
     def __repr__(self):

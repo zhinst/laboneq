@@ -88,7 +88,7 @@ class SignalCalibration(Observable):
     port_delay: float | Parameter | None = None
     port_mode: PortMode | None = None
     delay_signal: float | None = None
-    voltage_offset: float | None = None
+    voltage_offset: float | Parameter | None = None
     range: int | float | None = None
     threshold: float | list[float] | None = None
     amplitude: float | Parameter | None = None
@@ -144,7 +144,7 @@ class SignalCalibration(Observable):
             )
 
     @property
-    def mixer_calibration(self) -> MixerCalibration:
+    def mixer_calibration(self) -> MixerCalibration:  # noqa: F811
         return self._mixer_calibration
 
     @mixer_calibration.setter
@@ -168,7 +168,7 @@ class SignalCalibration(Observable):
         self.has_changed().fire("mixer_calibration", calibration)
 
     @property
-    def precompensation(self) -> Precompensation:
+    def precompensation(self) -> Precompensation:  # noqa: F811
         return self._precompensation
 
     @precompensation.setter
@@ -192,7 +192,7 @@ class SignalCalibration(Observable):
         self.has_changed().fire("precompensation", calibration)
 
     @property
-    def amplifier_pump(self):
+    def amplifier_pump(self):  # noqa: F811
         return self._amplifier_pump
 
     @amplifier_pump.setter
