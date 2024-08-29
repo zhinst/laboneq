@@ -296,7 +296,7 @@ def analyze_set_oscillator_times(
         for index, event in enumerate(events)
         if event["event_type"] == EventType.SET_OSCILLATOR_FREQUENCY_START
         and event.get("device_id") == device_id
-        and event.get("signal") == signal_id
+        and signal_id in event.get("signal")
     ]
     if len(set_oscillator_events) == 0:
         return AWGSampledEventSequence()
@@ -342,6 +342,10 @@ def analyze_set_oscillator_times(
         )
 
         retval.add(event_time_in_samples, set_oscillator_event)
+
+    # remove what we handled
+    for i, _ in reversed(set_oscillator_events):
+        events.pop(i)
 
     return retval
 

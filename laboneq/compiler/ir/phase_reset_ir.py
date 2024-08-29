@@ -14,3 +14,9 @@ class PhaseResetIR(IntervalIR):
     section: str
     hw_osc_devices: List[Tuple[str, float]]
     reset_sw_oscillators: bool
+
+
+@define(kw_only=True, slots=True)
+class PhaseIncrementIR(IntervalIR):
+    section: str
+    value: float

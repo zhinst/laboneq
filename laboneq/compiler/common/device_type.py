@@ -205,7 +205,7 @@ class DeviceType(DeviceTraits, Enum):
         sample_multiple=4,
         port_delay_granularity=-(1 << 32),  # FIXME: Unknown or NA
         supports_zsync=False,
-        supports_reset_osc_phase=False,
+        supports_reset_osc_phase=True,
         supports_binary_waves=False,
         supports_complex_waves=False,
         supports_digital_iq_modulation=False,
@@ -213,7 +213,8 @@ class DeviceType(DeviceTraits, Enum):
         channels_per_awg=1,
         is_qa_device=False,
         device_class=0x1,
-        oscillator_set_latency=36e-9,  # NOTE: rough value identified visually on the scope
+        oscillator_set_latency=36e-9,
+        reset_osc_duration=32e-9,
     )
 
     def __repr__(self):

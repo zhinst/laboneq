@@ -480,7 +480,7 @@ class SimpleRuntime:
             "QA_DATA_PROCESSED": 0b1000000000100
             if descriptor.device_type == "SHFSG"
             else 0b10000000100,
-            "ZSYNC_DATA_PQSC_REGISTER": 0b1000000000001
+            "ZSYNC_DATA_PROCESSED_A": 0b1000000000001
             if descriptor.device_type == "SHFSG"
             else 0b10000000001,
         }
@@ -508,6 +508,7 @@ class SimpleRuntime:
             "setPRNGRange": self.setPRNGRange,
             "setPRNGSeed": self.setPRNGSeed,
             "getPRNGValue": self.getPRNGValue,
+            "configureFeedbackProcessing": self.configureFeedbackProcessing,
         }
         self.variables = {}
         self.seqc_simulation = SeqCSimulation()
@@ -760,12 +761,12 @@ class SimpleRuntime:
 
     def executeTableEntry(self, ct_index, latency=None):
         QA_DATA_PROCESSED_SG = 0b1000000000100
-        ZSYNC_DATA_PQSC_REGISTER_SG = 0b1000000000001
-        ZSYNC_DATA_PQSC_REGISTER_HD = 0b10000000001
-        if ct_index == QA_DATA_PROCESSED_SG or ct_index == ZSYNC_DATA_PQSC_REGISTER_SG:
+        ZSYNC_DATA_PROCESSED_A_SG = 0b1000000000001
+        ZSYNC_DATA_PROCESSED_HD = 0b10000000001
+        if ct_index == QA_DATA_PROCESSED_SG or ct_index == ZSYNC_DATA_PROCESSED_A_SG:
             assert self.descriptor.device_type == "SHFSG"
             ct_index = self.descriptor.feedback_command_table_offset
-        elif ct_index == ZSYNC_DATA_PQSC_REGISTER_HD:
+        elif ct_index == ZSYNC_DATA_PROCESSED_HD:
             assert self.descriptor.device_type == "HDAWG"
             ct_index = self.descriptor.feedback_command_table_offset
 
@@ -1011,6 +1012,9 @@ class SimpleRuntime:
     def getPRNGValue(self):
         val = next(self._prng)
         return val
+
+    def configureFeedbackProcessing(self, *args):
+        pass
 
 
 def analyze_recipe(

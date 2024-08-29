@@ -7,8 +7,15 @@ import typing
 
 from laboneq.compiler import DeviceType
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types.enums import ExecutionType, AcquisitionType
+from laboneq.core.types.enums import ExecutionType
+from laboneq.core.types.enums.acquisition_type import is_spectroscopy
+from laboneq.data.calibration import PortMode
 from laboneq.data.compilation_job import SignalInfoType, DeviceInfoType, ParameterInfo
+
+import logging
+
+
+_logger = logging.getLogger(__name__)
 
 if typing.TYPE_CHECKING:
     from laboneq.compiler.experiment_access import ExperimentDAO
@@ -146,12 +153,6 @@ def check_ppc_sweeper(dao: ExperimentDAO):
                 device_id = signal_info.device.uid
                 awgs_with_ppc_sweeps.add((device_id, channel))
 
-    if awgs_with_ppc_sweeps and dao.acquisition_type in [
-        AcquisitionType.SPECTROSCOPY_IQ,
-        AcquisitionType.SPECTROSCOPY_PSD,
-    ]:
-        raise LabOneQException("SHFPPC not supported in SPECTROSCOPY mode")
-
     awgs_with_section_trigger: set[tuple[str, int]] = set()
     for section_id in dao.sections():
         section_info = dao.section_info(section_id)
@@ -190,3 +191,54 @@ def check_ppc_sweeper(dao: ExperimentDAO):
             )
         )
         raise LabOneQException(msg)
+
+
+def check_lo_frequency(dao: ExperimentDAO):
+    for signal in dao.signals():
+        signal_info = dao.signal_info(signal)
+
+        if signal_info.device.device_type not in [
+            DeviceInfoType.SHFQA,
+            DeviceInfoType.SHFSG,
+        ]:
+            continue
+        if signal_info.lo_frequency is None or signal_info.port_mode == PortMode.LF:
+            continue
+
+        if isinstance(signal_info.lo_frequency, ParameterInfo):
+            values = signal_info.lo_frequency.values
+        else:
+            values = [signal_info.lo_frequency]
+
+        for f in values:
+            if abs(f % 100e6) > 1e-6:
+                raise LabOneQException(
+                    f"Cannot set local oscillator of signal {signal} to {f/1e9:.3} GHz."
+                    f" Only integer multiples of 100 MHz are acceptable."
+                )
+            if abs(f % 200e6) > 1e-6:
+                _logger.warning(
+                    f"Setting the local oscillator frequency of signal '{signal}' to"
+                    f" {f/1e9:.3} GHz may yield unpredictable phase relationships"
+                    f" between different channels.\n"
+                    f"It is highly recommended to choose a frequency that is an integer"
+                    f" multiple of 200 MHz."
+                )
+
+
+def freq_sweep_on_acquire_line_requires_spectroscopy_mode(dao: ExperimentDAO):
+    for signal in dao.signals():
+        signal_info = dao.signal_info(signal)
+        if (
+            signal_info.device.device_type
+            in [DeviceInfoType.SHFQA, DeviceInfoType.UHFQA]
+            and signal_info.oscillator is not None
+            and isinstance(signal_info.oscillator.frequency, ParameterInfo)
+            and signal_info.oscillator.is_hardware
+            and not is_spectroscopy(dao.acquisition_type)
+        ):
+            raise LabOneQException(
+                f"Hardware oscillator sweep using oscillator {signal_info.oscillator.uid} on acquire line "
+                f"{signal_info.uid} connected to UFHQA or SHFQQA device {signal_info.device.uid} "
+                f"requires acquisition type to be set to spectroscopy"
+            )

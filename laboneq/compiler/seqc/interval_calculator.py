@@ -4,10 +4,10 @@
 from __future__ import annotations
 import dataclasses
 import logging
-from typing import Any, Iterable, List, Optional
+from typing import Any, Iterable, List, cast
 
-from intervaltree import Interval, IntervalTree
-
+from intervaltree import Interval as PyInterval
+from laboneq._rust.intervals import IntervalTree, Interval
 
 _logger = logging.getLogger(__name__)
 
@@ -31,7 +31,12 @@ def floor(value: int, grid: int):
 
 
 def merge_overlaps(interval_tree: IntervalTree):
-    interval_tree.merge_overlaps(data_reducer=lambda data1, data2: [*data1, *data2])
+    interval_tree.merge_overlaps(lambda data1, data2: [*data1, *data2])
+
+
+# NOTE: zinterval cannot take floats
+_INT_INF_POS = int(2**63) - 1
+_INT_INF_NEG = (int(2**63) - 1) * -1
 
 
 @dataclasses.dataclass
@@ -41,19 +46,33 @@ class MutableInterval:
     Cannot actually live in an IntervalTree."""
 
     begin: int
-    end: Optional[int]
+    end: int | None
     data: Any = dataclasses.field(default=None)
 
-    def overlaps(self, other):
-        return self.immutable().overlaps(other.immutable())
+    def __post_init__(self):
+        if self.begin == float("inf"):
+            self.begin = _INT_INF_POS
+        elif self.begin == -float("inf"):
+            self.begin = _INT_INF_NEG
+        else:
+            self.begin = self.begin
+        if self.end == float("inf"):
+            self.end = _INT_INF_POS
+        elif self.end == -float("inf"):
+            self.end = _INT_INF_NEG
+        else:
+            self.end = self.end
+
+    def overlaps(self, other: MutableInterval) -> bool:
+        return self.immutable().overlap(other.begin, other.end)
 
     def immutable(self) -> Interval:
-        return Interval(self.begin, self.end, self.data)
+        return Interval(self.begin, cast(int, self.end), self.data)
 
 
 def _pass_left_to_right(
     chunk: List[MutableInterval],
-    cut_interval: Interval,
+    cut_interval: PyInterval,
     play_wave_size_hint: int,
     play_zero_size_hint: int,
     play_wave_maximum_size: int = 0,
@@ -63,7 +82,7 @@ def _pass_left_to_right(
         assert play_wave_maximum_size > play_wave_size_hint
 
     if play_wave_maximum_size == 0:
-        play_wave_maximum_size = float("inf")
+        play_wave_maximum_size = _INT_INF_POS
     if 0 < first_playback - cut_interval.begin < play_zero_size_hint:
         # First playZero is too short. Extend first playWave to the left.
         extended_length = chunk[0].end - cut_interval.begin
@@ -73,7 +92,7 @@ def _pass_left_to_right(
     new_intervals = []
 
     for iv, next_iv in zip(
-        chunk, [*chunk[1:], MutableInterval(cut_interval.end, float("inf"))]
+        chunk, [*chunk[1:], MutableInterval(cut_interval.end, _INT_INF_POS)]
     ):
         next_iv: MutableInterval
         playback_length = iv.end - iv.begin
@@ -109,7 +128,7 @@ def _pass_right_to_left(
     previous_iv: MutableInterval
     for iv, previous_iv in zip(
         chunk[::-1],
-        [*chunk[-2::-1], MutableInterval(-float("inf"), cut_interval.begin)],
+        [*chunk[-2::-1], MutableInterval(_INT_INF_NEG, cut_interval.begin)],
     ):
         playback_length = iv.end - iv.begin
         if playback_length < play_wave_size_hint:
@@ -193,7 +212,7 @@ def calculate_intervals(
     Note that at this time, we do not support pulses overlapping cut points.
     """
     if interval_tree.is_empty():
-        return interval_tree
+        return []
 
     assert all(cut_point % granularity == 0 for cut_point in cut_points)
     assert min_play_wave % granularity == 0
@@ -202,34 +221,32 @@ def calculate_intervals(
     for interval in force_command_table_intervals:
         assert min_play_wave <= interval.end - interval.begin
     assert are_cut_points_valid(interval_tree, cut_points)
+    intervals_ = interval_tree.intervals
     assert all(
-        iv.end <= cut_points[-1] for iv in interval_tree
+        iv.end <= cut_points[-1] for iv in intervals_
     )  # last cut point is end of sequence
 
-    new_tree = IntervalTree()
-
-    for iv in sorted(interval_tree.items()):
-        begin = floor(iv.begin, granularity)
-        end = ceil(iv.end, granularity)
-        new_tree.addi(begin, end, [iv.data])
-
-    interval_tree = new_tree
-
+    interval_tree = IntervalTree(
+        [
+            Interval(floor(iv.begin, granularity), ceil(iv.end, granularity), [iv.data])
+            for iv in intervals_
+        ]
+    )
     merge_overlaps(interval_tree)
 
-    # These intervals mark the regions delimited by the cut points. They are
-    # independent, and *cannot* be merged.
-    cut_intervals = [
-        Interval(begin, end)
-        for begin, end in zip([0, *cut_points[:-1]], [*cut_points])
-        if begin != end  # necessary if 0 already in the list of cut points
-    ]
-
-    retval = IntervalTree()
     command_table_intervals = set(
         (m.begin, m.end) for m in force_command_table_intervals
     )
-
+    intervals_ = []
+    cut_intervals = [
+        Interval(begin, end)
+        for begin, end in zip(
+            [min(interval_tree.begin(), cut_points[0]), *cut_points[:-1]], [*cut_points]
+        )
+        if begin != end  # necessary if 0 already in the list of cut points
+    ]
+    # These intervals mark the regions delimited by the cut points. They are
+    # independent, and *cannot* be merged.
     for cut_interval in cut_intervals:
         # We may merge intervals inside this chunk, but they must not extend past it.
         chunk = [
@@ -259,12 +276,14 @@ def calculate_intervals(
         )
 
         for interval in chunk:
-            retval.add(interval.immutable())
+            im = interval.immutable()
+            intervals_.append(Interval(im.begin, im.end, im.data))
 
     # Check if the scheduling was successful
-    all_intervals = sorted(retval.items())
+    retval = IntervalTree(intervals_)
+    all_intervals = retval.intervals
     for iv, previous_iv in zip(
-        all_intervals, [*all_intervals[1:], Interval(cut_points[-1], None)]
+        all_intervals, [*all_intervals[1:], PyInterval(cut_points[-1], None)]
     ):
         # playWave not too short?
         assert iv.length() >= min_play_wave
@@ -278,4 +297,4 @@ def calculate_intervals(
 
     assert are_cut_points_valid(retval, cut_points)
 
-    return sorted(retval.items())
+    return all_intervals

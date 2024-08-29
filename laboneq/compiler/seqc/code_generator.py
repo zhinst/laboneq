@@ -22,6 +22,7 @@ from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.shfppc_sweeper_config import SHFPPCSweeperConfig
 from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
 from laboneq.compiler.ir.ir import IR
+from laboneq.compiler.seqc.inline_sections_in_branch import inline_sections_in_branch
 from laboneq.compiler.seqc.linker import AwgWeights, SeqCGenOutput
 from laboneq._utils import ensure_list
 from laboneq.compiler.seqc.analyze_events import (
@@ -386,6 +387,7 @@ class CodeGenerator(ICodeGenerator):
         self.EMIT_TIMING_COMMENTS = self._settings.EMIT_TIMING_COMMENTS
 
     def generate_code(self):
+        inline_sections_in_branch(self._ir)
         event_list = generate_event_list_from_ir(
             self._ir, self._settings, expand_loops=False, max_events=float("inf")
         )

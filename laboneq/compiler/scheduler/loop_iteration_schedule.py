@@ -54,8 +54,9 @@ class LoopIterationPreambleSchedule(IntervalSchedule):
             assert isinstance(child, PhaseResetSchedule)
 
             # phase resets go after the sweep steps
-            children_starts[i] = sweep_end
+            children_starts[i] = ceil_to_grid(sweep_end, child.grid)
 
+        self.children_start = children_starts
         self.length = 0
         for child, child_start in zip(self.children, self.children_start):
             self.length = max(self.length, child_start + child.length)

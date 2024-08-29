@@ -16,6 +16,6 @@ class PRNG:
 class PRNGSample:
     """Representation in the LabOne Q DSL of values drawn from an on-device PRNG."""
 
-    uid: str = None
+    uid: str | None = None
     prng: PRNG = None
     count: int = 1

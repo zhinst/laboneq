@@ -7,6 +7,6 @@ from attrs import define
 @define
 class SweptOscillator:
     id: str
-    signal: str
+    signals: set[str]
     device: str
     is_hardware: bool

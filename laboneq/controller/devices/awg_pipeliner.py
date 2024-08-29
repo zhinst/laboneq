@@ -48,11 +48,13 @@ class AwgPipeliner(_type_base):
         nc.add(f"{index}/pipeliner/mode", 1)
         nc.add(f"{index}/pipeliner/reset", 1, cache=False)
         nc.add(f"{index}/synchronization/enable", 1)
+        nc.barrier()
         return nc
 
     def pipeliner_commit(self, index: int) -> NodeCollector:
         self._pipeliner_slot_tracker[index] += 1
         nc = NodeCollector(base=f"{self._node_base}/")
+        nc.barrier()
         nc.add(f"{index}/pipeliner/commit", 1, cache=False)
         return nc
 

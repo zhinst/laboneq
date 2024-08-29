@@ -212,7 +212,12 @@ def sample_pulse(
     return retval
 
 
-pulse_function_library: dict[str, Callable[..., Any]] = dict()
+# registries of pulse samplers and factories:
+_pulse_samplers: dict[str, Callable[..., Any]] = {}
+_pulse_factories: dict[str, Callable[..., Any]] = {}
+
+# deprecated alias for _pulse_samples, use pulse_library.pulse_sampler(...) instead:
+pulse_function_library = _pulse_samplers
 
 
 def verify_amplitude_no_clipping(

@@ -470,7 +470,7 @@ class DeviceZI(INodeMonitorProvider):
         if isinstance(dev_type, str):
             self.dev_type = dev_type
         if isinstance(dev_opts, str):
-            self.dev_opts = dev_opts.split("\n")
+            self.dev_opts = dev_opts.splitlines()
         self._process_dev_opts()
 
         self._connected = True

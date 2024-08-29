@@ -327,6 +327,8 @@ class ExperimentDAO:
         validators.check_triggers_and_markers(self)
         validators.missing_sweep_parameter_for_play(self)
         validators.check_ppc_sweeper(self)
+        validators.check_lo_frequency(self)
+        validators.freq_sweep_on_acquire_line_requires_spectroscopy_mode(self)
 
     def acquisition_signal(self, handle: str) -> str | None:
         return self._data["handle_acquires"][handle]

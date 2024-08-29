@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from math import ceil
 from typing import Any, Dict, Iterable, List, Set, Tuple
 
-from intervaltree import Interval, IntervalTree
+from laboneq._rust.intervals import Interval, IntervalTree
 
 from laboneq.compiler.seqc.analyze_amplitude_registers import (
     analyze_amplitude_register_set_events,
@@ -278,8 +278,7 @@ def _make_interval_tree(
 ) -> IntervalTree:
     interval_zip = _interval_list(events, states, signal_ids, delay, sub_channel)
 
-    interval_tree = IntervalTree()
-
+    intervals = []
     for interval_start, interval_end in interval_zip:
         oscillator_phase = interval_start.oscillator_phase
 
@@ -293,27 +292,29 @@ def _make_interval_tree(
         )
 
         if start_samples != end_samples:
-            interval_tree.addi(
-                start_samples,
-                end_samples,
-                _PlayIntervalData(
-                    pulse=interval_start.play_wave_id,
-                    signal_id=interval_start.signal_id,
-                    amplitude=interval_start.amplitude,
-                    channel=interval_start.index,
-                    oscillator_phase=oscillator_phase,
-                    oscillator_frequency=interval_start.oscillator_frequency,
-                    increment_oscillator_phase=interval_start.increment_oscillator_phase,
-                    phase=interval_start.phase,
-                    sub_channel=interval_start.sub_channel,
-                    play_pulse_parameters=interval_start.play_pulse_parameters,
-                    pulse_pulse_parameters=interval_start.pulse_pulse_parameters,
-                    state=interval_start.state,
-                    start_rounding_error=start_rounding_error,
-                    markers=interval_start.markers,
-                    amp_param=interval_start.amp_param,
-                    incr_phase_param=interval_start.incr_phase_param,
-                ),
+            intervals.append(
+                Interval(
+                    start_samples,
+                    end_samples,
+                    _PlayIntervalData(
+                        pulse=interval_start.play_wave_id,
+                        signal_id=interval_start.signal_id,
+                        amplitude=interval_start.amplitude,
+                        channel=interval_start.index,
+                        oscillator_phase=oscillator_phase,
+                        oscillator_frequency=interval_start.oscillator_frequency,
+                        increment_oscillator_phase=interval_start.increment_oscillator_phase,
+                        phase=interval_start.phase,
+                        sub_channel=interval_start.sub_channel,
+                        play_pulse_parameters=interval_start.play_pulse_parameters,
+                        pulse_pulse_parameters=interval_start.pulse_pulse_parameters,
+                        state=interval_start.state,
+                        start_rounding_error=start_rounding_error,
+                        markers=interval_start.markers,
+                        amp_param=interval_start.amp_param,
+                        incr_phase_param=interval_start.incr_phase_param,
+                    ),
+                )
             )
 
         else:
@@ -323,11 +324,7 @@ def _make_interval_tree(
                 start_samples,
                 end_samples,
             )
-
-    for ivs in sorted(interval_tree.items()):
-        _logger.debug("Signal(s) %s intervaltree:%s", signal_ids, ivs)
-
-    return interval_tree
+    return IntervalTree(intervals)
 
 
 def _oscillator_phase_increment_points(
@@ -399,11 +396,13 @@ def _insert_frame_changes(
     signals: dict[str, SignalObj],
 ):
     frame_change_events = AWGSampledEventSequence()
-    intervals = IntervalTree.from_tuples(
-        (ev.start, ev.end, ev)
-        for t, evl in interval_events.sequence.items()
-        for ev in evl
-        if ev.type == AWGEventType.PLAY_WAVE
+    intervals = IntervalTree(
+        [
+            Interval(ev.start, ev.end, ev)
+            for t, evl in interval_events.sequence.items()
+            for ev in evl
+            if ev.type == AWGEventType.PLAY_WAVE
+        ]
     )
 
     frame_changes = _find_frame_changes(events, delay, sampling_rate)
@@ -417,7 +416,7 @@ def _insert_frame_changes(
         # check if the frame change overlaps a (compacted) interval
         play_ivs = [
             iv
-            for iv in intervals[frame_change.time]
+            for iv in intervals.at(frame_change.time)
             if iv.data.params["playback_signature"].state == frame_change.state
         ]
 
@@ -528,21 +527,29 @@ def _oscillator_switch_cut_points(
             f"with signal that is not HW modulated ({missing_oscillator_signal})."
         )
 
-    osc_intervals = IntervalTree()
-    for pulse_iv in interval_tree:
+    if interval_tree.is_empty():
+        # Nothing to do if there are no pulses in an experiment.
+        return osc_switch_events, cut_points
+
+    osc_intervals_ = []
+    for pulse_iv in interval_tree.intervals:
         oscillator = signals[pulse_iv.data.signal_id].hw_oscillator
         # if there were any pulses w/o HW modulator, we should have returned already
         assert oscillator is not None
 
-        osc_intervals.addi(
-            # Round down to sequencer grid
-            pulse_iv.begin // sample_multiple * sample_multiple,
-            pulse_iv.end,
-            {
-                "oscillator": oscillator,
-                "signal": pulse_iv.data.signal_id,
-            },
+        osc_intervals_.append(
+            Interval(
+                # Round down to sequencer grid
+                pulse_iv.begin // sample_multiple * sample_multiple,
+                pulse_iv.end,
+                {
+                    "oscillator": oscillator,
+                    "signal": pulse_iv.data.signal_id,
+                },
+            )
         )
+
+    osc_intervals = IntervalTree(osc_intervals_)
 
     for branching_interval_list in branching_intervals.values():
         for branching_interval in branching_interval_list:
@@ -570,7 +577,7 @@ def _oscillator_switch_cut_points(
             cut_points.add(ceil(time / sample_multiple) * sample_multiple)
 
     oscillator_switch_events = AWGSampledEventSequence()
-    for iv in osc_intervals:
+    for iv in osc_intervals.intervals:
         osc_switch_event = AWGEvent(
             type=AWGEventType.SWITCH_OSCILLATOR,
             start=iv.begin,
@@ -597,18 +604,22 @@ def _oscillator_intervals(
     signals: Iterable[SignalObj],
     oscillator_switch_events: AWGSampledEventSequence,
     sequence_end,
-):
-    retval = IntervalTree()
+) -> IntervalTree:
+    intervals_ = []
     start = 0
     active_oscillator = next(iter(signals)).hw_oscillator
     for osc_event_time, osc_event in oscillator_switch_events.sequence.items():
         if start != osc_event_time:
-            retval.addi(start, osc_event_time, {"oscillator": active_oscillator})
+            intervals_.append(
+                Interval(start, osc_event_time, {"oscillator": active_oscillator})
+            )
         active_oscillator = osc_event[0].params["oscillator"]
         start = osc_event_time
     if start != sequence_end:
-        retval.addi(start, sequence_end, {"oscillator": active_oscillator})
-    return retval
+        intervals_.append(
+            Interval(start, sequence_end, {"oscillator": active_oscillator})
+        )
+    return IntervalTree(intervals_)
 
 
 def _make_pulse_signature(
@@ -742,7 +753,9 @@ def analyze_play_wave_times(
     oscillator_intervals = _oscillator_intervals(
         signals.values(), oscillator_switch_events, sequence_end
     )
-    used_oscillators = {osc_iv.data["oscillator"] for osc_iv in oscillator_intervals}
+    used_oscillators = {
+        osc_iv.data["oscillator"] for osc_iv in oscillator_intervals.intervals
+    }
     if len(used_oscillators) > 1:
         assert (
             use_command_table
@@ -820,20 +833,21 @@ def analyze_play_wave_times(
     )
 
     k: Interval
-    for k in compacted_intervals:
+    if isinstance(compacted_intervals, IntervalTree):
+        comp = compacted_intervals.intervals
+    else:
+        comp = compacted_intervals
+    for k in comp:
         _logger.debug("Calculating signature for %s and its children", k)
 
-        overlap: Set[Interval] = interval_tree.overlap(k.begin, k.end)
+        overlap: list[Interval] = interval_tree.overlap(k.begin, k.end)
         _logger.debug("Overlap is %s", overlap)
-
-        v = sorted(overlap)
-
-        [hw_oscillator_interval] = oscillator_intervals.overlap(k)
+        [hw_oscillator_interval] = oscillator_intervals.overlap(k.begin, k.end)
         hw_oscillator = hw_oscillator_interval.data["oscillator"]
 
         # Group by states for match/state sections
-        v_state: Dict[int, List[Interval]] = {}
-        for i in v:
+        v_state: Dict[int, list[Interval]] = {}
+        for i in overlap:
             data: _PlayIntervalData = i.data
             v_state.setdefault(data.state, []).append(i)
 

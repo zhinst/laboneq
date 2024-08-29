@@ -15,7 +15,24 @@ from laboneq.controller.devices.zi_node_monitor import (
     WaitCondition,
 )
 
+import logging
+
+_logger = logging.getLogger(__name__)
+
 OPT_SHF_PLUS = "PLUS"
+
+
+def check_synth_frequency(synth_cf: float, device: str, index: int):
+    if abs(synth_cf % 200e6) > 1e-6:
+        _logger.warning(
+            f"Setting center frequency on device {device}, synthesizer {index} to"
+            f" {synth_cf / 1e9:.3} GHz.\n"
+            "To ensure reproducible phase relationships between different channels of"
+            " the same instrument or when switching between RF center frequencies on"
+            " the same channel, it is necessary to use an integer multiple of 200 MHz."
+            " For this reason, it is strongly recommended to use multiples of 200 MHz"
+            " by default for the center frequencies of all experiments."
+        )
 
 
 class ReferenceClockSourceSHF(IntEnum):

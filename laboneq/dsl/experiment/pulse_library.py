@@ -7,13 +7,16 @@ from typing import Any, Callable, Dict
 
 import numpy as np
 
-from laboneq.core.utilities.pulse_sampler import pulse_function_library
+from laboneq.core.utilities.pulse_sampler import _pulse_samplers, _pulse_factories
 from laboneq.dsl.experiment.pulse import (
     PulseFunctional,
     PulseSampled,
     PulseSampledComplex,
     PulseSampledReal,
 )
+
+# deprecated alias for _pulse_samples, use pulse_library.pulse_sampler(...) instead:
+pulse_function_library = _pulse_samplers
 
 
 def register_pulse_functional(sampler: Callable, name: str | None = None):
@@ -99,7 +102,8 @@ def register_pulse_functional(sampler: Callable, name: str | None = None):
     factory.__doc__ = sampler.__doc__
     # we do not wrap __qualname__, it throws off the documentation generator
 
-    pulse_function_library[function_name] = sampler
+    _pulse_samplers[function_name] = sampler
+    _pulse_factories[function_name] = factory
     return factory
 
 
@@ -364,3 +368,59 @@ def sampled_pulse_complex(samples, uid=None, can_compress=False):
         return PulseSampledComplex(samples=samples, can_compress=can_compress)
     else:
         return PulseSampledComplex(uid=uid, samples=samples, can_compress=can_compress)
+
+
+def pulse_sampler(name: str) -> Callable:
+    """Return the named pulse sampler.
+
+    The sampler is the original function used to define the pulse.
+
+    For example in:
+
+        ```python
+        @register_pulse_functional
+        def const(x, **_):
+            return numpy.ones_like(x)
+        ```
+
+    the sampler is the *undecorated* function `const`. Calling
+    `pulse_sampler("const")` will return this undecorated function.
+
+    This undecorate function is called a "sampler" because it is used by
+    the LabOne Q compiler to generate the samples played by a pulse.
+
+    Arguments:
+        name: The name of the sampler to return.
+
+    Return:
+        The sampler function.
+    """
+    return _pulse_samplers[name]
+
+
+def pulse_factory(name: str) -> Callable:
+    """Return the named pules factory.
+
+    The pulse factory returns the description of the pulse used to specify
+    a pulse when calling LabOne Q DSl commands such as `.play(...)` and
+    `.measure(...)`.
+
+    For example, in:
+
+        ```python
+        @register_pulse_functional
+        def const(x, **_):
+            return numpy.ones_like(x)
+        ```
+
+    the factory is the *decorated* function `const`. Calling
+    `pulse_factory("const")` will return this decorated function. This is
+    the same function one calls when calling `pulse_library.const(...)`.
+
+    Arguments:
+        name: The name of the factory to return.
+
+    Return:
+        The factory function.
+    """
+    return _pulse_factories[name]

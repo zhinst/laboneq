@@ -57,14 +57,16 @@ async def _get_device_statuses(
             for serial in serials
         }
     except KeyError as error:
-        raise RuntimeError(f"Device {error} could not be found.") from error
+        raise LabOneQControllerException(
+            f"Device {error} could not be found."
+        ) from error
 
 
 def _check_dataserver_device_compatibility(statuses: dict[str, _DeviceStatusFlag]):
     errors = []
     for serial, flags in statuses.items():
         if _DeviceStatusFlag.FW_UPDATE_IN_PROGRESS in flags:
-            raise ConnectionError(
+            raise LabOneQControllerException(
                 f"Device '{serial}' has update in progress. Wait for update to finish."
             )
         if _DeviceStatusFlag.FW_UPGRADE_AVAILABLE in flags:
@@ -91,7 +93,7 @@ def _check_dataserver_device_compatibility(statuses: dict[str, _DeviceStatusFlag
                 "Please downgrade the device firmware or update LabOne."
             )
     if errors:
-        raise RuntimeError(
+        raise LabOneQControllerException(
             "LabOne and device firmware version compatibility issues were found.\n"
             + "\n".join(errors)
         )

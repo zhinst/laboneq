@@ -99,11 +99,16 @@ def _remove_handled_oscillator_events(
     handled_event_id: set[int] = set()
     for event in event_list:
         if event["event_type"] == EventType.SET_OSCILLATOR_FREQUENCY_START:
-            signal_id = event["signal"]
-            oscillator_info = oscillator_map[signal_id]
-            is_hw_osc = oscillator_info.is_hardware if oscillator_info else False
-            if not is_hw_osc:
-                handled_event_id.add(event["id"])
+            signals = (
+                event["signal"]
+                if isinstance(event["signal"], set)
+                else {event["signal"]}
+            )
+            for signal_id in signals:
+                oscillator_info = oscillator_map[signal_id]
+                is_hw_osc = oscillator_info.is_hardware if oscillator_info else False
+                if not is_hw_osc:
+                    handled_event_id.add(event["id"])
         if event["event_type"] == EventType.INITIAL_OSCILLATOR_FREQUENCY:
             handled_event_id.add(event["id"])
 
@@ -138,19 +143,22 @@ def _calculate_osc_freq(event_list: EventList, ir: IR):
     current_frequency_map = {}
 
     for event in sorted_events:
-        signal_id = event["signal"]
-        oscillator_info = oscillator_map[signal_id]
-        is_hw_osc = oscillator_info.is_hardware if oscillator_info else False
-        if event["event_type"] == EventType.SET_OSCILLATOR_FREQUENCY_START:
-            current_frequency_map[signal_id] = event["value"]
-        elif (
-            event["event_type"] == EventType.INITIAL_OSCILLATOR_FREQUENCY
-            and not is_hw_osc
-        ):
-            current_frequency_map[signal_id] = event["value"]
-        elif not is_hw_osc:
-            if signal_id in current_frequency_map:
-                event["oscillator_frequency"] = current_frequency_map[signal_id]
+        signals = (
+            event["signal"] if isinstance(event["signal"], set) else {event["signal"]}
+        )
+        for signal_id in signals:
+            oscillator_info = oscillator_map[signal_id]
+            is_hw_osc = oscillator_info.is_hardware if oscillator_info else False
+            if event["event_type"] == EventType.SET_OSCILLATOR_FREQUENCY_START:
+                current_frequency_map[signal_id] = event["value"]
+            elif (
+                event["event_type"] == EventType.INITIAL_OSCILLATOR_FREQUENCY
+                and not is_hw_osc
+            ):
+                current_frequency_map[signal_id] = event["value"]
+            elif not is_hw_osc:
+                if signal_id in current_frequency_map:
+                    event["oscillator_frequency"] = current_frequency_map[signal_id]
 
     return _remove_handled_oscillator_events(
         event_list=event_list, oscillator_map=oscillator_map

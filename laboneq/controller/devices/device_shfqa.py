@@ -21,7 +21,10 @@ from laboneq.controller.communication import (
     DaqNodeSetAction,
 )
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
-from laboneq.controller.devices.device_shf_base import DeviceSHFBase
+from laboneq.controller.devices.device_shf_base import (
+    DeviceSHFBase,
+    check_synth_frequency,
+)
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import (
     AllocatedOscillator,
@@ -686,6 +689,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
                 keys=[(AttributeName.QA_CENTER_FREQ, ch)]
             )
             if synth_cf_updated:
+                check_synth_frequency(synth_cf, self.dev_repr, ch)
                 nc.add(f"qachannels/{ch}/centerfreq", synth_cf)
 
             [out_amp], out_amp_updated = attributes.resolve(

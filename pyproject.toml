@@ -1,13 +1,13 @@
 [build-system]
-requires = ["setuptools >= 65.0.0", "wheel >= 0.37.1", ]
-build-backend = "setuptools.build_meta"
+requires = ["maturin>=1.6,<2.0"]
+build-backend = "maturin"
 
 [project]
 name = "laboneq"
-version = "2.35.0"
-dynamic = ["readme"]
+version = "2.36.0"
 description = "Zurich Instruments LabOne Q software framework for quantum computing control"
 license = { text = "Apache 2.0" }
+readme = "README.md"
 requires-python = ">=3.9"
 authors = [
     { name = "Zurich Instruments Development Team", email = "info@zhinst.com" },
@@ -55,10 +55,10 @@ dependencies = [
     "attrs >= 20.1.0",
     "sortedcontainers >= 2.4.0",
     "typing_extensions >= 4.10.0",
-    "zhinst-core ~= 24.4.60606",
-    "zhinst-toolkit ~= 0.6.3",
+    "zhinst-core ~= 24.7.62562",
+    "zhinst-toolkit ~= 0.6.4",
     "zhinst-utils == 0.4.1",
-    "zhinst-timing-models ~= 24.4.57831",
+    "zhinst-timing-models ~= 24.7.62464",
     "labone == 2.3.0",
     "unsync == 1.4.0",
 ]
@@ -66,27 +66,33 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/zhinst/laboneq"
 
-[tool.setuptools]
-zip-safe = false
-
-[tool.setuptools.dynamic]
-readme = { file = "README.md", content-type = "text/markdown" }
-
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["laboneq*"]
-namespaces = false
-
-[tool.setuptools.package-data]
-laboneq = [
-    "compiler/qccs-schema_2_5_0.json",
-    "pulse_sheet_viewer/pulse_sheet_viewer_template.html",
+[tool.maturin]
+manifest-path = "./src/rust/Cargo.toml"
+module-name = "laboneq._rust"
+features = []
+include = [
+    "laboneq/compiler/qccs-schema_2_5_0.json",
+    "laboneq/pulse_sheet_viewer/pulse_sheet_viewer_template.html",
 ]
-
+python-packages = ["laboneq"]
+compatibility = "manylinux2014"
 
 [tool.ruff]
 line-length = 88
 target-version = "py39"
+exclude = [
+    ".cargo",
+    ".eggs",
+    ".git",
+    ".ruff_cache",
+    ".tox",
+    ".venv",
+    "_build",
+    "build",
+    "dist",
+    "target",
+    "venv",
+]
 extend-include = ["examples/*.ipynb", "resources/examples/*.ipynb"]
 
 [tool.ruff.lint]
@@ -124,19 +130,6 @@ ignore = [
 # Allow autofix for all enabled rules (when `--fix`) is provided.
 fixable = ["ALL"]
 unfixable = []
-
-exclude = [
-    ".eggs",
-    ".git",
-    ".ruff_cache",
-    ".tox",
-    ".venv",
-    "_build",
-    "build",
-    "dist",
-    "venv",
-]
-
 
 mccabe.max-complexity = 10
 

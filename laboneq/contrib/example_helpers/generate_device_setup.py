@@ -24,22 +24,20 @@ from laboneq.dsl.device.instruments import (
 # generate a device setup from a list of Instrument objects
 def generate_device_setup(
     number_qubits: int = 6,
-    pqsc: list[str] | None = None,
-    hdawg: list[str] | None = None,
-    shfsg: list[str] | None = None,
-    shfqc: list[str] | None = None,
-    shfqa: list[str] | None = None,
-    uhfqa: list[str] | None = None,
-    number_multiplex: int | None = 6,
+    pqsc: list[dict[str]] | None = None,
+    hdawg: list[dict[str]] | None = None,
+    shfsg: list[dict[str]] | None = None,
+    shfqc: list[dict[str]] | None = None,
+    shfqa: list[dict[str]] | None = None,
+    uhfqa: list[dict[str]] | None = None,
     multiplex_drive_lines: bool = False,
     include_flux_lines: bool = False,
     drive_only: bool = False,
-    dio: dict[str] | None = None,
-    zsync: dict[str | int] | None = None,
+    readout_only: bool = False,
     server_host: str = "localhost",
     server_port: str = "8004",
     setup_name: str = "my_QCCS",
-    debug=False,
+    debug: bool = False,
 ) -> DeviceSetup:
     """A function to generate a DeviceSetup given a list of devices, based on standardised wiring assumptions.
 
@@ -48,40 +46,38 @@ def generate_device_setup(
 
     Args:
         number_qubits: The number of qubits that the device setup shall be configured for.
-        pqsc: The device id of your PQSC as a list (e.g. `["DEV10XX0"]`).
+            Defaults to 6.
+        pqsc: The device id and additional properties of your PQSC as a list of dictionaries
+            (e.g. `[{"serial": "DEV10XX0", "external_clock": False, "usb": False}]`).
             Note: only one PQSC is possible per set-up.
-        hdawg: The device id(s) of your HDAWG instruments as a list
-            (e.g. `["DEV8XXX", "DEV8YYY"]`).
-            Note: only 8 channel HDAWG instruments are supported at the moment.
-        uhfqa: The device id(s) of your UHFQA instruments as a list
-            (e.g. `["DEV2XXX", "DEV2YYY"]`).
-            Note: The UHFQA cannot be used in combination with SHF devices.
-        shfsg: The device id(s) of your SHFSG instruments as a list
-            (e.g. `["DEV12XXX", "DEV12YYY"]`).
-            Note: only 8-channel SHFSG instruments are supported at the moment.
-        shfqc: The device id(s) of your SHFQC instruments as a list
-            (e.g. `["DEV12XXX", "DEV12YYY"]`).
-            Note: only 6 SG-channel SHFQC instruments are supported at the moment.
-        shfqa: The device id(s) of your SHFQA instruments as a list
-            (e.g. `["DEV12XXX", "DEV12YYY"]`).
-            Note: only 4-channel SHFQA instruments are supported at the moment.
-        number_multiplex: How many qubits to multiplex on a single readout line.
-            If set to None, no readout multiplexing is configured.
+        hdawg: The device id(s) and additional properties  of your HDAWG instruments as a list of dictionaries
+            (e.g.`[{"serial": "DEV8XXX", "usb": False, "zsync": 2, "dio": None, "options": None, "number_of_channels": 8}]`).
+        uhfqa: The device id(s) and additional properties of your UHFQA instruments as a list of dictionaries
+            (e.g. `[{"serial": "DEV2XXX", "usb": False, "readout_multiplex": 6}]`).
+            Note: UHFQA instruments cannot be used in combination with SHF instruments.
+        shfsg: The device id(s) and additional properties of your SHFSG instruments as a list of dictionaries
+            (e.g. `[{"serial": "DEV12XXX", "usb": False, "number_of_channels": 8, "options": None, "zsync": 3}]`).
+        shfqc: The device id(s) and additional properties of your SHFQC instruments as a list of dictionaries
+            (e.g. `[{"serial": "DEV12XXX", "usb": False, "number_of_channels": 6, "readout_multiplex": 6, "options": None, "zsync": 4}]`).
+        shfqa: The device id(s) and additional properties of your SHFQA instruments as a list of dictionaries
+            (e.g. `[{"serial": "DEV12XXX", "usb": False, "number_of_channels": 4, "readout_multiplex": 6, "options": None, "zsync": 5}]`).
         multiplex_drive_lines: Whether to add logical signals that are mutliplexed t othe drive lines,
             e.g. for cross-resonance or e-f driving.
+            Defaults to False.
         include_flux_lines: Whether to include flux lines in the setup.
+            Defaults to False.
         drive_only: Whether to generates a device setup without readout or acquisition lines.
-        dio: A dictionary specifying the DIO connectivity between instruments,
-            for setups containing HDAWG and UHFQA instruments.
-            Should be of the form `{"HDAWG_ID": "UHFQA_ID"}`
-        zsync: A dictionary specifying the ZSYNC configuration of any instruments attached to the PQSC.
-            Should be of the form `{"DEVICE_ID": ZSYNC_PORT_NUMBER}`
+            Defaults to False.
+        readout_only: Whether to generates a device setup without any drive or flux lines.
+            Defaults to False.
         server_host: The IP address of the LabOne dataserver used to connect to the instruments.
             Defaults to "localhost".
         server_port: The port number of the LabOne dataserver used to connect to the instruments.
             Defaults to the LabOne default setting "8004".
-        setup_name: The name of your setup. Defaults to "my_QCCS"
+        setup_name: The name of your setup.
+            Defaults to "my_QCCS"
         debug: Whether to print optional debug information to console.
+            Defaults to False.
 
     Returns:
         A LabOne Q DeviceSetup object with the specified configuration.
@@ -115,8 +111,6 @@ def generate_device_setup(
             else:
                 print_debug("INFO: Small setup detected - HDAWG + UHFQA.")
                 gen1_setup = True
-                if not dio:
-                    dio = {hdawg[0]: uhfqa[0]}
         if hdawg and not (uhfqa or shfsg or shfqa or shfqc):
             print_debug("INFO: Small setup detected - HDAWG only.")
             gen1_setup = True
@@ -127,22 +121,13 @@ def generate_device_setup(
         if shfqc and not (hdawg or shfqa or shfsg):
             print_debug("INFO: Small setup detected - SHFQC only.")
         if shfqa and not (hdawg or shfqc or shfsg):
-            print("INFO: Small setup detected - SHFQA only.")
+            print_debug("INFO: Small setup detected - SHFQA only.")
     elif len(pqsc) > 1:
         raise LabOneQException(
             "Device Setup generation failed: Only a single PQSC is supported in a QCCS setup."
         )
-    if uhfqa:
-        if hdawg:
-            gen1_setup = True
-            if not dio:
-                raise LabOneQException(
-                    "Device Setup generation failed: DIO connection information between UHFQA and HDAWG instruments is required."
-                )
-        else:
-            raise LabOneQException(
-                "Device Setup generation failed: UHFQA requires a HDAWG to be used with LabOne Q."
-            )
+    elif uhfqa and hdawg:
+        gen1_setup = True
     if gen1_setup:
         if include_flux_lines > 0:
             raise LabOneQException(
@@ -165,12 +150,26 @@ def generate_device_setup(
     number_flux_lines = 0
     readout_acquire_lines = []
     number_readout_acquire_lines = 0
-    if number_multiplex is None:
-        number_multiplex = 1
+    zsync = {}
+    dio = {}
 
     for id, instrument in enumerate(uhfqa):
-        device_setup.add_instruments(UHFQA(uid=f"uhfqa_{id}", address=instrument))
-        actual_multiplex = min(10, number_multiplex)
+        if "serial" not in instrument:
+            raise LabOneQException(
+                f"Device Setup generation failed: Serial not provided for UHFQA instrument - {id} - {instrument}."
+            )
+        if "usb" not in instrument:
+            instrument["usb"] = False
+        if "readout_multiplex" not in instrument:
+            instrument["readout_multiplex"] = 6
+        device_setup.add_instruments(
+            UHFQA(
+                uid=f"uhfqa_{id}",
+                address=instrument["serial"],
+                interface="1GBe" if not instrument["usb"] else "usb",
+            )
+        )
+        actual_multiplex = min(10, instrument["readout_multiplex"])
         readout_acquire_lines.extend(
             [
                 {
@@ -182,12 +181,29 @@ def generate_device_setup(
             ]
         )
         number_readout_acquire_lines += actual_multiplex
-        instrument_list[instrument] = f"uhfqa_{id}"
+        instrument_list[instrument["serial"]] = f"uhfqa_{id}"
 
     for id, instrument in enumerate(hdawg):
+        if "serial" not in instrument:
+            raise LabOneQException(
+                f"Device Setup generation failed: Serial not provided for HDAWG instrument - {id} - {instrument}."
+            )
+        if "usb" not in instrument:
+            instrument["usb"] = False
+        if "options" not in instrument:
+            instrument["options"] = None
+        if "zsync" not in instrument:
+            instrument["zsync"] = None
+        if "dio" not in instrument:
+            instrument["dio"] = None
+        if "number_of_channels" not in instrument:
+            instrument["number_of_channels"] = 8
         device_setup.add_instruments(
             HDAWG(
-                uid=f"hdawg_{id}", address=instrument, device_options="HDAWG8/MF/ME/PC"
+                uid=f"hdawg_{id}",
+                address=instrument["serial"],
+                device_options=instrument["options"],
+                interface="1GBe" if not instrument["usb"] else "usb",
             )
         )
         if gen1_setup:
@@ -197,10 +213,10 @@ def generate_device_setup(
                         "device": f"hdawg_{id}",
                         "port": [f"SIGOUTS/{2*it}", f"SIGOUTS/{2*it+1}"],
                     }
-                    for it in range(4)
+                    for it in range(int(instrument["number_of_channels"] / 2))
                 ]
             )
-            number_drive_lines += 4
+            number_drive_lines += instrument["number_of_channels"] / 2
         else:
             flux_lines.extend(
                 [
@@ -208,30 +224,85 @@ def generate_device_setup(
                         "device": f"hdawg_{id}",
                         "port": f"SIGOUTS/{it}",
                     }
-                    for it in range(8)
+                    for it in range(instrument["number_of_channels"])
                 ]
             )
-            number_flux_lines += 8
-        instrument_list[instrument] = f"hdawg_{id}"
+            number_flux_lines += instrument["number_of_channels"]
+        instrument_list[instrument["serial"]] = f"hdawg_{id}"
+        if instrument["zsync"] is not None:
+            zsync[instrument["serial"]] = instrument["zsync"]
+        if instrument["dio"] is not None:
+            dio[instrument["serial"]] = instrument["dio"]
+
+    # check if combination and wiring of HDAWG and UFQA instruments works
+    if uhfqa:
+        if hdawg:
+            gen1_setup = True
+            if not dio:
+                raise LabOneQException(
+                    "Device Setup generation failed: DIO connection information between UHFQA and HDAWG instruments is required."
+                )
+        else:
+            raise LabOneQException(
+                "Device Setup generation failed: UHFQA requires a HDAWG to be used with LabOne Q."
+            )
 
     for id, instrument in enumerate(shfsg):
+        if "serial" not in instrument:
+            raise LabOneQException(
+                f"Device Setup generation failed: Serial not provided for SHFSG instrument - {id} - {instrument}."
+            )
+        if "usb" not in instrument:
+            instrument["usb"] = False
+        if "options" not in instrument:
+            instrument["options"] = None
+        if "zsync" not in instrument:
+            instrument["zsync"] = None
+        if "number_of_channels" not in instrument:
+            instrument["number_of_channels"] = 8
         device_setup.add_instruments(
-            SHFSG(uid=f"shfsg_{id}", address=instrument, device_options="SHFSG8/RTR")
+            SHFSG(
+                uid=f"shfsg_{id}",
+                address=instrument["serial"],
+                device_options=instrument["options"],
+                interface="1GBe" if not instrument["usb"] else "usb",
+            )
         )
         drive_lines.extend(
             [
                 {"device": f"shfsg_{id}", "port": f"SGCHANNELS/{it}/OUTPUT"}
-                for it in range(8)
+                for it in range(instrument["number_of_channels"])
             ]
         )
-        number_drive_lines += 8
-        instrument_list[instrument] = f"shfsg_{id}"
+        number_drive_lines += instrument["number_of_channels"]
+        instrument_list[instrument["serial"]] = f"shfsg_{id}"
+        if instrument["zsync"] is not None:
+            zsync[instrument["serial"]] = instrument["zsync"]
 
     for id, instrument in enumerate(shfqa):
+        if "serial" not in instrument:
+            raise LabOneQException(
+                f"Device Setup generation failed: Serial not provided for SHFQA instrument - {id} - {instrument}."
+            )
+        if "usb" not in instrument:
+            instrument["usb"] = False
+        if "options" not in instrument:
+            instrument["options"] = None
+        if "zsync" not in instrument:
+            instrument["zsync"] = None
+        if "readout_multiplex" not in instrument:
+            instrument["readout_multiplex"] = 6
+        if "number_of_channels" not in instrument:
+            instrument["number_of_channels"] = 4
         device_setup.add_instruments(
-            SHFQA(uid=f"shfqa_{id}", address=instrument, device_options="SHFQA4/")
+            SHFQA(
+                uid=f"shfqa_{id}",
+                address=instrument["serial"],
+                device_options=instrument["options"],
+                interface="1GBe" if not instrument["usb"] else "usb",
+            )
         )
-        actual_multiplex = min(16, number_multiplex)
+        actual_multiplex = min(16, instrument["readout_multiplex"])
         readout_acquire_lines.extend(
             [
                 {
@@ -240,28 +311,48 @@ def generate_device_setup(
                     "port_in": "QACHANNELS/0/INPUT",
                     "multiplex": actual_multiplex,
                 }
+                for it in range(instrument["number_of_channels"])
             ]
         )
-        number_readout_acquire_lines += actual_multiplex
-        instrument_list[instrument] = f"shfqa_{id}"
+        number_readout_acquire_lines += (
+            instrument["number_of_channels"] * actual_multiplex
+        )
+        instrument_list[instrument["serial"]] = f"shfqa_{id}"
+        if instrument["zsync"] is not None:
+            zsync[instrument["serial"]] = instrument["zsync"]
 
     for id, instrument in enumerate(shfqc):
+        if "serial" not in instrument:
+            raise LabOneQException(
+                f"Device Setup generation failed: Serial not provided for SHFQC instrument - {id} - {instrument}."
+            )
+        if "usb" not in instrument:
+            instrument["usb"] = False
+        if "options" not in instrument:
+            instrument["options"] = None
+        if "zsync" not in instrument:
+            instrument["zsync"] = None
+        if "readout_multiplex" not in instrument:
+            instrument["readout_multiplex"] = 6
+        if "number_of_channels" not in instrument:
+            instrument["number_of_channels"] = 6
         device_setup.add_instruments(
             SHFQC(
                 uid=f"shfqc_{id}",
-                address=instrument,
-                device_options="SHFQC/QC6CH",
+                address=instrument["serial"],
+                device_options=instrument["options"],
+                interface="1GBe" if not instrument["usb"] else "usb",
             )
         )
         drive_lines.extend(
             [
                 {"device": f"shfqc_{id}", "port": f"SGCHANNELS/{it}/OUTPUT"}
-                for it in range(6)
+                for it in range(instrument["number_of_channels"])
             ]
         )
-        number_drive_lines += 6
+        number_drive_lines += instrument["number_of_channels"]
         # drive_instruments[f"shfqc_{id}"] = {}
-        actual_multiplex = min(16, number_multiplex)
+        actual_multiplex = min(16, instrument["readout_multiplex"])
         readout_acquire_lines.extend(
             [
                 {
@@ -273,11 +364,27 @@ def generate_device_setup(
             ]
         )
         number_readout_acquire_lines += actual_multiplex
-        instrument_list[instrument] = f"shfqc_{id}"
+        instrument_list[instrument["serial"]] = f"shfqc_{id}"
+        if instrument["zsync"] is not None:
+            zsync[instrument["serial"]] = instrument["zsync"]
 
     for id, instrument in enumerate(pqsc):
-        device_setup.add_instruments(PQSC(uid=f"pqsc_{id}", address=instrument))
-        instrument_list[instrument] = f"pqsc_{id}"
+        if "serial" not in instrument:
+            raise LabOneQException(
+                f"Device Setup generation failed: Serial not provided for PQSC instrument - {id} - {instrument}."
+            )
+        if "usb" not in instrument:
+            instrument["usb"] = False
+        if "external_clock" not in instrument:
+            instrument["external_clock"] = False
+        device_setup.add_instruments(
+            PQSC(
+                uid=f"pqsc_{id}",
+                address=instrument["serial"],
+                interface="1GBe" if not instrument["usb"] else "usb",
+            )
+        )
+        instrument_list[instrument["serial"]] = f"pqsc_{id}"
 
     # check that instruments supplied are sufficient for specified needs
     if number_readout_acquire_lines < number_qubits and not drive_only:
@@ -293,10 +400,11 @@ def generate_device_setup(
             f"Device Setup generation failed: not enought flux lines configurable ({number_flux_lines}) for the specified number of qubits ({number_qubits})"
         )
 
-    # add logical signal lines for all qubits
+    # add logical signal lines for the specified number of qubits
     qubits = [f"q{it}" for it in range(number_qubits)]
-    # add readout and acquire lines
+
     if not drive_only:
+        # add readout and acquire lines
         readout_index = 0
         current_readout = readout_acquire_lines[readout_index]
         readout_multiplex = current_readout["multiplex"]
@@ -319,50 +427,57 @@ def generate_device_setup(
             )
             current_multiplex += 1
 
-    # add drive and cr lines
-    drive_index = 0
-    for qubit in qubits:
-        current_drive = drive_lines[drive_index]
-        # advance in list of drive lines
-        device_setup.add_connections(
-            current_drive["device"],
-            create_connection(
-                to_signal=f"{qubit}/drive_line", ports=current_drive["port"]
-            ),
-        )
-        if multiplex_drive_lines:
+    if not readout_only:
+        # add drive and cr lines
+        drive_index = 0
+        for qubit in qubits:
+            current_drive = drive_lines[drive_index]
+            # advance in list of drive lines
             device_setup.add_connections(
                 current_drive["device"],
                 create_connection(
-                    to_signal=f"{qubit}/drive_line_ef", ports=current_drive["port"]
+                    to_signal=f"{qubit}/drive_line", ports=current_drive["port"]
                 ),
             )
-        drive_index += 1
+            if multiplex_drive_lines:
+                device_setup.add_connections(
+                    current_drive["device"],
+                    create_connection(
+                        to_signal=f"{qubit}/drive_line_ef", ports=current_drive["port"]
+                    ),
+                )
+            drive_index += 1
 
-    # add flux lines
-    if include_flux_lines:
-        flux_index = 0
-        for qubit in qubits:
-            current_flux = flux_lines[flux_index]
-            # advance in list of flux lines
-            device_setup.add_connections(
-                current_flux["device"],
-                create_connection(
-                    to_signal=f"{qubit}/flux_line", ports=current_flux["port"]
-                ),
-            )
-            flux_index += 1
+        # add flux lines
+        if include_flux_lines:
+            flux_index = 0
+            for qubit in qubits:
+                current_flux = flux_lines[flux_index]
+                # advance in list of flux lines
+                device_setup.add_connections(
+                    current_flux["device"],
+                    create_connection(
+                        to_signal=f"{qubit}/flux_line", ports=current_flux["port"]
+                    ),
+                )
+                flux_index += 1
 
     # add DIO and ZSync connections
-    if dio:
+    if dio and gen1_setup:
         for dio_in, dio_out in dio.items():
-            device_setup.add_connections(
-                instrument_list[dio_in],
-                create_connection(
-                    to_instrument=instrument_list[dio_out], ports="DIOS/0"
-                ),
-            )
-    if zsync:
+            # check if uhfqa is present in instrument list
+            if dio_out in instrument_list:
+                device_setup.add_connections(
+                    instrument_list[dio_in],
+                    create_connection(
+                        to_instrument=instrument_list[dio_out], ports="DIOS/0"
+                    ),
+                )
+            elif not drive_only:
+                raise LabOneQException(
+                    f"Device Setup generation failed: UHFQA {dio_out} is not part of device setup "
+                )
+    if zsync and pqsc:
         for zsync_in, zsync_id in zsync.items():
             # ensure that the instrument is already added to the device setup
             if zsync_in in instrument_list.keys():
@@ -379,23 +494,22 @@ def generate_device_setup(
 
 def generate_device_setup_qubits(
     number_qubits: int = 6,
-    pqsc: list[str] | None = None,
-    hdawg: list[str] | None = None,
-    shfsg: list[str] | None = None,
-    shfqc: list[str] | None = None,
-    shfqa: list[str] | None = None,
-    uhfqa: list[str] | None = None,
-    number_multiplex: int | None = 6,
+    pqsc: list[dict[str]] | None = None,
+    hdawg: list[dict[str]] | None = None,
+    shfsg: list[dict[str]] | None = None,
+    shfqc: list[dict[str]] | None = None,
+    shfqa: list[dict[str]] | None = None,
+    uhfqa: list[dict[str]] | None = None,
     multiplex_drive_lines: bool = False,
     include_flux_lines: bool = False,
     drive_only: bool = False,
-    dio: dict[str] | None = None,
-    zsync: dict[str | int] | None = None,
+    readout_only: bool = False,
     server_host: str = "localhost",
     server_port: str = "8004",
     setup_name: str = "my_QCCS",
-    include_qubits: bool = False,
-    calibrate_setup: bool = False,
+    include_qubits: bool = True,
+    calibrate_setup: bool = True,
+    debug: bool = False,
 ):
     """A function to generate a DeviceSetup and a list of Transmon qubits
     given a list of devices, based on standardised wiring assumptions.
@@ -405,39 +519,41 @@ def generate_device_setup_qubits(
 
     Args:
         number_qubits: The number of qubits that the device setup shall be configured for.
-        pqsc: The device id of your PQSC as a list (e.g. `["DEV10XX0"]`).
+        pqsc: The device id and additional properties of your PQSC as a list of dictionaries
+            (e.g. `[{"serial": "DEV10XX0", "external_clock": False, "usb": False}]`).
             Note: only one PQSC is possible per set-up.
-        hdawg: The device id(s) of your HDAWG instruments as a list
-            (e.g. `["DEV8XX0", "DEV8XX1"]`).
-            Note: only 8 channel HDAWG instruments are supported at the moment.
-        uhfqa: The device id(s) of your UHFQA instruments as a list
-            (e.g. `["DEV2XX0", "DEV2XX1"]`).
-            Note: The UHFQA cannot be used in combination with SHF devices.
-        shfsg: The device id(s) of your SHFSG instruments as a list
-            (e.g. `["DEV12XX0"]`).
-            Note: only 8-channel SHFSG instruments are supported at the moment.
-        shfqc: The device id(s) of your SHFQC instruments as a list
-            (e.g. `["DEV12XX3"]`).
-            Note: only 6 SG-channel SHFQC instruments are supported at the moment.
-        shfqa: The device id(s) of your SHFQA instruments as a list
-            (e.g. `["DEV12XX8"]`).
-            Note: only 4-channel SHFQA instruments are supported at the moment.
-        number_multiplex: How many qubits to multiplex on a single readout line.
-            If set to None, no readout multiplexing is configured.
+        hdawg: The device id(s) and additional properties  of your HDAWG instruments as a list of dictionaries
+            (e.g.`[{"serial": "DEV8XXX", "usb": False, "zsync": 2, "dio": None, "options": None, "number_of_channels": 8}]`).
+        uhfqa: The device id(s) and additional properties of your UHFQA instruments as a list of dictionaries
+            (e.g. `[{"serial": "DEV2XXX", "usb": False, "readout_multiplex": 6}]`).
+            Note: UHFQA instruments cannot be used in combination with SHF instruments.
+        shfsg: The device id(s) and additional properties of your SHFSG instruments as a list of dictionaries
+            (e.g. `[{"serial": "DEV12XXX", "usb": False, "number_of_channels": 8, "options": None, "zsync": 3}]`).
+        shfqc: The device id(s) and additional properties of your SHFQC instruments as a list of dictionaries
+            (e.g. `[{"serial": "DEV12XXX", "usb": False, "number_of_channels": 6, "readout_multiplex": 6, "options": None, "zsync": 4}]`).
+        shfqa: The device id(s) and additional properties of your SHFQA instruments as a list of dictionaries
+            (e.g. `[{"serial": "DEV12XXX", "usb": False, "number_of_channels": 4, "readout_multiplex": 6, "options": None, "zsync": 5}]`).
         multiplex_drive_lines: Whether to add logical signals that are mutliplexed t othe drive lines,
             e.g. for cross-resonance or e-f driving.
+            Defaults to False.
         include_flux_lines: Whether to include flux lines in the setup.
+            Defaults to False.
         drive_only: Whether to generates a device setup without readout or acquisition lines.
-        dio: A dictionary specifying the DIO connectivity between instruments,
-            for setups containing HDAWG and UHFQA instruments.
-            Should be of the form `{"HDAWG_ID": "UHFQA_ID"}`
-        zsync: A dictionary specifying the ZSYNC configuration of any instruments attached to the PQSC.
-            Should be of the form `{"DEVICE_ID": ZSYNC_PORT_NUMBER}`
+            Defaults to False.
+        readout_only: Whether to generates a device setup without any drive or flux lines.
+            Defaults to False.
         server_host: The IP address of the LabOne dataserver used to connect to the instruments.
             Defaults to "localhost".
         server_port: The port number of the LabOne dataserver used to connect to the instruments.
             Defaults to the LabOne default setting "8004".
-        setup_name: The name of your setup. Defaults to "my_QCCS"
+        setup_name: The name of your setup. Defaults to "my_QCCS".
+        include_qubits: Whether to include the qbits in the device setup itself, under the `DeviceSetup.qubits` property,
+            in addition to returning them.
+            Defaults to True.
+        calibrate_setup: Whether to use the qubit properties to calibrate the device setup.
+            Defaults to True.
+        debug: Whether to print optional debug information to console.
+            Defaults to False.
 
     Returns:
         A LabOne Q DeviceSetup object with the specified configuration
@@ -452,15 +568,14 @@ def generate_device_setup_qubits(
         shfqc=shfqc,
         shfqa=shfqa,
         uhfqa=uhfqa,
-        number_multiplex=number_multiplex,
         multiplex_drive_lines=multiplex_drive_lines,
         include_flux_lines=include_flux_lines,
         drive_only=drive_only,
-        dio=dio,
-        zsync=zsync,
+        readout_only=readout_only,
         server_host=server_host,
         server_port=server_port,
         setup_name=setup_name,
+        debug=debug,
     )
 
     dummy_qubit_parameters = generate_dummy_transmon_parameters(

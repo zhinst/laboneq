@@ -6,8 +6,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal
-from typing_extensions import TypeAlias
 
+from typing_extensions import TypeAlias
 
 ParameterUID: TypeAlias = str
 
@@ -88,7 +88,7 @@ class AWG:
     # receiver (SG instruments)
     source_feedback_register: int | Literal["local"] | None = None
     codeword_bitshift: int | None = None
-    codeword_bitmask: int = None
+    codeword_bitmask: int | None = None
     feedback_register_index_select: int | None = None
     command_table_match_offset: int | None = None
 
@@ -113,7 +113,7 @@ class Config:
 @dataclass
 class Initialization:
     device_uid: str
-    device_type: str = None
+    device_type: str | None = None
     config: Config = field(default_factory=Config)
     awgs: list[AWG] = field(default_factory=list)
     outputs: list[IO] = field(default_factory=list)
@@ -172,7 +172,7 @@ class Recipe:
     integrator_allocations: list[IntegratorAllocation] = field(default_factory=list)
     acquire_lengths: list[AcquireLength] = field(default_factory=list)
     simultaneous_acquires: list[dict[str, str]] = field(default_factory=list)
-    total_execution_time: float = None
-    max_step_execution_time: float = None
+    total_execution_time: float | None = None
+    max_step_execution_time: float | None = None
     is_spectroscopy: bool = False
     versions: SoftwareVersions = field(default_factory=lambda: SoftwareVersions("", ""))

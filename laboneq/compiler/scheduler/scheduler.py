@@ -281,22 +281,19 @@ class Scheduler:
             ):
                 osc_id = osc.uid
                 osc_signals = osc_to_signals[osc.uid]
-                swept_oscs = [
-                    SweptOscillator(
-                        osc_id,
-                        signal.uid,
-                        signal.device.uid,
-                        osc.is_hardware,
-                    )
-                    for signal in osc_signals
-                ]
+                swept_osc = SweptOscillator(
+                    osc_id,
+                    {s.uid for s in osc_signals},
+                    signal.device.uid,
+                    osc.is_hardware,
+                )
                 set_osc_freq.append(
                     InitialOscillatorFrequencySchedule(
                         length=0,
                         signals={signal.uid for signal in osc_to_signals[osc_id]},
                         grid=self._system_grid,
                         section="preamble",
-                        oscillators=swept_oscs,
+                        oscillators=[swept_osc],
                         values=[osc.frequency] * len(osc_signals),
                     )
                 )
@@ -315,15 +312,12 @@ class Scheduler:
         for param, osc in nt_swept_param_osc:
             osc_id = osc.uid
             osc_signals = osc_to_signals[osc.uid]
-            swept_oscs = [
-                SweptOscillator(
-                    osc_id,
-                    signal.uid,
-                    signal.device.uid,
-                    osc.is_hardware,
-                )
-                for signal in osc_signals
-            ]
+            swept_osc = SweptOscillator(
+                osc_id,
+                {s.uid for s in osc_signals},
+                signal.device.uid,
+                osc.is_hardware,
+            )
             value = nt_parameters[param]
             set_osc_freq.append(
                 InitialOscillatorFrequencySchedule(
@@ -331,7 +325,7 @@ class Scheduler:
                     signals={signal.uid for signal in osc_to_signals[osc_id]},
                     grid=self._system_grid,
                     section="preamble",
-                    oscillators=swept_oscs,
+                    oscillators=[swept_osc],
                     values=[value] * len(osc_signals),
                 )
             )
@@ -431,12 +425,15 @@ class Scheduler:
                         "Frequency sweep parameter may drive only a single"
                         " oscillator"
                     )
-                oscillator_param_lookup[param.uid] = SweptOscillator(
-                    id=oscillator.uid,
-                    device=signal_info.device.uid,
-                    signal=signal,
-                    is_hardware=oscillator.is_hardware,
-                )
+                if param.uid not in oscillator_param_lookup:
+                    oscillator_param_lookup[param.uid] = SweptOscillator(
+                        id=oscillator.uid,
+                        device=signal_info.device.uid,
+                        signals={signal},
+                        is_hardware=oscillator.is_hardware,
+                    )
+                else:
+                    oscillator_param_lookup[param.uid].signals.add(signal)
 
         return oscillator_param_lookup
 
@@ -573,7 +570,7 @@ class Scheduler:
                 if oscs_are_hw
                 else 0
             )
-            signals.add(osc.signal)
+            signals |= osc.signals
 
         return OscillatorFrequencyStepSchedule(
             length=length,
@@ -1188,39 +1185,18 @@ class Scheduler:
         children_schedules = self._collect_children_schedules(
             section_id, current_parameters
         )
-        for cs in children_schedules:
-            if not isinstance(cs, PulseSchedule):
-                raise LabOneQException(
-                    "Only pulses, not sections, are allowed inside a case"
-                )
-            if cs.is_acquire:
-                raise LabOneQException("No acquisitions can happen in a case block")
-            if cs.increment_oscillator_phase or cs.set_oscillator_phase:
-                for s in cs.signals:
-                    s = self._experiment_dao.signal_info(s)
-                    osc = s.oscillator
-                    if not osc.is_hardware:
-                        raise LabOneQException(
-                            f"Conditional 'increment_oscillator_phase' or"
-                            f" 'set_oscillator_phase' of software oscillator"
-                            f" '{osc.uid}' on signal '{s.uid}' not supported"
-                        )
-                    assert cs.set_oscillator_phase is None, "cannot set HW osc phase"
-                    dt = DeviceType.from_device_info_type(s.device.device_type)
-                    if dt.is_qa_device:
-                        # The _actual_ problem is that UHFQA and SHFQA do not support CT
-                        # phase registers. In practice, they don't because such a feature
-                        # is irrelevant on a QA.
-                        raise LabOneQException(
-                            f"Conditional 'increment_oscillator_phase' of signal"
-                            f"'{s.uid}' not supported on device type '{dt.name}'"
-                        )
 
         # We don't want any branches that are empty, but we don't know yet what signals
         # the placeholder should cover. So we defer the creation of placeholders to
         # `_schedule_match()`.
         schedule = self._schedule_children(section_id, section_info, children_schedules)
         schedule = CaseSchedule.from_section_schedule(schedule, state)
+
+        for signal in schedule.signals:
+            signal = self._schedule_data.signal_objects[signal]
+            if signal.signal_type == "integration":
+                raise LabOneQException("No acquisitions can happen in a case block")
+
         if schedule.cacheable:
             self._scheduled_sections[(section_id, current_parameters.frozen())] = (
                 schedule

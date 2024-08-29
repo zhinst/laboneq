@@ -41,34 +41,30 @@ def generate_example_datastore(
     else:
         setup_db = DataStore(path + filename)
 
-    # specify your device ids here
-    pqsc = ["dev10001"]
-    hdawg = ["dev8001", "dev8002", "dev8003"]
-    shfqc = ["dev12003", "dev12004", "dev12005", "dev12006"]
-    shfsg = ["dev12001"]
-    shfqa = ["dev12002"]
-    uhfqa = ["dev2001"]
-    zsync = {
-        "dev8001": 1,
-        "dev8002": 2,
-        "dev12001": 3,
-        "dev12002": 4,
-        "dev12003": 5,
-        "dev12004": 6,
-        "dev12005": 7,
-        "dev12006": 8,
-    }
-    dio = {"dev8001": "dev2001"}
+    # specify your device ids and parameters here
+    pqsc = [{"serial": "dev10001"}]
+    hdawg = [
+        {"serial": "dev8001", "zsync": 1, "dio": "dev2001"},
+        {"serial": "dev8002", "zsync": 2},
+        {"serial": "dev8003", "zsync": 3},
+    ]
+    shfqc = [
+        {"serial": "dev12003", "zsync": 4, "readout_multiplex": 6},
+        {"serial": "dev12004", "zsync": 5, "readout_multiplex": 6},
+        {"serial": "dev12005", "zsync": 6, "readout_multiplex": 6},
+        {"serial": "dev12006", "zsync": 7, "readout_multiplex": 6},
+    ]
+    shfsg = [{"serial": "dev12001", "zsync": 8}]
+    shfqa = [{"serial": "dev12002", "zsync": 9, "readout_multiplex": 6}]
+    uhfqa = [{"serial": "dev2001"}]
 
     # generic 6 qubit device setup - including flux lines
     num_qubits = 6
-    device_setup, qubits = generate_device_setup_qubits(
+    device_setup, _ = generate_device_setup_qubits(
         number_qubits=num_qubits,
         pqsc=pqsc,
         hdawg=hdawg[:1],
         shfqc=shfqc[:1],
-        zsync=zsync,
-        number_multiplex=6,
         include_flux_lines=True,
         multiplex_drive_lines=True,
         setup_name=f"{num_qubits}_tuneable_qubit_setup_shfqc_hdawg_pqsc",
@@ -88,13 +84,11 @@ def generate_example_datastore(
 
     # large 24 qubit device setup - including flux lines
     num_qubits = 24
-    device_setup, qubits = generate_device_setup_qubits(
+    device_setup, _ = generate_device_setup_qubits(
         number_qubits=num_qubits,
         pqsc=pqsc,
         hdawg=hdawg[:3],
         shfqc=shfqc,
-        zsync=zsync,
-        number_multiplex=6,
         include_flux_lines=True,
         multiplex_drive_lines=True,
         setup_name=f"{num_qubits}_tuneable_qubit_setup_shfqc_hdawg_pqsc",
@@ -114,13 +108,11 @@ def generate_example_datastore(
 
     # generic 6 qubit device setup - without flux lines
     num_qubits = 6
-    device_setup, qubits = generate_device_setup_qubits(
+    device_setup, _ = generate_device_setup_qubits(
         number_qubits=num_qubits,
         pqsc=pqsc,
         hdawg=hdawg[:1],
         shfqc=shfqc[:1],
-        zsync=zsync,
-        number_multiplex=6,
         include_flux_lines=False,
         multiplex_drive_lines=True,
         setup_name=f"{num_qubits}_fixed_qubit_setup_shfqc_hdawg_pqsc",
@@ -140,10 +132,9 @@ def generate_example_datastore(
 
     # shfqc standalone
     num_qubits = 6
-    device_setup, qubits = generate_device_setup_qubits(
+    device_setup, _ = generate_device_setup_qubits(
         number_qubits=num_qubits,
         shfqc=shfqc[:1],
-        number_multiplex=6,
         include_flux_lines=False,
         multiplex_drive_lines=True,
         setup_name=f"{num_qubits}_fixed_qubit_setup_shfqc",
@@ -163,13 +154,11 @@ def generate_example_datastore(
 
     # shfsg_shfqa_pqsc
     num_qubits = 6
-    device_setup, qubits = generate_device_setup_qubits(
+    device_setup, _ = generate_device_setup_qubits(
         number_qubits=num_qubits,
         pqsc=pqsc,
         shfsg=shfsg,
         shfqa=shfqa,
-        zsync=zsync,
-        number_multiplex=6,
         include_flux_lines=False,
         multiplex_drive_lines=True,
         setup_name=f"{num_qubits}_fixed_qubit_setup_shfsg_shfqa_pqsc",
@@ -189,14 +178,12 @@ def generate_example_datastore(
 
     # shfsg_shfqa_hdawg_pqsc
     num_qubits = 6
-    device_setup, qubits = generate_device_setup_qubits(
+    device_setup, _ = generate_device_setup_qubits(
         number_qubits=num_qubits,
         pqsc=pqsc,
         hdawg=hdawg[:1],
         shfsg=shfsg,
         shfqa=shfqa,
-        zsync=zsync,
-        number_multiplex=6,
         include_flux_lines=True,
         multiplex_drive_lines=True,
         setup_name=f"{num_qubits}_tuneable_qubit_setup_shfsg_shfqa_hdawg_pqsc",
@@ -216,15 +203,13 @@ def generate_example_datastore(
 
     # shfsg_shfqa_shfqc_hdawg_pqsc
     num_qubits = 12
-    device_setup, qubits = generate_device_setup_qubits(
+    device_setup, _ = generate_device_setup_qubits(
         number_qubits=num_qubits,
         pqsc=pqsc,
         hdawg=hdawg[:2],
         shfsg=shfsg,
         shfqa=shfqa,
         shfqc=shfqc[:1],
-        zsync=zsync,
-        number_multiplex=6,
         include_flux_lines=True,
         multiplex_drive_lines=True,
         setup_name=f"{num_qubits}_tuneable_qubit_setup_shfsg_shfqa_shfqc_hdawg_pqsc",
@@ -244,14 +229,11 @@ def generate_example_datastore(
 
     # hdawg_uhfqa_pqsc
     num_qubits = 2
-    device_setup, qubits = generate_device_setup_qubits(
+    device_setup, _ = generate_device_setup_qubits(
         number_qubits=num_qubits,
         pqsc=pqsc,
         hdawg=hdawg[:1],
         uhfqa=uhfqa,
-        zsync=zsync,
-        dio=dio,
-        number_multiplex=6,
         include_flux_lines=False,
         multiplex_drive_lines=False,
         setup_name=f"{num_qubits}_fixed_qubit_setup_hdawg_uhfqa_pqsc",
@@ -271,11 +253,10 @@ def generate_example_datastore(
 
     # shfsg standalone
     num_qubits = 8
-    device_setup, qubits = generate_device_setup_qubits(
+    device_setup, _ = generate_device_setup_qubits(
         number_qubits=num_qubits,
         shfsg=shfsg,
         drive_only=True,
-        number_multiplex=6,
         include_flux_lines=False,
         multiplex_drive_lines=True,
         setup_name=f"{num_qubits}_fixed_qubit_setup_shfsg",
@@ -295,11 +276,10 @@ def generate_example_datastore(
 
     # hdawg standalone
     num_qubits = 4
-    device_setup, qubits = generate_device_setup_qubits(
+    device_setup, _ = generate_device_setup_qubits(
         number_qubits=num_qubits,
         hdawg=hdawg[:1],
         drive_only=True,
-        number_multiplex=6,
         include_flux_lines=False,
         multiplex_drive_lines=False,
         setup_name=f"{num_qubits}_fixed_qubit_setup_hdawg",

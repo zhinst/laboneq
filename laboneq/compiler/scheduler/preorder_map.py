@@ -3,8 +3,7 @@
 
 from __future__ import annotations
 
-import intervaltree
-
+from laboneq._rust.intervals import IntervalTree
 from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
 from laboneq.compiler.scheduler.loop_iteration_schedule import LoopIterationSchedule
 from laboneq.compiler.scheduler.loop_schedule import LoopSchedule
@@ -20,7 +19,6 @@ def calculate_preorder_map(
     if not isinstance(schedule, SectionSchedule):
         return current_depth
     max_depth = current_depth
-    intervals = intervaltree.IntervalTree()
     if isinstance(schedule, LoopSchedule):
         # Normally we only need to look at the first loop iteration to find all the
         # sections. When there are statically resolved branches however, not every
@@ -44,6 +42,7 @@ def calculate_preorder_map(
             pass
         return max_depth
 
+    intervals = IntervalTree()
     if isinstance(schedule, SectionSchedule):
         # Draw the section on this row
         preorder_map[schedule.section] = current_depth
@@ -56,7 +55,7 @@ def calculate_preorder_map(
             c_start = schedule.children_start[i]
             c_end = c_start + c.length
 
-            if not intervals.overlap(c_start, c_end):
+            if not intervals.overlaps_range(c_start, c_end):
                 # Place child in this row
                 max_depth = max(
                     max_depth,

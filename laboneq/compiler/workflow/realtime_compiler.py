@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 from itertools import groupby
 from typing import Optional, TypedDict
@@ -77,6 +78,10 @@ class RealtimeCompiler:
         if len(unknown_devices) != 0:
             raise Exception("Invalid device class encountered")
 
+        # The backends mutate the IR as they lower it. If we use more than 1, we
+        # must provide each ith a pristine copy of the original IR.
+        maybe_copy = copy.deepcopy if len(device_classes) > 1 else lambda x: x
+
         for device_class in device_classes:
             signals = [
                 s
@@ -86,7 +91,7 @@ class RealtimeCompiler:
             self._code_generators[device_class] = self._registered_codegens[
                 device_class
             ](
-                ir,
+                maybe_copy(ir),
                 settings=self._settings,
                 signals=signals,
                 feedback_register_layout=self._feedback_register_layout,

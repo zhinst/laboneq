@@ -68,7 +68,7 @@ _logger = logging.getLogger(__name__)
 # executed in a batch.
 CONNECT_CHECK_HOLDOFF = 10  # sec
 
-USE_ASYNC_API_BY_DEFAULT = False
+USE_ASYNC_API_BY_DEFAULT = True
 
 
 class Controller:

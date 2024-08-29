@@ -14,18 +14,18 @@ from setups with a single qubit to those with 100 and more.
 ## Requirements
 
 > ⚠️ **This software requires Python 3.9 or higher.** We assume that
-> `pip3` and `python3` use a corresponding Python version.
+> `pip` and `python` use a corresponding Python version.
 
 > 💡 To ease the maintenance of multiple installations, we recommended to
 > use Python environments through e.g. **venv**, **pipenv** or **conda**.
 
 ## Installation
 
-The following commands will make LabOne Q available in your current
-environment.
+The following commands will make the latest release of LabOne Q available in
+your current environment.
 
 ```sh
-$ pip3 install --upgrade laboneq
+$ pip install --upgrade laboneq
 ```
 
 ## Documentation
