@@ -1,0 +1,11 @@
+[package]
+name = "interval-tree"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+publish.workspace = true
+license = "MIT"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "1"
