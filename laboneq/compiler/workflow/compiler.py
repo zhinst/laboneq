@@ -118,6 +118,7 @@ class Compiler:
         self._delays_by_signal: dict[str, OnDeviceDelayCompensation] = {}
         self._precompensations: dict[str, PrecompensationInfo] | None = None
         self._signal_objects: dict[str, SignalObj] = {}
+        self._has_uhfqa: bool = False
 
         _logger.info("Starting LabOne Q Compiler run...")
         self._check_tinysamples()
@@ -156,6 +157,7 @@ class Compiler:
         has_pqsc = type_counter["pqsc"] > 0
         has_qhub = type_counter["qhub"] > 0
         has_hdawg = type_counter["hdawg"] > 0
+        has_uhfqa = type_counter["uhfqa"] > 0
         has_shfsg = type_counter["shfsg"] > 0
         has_shfqa = type_counter["shfqa"] > 0
         shf_types = {"shfsg", "shfqa", "shfqc"}
@@ -251,8 +253,7 @@ class Compiler:
                         signal_id,
                     )
 
-            has_qa = type_counter["shfqa"] > 0 or type_counter["uhfqa"] > 0
-            is_hdawg_solo = type_counter["hdawg"] == 1 and not has_shf and not has_qa
+            is_hdawg_solo = type_counter["hdawg"] == 1 and not has_shf and not has_uhfqa
             if is_hdawg_solo:
                 first_hdawg = self._get_first_instr_of(device_infos, "hdawg")
                 if first_hdawg.reference_clock_source is None:
@@ -269,6 +270,7 @@ class Compiler:
 
         self._clock_settings["use_2GHz_for_HDAWG"] = has_shf
         self._leader_properties.global_leader = leader
+        self._has_uhfqa = has_uhfqa
 
     def _process_experiment(self):
         dao = self._experiment_dao
@@ -514,7 +516,7 @@ class Compiler:
         awg_number = Compiler.calc_awg_number(signal_info.channels[0], device_type)
         if (
             signal_info.type == SignalInfoType.INTEGRATION
-            and device_type != DeviceType.SHFQA
+            and device_type == DeviceType.UHFQA
         ):
             awg_number = 0
         return self._awgs[device_id][awg_number]
@@ -601,7 +603,9 @@ class Compiler:
                 awg.reference_clock_source = device_info.reference_clock_source
             if self._leader_properties.is_desktop_setup:
                 awg.trigger_mode = {
-                    DeviceType.HDAWG: TriggerMode.DIO_TRIGGER,
+                    DeviceType.HDAWG: TriggerMode.DIO_TRIGGER
+                    if self._has_uhfqa
+                    else TriggerMode.INTERNAL_READY_CHECK,
                     DeviceType.SHFSG: TriggerMode.INTERNAL_TRIGGER_WAIT,
                     DeviceType.SHFQA: TriggerMode.INTERNAL_TRIGGER_WAIT,
                     DeviceType.UHFQA: TriggerMode.DIO_WAIT,

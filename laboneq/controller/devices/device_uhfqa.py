@@ -20,7 +20,7 @@ from laboneq.controller.communication import (
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import (
     AllocatedOscillator,
-    DeviceZI,
+    DeviceBase,
     delay_to_rounded_samples,
     RawReadoutData,
 )
@@ -64,7 +64,7 @@ MAX_AVERAGES_RESULT_LOGGER = 1 << 17
 MAX_AVERAGES_SCOPE = 1 << 15
 
 
-class DeviceUHFQA(DeviceZI):
+class DeviceUHFQA(DeviceBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.dev_type = "UHFQA"

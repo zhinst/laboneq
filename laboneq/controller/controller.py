@@ -544,7 +544,7 @@ class Controller:
         # TODO(2K): Do this in the recipe preprocessor, or even modify the compiled experiment
         #  data model
         for rt_exec_step in self._recipe_data.recipe.realtime_execution_init:
-            if rt_exec_step.seqc_ref == seqc_name:
+            if rt_exec_step.program_ref == seqc_name:
                 return rt_exec_step.device_id, rt_exec_step.awg_id
         return None, None
 
@@ -639,12 +639,7 @@ class Controller:
             nodes = device.prepare_upload_command_table(awg_index, command_table)
             self._nodes_from_artifact_replacement[device].extend(nodes)
 
-    async def _prepare_rt_execution(
-        self, rt_section_uid: str
-    ) -> list[DaqNodeSetAction]:
-        if rt_section_uid is None:
-            return [], []  # Old recipe-based execution - skip RT preparation
-
+    async def _prepare_rt_execution(self) -> list[DaqNodeSetAction]:
         nodes_to_prepare_rt = []
         for _, device in self._devices.leaders:
             nodes_to_prepare_rt.extend(

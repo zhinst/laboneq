@@ -92,7 +92,7 @@ class SeqCGenOutput(RTCompilerOutput):
     wave_indices: dict[AwgKey, dict[str, Any]]
     command_tables: dict[AwgKey, dict[str, Any]]
     pulse_map: dict[str, PulseMapEntry]
-    parameter_phase_increment_map: dict[str, list]
+    parameter_phase_increment_map: dict[AwgKey, dict[str, list]]
     feedback_register_configurations: dict[AwgKey, FeedbackRegisterConfig]
     shfppc_sweep_configurations: dict[AwgKey, SHFPPCSweeperConfig]
 
@@ -127,9 +127,17 @@ def _check_compatibility(this, new):
 
 
 def _extend_parameter_phase_increment_map(
-    ppim: dict[str, ParameterPhaseIncrementMap], new: SeqCGenOutput, ct_ref: str
+    ppim: dict[str, ParameterPhaseIncrementMap],
+    new: SeqCGenOutput,
+    ct_ref: str,
+    awg_key: AwgKey,
 ):
-    for param_name, targets in new.parameter_phase_increment_map.items():
+    try:
+        parameter_phase_increment_map = new.parameter_phase_increment_map[awg_key]
+    except KeyError:
+        return
+
+    for param_name, targets in parameter_phase_increment_map.items():
         this_param_targets = ppim.setdefault(param_name, ParameterPhaseIncrementMap())
         for target in targets:
             entry = (
@@ -164,7 +172,7 @@ class SeqCLinker(ILinker):
             if awg in output.integration_weights:
                 integration_weights[seqc_name] = output.integration_weights[awg]
             _extend_parameter_phase_increment_map(
-                parameter_phase_increment_map, output, seqc_name
+                parameter_phase_increment_map, output, seqc_name, awg_key=awg
             )
 
         return CombinedRTOutputSeqC(
@@ -268,7 +276,7 @@ class SeqCLinker(ILinker):
                     this.pulse_map[pulse_id].waveforms.update(entry.waveforms)
 
             _extend_parameter_phase_increment_map(
-                this.parameter_phase_increment_map, new, seqc_name
+                this.parameter_phase_increment_map, new, seqc_name, awg
             )
 
             this.src.append({"filename": seqc_name, **awg_src})

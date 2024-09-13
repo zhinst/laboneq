@@ -219,15 +219,18 @@ class _PRETTYPRINTERDEVICEGenerator(_InstrumentGenerator):
     ) -> list[Connection]:
         connections = []
         if isinstance(connection, SignalConnection):
-            if connection.type != "rf" or len(connection.ports) != 1:
-                raise DeviceSetupInternalException(
-                    "Pretty printer devices are required to have one rf signal on exactly one port."
-                )
+            [port] = connection.ports
+            signal_type, direction = {
+                "iq": (IOSignalType.IQ, IODirection.OUT),
+                "rf": (IOSignalType.RF, IODirection.OUT),
+                "acquire": (IOSignalType.IQ, IODirection.IN),
+            }[connection.type]
             conn = Connection(
-                local_port=connection.ports[0],
+                local_port=port,
                 remote_path=qct_path.insert_logical_signal_prefix(connection.uid),
-                remote_port="0",
-                signal_type=IOSignalType.RF,
+                remote_port=None,
+                signal_type=signal_type,
+                direction=direction,
             )
             connections.append(conn)
         else:
@@ -241,10 +244,11 @@ class _PRETTYPRINTERDEVICEGenerator(_InstrumentGenerator):
         connection: InternalConnection | SignalConnection, pc: PhysicalChannel
     ) -> LogicalSignal | None:
         assert isinstance(connection, SignalConnection)
+        direction = IODirection.IN if connection.type == "acquire" else IODirection.OUT
         ls = LogicalSignal(
             uid=connection.uid,
             name=connection.name,
-            direction=IODirection.OUT,
+            direction=direction,
             path=qct_path.Separator.join(
                 [
                     qct_path.LogicalSignalGroups_Path_Abs,
@@ -641,7 +645,13 @@ def add_connection(
     if dev := setup.instrument_by_uid(instrument):
         handler = HANDLERS[dev.__class__]
         if isinstance(dev, PRETTYPRINTERDEVICE):
-            dev._ports.extend(connection.ports)
+            try:
+                [port] = connection.ports
+            except ValueError as e:
+                raise DeviceSetupInternalException(
+                    "'ports' field must be a list with a single item"
+                ) from e
+            dev.append_port(port, connection.type)
         else:
             _raise_for_invalid_ports(dev, connection.ports)
 

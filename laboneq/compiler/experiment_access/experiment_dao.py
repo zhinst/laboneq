@@ -329,6 +329,9 @@ class ExperimentDAO:
         validators.check_ppc_sweeper(self)
         validators.check_lo_frequency(self)
         validators.freq_sweep_on_acquire_line_requires_spectroscopy_mode(self)
+        validators.check_phase_increments_support(self)
+        validators.check_acquire_only_on_acquire_line(self)
+        validators.check_no_play_on_acquire_line(self)
 
     def acquisition_signal(self, handle: str) -> str | None:
         return self._data["handle_acquires"][handle]

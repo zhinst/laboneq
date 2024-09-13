@@ -25,8 +25,8 @@ class SeqCCompileItem:
     awg_index: int
     sequencer: str
     sampling_rate: float | None
-    code: str | None = None
-    filename: str | None = None
+    filename: str
+    code: str
     elf: bytes | None = None
 
 

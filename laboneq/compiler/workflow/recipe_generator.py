@@ -416,7 +416,11 @@ class RecipeGenerator:
             ppc_device = shfppc_sweep_configuration.ppc_device
             ppc_channel_idx = shfppc_sweep_configuration.ppc_channel
             ppc_initialization = self._find_initialization(ppc_device)
-            ppchannel = ppc_initialization.ppchannels[ppc_channel_idx]
+            for ppchannel in ppc_initialization.ppchannels:
+                if ppchannel["channel"] == ppc_channel_idx:
+                    break
+            else:
+                raise AssertionError("channel not found")
 
             # remove the swept fields from the initialization; no need to set it in NT
             for field in shfppc_sweep_configuration.swept_fields():
@@ -434,7 +438,7 @@ class RecipeGenerator:
             RealtimeExecutionInit(
                 device_id=rt_step.device_id,
                 awg_id=rt_step.awg_id,
-                seqc_ref=rt_step.seqc_ref,
+                program_ref=rt_step.seqc_ref,
                 wave_indices_ref=rt_step.wave_indices_ref,
                 kernel_indices_ref=rt_step.kernel_indices_ref,
                 nt_step=NtStepKey(indices=tuple(rt_step.nt_step)),

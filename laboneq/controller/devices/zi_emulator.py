@@ -398,15 +398,14 @@ class PipelinerEmu:
 
 
 class DevEmuZI(DevEmu):
-    @property
-    def server(self) -> ziDAQServerEmulator:
-        return self._dev_opts["emu_server"]
-
     def _devices_connected(self) -> str:
-        devices = [
-            d.serial().upper() for d in self.server._devices.values() if d != self
-        ]
-        return ",".join(devices)
+        server = self._dev_opts.get("emu_server")
+        if isinstance(server, ziDAQServerEmulator):
+            devices = [
+                d.serial().upper() for d in server._devices.values() if d != self
+            ]
+            return ",".join(devices)
+        return ""
 
     def _node_def(self) -> dict[str, NodeInfo]:
         return {
@@ -1124,7 +1123,7 @@ _dev_type_map: dict[str | None, type[DevEmu]] = {
 
 class EmulatorState:
     def __init__(self):
-        self._dev_type_by_serial: dict[str, str] = {}
+        self._dev_type_by_serial: dict[str, str] = {"ZI": "ZI"}
         self._options: dict[str, dict[str, Any]] = defaultdict(dict)
         self._scheduler = sched.scheduler()
 
@@ -1160,7 +1159,6 @@ class ziDAQServerEmulator:
         if emulator_state is None:
             emulator_state = EmulatorState()
         self._emulator_state = emulator_state
-        self._emulator_state.map_device_type("ZI", "ZI")
         self._emulator_state.set_option("ZI", "emu_server", self)
         if api_level is None:
             api_level = 6

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Iterator
+from weakref import ref
 
 import numpy
 from numpy import typing as npt
@@ -48,11 +49,12 @@ DELAY_NODE_MAX_SAMPLES = round(124e-9 * SAMPLE_FREQUENCY_HZ)
 OPT_OUTPUT_ROUTER_ADDER = "RTR"
 
 
-class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
+class DeviceSHFSG(DeviceSHFBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.dev_type = "SHFSG8"
         self.dev_opts = []
+        self._pipeliner = AwgPipeliner(ref(self), f"/{self.serial}/sgchannels", "SG")
         # Available number of full output channels (Front panel outputs).
         self._outputs = 8
         # Available number of output channels (RTR option can extend these with internal channels on certain devices)
@@ -60,9 +62,21 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
         self._output_to_synth_map = [0, 0, 1, 1, 2, 2, 3, 3]
         self._wait_for_awgs = True
         self._emit_trigger = False
-        self.pipeliner_set_node_base(f"/{self.serial}/sgchannels", "SG")
         self._has_opt_rtr = False
         self._warning_nodes = {}
+
+    @property
+    def has_pipeliner(self) -> bool:
+        return True
+
+    def pipeliner_prepare_for_upload(self, index: int) -> NodeCollector:
+        return self._pipeliner.prepare_for_upload(index)
+
+    def pipeliner_commit(self, index: int) -> NodeCollector:
+        return self._pipeliner.commit(index)
+
+    def pipeliner_ready_conditions(self, index: int) -> dict[str, Any]:
+        return self._pipeliner.ready_conditions(index)
 
     @property
     def dev_repr(self) -> str:
@@ -199,7 +213,7 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
         for awg in range(self._get_num_awgs()):
             nodes.append(f"/{self.serial}/sgchannels/{awg}/awg/enable")
             nodes.append(f"/{self.serial}/sgchannels/{awg}/awg/ready")
-            nodes.extend(self.pipeliner_control_nodes(awg))
+            nodes.extend(self._pipeliner.control_nodes(awg))
         return nodes
 
     def clock_source_control_nodes(self) -> list[NodeControlBase]:
@@ -212,7 +226,7 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
         self, with_pipeliner: bool
     ) -> list[DaqNodeSetAction]:
         if with_pipeliner:
-            nc = self.pipeliner_collect_execution_nodes()
+            nc = self._pipeliner.collect_execution_nodes()
         else:
             nc = NodeCollector(base=f"/{self.serial}/")
             for awg_index in self._allocated_awgs:
@@ -243,7 +257,7 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
             return {}
 
         if with_pipeliner:
-            conditions = self.pipeliner_conditions_for_execution_ready()
+            conditions = self._pipeliner.conditions_for_execution_ready()
         else:
             conditions = {
                 f"/{self.serial}/sgchannels/{awg_index}/awg/enable": (
@@ -258,7 +272,7 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
         if with_pipeliner:
-            conditions = self.pipeliner_conditions_for_execution_done()
+            conditions = self._pipeliner.conditions_for_execution_done()
         else:
             conditions = {
                 f"/{self.serial}/sgchannels/{awg_index}/awg/enable": (
@@ -279,7 +293,7 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
             nc.add("system/synchronization/source", 0)
 
         if with_pipeliner:
-            nc.extend(self.pipeliner_reset_nodes())
+            nc.extend(self._pipeliner.reset_nodes())
 
         return await self.maybe_async(nc)
 
@@ -745,7 +759,7 @@ class DeviceSHFSG(AwgPipeliner, DeviceSHFBase):
     async def collect_reset_nodes(self) -> list[DaqNodeSetAction]:
         nc = NodeCollector(base=f"/{self.serial}/")
         # Reset pipeliner first, attempt to set AWG enable leads to FW error if pipeliner was enabled.
-        nc.extend(self.pipeliner_reset_nodes())
+        nc.extend(self._pipeliner.reset_nodes())
         nc.add("sgchannels/*/awg/enable", 0, cache=False)
         if not self.is_secondary:
             nc.add(

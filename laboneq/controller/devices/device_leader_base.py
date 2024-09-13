@@ -11,7 +11,7 @@ from laboneq.controller.communication import (
     DaqNodeSetAction,
 )
 from laboneq.controller.devices.device_utils import NodeCollector
-from laboneq.controller.devices.device_zi import DeviceZI
+from laboneq.controller.devices.device_zi import DeviceBase
 from laboneq.controller.devices.zi_node_monitor import (
     Setting,
     Condition,
@@ -30,7 +30,7 @@ class ReferenceClockSourceLeader(IntEnum):
     EXTERNAL = 1
 
 
-class DeviceLeaderBase(DeviceZI):
+class DeviceLeaderBase(DeviceBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._use_internal_clock = False

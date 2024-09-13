@@ -14,14 +14,14 @@ from laboneq.controller.attribute_value_tracker import (
 )
 from laboneq.controller.communication import DaqNodeSetAction
 from laboneq.controller.devices.device_utils import NodeCollector
-from laboneq.controller.devices.device_zi import DeviceZI
+from laboneq.controller.devices.device_zi import DeviceBase
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.core.types.enums import AcquisitionType
 from laboneq.data.calibration import CancellationSource
 from laboneq.data.recipe import Initialization
 
 
-class DeviceSHFPPC(DeviceZI):
+class DeviceSHFPPC(DeviceBase):
     attribute_keys = {
         "cancellation_phase": AttributeName.PPC_CANCELLATION_PHASE,
         "cancellation_attenuation": AttributeName.PPC_CANCELLATION_ATTENUATION,

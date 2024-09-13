@@ -215,6 +215,7 @@ class DeviceType(DeviceTraits, Enum):
         device_class=0x1,
         oscillator_set_latency=36e-9,
         reset_osc_duration=32e-9,
+        num_integration_units_per_acquire_signal=1,
     )
 
     def __repr__(self):

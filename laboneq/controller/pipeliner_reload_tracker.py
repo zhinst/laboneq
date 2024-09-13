@@ -12,8 +12,8 @@ def _merge(
     last: RealtimeExecutionInit, update: RealtimeExecutionInit
 ) -> RealtimeExecutionInit:
     new = copy.deepcopy(last)
-    if update.seqc_ref is not None:
-        new.seqc_ref = update.seqc_ref
+    if update.program_ref is not None:
+        new.program_ref = update.program_ref
     if update.wave_indices_ref is not None:
         new.wave_indices_ref = update.wave_indices_ref
     return new

@@ -8,6 +8,10 @@ from dataclasses import dataclass, field
 from typing import Any, List, Tuple
 
 from laboneq.compiler.common.device_type import DeviceType
+from laboneq.compiler.common.integration_times import (
+    IntegrationTimes,
+    SignalIntegrationInfo,
+)
 
 
 class _SamplingRateConversions:
@@ -80,20 +84,6 @@ class _MeasurementInfo:
         if self.acquire_end is None:
             return self.play_end
         return max(self.play_end, self.acquire_end)
-
-
-@dataclass(init=True, repr=True, order=True)
-class SignalIntegrationInfo:
-    is_play: bool = False
-    length_in_samples: int = None
-
-
-@dataclass(init=True, repr=True, order=True)
-class IntegrationTimes:
-    signal_infos: dict[str, SignalIntegrationInfo] = field(default_factory=dict)
-
-    def signal_info(self, signal_id: str) -> SignalIntegrationInfo | None:
-        return self.signal_infos.get(signal_id)
 
 
 @dataclass

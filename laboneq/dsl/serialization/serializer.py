@@ -138,7 +138,6 @@ class Serializer:
             "laboneq.dsl.calibration",
             "laboneq.dsl.device",
             "laboneq.dsl.quantum.quantum_element",
-            "laboneq.dsl.quantum.quantum_operation",
             "laboneq.dsl.quantum.qubit",
             "laboneq.dsl.quantum.transmon",
             "laboneq.dsl.device.server",

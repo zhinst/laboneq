@@ -105,12 +105,6 @@ class DeviceCollection:
                 yield uid, device
 
     @property
-    def with_node_monitor(self) -> Iterator[DeviceZI]:
-        for device in self._devices.values():
-            if device._node_monitor is not None:
-                yield device
-
-    @property
     def has_qhub(self) -> bool:
         return self._ds.has_qhub
 
@@ -141,10 +135,10 @@ class DeviceCollection:
         use_async_api: bool = False,
     ):
         await self._prepare_daqs(do_emulation=do_emulation, use_async_api=use_async_api)
-        if not do_emulation:
-            await self._validate_dataserver_device_fw_compatibility(
-                use_async_api=use_async_api
-            )
+        await self._validate_dataserver_device_fw_compatibility(
+            self.emulator_state if do_emulation else None,
+            use_async_api=use_async_api,
+        )
         self._prepare_devices()
         for _, device in self.all:
             await device.connect(
@@ -402,9 +396,9 @@ class DeviceCollection:
             invert = False
             assert device_uids is None and not unused_only
             for ls_path in logical_signals:
-                device_uid, outputs = self._ds.resolve_ls_path_outputs(ls_path)
-                if device_uid is not None:
-                    outputs_per_device[device_uid].update(outputs)
+                maybe_device_uid, outputs = self._ds.resolve_ls_path_outputs(ls_path)
+                if maybe_device_uid is not None:
+                    outputs_per_device[maybe_device_uid].update(outputs)
 
         async with gather_and_apply(batch_set_multiple) as awaitables:
             for device_uid, outputs in outputs_per_device.items():
@@ -425,7 +419,7 @@ class DeviceCollection:
             return
 
         response_waiter = ResponseWaiter()
-        for device in self.with_node_monitor:
+        for _, device in self.all:
             await device.node_monitor.start()
             response_waiter.add(
                 target=device,
@@ -441,18 +435,20 @@ class DeviceCollection:
         self._monitor_started = True
 
     async def flush_monitor(self):
-        for node_monitor in {device.node_monitor for device in self.with_node_monitor}:
-            await node_monitor.flush()
+        for _, device in self.all:
+            await device.node_monitor.flush()
 
     async def reset_monitor(self):
-        for node_monitor in {device.node_monitor for device in self.with_node_monitor}:
-            await node_monitor.reset()
+        for _, device in self.all:
+            await device.node_monitor.reset()
         self._monitor_started = False
 
-    async def _validate_dataserver_device_fw_compatibility(self, use_async_api: bool):
+    async def _validate_dataserver_device_fw_compatibility(
+        self,
+        emulator_state: EmulatorState | None,
+        use_async_api: bool,
+    ):
         """Validate dataserver and device firmware compatibility."""
-        if self._ignore_version_mismatch:
-            return
 
         daq_dev_serials: dict[str, list[str]] = defaultdict(list)
         for device_qualifier in self._ds.instruments:
@@ -466,12 +462,16 @@ class DeviceCollection:
                     s[1] for s in self._ds.servers if s[0] == server_uid
                 )
                 await async_check_dataserver_device_compatibility(
-                    server_qualifier.host, server_qualifier.port, dev_serials
+                    server_qualifier.host,
+                    server_qualifier.port,
+                    dev_serials,
+                    emulator_state,
+                    self._ignore_version_mismatch,
                 )
-            else:
+            elif emulator_state is None and not self._ignore_version_mismatch:
                 try:
                     check_dataserver_device_compatibility(
-                        self._daqs.get(server_uid)._zi_api_object, dev_serials
+                        self._daqs[server_uid]._zi_api_object, dev_serials
                     )
                 except Exception as error:  # noqa: PERF203
                     raise LabOneQControllerException(str(error)) from error
@@ -488,6 +488,7 @@ class DeviceCollection:
             device.remove_all_links()
             updated_devices[device_qualifier.uid] = device
         self._devices = updated_devices
+
         # Update device links and leader/follower status
         for device_qualifier in self._ds.instruments:
             from_dev = self._devices[device_qualifier.uid]
@@ -519,10 +520,7 @@ class DeviceCollection:
                 )
             dev.update_clock_source(force_internal)
 
-            # Set RF channel offsets
-            dev.update_rf_offsets(
-                self._ds.get_device_rf_voltage_offsets(device_qualifier.uid)
-            )
+            dev.update_from_device_setup(self._ds)
 
     async def _prepare_daqs(self, do_emulation: bool, use_async_api: bool):
         updated_daqs: dict[str, DaqWrapper] = {}
@@ -565,10 +563,10 @@ class DeviceCollection:
         return msg
 
     async def update_warning_nodes(self):
-        for node_monitor in {device.node_monitor for device in self.with_node_monitor}:
-            await node_monitor.poll()
+        for _, device in self.all:
+            await device.node_monitor.poll()
 
-        for device in self.with_node_monitor:
+        for _, device in self.all:
             device.update_warning_nodes(
                 {
                     node: device.node_monitor.get_last(node)
@@ -583,7 +581,7 @@ class DeviceErrorSeverity(Enum):
     error = 2
 
 
-def decode_errors(errors: list[str], dev_repr: str) -> list[str]:
+def decode_errors(errors: str | list[str], dev_repr: str) -> list[str]:
     collected_messages: list[str] = []
     if not isinstance(errors, list):
         errors = [errors]

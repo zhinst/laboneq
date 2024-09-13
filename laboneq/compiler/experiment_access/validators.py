@@ -242,3 +242,51 @@ def freq_sweep_on_acquire_line_requires_spectroscopy_mode(dao: ExperimentDAO):
                 f"{signal_info.uid} connected to UFHQA or SHFQQA device {signal_info.device.uid} "
                 f"requires acquisition type to be set to spectroscopy"
             )
+
+
+def check_phase_increments_support(dao: ExperimentDAO):
+    for section_id in dao.sections():
+        for signal_id in dao.section_signals(section_id):
+            signal = dao.signal_info(signal_id)
+            device = signal.device
+            if device.device_type == DeviceInfoType.PRETTYPRINTERDEVICE:
+                continue
+            for ssp in dao.section_pulses(section_id, signal_id):
+                if ssp.increment_oscillator_phase is None:
+                    continue
+                if signal.type != SignalInfoType.IQ:
+                    raise LabOneQException(
+                        f"In section '{section_id}', signal '{signal_id}':"
+                        " phase increments are only supported on IQ signals"
+                    )
+
+
+def check_acquire_only_on_acquire_line(dao: ExperimentDAO):
+    for section_id in dao.sections():
+        for signal_id in dao.section_signals(section_id):
+            for section_pulse in dao.section_pulses(section_id, signal_id):
+                is_acquire = section_pulse.acquire_params is not None
+                if (
+                    is_acquire
+                    and dao.signal_info(signal_id).type != SignalInfoType.INTEGRATION
+                ):
+                    raise LabOneQException(
+                        f"In section '{section_id}, an acquire statement is issued on signal '{signal_id}'."
+                        " acquire is only allowed on acquire lines."
+                    )
+
+
+def check_no_play_on_acquire_line(dao: ExperimentDAO):
+    for section_id in dao.sections():
+        for signal_id in dao.section_signals(section_id):
+            for section_pulse in dao.section_pulses(section_id, signal_id):
+                is_acquire = section_pulse.acquire_params is not None
+                if (
+                    not is_acquire
+                    and dao.signal_info(signal_id).type == SignalInfoType.INTEGRATION
+                    and section_pulse.pulse is not None
+                ):
+                    raise LabOneQException(
+                        f"In section '{section_id}, a play statement is issued on signal '{signal_id}'."
+                        " play is not allowed on acquire lines."
+                    )

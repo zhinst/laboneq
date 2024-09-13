@@ -61,7 +61,6 @@ from laboneq.dsl.experiment import (
 )
 from laboneq.dsl.quantum import (
     QuantumElement,
-    QuantumOperation,
     Qubit,
     QubitParameters,
     Transmon,

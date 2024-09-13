@@ -116,13 +116,12 @@ def add_wait_trigger_statements(
     deferred_function_calls: SeqCGenerator,
 ):
     if awg.trigger_mode == TriggerMode.DIO_TRIGGER:
-        # HDAWG (with optional downstream UHFQA connected via DIO), no PQSC
+        # HDAWG+UHFQA connected via DIO, no PQSC
         if awg.awg_number == 0:
-            init_generator.add_function_call_statement("setDIO", ["0"])
-            init_generator.add_function_call_statement("wait", ["1"])
-            init_generator.add_function_call_statement("playZero", ["512"])
-            if awg.reference_clock_source != "internal":
-                init_generator.add_function_call_statement("waitDigTrigger", ["1"])
+            assert (
+                awg.reference_clock_source != "internal"
+            ), "HDAWG+UHFQA system can only be used with an external clock connected to HDAWG in order to prevent jitter."
+            init_generator.add_function_call_statement("waitDigTrigger", ["1"])
             init_generator.add_function_call_statement("setDIO", ["0xffffffff"])
             init_generator.add_function_call_statement("waitDIOTrigger")
             delay_first_awg_samples = str(
@@ -132,7 +131,6 @@ def add_wait_trigger_statements(
                 deferred_function_calls.add_function_call_statement(
                     "playZero", [delay_first_awg_samples]
                 )
-                deferred_function_calls.add_function_call_statement("waitWave")
         else:
             init_generator.add_function_call_statement("waitDIOTrigger")
             delay_other_awg_samples = str(
@@ -142,14 +140,14 @@ def add_wait_trigger_statements(
                 deferred_function_calls.add_function_call_statement(
                     "playZero", [delay_other_awg_samples]
                 )
-                deferred_function_calls.add_function_call_statement("waitWave")
+    elif awg.trigger_mode == TriggerMode.INTERNAL_READY_CHECK:
+        # Standalone HDAWG
+        # We don't need to do anything for alignment because ready check
+        # mechanism handles that.
+        pass
 
     elif awg.trigger_mode == TriggerMode.DIO_WAIT:
         # UHFQA triggered by HDAWG
-        init_generator.add_variable_declaration("dio", "0xffffffff")
-        body = SeqCGenerator()
-        body.add_function_call_statement("getDIO", args=None, assign_to="dio")
-        init_generator.add_do_while("dio & 0x0001", body)
         init_generator.add_function_call_statement("waitDIOTrigger")
         delay_uhfqa_samples = str(
             round(awg.sampling_rate * CodeGenerator.DELAY_UHFQA / 8) * 8
@@ -158,7 +156,6 @@ def add_wait_trigger_statements(
             init_generator.add_function_call_statement(
                 "playZero", [delay_uhfqa_samples]
             )
-            init_generator.add_function_call_statement("waitWave")
 
     elif awg.trigger_mode == TriggerMode.INTERNAL_TRIGGER_WAIT:
         # SHFQC, internally triggered
@@ -329,7 +326,7 @@ class CodeGenerator(ICodeGenerator):
 
     DELAY_FIRST_AWG = 32 / DeviceType.HDAWG.sampling_rate
     DELAY_OTHER_AWG = 32 / DeviceType.HDAWG.sampling_rate
-    DELAY_UHFQA = 140 / DeviceType.HDAWG.sampling_rate
+    DELAY_UHFQA = 128 / DeviceType.UHFQA.sampling_rate
 
     # This is used as a workaround for the SHFQA requiring that for sampled pulses,  abs(s)  < 1.0 must hold
     # to be able to play pulses with an amplitude of 1.0, we scale complex pulses by this factor
@@ -364,7 +361,7 @@ class CodeGenerator(ICodeGenerator):
         self._command_tables: dict[AwgKey, dict[str, Any]] = {}
         self._pulse_map: dict[str, PulseMapEntry] = {}
         self._parameter_phase_increment_map: dict[
-            str, list[int | Literal[COMPLEX_USAGE]]
+            AwgKey, dict[str, list[int | Literal[COMPLEX_USAGE]]]
         ] = {}
         self._sampled_signatures: dict[str, dict[WaveformSignature, dict]] = {}
         self._integration_times: IntegrationTimes | None = None
@@ -1569,9 +1566,6 @@ class CodeGenerator(ICodeGenerator):
         seq_c_generator.append_statements_from(declarations_generator)
         seq_c_generator.append_statements_from(main_generator)
 
-        if awg.trigger_mode == TriggerMode.DIO_TRIGGER and awg.awg_number == 0:
-            seq_c_generator.add_function_call_statement("setDIO", ["0"])
-
         seq_c_text = seq_c_generator.generate_seq_c()
 
         for line in seq_c_text.splitlines():
@@ -1585,7 +1579,7 @@ class CodeGenerator(ICodeGenerator):
             self._command_tables[awg_key] = {
                 "ct": handler.command_table_tracker.command_table()
             }
-            self._parameter_phase_increment_map = (
+            self._parameter_phase_increment_map[awg_key] = (
                 handler.command_table_tracker.parameter_phase_increment_map()
             )
 
@@ -1933,7 +1927,9 @@ class CodeGenerator(ICodeGenerator):
     def pulse_map(self) -> dict[str, PulseMapEntry]:
         return self._pulse_map
 
-    def parameter_phase_increment_map(self) -> dict[str, int | Literal[COMPLEX_USAGE]]:
+    def parameter_phase_increment_map(
+        self,
+    ) -> dict[AwgKey, dict[str, list[int | Literal[COMPLEX_USAGE]]]]:
         return self._parameter_phase_increment_map
 
     def integration_times(self) -> IntegrationTimes:

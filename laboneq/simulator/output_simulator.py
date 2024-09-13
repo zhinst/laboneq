@@ -62,7 +62,7 @@ class _AWG_ID:
                     key=lambda rt_init: rt_init.nt_step.indices,
                 )
             )
-        ).seqc_ref
+        ).program_ref
 
     def _decode_sigouts(
         self, chs: list[str], realtime_inits: list[RealtimeExecutionInit]

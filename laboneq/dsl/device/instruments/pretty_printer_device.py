@@ -18,22 +18,35 @@ class PRETTYPRINTERDEVICE(ZIStandardInstrument):
 
     def __post_init__(self):
         self.device_class = 0x1
-        self._ports: list[str] = []
+        self._ports: list[Port] = []
 
     def calc_options(self):
         return {
             **super().calc_options(),
         }
 
-    @property
-    def ports(self) -> list[Port]:
-        return [
+    def append_port(self, port_name: str, signal_type_str: str):
+        if signal_type_str == "rf":
+            direction = IODirection.OUT
+            signal_type = IOSignalType.RF
+        elif signal_type_str == "iq":
+            direction = IODirection.OUT
+            signal_type = IOSignalType.IQ
+        elif signal_type_str == "acquire":
+            direction = IODirection.IN
+            signal_type = IOSignalType.IQ
+        else:
+            raise AssertionError("invalid signal type")
+        self._ports.append(
             Port(
-                IODirection.OUT,
-                uid=port,
-                signal_type=IOSignalType.RF,
+                direction=direction,
+                uid=port_name,
+                signal_type=signal_type,
                 physical_port_ids=[str(0)],
                 connector_labels=[f"Wave {0 + 1}"],
             )
-            for port in self._ports
-        ]
+        )
+
+    @property
+    def ports(self) -> list[Port]:
+        return self._ports

@@ -3,46 +3,35 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import Any
+from weakref import ReferenceType
 
 from laboneq.controller.devices.device_utils import NodeCollector
+from laboneq.controller.devices.device_zi import DeviceBase
 
 
-class _MixInToDevice(Protocol):
-    _allocated_awgs: set[int]
-    dev_repr: str
-
-    def _get_num_awgs(self) -> int: ...
-
-
-if TYPE_CHECKING:
-    _type_base = _MixInToDevice
-else:
-    _type_base = object
-
-
-class AwgPipeliner(_type_base):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._node_base = ""
-        self._unit = ""
+class AwgPipeliner:
+    def __init__(
+        self, parent_device: ReferenceType[DeviceBase], node_base: str, unit: str
+    ):
+        self._parent_device = parent_device
+        self._node_base = node_base
+        self._unit = unit
         self._pipeliner_slot_tracker: dict[int, int] = {}
 
     @property
-    def has_pipeliner(self) -> bool:
-        return True
+    def parent_device(self) -> DeviceBase:
+        parent_device = self._parent_device()
+        assert parent_device is not None
+        return parent_device
 
-    def pipeliner_set_node_base(self, node_base: str, unit: str):
-        self._node_base = node_base
-        self._unit = unit
-
-    def pipeliner_control_nodes(self, index: int) -> list[str]:
+    def control_nodes(self, index: int) -> list[str]:
         return [
             f"{self._node_base}/{index}/pipeliner/availableslots",
             f"{self._node_base}/{index}/pipeliner/status",
         ]
 
-    def pipeliner_prepare_for_upload(self, index: int) -> NodeCollector:
+    def prepare_for_upload(self, index: int) -> NodeCollector:
         self._pipeliner_slot_tracker[index] = 0
         nc = NodeCollector(base=f"{self._node_base}/")
         nc.add(f"{index}/pipeliner/mode", 1)
@@ -51,43 +40,43 @@ class AwgPipeliner(_type_base):
         nc.barrier()
         return nc
 
-    def pipeliner_commit(self, index: int) -> NodeCollector:
+    def commit(self, index: int) -> NodeCollector:
         self._pipeliner_slot_tracker[index] += 1
         nc = NodeCollector(base=f"{self._node_base}/")
         nc.barrier()
         nc.add(f"{index}/pipeliner/commit", 1, cache=False)
         return nc
 
-    def pipeliner_ready_conditions(self, index: int) -> dict[str, Any]:
+    def ready_conditions(self, index: int) -> dict[str, Any]:
         max_slots = 1024  # TODO(2K): read on connect from pipeliner/maxslots
         avail_slots = max_slots - self._pipeliner_slot_tracker[index]
         return {f"{self._node_base}/{index}/pipeliner/availableslots": avail_slots}
 
-    def pipeliner_collect_execution_nodes(self) -> NodeCollector:
+    def collect_execution_nodes(self) -> NodeCollector:
         nc = NodeCollector(base=f"{self._node_base}/")
-        for index in self._allocated_awgs:
+        for index in self.parent_device._allocated_awgs:
             nc.add(f"{index}/pipeliner/enable", 1, cache=False)
         return nc
 
-    def pipeliner_conditions_for_execution_ready(self) -> dict[str, tuple[Any, str]]:
+    def conditions_for_execution_ready(self) -> dict[str, tuple[Any, str]]:
         return {
             f"{self._node_base}/{index}/pipeliner/status": (
                 1,  # exec
-                f"{self.dev_repr}: Pipeliner for {self._unit} channel {index + 1} didn't start.",
+                f"{self.parent_device.dev_repr}: Pipeliner for {self._unit} channel {index + 1} didn't start.",
             )
-            for index in self._allocated_awgs
+            for index in self.parent_device._allocated_awgs
         }
 
-    def pipeliner_conditions_for_execution_done(self) -> dict[str, tuple[Any, str]]:
+    def conditions_for_execution_done(self) -> dict[str, tuple[Any, str]]:
         return {
             f"{self._node_base}/{index}/pipeliner/status": (
                 0,  # idle
-                f"{self.dev_repr}: Pipeliner for {self._unit} channel {index + 1} didn't stop. Missing start trigger? Check HW synchronization participants.",
+                f"{self.parent_device.dev_repr}: Pipeliner for {self._unit} channel {index + 1} didn't stop. Missing start trigger? Check HW synchronization participants.",
             )
-            for index in self._allocated_awgs
+            for index in self.parent_device._allocated_awgs
         }
 
-    def pipeliner_reset_nodes(self) -> NodeCollector:
+    def reset_nodes(self) -> NodeCollector:
         nc = NodeCollector(base=f"{self._node_base}/")
         nc.add("*/pipeliner/mode", 0, cache=False)  # off
         nc.add("*/synchronization/enable", 0, cache=False)

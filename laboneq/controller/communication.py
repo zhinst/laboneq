@@ -208,7 +208,7 @@ class ZiApiWrapperBase(ABC):
 
 @dataclass
 class ServerQualifier:
-    host: str | None = None
+    host: str = "localhost"
     port: int = 8004
     ignore_version_mismatch: bool = False
 
@@ -263,7 +263,7 @@ class DaqWrapper(ZiApiWrapperBase):
                 f"We recommend {RECOMMENDED_LABONE_VERSION}."
             )
             if not self.server_qualifier.ignore_version_mismatch:
-                LabOneQControllerException(err_msg)
+                raise LabOneQControllerException(err_msg)
             else:
                 _logger.warning("Ignoring that %s", err_msg)
 

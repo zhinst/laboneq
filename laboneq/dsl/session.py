@@ -281,7 +281,8 @@ class Session:
                 The connection state of the session.
         """
         self._connection_state.connected = False
-        self._controller.disconnect()
+        if self._controller is not None:
+            self._controller.disconnect()
         self._controller = None
         self._toolkit_devices = ToolkitDevices()
         return self._connection_state

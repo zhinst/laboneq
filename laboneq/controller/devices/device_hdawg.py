@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 from enum import IntEnum
 from typing import Any, Iterator
+from weakref import ref
 
 import numpy as np
 
@@ -20,7 +21,7 @@ from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import (
     AllocatedOscillator,
-    DeviceZI,
+    DeviceBase,
     delay_to_rounded_samples,
 )
 from laboneq.controller.attribute_value_tracker import DeviceAttribute
@@ -46,12 +47,23 @@ from laboneq.data.recipe import (
 
 _logger = logging.getLogger(__name__)
 
-DIG_TRIGGER_1_LEVEL = 0.225
+TRIGGER_INPUT_LEVEL_FOR_DESKTOP_SETUP = 0.0
+"""For setups without PQSC, we suggest customers to connect UHFQA ref. clock
+output to a trigger input on the HDAWG. The ref. clock output of UHFQA is
+AC-coupled, so triggering at 0 V is safe, especially when the amplitude is
+low (e.g. due to usage of passive splitters for clock distribution)."""
 
 DELAY_NODE_GRANULARITY_SAMPLES = 1
 DELAY_NODE_MAX_SAMPLES = 62
 DEFAULT_SAMPLE_FREQUENCY_HZ = 2.4e9
 GEN2_SAMPLE_FREQUENCY_HZ = 2.0e9
+
+
+class DIOMode(IntEnum):
+    MANUAL = 0
+    AWG_SEQUENCER = 1
+    DIO_CODEWORD = 2
+    QCCS = 3
 
 
 class ReferenceClockSourceHDAWG(IntEnum):
@@ -70,11 +82,12 @@ class ModulationMode(IntEnum):
     MIXER_CAL = 6
 
 
-class DeviceHDAWG(AwgPipeliner, DeviceZI):
+class DeviceHDAWG(DeviceBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.dev_type = "HDAWG8"
         self.dev_opts = ["MF", "ME", "SKW"]
+        self._pipeliner = AwgPipeliner(ref(self), f"/{self.serial}/awgs", "AWG")
         self._channels = 8
         self._multi_freq = True
         self._reference_clock_source = ReferenceClockSourceHDAWG.INTERNAL
@@ -83,7 +96,19 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
             if self.options.gen2
             else DEFAULT_SAMPLE_FREQUENCY_HZ
         )
-        self.pipeliner_set_node_base(f"/{self.serial}/awgs", "AWG")
+
+    @property
+    def has_pipeliner(self) -> bool:
+        return True
+
+    def pipeliner_prepare_for_upload(self, index: int) -> NodeCollector:
+        return self._pipeliner.prepare_for_upload(index)
+
+    def pipeliner_commit(self, index: int) -> NodeCollector:
+        return self._pipeliner.commit(index)
+
+    def pipeliner_ready_conditions(self, index: int) -> dict[str, Any]:
+        return self._pipeliner.ready_conditions(index)
 
     def _process_dev_opts(self):
         self._check_expected_dev_opts()
@@ -139,7 +164,7 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
         for awg in range(self._get_num_awgs()):
             nodes.append(f"/{self.serial}/awgs/{awg}/enable")
             nodes.append(f"/{self.serial}/awgs/{awg}/ready")
-            nodes.extend(self.pipeliner_control_nodes(awg))
+            nodes.extend(self._pipeliner.control_nodes(awg))
         return nodes
 
     def update_clock_source(self, force_internal: bool | None):
@@ -155,6 +180,14 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
             # If HDAWG is a follower (and not explicitly forced to internal),
             # ZSync is the default (explicit external is also treated as ZSync in this case)
             self._reference_clock_source = ReferenceClockSourceHDAWG.ZSYNC
+
+    def _sigout_from_port(self, ports: list[str]) -> int | None:
+        if len(ports) != 1:
+            return None
+        port_parts = ports[0].upper().split("/")
+        if len(port_parts) != 2 or port_parts[0] != "SIGOUTS":
+            return None
+        return int(port_parts[1])
 
     def clock_source_control_nodes(self) -> list[NodeControlBase]:
         expected_freq = {
@@ -204,7 +237,7 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
 
     def rf_offset_control_nodes(self) -> list[NodeControlBase]:
         nodes = []
-        for channel, offset in self._rf_offsets.items():
+        for channel, offset in self._voltage_offsets.items():
             nodes.extend(
                 [
                     Setting(f"/{self.serial}/sigouts/{channel}/on", 1),
@@ -239,7 +272,7 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
         self, with_pipeliner: bool
     ) -> list[DaqNodeSetAction]:
         if with_pipeliner:
-            return await self.maybe_async(self.pipeliner_collect_execution_nodes())
+            return await self.maybe_async(self._pipeliner.collect_execution_nodes())
 
         return await super().collect_execution_nodes(with_pipeliner=with_pipeliner)
 
@@ -247,7 +280,7 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
         self, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
         if with_pipeliner:
-            conditions = self.pipeliner_conditions_for_execution_ready()
+            conditions = self._pipeliner.conditions_for_execution_ready()
         else:
             conditions = {
                 f"/{self.serial}/awgs/{awg_index}/enable": (
@@ -262,7 +295,7 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
         if with_pipeliner:
-            conditions = self.pipeliner_conditions_for_execution_done()
+            conditions = self._pipeliner.conditions_for_execution_done()
         else:
             conditions = {
                 f"/{self.serial}/awgs/{awg_index}/enable": (
@@ -291,7 +324,7 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
             nc.add("system/synchronization/source", 0)
 
         if with_pipeliner:
-            nc.extend(self.pipeliner_reset_nodes())
+            nc.extend(self._pipeliner.reset_nodes())
 
         return await self.maybe_async(nc)
 
@@ -612,8 +645,8 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
                 "%s: Configuring DIO mode: ZSync pass-through.", self.dev_repr
             )
             _logger.debug("%s: Configuring external clock to ZSync.", self.dev_repr)
-            nc.add("dios/0/mode", 3)
-            nc.add("dios/0/drive", 0xC)
+            nc.add("dios/0/mode", DIOMode.QCCS)
+            nc.add("dios/0/drive", 0b1100)
 
             # Loop over at least one AWG instance to cover the case that the instrument is only used
             # as a communication proxy. Some of the nodes on the AWG branch are needed to get
@@ -651,7 +684,14 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
                         awg_config.command_table_match_offset,
                     )
         elif triggering_mode == TriggeringMode.DESKTOP_LEADER:
-            nc.add("triggers/in/0/level", DIG_TRIGGER_1_LEVEL)
+            # For desktop setups (setup with HDAWG and UHFQA only) we recommend
+            # users to connect UHFQA reference clock output to the trigger
+            # input of the first channel on the HDAWG.
+            nc.add("triggers/in/0/level", TRIGGER_INPUT_LEVEL_FOR_DESKTOP_SETUP)
+            # The reference clock output of UHFQA is 50 Ohm. If we don't match
+            # it here, this 'may' cause issue for the user if they are providing the
+            # clock by splitting it and the cable lengths involved are large.
+            nc.add("triggers/in/0/imp50", 1)
 
             for awg_index in (
                 self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
@@ -659,8 +699,9 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
                 nc.add(f"awgs/{awg_index}/auxtriggers/0/slope", 1)
                 nc.add(f"awgs/{awg_index}/auxtriggers/0/channel", 0)
 
-            nc.add("dios/0/mode", 1)
-            nc.add("dios/0/drive", 15)
+            # DIO_CODEWORD is mandatory for HDAWG+UHFQA systems to prevent jitter.
+            nc.add("dios/0/mode", DIOMode.DIO_CODEWORD)
+            nc.add("dios/0/drive", 0b1111)
 
             # Loop over at least one AWG instance to cover the case that the instrument is only used
             # as a communication proxy. Some of the nodes on the AWG branch are needed to get
@@ -684,7 +725,7 @@ class DeviceHDAWG(AwgPipeliner, DeviceZI):
     async def collect_reset_nodes(self) -> list[DaqNodeSetAction]:
         nc = NodeCollector(base=f"/{self.serial}/")
         # Reset pipeliner first, attempt to set AWG enable leads to FW error if pipeliner was enabled.
-        nc.extend(self.pipeliner_reset_nodes())
+        nc.extend(self._pipeliner.reset_nodes())
         nc.barrier()
         nc.add("awgs/*/enable", 0, cache=False)
         nc.add("system/synchronization/source", 0, cache=False)  # internal

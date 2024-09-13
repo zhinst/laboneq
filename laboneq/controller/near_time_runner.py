@@ -117,9 +117,7 @@ class NearTimeRunner(AsyncExecutorBase):
             self.sweep_params_tracker
         )
 
-        step_prepare_nodes = await self.controller._prepare_rt_execution(
-            rt_section_uid=uid
-        )
+        step_prepare_nodes = await self.controller._prepare_rt_execution()
 
         await batch_set([*user_set_node_actions, *nt_sweep_nodes, *step_prepare_nodes])
         self.sweep_params_tracker.clear_for_next_step()

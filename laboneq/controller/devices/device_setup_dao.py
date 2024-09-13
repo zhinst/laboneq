@@ -4,12 +4,11 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import dataclass
 import logging
-import math
 from typing import TYPE_CHECKING, ItemsView, Iterator
 
 from laboneq.controller.communication import ServerQualifier
-from laboneq.controller.devices.device_zi import DeviceOptions, DeviceQualifier
 from laboneq.controller.versioning import SetupCaps
 from laboneq.data.execution_payload import (
     TargetChannelCalibration,
@@ -21,6 +20,26 @@ if TYPE_CHECKING:
     from laboneq.data.execution_payload import TargetDevice, TargetServer, TargetSetup
 
 _logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DeviceOptions:
+    serial: str
+    interface: str
+    dev_type: str | None = None
+    is_qc: bool | None = False
+    qc_with_qa: bool = False
+    gen2: bool = False
+    reference_clock_source: str | None = None
+    expected_installed_options: str | None = None
+
+
+@dataclass
+class DeviceQualifier:
+    uid: str
+    server_uid: str
+    driver: str
+    options: DeviceOptions
 
 
 def _make_server_qualifier(server: TargetServer, ignore_version_mismatch: bool):
@@ -60,6 +79,11 @@ def _make_device_qualifier(
 
 
 class DeviceSetupDAO:
+    # Prevent external deps from spreading throughout the controller.
+    @staticmethod
+    def is_rf(calib: TargetChannelCalibration) -> bool:
+        return calib.channel_type == TargetChannelType.RF
+
     def __init__(
         self,
         target_setup: TargetSetup,
@@ -103,6 +127,7 @@ class DeviceSetupDAO:
         self._calibrations: dict[str, list[TargetChannelCalibration]] = {
             device.uid: copy.deepcopy(device.calibrations)
             for device in target_setup.devices
+            if device.calibrations is not None
         }
 
         self._setup_caps = setup_caps
@@ -139,41 +164,8 @@ class DeviceSetupDAO:
             used_outputs.update(sig_used_outputs)
         return used_outputs
 
-    def get_device_rf_voltage_offsets(self, device_uid: str) -> dict[int, float]:
-        """Returns map: <sigout index> -> <voltage_offset>"""
-        voltage_offsets: dict[int, float] = {}
-
-        def add_voltage_offset(sigout: int, voltage_offset: float):
-            if sigout in voltage_offsets:
-                if not math.isclose(voltage_offsets[sigout], voltage_offset):
-                    _logger.warning(
-                        "Ambiguous 'voltage_offset' for the output %s of device %s: %s != %s, "
-                        "will use %s",
-                        sigout,
-                        device_uid,
-                        voltage_offsets[sigout],
-                        voltage_offset,
-                        voltage_offsets[sigout],
-                    )
-            else:
-                voltage_offsets[sigout] = voltage_offset
-
-        for calib in self._calibrations.get(device_uid) or []:
-            if calib.channel_type == TargetChannelType.RF and len(calib.ports) == 1:
-                port_parts = calib.ports[0].upper().split("/")
-                if len(port_parts) == 2 and port_parts[0] == "SIGOUTS":
-                    sigout = int(port_parts[1])
-                elif (
-                    len(port_parts) == 3
-                    and port_parts[0] in ["SGCHANNELS", "QACHANNELS"]
-                    and port_parts[2] == "OUTPUT"
-                ):
-                    sigout = int(port_parts[1])
-                else:
-                    sigout = None
-                if sigout is not None:
-                    add_voltage_offset(sigout, calib.voltage_offset)
-        return voltage_offsets
+    def calibrations(self, device_uid: str) -> list[TargetChannelCalibration]:
+        return self._calibrations.get(device_uid) or []
 
     @property
     def setup_caps(self):

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+from abc import abstractmethod
 from collections import defaultdict
 
 import json
@@ -71,6 +72,13 @@ from laboneq.data.scheduled_experiment import (
     ScheduledExperiment,
 )
 
+from laboneq.controller.devices.device_setup_dao import (
+    DeviceOptions,
+    DeviceQualifier,
+    DeviceSetupDAO,
+)
+
+
 _logger = logging.getLogger(__name__)
 
 seqc_osc_match = re.compile(
@@ -90,28 +98,8 @@ class AllocatedOscillator:
     channels: set[int]
     index: int
     id: str
-    frequency: float
-    param: str
-
-
-@dataclass
-class DeviceOptions:
-    serial: str
-    interface: str
-    dev_type: str | None = None
-    is_qc: bool | None = False
-    qc_with_qa: bool = False
-    gen2: bool = False
-    reference_clock_source: str | None = None
-    expected_installed_options: str | None = None
-
-
-@dataclass
-class DeviceQualifier:
-    uid: str
-    server_uid: str
-    driver: str
-    options: DeviceOptions
+    frequency: float | None
+    param: str | None
 
 
 @dataclass
@@ -185,24 +173,318 @@ class DeviceZI(INodeMonitorProvider):
     def __init__(
         self, device_qualifier: DeviceQualifier, daq: DaqWrapper, setup_caps: SetupCaps
     ):
-        self._setup_caps = setup_caps
         self._device_qualifier = device_qualifier
         self._downlinks: dict[str, list[tuple[str, ReferenceType[DeviceZI]]]] = {}
         self._uplinks: list[ReferenceType[DeviceZI]] = []
-        self._rf_offsets: dict[int, float] = {}
+
+    @property
+    def device_qualifier(self):
+        return self._device_qualifier
+
+    @property
+    def options(self) -> DeviceOptions:
+        return self._device_qualifier.options
+
+    @property
+    def serial(self):
+        return self.options.serial.lower()
+
+    @property
+    def dev_repr(self) -> str:
+        return f"{self._device_qualifier.driver.upper()}:{self.serial}"
+
+    @property
+    def is_secondary(self) -> bool:
+        return False
+
+    ### Node monitoring
+    @property
+    @abstractmethod
+    def node_monitor(self) -> NodeMonitorBase:
+        pass
+
+    def nodes_to_monitor(self) -> list[str]:
+        return []
+
+    def load_factory_preset_control_nodes(self) -> list[NodeControlBase]:
+        return []
+
+    def clock_source_control_nodes(self) -> list[NodeControlBase]:
+        return []
+
+    def system_freq_control_nodes(self) -> list[NodeControlBase]:
+        return []
+
+    def rf_offset_control_nodes(self) -> list[NodeControlBase]:
+        return []
+
+    def zsync_link_control_nodes(self) -> list[NodeControlBase]:
+        return []
+
+    ### Device linking by trigger chain
+    def remove_all_links(self):
+        self._downlinks.clear()
+        self._uplinks.clear()
+
+    def add_downlink(self, port: str, linked_device_uid: str, linked_device: DeviceZI):
+        self._downlinks.setdefault(port, []).append(
+            (linked_device_uid, ref(linked_device))
+        )
+
+    def add_uplink(self, linked_device: DeviceZI):
+        dev_ref = ref(linked_device)
+        if dev_ref not in self._uplinks:
+            self._uplinks.append(dev_ref)
+
+    def downlinks(self) -> Iterator[tuple[str, str, DeviceZI]]:
+        for port, downstream_devices in self._downlinks.items():
+            for uid, dev_ref in downstream_devices:
+                downstream_device = dev_ref()
+                assert downstream_device is not None
+                yield port, uid, downstream_device
+
+    def is_leader(self) -> bool:
+        # Check also downlinks, to exclude standalone devices
+        return len(self._uplinks) == 0 and len(self._downlinks) > 0
+
+    def is_follower(self) -> bool:
+        # Treat standalone devices as followers
+        return len(self._uplinks) > 0 or self.is_standalone()
+
+    def is_standalone(self) -> bool:
+        return len(self._uplinks) == 0 and len(self._downlinks) == 0
+
+    ### Device setup settings
+    def update_clock_source(self, force_internal: bool | None):
+        pass
+
+    def update_from_device_setup(self, ds: DeviceSetupDAO):
+        pass
+
+    ### Device connectivity
+    @abstractmethod
+    async def connect(
+        self,
+        emulator_state: EmulatorState | None,
+        use_async_api: bool,
+    ):
+        pass
+
+    @abstractmethod
+    def disconnect(self):
+        pass
+
+    async def disable_outputs(
+        self, outputs: set[int], invert: bool
+    ) -> list[DaqNodeSetAction]:
+        """Returns actions to disable the specified outputs for the device.
+
+        outputs: set(int)
+            - When 'invert' is False: set of outputs to disable.
+            - When 'invert' is True: set of used outputs to be skipped, remaining
+            outputs will be disabled.
+
+        invert: bool
+            Controls how 'outputs' argument is interpreted, see above. Special case: set
+            to True along with empty 'outputs' to disable all outputs.
+        """
+        return []
+
+    def clear_cache(self):
+        pass
+
+    ### Device resources allocation
+    def free_allocations(self):
+        pass
+
+    def allocate_osc(self, osc_param: OscillatorParam, recipe_data: RecipeData):
+        pass
+
+    ### Handling of device warnings
+    def collect_warning_nodes(self) -> list[str]:
+        return []
+
+    def update_warning_nodes(self, node_values: dict[str, Any]):
+        pass
+
+    ### Other methods
+    async def maybe_async(self, nodes: NodeCollector) -> list[DaqNodeSetAction]:
+        return []
+
+    def validate_scheduled_experiment(
+        self, device_uid: str, scheduled_experiment: ScheduledExperiment
+    ):
+        pass
+
+    def pre_process_attributes(
+        self,
+        initialization: Initialization,
+    ) -> Iterator[DeviceAttribute]:
+        yield from []
+
+    async def collect_reset_nodes(self) -> list[DaqNodeSetAction]:
+        return []
+
+    async def collect_trigger_configuration_nodes(
+        self, initialization: Initialization, recipe_data: RecipeData
+    ) -> list[DaqNodeSetAction]:
+        return []
+
+    async def collect_initialization_nodes(
+        self,
+        device_recipe_data: DeviceRecipeData,
+        initialization: Initialization,
+        recipe_data: RecipeData,
+    ) -> list[DaqNodeSetAction]:
+        return []
+
+    async def collect_osc_initialization_nodes(self) -> list[DaqNodeSetAction]:
+        return []
+
+    @abstractmethod
+    async def prepare_artifacts(
+        self,
+        recipe_data: RecipeData,
+        rt_section_uid: str,
+        initialization: Initialization,
+        awg_index: int,
+        nt_step: NtStepKey,
+    ) -> tuple[
+        DeviceZI, list[DaqNodeSetAction], list[DaqNodeSetAction], dict[str, Any]
+    ]:
+        pass
+
+    def prepare_upload_binary_wave(
+        self,
+        filename: str,
+        waveform: npt.ArrayLike,
+        awg_index: int,
+        wave_index: int,
+        acquisition_type: AcquisitionType,
+    ) -> NodeCollector:
+        return NodeCollector()
+
+    def prepare_command_table(
+        self,
+        artifacts: ArtifactsCodegen,
+        ct_ref: str | None,
+    ) -> dict | None:
+        return None
+
+    def prepare_upload_command_table(
+        self, awg_index, command_table: dict
+    ) -> NodeCollector:
+        return NodeCollector()
+
+    def collect_prepare_nt_step_nodes(
+        self, attributes: DeviceAttributesView, recipe_data: RecipeData
+    ) -> NodeCollector:
+        return NodeCollector()
+
+    async def collect_awg_before_upload_nodes(
+        self, initialization: Initialization, recipe_data: RecipeData
+    ) -> list[DaqNodeSetAction]:
+        return []
+
+    async def collect_awg_after_upload_nodes(
+        self, initialization: Initialization
+    ) -> list[DaqNodeSetAction]:
+        return []
+
+    async def collect_execution_setup_nodes(
+        self, with_pipeliner: bool, has_awg_in_use: bool
+    ) -> list[DaqNodeSetAction]:
+        return []
+
+    async def collect_execution_nodes(
+        self, with_pipeliner: bool
+    ) -> list[DaqNodeSetAction]:
+        return []
+
+    async def configure_feedback(
+        self, recipe_data: RecipeData
+    ) -> list[DaqNodeSetAction]:
+        return []
+
+    async def conditions_for_sync_ready(
+        self, with_pipeliner: bool
+    ) -> dict[str, tuple[Any, str]]:
+        return {}
+
+    async def conditions_for_execution_ready(
+        self, with_pipeliner: bool
+    ) -> dict[str, tuple[Any, str]]:
+        return {}
+
+    async def collect_internal_start_execution_nodes(self) -> list[DaqNodeSetAction]:
+        return []
+
+    async def conditions_for_execution_done(
+        self, acquisition_type: AcquisitionType, with_pipeliner: bool
+    ) -> dict[str, tuple[Any, str]]:
+        return {}
+
+    async def collect_execution_teardown_nodes(
+        self, with_pipeliner: bool
+    ) -> list[DaqNodeSetAction]:
+        return []
+
+    async def fetch_errors(self) -> str | list[str]:
+        return []
+
+    def on_experiment_end(self) -> NodeCollector:
+        return NodeCollector()
+
+    ### Result processing
+    async def get_result_data(self) -> Any:
+        pass
+
+    async def get_measurement_data(
+        self,
+        recipe_data: RecipeData,
+        channel: int,
+        rt_execution_info: RtExecutionInfo,
+        result_indices: list[int],
+        num_results: int,
+        hw_averages: int,
+    ) -> RawReadoutData:
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support result retrieval"
+        )
+
+    async def get_input_monitor_data(
+        self, channel: int, num_results: int
+    ) -> RawReadoutData:
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support result retrieval"
+        )
+
+    async def check_results_acquired_status(
+        self, channel, acquisition_type: AcquisitionType, result_length, hw_averages
+    ):
+        pass
+
+
+class DeviceBase(DeviceZI):
+    def __init__(
+        self, device_qualifier: DeviceQualifier, daq: DaqWrapper, setup_caps: SetupCaps
+    ):
+        super().__init__(device_qualifier, daq, setup_caps)
+        self._setup_caps = setup_caps
 
         self._daq = daq
         self._api = None  # TODO(2K): Add type labone.Instrument
         self._node_monitor: NodeMonitorBase | None = None
-        self.dev_type: str | None = None
+        self.dev_type: str = "UNKNOWN"
         self.dev_opts: list[str] = []
         self._connected = False
+        self._voltage_offsets: dict[int, float] = {}
         self._allocated_oscs: list[AllocatedOscillator] = []
         self._allocated_awgs: set[int] = set()
         self._pipeliner_reload_tracker: dict[int, PipelinerReloadTracker] = defaultdict(
             PipelinerReloadTracker
         )
-        self._nodes_to_monitor = None
+        self._nodes_to_monitor: list[str] | None = None
         self._sampling_rate = None
         self._device_class = 0x0
 
@@ -220,28 +502,12 @@ class DeviceZI(INodeMonitorProvider):
             )
 
     @property
-    def device_qualifier(self):
-        return self._device_qualifier
-
-    @property
-    def dev_repr(self) -> str:
-        return f"{self._device_qualifier.driver.upper()}:{self.serial}"
-
-    @property
     def has_awg(self) -> bool:
         return self._get_num_awgs() > 0
 
     @property
     def has_pipeliner(self) -> bool:
         return False
-
-    @property
-    def options(self) -> DeviceOptions:
-        return self._device_qualifier.options
-
-    @property
-    def serial(self):
-        return self.options.serial.lower()
 
     @property
     def interface(self):
@@ -255,10 +521,6 @@ class DeviceZI(INodeMonitorProvider):
     def node_monitor(self) -> NodeMonitorBase:
         assert self._node_monitor is not None
         return self._node_monitor
-
-    @property
-    def is_secondary(self) -> bool:
-        return False
 
     async def maybe_async(self, nodes: NodeCollector) -> list[DaqNodeSetAction]:
         if self._api is not None:
@@ -351,33 +613,6 @@ class DeviceZI(INodeMonitorProvider):
             ready=f"/{self.serial}/awgs/{index}/ready",
         )
 
-    def add_downlink(self, port: str, linked_device_uid: str, linked_device: DeviceZI):
-        self._downlinks.setdefault(port, []).append(
-            (linked_device_uid, ref(linked_device))
-        )
-
-    def add_uplink(self, linked_device: DeviceZI):
-        dev_ref = ref(linked_device)
-        if dev_ref not in self._uplinks:
-            self._uplinks.append(dev_ref)
-
-    def remove_all_links(self):
-        self._downlinks.clear()
-        self._uplinks.clear()
-
-    def downlinks(self) -> Iterator[tuple[str, str, DeviceZI]]:
-        for port, downstream_devices in self._downlinks.items():
-            for uid, dev_ref in downstream_devices:
-                yield port, uid, dev_ref()
-
-    def is_leader(self):
-        # Check also downlinks, to exclude standalone devices
-        return len(self._uplinks) == 0 and len(self._downlinks) > 0
-
-    def is_follower(self):
-        # Treat standalone devices as followers
-        return len(self._uplinks) > 0 or self.is_standalone()
-
     def is_standalone(self):
         def is_ppc(dev):
             return (
@@ -418,23 +653,30 @@ class DeviceZI(INodeMonitorProvider):
                 value_or_param=input.port_delay,
             )
 
-    def validate_scheduled_experiment(
-        self, device_uid: str, scheduled_experiment: ScheduledExperiment
-    ):
-        pass
+    def _sigout_from_port(self, ports: list[str]) -> int | None:
+        return None
 
-    async def collect_initialization_nodes(
-        self,
-        device_recipe_data: DeviceRecipeData,
-        initialization: Initialization,
-        recipe_data: RecipeData,
-    ) -> list[DaqNodeSetAction]:
-        return []
+    def _add_voltage_offset(self, sigout: int, voltage_offset: float):
+        if sigout in self._voltage_offsets:
+            if not math.isclose(self._voltage_offsets[sigout], voltage_offset):
+                _logger.warning(
+                    "Ambiguous 'voltage_offset' for the output %s of device %s: %s != %s, "
+                    "will use %s",
+                    sigout,
+                    self.device_qualifier.uid,
+                    self._voltage_offsets[sigout],
+                    voltage_offset,
+                    self._voltage_offsets[sigout],
+                )
+        else:
+            self._voltage_offsets[sigout] = voltage_offset
 
-    async def collect_trigger_configuration_nodes(
-        self, initialization: Initialization, recipe_data: RecipeData
-    ) -> list[DaqNodeSetAction]:
-        return []
+    def update_from_device_setup(self, ds: DeviceSetupDAO):
+        for calib in ds.calibrations(self.device_qualifier.uid):
+            if DeviceSetupDAO.is_rf(calib) and calib.voltage_offset is not None:
+                sigout = self._sigout_from_port(calib.ports)
+                if sigout is not None:
+                    self._add_voltage_offset(sigout, calib.voltage_offset)
 
     async def _connect_to_data_server(
         self, emulator_state: EmulatorState | None, use_async_api: bool
@@ -494,31 +736,12 @@ class DeviceZI(INodeMonitorProvider):
             self._api = None  # TODO(2K): Proper disconnect?
         self._connected = False
 
-    async def disable_outputs(
-        self, outputs: set[int], invert: bool
-    ) -> list[DaqNodeSetAction]:
-        """Returns actions to disable the specified outputs for the device.
-
-        outputs: set(int)
-            - When 'invert' is False: set of outputs to disable.
-            - When 'invert' is True: set of used outputs to be skipped, remaining
-            outputs will be disabled.
-
-        invert: bool
-            Controls how 'outputs' argument is interpreted, see above. Special case: set
-            to True along with empty 'outputs' to disable all outputs.
-        """
-        return []
-
-    def on_experiment_end(self) -> NodeCollector:
-        return NodeCollector()
-
     def free_allocations(self):
         self._allocated_oscs.clear()
         self._allocated_awgs.clear()
         self._pipeliner_reload_tracker.clear()
 
-    def _nodes_to_monitor_impl(self):
+    def _nodes_to_monitor_impl(self) -> list[str]:
         nodes = []
         nodes.extend([node.path for node in self.load_factory_preset_control_nodes()])
         nodes.extend([node.path for node in self.clock_source_control_nodes()])
@@ -527,27 +750,6 @@ class DeviceZI(INodeMonitorProvider):
         nodes.extend([node.path for node in self.zsync_link_control_nodes()])
         nodes.extend(self.collect_warning_nodes())
         return nodes
-
-    def update_clock_source(self, force_internal: bool | None):
-        pass
-
-    def update_rf_offsets(self, rf_offsets: dict[int, float]):
-        self._rf_offsets = rf_offsets
-
-    def load_factory_preset_control_nodes(self) -> list[NodeControlBase]:
-        return []
-
-    def clock_source_control_nodes(self) -> list[NodeControlBase]:
-        return []
-
-    def system_freq_control_nodes(self) -> list[NodeControlBase]:
-        return []
-
-    def rf_offset_control_nodes(self) -> list[NodeControlBase]:
-        return []
-
-    def zsync_link_control_nodes(self) -> list[NodeControlBase]:
-        return []
 
     def nodes_to_monitor(self) -> list[str]:
         if self._nodes_to_monitor is None:
@@ -598,11 +800,6 @@ class DeviceZI(INodeMonitorProvider):
                 )
             same_id_osc.channels.add(osc_param.channel)
 
-    async def configure_feedback(
-        self, recipe_data: RecipeData
-    ) -> list[DaqNodeSetAction]:
-        return []
-
     def configure_acquisition(
         self,
         awg_key: AwgKey,
@@ -620,59 +817,6 @@ class DeviceZI(INodeMonitorProvider):
         if self._api is not None:
             return await get_raw(self._api, path)
         return self.daq.get_raw(path)
-
-    async def get_measurement_data(
-        self,
-        recipe_data: RecipeData,
-        channel: int,
-        rt_execution_info: RtExecutionInfo,
-        result_indices: list[int],
-        num_results: int,
-        hw_averages: int,
-    ) -> RawReadoutData:
-        raise NotImplementedError(
-            f"{self.__class__.__name__} does not support result retrieval"
-        )
-
-    async def get_input_monitor_data(
-        self, channel: int, num_results: int
-    ) -> RawReadoutData:
-        raise NotImplementedError(
-            f"{self.__class__.__name__} does not support result retrieval"
-        )
-
-    async def conditions_for_execution_ready(
-        self, with_pipeliner: bool
-    ) -> dict[str, tuple[Any, str]]:
-        return {}
-
-    async def conditions_for_execution_done(
-        self, acquisition_type: AcquisitionType, with_pipeliner: bool
-    ) -> dict[str, tuple[Any, str]]:
-        return {}
-
-    async def collect_execution_setup_nodes(
-        self, with_pipeliner: bool, has_awg_in_use: bool
-    ) -> list[DaqNodeSetAction]:
-        return []
-
-    async def collect_execution_teardown_nodes(
-        self, with_pipeliner: bool
-    ) -> list[DaqNodeSetAction]:
-        return []
-
-    async def conditions_for_sync_ready(
-        self, with_pipeliner: bool
-    ) -> dict[str, tuple[Any, str]]:
-        return {}
-
-    async def check_results_acquired_status(
-        self, channel, acquisition_type: AcquisitionType, result_length, hw_averages
-    ):
-        pass
-
-    async def get_result_data(self) -> Any:
-        pass
 
     def _adjust_frequency(self, freq):
         return freq
@@ -765,7 +909,7 @@ class DeviceZI(INodeMonitorProvider):
             if rt_exec_step is None:
                 continue
 
-            seqc_code = self.prepare_seqc(artifacts, rt_exec_step.seqc_ref)
+            seqc_code = self.prepare_seqc(artifacts, rt_exec_step.program_ref)
             if seqc_code is not None:
                 seqc_item = SeqCCompileItem(
                     dev_type=self.dev_type,
@@ -774,9 +918,10 @@ class DeviceZI(INodeMonitorProvider):
                     sequencer=self._get_sequencer_type(),
                     sampling_rate=self._sampling_rate,
                     code=seqc_code,
-                    filename=rt_exec_step.seqc_ref,
+                    filename=rt_exec_step.program_ref,
                 )
                 await seqc_compile_async(seqc_item)
+                assert seqc_item.elf is not None
                 elf_nodes.extend(
                     self.prepare_upload_elf(
                         seqc_item.elf, awg_index, seqc_item.filename
@@ -1165,16 +1310,6 @@ class DeviceZI(INodeMonitorProvider):
             nc.add(path, 0 if freq is None else self._adjust_frequency(freq))
         return await self.maybe_async(nc)
 
-    async def collect_awg_before_upload_nodes(
-        self, initialization: Initialization, recipe_data: RecipeData
-    ) -> list[DaqNodeSetAction]:
-        return []
-
-    async def collect_awg_after_upload_nodes(
-        self, initialization: Initialization
-    ) -> list[DaqNodeSetAction]:
-        return []
-
     async def collect_execution_nodes(
         self, with_pipeliner: bool
     ) -> list[DaqNodeSetAction]:
@@ -1187,10 +1322,7 @@ class DeviceZI(INodeMonitorProvider):
 
         return await self.maybe_async(nc)
 
-    async def collect_internal_start_execution_nodes(self) -> list[DaqNodeSetAction]:
-        return []
-
-    async def fetch_errors(self):
+    async def fetch_errors(self) -> str | list[str]:
         error_node = f"/{self.serial}/raw/error/json/errors"
         all_errors = await self.get_raw(error_node)
         return all_errors[error_node]
@@ -1199,9 +1331,3 @@ class DeviceZI(INodeMonitorProvider):
         nc = NodeCollector(base=f"/{self.serial}/")
         nc.add("raw/error/clear", 1, cache=False)
         return await self.maybe_async(nc)
-
-    def collect_warning_nodes(self) -> list[str]:
-        return []
-
-    def update_warning_nodes(self, node_values: dict[str, Any]):
-        pass

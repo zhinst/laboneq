@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from enum import IntEnum
 
-from laboneq.controller.devices.device_zi import DeviceZI
+from laboneq.controller.devices.device_zi import DeviceBase
 from laboneq.controller.devices.zi_node_monitor import (
     Command,
     Setting,
@@ -41,7 +41,7 @@ class ReferenceClockSourceSHF(IntEnum):
     ZSYNC = 2
 
 
-class DeviceSHFBase(DeviceZI):
+class DeviceSHFBase(DeviceBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._reference_clock_source = ReferenceClockSourceSHF.ZSYNC

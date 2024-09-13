@@ -286,8 +286,8 @@ class ExperimentInfoBuilder:
     ) -> AmplifierPumpInfo:
         return AmplifierPumpInfo(
             ppc_device=ppc_device,
-            pump_frequency=self.opt_param(amp_pump.pump_frequency, nt_only=True),
-            pump_power=self.opt_param(amp_pump.pump_power, nt_only=True),
+            pump_frequency=self.opt_param(amp_pump.pump_frequency),
+            pump_power=self.opt_param(amp_pump.pump_power),
             pump_on=amp_pump.pump_on,
             pump_filter_on=amp_pump.pump_filter_on,
             cancellation_on=amp_pump.cancellation_on,
@@ -297,8 +297,8 @@ class ExperimentInfoBuilder:
             cancellation_source_frequency=amp_pump.cancellation_source_frequency,
             alc_on=amp_pump.alc_on,
             probe_on=amp_pump.probe_on,
-            probe_frequency=self.opt_param(amp_pump.probe_frequency, nt_only=True),
-            probe_power=self.opt_param(amp_pump.probe_power, nt_only=True),
+            probe_frequency=self.opt_param(amp_pump.probe_frequency),
+            probe_power=self.opt_param(amp_pump.probe_power),
             channel=channel,
         )
 
@@ -315,11 +315,10 @@ class ExperimentInfoBuilder:
 
         if physical_channel.direction == IODirection.IN:
             signal_info.type = SignalInfoType.INTEGRATION
+        elif physical_channel.type == PhysicalChannelType.RF_CHANNEL:
+            signal_info.type = SignalInfoType.RF
         else:
-            if physical_channel.type == PhysicalChannelType.RF_CHANNEL:
-                signal_info.type = SignalInfoType.RF
-            else:
-                signal_info.type = SignalInfoType.IQ
+            signal_info.type = SignalInfoType.IQ
 
         calibration = self._get_signal_calibration(signal, mapped_ls)
         if calibration is not None:
@@ -855,15 +854,7 @@ class ExperimentInfoBuilder:
                     raise ValueError(
                         f"Repeat count must be at least 1, but section {section.uid} has count={count}"
                     )
-                if (
-                    section.execution_type is not None
-                    and section.execution_type == ExecutionType.REAL_TIME
-                    and parameter.uid in self._nt_only_params
-                ):
-                    raise LabOneQException(
-                        f"Parameter {parameter.uid} can't be swept in real-time, it is bound to a value "
-                        f"that can only be set in near-time"
-                    )
+
         execution_type = section.execution_type
         align = section.alignment
         on_system_grid = section.on_system_grid
@@ -1063,6 +1054,13 @@ class ExperimentInfoBuilder:
                 # assertion rather than a LabOneQException.
                 assert acquire_loop is None, "multiple AcquireLoopRt not permitted"
                 acquire_loop = section
+            if section.execution_type == ExecutionType.REAL_TIME:
+                for parameter in section.parameters:
+                    if parameter.uid in self._nt_only_params:
+                        raise LabOneQException(
+                            f"Parameter {parameter.uid} can't be swept in real-time, it"
+                            " is bound to a value that can only be set in near-time"
+                        )
             for child in section.children:
                 traverse_set_execution_type_and_check_rt_loop(child, in_realtime)
 

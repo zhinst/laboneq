@@ -1070,7 +1070,7 @@ def analyze_recipe(
                 for r in recipe.realtime_execution_init
                 if r.device_id == device_uid and r.awg_id == awg_nr
             )
-            seqc = rt_exec_step.seqc_ref
+            seqc = rt_exec_step.program_ref
             if device_type == "SHFSG" or device_type == "SHFQA":
                 input_channel = awg_nr
                 output_channels = [awg_nr]

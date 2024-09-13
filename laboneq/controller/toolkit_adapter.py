@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 from collections.abc import Mapping
-from typing import Dict, Optional
 from unittest.mock import MagicMock
 
 import numpy
@@ -11,7 +10,7 @@ import zhinst.core
 from zhinst.toolkit.driver.devices import DeviceType
 from zhinst.toolkit import Session as TKSession
 
-from laboneq.controller.devices.device_zi import DeviceZI
+from laboneq.controller.devices.device_zi import DeviceBase, DeviceZI
 
 
 class MockedToolkit(MagicMock):
@@ -32,8 +31,12 @@ class ToolkitDevices(Mapping):
         devices: Mapping of devices in the device setup.
     """
 
-    def __init__(self, devices: Optional[Dict[str, DeviceZI]] = None):
-        self._devices = devices if devices else {}
+    def __init__(self, devices: dict[str, DeviceZI] | None = None):
+        self._devices = (
+            {u: d for u, d in devices.items() if isinstance(d, DeviceBase)}
+            if devices
+            else {}
+        )
         self._tk_sessions: dict[tuple[str, int], TKSession] = {}
 
     def _tk_session(

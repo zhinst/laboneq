@@ -8,6 +8,7 @@ import itertools
 import logging
 import time
 from typing import Any, Iterator
+from weakref import ref
 
 import numpy as np
 from numpy import typing as npt
@@ -114,17 +115,30 @@ def calc_theoretical_assignment_vec(num_weights: int) -> np.ndarray:
     return assignment_vec
 
 
-class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
+class DeviceSHFQA(DeviceSHFBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.dev_type = "SHFQA4"
         self.dev_opts = []
+        self._pipeliner = AwgPipeliner(ref(self), f"/{self.serial}/qachannels", "QA")
         self._channels = 4
         self._integrators = 16
         self._long_readout_available = True
         self._wait_for_awgs = True
         self._emit_trigger = False
-        self.pipeliner_set_node_base(f"/{self.serial}/qachannels", "QA")
+
+    @property
+    def has_pipeliner(self) -> bool:
+        return True
+
+    def pipeliner_prepare_for_upload(self, index: int) -> NodeCollector:
+        return self._pipeliner.prepare_for_upload(index)
+
+    def pipeliner_commit(self, index: int) -> NodeCollector:
+        return self._pipeliner.commit(index)
+
+    def pipeliner_ready_conditions(self, index: int) -> dict[str, Any]:
+        return self._pipeliner.ready_conditions(index)
 
     @property
     def dev_repr(self) -> str:
@@ -293,7 +307,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
                 nodes.append(
                     f"/{self.serial}/qachannels/{awg}/readout/result/data/{result_index}/wave",
                 )
-            nodes.extend(self.pipeliner_control_nodes(awg))
+            nodes.extend(self._pipeliner.control_nodes(awg))
         return nodes
 
     def configure_acquisition(
@@ -505,7 +519,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         self, with_pipeliner: bool
     ) -> list[DaqNodeSetAction]:
         if with_pipeliner:
-            nc = self.pipeliner_collect_execution_nodes()
+            nc = self._pipeliner.collect_execution_nodes()
         else:
             nc = NodeCollector(base=f"/{self.serial}/")
             for awg_index in self._allocated_awgs:
@@ -539,7 +553,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         self, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
         if with_pipeliner:
-            conditions = self.pipeliner_conditions_for_execution_ready()
+            conditions = self._pipeliner.conditions_for_execution_ready()
         else:
             # TODO(janl): Not sure whether we need this condition on the SHFQA (including SHFQC)
             # as well. The state of the generator enable wasn't always picked up reliably, so we
@@ -559,7 +573,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
         conditions: dict[str, tuple[Any, str]] = {}
 
         if with_pipeliner:
-            conditions.update(self.pipeliner_conditions_for_execution_done())
+            conditions.update(self._pipeliner.conditions_for_execution_done())
         else:
             conditions.update(
                 {
@@ -583,7 +597,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
             nc.add("system/synchronization/source", 0)
 
         if with_pipeliner:
-            nc.extend(self.pipeliner_reset_nodes())
+            nc.extend(self._pipeliner.reset_nodes())
 
         return await self.maybe_async(nc)
 
@@ -1289,7 +1303,7 @@ class DeviceSHFQA(AwgPipeliner, DeviceSHFBase):
     async def collect_reset_nodes(self) -> list[DaqNodeSetAction]:
         nc = NodeCollector(base=f"/{self.serial}/")
         # Reset pipeliner first, attempt to set generator enable leads to FW error if pipeliner was enabled.
-        nc.extend(self.pipeliner_reset_nodes())
+        nc.extend(self._pipeliner.reset_nodes())
         nc.add("qachannels/*/generator/enable", 0, cache=False)
         nc.add("system/synchronization/source", 0, cache=False)  # internal
         if self.options.is_qc:
