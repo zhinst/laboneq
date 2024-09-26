@@ -59,13 +59,12 @@ class DeviceSHFPPC(DeviceBase):
 
     def _nodes_to_monitor_impl(self):
         nodes = super()._nodes_to_monitor_impl()
-        if self._setup_caps.ppc_sweeper:
-            nodes.extend(
-                [
-                    f"/{self.serial}/ppchannels/{channel}/sweeper/enable"
-                    for channel in range(self._channels)
-                ]
-            )
+        nodes.extend(
+            [
+                f"/{self.serial}/ppchannels/{channel}/sweeper/enable"
+                for channel in range(self._channels)
+            ]
+        )
         return nodes
 
     def _key_to_path(self, key: str, ch: int):
@@ -106,8 +105,7 @@ class DeviceSHFPPC(DeviceBase):
 
     async def collect_reset_nodes(self) -> list[DaqNodeSetAction]:
         nc = NodeCollector(base=f"/{self.serial}/")
-        if self._setup_caps.ppc_sweeper:
-            nc.add("ppchannels/*/sweeper/enable", 0, cache=False)
+        nc.add("ppchannels/*/sweeper/enable", 0, cache=False)
         reset_nodes = await super().collect_reset_nodes()
         reset_nodes.extend(await self.maybe_async(nc))
         return reset_nodes

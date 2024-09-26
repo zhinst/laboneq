@@ -51,14 +51,6 @@ class LabOneVersion:
         """Pack version information similar to how LabOne data server does it."""
         return f"{self.major}.{self.minor:02d}"
 
-    @property
-    def supports_flexible_feedback(self):
-        return self.as_tuple(omit_build=True) > (24, 4)
-
-    @property
-    def supports_ppc_sweeper(self):
-        return self.as_tuple(omit_build=True) > (24, 4)
-
     @classmethod
     def from_version_string(cls, s: str):
         major, minor, build = map(int, s.split("."))
@@ -96,7 +88,7 @@ class LabOneVersion:
 RECOMMENDED_LABONE_VERSION = LabOneVersion(24, 7, 0)
 """This variable holds the version what we currently support and actively test against."""
 
-MINIMUM_SUPPORTED_LABONE_VERSION = LabOneVersion(24, 4, 0)
+MINIMUM_SUPPORTED_LABONE_VERSION = RECOMMENDED_LABONE_VERSION
 """This variable holds the minimum version that we expect LabOne Q to work
 reliably, but may not be testing against anymore. Most of the time, this will
 be equal to `RECOMMENDED_LABONE_VERSION` with the exceptions happening
@@ -112,11 +104,3 @@ DROP_SUPPORT_FOR_PREVIOUS_L1 = (2, 37)
 class SetupCaps:
     def __init__(self, version: LabOneVersion):
         self._version = version
-
-    @property
-    def flexible_feedback(self) -> bool:
-        return self._version.supports_flexible_feedback
-
-    @property
-    def ppc_sweeper(self) -> bool:
-        return self._version.supports_ppc_sweeper

@@ -134,7 +134,6 @@ class SampledEventHandler:
         use_command_table: bool,
         emit_timing_comments: bool,
         use_current_sequencer_step: bool,
-        use_flexible_feedback: bool,
     ):
         self.seqc_tracker = seqc_tracker
         self.command_table_tracker = command_table_tracker
@@ -168,8 +167,6 @@ class SampledEventHandler:
         self.match_seqc_generators: dict[int, SeqCGenerator] = {}  # user_register match
         self.current_sequencer_step = 0 if use_current_sequencer_step else None
         self.sequencer_step = 8  # todo(JL): Is this always the case, and how to get it?
-
-        self.use_flexible_feedback = use_flexible_feedback
 
     def _increment_sequencer_step(self):
         if self.current_sequencer_step is not None:
@@ -997,20 +994,19 @@ class SampledEventHandler:
         if local:
             self.feedback_register_config.source_feedback_register = "local"
 
-        if self.use_flexible_feedback:
-            if not local:
-                path = "ZSYNC_DATA_PROCESSED_A"
-            else:
-                path = "QA_DATA_PROCESSED"
-            self.declarations_generator.add_function_call_statement(
-                "configureFeedbackProcessing",
-                args=[
-                    path,
-                    codeword_bitshift,
-                    width,  # todo: According to docs, should be decremented
-                    self.feedback_register_config.command_table_offset,
-                ],
-            )
+        if not local:
+            path = "ZSYNC_DATA_PROCESSED_A"
+        else:
+            path = "QA_DATA_PROCESSED"
+        self.declarations_generator.add_function_call_statement(
+            "configureFeedbackProcessing",
+            args=[
+                path,
+                codeword_bitshift,
+                width,  # todo: According to docs, should be decremented
+                self.feedback_register_config.command_table_offset,
+            ],
+        )
 
         self.feedback_register_config.codeword_bitshift = codeword_bitshift
         self.feedback_register_config.codeword_bitmask = mask
@@ -1076,11 +1072,7 @@ class SampledEventHandler:
             - EXECUTETABLEENTRY_LATENCY
         )
 
-        ete_global_feedback_source = (
-            "ZSYNC_DATA_PROCESSED_A"
-            if self.use_flexible_feedback
-            else "ZSYNC_DATA_PQSC_REGISTER"
-        )
+        ete_global_feedback_source = "ZSYNC_DATA_PROCESSED_A"
         self.seqc_tracker.add_command_table_execution(
             "QA_DATA_PROCESSED" if ev.params["local"] else ete_global_feedback_source,
             latency="current_seq_step "

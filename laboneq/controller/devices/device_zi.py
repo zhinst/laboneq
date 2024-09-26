@@ -209,6 +209,9 @@ class DeviceZI(INodeMonitorProvider):
     def load_factory_preset_control_nodes(self) -> list[NodeControlBase]:
         return []
 
+    def runtime_check_control_nodes(self) -> list[NodeControlBase]:
+        return []
+
     def clock_source_control_nodes(self) -> list[NodeControlBase]:
         return []
 
@@ -267,6 +270,7 @@ class DeviceZI(INodeMonitorProvider):
         self,
         emulator_state: EmulatorState | None,
         use_async_api: bool,
+        disable_runtime_checks: bool,
     ):
         pass
 
@@ -487,6 +491,7 @@ class DeviceBase(DeviceZI):
         self._nodes_to_monitor: list[str] | None = None
         self._sampling_rate = None
         self._device_class = 0x0
+        self._enable_runtime_checks = True
 
         if self._daq is None:
             raise LabOneQControllerException("ZI devices need daq")
@@ -721,7 +726,9 @@ class DeviceBase(DeviceZI):
         self,
         emulator_state: EmulatorState | None,
         use_async_api: bool,
+        disable_runtime_checks: bool = False,
     ):
+        self._enable_runtime_checks = not disable_runtime_checks
         await self._connect_to_data_server(emulator_state, use_async_api=use_async_api)
         if self._node_monitor is not None:
             self.node_monitor.add_nodes(self.nodes_to_monitor())
@@ -744,6 +751,7 @@ class DeviceBase(DeviceZI):
     def _nodes_to_monitor_impl(self) -> list[str]:
         nodes = []
         nodes.extend([node.path for node in self.load_factory_preset_control_nodes()])
+        nodes.extend([node.path for node in self.runtime_check_control_nodes()])
         nodes.extend([node.path for node in self.clock_source_control_nodes()])
         nodes.extend([node.path for node in self.system_freq_control_nodes()])
         nodes.extend([node.path for node in self.rf_offset_control_nodes()])

@@ -500,7 +500,10 @@ class DeviceSHFQA(DeviceSHFBase):
             nc.add(
                 f"scopes/0/channels/{channel}/inputselect", channel
             )  # channelN_signal_input
-            nc.add("scopes/0/length", acquire_length)
+            scope_length = (acquire_length + 0xF) & (
+                ~0xF
+            )  # scope length has a granularity of 16
+            nc.add("scopes/0/length", scope_length)
             nc.add("scopes/0/segments/enable", 0)
             # TODO(2K): multiple acquire events per monitor
             # "scopes/0/segments/enable", 1

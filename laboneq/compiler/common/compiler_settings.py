@@ -82,8 +82,6 @@ class CompilerSettings:
 
     LOG_REPORT: bool = True
 
-    FLEXIBLE_FEEDBACK: bool = True
-
     @classmethod
     def from_dict(cls, settings: dict | None = None):
         if settings is None:

@@ -214,6 +214,15 @@ class DeviceHDAWG(DeviceBase):
             WaitCondition(f"/{self.serial}/system/clocks/referenceclock/status", 0),
         ]
 
+    def runtime_check_control_nodes(self) -> list[NodeControlBase]:
+        # Enable AWG runtime checks which includes the gap detector.
+        return [
+            Setting(
+                f"/{self.serial}/raw/system/awg/runtimechecks/enable",
+                int(self._enable_runtime_checks),
+            )
+        ]
+
     def system_freq_control_nodes(self) -> list[NodeControlBase]:
         # If we do not turn all channels off, we get the following error message from
         # the server/device: 'An error happened on device dev8330 during the execution
@@ -325,6 +334,12 @@ class DeviceHDAWG(DeviceBase):
 
         if with_pipeliner:
             nc.extend(self._pipeliner.reset_nodes())
+
+        # HACK: HBAR-1427 and HBAR-2165 show that runtime checks generate
+        # wrongly detected gaps when enabled during experiments with feedback.
+        # Here we make sure that if they were enabled at `session.connect` we
+        # re-enable them in case the previous experiment had feedback.
+        nc.add("raw/system/awg/runtimechecks/enable", int(self._enable_runtime_checks))
 
         return await self.maybe_async(nc)
 
@@ -631,7 +646,21 @@ class DeviceHDAWG(DeviceBase):
     async def collect_trigger_configuration_nodes(
         self, initialization: Initialization, recipe_data: RecipeData
     ) -> list[DaqNodeSetAction]:
-        return []
+        nc = NodeCollector(base=f"/{self.serial}/")
+
+        for awg_key, awg_config in recipe_data.awg_configs.items():
+            has_no_feedback = awg_config.source_feedback_register is None
+            if (awg_key.device_uid != initialization.device_uid) or has_no_feedback:
+                continue
+
+            # HACK: HBAR-1427 and HBAR-2165 show that runtime checks generate
+            # wrongly detected gaps when enabled during experiments with feedback.
+            # Here we ensure that the gap detector is disabled if we are
+            # configuring feedback.
+            nc.add("raw/system/awg/runtimechecks/enable", 0)
+            break
+
+        return await self.maybe_async(nc)
 
     def _collect_dio_configuration_nodes(
         self, initialization: Initialization, recipe_data: RecipeData
@@ -651,38 +680,13 @@ class DeviceHDAWG(DeviceBase):
             # Loop over at least one AWG instance to cover the case that the instrument is only used
             # as a communication proxy. Some of the nodes on the AWG branch are needed to get
             # proper communication between HDAWG and UHFQA.
-            is_not_flexible_feedback = not self._setup_caps.flexible_feedback
             for awg_index in (
                 self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
             ):
                 awg_path = f"awgs/{awg_index}"
                 nc.add(f"{awg_path}/dio/strobe/slope", 0)
                 nc.add(f"{awg_path}/dio/valid/polarity", 0)
-                awg_config = next(
-                    (
-                        awg_config
-                        for awg_key, awg_config in recipe_data.awg_configs.items()
-                        if (
-                            awg_key.device_uid == initialization.device_uid
-                            and awg_key.awg_index == awg_index
-                            and awg_config.source_feedback_register is not None
-                        )
-                    ),
-                    None,
-                )
-                if (awg_config is not None) and is_not_flexible_feedback:
-                    nc.add(
-                        f"{awg_path}/zsync/register/shift",
-                        awg_config.register_selector_shift,
-                    )
-                    nc.add(
-                        f"{awg_path}/zsync/register/mask",
-                        awg_config.register_selector_bitmask,
-                    )
-                    nc.add(
-                        f"{awg_path}/zsync/register/offset",
-                        awg_config.command_table_match_offset,
-                    )
+
         elif triggering_mode == TriggeringMode.DESKTOP_LEADER:
             # For desktop setups (setup with HDAWG and UHFQA only) we recommend
             # users to connect UHFQA reference clock output to the trigger

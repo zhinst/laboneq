@@ -215,6 +215,7 @@ class Session:
         ignore_version_mismatch=False,
         reset_devices=False,
         use_async_api: bool | None = None,
+        disable_runtime_checks: bool = True,
     ) -> ConnectionState:
         """Connects the session to the QCCS system.
 
@@ -242,6 +243,11 @@ class Session:
 
             reset_devices (bool): Load the factory preset after connecting for device which support it.
 
+            use_async_api (bool): Enable the async backend of LabOne Q controller. Defaults to `True`.
+
+            disable_runtime_checks (bool): Disable the runtime checks performed
+                by device firmware. Defaults to `False`.
+
         Returns:
             connection_state:
                 The connection state of the session.
@@ -264,6 +270,7 @@ class Session:
             do_emulation=self._connection_state.emulated,
             reset_devices=reset_devices,
             use_async_api=use_async_api,
+            disable_runtime_checks=disable_runtime_checks,
         )
         self._controller = controller
         if self._connection_state.emulated:
@@ -357,19 +364,11 @@ class Session:
             Use [OutputSimulator][laboneq.simulator.output_simulator.OutputSimulator] instead.
         """
         self._experiment_definition = experiment
-        internal_compiler_settings = {}
-        if self._controller is not None:
-            internal_compiler_settings.update(
-                {
-                    _FLEXIBLE_FEEDBACK_SETTING: self._controller.setup_caps.flexible_feedback
-                }
-            )
         self._compiled_experiment = laboneq_compile(
             device_setup=self.device_setup,
             experiment=self.experiment,
             compiler_settings={
                 **(compiler_settings or {}),
-                **internal_compiler_settings,
             },
         )
         self._last_results = None
@@ -421,17 +420,6 @@ class Session:
                 self.compile(experiment)
         if self.compiled_experiment is None:
             raise LabOneQException("No experiment available to run.")
-        compiler_settings = self.compiled_experiment.compiler_settings or {}
-        compiled_flexible_feedback = compiler_settings.get(
-            _FLEXIBLE_FEEDBACK_SETTING, False
-        )
-        if compiled_flexible_feedback != controller.setup_caps.flexible_feedback:
-            with_or_without = {True: "with", False: "without"}
-            raise LabOneQException(
-                f"Attempt to run experiment compiled {with_or_without[compiled_flexible_feedback]} flexible feedback, "
-                f"on a setup {with_or_without[controller.setup_caps.flexible_feedback]} flexible feedback."
-            )
-
         self._last_results = Results(
             experiment=self.experiment,
             device_setup=self.device_setup,

@@ -28,7 +28,10 @@ from laboneq.controller.devices.device_zi import (
     SequencerPaths,
     delay_to_rounded_samples,
 )
-from laboneq.controller.devices.zi_node_monitor import NodeControlBase
+from laboneq.controller.devices.zi_node_monitor import (
+    NodeControlBase,
+    Setting,
+)
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
@@ -295,6 +298,12 @@ class DeviceSHFSG(DeviceSHFBase):
         if with_pipeliner:
             nc.extend(self._pipeliner.reset_nodes())
 
+        # HACK: HBAR-1427 and HBAR-2165 show that runtime checks generate
+        # wrongly detected gaps when enabled during experiments with feedback.
+        # Here we make sure that if they were enabled at `session.connect` we
+        # re-enable them in case the previous experiment had feedback.
+        nc.add("raw/system/awg/runtimechecks/enable", int(self._enable_runtime_checks))
+
         return await self.maybe_async(nc)
 
     def pre_process_attributes(
@@ -483,6 +492,7 @@ class DeviceSHFSG(DeviceSHFBase):
         _logger.debug("%s: Initializing device...", self.dev_repr)
 
         nc = NodeCollector()
+
         outputs = initialization.outputs or []
         for output in outputs:
             self._warn_for_unsupported_param(
@@ -672,51 +682,28 @@ class DeviceSHFSG(DeviceSHFBase):
 
         nc = NodeCollector(base=f"/{self.serial}/")
 
-        is_not_flexible_feedback = not self._setup_caps.flexible_feedback
         for awg_key, awg_config in recipe_data.awg_configs.items():
             if awg_key.device_uid != initialization.device_uid:
                 continue
 
             if awg_config.source_feedback_register is None:
+                # if it does not have feedback
                 continue
 
-            if (
-                awg_config.source_feedback_register == "local"
-                and self.is_secondary
-                and is_not_flexible_feedback
-            ):
-                # local feedback
-                nc.add(
-                    f"sgchannels/{awg_key.awg_index}/awg/intfeedback/direct/shift",
-                    awg_config.register_selector_shift,
-                )
-                nc.add(
-                    f"sgchannels/{awg_key.awg_index}/awg/intfeedback/direct/mask",
-                    awg_config.register_selector_bitmask,
-                )
-                nc.add(
-                    f"sgchannels/{awg_key.awg_index}/awg/intfeedback/direct/offset",
-                    awg_config.command_table_match_offset,
-                )
-            else:
-                # global feedback
+            # HACK: HBAR-1427 and HBAR-2165 show that runtime checks generate
+            # wrongly detected gaps when enabled during experiments with feedback.
+            # Here we ensure that the gap detector is disabled if we are
+            # configuring feedback.
+            nc.add("raw/system/awg/runtimechecks/enable", 0)
+
+            global_feedback = not (
+                awg_config.source_feedback_register == "local" and self.is_secondary
+            )
+
+            if global_feedback:
                 nc.add(
                     f"sgchannels/{awg_key.awg_index}/awg/diozsyncswitch", 1
                 )  # ZSync Trigger
-
-                if is_not_flexible_feedback:
-                    nc.add(
-                        f"sgchannels/{awg_key.awg_index}/awg/zsync/register/shift",
-                        awg_config.register_selector_shift,
-                    )
-                    nc.add(
-                        f"sgchannels/{awg_key.awg_index}/awg/zsync/register/mask",
-                        awg_config.register_selector_bitmask,
-                    )
-                    nc.add(
-                        f"sgchannels/{awg_key.awg_index}/awg/zsync/register/offset",
-                        awg_config.command_table_match_offset,
-                    )
 
         triggering_mode = initialization.config.triggering_mode
         if triggering_mode == TriggeringMode.ZSYNC_FOLLOWER:
@@ -793,3 +780,12 @@ class DeviceSHFSG(DeviceSHFBase):
                     value - prev,
                 )
             self._warning_nodes[node] = value
+
+    def runtime_check_control_nodes(self) -> list[NodeControlBase]:
+        # Enable AWG runtime checks which includes the gap detector.
+        return [
+            Setting(
+                f"/{self.serial}/raw/system/awg/runtimechecks/enable",
+                int(self._enable_runtime_checks),
+            )
+        ]

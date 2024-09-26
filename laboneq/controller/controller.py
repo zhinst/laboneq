@@ -438,14 +438,21 @@ class Controller:
         do_emulation: bool = True,
         reset_devices: bool = False,
         use_async_api: bool | None = None,
+        disable_runtime_checks: bool = True,
     ):
         # Remember settings for later implicit connect check
         self._do_emulation = do_emulation
         if use_async_api is not None:
             self._use_async_api = use_async_api
-        run_async(self._connect_async, reset_devices=reset_devices)
+        run_async(
+            self._connect_async,
+            reset_devices=reset_devices,
+            disable_runtime_checks=disable_runtime_checks,
+        )
 
-    async def _connect_async(self, reset_devices: bool = False):
+    async def _connect_async(
+        self, reset_devices: bool = False, disable_runtime_checks: bool = True
+    ):
         now = time.monotonic()
         if (
             self._last_connect_check_ts is None
@@ -455,6 +462,7 @@ class Controller:
                 do_emulation=self._do_emulation,
                 reset_devices=reset_devices,
                 use_async_api=self._use_async_api,
+                disable_runtime_checks=disable_runtime_checks,
             )
         self._last_connect_check_ts = now
 

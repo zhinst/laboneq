@@ -133,6 +133,7 @@ class DeviceCollection:
         do_emulation: bool,
         reset_devices: bool = False,
         use_async_api: bool = False,
+        disable_runtime_checks: bool = False,
     ):
         await self._prepare_daqs(do_emulation=do_emulation, use_async_api=use_async_api)
         await self._validate_dataserver_device_fw_compatibility(
@@ -144,6 +145,7 @@ class DeviceCollection:
             await device.connect(
                 self.emulator_state if do_emulation else None,
                 use_async_api=use_async_api,
+                disable_runtime_checks=disable_runtime_checks,
             )
         await self.start_monitor()
         await self.configure_device_setup(reset_devices)
@@ -328,6 +330,9 @@ class DeviceCollection:
             # the respective actions from the regular config will be skipped.
 
         configs = {
+            "Configure runtime checks": lambda d: cast(
+                DeviceZI, d
+            ).runtime_check_control_nodes(),
             "Reference clock switching": lambda d: cast(
                 DeviceZI, d
             ).clock_source_control_nodes(),

@@ -1530,7 +1530,6 @@ class CodeGenerator(ICodeGenerator):
             use_command_table=use_command_table,
             emit_timing_comments=self.EMIT_TIMING_COMMENTS,
             use_current_sequencer_step=has_readout_feedback,
-            use_flexible_feedback=self._settings.FLEXIBLE_FEEDBACK,
         )
 
         add_wait_trigger_statements(awg, init_generator, deferred_function_calls)

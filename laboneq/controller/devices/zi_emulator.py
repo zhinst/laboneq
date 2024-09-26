@@ -859,6 +859,8 @@ class DevEmuSHFQABase(Gen2Base):
             if scope_single != 0:
                 self._set_val("scopes/0/enable", 0)
             length = self._get_node("scopes/0/length").value
+            assert isinstance(length, int)
+            length &= ~0xF
             for scope_ch in range(4):
                 self._set_val(
                     f"scopes/0/channels/{scope_ch}/wave",
