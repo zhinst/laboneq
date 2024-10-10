@@ -97,6 +97,8 @@ def create_connection(
             - to_signal: If the connection is to a signal
                 The number of allowed ports depends on the instrument and its port.
 
+        signal_type: Optional argument, can be used to specify a signal type, allowed values are "iq", "rf" or "acquire"
+
     Returns:
         Created connection.
 
@@ -120,5 +122,9 @@ def create_connection(
             ports = []
         elif isinstance(ports, str):
             ports = [ports]
-        return SignalConnection(uid=to, ports=ports, type=None)
+        if "signal_type" in kwargs:
+            signal_type = kwargs["signal_type"]
+        else:
+            signal_type = None
+        return SignalConnection(uid=to, ports=ports, type=signal_type)
     raise ValueError("Either 'to_instrument' or 'to_signal' must be defined.")

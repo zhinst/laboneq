@@ -290,3 +290,27 @@ def check_no_play_on_acquire_line(dao: ExperimentDAO):
                         f"In section '{section_id}, a play statement is issued on signal '{signal_id}'."
                         " play is not allowed on acquire lines."
                     )
+
+
+def check_arbirary_marker_is_valid(dao: ExperimentDAO):
+    for section_id in dao.sections():
+        for signal_id in dao.section_signals(section_id):
+            for section_pulse in dao.section_pulses(section_id, signal_id):
+                for marker in section_pulse.markers:
+                    if marker.pulse_id is not None:
+                        marker_pulse = dao.pulse(marker.pulse_id)
+                        if (
+                            marker_pulse.function is not None
+                            and marker_pulse.function != "const"
+                        ):
+                            raise LabOneQException(
+                                f"A pulse in section {section_id} attempts to play an arbitrary marker with a pulse functional other than `const'."
+                                " At this time, only constants pulses or sampled pulses are supported"
+                            )
+                        if marker_pulse.samples is not None and not all(
+                            [s == 0.0 or s == 1.0 for s in marker_pulse.samples]
+                        ):
+                            raise LabOneQException(
+                                f"A pulse in section {section_id} attempts to play a sampled arbitrary marker with a sample not set to either 0 or 1."
+                                " Please make sure that all samples of your markers are either 0 or 1."
+                            )

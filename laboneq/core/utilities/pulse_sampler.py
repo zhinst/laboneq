@@ -12,6 +12,7 @@ import numpy as np
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums.mixer_type import MixerType
+from laboneq.data.compilation_job import PulseDef
 
 _logger = logging.getLogger(__name__)
 
@@ -35,25 +36,55 @@ def interval_to_samples_with_errors(start, end, sampling_rate):
     return (start_samples, end_samples), (start_rounding_error, end_rounding_error)
 
 
-def sample_marker(num_total_samples, sampling_rate, enable, start, length):
+def sample_marker(
+    num_total_samples, sampling_rate, enable, start, length, pulse_def: PulseDef
+):
     """Sample a marker.
 
     Args:
         num_total_samples: Number of samples in the pulse
+        sampling_rate: The sampling rate
         enable: Whether the marker is fully enabled
         start: Start time of the marker
         length: Length of the marker
+        pulse_def: The pulse definition used for sampling the marker waveform
 
     Returns:
         A numpy array of the marker samples
     """
     if enable:
         return np.ones(num_total_samples, dtype=np.uint8)
+    if pulse_def is not None:
+        if pulse_def.samples is not None:
+            num_samples_marker = len(pulse_def.samples)
+            if num_samples_marker != num_total_samples:
+                raise LabOneQException(
+                    f"The pulse and marker waveforms must have the same length, "
+                    f"but currently the pulse has {num_total_samples} samples while "
+                    f"the marker has {num_samples_marker} samples."
+                )
+            # in this case `length` is None, so derive it from the number of samples
+            length = num_samples_marker / sampling_rate
+        marker_samples = sample_pulse(
+            signal_type="marker",
+            sampling_rate=sampling_rate,
+            length=length,
+            amplitude=1.0,
+            pulse_function=pulse_def.function,
+            samples=pulse_def.samples,
+            mixer_type=None,
+            markers=None,
+        )
+        marker_samples_int = np.clip(marker_samples["samples_i"], 0, 1).astype(np.uint8)
+
+        return marker_samples_int
+
     if start is None:
         return None
 
     if length is None:
         length = num_total_samples / sampling_rate - start
+
     start_samples = length_to_samples(start, sampling_rate)
     end_samples = start_samples + length_to_samples(length, sampling_rate)
     marker_samples = np.zeros(num_total_samples, dtype=np.uint8)
@@ -73,7 +104,8 @@ def sample_pulse(
     samples: np.ndarray | None = None,
     mixer_type: MixerType | None = MixerType.IQ,
     pulse_parameters: dict[str, Any] | None = None,
-    markers=None,
+    markers: dict[str, Any] | None = None,
+    pulse_defs: dict[str, PulseDef] | None = None,
 ):
     """Create a waveform from a pulse definition.
 
@@ -101,11 +133,14 @@ def sample_pulse(
         phase: The phase shift to apply to the signal
         samples: Pulse shape for a sampled pulse
         mixer_type: Type of the mixer after the AWG. Only effective for IQ signals.
-
+        pulse_parameters: Extra pulse parameters, passed to the sampler,
+        markers: Configuration of the markers,
+        pulse_defs: Definitions of other pulses (may be referenced by marker spec),
     Returns:
         A dict with one ("samples_i", real case) or two ("samples_i" and
         "samples_q", complex case) ndarrays representing the sampled, scaled and
-        possibly modulated waveform for this pulse.
+        possibly modulated waveform for this pulse. Markers are optionally represented
+        by more fields ("marker1" and maybe "marker2")
 
     Raises:
         ValueError: Invalid combination of arguments
@@ -195,19 +230,39 @@ def sample_pulse(
                 (m for m in markers if m.get("marker_selector") == "marker" + i),
                 None,
             )
-            if m:
-                start = m.get("start")
-                length = m.get("length")
-                enable = m.get("enable")
-                m_sampled = sample_marker(
-                    len(samples),
-                    sampling_rate=sampling_rate,
-                    enable=enable,
-                    start=start,
-                    length=length,
-                )
-                if m_sampled is not None:
-                    retval["samples_marker" + i] = m_sampled
+            if m is None:
+                continue
+            marker_pulse_id = m.get("pulse_id")
+            if marker_pulse_id is not None:
+                marker_pulse_def = pulse_defs[marker_pulse_id]
+                if m.get("length") is not None:
+                    raise LabOneQException(
+                        "Specifying both waveform and length for the markers is not "
+                        "supported. Please set markers either via "
+                        "{'marker': {'waveform': marker_pulse}} or "
+                        "{'marker': {'start': 0, 'length': marker_length}}."
+                    )
+                marker_length = marker_pulse_def.length
+                if marker_length is not None and marker_length != length:
+                    raise LabOneQException(
+                        f"The pulse and marker waveforms must have the same length, "
+                        f"but currently the pulse has length {length} while the "
+                        f"marker has length {marker_length}."
+                    )
+            else:
+                marker_pulse_def = None
+                if (marker_length := m.get("length")) is None:
+                    marker_length = length
+            m_sampled = sample_marker(
+                len(samples),
+                sampling_rate=sampling_rate,
+                enable=m.get("enable"),
+                start=m.get("start"),
+                length=marker_length,
+                pulse_def=marker_pulse_def,
+            )
+            if m_sampled is not None:
+                retval["samples_marker" + i] = m_sampled
 
     return retval
 

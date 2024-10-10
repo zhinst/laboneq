@@ -304,3 +304,8 @@ def get_first_named_entry(db: DataStore, name: str):
     """Return the first entry in a LabOne Q Datastore whose metadata contains the matching name"""
     key = next(db.find(metadata={"name": name}))
     return db.get(key)
+
+
+def print_all_names(db: DataStore):
+    for key in db.keys():
+        print(db.get_metadata(key)["name"])

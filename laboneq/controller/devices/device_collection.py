@@ -544,6 +544,14 @@ class DeviceCollection:
             if use_async_api:
                 daq = DaqWrapperDummy(server_qualifier)
             else:
+                _logger.warning(
+                    "\n\n"
+                    "====================================================================================\n"
+                    "The synchronous API you enabled is deprecated for LabOne Q and will soon be removed.\n"
+                    "Please contact Zurich Instruments about the use case for the synchronous API, unless\n"
+                    "it's a known limitation regarding the missing node log, which is set to be fixed.\n"
+                    "====================================================================================\n"
+                )
                 if do_emulation:
                     daq = DaqWrapperDryRun(
                         server_uid, server_qualifier, self.emulator_state

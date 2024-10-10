@@ -332,7 +332,7 @@ class Marker:
     enable: bool
     start: float
     length: float
-    pulse_id: str
+    pulse_id: str | None
 
 
 @dataclass

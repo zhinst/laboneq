@@ -487,35 +487,30 @@ class DeviceSHFQA(DeviceSHFBase):
         self, enable: bool, channel: int, averages: int, acquire_length: int
     ) -> NodeCollector:
         # TODO(2K): multiple acquire events
-        nc = NodeCollector(base=f"/{self.serial}/")
+        nc = NodeCollector(base=f"/{self.serial}/scopes/0/")
         if enable:
             if averages > MAX_AVERAGES_SCOPE:
                 raise LabOneQControllerException(
                     f"Number of averages {averages} exceeds the allowed maximum {MAX_AVERAGES_SCOPE}"
                 )
-            nc.add("scopes/0/time", 0)  # 0 -> 2 GSa/s
-            nc.add("scopes/0/averaging/enable", 1)
-            nc.add("scopes/0/averaging/count", averages)
-            nc.add(f"scopes/0/channels/{channel}/enable", 1)
-            nc.add(
-                f"scopes/0/channels/{channel}/inputselect", channel
-            )  # channelN_signal_input
-            scope_length = (acquire_length + 0xF) & (
-                ~0xF
-            )  # scope length has a granularity of 16
-            nc.add("scopes/0/length", scope_length)
-            nc.add("scopes/0/segments/enable", 0)
+            nc.add("time", 0)  # 0 -> 2 GSa/s
+            nc.add("averaging/enable", 1)
+            nc.add("averaging/count", averages)
+            nc.add(f"channels/{channel}/enable", 1)
+            nc.add(f"channels/{channel}/inputselect", channel)  # channelN_signal_input
+            # scope length has a granularity of 16
+            scope_length = (acquire_length + 0xF) & (~0xF)
+            nc.add("length", scope_length)
+            nc.add("segments/enable", 0)
             # TODO(2K): multiple acquire events per monitor
-            # "scopes/0/segments/enable", 1
-            # "scopes/0/segments/count", measurement.result_length
+            # "segments/enable", 1
+            # "segments/count", measurement.result_length
             # TODO(2K): only one trigger is possible for all channels. Which one to use?
-            nc.add(
-                "scopes/0/trigger/channel", 64 + channel
-            )  # channelN_sequencer_monitor0
-            nc.add("scopes/0/trigger/enable", 1)
-            nc.add("scopes/0/enable", 0)  # todo: barrier needed?
-            nc.add("scopes/0/single", 1, cache=False)
-        nc.add("scopes/0/enable", 1 if enable else 0)
+            nc.add("trigger/channel", 64 + channel)  # channelN_sequencer_monitor0
+            nc.add("trigger/enable", 1)
+            nc.add("enable", 0)  # todo: barrier needed?
+            nc.add("single", 1, cache=False)
+        nc.add("enable", 1 if enable else 0)
         return nc
 
     async def collect_execution_nodes(

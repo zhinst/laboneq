@@ -1362,7 +1362,6 @@ _node_logger = logging.getLogger("node.log")
 class MockAnnotatedValue:
     path: str
     value: Any
-    extra_header: Any | None
     cache: bool = False
     filename: str | None = None
 
@@ -1370,16 +1369,14 @@ class MockAnnotatedValue:
 def make_annotated_value(path: str, value: Any) -> MockAnnotatedValue:
     if isinstance(value, dict) and "value" in value:
         effective_value = value["value"][-1]
-        extra_header = None
     elif isinstance(value, list):
-        effective_value = value[0]["vector"]
-        extra_header = SimpleNamespace(**value[0].get("properties"))
+        effective_value = SimpleNamespace(
+            vector=value[0]["vector"],
+            properties=value[0].get("properties"),
+        )
     else:
         effective_value = value
-        extra_header = None
-    return MockAnnotatedValue(
-        path=path, value=effective_value, extra_header=extra_header
-    )
+    return MockAnnotatedValue(path=path, value=effective_value)
 
 
 class MockDataQueue:
@@ -1397,6 +1394,9 @@ class MockDataQueue:
             await asyncio.sleep(0.01)
         value = self._path_events.pop(0)
         return make_annotated_value(path=self._path, value=value)
+
+    def disconnect(self):
+        pass
 
 
 ASYNC_EMULATE_CACHE = False

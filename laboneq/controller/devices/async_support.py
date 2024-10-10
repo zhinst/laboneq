@@ -24,7 +24,10 @@ from laboneq.controller.devices.zi_node_monitor import NodeMonitorBase
 from labone import DataServer, Instrument
 from labone.core import AnnotatedValue
 from labone.core.subscription import DataQueue
-from labone.core.shf_vector_data import preprocess_complex_shf_waveform_vector
+from labone.core.shf_vector_data import (
+    ShfGeneratorWaveformVectorData,
+    preprocess_complex_shf_waveform_vector,
+)
 
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.controller.versioning import (
@@ -238,7 +241,10 @@ def _resolve_type(value: Any, path: str) -> Any:
     if np.iscomplexobj(value) and "spectroscopy/envelope/wave" in path.lower():
         # TODO(2K): This conversion may not be entirely accurate, it is only known to match the expected node
         # type and address the "Vector transfer error: data have different type than expected" error.
-        return preprocess_complex_shf_waveform_vector(value)[0].astype(dtype=np.uint32)
+        return np.frombuffer(
+            preprocess_complex_shf_waveform_vector(value)["vectorData"]["data"],
+            dtype=np.uint32,
+        )
     return value
 
 
@@ -259,6 +265,9 @@ async def set_parallel(api: Instrument, nodes: NodeCollector):
             )
             type_adjusted_value = _resolve_type(node.value, node.path)
             if isinstance(api, MockInstrument):
+                # Don't wrap into ShfGeneratorWaveformVectorData for emulation
+                # (see also code in "else" below)
+                # to avoid emulator dependency on labone-python
                 val = AnnotatedValueWithExtras(
                     path=node.path,
                     value=type_adjusted_value,
@@ -266,6 +275,13 @@ async def set_parallel(api: Instrument, nodes: NodeCollector):
                     filename=node.filename,
                 )
             else:
+                if (
+                    np.iscomplexobj(type_adjusted_value)
+                    and "generator/waveforms" in node.path.lower()
+                ):
+                    type_adjusted_value = ShfGeneratorWaveformVectorData(
+                        complex=type_adjusted_value
+                    )
                 val = AnnotatedValue(
                     path=node.path,
                     value=type_adjusted_value,
@@ -282,19 +298,20 @@ async def set_parallel(api: Instrument, nodes: NodeCollector):
 def parse_annotated_value(annotated_value: AnnotatedValue) -> Any:
     key_translate = {
         "job_id": "jobid",
+        "jobId": "jobid",
         "samples": "numsamples",
         "first_sample_timestamp": "firstSampleTimestamp",
     }
     value = annotated_value.value
-    extra_header = annotated_value.extra_header
+    properties = getattr(value, "properties", None)
     effective_value: Any
-    if extra_header is not None:
+    if properties is not None:
         effective_value = [
             {
-                "vector": value,
+                "vector": value.vector,
                 "properties": {
                     key_translate.get(key, key): val
-                    for key, val in extra_header.__dict__.items()
+                    for key, val in dict(properties).items()
                 },
             }
         ]

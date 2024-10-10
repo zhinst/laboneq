@@ -815,7 +815,7 @@ class CodeGenerator(ICodeGenerator):
                 != 0
             ):
                 raise RuntimeError(
-                    f"Delay {relevant_delay} s = {round(relevant_delay*signal_obj.awg.sampling_rate)} samples on signal {signal_obj.id} is not compatible with the sample multiple of {signal_obj.awg.device_type.sample_multiple} on {signal_obj.awg.device_type}"
+                    f"Delay {relevant_delay} s = {round(relevant_delay * signal_obj.awg.sampling_rate)} samples on signal {signal_obj.id} is not compatible with the sample multiple of {signal_obj.awg.device_type.sample_multiple} on {signal_obj.awg.device_type}"
                 )
             all_relevant_delays[signal_obj.id] = relevant_delay
 
@@ -1744,9 +1744,10 @@ class CodeGenerator(ICodeGenerator):
                     samples=samples,
                     mixer_type=mixer_type,
                     pulse_parameters=decoded_pulse_parameters,
-                    markers=None
-                    if not pulse_part.markers
-                    else [{k: v for k, v in m} for m in pulse_part.markers],
+                    markers=[{k: v for k, v in m} for m in pulse_part.markers]
+                    if pulse_part.markers
+                    else None,
+                    pulse_defs=pulse_defs,
                 )
 
                 verify_amplitude_no_clipping(

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "laboneq"
-version = "2.38.0"
+version = "2.39.0"
 description = "Zurich Instruments LabOne Q software framework for quantum computing control"
 license = { text = "Apache 2.0" }
 readme = "README.md"
@@ -59,7 +59,7 @@ dependencies = [
     "zhinst-toolkit ~= 0.6.4",
     "zhinst-utils == 0.4.1",
     "zhinst-timing-models ~= 24.7.62464",
-    "labone == 2.3.0",
+    "labone == 3.0.0",
     "unsync == 1.4.0",
 ]
 

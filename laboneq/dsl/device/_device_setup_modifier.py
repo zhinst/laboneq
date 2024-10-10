@@ -667,7 +667,9 @@ def add_connection(
 
         if isinstance(connection, SignalConnection):
             # Physical signals
-            pc = handler.make_physical_channel(instrument, connection.ports)
+            pc = handler.make_physical_channel(
+                instrument, connection.ports, connection.type
+            )
             if pc:
                 group, name = pc.uid.split(qct_path.Separator)
                 if group in setup.physical_channel_groups:

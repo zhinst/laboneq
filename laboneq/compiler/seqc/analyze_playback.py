@@ -671,7 +671,7 @@ def _make_pulse_signature(
         pulse_parameters=None
         if combined_pulse_parameters is None
         else frozenset(combined_pulse_parameters.items()),
-        markers=None if not markers else tuple(frozenset(m.items()) for m in markers),
+        markers=tuple(frozenset(m.items()) for m in markers) if markers else None,
         preferred_amplitude_register=amplitude_register,
         incr_phase_params=incr_phase_params,
     )

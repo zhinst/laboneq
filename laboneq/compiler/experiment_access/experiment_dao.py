@@ -332,6 +332,7 @@ class ExperimentDAO:
         validators.check_phase_increments_support(self)
         validators.check_acquire_only_on_acquire_line(self)
         validators.check_no_play_on_acquire_line(self)
+        validators.check_arbirary_marker_is_valid(self)
 
     def acquisition_signal(self, handle: str) -> str | None:
         return self._data["handle_acquires"][handle]

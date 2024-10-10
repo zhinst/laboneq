@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import TypedDict
 
 import attr
@@ -57,7 +58,12 @@ class SHFPPCSweeperConfig:
 
         # Finally, construct the flat list of all values.
         flat_list = [
-            [float(command[field]) for field in swept_fields]
+            [
+                float(command[field])
+                if field != "cancellation_phase"
+                else float(command[field]) * 180 / math.pi
+                for field in swept_fields
+            ]
             for command in self.commands
         ]
 

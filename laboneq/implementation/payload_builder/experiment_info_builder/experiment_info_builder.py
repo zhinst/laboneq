@@ -590,16 +590,25 @@ class ExperimentInfoBuilder:
 
     def _load_markers(self, operation):
         markers_raw = getattr(operation, "marker", None) or {}
-        return [
-            Marker(
-                k,
-                enable=v.get("enable"),
-                start=v.get("start"),
-                length=v.get("length"),
-                pulse_id=v.get("waveform", {}).get("$ref", None),
+
+        markers = []
+        for k, v in markers_raw.items():
+            marker_pulse = v.get("waveform")
+            if marker_pulse is not None:
+                self._add_pulse(marker_pulse)
+                marker_pulse_id = marker_pulse.uid
+            else:
+                marker_pulse_id = None
+            markers.append(
+                Marker(
+                    k,
+                    enable=v.get("enable"),
+                    start=v.get("start"),
+                    length=v.get("length"),
+                    pulse_id=marker_pulse_id,
+                )
             )
-            for k, v in markers_raw.items()
-        ]
+        return markers
 
     def _load_ssp(
         self,
@@ -653,16 +662,25 @@ class ExperimentInfoBuilder:
             # generate a zero amplitude pulse to play the markers
             # TODO: generate a proper constant pulse here
 
-            if any(m.start is None or m.length is None for m in markers):
+            if any(
+                (m.start is None or m.length is None) and m.pulse_id is None
+                for m in markers
+            ):
                 raise RuntimeError(
-                    f"Please specify a start and length for a play command without pulse and enabled marker(s) in section {section.uid}"
+                    f"Please specify a start and length or a waveform for a play command without pulse and enabled marker(s) in section {section.uid}"
                 )
 
             pulses = [pulse] = [SimpleNamespace()]
             pulse.uid = next(auto_pulse_id)
             pulse.function = "const"
             pulse.amplitude = 0.0
-            pulse.length = max([m.start + m.length for m in markers])
+            lengths = [
+                self._pulse_defs[m.pulse_id].length
+                if m.pulse_id is not None
+                else m.start + m.length
+                for m in markers
+            ]
+            pulse.length = max(lengths)
             pulse.can_compress = False
 
         if hasattr(operation, "kernel"):
@@ -683,11 +701,6 @@ class ExperimentInfoBuilder:
         assert pulses is not None and isinstance(pulses, list)
 
         pulse_group = None if len(pulses) == 1 else id_generator("pulse_group")
-        if markers:
-            for m in markers:
-                if m.pulse_id is None:
-                    assert len(pulses) == 1 and pulses[0] is not None
-                    m.pulse_id = pulses[0].uid
 
         if hasattr(operation, "handle") and len(pulses) == 0:
             raise RuntimeError(
