@@ -38,19 +38,12 @@ class LogicalSignalGroup:
             assert isinstance(logical_signal, Calibratable)
             logical_signal.reset_calibration()
 
-    def list_calibratables(self, parent_path: str | None = None):
-        current_path = (
-            qct_path.concat(parent_path, self.uid)
-            if parent_path is not None
-            else self.uid
-        )
-        calibratables = dict()
-        for signal in self.logical_signals.values():
-            if isinstance(signal, Calibratable):
-                calibratables[qct_path.concat(current_path, signal.uid)] = (
-                    signal.create_info()
-                )
-        return calibratables
+    def list_calibratables(self):
+        return {
+            signal.path: signal.create_info()
+            for signal in self.logical_signals.values()
+            if isinstance(signal, Calibratable)
+        }
 
     @property
     def path(self):

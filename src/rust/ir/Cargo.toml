@@ -1,0 +1,8 @@
+[package]
+name = "ir"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+thiserror = "1.0.58"
+pyo3 = { version = "0.22.2", features = ["abi3-py39", "generate-import-lib"] }

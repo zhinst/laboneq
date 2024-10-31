@@ -6,13 +6,14 @@
 import numpy as np
 
 from laboneq.core.types.enums import AcquisitionType
-from laboneq.dsl.calibration import Calibration, SignalCalibration
+from laboneq.dsl.calibration import SignalCalibration
 from laboneq.dsl.experiment import pulse_library
 from laboneq.dsl.experiment.builtins import (
     acquire,
     acquire_loop_rt,
     delay,
     experiment,
+    experiment_calibration,
     for_each,
     map_signal,
     play,
@@ -116,7 +117,7 @@ def create_discrimination_experiment(
                         delay(signal=f"measure_{it}", time=0.5e-6)
 
         if thresholds is not None:
-            exp_cal = Calibration()
+            exp_cal = experiment_calibration()
             exp_cal["acquire"] = SignalCalibration(threshold=thresholds)
 
     return exp()

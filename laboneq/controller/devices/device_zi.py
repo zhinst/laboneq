@@ -32,7 +32,9 @@ from laboneq.controller.communication import (
     DaqWrapper,
 )
 from laboneq.controller.devices.async_support import (
+    ConditionsCheckerAsync,
     NodeMonitorAsync,
+    ResponseWaiterAsync,
     create_device_kernel_session,
     get_raw,
     set_parallel,
@@ -43,7 +45,11 @@ from laboneq.controller.devices.zi_node_monitor import (
     INodeMonitorProvider,
     NodeControlBase,
     NodeMonitorBase,
-    ResponseWaiter,
+    filter_commands,
+    filter_responses,
+    filter_settings,
+    filter_states,
+    filter_wait_conditions,
 )
 from laboneq.controller.pipeliner_reload_tracker import PipelinerReloadTracker
 from laboneq.controller.recipe_processor import (
@@ -271,6 +277,7 @@ class DeviceZI(INodeMonitorProvider):
         emulator_state: EmulatorState | None,
         use_async_api: bool,
         disable_runtime_checks: bool,
+        timeout_s: float,
     ):
         pass
 
@@ -468,6 +475,11 @@ class DeviceZI(INodeMonitorProvider):
     ):
         pass
 
+    async def exec_config_step(
+        self, control_nodes: list[NodeControlBase], config_name: str, timeout_s: float
+    ):
+        pass
+
 
 class DeviceBase(DeviceZI):
     def __init__(
@@ -546,9 +558,9 @@ class DeviceBase(DeviceZI):
 
     async def maybe_async_wait(self, nodes: dict[str, Any]) -> dict[str, Any]:
         if self._api is not None:
-            rw = ResponseWaiter()
-            rw.add(target=self, conditions=nodes)
-            await rw.wait_all(timeout=1)
+            rw = ResponseWaiterAsync(self._api, nodes)
+            await rw.prepare(get_initial_value=True)
+            await rw.wait()
             return {}
         return nodes
 
@@ -684,7 +696,10 @@ class DeviceBase(DeviceZI):
                     self._add_voltage_offset(sigout, calib.voltage_offset)
 
     async def _connect_to_data_server(
-        self, emulator_state: EmulatorState | None, use_async_api: bool
+        self,
+        emulator_state: EmulatorState | None,
+        use_async_api: bool,
+        timeout_s: float,
     ):
         if self._connected:
             return
@@ -696,6 +711,7 @@ class DeviceBase(DeviceZI):
                     device_qualifier=self._device_qualifier,
                     server_qualifier=self.daq.server_qualifier,
                     emulator_state=emulator_state,
+                    timeout_s=timeout_s,
                 )
                 self._node_monitor = NodeMonitorAsync(self._api)
             else:
@@ -727,9 +743,12 @@ class DeviceBase(DeviceZI):
         emulator_state: EmulatorState | None,
         use_async_api: bool,
         disable_runtime_checks: bool = False,
+        timeout_s: float = 10.0,
     ):
         self._enable_runtime_checks = not disable_runtime_checks
-        await self._connect_to_data_server(emulator_state, use_async_api=use_async_api)
+        await self._connect_to_data_server(
+            emulator_state, use_async_api=use_async_api, timeout_s=timeout_s
+        )
         if self._node_monitor is not None:
             self.node_monitor.add_nodes(self.nodes_to_monitor())
 
@@ -1339,3 +1358,65 @@ class DeviceBase(DeviceZI):
         nc = NodeCollector(base=f"/{self.serial}/")
         nc.add("raw/error/clear", 1, cache=False)
         return await self.maybe_async(nc)
+
+    async def exec_config_step(
+        self, control_nodes: list[NodeControlBase], config_name: str, timeout_s: float
+    ):
+        state_nodes = filter_states(control_nodes)
+        state_check = ConditionsCheckerAsync(
+            self._api,
+            {n.path: n.value for n in state_nodes},
+        )
+        mismatches = await state_check.check()
+
+        commands = filter_commands(control_nodes)
+        responses = filter_responses(control_nodes)
+        response_waiter = ResponseWaiterAsync(self._api, timeout_s=timeout_s)
+        changes_to_apply = []
+        if len(commands) > 0:
+            # 1a. Has unconditional commands? Use simplified flow.
+            changes_to_apply = commands
+            response_waiter.add_nodes({n.path: n.value for n in responses})
+            if len(mismatches) > 0:
+                response_waiter.add_nodes(
+                    {n.path: n.value for n in filter_wait_conditions(control_nodes)}
+                )
+        else:
+            # 1b. Is device already in the desired state?
+            if len(mismatches) > 0:
+                changes_to_apply = filter_settings(control_nodes)
+                response_waiter.add_nodes({n.path: n.value for n in responses})
+                failed_paths = [path for path, _, _ in mismatches]
+                failed_nodes = [n for n in control_nodes if n.path in failed_paths]
+                response_waiter.add_nodes(
+                    {n.path: n.value for n in failed_nodes},
+                )
+
+        # Arm the response waiter (for step 3 below) before applying any changes
+        await response_waiter.prepare()
+
+        # 2. Apply any necessary node changes (which may be empty)
+        nc = NodeCollector()
+        for node in changes_to_apply:
+            nc.add(node.path, node.raw_value)
+        await set_parallel(self._api, nc)
+
+        # 3. Wait for responses to the changes in step 2 and settling of dependent states
+        failed_responses = await response_waiter.wait()
+        if len(failed_responses) > 0:
+            failures = "\n".join([f"{p}={v}" for p, v in failed_responses.items()])
+            raise LabOneQControllerException(
+                f"{self.dev_repr}: Internal error: {config_name} is not complete within {timeout_s}s. "
+                f"Not fulfilled:\n{failures}"
+            )
+
+        # 4. Recheck all the conditions, as some may have potentially changed as a result of step 2
+        final_checks = await state_check.check()
+        if len(final_checks) > 0:
+            failures = "\n".join(
+                [f"{p}: {v}  (expected: {e})" for p, v, e in final_checks]
+            )
+            raise LabOneQControllerException(
+                f"{self.dev_repr}: Internal error: {config_name} failed. "
+                f"Errors:\n{failures}"
+            )

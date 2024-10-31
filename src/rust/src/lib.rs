@@ -7,7 +7,9 @@ mod intervals;
 
 #[pymodule]
 mod _rust {
+
     use super::*;
+    use ir_python::create_module;
 
     #[pymodule(submodule)]
     mod intervals {
@@ -31,6 +33,11 @@ mod _rust {
         let intervals_module = m.getattr("intervals")?;
         let modules = py.import_bound("sys")?.getattr("modules")?;
         modules.set_item("laboneq._rust.intervals", intervals_module)?;
+
+        let rust_ir_module = create_module(m)?;
+        m.add_submodule(&rust_ir_module)?;
+        modules.set_item("laboneq._rust.rust_ir", rust_ir_module)?;
+
         Ok(())
     }
 }

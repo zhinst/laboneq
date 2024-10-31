@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+import math
 
 from dataclasses import dataclass
 from importlib.metadata import version
@@ -20,6 +21,37 @@ def calc_dev_type(device_qualifier: DeviceQualifier) -> str:
         return "SHFQC"
     else:
         return device_qualifier.driver
+
+
+@dataclass
+class FloatWithTolerance:
+    val: float
+    abs_tol: float
+
+
+def is_expected(val: Any, expected: Any | None | list[Any | None]) -> bool:
+    if val is None:
+        return False
+
+    all_expected = (
+        expected
+        if isinstance(expected, Iterable) and not isinstance(expected, str)
+        else [expected]
+    )
+
+    for e in all_expected:
+        if e is None:
+            # No specific value expected, any update matches
+            return True
+        if isinstance(e, FloatWithTolerance) and math.isclose(
+            val, e.val, abs_tol=e.abs_tol
+        ):
+            # Float with given tolerance
+            return True
+        if val == e:
+            # Otherwise exact match
+            return True
+    return False
 
 
 @dataclass

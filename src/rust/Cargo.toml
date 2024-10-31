@@ -15,15 +15,16 @@ publish.workspace = true
 name = "laboneq_rust"
 crate-type = ["cdylib"]
 
+
 [dependencies]
 pyo3 = { version = "0.22.2", features = ["abi3-py39", "generate-import-lib"] }
 interval-tree = { path = "interval-tree" }
+ir = { path = "ir" }
+ir_python = { path = "ir-python" }
 
 [features]
 extension-module = ["pyo3/extension-module"]
 default = ["extension-module"]
 
 [workspace]
-members = [
-    "interval-tree",
-]
+members = ["interval-tree", "ir-python", "ir"]

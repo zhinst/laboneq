@@ -216,6 +216,7 @@ class Session:
         reset_devices=False,
         use_async_api: bool | None = None,
         disable_runtime_checks: bool = True,
+        timeout: float | None = None,
     ) -> ConnectionState:
         """Connects the session to the QCCS system.
 
@@ -246,7 +247,9 @@ class Session:
             use_async_api (bool): Enable the async backend of LabOne Q controller. Defaults to `True`.
 
             disable_runtime_checks (bool): Disable the runtime checks performed
-                by device firmware. Defaults to `False`.
+                by device firmware. Defaults to `True`.
+
+            timeout (float): Specifies the timeout for the initial connection to the instrument in seconds.
 
         Returns:
             connection_state:
@@ -271,6 +274,7 @@ class Session:
             reset_devices=reset_devices,
             use_async_api=use_async_api,
             disable_runtime_checks=disable_runtime_checks,
+            timeout_s=timeout,
         )
         self._controller = controller
         if self._connection_state.emulated:

@@ -85,10 +85,10 @@ class LabOneVersion:
         return cls(major, minor, build)
 
 
-RECOMMENDED_LABONE_VERSION = LabOneVersion(24, 7, 0)
+RECOMMENDED_LABONE_VERSION = LabOneVersion(24, 10, 0)
 """This variable holds the version what we currently support and actively test against."""
 
-MINIMUM_SUPPORTED_LABONE_VERSION = RECOMMENDED_LABONE_VERSION
+MINIMUM_SUPPORTED_LABONE_VERSION = LabOneVersion(24, 7, 0)
 """This variable holds the minimum version that we expect LabOne Q to work
 reliably, but may not be testing against anymore. Most of the time, this will
 be equal to `RECOMMENDED_LABONE_VERSION` with the exceptions happening
@@ -98,7 +98,7 @@ case an issue is found."""
 
 # LabOne Q version (major,minor) marked to remove support for all LabOne
 # versions less than RECOMMENDED_LABONE_VERSION.
-DROP_SUPPORT_FOR_PREVIOUS_L1 = (2, 37)
+DROP_SUPPORT_FOR_PREVIOUS_L1 = (2, 41)
 
 
 class SetupCaps:

@@ -211,18 +211,10 @@ def check_lo_frequency(dao: ExperimentDAO):
             values = [signal_info.lo_frequency]
 
         for f in values:
-            if abs(f % 100e6) > 1e-6:
+            if abs(f % 200e6) > 1e-6:
                 raise LabOneQException(
                     f"Cannot set local oscillator of signal {signal} to {f/1e9:.3} GHz."
-                    f" Only integer multiples of 100 MHz are acceptable."
-                )
-            if abs(f % 200e6) > 1e-6:
-                _logger.warning(
-                    f"Setting the local oscillator frequency of signal '{signal}' to"
-                    f" {f/1e9:.3} GHz may yield unpredictable phase relationships"
-                    f" between different channels.\n"
-                    f"It is highly recommended to choose a frequency that is an integer"
-                    f" multiple of 200 MHz."
+                    f" Only integer multiples of 200 MHz are accepted."
                 )
 
 

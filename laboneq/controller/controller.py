@@ -439,9 +439,11 @@ class Controller:
         reset_devices: bool = False,
         use_async_api: bool | None = None,
         disable_runtime_checks: bool = True,
+        timeout_s: float | None = None,
     ):
         # Remember settings for later implicit connect check
         self._do_emulation = do_emulation
+        self._devices.set_timeout(timeout_s)
         if use_async_api is not None:
             self._use_async_api = use_async_api
         run_async(

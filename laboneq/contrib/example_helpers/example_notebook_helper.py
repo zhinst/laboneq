@@ -135,7 +135,7 @@ def create_dummy_qubit(index, base_parameters, device_setup):
 # functions that modifies the calibration on a given device setup
 def calibrate_devices(device_setup):
     local_oscillator_shfsg = Oscillator(uid="lo_shfsg", frequency=5e9)
-    local_oscillator_shfqa = Oscillator(uid="lo_shfqa", frequency=5.5e9)
+    local_oscillator_shfqa = Oscillator(uid="lo_shfqa", frequency=5.6e9)
 
     # qubit 0
     # calibration setting for drive line for qubit 0

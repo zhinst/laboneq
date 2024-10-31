@@ -9,7 +9,8 @@ from enum import Enum, IntFlag
 import json
 import logging
 import time
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Literal, TypeVar, overload
+from laboneq.controller.devices.device_utils import is_expected
 
 import numpy as np
 from laboneq.controller.devices.device_utils import (
@@ -137,6 +138,7 @@ async def async_check_dataserver_device_compatibility(
     serials: list[str],
     emulator_state: EmulatorState | None,
     ignore_version_mismatch: bool,
+    timeout_s: float,
 ):
     if port == -1:  # Dummy server
         return
@@ -148,7 +150,9 @@ async def async_check_dataserver_device_compatibility(
     python_api_version = LabOneVersion.from_version_string(zhinst_core_version())
 
     if emulator_state is None:
-        dataserver = await DataServer.create(host=host, port=port)
+        dataserver = await DataServer.create(
+            host=host, port=port, timeout=int(timeout_s * 1e3)
+        )
     else:
         dataserver = MockInstrument(serial="ZI", emulator_state=emulator_state)
 
@@ -190,6 +194,7 @@ async def create_device_kernel_session(
     server_qualifier: ServerQualifier,
     device_qualifier: DeviceQualifier,
     emulator_state: EmulatorState | None,
+    timeout_s: float,
 ) -> Instrument:
     if emulator_state is not None:
         return MockInstrument(
@@ -201,15 +206,30 @@ async def create_device_kernel_session(
         interface=device_qualifier.options.interface,
         host=server_qualifier.host,
         port=server_qualifier.port,
+        timeout=int(timeout_s * 1e3),
     )
 
 
 U = TypeVar("U")
 
 
-async def _gather(*args: Coroutine[Any, Any, U]) -> list[U]:
+@overload
+async def _gather(
+    *args: Coroutine[Any, Any, U], return_exceptions: Literal[False] = False
+) -> list[U]: ...
+
+
+@overload
+async def _gather(
+    *args: Coroutine[Any, Any, U], return_exceptions: Literal[True]
+) -> list[U | BaseException]: ...
+
+
+async def _gather(
+    *args: Coroutine[Any, Any, U], return_exceptions: bool = False
+) -> list[U] | list[U | BaseException]:
     if ASYNC_DEBUG_MODE:
-        results = []
+        results: list[U | BaseException] = []
         failures = []
         for arg in args:
             try:
@@ -217,11 +237,23 @@ async def _gather(*args: Coroutine[Any, Any, U]) -> list[U]:
                 results.append(await arg)  # noqa: PERF401
             except Exception as ex:  # noqa: PERF203
                 # Defer exception and continue to avoid "was never awaited" warning
-                failures.append(ex)
+                if return_exceptions:
+                    results.append(ex)
+                else:
+                    failures.append(ex)
         if len(failures) > 0:
             raise failures[0]
         return results
-    return await asyncio.gather(*args)
+    return await asyncio.gather(*args, return_exceptions=return_exceptions)
+
+
+async def _gather_with_timeout(
+    *args: Coroutine[Any, Any, U], timeout_s: float
+) -> list[U | BaseException]:
+    return await _gather(
+        *(asyncio.wait_for(arg, timeout=timeout_s) for arg in args),
+        return_exceptions=True,
+    )
 
 
 @asynccontextmanager
@@ -382,3 +414,86 @@ class NodeMonitorAsync(NodeMonitorBase):
         raise LabOneQControllerException(
             f"Condition {path}=={expected} is not fulfilled within 3s. Last value: {val}"
         )
+
+
+def _from_annotated_value(annotated_value: AnnotatedValue) -> Any:
+    value = annotated_value.value
+    vector = getattr(value, "vector", None)
+    if isinstance(vector, str):
+        value = vector
+    return value
+
+
+class ResponseWaiterAsync:
+    def __init__(
+        self,
+        api: Instrument,
+        nodes: dict[str, Any] | None = None,
+        timeout_s: float | None = None,
+    ):
+        self._api = api
+        self._nodes: dict[str, Any] = {}
+        self._timeout_s = timeout_s  # TODO(2K): stop on timeout
+        self._queues: dict[str, DataQueue] = {}
+        if nodes is not None:
+            self.add_nodes(nodes)
+
+    def add_nodes(self, nodes: dict[str, Any]):
+        self._nodes.update(nodes)
+
+    async def prepare(self, get_initial_value: bool = False):
+        if len(self._nodes) == 0:
+            return
+        queues = await _gather(
+            *(
+                self._api.kernel_session.subscribe(
+                    path, get_initial_value=get_initial_value
+                )
+                for path in self._nodes
+            )
+        )
+        for path, queue in zip(self._nodes.keys(), queues):
+            self._queues[path] = queue
+
+    async def _wait_one(self, path: str):
+        queue = self._queues[path]
+        expected = self._nodes[path]
+        node_value = _from_annotated_value(await queue.get())
+        while not is_expected(node_value, expected):
+            node_value = _from_annotated_value(await queue.get())
+
+    async def wait(self) -> dict[str, Any]:
+        failed_nodes: dict[str, Any] = {}
+        if len(self._nodes) == 0:
+            return failed_nodes
+        if self._timeout_s is None:
+            await _gather(*(self._wait_one(path) for path in self._nodes))
+        else:
+            results = await _gather_with_timeout(
+                *(self._wait_one(path) for path in self._nodes),
+                timeout_s=self._timeout_s,
+            )
+            for result, (path, expected) in zip(results, self._nodes.items()):
+                if isinstance(result, (asyncio.TimeoutError, TimeoutError)):
+                    failed_nodes[path] = expected
+        for queue in self._queues.values():
+            queue.disconnect()
+        return failed_nodes
+
+
+class ConditionsCheckerAsync:
+    def __init__(self, api: Instrument, conditions: dict[str, Any]):
+        self._api = api
+        self._conditions = conditions
+
+    async def check(self) -> list[tuple[str, Any, Any]]:
+        results: list[AnnotatedValue] = await _gather(
+            *(self._api.kernel_session.get(path) for path in self._conditions)
+        )
+        values = [(res.path, _from_annotated_value(res)) for res in results]
+        mismatches = [
+            (path, value, self._conditions[path])
+            for path, value in values
+            if not is_expected(value, self._conditions[path])
+        ]
+        return mismatches

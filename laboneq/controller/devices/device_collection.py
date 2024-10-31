@@ -20,6 +20,7 @@ from laboneq.controller.communication import (
     batch_set_multiple,
 )
 from laboneq.controller.devices.async_support import (
+    _gather,
     async_check_dataserver_device_compatibility,
     gather_and_apply,
 )
@@ -61,6 +62,9 @@ SUPPRESSED_WARNINGS = frozenset(
 _logger = logging.getLogger(__name__)
 
 
+DEFAULT_TIMEOUT_S = 10
+
+
 class DeviceCollection:
     def __init__(
         self,
@@ -77,6 +81,7 @@ class DeviceCollection:
             raise LabOneQControllerException("Gen1 setup with QHub is not supported.")
         self._emulator_state: EmulatorState | None = None
         self._ignore_version_mismatch = ignore_version_mismatch
+        self._timeout_s: float = DEFAULT_TIMEOUT_S
         self._daqs: dict[str, DaqWrapper] = {}
         self._devices: dict[str, DeviceZI] = {}
         self._monitor_started = False
@@ -108,6 +113,9 @@ class DeviceCollection:
     def has_qhub(self) -> bool:
         return self._ds.has_qhub
 
+    def set_timeout(self, timeout_s: float | None):
+        self._timeout_s = DEFAULT_TIMEOUT_S if timeout_s is None else timeout_s
+
     def find_by_uid(self, device_uid) -> DeviceZI:
         device = self._devices.get(device_uid)
         if device is None:
@@ -137,8 +145,9 @@ class DeviceCollection:
     ):
         await self._prepare_daqs(do_emulation=do_emulation, use_async_api=use_async_api)
         await self._validate_dataserver_device_fw_compatibility(
-            self.emulator_state if do_emulation else None,
+            emulator_state=self.emulator_state if do_emulation else None,
             use_async_api=use_async_api,
+            timeout_s=self._timeout_s,
         )
         self._prepare_devices()
         for _, device in self.all:
@@ -146,9 +155,27 @@ class DeviceCollection:
                 self.emulator_state if do_emulation else None,
                 use_async_api=use_async_api,
                 disable_runtime_checks=disable_runtime_checks,
+                timeout_s=self._timeout_s,
             )
         await self.start_monitor()
-        await self.configure_device_setup(reset_devices)
+        await self.configure_device_setup(reset_devices, use_async_api=use_async_api)
+
+    async def _configure_async(
+        self,
+        devices: list[DeviceZI],
+        control_nodes_getter: Callable[[DeviceZI], list[NodeControlBase]],
+        config_name: str,
+    ):
+        await _gather(
+            *(
+                device.exec_config_step(
+                    control_nodes=control_nodes_getter(device),
+                    config_name=config_name,
+                    timeout_s=self._timeout_s,
+                )
+                for device in devices
+            )
+        )
 
     async def _configure_parallel(
         self,
@@ -243,8 +270,10 @@ class DeviceCollection:
                 f"Errors:\n{conditions_checker.failed_str(failed)}"
             )
 
-    async def configure_device_setup(self, reset_devices: bool):
+    async def configure_device_setup(self, reset_devices: bool, use_async_api: bool):
         _logger.info("Configuring the device setup")
+
+        configure = self._configure_async if use_async_api else self._configure_parallel
 
         await self.flush_monitor()  # Ensure status is up-to-date
 
@@ -258,7 +287,7 @@ class DeviceCollection:
             return children
 
         if reset_devices:
-            await self._configure_parallel(
+            await configure(
                 [d for d in self._devices.values() if not d.is_secondary],
                 lambda d: cast(DeviceZI, d).load_factory_preset_control_nodes(),
                 "Reset to factory defaults",
@@ -273,7 +302,7 @@ class DeviceCollection:
             leaders = [dev for _, dev in self.leaders]
             followers = _followers_of(leaders)
             # Switch QHUB to the external clock as usual
-            await self._configure_parallel(
+            await configure(
                 leaders,
                 lambda d: cast(DeviceZI, d).clock_source_control_nodes(),
                 "QHUB: Reference clock switching",
@@ -359,9 +388,7 @@ class DeviceCollection:
             # configuration step.
             targets = leaders
             while len(targets) > 0:
-                await self._configure_parallel(
-                    targets, control_nodes_getter, config_name
-                )
+                await configure(targets, control_nodes_getter, config_name)
                 targets = _followers_of(targets)
         _logger.info("The device setup is configured")
 
@@ -452,6 +479,7 @@ class DeviceCollection:
         self,
         emulator_state: EmulatorState | None,
         use_async_api: bool,
+        timeout_s: float,
     ):
         """Validate dataserver and device firmware compatibility."""
 
@@ -472,6 +500,7 @@ class DeviceCollection:
                     dev_serials,
                     emulator_state,
                     self._ignore_version_mismatch,
+                    timeout_s,
                 )
             elif emulator_state is None and not self._ignore_version_mismatch:
                 try:

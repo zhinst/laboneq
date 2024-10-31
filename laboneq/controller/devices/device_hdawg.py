@@ -18,7 +18,7 @@ from laboneq.controller.communication import (
     DaqNodeSetAction,
 )
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
-from laboneq.controller.devices.device_utils import NodeCollector
+from laboneq.controller.devices.device_utils import FloatWithTolerance, NodeCollector
 from laboneq.controller.devices.device_zi import (
     AllocatedOscillator,
     DeviceBase,
@@ -28,7 +28,6 @@ from laboneq.controller.attribute_value_tracker import DeviceAttribute
 from laboneq.controller.devices.zi_node_monitor import (
     Command,
     Condition,
-    FloatWithTolerance,
     NodeControlBase,
     Prepare,
     Response,

@@ -681,8 +681,11 @@ class Gen2Base(DevEmuHW):
         # 0 - INTERNAL
         # 1 - EXTERNAL
         # 2 - ZSYNC
-        freq = 10e6 if requested_source == 1 else 100e6
-        self._set_val("system/clocks/referenceclock/in/sourceactual", requested_source)
+        source_actual = self._dev_opts.get(
+            "system/clocks/referenceclock/in/sourceactual", requested_source
+        )
+        freq = 10e6 if source_actual == 1 else 100e6
+        self._set_val("system/clocks/referenceclock/in/sourceactual", source_actual)
         self._set_val("system/clocks/referenceclock/in/status", 0)
         self._set_val("system/clocks/referenceclock/in/freq", freq)
 

@@ -5,13 +5,13 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 import asyncio
-import math
 import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Iterable
+from typing import Any
 
 from laboneq._observability.tracing import trace
+from laboneq.controller.devices.device_utils import FloatWithTolerance, is_expected
 from laboneq.controller.util import LabOneQControllerException
 
 
@@ -47,31 +47,6 @@ class Node:
                     # Other vector types, keep everything
                     self.values.append(v)
         self.last = self.values[-1]
-
-
-def _is_expected(val: Any, expected: Any | None | list[Any | None]) -> bool:
-    if val is None:
-        return False
-
-    all_expected = (
-        expected
-        if isinstance(expected, Iterable) and not isinstance(expected, str)
-        else [expected]
-    )
-
-    for e in all_expected:
-        if e is None:
-            # No specific value expected, any update matches
-            return True
-        if isinstance(e, FloatWithTolerance) and math.isclose(
-            val, e.val, abs_tol=e.abs_tol
-        ):
-            # Float with given tolerance
-            return True
-        if val == e:
-            # Otherwise exact match
-            return True
-    return False
 
 
 class NodeMonitorBase(ABC):
@@ -130,7 +105,7 @@ class NodeMonitorBase(ABC):
         for path, expected in conditions.items():
             self._fail_on_missing_node(path)
             val = self.get_last(path)
-            if not _is_expected(val, expected):
+            if not is_expected(val, expected):
                 failed.append((path, val))
         return failed
 
@@ -148,7 +123,7 @@ class NodeMonitorBase(ABC):
                     # keep condition as is for the next check iteration
                     remaining[path] = expected
                     break
-                if _is_expected(val, expected):
+                if is_expected(val, expected):
                     break
         return remaining
 
@@ -356,12 +331,6 @@ class NodeControlKind(Enum):
     Command = auto()
     Response = auto()
     Prepare = auto()
-
-
-@dataclass
-class FloatWithTolerance:
-    val: float
-    abs_tol: float
 
 
 @dataclass

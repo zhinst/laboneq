@@ -1067,7 +1067,7 @@ def exp_from_qasm(
             to [AcquisitionType.INTEGRATION]().
         reset_oscillator_phase:
             When true, reset all oscillators at the start of every
-            acquistion loop iteration.
+            acquisition loop iteration.
 
     Returns:
         The experiment generated from the OpenQASM program.
@@ -1174,7 +1174,7 @@ def exp_from_qasm_list(
             The type of acquisition to perform.
         reset_oscillator_phase:
             When true, reset all oscillators at the start of every
-            acquistion loop iteration.
+            acquisition loop iteration.
         repetition_time:
             The length that any single program is padded to.
         batch_execution_mode:

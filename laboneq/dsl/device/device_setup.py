@@ -338,21 +338,18 @@ class DeviceSetup:
                 and the values are again a dictionary with type of the calibratable
                 and whether it is already set or not.
         """
-        calibratables = dict()
-        for logical_signal_group in self.logical_signal_groups.values():
-            calibratables = {
-                **calibratables,
-                **logical_signal_group.list_calibratables(
-                    qct_path.LogicalSignalGroups_Path_Abs
-                ),
-            }
-        for physical_channel in self.physical_channel_groups.values():
-            calibratables = {
-                **calibratables,
-                **physical_channel.list_calibratables(
-                    qct_path.PhysicalChannelGroups_Path_Abs
-                ),
-            }
+        calibratables = {
+            **{
+                path: info
+                for logical_signal_group in self.logical_signal_groups.values()
+                for path, info in logical_signal_group.list_calibratables().items()
+            },
+            **{
+                path: info
+                for physical_channel_group in self.physical_channel_groups.values()
+                for path, info in physical_channel_group.list_calibratables().items()
+            },
+        }
         return calibratables
 
     @classmethod
