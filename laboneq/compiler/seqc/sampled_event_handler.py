@@ -54,9 +54,13 @@ def sort_events(events: List[AWGEvent]) -> List[AWGEvent]:
 
     def fixed_priorities(event1, event2) -> int | None:
         """Extensible list of special cases for event ordering."""
-        if event1.type == AWGEventType.ACQUIRE:
-            if event2.type == AWGEventType.TRIGGER_OUTPUT:
-                return KEEP_ORDER
+        if (
+            event1.type == AWGEventType.ACQUIRE
+            and event2.type == AWGEventType.TRIGGER_OUTPUT
+        ):
+            return KEEP_ORDER
+        else:
+            return None
 
     def cmp(event1, event2):
         if (v := fixed_priorities(event1, event2)) is not None:
@@ -75,6 +79,7 @@ def sort_events(events: List[AWGEvent]) -> List[AWGEvent]:
                 AWGEventType.SEQUENCER_START: -100,
                 AWGEventType.INITIAL_RESET_PHASE: -5,
                 AWGEventType.LOOP_STEP_START: -4,
+                AWGEventType.LOOP_STEP_END: -4,
                 AWGEventType.INIT_AMPLITUDE_REGISTER: -3,
                 AWGEventType.PUSH_LOOP: -2,
                 AWGEventType.RESET_PHASE: -1,
@@ -1154,8 +1159,8 @@ class SampledEventHandler:
         if not prng_tracker.is_committed():
             # use the PRNG output range to do the offset for us
             prng_tracker.offset = command_table_match_offset
-            command_table_match_offset = 0
             prng_tracker.commit()
+        command_table_match_offset -= prng_tracker.offset
 
         ev = self.match_parent_event
         start = ev.start

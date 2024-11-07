@@ -10,7 +10,7 @@ import json
 import logging
 import time
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Literal, TypeVar, overload
-from laboneq.controller.devices.device_utils import is_expected
+from laboneq.controller.devices.device_utils import is_expected, to_l1_timeout
 
 import numpy as np
 from laboneq.controller.devices.device_utils import (
@@ -151,7 +151,7 @@ async def async_check_dataserver_device_compatibility(
 
     if emulator_state is None:
         dataserver = await DataServer.create(
-            host=host, port=port, timeout=int(timeout_s * 1e3)
+            host=host, port=port, timeout=to_l1_timeout(timeout_s)
         )
     else:
         dataserver = MockInstrument(serial="ZI", emulator_state=emulator_state)
@@ -206,7 +206,7 @@ async def create_device_kernel_session(
         interface=device_qualifier.options.interface,
         host=server_qualifier.host,
         port=server_qualifier.port,
-        timeout=int(timeout_s * 1e3),
+        timeout=to_l1_timeout(timeout_s),
     )
 
 
@@ -361,6 +361,15 @@ async def get_raw(api: Instrument, path: str) -> dict[str, Any]:
     return {r.path: parse_annotated_value(r) for r in results}
 
 
+async def _yield():
+    # Yield to the event loop to fill queues with pending data
+    # Note: asyncio.sleep(0) is not sufficient. See:
+    # https://stackoverflow.com/questions/74493571/asyncio-sleep0-does-not-yield-control-to-the-event-loop
+    # https://bugs.python.org/issue40800
+    # TODO(2K): rework the logic to use proper async once the legacy API is removed.
+    await asyncio.sleep(0.0001)
+
+
 class NodeMonitorAsync(NodeMonitorBase):
     def __init__(self, api: Instrument):
         super().__init__()
@@ -385,12 +394,7 @@ class NodeMonitorAsync(NodeMonitorBase):
 
     async def poll(self):
         while True:
-            # Yield to the event loop to fill queues with pending data
-            # Note: asyncio.sleep(0) is not sufficient. See:
-            # https://stackoverflow.com/questions/74493571/asyncio-sleep0-does-not-yield-control-to-the-event-loop
-            # https://bugs.python.org/issue40800
-            # TODO(2K): rework the logic to use proper async once the legacy API is removed.
-            await asyncio.sleep(0.0001)
+            await _yield()
             no_more_data = True
             for path, queue in self._queues.items():
                 while not queue.empty():
@@ -497,3 +501,33 @@ class ConditionsCheckerAsync:
             if not is_expected(value, self._conditions[path])
         ]
         return mismatches
+
+
+class AsyncSubscriber:
+    def __init__(self):
+        self._subscriptions: dict[str, DataQueue] = {}
+
+    async def subscribe(
+        self, api: Instrument, path: str, get_initial_value: bool = False
+    ):
+        if path in self._subscriptions:
+            if get_initial_value:
+                self._subscriptions.pop(path).disconnect()
+            else:
+                return  # Keep existing subscription
+        self._subscriptions[path] = await api.kernel_session.subscribe(
+            path, get_initial_value=get_initial_value
+        )
+
+    def get_updates(self, path) -> list[AnnotatedValue]:
+        updates = []
+        queue = self._subscriptions.get(path)
+        if queue is not None:
+            while not queue.empty():
+                updates.append(queue.get_nowait())
+        return updates
+
+    def unsubscribe_all(self):
+        for queue in self._subscriptions.values():
+            queue.disconnect()
+        self._subscriptions.clear()

@@ -37,6 +37,7 @@ from laboneq.controller.devices.zi_node_monitor import (
     ConditionsChecker,
     NodeControlBase,
     NodeControlKind,
+    NodeMonitorBase,
     ResponseWaiter,
     filter_commands,
     filter_settings,
@@ -93,6 +94,10 @@ class DeviceCollection:
         return self._emulator_state
 
     @property
+    def devices(self) -> dict[str, DeviceZI]:
+        return self._devices
+
+    @property
     def all(self) -> Iterator[tuple[str, DeviceZI]]:
         for uid, device in self._devices.items():
             yield uid, device
@@ -110,6 +115,15 @@ class DeviceCollection:
                 yield uid, device
 
     @property
+    def node_monitors(self) -> Iterator[NodeMonitorBase]:
+        already_considered = set()
+        for _, device in self.all:
+            node_monitor = device.node_monitor
+            if node_monitor not in already_considered:
+                already_considered.add(node_monitor)
+                yield node_monitor
+
+    @property
     def has_qhub(self) -> bool:
         return self._ds.has_qhub
 
@@ -125,15 +139,11 @@ class DeviceCollection:
         return device
 
     def find_by_node_path(self, path: str) -> DeviceZI:
-        m = re.match(r"^/?(DEV[^/]+)/.+", path.upper())
-        if m is None:
-            raise LabOneQControllerException(
-                f"Path '{path}' is not referring to any device"
-            )
-        serial = m.group(1).lower()
-        for _, dev in self.all:
-            if dev.serial == serial:
-                return dev
+        if m := re.match(r"^/?(dev[^/]+)/.+", path.lower()):
+            serial = m.group(1)
+            for _, dev in self.all:
+                if dev.serial == serial:
+                    return dev
         raise LabOneQControllerException(f"Could not find device for the path '{path}'")
 
     async def connect(
@@ -288,7 +298,7 @@ class DeviceCollection:
 
         if reset_devices:
             await configure(
-                [d for d in self._devices.values() if not d.is_secondary],
+                [device for _, device in self.all if not device.is_secondary],
                 lambda d: cast(DeviceZI, d).load_factory_preset_control_nodes(),
                 "Reset to factory defaults",
             )
@@ -394,7 +404,7 @@ class DeviceCollection:
 
     async def disconnect(self):
         await self.reset_monitor()
-        for device in self._devices.values():
+        for _, device in self.all:
             device.disconnect()
         self._devices = {}
         self._daqs = {}
@@ -438,21 +448,33 @@ class DeviceCollection:
                 awaitables.append(device.disable_outputs(outputs, invert))
 
     def free_allocations(self):
-        for device in self._devices.values():
+        for _, device in self.all:
             device.free_allocations()
+
+    async def on_experiment_begin(self):
+        async with gather_and_apply(batch_set_multiple) as awaitables:
+            for _, device in self.all:
+                awaitables.append(device.on_experiment_begin())
+        await self._update_warning_nodes()
+
+    async def on_after_nt_step(self):
+        await self._update_warning_nodes()
+        device_errors = await self.fetch_device_errors()
+        if device_errors is not None:
+            raise LabOneQControllerException(device_errors)
 
     async def on_experiment_end(self):
         async with gather_and_apply(batch_set_multiple) as awaitables:
-            for device in self._devices.values():
-                awaitables.append(device.maybe_async(device.on_experiment_end()))
+            for _, device in self.all:
+                awaitables.append(device.on_experiment_end())
 
     async def start_monitor(self):
         if self._monitor_started:
             return
+        await _gather(*(node_monitor.start() for node_monitor in self.node_monitors))
 
         response_waiter = ResponseWaiter()
         for _, device in self.all:
-            await device.node_monitor.start()
             response_waiter.add(
                 target=device,
                 conditions={path: None for path in device.nodes_to_monitor()},
@@ -467,12 +489,13 @@ class DeviceCollection:
         self._monitor_started = True
 
     async def flush_monitor(self):
-        for _, device in self.all:
-            await device.node_monitor.flush()
+        await _gather(*(node_monitor.flush() for node_monitor in self.node_monitors))
+
+    async def poll_monitor(self):
+        await _gather(*(node_monitor.poll() for node_monitor in self.node_monitors))
 
     async def reset_monitor(self):
-        for _, device in self.all:
-            await device.node_monitor.reset()
+        await _gather(*(node_monitor.reset() for node_monitor in self.node_monitors))
         self._monitor_started = False
 
     async def _validate_dataserver_device_fw_compatibility(
@@ -591,7 +614,13 @@ class DeviceCollection:
             updated_daqs[server_uid] = daq
         self._daqs = updated_daqs
 
-    async def check_errors(self, raise_on_error: bool = True) -> str | None:
+    async def _update_warning_nodes(self):
+        await self.poll_monitor()
+
+        for _, device in self.all:
+            await device.update_warning_nodes()
+
+    async def fetch_device_errors(self) -> str | None:
         all_errors: list[str] = []
         for _, device in self.all:
             dev_errors = await device.fetch_errors()
@@ -599,22 +628,7 @@ class DeviceCollection:
         if len(all_errors) == 0:
             return None
         all_messages = "\n".join(all_errors)
-        msg = f"Error(s) happened on device(s) during the execution of the experiment. Error messages:\n{all_messages}"
-        if raise_on_error:
-            raise LabOneQControllerException(msg)
-        return msg
-
-    async def update_warning_nodes(self):
-        for _, device in self.all:
-            await device.node_monitor.poll()
-
-        for _, device in self.all:
-            device.update_warning_nodes(
-                {
-                    node: device.node_monitor.get_last(node)
-                    for node in device.collect_warning_nodes()
-                }
-            )
+        return f"Error(s) happened on device(s) during the execution of the experiment. Error messages:\n{all_messages}"
 
 
 class DeviceErrorSeverity(Enum):

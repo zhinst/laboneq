@@ -30,15 +30,12 @@ impl DeepCopy for LoopIr {
         let prng_clone = match self.prng_setup {
             Some(ref prng) => match py_deep_copy(prng) {
                 Ok(prng) => Some(prng),
-                Err(_) => return Err(RuntimeError::PyhonDeepCopyFailed()),
+                Err(_) => return Err(RuntimeError::PyhonDeepCop()),
             },
             None => None,
         };
 
-        let guard = self
-            .interval
-            .lock()
-            .map_err(|_| RuntimeError::LockFailed())?;
+        let guard = self.interval.lock().map_err(|_| RuntimeError::Lock())?;
         Ok(Self {
             interval: Arc::new(Mutex::new(guard.deep_copy()?)),
             section: self.section.clone(),

@@ -14,8 +14,9 @@ class RootSchedule(IntervalSchedule):
         start_may_change: bool,
     ) -> int:
         length = 0
+        assert start_may_change is False
         for child in self.children:
-            child.calculate_timing(schedule_data, 0, False)
+            child.calculate_timing(schedule_data, 0, start_may_change)
             assert child.length is not None
             length = max(length, child.length)
             child.on_absolute_start_time_fixed(0, schedule_data)

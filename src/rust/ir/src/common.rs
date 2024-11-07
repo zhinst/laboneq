@@ -15,7 +15,9 @@ pub fn py_deep_copy(obj: &Py<PyAny>) -> PyResult<PyObject> {
 #[derive(Error, Debug)]
 pub enum RuntimeError {
     #[error("Failed to lock shared python reference.")]
-    LockFailed(),
+    Lock(),
     #[error("Failed to deep copy object on python heap.")]
-    PyhonDeepCopyFailed(),
+    PyhonDeepCop(),
+    #[error("Failed to extract type from python object.")]
+    PyhonExtraction(),
 }

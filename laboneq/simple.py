@@ -78,3 +78,6 @@ from laboneq.openqasm3.openqasm3_importer import (
 )
 from laboneq.pulse_sheet_viewer.pulse_sheet_viewer import show_pulse_sheet
 from laboneq.simulator.output_simulator import OutputSimulator
+
+from laboneq.dsl.experiment import builtins_dsl as dsl
+from laboneq import workflow

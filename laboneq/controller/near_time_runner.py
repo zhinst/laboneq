@@ -45,7 +45,7 @@ class NearTimeRunner(AsyncExecutorBase):
         return NtStepKey(indices=tuple(self.nt_loop_indices))
 
     async def set_handler(self, path: str, value):
-        dev = self.controller._devices.find_by_node_path(path)
+        dev = self.controller._find_by_node_path(path)
         self.user_set_nodes[dev].add(path, value, cache=False)
 
     async def nt_callback_handler(self, func_name: str, args: dict[str, Any]):
@@ -104,8 +104,6 @@ class NearTimeRunner(AsyncExecutorBase):
             # Skip the pipeliner loop iterations, except the first one - iterated by the pipeliner itself
             return
 
-        await self.controller._devices.update_warning_nodes()
-
         await self.controller._configure_triggers()
 
         user_set_node_actions: list[DaqNodeSetAction] = []
@@ -140,5 +138,5 @@ class NearTimeRunner(AsyncExecutorBase):
                 rt_section_uid=uid,
                 message=traceback.format_exc(),
             )
-        await self.controller._devices.update_warning_nodes()
-        await self.controller._devices.check_errors()
+
+        await self.controller._after_nt_step()

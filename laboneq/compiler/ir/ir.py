@@ -15,7 +15,6 @@ from laboneq.data.compilation_job import (
     OscillatorInfo,
     PulseDef,
     SignalInfo,
-    SectionInfo,
 )
 
 
@@ -66,27 +65,15 @@ class PulseDefIR:
 
 
 @attr.define(slots=True)
-class SectionRefIR:
-    uid: str = ""
-
-    @classmethod
-    def from_section_info(cls, section_info: SectionInfo):
-        return cls(uid=section_info.uid)
-
-
-@attr.define(slots=True)
-class IR:
+class IRTree:
     devices: list[DeviceIR] = field(factory=list)
     signals: list[SignalIR] = field(factory=list)
     root: Optional[RootScheduleIR] = None
     pulse_defs: list[PulseDefIR] = field(factory=list)
-    root_section: Optional[SectionRefIR] = None
-    root_section_children: list[SectionRefIR] = field(factory=list)
-    section_signals_with_children_ids: dict[str, set[str]] = field(factory=dict)
 
     def round_trip(self):
         from laboneq.dsl.serialization import Serializer
 
         json = Serializer.to_json(self)
-        rt = Serializer.from_json(json, IR)
+        rt = Serializer.from_json(json, IRTree)
         assert rt == self

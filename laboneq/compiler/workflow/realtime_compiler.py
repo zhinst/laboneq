@@ -13,6 +13,7 @@ import time
 from laboneq._observability.tracing import trace
 from laboneq.compiler import CodeGenerator, CompilerSettings
 from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
+from laboneq.compiler.ir.section_ir import SectionIR
 from laboneq.compiler.seqc.ir_to_event_list import generate_event_list_from_ir
 from laboneq.compiler.common.iface_code_generator import (
     ICodeGenerator,
@@ -20,7 +21,7 @@ from laboneq.compiler.common.iface_code_generator import (
 from laboneq.compiler.common.iface_compiler_output import RTCompilerOutputContainer
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.experiment_access import ExperimentDAO
-from laboneq.compiler.ir.ir import IR
+from laboneq.compiler.ir.ir import IRTree
 from laboneq.compiler.scheduler.parameter_store import ParameterStore
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.scheduler.scheduler import Scheduler
@@ -68,7 +69,7 @@ class RealtimeCompiler:
     def _lower_to_ir(self):
         return self._scheduler.generate_ir()
 
-    def _lower_ir_to_code(self, ir: IR):
+    def _lower_ir_to_code(self, ir: IRTree):
         awgs = [signal_obj.awg for signal_obj in self._signal_objects.values()]
         device_classes = {awg.device_class for awg in awgs}
         unknown_devices = [
@@ -138,7 +139,7 @@ class RealtimeCompiler:
 
         return compiler_output
 
-    def _lower_ir_to_pulse_sheet(self, ir: IR):
+    def _lower_ir_to_pulse_sheet(self, ir: IRTree):
         event_list = generate_event_list_from_ir(
             ir=ir,
             settings=self._settings,
@@ -149,31 +150,37 @@ class RealtimeCompiler:
             {k: v for k, v in event.items() if v is not None} for event in event_list
         ]
 
-        if ir.root_section is None:
-            return Schedule(
-                event_list=[],
-                section_info={},
-                section_signals_with_children={},
-                sampling_rates=[],
-            )
+        def find_root_section(ir_node):
+            if isinstance(ir_node, SectionIR):
+                return ir_node
+            for child in ir_node.children:
+                if (r := find_root_section(child)) is not None:
+                    return r
+            return None
+
+        root_section: SectionIR | None = find_root_section(ir.root)
+        assert root_section is not None
 
         preorder_map = self._scheduler.preorder_map()
 
         section_info_out = {}
         section_signals_with_children = {}
 
-        for section_info in (
-            ir.root_section,
-            *ir.root_section_children,
-        ):
+        def all_sections(section_ir):
+            assert isinstance(section_ir, SectionIR)
+            yield section_ir
+            for child in section_ir.children:
+                if isinstance(child, SectionIR):
+                    yield from (all_sections(child))
+
+        for section_ir in all_sections(root_section):
             try:  # pulse may be missing in case of experiments using match case
-                section_display_name = section_info.uid
-                section_signals_with_children[section_info.uid] = list(
-                    ir.section_signals_with_children_ids[section_info.uid]
-                )
-                section_info_out[section_info.uid] = {
+                section_id = section_ir.section
+                section_display_name = section_id
+                section_signals_with_children[section_id] = list(section_ir.signals)
+                section_info_out[section_id] = {
                     "section_display_name": section_display_name,
-                    "preorder": preorder_map[section_info.uid],
+                    "preorder": preorder_map[section_id],
                 }
             except KeyError:  # noqa: PERF203
                 continue

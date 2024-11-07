@@ -282,12 +282,11 @@ class DeviceSHFQA(DeviceSHFBase):
                 nc.add(f"qachannels/{ch}/output/on", 0, cache=False)
         return await self.maybe_async(nc)
 
-    def on_experiment_end(self) -> NodeCollector:
+    async def on_experiment_end(self) -> list[DaqNodeSetAction]:
         nc = NodeCollector(base=f"/{self.serial}/")
-        nc.extend(super().on_experiment_end())
         # in CW spectroscopy mode, turn off the tone
         nc.add("qachannels/*/spectroscopy/envelope/enable", 1, cache=False)
-        return nc
+        return (await super().on_experiment_end()) + (await self.maybe_async(nc))
 
     def _nodes_to_monitor_impl(self) -> list[str]:
         nodes = super()._nodes_to_monitor_impl()

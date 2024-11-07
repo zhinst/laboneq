@@ -8,7 +8,7 @@ from typing import Iterator, Any
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.ir.case_ir import CaseIR
 from laboneq.compiler.ir.interval_ir import IntervalIR
-from laboneq.compiler.ir.ir import IR
+from laboneq.compiler.ir.ir import IRTree
 from laboneq.compiler.ir.pulse_ir import PulseIR
 from laboneq.compiler.ir.root_ir import RootScheduleIR
 from laboneq.compiler.ir.section_ir import SectionIR
@@ -16,7 +16,7 @@ from laboneq.core.exceptions import LabOneQException
 
 
 class SectionInliner:
-    def __init__(self, ir: IR):
+    def __init__(self, ir: IRTree):
         self._ir = ir
         self._signals = {signal.uid: signal for signal in self._ir.signals}
 
@@ -93,7 +93,7 @@ class SectionInliner:
         yield start, node
 
 
-def inline_sections_in_branch(ir: IR):
+def inline_sections_in_branch(ir: IRTree):
     """Replace non-control flow sections by their contents.
 
     This pass operates in-place."""

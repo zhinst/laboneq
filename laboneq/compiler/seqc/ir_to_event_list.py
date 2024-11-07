@@ -8,11 +8,11 @@ from laboneq.compiler.common.compiler_settings import CompilerSettings, TINYSAMP
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.event_list.event_type import EventList, EventType
 from laboneq.compiler.event_list.event_list_generator import generate_event_list
-from laboneq.compiler.ir.ir import IR
+from laboneq.compiler.ir.ir import IRTree
 from laboneq.data.compilation_job import OscillatorInfo
 
 
-def _calculate_osc_phase(event_list: EventList, ir: IR):
+def _calculate_osc_phase(event_list: EventList, ir: IRTree):
     """Traverse the event list, and elaborate the phase of each played pulse.
 
     For SW oscillators, calculate the time since the last set/reset of that oscillator,
@@ -125,7 +125,7 @@ def _remove_handled_oscillator_events(
     return filtered_events
 
 
-def _calculate_osc_freq(event_list: EventList, ir: IR):
+def _calculate_osc_freq(event_list: EventList, ir: IRTree):
     """Traverse the event list, and elaborate the frequency of each played pulse."""
 
     priority_map = {
@@ -165,7 +165,7 @@ def _calculate_osc_freq(event_list: EventList, ir: IR):
     )
 
 
-def _start_events(ir: IR) -> EventList:
+def _start_events(ir: IRTree) -> EventList:
     retval = []
 
     # Add initial events to reset the NCOs.
@@ -190,7 +190,7 @@ def _start_events(ir: IR) -> EventList:
 
 
 def generate_event_list_from_ir(
-    ir: IR, settings: CompilerSettings, expand_loops: bool, max_events: int
+    ir: IRTree, settings: CompilerSettings, expand_loops: bool, max_events: int
 ) -> EventList:
     event_list = _start_events(ir)
 

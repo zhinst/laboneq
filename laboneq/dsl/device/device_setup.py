@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Union
 
@@ -21,6 +22,7 @@ from laboneq.dsl.device.servers import DataServer
 from laboneq.dsl.serialization import Serializer
 
 from ._device_setup_generator import _DeviceSetupGenerator
+from ...core.types.enums import IOSignalType
 
 if TYPE_CHECKING:
     from laboneq.dsl import quantum
@@ -139,6 +141,7 @@ class DeviceSetup:
         try:
             for connection in connections:
                 setup_modifier.add_connection(self, instrument, connection)
+            self.check_no_rf_multiplexing()
         except DeviceSetupInternalException as e:
             raise LabOneQException(str(e)) from e
 
@@ -360,7 +363,9 @@ class DeviceSetup:
             filename (str): Filename.
         """
         # TODO ErC: Error handling
-        return Serializer.from_json_file(filename, cls)
+        ds = Serializer.from_json_file(filename, cls)
+        ds.check_no_rf_multiplexing()
+        return ds
 
     def save(self, filename: str):
         """Save the device setup to a specified file.
@@ -392,9 +397,11 @@ class DeviceSetup:
             server_port (str): Port of the server that should be created.
             setup_name (str): Name of the setup that should be created.
         """
-        return _DeviceSetupGenerator.from_descriptor(
+        ds = _DeviceSetupGenerator.from_descriptor(
             yaml_text, server_host, server_port, setup_name
         )
+        ds.check_no_rf_multiplexing()
+        return ds
 
     @classmethod
     def from_yaml(
@@ -412,9 +419,11 @@ class DeviceSetup:
             server_port (str): Port of the server that should be created.
             setup_name (str): Name of the setup that should be created.
         """
-        return _DeviceSetupGenerator.from_yaml(
+        ds = _DeviceSetupGenerator.from_yaml(
             filepath, server_host, server_port, setup_name
         )
+        ds.check_no_rf_multiplexing()
+        return ds
 
     @classmethod
     def from_dict(
@@ -434,7 +443,7 @@ class DeviceSetup:
 
         !!! version-added "Added in version 2.5.0"
         """
-        return _DeviceSetupGenerator.from_dicts(
+        ds = _DeviceSetupGenerator.from_dicts(
             instrument_list=data.get("instrument_list"),
             instruments=data.get("instruments"),
             connections=data.get("connections"),
@@ -443,6 +452,8 @@ class DeviceSetup:
             server_port=server_port,
             setup_name=setup_name,
         )
+        ds.check_no_rf_multiplexing()
+        return ds
 
     @classmethod
     def from_dicts(
@@ -473,7 +484,7 @@ class DeviceSetup:
             setup_name:
                 Name of the setup that should be created.
         """
-        return _DeviceSetupGenerator.from_dicts(
+        ds = _DeviceSetupGenerator.from_dicts(
             instrument_list=instrument_list,
             instruments=instruments,
             connections=connections,
@@ -482,6 +493,8 @@ class DeviceSetup:
             server_port=server_port,
             setup_name=setup_name,
         )
+        ds.check_no_rf_multiplexing()
+        return ds
 
     def _server_leader_instrument(self, server_uid: str) -> str | None:
         """Return a leader instrument for the given Dataserver UID."""
@@ -489,3 +502,32 @@ class DeviceSetup:
             if isinstance(dev, (PQSC, QHUB)):
                 if dev.server_uid == server_uid:
                     return dev.uid
+
+    def check_no_rf_multiplexing(self):
+        """
+        Checks each instrument in DeviceSetup for RF signal multiplexing.
+        Raises RFMultiplexingError if multiplexing is detected.
+        """
+        # Iterate over all instruments
+        for instrument in self.instruments:
+            # Dictionary to map local_port to list of RF connections within this instrument
+            rf_port_usage = defaultdict(list)
+
+            # Iterate over all connections in the current instrument
+            for conn in instrument.connections:
+                if conn.signal_type == IOSignalType.RF:
+                    rf_port_usage[conn.local_port].append(conn)
+
+            # Identify local_ports with more than one RF connection
+            multiplexed_ports = [
+                port for port, conns in rf_port_usage.items() if len(conns) > 1
+            ]
+
+            if multiplexed_ports:
+                multiplexed_details = f"Instrument '{instrument.uid}' has RF multiplexing on the following ports:\n"
+                for port in multiplexed_ports:
+                    connections = rf_port_usage[port]
+                    # Extract remote paths for detailed reporting
+                    remote_paths = [conn.remote_path for conn in connections]
+                    multiplexed_details += f"  - Port '{port}' is used by signals: {', '.join(remote_paths)}\n"
+                raise LabOneQException(multiplexed_details)

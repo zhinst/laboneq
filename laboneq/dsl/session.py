@@ -280,7 +280,7 @@ class Session:
         if self._connection_state.emulated:
             self._toolkit_devices = MockedToolkit()
         else:
-            self._toolkit_devices = ToolkitDevices(controller._devices._devices)
+            self._toolkit_devices = ToolkitDevices(controller.devices)
         self._connection_state.connected = True
         return self._connection_state
 

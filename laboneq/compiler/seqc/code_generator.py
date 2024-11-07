@@ -21,7 +21,7 @@ import scipy.signal
 from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.shfppc_sweeper_config import SHFPPCSweeperConfig
 from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
-from laboneq.compiler.ir.ir import IR
+from laboneq.compiler.ir.ir import IRTree
 from laboneq.compiler.seqc.inline_sections_in_branch import inline_sections_in_branch
 from laboneq.compiler.seqc.linker import AwgWeights, SeqCGenOutput
 from laboneq._utils import ensure_list
@@ -336,7 +336,7 @@ class CodeGenerator(ICodeGenerator):
 
     def __init__(
         self,
-        ir: IR,
+        ir: IRTree,
         signals: list[SignalObj],
         feedback_register_layout: FeedbackRegisterLayout | None = None,
         settings: CompilerSettings | dict | None = None,

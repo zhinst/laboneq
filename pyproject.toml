@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "laboneq"
-version = "2.40.0"
+version = "2.41.0"
 description = "Zurich Instruments LabOne Q software framework for quantum computing control"
 license = { text = "Apache 2.0" }
 readme = "README.md"
@@ -61,6 +61,7 @@ dependencies = [
     "zhinst-timing-models ~= 24.10.64896",
     "labone == 3.1.0",
     "unsync == 1.4.0",
+    "pygments >= 2.18.0"
 ]
 
 [project.urls]
@@ -93,7 +94,6 @@ exclude = [
     "target",
     "venv",
 ]
-extend-include = ["examples/*.ipynb", "resources/examples/*.ipynb"]
 
 [tool.ruff.lint]
 select = [
@@ -137,6 +137,14 @@ mccabe.max-complexity = 10
 # F401: Imported but unused
 "__init__.py" = ["F401"]
 "laboneq/simple.py" = ["F401"]
+
+# Documentation notebooks (nbqa converts notebooks to .py)
+"examples/**/*.ipynb" = [
+  # Allow redefining values
+  "F811",
+  # Useless attribute access can display values in notebooks
+  "B018",
+]
 
 # Ignore star import, mainly from laboneq.simple (TODO: Fix this)
 "tests/integration/dsl_v3/*" = ["F403", "F405"]

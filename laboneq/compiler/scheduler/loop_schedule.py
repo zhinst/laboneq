@@ -101,7 +101,7 @@ class LoopSchedule(SectionSchedule):
                         longest = length
             if repetition_mode == RepetitionMode.AUTO:
                 for c in self.children:
-                    assert isinstance(c, SectionSchedule)
+                    assert isinstance(c, LoopIterationSchedule)
                     c.adjust_length(longest)
                 self.children_start = [longest * i for i in range(len(self.children))]
             self._calculate_length(schedule_data)

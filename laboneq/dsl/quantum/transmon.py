@@ -75,7 +75,7 @@ class Transmon(QuantumElement):
     def __init__(
         self,
         uid: str | None = None,
-        signals: dict[str, LogicalSignal] | None = None,
+        signals: dict[str, LogicalSignal | str] | None = None,
         parameters: TransmonParameters | dict[str, Any] | None = None,
     ):
         """

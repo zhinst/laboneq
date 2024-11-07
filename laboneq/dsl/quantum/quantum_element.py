@@ -92,7 +92,7 @@ class QuantumElement(ABC):
     def __init__(
         self,
         uid: str | None = None,
-        signals: dict[str, LogicalSignal] | None = None,
+        signals: dict[str, LogicalSignal | str] | None = None,
     ):
         """
         Initializes a new QuantumElement object.
@@ -125,7 +125,7 @@ class QuantumElement(ABC):
 
     @staticmethod
     def _coerce_signal_type(name: str) -> SignalType:
-        """Coerse signal type.
+        """Coerce signal type.
 
         The method can be overwritten if the child class
         does additional validation or uses custom `SignalType`.

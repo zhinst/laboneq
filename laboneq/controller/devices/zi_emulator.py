@@ -1395,6 +1395,14 @@ class MockDataQueue:
     async def get(self) -> MockAnnotatedValue:
         while self.empty():
             await asyncio.sleep(0.01)
+        return self._get()
+
+    def get_nowait(self) -> MockAnnotatedValue:
+        if self.empty():
+            raise asyncio.QueueEmpty
+        return self._get()
+
+    def _get(self) -> MockAnnotatedValue:
         value = self._path_events.pop(0)
         return make_annotated_value(path=self._path, value=value)
 

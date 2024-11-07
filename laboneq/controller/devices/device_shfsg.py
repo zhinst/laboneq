@@ -17,6 +17,7 @@ from laboneq.controller.attribute_value_tracker import (
 from laboneq.controller.communication import (
     DaqNodeSetAction,
 )
+from laboneq.controller.devices.async_support import _gather
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
 from laboneq.controller.devices.device_shf_base import (
     DeviceSHFBase,
@@ -213,6 +214,8 @@ class DeviceSHFSG(DeviceSHFBase):
 
     def _nodes_to_monitor_impl(self) -> list[str]:
         nodes = super()._nodes_to_monitor_impl()
+        if self._api is None:
+            nodes.extend(self._collect_warning_nodes().values())
         for awg in range(self._get_num_awgs()):
             nodes.append(f"/{self.serial}/sgchannels/{awg}/awg/enable")
             nodes.append(f"/{self.serial}/sgchannels/{awg}/awg/ready")
@@ -433,12 +436,16 @@ class DeviceSHFSG(DeviceSHFBase):
                         target=output.channel,
                         source=route.from_channel,
                         router_idx=idx,
-                        amplitude=route.amplitude
-                        if not isinstance(route.amplitude, ParameterUID)
-                        else None,
-                        phase=route.phase
-                        if not isinstance(route.phase, ParameterUID)
-                        else None,
+                        amplitude=(
+                            route.amplitude
+                            if not isinstance(route.amplitude, ParameterUID)
+                            else None
+                        ),
+                        phase=(
+                            route.phase
+                            if not isinstance(route.phase, ParameterUID)
+                            else None
+                        ),
                     )
                 )
             # Disable routes which are not used.
@@ -548,9 +555,11 @@ class DeviceSHFSG(DeviceSHFBase):
 
                 nc.add(
                     f"/{self.serial}/sgchannels/{output.channel}/output/rflfpath",
-                    1  # RF
-                    if output.port_mode is None or output.port_mode == "rf"
-                    else 0,  # LF
+                    (
+                        1  # RF
+                        if output.port_mode is None or output.port_mode == "rf"
+                        else 0
+                    ),  # LF
                 )
                 if self._is_plus:
                     nc.add(
@@ -760,26 +769,45 @@ class DeviceSHFSG(DeviceSHFBase):
         reset_nodes.extend(await self.maybe_async(nc))
         return reset_nodes
 
-    def collect_warning_nodes(self) -> list[str]:
+    def _collect_warning_nodes(self) -> dict[int, str]:
         if self._has_opt_rtr:
-            return [
-                f"/{self.serial}/sgchannels/{ch}/outputrouter/overflowcount"
+            return {
+                ch: f"/{self.serial}/sgchannels/{ch}/outputrouter/overflowcount"
                 for ch in range(self._outputs)
-            ]
-        return []
+            }
+        return {}
 
-    def update_warning_nodes(self, node_values: dict[str, Any]):
-        for idx, node in enumerate(self.collect_warning_nodes()):
-            value = node_values.get(node)
+    async def update_warning_nodes(self):
+        for ch, node in self._collect_warning_nodes().items():
+            if self._api is None:
+                value = self.node_monitor.pop(node)
+            else:
+                updates = self._subscriber.get_updates(node)
+                value = updates[-1].value if len(updates) > 0 else None
+
+            if value is None:
+                continue
+
             prev = self._warning_nodes.get(node)
-            if value is not None and prev is not None and value > prev:
+            if prev is not None and value > prev:
                 _logger.warning(
                     "%s: Output channel %s Output Router overflow count: %s",
                     self.dev_repr,
-                    idx,
+                    ch,
                     value - prev,
                 )
             self._warning_nodes[node] = value
+
+    async def on_experiment_begin(self) -> list[DaqNodeSetAction]:
+        if self._api is not None:
+            await _gather(
+                *(
+                    self._subscriber.subscribe(self._api, path)
+                    for path in self._collect_warning_nodes().values()
+                )
+            )
+
+        return await super().on_experiment_begin()
 
     def runtime_check_control_nodes(self) -> list[NodeControlBase]:
         # Enable AWG runtime checks which includes the gap detector.

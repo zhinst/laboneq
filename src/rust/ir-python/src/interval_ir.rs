@@ -14,7 +14,15 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::{common::*, loop_ir::LoopPy, section_ir::SectionPy};
+use crate::{
+    common::*,
+    loop_ir::LoopPy,
+    loop_iteration_ir::{LoopIterationPreamblePy, LoopIterationPy},
+    oscillator_ir::{InitialOscillatorFrequencyPy, SetOscillatorFrequencyPy},
+    pulse_ir::PulsePy,
+    section_ir::SectionPy,
+    single_awg_ir::SingleAwgPy,
+};
 
 #[pyclass]
 #[pyo3(name = "IntervalIR")]
@@ -74,6 +82,22 @@ impl IntervalPy {
                 IrNode::SectionIr(_) => {
                     ret.append(Py::new(py, SectionPy(Arc::clone(c))).unwrap())?
                 }
+                IrNode::LoopIterationPreambleIr(_) => {
+                    ret.append(Py::new(py, LoopIterationPreamblePy(Arc::clone(c))).unwrap())?
+                }
+                IrNode::LoopIterationIr(_) => {
+                    ret.append(Py::new(py, LoopIterationPy(Arc::clone(c))).unwrap())?
+                }
+                IrNode::PulseIr(_) => ret.append(Py::new(py, PulsePy(Arc::clone(c))).unwrap())?,
+                IrNode::InitialOscillatorFrequencyIr(_) => {
+                    ret.append(Py::new(py, InitialOscillatorFrequencyPy(Arc::clone(c))).unwrap())?
+                }
+                IrNode::SetOscillatorFrequencyIr(_) => {
+                    ret.append(Py::new(py, SetOscillatorFrequencyPy(Arc::clone(c))).unwrap())?
+                }
+                IrNode::SingleAwgIr(_) => {
+                    ret.append(Py::new(py, SingleAwgPy(Arc::clone(c))).unwrap())?
+                }
             }
         }
 
@@ -129,6 +153,38 @@ impl IntervalPy {
             IrNode::SectionIr(_) => Ok(Py::new(py, SectionPy(Arc::clone(&guard.children[idx])))
                 .unwrap()
                 .into_any()),
+            IrNode::LoopIterationPreambleIr(_) => Ok(Py::new(
+                py,
+                LoopIterationPreamblePy(Arc::clone(&guard.children[idx])),
+            )
+            .unwrap()
+            .into_any()),
+            IrNode::LoopIterationIr(_) => Ok(Py::new(
+                py,
+                LoopIterationPy(Arc::clone(&guard.children[idx])),
+            )
+            .unwrap()
+            .into_any()),
+            IrNode::PulseIr(_) => Ok(Py::new(py, PulsePy(Arc::clone(&guard.children[idx])))
+                .unwrap()
+                .into_any()),
+            IrNode::InitialOscillatorFrequencyIr(_) => Ok(Py::new(
+                py,
+                InitialOscillatorFrequencyPy(Arc::clone(&guard.children[idx])),
+            )
+            .unwrap()
+            .into_any()),
+            IrNode::SetOscillatorFrequencyIr(_) => Ok(Py::new(
+                py,
+                SetOscillatorFrequencyPy(Arc::clone(&guard.children[idx])),
+            )
+            .unwrap()
+            .into_any()),
+            IrNode::SingleAwgIr(_) => {
+                Ok(Py::new(py, SingleAwgPy(Arc::clone(&guard.children[idx])))
+                    .unwrap()
+                    .into_any())
+            }
         }
     }
 

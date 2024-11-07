@@ -20,7 +20,7 @@ impl DeepCopy for IntervalIr {
     fn deep_copy(&self) -> Result<Self, RuntimeError> {
         let mut cloned_children: Vec<Arc<Mutex<IrNode>>> = Vec::new();
         for c in &self.children {
-            let c_guard = c.lock().map_err(|_| RuntimeError::LockFailed())?;
+            let c_guard = c.lock().map_err(|_| RuntimeError::Lock())?;
             let c_clone = deep_copy_ir_node(&c_guard);
             match c_clone {
                 Ok(c_clone) => cloned_children.push(Arc::new(Mutex::new(c_clone))),

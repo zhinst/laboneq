@@ -6,7 +6,14 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use ir::IrNode;
 use pyo3::prelude::*;
 
-use crate::{loop_ir::LoopPy, section_ir::SectionPy};
+use crate::{
+    loop_ir::LoopPy,
+    loop_iteration_ir::{LoopIterationPreamblePy, LoopIterationPy},
+    oscillator_ir::{InitialOscillatorFrequencyPy, SetOscillatorFrequencyPy},
+    pulse_ir::PulsePy,
+    section_ir::SectionPy,
+    single_awg_ir::SingleAwgPy,
+};
 
 pub fn unlock_mutex<T>(node: &Arc<Mutex<T>>) -> Result<MutexGuard<'_, T>, PyErr> {
     node.lock().map_err(|_| {
@@ -35,6 +42,12 @@ macro_rules! impl_extractable_ir_node {
 enum IRNodePy {
     Section(SectionPy),
     Loop(LoopPy),
+    LoopIterationPreamble(LoopIterationPreamblePy),
+    LoopIteration(LoopIterationPy),
+    Pulse(PulsePy),
+    SetOscillatorFrequency(SetOscillatorFrequencyPy),
+    InitialOscillatorFrequency(InitialOscillatorFrequencyPy),
+    SingleAwg(SingleAwgPy),
 }
 
 pub fn extract_child(item: &Bound<PyAny>) -> Result<Arc<Mutex<IrNode>>, PyErr> {
@@ -43,6 +56,12 @@ pub fn extract_child(item: &Bound<PyAny>) -> Result<Arc<Mutex<IrNode>>, PyErr> {
     match ir_node_py {
         IRNodePy::Section(node) => Ok(node.extract_ir_node()),
         IRNodePy::Loop(node) => Ok(node.extract_ir_node()),
+        IRNodePy::LoopIterationPreamble(node) => Ok(node.extract_ir_node()),
+        IRNodePy::LoopIteration(node) => Ok(node.extract_ir_node()),
+        IRNodePy::Pulse(node) => Ok(node.extract_ir_node()),
+        IRNodePy::SetOscillatorFrequency(node) => Ok(node.extract_ir_node()),
+        IRNodePy::InitialOscillatorFrequency(node) => Ok(node.extract_ir_node()),
+        IRNodePy::SingleAwg(node) => Ok(node.extract_ir_node()),
     }
 }
 

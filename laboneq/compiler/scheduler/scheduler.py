@@ -29,7 +29,7 @@ from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.ir.acquire_group_ir import AcquireGroupIR
 from laboneq.compiler.ir.case_ir import CaseIR, EmptyBranchIR
 from laboneq.compiler.ir.interval_ir import IntervalIR
-from laboneq.compiler.ir.ir import IR, DeviceIR, SectionRefIR, SignalIR, PulseDefIR
+from laboneq.compiler.ir.ir import IRTree, DeviceIR, SignalIR, PulseDefIR
 from laboneq.compiler.ir.loop_ir import LoopIR
 from laboneq.compiler.ir.loop_iteration_ir import (
     LoopIterationIR,
@@ -201,40 +201,13 @@ class Scheduler:
             self._schedule_to_ir(root_ir, self._root_schedule)
         exp_info = self._experiment_dao.to_experiment_info()
 
-        root_sections_ids = self._experiment_dao.root_rt_sections()
-        has_rt_root = len(root_sections_ids) != 0
-
-        section_signals_with_children = {}
-        root_section_children_ids = None
-        if has_rt_root:
-            root_section_children_ids = self._experiment_dao.all_section_children(
-                root_sections_ids[0]
-            )
-            all_section_ids = [root_sections_ids[0], *root_section_children_ids]
-            for section_id in all_section_ids:
-                section_signals_with_children[section_id] = (
-                    self._experiment_dao.section_signals_with_children(section_id)
-                )
-
-        return IR(
+        return IRTree(
             devices=[DeviceIR.from_device_info(dev) for dev in exp_info.devices],
             signals=[SignalIR.from_signal_info(sig) for sig in exp_info.signals],
             root=root_ir,
             pulse_defs=[
                 PulseDefIR.from_pulse_def(pulse) for pulse in exp_info.pulse_defs
             ],
-            root_section=SectionRefIR.from_section_info(
-                self._experiment_dao.section_info(root_sections_ids[0])
-            )
-            if has_rt_root
-            else None,
-            root_section_children=[
-                SectionRefIR.from_section_info(self._experiment_dao.section_info(id))
-                for id in root_section_children_ids
-            ]
-            if has_rt_root
-            else None,
-            section_signals_with_children_ids=section_signals_with_children,
         )
 
     def _schedule_root(

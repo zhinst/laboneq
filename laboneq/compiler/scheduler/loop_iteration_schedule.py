@@ -60,7 +60,9 @@ class LoopIterationPreambleSchedule(IntervalSchedule):
         self.length = 0
         for child, child_start in zip(self.children, self.children_start):
             self.length = max(self.length, child_start + child.length)
-            child.calculate_timing(schedule_data, suggested_start + child_start, False)
+            child.calculate_timing(
+                schedule_data, suggested_start + child_start, start_may_change
+            )
 
         assert self.length % self.grid == 0
         return suggested_start

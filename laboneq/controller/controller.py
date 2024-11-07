@@ -124,6 +124,10 @@ class Controller:
     def setup_caps(self) -> SetupCaps:
         return self._setup_caps
 
+    @property
+    def devices(self) -> dict[str, DeviceZI]:
+        return self._devices.devices
+
     def _allocate_resources(self):
         self._devices.free_allocations()
         osc_params = self._recipe_data.recipe.oscillator_params
@@ -180,8 +184,7 @@ class Controller:
 
         # Upload AWG programs, waveforms, and command tables:
         if len(elf_upload_conditions) > 0:
-            for device in elf_upload_conditions.keys():
-                await device.node_monitor.flush()
+            self._devices.flush_monitor()
 
         _logger.debug("Started upload of AWG programs...")
         with tracing.get_tracer().start_span("upload-awg-programs") as _:
@@ -251,6 +254,12 @@ class Controller:
         await self._upload_awg_programs(nt_step=nt_step, rt_section_uid=rt_section_uid)
         await self._replace_artifacts(rt_section_uid=rt_section_uid)
         await self._set_nodes_after_awg_program_upload()
+
+    def _find_by_node_path(self, path: str) -> DeviceZI:
+        return self._devices.find_by_node_path(path)
+
+    async def _after_nt_step(self):
+        await self._devices.on_after_nt_step()
 
     async def _configure_triggers(self):
         async with gather_and_apply(batch_set_multiple) as awaitables:
@@ -488,6 +497,7 @@ class Controller:
 
     def disconnect(self):
         run_async(self._disconnect_async)
+        self._use_async_api = USE_ASYNC_API_BY_DEFAULT
 
     async def _disconnect_async(self):
         _logger.info("Disconnecting from all devices and servers...")
@@ -519,6 +529,7 @@ class Controller:
         protected_session._set_experiment_results(self._results)
         try:
             await self._initialize_devices()
+            await self._devices.on_experiment_begin()
 
             # Ensure no side effects from the previous execution in the same session
             self._current_waves.clear()
@@ -537,15 +548,14 @@ class Controller:
             _logger.info("Finished near-time execution.")
         except LabOneQControllerException:
             # Report device errors if any - it maybe useful to diagnose the original exception
-            device_errors = await self._devices.check_errors(raise_on_error=False)
+            device_errors = await self._devices.fetch_device_errors()
             if device_errors is not None:
                 _logger.warning(device_errors)
             raise
         finally:
             # Ensure that the experiment run time is not included in the idle timeout for the connection check.
             self._last_connect_check_ts = time.monotonic()
-
-        await self._devices.on_experiment_end()
+            await self._devices.on_experiment_end()
 
     def results(self) -> ExperimentResults:
         return self._results

@@ -153,3 +153,8 @@ def prepare_emulator_state(ds: DeviceSetupDAO) -> EmulatorState:
                 )
 
     return emulator_state
+
+
+def to_l1_timeout(timeout_s: float) -> int:
+    assert 0 < timeout_s < float("inf")
+    return int(timeout_s * 1e3)
