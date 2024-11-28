@@ -1,0 +1,9 @@
+[workspace.package]
+version = "0.1.0"
+authors = ["Zurich Instruments AG <info@zhinst.com>"]
+edition = "2021"
+publish = false
+
+[workspace]
+members = ["**/src/rust/*"]
+resolver = "2"

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "laboneq"
-version = "2.41.0"
+version = "2.42.0"
 description = "Zurich Instruments LabOne Q software framework for quantum computing control"
 license = { text = "Apache 2.0" }
 readme = "README.md"
@@ -39,8 +39,8 @@ dependencies = [
     "matplotlib >= 3.8.3",
     "cycler >= 0.12.1",
     "numpy >= 1.26.4, < 2.0",
-    "openpulse >= 0.5.0",
-    "openqasm3 >= 0.5.0, < 1.0",
+    "openpulse ~= 1.0.1",
+    "openqasm3 ~= 1.0.0",
     "orjson >= 3.9.15",
     "pybase64 >= 1.3.2",
     "pycparser >= 2.21",
@@ -55,11 +55,11 @@ dependencies = [
     "attrs >= 20.1.0",
     "sortedcontainers >= 2.4.0",
     "typing_extensions >= 4.10.0",
-    "zhinst-core ~= 24.10.64896",
+    "zhinst-core ~= 24.10.65175",
     "zhinst-toolkit == 0.7.0",
     "zhinst-utils == 0.5.0",
     "zhinst-timing-models ~= 24.10.64896",
-    "labone == 3.1.0",
+    "labone == 3.2.0",
     "unsync == 1.4.0",
     "pygments >= 2.18.0"
 ]
@@ -68,9 +68,10 @@ dependencies = [
 Homepage = "https://github.com/zhinst/laboneq"
 
 [tool.maturin]
-manifest-path = "./src/rust/Cargo.toml"
+manifest-path = "./src/rust/laboneq-rust/Cargo.toml"
 module-name = "laboneq._rust"
 features = []
+python-source = "src/python"
 include = [
     "laboneq/compiler/qccs-schema_2_5_0.json",
     "laboneq/pulse_sheet_viewer/pulse_sheet_viewer_template.html",
@@ -136,7 +137,7 @@ mccabe.max-complexity = 10
 [tool.ruff.lint.per-file-ignores]
 # F401: Imported but unused
 "__init__.py" = ["F401"]
-"laboneq/simple.py" = ["F401"]
+"*/laboneq/simple.py" = ["F401"]
 
 # Documentation notebooks (nbqa converts notebooks to .py)
 "examples/**/*.ipynb" = [
@@ -157,7 +158,6 @@ mccabe.max-complexity = 10
 ]
 
 [tool.ruff.format]
-exclude = ["docs/zi_mkdocs/*"]  # git submodule
 docstring-code-format = true
 
 

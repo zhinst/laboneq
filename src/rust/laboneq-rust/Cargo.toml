@@ -1,0 +1,18 @@
+[package]
+name = "laboneq-rust"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "laboneq_rust"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22.2", features = ["abi3-py39", "generate-import-lib"] }
+interval-tree = { path = "../interval-tree" }
+
+[features]
+extension-module = ["pyo3/extension-module"]
+default = ["extension-module"]
