@@ -12,7 +12,7 @@ from typing import Callable, Generic, TypeVar, cast, overload
 
 from typing_extensions import ParamSpec
 
-from laboneq.workflow.highlight import pygmentize
+from laboneq.core.utilities.highlight import pygmentize
 from laboneq.workflow import _utils, variable_tracker
 from laboneq.workflow.blocks import BlockBuilderContext, TaskBlock
 from laboneq.workflow import opts

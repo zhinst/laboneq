@@ -10,7 +10,6 @@ from itertools import groupby
 from typing import Optional, TypedDict
 import time
 
-from laboneq._observability.tracing import trace
 from laboneq.compiler import CodeGenerator, CompilerSettings
 from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
 from laboneq.compiler.ir.section_ir import SectionIR
@@ -101,7 +100,6 @@ class RealtimeCompiler:
 
         _logger.debug("Code generation completed")
 
-    @trace("compiler.generate-code()")
     def _generate_code(self):
         ir = self._lower_to_ir()
         _logger.debug("IR lowering complete")

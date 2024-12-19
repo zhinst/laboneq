@@ -106,12 +106,6 @@ class JsonLoader(LoaderBase):
                 leader_device_id = experiment["connectivity"]["leader"]["$ref"]
                 self.global_leader_device_id = leader_device_id
 
-            if "reference_clock" in experiment["connectivity"]:
-                reference_clock = experiment["connectivity"]["reference_clock"]
-                for device in self._devices.values():
-                    if device.device_type.value in {"hdawg", "uhfqa", "pqsc"}:
-                        device.reference_clock = reference_clock
-
             for pqsc in experiment["connectivity"].get("pqscs", {}):
                 pqsc_device_id = pqsc["device"]["$ref"]
                 for port in pqsc.get("ports", ()):

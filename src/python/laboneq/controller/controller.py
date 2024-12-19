@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+import threading
 import time
 from collections import defaultdict
 from copy import deepcopy
@@ -15,7 +16,6 @@ import zhinst.utils
 from numpy import typing as npt
 
 from laboneq import __version__
-from laboneq._observability import tracing
 from laboneq.controller.communication import (
     DaqNodeSetAction,
     batch_set,
@@ -24,7 +24,7 @@ from laboneq.controller.communication import (
 from laboneq.controller.devices.async_support import _gather, gather_and_apply
 from laboneq.controller.devices.device_collection import DeviceCollection
 from laboneq.controller.devices.device_utils import NodeCollector, zhinst_core_version
-from laboneq.controller.devices.device_zi import DeviceZI
+from laboneq.controller.devices.device_zi import DeviceBase, DeviceZI
 from laboneq.controller.devices.zi_node_monitor import ResponseWaiter
 from laboneq.controller.near_time_runner import NearTimeRunner
 from laboneq.controller.protected_session import ProtectedSession
@@ -46,7 +46,7 @@ from laboneq.controller.versioning import (
 from laboneq.core.exceptions import AbortExecution
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
-from laboneq.core.utilities.async_helpers import run_async
+from laboneq.core.utilities.async_helpers import EventLoopHolder
 from laboneq.core.utilities.replace_phase_increment import calc_ct_replacement
 from laboneq.core.utilities.replace_pulse import ReplacementType, calc_wave_replacements
 from laboneq.data.execution_payload import TargetSetup
@@ -74,6 +74,8 @@ USE_ASYNC_API_BY_DEFAULT = True
 
 
 class Controller:
+    _thread_local = threading.local()
+
     def __init__(
         self,
         target_setup: TargetSetup,
@@ -111,6 +113,14 @@ class Controller:
         _logger.debug("Controller debug logging is on")
 
         _logger.info("VERSION: laboneq %s", __version__)
+
+    @property
+    def _event_loop(self) -> EventLoopHolder:
+        event_loop = getattr(self._thread_local, "laboneq_event_loop", None)
+        if event_loop is None:
+            event_loop = EventLoopHolder()
+            self._thread_local.laboneq_event_loop = event_loop
+        return event_loop
 
     def _check_zhinst_core_version_support(self, version: LabOneVersion):
         if version < MINIMUM_SUPPORTED_LABONE_VERSION:
@@ -189,27 +199,25 @@ class Controller:
             await self._devices.flush_monitor()
 
         _logger.debug("Started upload of AWG programs...")
-        with tracing.get_tracer().start_span("upload-awg-programs") as _:
-            await batch_set(elf_node_settings)
+        await batch_set(elf_node_settings)
 
-            if len(elf_upload_conditions) > 0:
-                _logger.debug("Waiting for devices...")
-                response_waiter = ResponseWaiter()
-                for device, conditions in elf_upload_conditions.items():
-                    response_waiter.add(target=device, conditions=conditions)
-                timeout_s = 10
-                if not await response_waiter.wait_all(timeout=timeout_s):
-                    raise LabOneQControllerException(
-                        f"AWGs not in ready state within timeout ({timeout_s} s). "
-                        f"Not fulfilled:\n{response_waiter.remaining_str()}"
-                    )
-            if len(wf_node_settings) > 0:
-                _logger.debug("Started upload of waveforms...")
-                with tracing.get_tracer().start_span("upload-waveforms"):
-                    await batch_set(wf_node_settings)
+        if len(elf_upload_conditions) > 0:
+            _logger.debug("Waiting for devices...")
+            response_waiter = ResponseWaiter()
+            for device, conditions in elf_upload_conditions.items():
+                response_waiter.add(target=device, conditions=conditions)
+            timeout_s = 10
+            if not await response_waiter.wait_all(timeout=timeout_s):
+                raise LabOneQControllerException(
+                    f"AWGs not in ready state within timeout ({timeout_s} s). "
+                    f"Not fulfilled:\n{response_waiter.remaining_str()}"
+                )
+        if len(wf_node_settings) > 0:
+            _logger.debug("Started upload of waveforms...")
+            await batch_set(wf_node_settings)
         _logger.debug("Finished upload.")
 
-    async def _upload_awg_programs(self, nt_step: NtStepKey, rt_section_uid: str):
+    async def _upload_awg_programs(self, nt_step_key: NtStepKey, rt_section_uid: str):
         recipe_data = self._recipe_data
 
         async with gather_and_apply(self._perform_awg_upload) as awaitables:
@@ -227,7 +235,7 @@ class Controller:
                             rt_section_uid=rt_section_uid,
                             initialization=initialization,
                             awg_index=awg_index,
-                            nt_step=nt_step,
+                            nt_step_key=nt_step_key,
                         )
                     )
 
@@ -253,7 +261,9 @@ class Controller:
 
     async def _initialize_awgs(self, nt_step: NtStepKey, rt_section_uid: str):
         await self._set_nodes_before_awg_program_upload()
-        await self._upload_awg_programs(nt_step=nt_step, rt_section_uid=rt_section_uid)
+        await self._upload_awg_programs(
+            nt_step_key=nt_step, rt_section_uid=rt_section_uid
+        )
         await self._replace_artifacts(rt_section_uid=rt_section_uid)
         await self._set_nodes_after_awg_program_upload()
 
@@ -308,27 +318,36 @@ class Controller:
     async def _execute_one_step_followers(self, with_pipeliner: bool):
         _logger.debug("Settings nodes to start on followers")
 
-        async with gather_and_apply(batch_set_multiple) as awaitables:
-            for _, device in self._devices.followers:
-                awaitables.append(
-                    device.collect_execution_nodes(with_pipeliner=with_pipeliner)
+        if self._use_async_api:
+            await _gather(
+                *(
+                    device.wait_for_execution_ready(with_pipeliner=with_pipeliner)
+                    for _, device in self._devices.followers
+                    if isinstance(device, DeviceBase)
                 )
+            )
+        else:
+            async with gather_and_apply(batch_set_multiple) as awaitables:
+                for _, device in self._devices.followers:
+                    awaitables.append(
+                        device.collect_execution_nodes(with_pipeliner=with_pipeliner)
+                    )
 
-        response_waiter = ResponseWaiter()
-        for _, device in self._devices.followers:
-            response_waiter.add_with_msg(
-                target=device,
-                conditions=await device.conditions_for_execution_ready(
-                    with_pipeliner=with_pipeliner
-                ),
-            )
-        if not await response_waiter.wait_all(timeout=2):
-            _logger.warning(
-                "Conditions to start RT on followers still not fulfilled after 2"
-                " seconds, nonetheless trying to continue..."
-                "\nNot fulfilled:\n%s",
-                response_waiter.remaining_str(),
-            )
+            response_waiter = ResponseWaiter()
+            for _, device in self._devices.followers:
+                response_waiter.add_with_msg(
+                    target=device,
+                    conditions=device.conditions_for_execution_ready(
+                        with_pipeliner=with_pipeliner
+                    ),
+                )
+            if not await response_waiter.wait_all(timeout=2):
+                _logger.warning(
+                    "Conditions to start RT on followers still not fulfilled after 2"
+                    " seconds, nonetheless trying to continue..."
+                    "\nNot fulfilled:\n%s",
+                    response_waiter.remaining_str(),
+                )
 
         # Standalone workaround: The device is triggering itself,
         # thus split the execution into AWG trigger arming and triggering
@@ -359,25 +378,40 @@ class Controller:
             min_wait_time * 1.1 + 1
         )  # +10% and fixed 1sec guard time
 
-        response_waiter = ResponseWaiter()
-        for _, device in self._devices.followers:
-            response_waiter.add_with_msg(
-                target=device,
-                conditions=await device.conditions_for_execution_done(
-                    acquisition_type, with_pipeliner=rt_execution_info.with_pipeliner
-                ),
+        if self._use_async_api:
+            await _gather(
+                *(
+                    device.wait_for_execution_done(
+                        acquisition_type=acquisition_type,
+                        with_pipeliner=rt_execution_info.with_pipeliner,
+                        min_wait_time=min_wait_time,
+                        timeout_s=guarded_wait_time,
+                    )
+                    for _, device in self._devices.followers
+                    if isinstance(device, DeviceBase)
+                )
             )
-        if not await response_waiter.wait_all(timeout=guarded_wait_time):
-            _logger.warning(
-                (
-                    "Stop conditions still not fulfilled after %f s, estimated"
-                    " execution time was %.2f s. Continuing to the next step."
-                    "\nNot fulfilled:\n%s"
-                ),
-                guarded_wait_time,
-                min_wait_time,
-                response_waiter.remaining_str(),
-            )
+        else:
+            response_waiter = ResponseWaiter()
+            for _, device in self._devices.followers:
+                response_waiter.add_with_msg(
+                    target=device,
+                    conditions=device.conditions_for_execution_done(
+                        acquisition_type,
+                        with_pipeliner=rt_execution_info.with_pipeliner,
+                    ),
+                )
+            if not await response_waiter.wait_all(timeout=guarded_wait_time):
+                _logger.warning(
+                    (
+                        "Stop conditions still not fulfilled after %f s, estimated"
+                        " execution time was %.2f s. Continuing to the next step."
+                        "\nNot fulfilled:\n%s"
+                    ),
+                    guarded_wait_time,
+                    min_wait_time,
+                    response_waiter.remaining_str(),
+                )
 
     async def _setup_one_step_execution(self, with_pipeliner: bool):
         async with gather_and_apply(batch_set_multiple) as awaitables:
@@ -457,7 +491,7 @@ class Controller:
         self._devices.set_timeout(timeout_s)
         if use_async_api is not None:
             self._use_async_api = use_async_api
-        run_async(
+        self._event_loop.run(
             self._connect_async,
             reset_devices=reset_devices,
             disable_runtime_checks=disable_runtime_checks,
@@ -485,7 +519,7 @@ class Controller:
         logical_signals: list[str] | None = None,
         unused_only: bool = False,
     ):
-        run_async(
+        self._event_loop.run(
             self._disable_outputs_async, device_uids, logical_signals, unused_only
         )
 
@@ -498,7 +532,7 @@ class Controller:
         await self._devices.disable_outputs(device_uids, logical_signals, unused_only)
 
     def disconnect(self):
-        run_async(self._disconnect_async)
+        self._event_loop.run(self._disconnect_async)
         self._use_async_api = USE_ASYNC_API_BY_DEFAULT
 
     async def _disconnect_async(self):
@@ -512,7 +546,9 @@ class Controller:
         scheduled_experiment: ScheduledExperiment,
         protected_session: ProtectedSession | None = None,
     ):
-        run_async(self._execute_compiled_async, scheduled_experiment, protected_session)
+        self._event_loop.run(
+            self._execute_compiled_async, scheduled_experiment, protected_session
+        )
 
     async def _execute_compiled_async(
         self,
@@ -539,11 +575,10 @@ class Controller:
 
             _logger.info("Starting near-time execution...")
             try:
-                with tracing.get_tracer().start_span("near-time-execution"):
-                    await NearTimeRunner(
-                        controller=self,
-                        protected_session=protected_session,
-                    ).run(self._recipe_data.execution)
+                await NearTimeRunner(
+                    controller=self,
+                    protected_session=protected_session,
+                ).run(self._recipe_data.execution)
             except AbortExecution:
                 # eat the exception
                 pass

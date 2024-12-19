@@ -51,3 +51,12 @@ def merge_compiler_runs(
             previous.codegen_output[device_class],
             step_indices,
         )
+
+
+def repeat_previous(
+    this: CombinedRTCompilerOutputContainer, previous: RTCompilerOutputContainer
+):
+    for device_class, combined_output in this.combined_output.items():
+        _registered_hooks[device_class].repeat_previous(
+            combined_output, previous.codegen_output[device_class]
+        )

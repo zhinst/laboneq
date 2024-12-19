@@ -7,26 +7,30 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from laboneq.workflow.recorder import Artifact
 from laboneq.workflow.timestamps import local_date_stamp, local_timestamp, utc_now
+
 from . import Logbook, LogbookStore
 from .deduplication import DeduplicationCache
-from .serializer import SerializeOpener
+from .serializer import SerializationNotSupportedError, SerializeOpener
 from .serializer import (
     serialize as default_serialize,
 )
-from .simple_serializer import simple_serialize, NOT_SIMPLE
+from .simple_serializer import NOT_SIMPLE, SimpleType, simple_serialize
 
 if TYPE_CHECKING:
     import datetime
     from typing import IO, Callable
 
     from laboneq.workflow import Workflow, WorkflowResult
-    from laboneq.workflow.typing import SimpleDict
     from laboneq.workflow.result import TaskResult
+    from laboneq.workflow.typing import SimpleDict
+
+_logger = logging.getLogger(__name__)
 
 
 def _sanitize_filename(filename: str) -> str:
@@ -262,58 +266,47 @@ class FolderLogbook(Logbook):
             )
         return files
 
+    def _save_safe(self, artifact: Artifact) -> str | list[dict[str, str]]:
+        try:
+            ref = self._save(artifact)
+        except SerializationNotSupportedError as e:
+            _logger.warning(str(e))
+            return [{"error": str(e)}]
+        return ref.as_dicts()
+
     def _save_input(
         self,
         inpt: dict[str, object],
         name_hint: str,
-    ) -> dict:
+    ) -> dict[str, SimpleType | list[dict[str, str]]]:
         """Store artifacts for task or workflow inputs."""
-        input_dict = {}
+        input_dict: dict[str, SimpleType | list[dict[str, str]]] = {}
         for k, v in inpt.items():
             simple = simple_serialize(v)
             if simple is not NOT_SIMPLE:
                 input_dict[k] = simple
             else:
-                artifact = Artifact(f"{name_hint}.{k}", v)
-                try:
-                    ref = self._save(artifact)
-                except TypeError:
-                    # TODO: Less silent errors
-                    input_dict[k] = "..."
-                else:
-                    input_dict[k] = ref.as_dicts()
+                input_dict[k] = self._save_safe(Artifact(f"{name_hint}.{k}", v))
         return input_dict
 
-    def _save_output(self, result: object, name_hint: str) -> dict:
+    def _save_output(
+        self, result: object, name_hint: str
+    ) -> str | dict[str, SimpleType | list[dict[str, str]]]:
         """Store artifacts for task or workflow results."""
         simple = simple_serialize(result)
         if simple is not NOT_SIMPLE:
             return simple
 
         if not isinstance(result, dict):
-            artifact = Artifact(f"{name_hint}", result)
-            try:
-                ref = self._save(artifact)
-            except TypeError:
-                # TODO: Less silent errors
-                return "..."
-            else:
-                return ref.as_dicts()
+            return self._save_safe(Artifact(f"{name_hint}", result))
 
-        result_dict = {}
+        result_dict: dict[str, SimpleType | list[dict[str, str]]] = {}
         for k, v in result.items():
             simple = simple_serialize(v)
             if simple is not NOT_SIMPLE:
                 result_dict[k] = simple
             else:
-                artifact = Artifact(f"{name_hint}.{k}", v)
-                try:
-                    ref = self._save(artifact)
-                except TypeError:
-                    # TODO: Less silent errors
-                    result_dict[k] = "..."
-                else:
-                    result_dict[k] = ref.as_dicts()
+                result_dict[k] = self._save_safe(Artifact(f"{name_hint}.{k}", v))
         return result_dict
 
     @staticmethod

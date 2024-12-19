@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any
 
-from laboneq._observability.tracing import trace
 from laboneq.controller.devices.device_utils import FloatWithTolerance, is_expected
 from laboneq.controller.util import LabOneQControllerException
 
@@ -291,7 +290,6 @@ class ResponseWaiter(MultiDeviceHandlerBase):
         super().__init__()
         self._timer = time.monotonic
 
-    @trace("wait-for-all-nodes", disable_tracing_during=True)
     async def wait_all(self, timeout: float) -> bool:
         start = self._timer()
         while True:

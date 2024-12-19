@@ -10,6 +10,7 @@ from typing import Any
 from laboneq.controller.communication import (
     DaqNodeSetAction,
 )
+from laboneq.controller.devices.async_support import ResponseWaiterAsync
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import DeviceBase
 from laboneq.controller.devices.zi_node_monitor import (
@@ -20,6 +21,7 @@ from laboneq.controller.devices.zi_node_monitor import (
     WaitCondition,
 )
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
+from laboneq.controller.util import LabOneQControllerException
 from laboneq.data.recipe import Initialization
 
 _logger = logging.getLogger(__name__)
@@ -37,8 +39,8 @@ class DeviceLeaderBase(DeviceBase):
 
     def _nodes_to_monitor_impl(self) -> list[str]:
         nodes = super()._nodes_to_monitor_impl()
-        nodes.append(f"/{self.serial}/execution/enable")
-        nodes.append(f"/{self.serial}/execution/synchronization/enable")
+        if self._api is None:
+            nodes.append(f"/{self.serial}/execution/synchronization/enable")
         return nodes
 
     def update_clock_source(self, force_internal: bool | None):
@@ -188,6 +190,21 @@ class DeviceLeaderBase(DeviceBase):
     ) -> dict[str, tuple[Any, str]]:
         if not with_pipeliner:
             return {}
+        if self._api is not None:
+            # TODO(2K): Use timeout from connect
+            rw = ResponseWaiterAsync(
+                api=self._api,
+                nodes={
+                    f"/{self.serial}/execution/synchronization/enable": 1  # sync enabled
+                },
+                timeout_s=1.0,
+            )
+            await rw.prepare(get_initial_value=True)
+            if len(await rw.wait()) > 0:
+                raise LabOneQControllerException(
+                    f"{self.dev_repr}: Internal error: Failed to enable synchronization"
+                )
+            return {}
         return {
             f"/{self.serial}/execution/synchronization/enable": (
                 1,  # sync enabled
@@ -200,10 +217,6 @@ class DeviceLeaderBase(DeviceBase):
     ) -> list[DaqNodeSetAction]:
         nc = NodeCollector(base=f"/{self.serial}/")
         nc.add("system/clocks/referenceclock/out/enable", 1)
-        nc.add(
-            "system/clocks/referenceclock/out/freq",
-            initialization.config.reference_clock.value,
-        )
         nc.add("execution/repetitions", initialization.config.repetitions)
         return await self.maybe_async(nc)
 

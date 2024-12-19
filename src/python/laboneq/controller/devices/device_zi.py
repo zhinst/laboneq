@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from abc import abstractmethod
-from collections import defaultdict
 
 import json
 import logging
 import math
 import re
+from abc import abstractmethod
+from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
@@ -34,9 +34,15 @@ from laboneq.controller.devices.async_support import (
     ConditionsCheckerAsync,
     NodeMonitorAsync,
     ResponseWaiterAsync,
+    _gather,
     create_device_kernel_session,
     get_raw,
     set_parallel,
+)
+from laboneq.controller.devices.device_setup_dao import (
+    DeviceOptions,
+    DeviceQualifier,
+    DeviceSetupDAO,
 )
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.zi_emulator import EmulatorState, MockInstrument
@@ -75,12 +81,6 @@ from laboneq.data.scheduled_experiment import (
     ArtifactsCodegen,
     CodegenWaveform,
     ScheduledExperiment,
-)
-
-from laboneq.controller.devices.device_setup_dao import (
-    DeviceOptions,
-    DeviceQualifier,
-    DeviceSetupDAO,
 )
 
 if TYPE_CHECKING:
@@ -314,7 +314,7 @@ class DeviceZI(INodeMonitorProvider):
         pass
 
     ### Handling of device warnings
-    async def update_warning_nodes(self):
+    async def update_warning_nodes(self, init: bool):
         pass
 
     ### Other methods
@@ -358,7 +358,7 @@ class DeviceZI(INodeMonitorProvider):
         rt_section_uid: str,
         initialization: Initialization,
         awg_index: int,
-        nt_step: NtStepKey,
+        nt_step_key: NtStepKey,
     ) -> tuple[
         DeviceZI, list[DaqNodeSetAction], list[DaqNodeSetAction], dict[str, Any]
     ]:
@@ -421,7 +421,7 @@ class DeviceZI(INodeMonitorProvider):
     ) -> dict[str, tuple[Any, str]]:
         return {}
 
-    async def conditions_for_execution_ready(
+    def conditions_for_execution_ready(
         self, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
         return {}
@@ -429,7 +429,7 @@ class DeviceZI(INodeMonitorProvider):
     async def collect_internal_start_execution_nodes(self) -> list[DaqNodeSetAction]:
         return []
 
-    async def conditions_for_execution_done(
+    def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
         return {}
@@ -440,6 +440,9 @@ class DeviceZI(INodeMonitorProvider):
         return []
 
     async def fetch_errors(self) -> str | list[str]:
+        return []
+
+    def _collect_warning_nodes(self) -> list[tuple[str, str]]:
         return []
 
     async def on_experiment_begin(self) -> list[DaqNodeSetAction]:
@@ -502,6 +505,7 @@ class DeviceBase(DeviceZI):
         self._sampling_rate = None
         self._device_class = 0x0
         self._enable_runtime_checks = True
+        self._warning_nodes: dict[str, int] = {}
 
         if self._daq is None:
             raise LabOneQControllerException("ZI devices need daq")
@@ -537,6 +541,10 @@ class DeviceBase(DeviceZI):
         assert self._node_monitor is not None
         return self._node_monitor
 
+    @property
+    def is_async_standalone(self) -> bool:
+        return self.is_standalone() and self._api is not None
+
     async def maybe_async(self, nodes: NodeCollector) -> list[DaqNodeSetAction]:
         if self._api is not None:
             await set_parallel(self._api, nodes)
@@ -554,18 +562,10 @@ class DeviceBase(DeviceZI):
             for node in nodes.set_actions()
         ]
 
-    async def maybe_async_wait(self, nodes: dict[str, Any]) -> dict[str, Any]:
-        if self._api is not None:
-            rw = ResponseWaiterAsync(self._api, nodes)
-            await rw.prepare(get_initial_value=True)
-            await rw.wait()
-            return {}
-        return nodes
-
     def clear_cache(self):
         if self._api is not None:
             # TODO(2K): the code below is only needed to keep async API behavior
-            # in emulation mode matching that of legacy API with L1Q cache.
+            # in emulation mode matching that of legacy API with LabOne Q cache.
             if isinstance(self._api, MockInstrument):
                 self._api.clear_cache()
         else:
@@ -832,6 +832,37 @@ class DeviceBase(DeviceZI):
                 )
             same_id_osc.channels.add(osc_param.channel)
 
+    async def on_experiment_begin(self) -> list[DaqNodeSetAction]:
+        if self._api is not None:
+            await _gather(
+                *(
+                    self._subscriber.subscribe(self._api, path, get_initial_value=True)
+                    for path, _ in self._collect_warning_nodes()
+                )
+            )
+
+        return await super().on_experiment_begin()
+
+    async def update_warning_nodes(self, init: bool):
+        for node, msg in self._collect_warning_nodes():
+            if self._api is None:
+                value = (
+                    self.node_monitor.get_last(node)
+                    if init
+                    else self.node_monitor.pop(node)
+                )
+            else:
+                updates = self._subscriber.get_updates(node)
+                value = updates[-1].value if len(updates) > 0 else None
+
+            if not isinstance(value, int):
+                continue
+
+            prev = self._warning_nodes.get(node)
+            if prev is not None and value > prev:
+                _logger.warning("%s: %s: %s", self.dev_repr, msg, value - prev)
+            self._warning_nodes[node] = value
+
     def configure_acquisition(
         self,
         awg_key: AwgKey,
@@ -882,7 +913,7 @@ class DeviceBase(DeviceZI):
         rt_section_uid: str,
         initialization: Initialization,
         awg_index: int,
-        nt_step: NtStepKey,
+        nt_step_key: NtStepKey,
     ) -> tuple[
         DeviceZI, list[DaqNodeSetAction], list[DaqNodeSetAction], dict[str, Any]
     ]:
@@ -906,9 +937,9 @@ class DeviceBase(DeviceZI):
 
         for pipeliner_job in range(rt_execution_info.pipeliner_jobs):
             effective_nt_step = (
-                NtStepKey(indices=tuple([*nt_step.indices, pipeliner_job]))
+                NtStepKey(indices=tuple([*nt_step_key.indices, pipeliner_job]))
                 if rt_execution_info.with_pipeliner
-                else nt_step
+                else nt_step_key
             )
             rt_exec_step = next(
                 (
@@ -1008,8 +1039,14 @@ class DeviceBase(DeviceZI):
         if rt_execution_info.with_pipeliner:
             upload_ready_conditions.update(self.pipeliner_ready_conditions(awg_index))
 
+        if self._api is not None:
+            # TODO(2K): Use timeout from connect
+            rw = ResponseWaiterAsync(self._api, upload_ready_conditions, timeout_s=10)
+            await rw.prepare()
         elf_nodes_actions = await self.maybe_async(elf_nodes)
-        upload_ready_conditions = await self.maybe_async_wait(upload_ready_conditions)
+        if self._api is not None:
+            await rw.wait()
+            upload_ready_conditions.clear()
         wf_nodes_actions = await self.maybe_async(wf_nodes)
 
         return self, elf_nodes_actions, wf_nodes_actions, upload_ready_conditions
@@ -1409,7 +1446,7 @@ class DeviceBase(DeviceZI):
         # 3. Wait for responses to the changes in step 2 and settling of dependent states
         failed_responses = await response_waiter.wait()
         if len(failed_responses) > 0:
-            failures = "\n".join([f"{p}={v}" for p, v in failed_responses.items()])
+            failures = "\n".join(failed_responses)
             raise LabOneQControllerException(
                 f"{self.dev_repr}: Internal error: {config_name} is not complete within {timeout_s}s. "
                 f"Not fulfilled:\n{failures}"
@@ -1429,3 +1466,48 @@ class DeviceBase(DeviceZI):
     async def on_experiment_end(self) -> list[DaqNodeSetAction]:
         self._subscriber.unsubscribe_all()
         return await super().on_experiment_end()
+
+    async def wait_for_execution_ready(self, with_pipeliner: bool):
+        # TODO(2K): use timeout passed to connect
+        rw = ResponseWaiterAsync(api=self._api, timeout_s=2)
+        rw.add_with_msg(
+            nodes=self.conditions_for_execution_ready(with_pipeliner=with_pipeliner),
+        )
+        await rw.prepare(get_initial_value=True)
+        await self.collect_execution_nodes(with_pipeliner=with_pipeliner)
+        failed_nodes = await rw.wait()
+        if len(failed_nodes) > 0:
+            _logger.warning(
+                "Conditions to start RT on followers still not fulfilled after 2"
+                " seconds, nonetheless trying to continue..."
+                "\nNot fulfilled:\n%s",
+                "\n".join(failed_nodes),
+            )
+
+    async def wait_for_execution_done(
+        self,
+        acquisition_type: AcquisitionType,
+        with_pipeliner: bool,
+        min_wait_time: float,
+        timeout_s: float,
+    ):
+        rw = ResponseWaiterAsync(api=self._api, timeout_s=timeout_s)
+        rw.add_with_msg(
+            nodes=self.conditions_for_execution_done(
+                acquisition_type=acquisition_type,
+                with_pipeliner=with_pipeliner,
+            ),
+        )
+        await rw.prepare(get_initial_value=True)
+        failed_nodes = await rw.wait()
+        if len(failed_nodes) > 0:
+            _logger.warning(
+                (
+                    "Stop conditions still not fulfilled after %f s, estimated"
+                    " execution time was %.2f s. Continuing to the next step."
+                    "\nNot fulfilled:\n%s"
+                ),
+                timeout_s,
+                min_wait_time,
+                "\n".join(failed_nodes),
+            )

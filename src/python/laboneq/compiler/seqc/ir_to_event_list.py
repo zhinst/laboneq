@@ -172,7 +172,9 @@ def _start_events(ir: IRTree) -> EventList:
     # Todo (PW): Drop once system tests have been migrated from legacy behaviour.
     for device_info in ir.devices:
         try:
-            device_type = DeviceType.from_device_info_type(device_info.device_type)
+            device_type = DeviceType.from_device_info_type(  # @IgnoreException
+                device_info.device_type
+            )
         except ValueError:
             # Not every device has a corresponding DeviceType (e.g. PQSC)
             continue

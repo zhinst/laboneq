@@ -138,14 +138,12 @@ class LoaderBase:
         self,
         device_id: str,
         device_type: DeviceInfoType | str,
-        reference_clock=None,
         reference_clock_source=None,
         is_qc=None,
     ):
         self._devices[device_id] = DeviceInfo(
             uid=device_id,
             device_type=DeviceInfoType(device_type),
-            reference_clock=reference_clock,
             reference_clock_source=reference_clock_source,
             is_qc=is_qc,
         )

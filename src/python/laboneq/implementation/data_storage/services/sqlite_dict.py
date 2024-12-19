@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
 import copy
 import datetime
+import warnings
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Tuple, Union
 from uuid import uuid4
@@ -17,6 +19,12 @@ class DataStorageServiceSqliteDict(DataStorageAPI):
     DATA_TABLE = "data"
 
     def __init__(self, file_path: str | None = None):
+        warnings.warn(
+            "The integrated sqlite database is deprecated since version 2.42.0 and will be removed in a future version.",
+            FutureWarning,
+            stacklevel=2,
+        )
+
         from sqlitedict import SqliteDict
 
         if file_path is None:

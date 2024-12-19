@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Union
 
 from numpy import typing as npt
 
-from laboneq._observability.tracing import trace
 from laboneq.controller.protected_session import ProtectedSession
 from laboneq.controller.toolkit_adapter import MockedToolkit, ToolkitDevices
 from laboneq.core.exceptions import AbortExecution, LabOneQException
@@ -208,7 +207,6 @@ class Session:
         )
         self.register_neartime_callback(func, name)
 
-    @trace("session.connect()")
     def connect(
         self,
         do_emulation=False,
@@ -346,7 +344,6 @@ class Session:
         """Session connection state."""
         return self._connection_state
 
-    @trace("session.compile()")
     def compile(
         self,
         experiment: Experiment,
@@ -386,7 +383,6 @@ class Session:
         """
         return self._compiled_experiment
 
-    @trace("session.run()")
     def run(
         self,
         experiment: Union[Experiment, CompiledExperiment] | None = None,

@@ -20,8 +20,8 @@ class SignalType(Enum):
 
 
 class RefClkType(Enum):
-    _10MHZ = 10  # TODO(2K): should be 10e6
-    _100MHZ = 100  # TODO(2K): should be 100e6
+    _10MHZ = 10_000_000
+    _100MHZ = 100_000_000
 
 
 class TriggeringMode(Enum):
@@ -105,7 +105,6 @@ class Measurement:
 @dataclass
 class Config:
     repetitions: int = 1
-    reference_clock: RefClkType = RefClkType._100MHZ
     triggering_mode: TriggeringMode = TriggeringMode.DIO_FOLLOWER
     sampling_rate: float | None = None
 
@@ -172,7 +171,7 @@ class Recipe:
     integrator_allocations: list[IntegratorAllocation] = field(default_factory=list)
     acquire_lengths: list[AcquireLength] = field(default_factory=list)
     simultaneous_acquires: list[dict[str, str]] = field(default_factory=list)
-    total_execution_time: float | None = None
-    max_step_execution_time: float | None = None
+    total_execution_time: float = 0.0
+    max_step_execution_time: float = 0.0
     is_spectroscopy: bool = False
     versions: SoftwareVersions = field(default_factory=lambda: SoftwareVersions("", ""))

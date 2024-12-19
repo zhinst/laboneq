@@ -16,7 +16,6 @@ from laboneq.controller.attribute_value_tracker import (
 from laboneq.controller.communication import (
     DaqNodeSetAction,
 )
-from laboneq.controller.devices.async_support import _gather
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
 from laboneq.controller.devices.device_shf_base import (
     DeviceSHFBase,
@@ -69,7 +68,6 @@ class DeviceSHFSG(DeviceSHFBase):
         self._wait_for_awgs = True
         self._emit_trigger = False
         self._has_opt_rtr = False
-        self._warning_nodes = {}
 
     @property
     def has_pipeliner(self) -> bool:
@@ -215,11 +213,13 @@ class DeviceSHFSG(DeviceSHFBase):
     def _nodes_to_monitor_impl(self) -> list[str]:
         nodes = super()._nodes_to_monitor_impl()
         if self._api is None:
-            nodes.extend(self._collect_warning_nodes().values())
+            nodes.extend([path for path, _ in self._collect_warning_nodes()])
         for awg in range(self._get_num_awgs()):
-            nodes.append(f"/{self.serial}/sgchannels/{awg}/awg/enable")
-            nodes.append(f"/{self.serial}/sgchannels/{awg}/awg/ready")
-            nodes.extend(self._pipeliner.control_nodes(awg))
+            if self._api is None:
+                nodes.append(self.get_sequencer_paths(awg).enable)
+            nodes.extend(
+                self._pipeliner.control_nodes(awg, use_async_api=self._api is not None)
+            )
         return nodes
 
     def clock_source_control_nodes(self) -> list[NodeControlBase]:
@@ -256,7 +256,7 @@ class DeviceSHFSG(DeviceSHFBase):
             nc.add("system/internaltrigger/enable", 1, cache=False)
         return await self.maybe_async(nc)
 
-    async def conditions_for_execution_ready(
+    def conditions_for_execution_ready(
         self, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
         if not self._wait_for_awgs:
@@ -266,28 +266,28 @@ class DeviceSHFSG(DeviceSHFBase):
             conditions = self._pipeliner.conditions_for_execution_ready()
         else:
             conditions = {
-                f"/{self.serial}/sgchannels/{awg_index}/awg/enable": (
+                self.get_sequencer_paths(awg_index).enable: (
                     1,
                     f"{self.dev_repr}: AWG {awg_index + 1} didn't start.",
                 )
                 for awg_index in self._allocated_awgs
             }
-        return conditions  # await self.maybe_async_wait(conditions)
+        return conditions
 
-    async def conditions_for_execution_done(
+    def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
         if with_pipeliner:
             conditions = self._pipeliner.conditions_for_execution_done()
         else:
             conditions = {
-                f"/{self.serial}/sgchannels/{awg_index}/awg/enable": (
+                self.get_sequencer_paths(awg_index).enable: (
                     0,
                     f"{self.dev_repr}: AWG {awg_index + 1} didn't stop. Missing start trigger? Check ZSync.",
                 )
                 for awg_index in self._allocated_awgs
             }
-        return conditions  # await self.maybe_async_wait(conditions)
+        return conditions
 
     async def collect_execution_teardown_nodes(
         self, with_pipeliner: bool
@@ -769,45 +769,23 @@ class DeviceSHFSG(DeviceSHFBase):
         reset_nodes.extend(await self.maybe_async(nc))
         return reset_nodes
 
-    def _collect_warning_nodes(self) -> dict[int, str]:
-        if self._has_opt_rtr:
-            return {
-                ch: f"/{self.serial}/sgchannels/{ch}/outputrouter/overflowcount"
-                for ch in range(self._outputs)
-            }
-        return {}
-
-    async def update_warning_nodes(self):
-        for ch, node in self._collect_warning_nodes().items():
-            if self._api is None:
-                value = self.node_monitor.pop(node)
-            else:
-                updates = self._subscriber.get_updates(node)
-                value = updates[-1].value if len(updates) > 0 else None
-
-            if value is None:
-                continue
-
-            prev = self._warning_nodes.get(node)
-            if prev is not None and value > prev:
-                _logger.warning(
-                    "%s: Output channel %s Output Router overflow count: %s",
-                    self.dev_repr,
-                    ch,
-                    value - prev,
+    def _collect_warning_nodes(self) -> list[tuple[str, str]]:
+        warning_nodes = []
+        for ch in range(self._outputs):
+            if self._has_opt_rtr:
+                warning_nodes.append(
+                    (
+                        f"/{self.serial}/sgchannels/{ch}/outputrouter/overflowcount",
+                        f"Channel {ch} Output Router overflow count",
+                    )
                 )
-            self._warning_nodes[node] = value
-
-    async def on_experiment_begin(self) -> list[DaqNodeSetAction]:
-        if self._api is not None:
-            await _gather(
-                *(
-                    self._subscriber.subscribe(self._api, path)
-                    for path in self._collect_warning_nodes().values()
+            warning_nodes.append(
+                (
+                    f"/{self.serial}/sgchannels/{ch}/output/overrangecount",
+                    f"Channel {ch} Output overrange count",
                 )
             )
-
-        return await super().on_experiment_begin()
+        return warning_nodes
 
     def runtime_check_control_nodes(self) -> list[NodeControlBase]:
         # Enable AWG runtime checks which includes the gap detector.

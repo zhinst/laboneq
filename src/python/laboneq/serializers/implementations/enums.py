@@ -3,23 +3,24 @@
 
 from __future__ import annotations
 
-from laboneq import simple
+from laboneq.dsl import enums
+from laboneq.data import calibration
 from laboneq.serializers.base import LabOneQClassicSerializer
 from laboneq.serializers.serializer_registry import serializer
 
 
 @serializer(
     types=[
-        simple.AcquisitionType,
-        simple.AveragingMode,
-        simple.CarrierType,
-        simple.ExecutionType,
-        simple.CancellationSource,
-        simple.RepetitionMode,
-        simple.PortMode,
-        simple.ModulationType,
-        simple.HighPassCompensationClearing,
-        simple.SectionAlignment,
+        enums.AcquisitionType,
+        enums.AveragingMode,
+        enums.CarrierType,
+        enums.ExecutionType,
+        calibration.CancellationSource,
+        enums.RepetitionMode,
+        enums.PortMode,
+        enums.ModulationType,
+        enums.HighPassCompensationClearing,
+        enums.SectionAlignment,
     ],
     public=True,
 )

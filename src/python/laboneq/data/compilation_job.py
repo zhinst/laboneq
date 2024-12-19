@@ -103,7 +103,6 @@ class FollowerInfo:
 class DeviceInfo:
     uid: str = None
     device_type: DeviceInfoType = None
-    reference_clock: float = None
     reference_clock_source: ReferenceClockSourceInfo | None = None
     is_qc: bool | None = None
     followers: list[FollowerInfo] = field(default_factory=list)

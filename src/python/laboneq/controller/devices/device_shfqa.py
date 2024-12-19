@@ -64,8 +64,8 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 
-INTERNAL_TRIGGER_CHANNEL = 1024  # PQSC style triggering on the SHFSG/QC
-SOFTWARE_TRIGGER_CHANNEL = 8  # Software triggering on the SHFQA
+INTERNAL_TRIGGER_CHANNEL = 8  # PQSC style triggering on the SHFSG/QC
+SOFTWARE_TRIGGER_CHANNEL = 1024  # Software triggering on the SHFQA
 
 SAMPLE_FREQUENCY_HZ = 2.0e9
 DELAY_NODE_GRANULARITY_SAMPLES = 4
@@ -303,23 +303,19 @@ class DeviceSHFQA(DeviceSHFBase):
 
     def _nodes_to_monitor_impl(self) -> list[str]:
         nodes = super()._nodes_to_monitor_impl()
+        if self._api is None:
+            nodes.extend([path for path, _ in self._collect_warning_nodes()])
         for awg in range(self._get_num_awgs()):
-            nodes.extend(
-                [
-                    f"/{self.serial}/qachannels/{awg}/generator/enable",
-                    f"/{self.serial}/qachannels/{awg}/generator/ready",
-                    f"/{self.serial}/qachannels/{awg}/spectroscopy/psd/enable",
-                    f"/{self.serial}/qachannels/{awg}/spectroscopy/result/enable",
-                    f"/{self.serial}/qachannels/{awg}/readout/result/enable",
-                ]
-            )
             if self._api is None:
+                nodes.append(self.get_sequencer_paths(awg).enable)
                 for result_index in range(self._integrators):
                     nodes.append(self._result_node_readout(awg, result_index))
                 nodes.append(self._result_node_spectroscopy(awg))
                 # 1:1 mapping of QA channels to scope channels
                 nodes.append(self._result_node_scope(awg))
-            nodes.extend(self._pipeliner.control_nodes(awg))
+            nodes.extend(
+                self._pipeliner.control_nodes(awg, use_async_api=self._api is not None)
+            )
         return nodes
 
     def configure_acquisition(
@@ -561,7 +557,7 @@ class DeviceSHFQA(DeviceSHFBase):
             )
         return await self.maybe_async(nc)
 
-    async def conditions_for_execution_ready(
+    def conditions_for_execution_ready(
         self, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
         if with_pipeliner:
@@ -571,32 +567,28 @@ class DeviceSHFQA(DeviceSHFBase):
             # as well. The state of the generator enable wasn't always picked up reliably, so we
             # only check in cases where we rely on external triggering mechanisms.
             conditions = {
-                f"/{self.serial}/qachannels/{awg_index}/generator/enable": (
+                self.get_sequencer_paths(awg_index).enable: (
                     1,
                     f"{self.dev_repr}: Readout pulse generator {awg_index + 1} didn't start.",
                 )
                 for awg_index in self._allocated_awgs
             }
-        return conditions  # await self.maybe_async_wait(conditions)
+        return conditions
 
-    async def conditions_for_execution_done(
+    def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
-        conditions: dict[str, tuple[Any, str]] = {}
-
         if with_pipeliner:
-            conditions.update(self._pipeliner.conditions_for_execution_done())
+            conditions = self._pipeliner.conditions_for_execution_done()
         else:
-            conditions.update(
-                {
-                    f"/{self.serial}/qachannels/{awg_index}/generator/enable": (
-                        0,
-                        f"{self.dev_repr}: Generator {awg_index + 1} didn't stop. Missing start trigger? Check ZSync.",
-                    )
-                    for awg_index in self._allocated_awgs
-                }
-            )
-        return conditions  # await self.maybe_async_wait(conditions)
+            conditions = {
+                self.get_sequencer_paths(awg_index).enable: (
+                    0,
+                    f"{self.dev_repr}: Generator {awg_index + 1} didn't stop. Missing start trigger? Check ZSync.",
+                )
+                for awg_index in self._allocated_awgs
+            }
+        return conditions
 
     async def collect_execution_teardown_nodes(
         self, with_pipeliner: bool
@@ -1183,9 +1175,9 @@ class DeviceSHFQA(DeviceSHFBase):
             if initialization.config.triggering_mode == TriggeringMode.DESKTOP_LEADER:
                 # standalone QA oder QC
                 channel = (
-                    SOFTWARE_TRIGGER_CHANNEL
+                    INTERNAL_TRIGGER_CHANNEL
                     if self.options.is_qc
-                    else INTERNAL_TRIGGER_CHANNEL
+                    else SOFTWARE_TRIGGER_CHANNEL
                 )
             nc.add(
                 f"qachannels/{measurement.channel}/generator/auxtriggers/0/channel",
@@ -1505,3 +1497,20 @@ class DeviceSHFQA(DeviceSHFBase):
         reset_nodes = await super().collect_reset_nodes()
         reset_nodes.extend(await self.maybe_async(nc))
         return reset_nodes
+
+    def _collect_warning_nodes(self) -> list[tuple[str, str]]:
+        warning_nodes = []
+        for ch in range(self._channels):
+            warning_nodes.append(
+                (
+                    f"/{self.serial}/qachannels/{ch}/output/overrangecount",
+                    f"Channel {ch} Output overrange count",
+                )
+            )
+            warning_nodes.append(
+                (
+                    f"/{self.serial}/qachannels/{ch}/input/overrangecount",
+                    f"Channel {ch} Input overrange count",
+                )
+            )
+        return warning_nodes

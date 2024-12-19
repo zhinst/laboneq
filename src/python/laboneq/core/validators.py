@@ -24,7 +24,10 @@ def validating_allowed_values(allowed_values: dict[str, Any]):
 
         def __setattr__(self, prop, val):
             try:
-                if val is not None and val not in allowed_values[prop]:
+                if (
+                    val is not None
+                    and val not in allowed_values[prop]  # @IgnoreException
+                ):
                     raise ValueError(f"Setting {prop} to {val} is not allowed.")
             except KeyError:
                 pass

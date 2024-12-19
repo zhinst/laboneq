@@ -12,7 +12,7 @@ from laboneq.compiler.seqc.linker import CombinedRTOutputSeqC
 from laboneq.compiler.workflow.compiler_output import CombinedRTCompilerOutputContainer
 
 if TYPE_CHECKING:
-    from laboneq.compiler.workflow.compiler import _IntegrationUnitAllocation
+    from laboneq.compiler.workflow.compiler import IntegrationUnitAllocation
 
 
 class LocalFeedbackRegister(NamedTuple):
@@ -32,7 +32,7 @@ FeedbackRegisterLayout = dict[
 
 
 def calculate_feedback_register_layout(
-    integration_unit_allocation: dict[str, _IntegrationUnitAllocation],
+    integration_unit_allocation: dict[str, IntegrationUnitAllocation],
 ) -> FeedbackRegisterLayout:
     feedback_register_layouts: FeedbackRegisterLayout = defaultdict(
         SingleFeedbackRegisterLayout

@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from enum import Enum, IntFlag
 import json
 import logging
-import time
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Literal, TypeVar, overload
 from laboneq.controller.devices.device_utils import is_expected, to_l1_timeout
 
@@ -393,51 +392,18 @@ async def wait_for_state_change(
 class NodeMonitorAsync(NodeMonitorBase):
     def __init__(self, api: Instrument):
         super().__init__()
-        self._api = api
-        self._queues: dict[str, DataQueue] = {}
 
     async def start(self):
-        queues: list[DataQueue] = await _gather(
-            *(
-                self._api.kernel_session.subscribe(path, get_initial_value=True)
-                for path in self._nodes.keys()
-            )
-        )
-        for path, queue in zip(self._nodes.keys(), queues):
-            self._queues[path] = queue
+        pass
 
     async def stop(self):
-        for queue in self._queues.values():
-            queue.disconnect()
-        self._queues.clear()
-        await self.flush()
+        pass
 
     async def poll(self):
-        while True:
-            await _yield()
-            no_more_data = True
-            for path, queue in self._queues.items():
-                while not queue.empty():
-                    annotated_value = await queue.get()
-                    self._get_node(path).append(parse_annotated_value(annotated_value))
-                    no_more_data = False
-            if no_more_data:
-                break
+        pass
 
     async def wait_for_state_by_get(self, path: str, expected: int):
-        if not isinstance(expected, int):
-            # Non-int nodes are not important, included only for consistency check.
-            # Skip it for this workaround.
-            return
-        t0 = time.time()
-        while time.time() - t0 < 3:  # hard-coded timeout of 3s
-            val = (await self._api.kernel_session.get(path)).value
-            if val == expected:
-                return
-            await asyncio.sleep(0.005)
-        raise LabOneQControllerException(
-            f"Condition {path}=={expected} is not fulfilled within 3s. Last value: {val}"
-        )
+        pass
 
 
 def _from_annotated_value(annotated_value: AnnotatedValue) -> Any:
@@ -457,13 +423,18 @@ class ResponseWaiterAsync:
     ):
         self._api = api
         self._nodes: dict[str, Any] = {}
-        self._timeout_s = timeout_s  # TODO(2K): stop on timeout
+        self._messages: dict[str, str] = {}
+        self._timeout_s = timeout_s
         self._queues: dict[str, DataQueue] = {}
         if nodes is not None:
             self.add_nodes(nodes)
 
     def add_nodes(self, nodes: dict[str, Any]):
         self._nodes.update(nodes)
+
+    def add_with_msg(self, nodes: dict[str, tuple[Any, str]]):
+        self._nodes.update({path: val[0] for path, val in nodes.items()})
+        self._messages.update({path: val[1] for path, val in nodes.items()})
 
     async def prepare(self, get_initial_value: bool = False):
         if len(self._nodes) == 0:
@@ -482,14 +453,20 @@ class ResponseWaiterAsync:
     async def _wait_one(self, path: str):
         queue = self._queues[path]
         expected = self._nodes[path]
-        node_value = _from_annotated_value(await queue.get())
-        while not is_expected(node_value, expected):
+        all_expected = []
+        if isinstance(expected, list):
+            all_expected.extend(expected)
+        else:
+            all_expected.append(expected)
+        while len(all_expected) > 0:
             node_value = _from_annotated_value(await queue.get())
+            if is_expected(node_value, all_expected[0]):
+                all_expected.pop(0)
 
-    async def wait(self) -> dict[str, Any]:
-        failed_nodes: dict[str, Any] = {}
+    async def wait(self) -> list[str]:
         if len(self._nodes) == 0:
-            return failed_nodes
+            return []
+        failed_nodes: list[str] = []
         if self._timeout_s is None:
             await _gather(*(self._wait_one(path) for path in self._nodes))
         else:
@@ -499,7 +476,10 @@ class ResponseWaiterAsync:
             )
             for result, (path, expected) in zip(results, self._nodes.items()):
                 if isinstance(result, (asyncio.TimeoutError, TimeoutError)):
-                    failed_nodes[path] = expected
+                    msg = self._messages.get(path)
+                    if msg is None:
+                        msg = f"{path}={expected}"
+                    failed_nodes.append(msg)
         for queue in self._queues.values():
             queue.disconnect()
         return failed_nodes

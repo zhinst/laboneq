@@ -16,3 +16,8 @@ class ILinker(abc.ABC):
     @abc.abstractmethod
     def merge_combined_compiler_runs(this, new, previous, step_indices: list[int]):
         raise NotImplementedError
+
+    @staticmethod
+    @abc.abstractmethod
+    def repeat_previous(this, previous):
+        raise NotImplementedError

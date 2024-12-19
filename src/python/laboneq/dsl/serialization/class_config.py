@@ -115,7 +115,7 @@ def classes_by_short_name() -> OrderedDict[str, type]:
     )
 
 
-# NOTE(mr): This can be removed after the legacy adapters have been removed, or, conversely after class names are unique in L1Q once more
+# NOTE(mr): This can be removed after the legacy adapters have been removed, or, conversely after class names are unique in LabOne Q once more
 def classes_by_short_name_ir() -> OrderedDict[str, type]:
     _, classes_by_short_name = module_classes(
         [

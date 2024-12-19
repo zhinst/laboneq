@@ -127,10 +127,10 @@ class DeviceUHFQA(DeviceBase):
 
     def _nodes_to_monitor_impl(self) -> list[str]:
         nodes = super()._nodes_to_monitor_impl()
-        for awg in range(self._get_num_awgs()):
-            nodes.append(self.get_sequencer_paths(awg).enable)
-            nodes.append(self.get_sequencer_paths(awg).ready)
         if self._api is None:
+            for awg in range(self._get_num_awgs()):
+                nodes.append(self.get_sequencer_paths(awg).enable)
+                nodes.append(self.get_sequencer_paths(awg).ready)
             for result_index in range(self._integrators):
                 nodes.append(self._result_node_integrator(result_index))
             nodes.append(self._result_node_monitor(0))
@@ -269,7 +269,7 @@ class DeviceUHFQA(DeviceBase):
         nc.add("qas/0/monitor/enable", 1 if enable else 0)
         return nc
 
-    async def conditions_for_execution_ready(
+    def conditions_for_execution_ready(
         self, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
         conditions: dict[str, tuple[Any, str]] = {}
@@ -278,9 +278,9 @@ class DeviceUHFQA(DeviceBase):
                 1,
                 f"{self.dev_repr}: AWG {awg_index + 1} didn't start.",
             )
-        return conditions  # await self.maybe_async_wait(conditions)
+        return conditions
 
-    async def conditions_for_execution_done(
+    def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
         conditions: dict[str, tuple[Any, str]] = {}
@@ -289,7 +289,7 @@ class DeviceUHFQA(DeviceBase):
                 0,
                 f"{self.dev_repr}: AWG {awg_index + 1} didn't stop. Missing start trigger? Check DIO.",
             )
-        return conditions  # await self.maybe_async_wait(conditions)
+        return conditions
 
     def _validate_range(self, io: IO, is_out: bool):
         if io.range is None:

@@ -55,8 +55,8 @@ from laboneq.dsl.experiment.builtins import (
     uid,
 )
 from laboneq.dsl.experiment.section_context import active_section
-from laboneq.simple import pulse_library
-from laboneq.workflow.tasks import handles
+from laboneq.dsl.experiment import pulse_library
+from laboneq.workflow import handles
 from laboneq.dsl.experiment.build_experiment import qubit_experiment
 from laboneq.dsl.quantum.quantum_operations import (
     QuantumOperations,

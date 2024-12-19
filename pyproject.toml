@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "laboneq"
-version = "2.42.0"
+version = "2.43.0"
 description = "Zurich Instruments LabOne Q software framework for quantum computing control"
 license = { text = "Apache 2.0" }
 readme = "README.md"
@@ -52,15 +52,14 @@ dependencies = [
     "sqlitedict >= 2.1.0",
     "sortedcollections >= 2.1.0",
     "lagom >= 2.6.0",
-    "attrs >= 20.1.0",
+    "attrs >= 24.1.0",
     "sortedcontainers >= 2.4.0",
     "typing_extensions >= 4.10.0",
     "zhinst-core ~= 24.10.65175",
     "zhinst-toolkit == 0.7.0",
     "zhinst-utils == 0.5.0",
     "zhinst-timing-models ~= 24.10.64896",
-    "labone == 3.2.0",
-    "unsync == 1.4.0",
+    "labone == 3.2.1",
     "pygments >= 2.18.0"
 ]
 
@@ -73,9 +72,12 @@ module-name = "laboneq._rust"
 features = []
 python-source = "src/python"
 include = [
-    "laboneq/compiler/qccs-schema_2_5_0.json",
-    "laboneq/pulse_sheet_viewer/pulse_sheet_viewer_template.html",
+    # **/ prefix is used to work around a bug that causes include pattern
+    # to be treated differently for sdist builds. https://github.com/PyO3/maturin/issues/2320
+    "**/laboneq/compiler/qccs-schema_2_5_0.json",
+    "**/laboneq/pulse_sheet_viewer/pulse_sheet_viewer_template.html",
 ]
+
 python-packages = ["laboneq"]
 compatibility = "manylinux2014"
 

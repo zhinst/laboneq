@@ -9,7 +9,14 @@ from typing import Iterable, Type
 
 from openqasm3 import ast
 
-from .namespace import ClassicalRef, Frame, NamespaceNest, QubitRef
+from .namespace import (
+    ClassicalRef,
+    Frame,
+    Array,
+    NamespaceStack,
+    QubitRef,
+    QubitRegisterRef,
+)
 from .openqasm_error import OpenQasmException
 
 binary_ops = {
@@ -62,7 +69,7 @@ def duration_to_seconds(duration: ast.DurationLiteral):
 
 
 def _eval_expression(
-    expression: ast.Expression | ast.DiscreteSet, namespace: NamespaceNest
+    expression: ast.Expression | ast.DiscreteSet, namespace: NamespaceStack
 ):
     if isinstance(
         expression,
@@ -107,15 +114,13 @@ def _eval_expression(
         except KeyError:
             pass
         value = eval_lvalue(expression, namespace)
-        if isinstance(value, QubitRef):
+        if isinstance(value, (QubitRef, Frame)):
             return value
         if isinstance(value, ClassicalRef):
             # in an expression (rvalue), we can safely dereference classical values
             return value.value
-        if isinstance(value, Frame):
-            return value
-        else:  # value is a list; dereference classical references
-            return [v.value if isinstance(v, ClassicalRef) else v for v in value]
+        if isinstance(value, (Array, QubitRegisterRef)):
+            return [v.value if isinstance(v, ClassicalRef) else v for v in value.value]
 
     if isinstance(expression, ast.RangeDefinition):
         start = _eval_expression(expression.start, namespace)
@@ -183,11 +188,11 @@ def _eval_expression(
 def eval_expression(
     expression: ast.Expression | None,
     *,
-    namespace: NamespaceNest | None = None,
+    namespace: NamespaceStack | None = None,
     type_: Type | None = None,
 ):
     if namespace is None:
-        namespace = NamespaceNest()
+        namespace = NamespaceStack()
     try:
         retval = _eval_expression(expression, namespace)
     except OpenQasmException:
@@ -203,9 +208,7 @@ def eval_expression(
     return retval
 
 
-def eval_lvalue(
-    node, namespace: NamespaceNest
-) -> ClassicalRef | QubitRef | list[ClassicalRef] | list[QubitRef]:
+def eval_lvalue(node, namespace: NamespaceStack) -> ClassicalRef | QubitRef:
     if isinstance(node, ast.Identifier):
         if node.name in constants:
             raise OpenQasmException("Cannot alias a constant", node.span)
@@ -220,8 +223,9 @@ def eval_lvalue(
         if identifier.name in constants:
             raise OpenQasmException("Cannot alias a constant", node.span)
         collection = namespace.lookup(identifier.name)
-        if isinstance(collection, QubitRef):
-            raise OpenQasmException("Cannot index a single qubit", node.span)
+        if not isinstance(collection, (QubitRegisterRef, Array)):
+            raise OpenQasmException("Cannot index a single value", node.span)
+        collection = collection.value
         for index_element in node.indices:
             if isinstance(index_element, ast.DiscreteSet):
                 index = _eval_expression(index_element, namespace)
@@ -263,9 +267,9 @@ def eval_lvalue(
         lhs = eval_lvalue(node.lhs, namespace=namespace)
         rhs = eval_lvalue(node.rhs, namespace=namespace)
         for child, lval in ((node.lhs, lhs), (node.rhs, rhs)):
-            if not isinstance(lval, list):
+            if not isinstance(lval, (QubitRegisterRef, Array)):
                 raise OpenQasmException(
                     f"Array view expected, got {type(lval.__name__)}", child.span
                 )
-        return [*lhs, *rhs]
+        return [*lhs.value, *rhs.value]
     raise OpenQasmException("lvalue expected", node.span)

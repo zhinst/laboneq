@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
 from laboneq.application_management.application_manager import ApplicationManager
 from laboneq.data.execution_payload import ExecutionPayload
 from laboneq.data.experiment_description import (
@@ -73,8 +74,8 @@ class DeviceSetupAdapter:
             ApplicationManager,
         )
 
-        l1q: ExperimentAPI = ApplicationManager.instance().laboneq()
-        retval = l1q.device_setup_from_descriptor(
+        laboneq: ExperimentAPI = ApplicationManager.instance().laboneq()
+        retval = laboneq.device_setup_from_descriptor(
             yaml_text, server_host, server_port, setup_name
         )
         for ls in SetupHelper(retval).logical_signals():
@@ -92,8 +93,8 @@ class LegacySessionAdapter:
         self.compiled_experiment = ScheduledExperiment()
         self.results = ExperimentResultsAdapter(ExperimentResults())
         app_manager = ApplicationManager.instance()
-        self.l1q = app_manager.laboneq()
-        self.l1q.set_current_setup(device_setup)
+        self.laboneq = app_manager.laboneq()
+        self.laboneq.set_current_setup(device_setup)
         self.do_emulation = False
         self.reset_devices = False
 
@@ -107,15 +108,15 @@ class LegacySessionAdapter:
         self.reset_devices = reset_devices
 
     def compile(self, experiment: Experiment) -> ExecutionPayload:
-        self.l1q.set_current_experiment(experiment.data_experiment)
-        self.l1q.map_signals(experiment.signal_mappings)
-        self.compiled_experiment = self.l1q.build_payload_for_current_experiment()
+        self.laboneq.set_current_experiment(experiment.data_experiment)
+        self.laboneq.map_signals(experiment.signal_mappings)
+        self.compiled_experiment = self.laboneq.build_payload_for_current_experiment()
         return self.compiled_experiment
 
     def run(self, compiled_experiment: ExecutionPayload | None = None):
         if compiled_experiment is None:
             compiled_experiment = self.compiled_experiment
-        self.results = self.l1q.run_payload(compiled_experiment)
+        self.results = self.laboneq.run_payload(compiled_experiment)
         return self.results
 
     def get_results(self, *args, **kwargs):

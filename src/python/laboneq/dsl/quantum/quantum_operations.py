@@ -17,7 +17,7 @@ from laboneq.dsl.experiment import builtins, pulse_library
 from laboneq.dsl.experiment.build_experiment import _qubits_from_args
 from laboneq.dsl.parameter import Parameter
 from laboneq.core.types.enums.execution_type import ExecutionType
-from laboneq.workflow.highlight import pygmentize
+from laboneq.core.utilities.highlight import pygmentize
 
 
 if TYPE_CHECKING:

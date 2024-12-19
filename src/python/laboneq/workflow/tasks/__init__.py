@@ -12,11 +12,11 @@ __all__ = [
     "RunExperimentResults",
     "append_result",
     "combine_results",
-    "handles",
+    "create_qasm_experiment",
 ]
 
 
 from .collect_experiment_results import append_result, combine_results
 from .compile_experiment import compile_experiment
+from .create_qasm_experiment import create_qasm_experiment
 from .run_experiment import RunExperimentOptions, RunExperimentResults, run_experiment
-from .common import handles

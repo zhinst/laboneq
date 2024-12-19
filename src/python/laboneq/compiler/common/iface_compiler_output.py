@@ -7,15 +7,12 @@ import abc
 from dataclasses import dataclass
 from typing import Any
 
-from laboneq.compiler.common.awg_info import AwgKey
-from laboneq.compiler.common.shfppc_sweeper_config import SHFPPCSweeperConfig
+from laboneq.data.recipe import NtStepKey
 from laboneq.data.scheduled_experiment import CompilerArtifact
 
 
-class RealtimeStepBase:
-    device_id: str
-    awg_id: int
-    nt_step: list[int]
+class NeartimeStepBase:
+    key: NtStepKey
 
 
 class RTCompilerOutput:
@@ -26,11 +23,7 @@ class CombinedOutput(abc.ABC):
     """Base class for compiler output _after_ linking individual runs of the code
     generation backend."""
 
-    feedback_register_configurations: dict[AwgKey, Any]
-    shfppc_sweep_configurations: dict[AwgKey, SHFPPCSweeperConfig]
-    realtime_steps: list[RealtimeStepBase]
-    total_execution_time: float
-    max_execution_time_per_step: float
+    neartime_steps: list[NeartimeStepBase]
 
     @abc.abstractmethod
     def get_artifacts(self) -> CompilerArtifact:

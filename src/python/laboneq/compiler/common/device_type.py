@@ -64,7 +64,7 @@ class DeviceType(DeviceTraits, Enum):
 
     @classmethod
     def from_device_info_type(cls, value: DeviceInfoType):
-        return cls(value.name.lower())
+        return cls(value.name.lower())  # @IgnoreException
 
     HDAWG = DeviceTraits(
         str_value="hdawg",

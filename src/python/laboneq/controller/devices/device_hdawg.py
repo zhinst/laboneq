@@ -161,9 +161,12 @@ class DeviceHDAWG(DeviceBase):
     def _nodes_to_monitor_impl(self) -> list[str]:
         nodes = super()._nodes_to_monitor_impl()
         for awg in range(self._get_num_awgs()):
-            nodes.append(f"/{self.serial}/awgs/{awg}/enable")
-            nodes.append(f"/{self.serial}/awgs/{awg}/ready")
-            nodes.extend(self._pipeliner.control_nodes(awg))
+            if self._api is None:
+                nodes.append(self.get_sequencer_paths(awg).enable)
+                nodes.append(self.get_sequencer_paths(awg).ready)
+            nodes.extend(
+                self._pipeliner.control_nodes(awg, use_async_api=self._api is not None)
+            )
         return nodes
 
     def update_clock_source(self, force_internal: bool | None):
@@ -284,11 +287,19 @@ class DeviceHDAWG(DeviceBase):
 
         return await super().collect_execution_nodes(with_pipeliner=with_pipeliner)
 
-    async def conditions_for_execution_ready(
+    def conditions_for_execution_ready(
         self, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
         if with_pipeliner:
             conditions = self._pipeliner.conditions_for_execution_ready()
+        elif self.is_async_standalone:
+            conditions = {
+                f"/{self.serial}/awgs/{awg_index}/enable": (
+                    [1, 0],
+                    f"{self.dev_repr}: AWG {awg_index + 1} failed to transition to exec and back to stop.",
+                )
+                for awg_index in self._allocated_awgs
+            }
         else:
             conditions = {
                 f"/{self.serial}/awgs/{awg_index}/enable": (
@@ -297,13 +308,15 @@ class DeviceHDAWG(DeviceBase):
                 )
                 for awg_index in self._allocated_awgs
             }
-        return conditions  # await self.maybe_async_wait(conditions)
+        return conditions
 
-    async def conditions_for_execution_done(
+    def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
         if with_pipeliner:
             conditions = self._pipeliner.conditions_for_execution_done()
+        elif self.is_async_standalone:
+            conditions = {}
         else:
             conditions = {
                 f"/{self.serial}/awgs/{awg_index}/enable": (
@@ -312,7 +325,7 @@ class DeviceHDAWG(DeviceBase):
                 )
                 for awg_index in self._allocated_awgs
             }
-        return conditions  # await self.maybe_async_wait(conditions)
+        return conditions
 
     async def collect_execution_setup_nodes(
         self, with_pipeliner: bool, has_awg_in_use: bool
@@ -394,7 +407,7 @@ class DeviceHDAWG(DeviceBase):
             try:
                 precomp = output.precompensation
                 if not precomp:
-                    raise AttributeError
+                    raise AttributeError  # @IgnoreException
                 if not has_pc:
                     raise LabOneQControllerException(
                         f"Precompensation is not supported on device {self.dev_repr}."

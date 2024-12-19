@@ -25,7 +25,9 @@ class AwgPipeliner:
         assert parent_device is not None
         return parent_device
 
-    def control_nodes(self, index: int) -> list[str]:
+    def control_nodes(self, index: int, use_async_api: bool) -> list[str]:
+        if use_async_api:
+            return []
         return [
             f"{self._node_base}/{index}/pipeliner/availableslots",
             f"{self._node_base}/{index}/pipeliner/status",
@@ -59,6 +61,14 @@ class AwgPipeliner:
         return nc
 
     def conditions_for_execution_ready(self) -> dict[str, tuple[Any, str]]:
+        if self.parent_device.is_async_standalone:
+            return {
+                f"{self._node_base}/{index}/pipeliner/status": (
+                    [1, 0],  # exec -> idle
+                    f"{self.parent_device.dev_repr}: Pipeliner for {self._unit} channel {index + 1} failed to transition to exec and back to stop.",
+                )
+                for index in self.parent_device._allocated_awgs
+            }
         return {
             f"{self._node_base}/{index}/pipeliner/status": (
                 1,  # exec
@@ -68,6 +78,8 @@ class AwgPipeliner:
         }
 
     def conditions_for_execution_done(self) -> dict[str, tuple[Any, str]]:
+        if self.parent_device.is_async_standalone:
+            return {}
         return {
             f"{self._node_base}/{index}/pipeliner/status": (
                 0,  # idle

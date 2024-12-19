@@ -59,12 +59,13 @@ class DeviceSHFPPC(DeviceBase):
 
     def _nodes_to_monitor_impl(self):
         nodes = super()._nodes_to_monitor_impl()
-        nodes.extend(
-            [
-                f"/{self.serial}/ppchannels/{channel}/sweeper/enable"
-                for channel in range(self._channels)
-            ]
-        )
+        if self._api is None:
+            nodes.extend(
+                [
+                    f"/{self.serial}/ppchannels/{channel}/sweeper/enable"
+                    for channel in range(self._channels)
+                ]
+            )
         return nodes
 
     def _key_to_path(self, key: str, ch: int):
@@ -188,7 +189,7 @@ class DeviceSHFPPC(DeviceBase):
 
         return await self.maybe_async(nc)
 
-    async def conditions_for_execution_ready(
+    def conditions_for_execution_ready(
         self, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
         conditions = {
@@ -198,9 +199,9 @@ class DeviceSHFPPC(DeviceBase):
             )
             for channel in self._allocated_sweepers
         }
-        return conditions  # await self.maybe_async_wait(conditions)
+        return conditions
 
-    async def conditions_for_execution_done(
+    def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
         conditions = {
@@ -210,4 +211,4 @@ class DeviceSHFPPC(DeviceBase):
             )
             for sweeper_index in self._allocated_sweepers
         }
-        return conditions  # await self.maybe_async_wait(conditions)
+        return conditions

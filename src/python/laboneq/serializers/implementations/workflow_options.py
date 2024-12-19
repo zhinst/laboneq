@@ -5,17 +5,19 @@
 """Serializer/Deserializer for laboneq.workflow.WorkflowOptions"""
 
 from __future__ import annotations
+
 import attrs
-from laboneq.workflow import WorkflowOptions, TaskOptions
+
+from laboneq import serializers
 from laboneq.serializers.base import VersionedClassSerializer
-from laboneq.serializers.serializer_registry import serializer
 from laboneq.serializers.core import import_cls
+from laboneq.serializers.serializer_registry import serializer
 from laboneq.serializers.types import (
-    SerializationOptions,
     DeserializationOptions,
     JsonSerializableType,
+    SerializationOptions,
 )
-from laboneq import serializers
+from laboneq.workflow import TaskOptions, WorkflowOptions
 
 
 @serializer(types=WorkflowOptions, public=True)
@@ -28,7 +30,7 @@ class WorkflowOptionsSerializer(VersionedClassSerializer[WorkflowOptions]):
         cls, obj: WorkflowOptions, options: SerializationOptions | None = None
     ) -> JsonSerializableType:
         # We let attrs handle core Python object types as they are not currently supported
-        # by the L1Q serializer (e.g a dict).
+        # by the LabOne Q serializer (e.g a dict).
         def attr_filter(attr: attrs.Attribute, _):
             return False if attr.name == "logstore" else True
 
@@ -77,7 +79,7 @@ class TaskOptionsSerializer(VersionedClassSerializer[TaskOptions]):
         cls, obj: TaskOptions, options: SerializationOptions | None = None
     ) -> JsonSerializableType:
         # We let attrs handle core Python object types as they are not currently supported
-        # by the L1Q serializer (e.g a dict).
+        # by the LabOne Q serializer (e.g a dict).
         def attr_serializer(_, attr: attrs.Attribute, value: object):
             try:
                 return serializers.to_dict(value)

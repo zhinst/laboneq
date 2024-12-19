@@ -21,7 +21,6 @@ from typing import (
     Tuple,
 )
 
-from laboneq._observability.tracing import trace
 from laboneq._utils import UIDReference, cached_method
 from laboneq.compiler.common.compiler_settings import CompilerSettings, TINYSAMPLE
 from laboneq.compiler.common.device_type import DeviceType
@@ -198,7 +197,6 @@ class Scheduler:
                             length,
                         )
 
-    @trace("scheduler.run()", {"version": "v2"})
     def run(self, nt_parameters: Optional[ParameterStore] = None):
         if nt_parameters is None:
             nt_parameters = ParameterStore()
@@ -366,7 +364,9 @@ class Scheduler:
             # todo: do not hash the entire current_parameters dict, but just the param values
             # todo: reduce key to those parameters actually required by the section
             return copy.deepcopy(
-                self._scheduled_sections[(section_id, current_parameters.frozen())]
+                self._scheduled_sections[  # @IgnoreException
+                    (section_id, current_parameters.frozen())
+                ]
             )
         except KeyError:
             pass
@@ -1193,7 +1193,9 @@ class Scheduler:
             # todo: do not hash the entire current_parameters dict, but just the param values
             # todo: reduce key to those parameters actually required by the section
             return copy.deepcopy(
-                self._scheduled_sections[(section_id, current_parameters.frozen())]
+                self._scheduled_sections[  # @IgnoreException
+                    (section_id, current_parameters.frozen())
+                ]
             )
         except KeyError:
             pass

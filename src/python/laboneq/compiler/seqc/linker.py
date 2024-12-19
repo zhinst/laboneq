@@ -21,9 +21,10 @@ from laboneq.compiler.common.iface_linker import ILinker
 from laboneq.compiler.common.iface_compiler_output import (
     RTCompilerOutput,
     CombinedOutput,
-    RealtimeStepBase,
+    NeartimeStepBase,
 )
 from laboneq.core.exceptions import LabOneQException
+from laboneq.data.recipe import NtStepKey
 from laboneq.data.scheduled_experiment import (
     AwgWeights,
     CodegenWaveform,
@@ -58,7 +59,7 @@ class CombinedRTOutputSeqC(CombinedOutput):
     feedback_register_configurations: dict[AwgKey, FeedbackRegisterConfig] = field(
         default_factory=dict
     )
-    realtime_steps: list[RealtimeStep] = field(default_factory=list)
+    neartime_steps: list[NeartimeStep] = field(default_factory=list)
     shfppc_sweep_configurations: dict[AwgKey, SHFPPCSweeperConfig] = field(
         default_factory=dict
     )
@@ -133,7 +134,11 @@ def _extend_parameter_phase_increment_map(
     awg_key: AwgKey,
 ):
     try:
-        parameter_phase_increment_map = new.parameter_phase_increment_map[awg_key]
+        parameter_phase_increment_map = (
+            new.parameter_phase_increment_map[  # @IgnoreException
+                awg_key
+            ]
+        )
     except KeyError:
         return
 
@@ -190,7 +195,9 @@ class SeqCLinker(ILinker):
             wave_indices=wave_indices,
             pulse_map=output.pulse_map,
             feedback_register_configurations=output.feedback_register_configurations,
-            realtime_steps=SeqCLinker.make_realtime_step(output, step_indices),
+            neartime_steps=SeqCLinker.make_neartime_execution_step(
+                output, step_indices
+            ),
             parameter_phase_increment_map=parameter_phase_increment_map,
             shfppc_sweep_configurations=output.shfppc_sweep_configurations,
         )
@@ -290,6 +297,7 @@ class SeqCLinker(ILinker):
             this.max_execution_time_per_step = max(
                 this.max_execution_time_per_step, new.total_execution_time
             )
+            this.total_execution_time += new.total_execution_time
 
         for (
             new_device_id,
@@ -300,29 +308,40 @@ class SeqCLinker(ILinker):
                 if signal_id not in dev_requires_long_readout:
                     dev_requires_long_readout.append(signal_id)
 
-        for new_realtime_step in SeqCLinker.make_realtime_step(new, step_indices):
+        for new_neartime_execution_step in SeqCLinker.make_neartime_execution_step(
+            new, step_indices
+        ):
             if (
-                AwgKey(new_realtime_step.device_id, new_realtime_step.awg_id)
+                AwgKey(
+                    new_neartime_execution_step.device_id,
+                    new_neartime_execution_step.awg_id,
+                )
                 in merged_ids
             ):
-                this.realtime_steps.append(new_realtime_step)
+                this.neartime_steps.append(new_neartime_execution_step)
 
     @staticmethod
-    def make_realtime_step(rt_compiler_output: SeqCGenOutput, step_indices: list[int]):
-        realtime_steps = []
+    def make_neartime_execution_step(
+        rt_compiler_output: SeqCGenOutput, step_indices: list[int]
+    ):
+        neartime_execution_steps = []
         for awg in rt_compiler_output.src.keys():
             seqc_name = _make_seqc_name(awg, step_indices)
-            realtime_steps.append(
-                RealtimeStep(
+            neartime_execution_steps.append(
+                NeartimeStep(
                     device_id=awg.device_id,
                     awg_id=awg.awg_number,
                     seqc_ref=seqc_name,
                     wave_indices_ref=seqc_name,
                     kernel_indices_ref=seqc_name,
-                    nt_step=step_indices,
+                    key=NtStepKey(tuple(step_indices)),
                 )
             )
-        return realtime_steps
+        return neartime_execution_steps
+
+    @staticmethod
+    def repeat_previous(this: CombinedRTOutputSeqC, previous: SeqCGenOutput):
+        this.total_execution_time += previous.total_execution_time
 
 
 def _make_seqc_name(awg: AwgKey, step_indices: list[int]) -> str:
@@ -350,10 +369,10 @@ def _deep_compare(a: Any, b: Any) -> bool:
 
 
 @dataclass
-class RealtimeStep(RealtimeStepBase):
+class NeartimeStep(NeartimeStepBase):
     device_id: str
     awg_id: int
     seqc_ref: str
     wave_indices_ref: str
     kernel_indices_ref: str
-    nt_step: list[int]
+    key: NtStepKey

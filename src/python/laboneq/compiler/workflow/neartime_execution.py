@@ -168,8 +168,8 @@ class NtCompilerExecutor(ExecutorBase):
                 ]
 
                 self._last_compiler_output = new_compiler_output
-                self._combined_compiler_output.add_total_execution_time(
-                    new_compiler_output
+                rt_linker.repeat_previous(
+                    self._combined_compiler_output, self._last_compiler_output
                 )
                 if not self._skipped_last_compilation:
                     _logger.info("Skipping compilation for next step(s)...")
@@ -206,7 +206,6 @@ class NtCompilerExecutor(ExecutorBase):
                 self._last_compiler_output,
                 nt_step_indices,
             )
-            self._combined_compiler_output.add_total_execution_time(new_compiler_output)
 
         for delegate in self._delegates:
             delegate.after_compilation_run(new_compiler_output, nt_step_indices)

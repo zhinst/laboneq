@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from laboneq import workflow
 
-from laboneq.workflow.tasks.common import handles
+from laboneq.workflow import handles
 from laboneq.workflow.tasks.run_experiment import RunExperimentResults
 
 

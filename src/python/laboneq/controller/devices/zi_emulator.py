@@ -17,13 +17,17 @@ from enum import Enum
 from functools import partial
 from types import SimpleNamespace
 from typing import Any, Callable, Iterator, cast, overload
-from weakref import ref
+from weakref import ReferenceType, ref
 
 import numpy as np
 from numpy import typing as npt
 
 
 _logger = logging.getLogger(__name__)
+
+
+# Option for the overrange nodes that triggers increment emulation
+_INC_ON_RUN = "INC_ON_RUN"
 
 
 @dataclass
@@ -193,6 +197,10 @@ class DevEmu(ABC):
         self._emulator_state.scheduler.enter(
             delay=delay, priority=0, action=action, argument=argument
         )
+
+    def trigger(self):  # noqa: B027
+        """No trigger actions by default"""
+        pass
 
     @abstractmethod
     def _node_def(self) -> dict[str, NodeInfo]: ...
@@ -523,12 +531,35 @@ class DevEmuHDAWG(DevEmuHW):
             parent=self,
             pipeliner_base="awgs",
         )
+        self._armed_awgs: set[int] = set()
+
+    def trigger(self):
+        super().trigger()
+        for awg_idx in self._armed_awgs:
+            self._awg_stop(awg_idx)
+        self._armed_awgs.clear()
 
     def _awg_stop(self, awg_idx):
         self._set_val(f"awgs/{awg_idx}/enable", 0)
 
-    def _awg_execute(self, node: NodeBase, awg_idx):
-        self.schedule(delay=0.001, action=self._awg_stop, argument=(awg_idx,))
+    def _awg_enable(self, node: NodeBase, awg_idx):
+        if node.value != 0:
+            ref_clk = self._get_node("system/clocks/referenceclock/source").value
+            # TODO(2K): Improve logic by sensing actual AWG code for wait trigger statements
+            all_devices = set(self._emulator_state._devices.keys())
+            other_devices = all_devices - {"ZI", self.serial().upper()}
+            has_other_devices = len(other_devices) > 0
+            not_on_zsync = ref_clk != 2
+            is_standalone = not_on_zsync and not has_other_devices
+            is_leader = not_on_zsync and has_other_devices
+            if is_standalone or is_leader:
+                self.schedule(delay=0.001, action=self._awg_stop, argument=(awg_idx,))
+                if is_leader:
+                    self._emulator_state.send_trigger()
+            else:
+                self._armed_awgs.add(awg_idx)
+        elif awg_idx in self._armed_awgs:
+            self._armed_awgs.remove(awg_idx)
 
     def _sample_clock_switched(self):
         self._set_val("system/clocks/sampleclock/status", 0)
@@ -584,7 +615,7 @@ class DevEmuHDAWG(DevEmuHW):
             nd[f"awgs/{awg_idx}/enable"] = NodeInfo(
                 type=NodeType.INT,
                 default=0,
-                handler=partial(self._awg_execute, awg_idx=awg_idx),
+                handler=partial(self._awg_enable, awg_idx=awg_idx),
             )
         return nd
 
@@ -606,6 +637,16 @@ class DevEmuUHFQA(DevEmuHW):
             sum of all the averaged readouts. The function may also return None, in which case
             the emulator falls back to the default emulated results for this integrator.
     """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._armed_awg: bool = False
+
+    def trigger(self):
+        super().trigger()
+        if self._armed_awg:
+            self._awg_stop()
+        self._armed_awg = False
 
     def _awg_stop(self):
         self._set_val("awgs/0/enable", 0)
@@ -638,8 +679,8 @@ class DevEmuUHFQA(DevEmuHW):
             self._set_val("qas/0/monitor/inputs/0/wave", ([52] * length, {}))
             self._set_val("qas/0/monitor/inputs/1/wave", ([52] * length, {}))
 
-    def _awg_execute(self, node: NodeBase):
-        self.schedule(delay=0.001, action=self._awg_stop)
+    def _awg_enable(self, node: NodeBase):
+        self._armed_awg = node.value != 0
 
     def _awg_ready(self):
         self._set_val("awgs/0/ready", 1)
@@ -660,7 +701,7 @@ class DevEmuUHFQA(DevEmuHW):
                 default=self._dev_opts.get("features/options", "AWG\nDIG\nQA"),
             ),
             "awgs/0/enable": NodeInfo(
-                type=NodeType.INT, default=0, handler=self._awg_execute
+                type=NodeType.INT, default=0, handler=self._awg_enable
             ),
             "awgs/0/elf/data": NodeInfo(
                 type=NodeType.VECTOR_INT, default=([], {}), handler=self._elf_upload
@@ -719,19 +760,17 @@ class DevEmuLeader(Gen2Base):
         super().__init__(serial=serial, emulator_state=emulator_state)
         self._zsync_ports: int | None = None
 
-    def _trig_stop(self):
-        self._set_val("execution/enable", 0)
-
     def _trig_execute(self, node: NodeBase):
-        self.schedule(delay=0.001, action=self._trig_stop)
+        self._emulator_state.send_trigger()
+        self.schedule(
+            delay=0.001, action=self._set_val, argument=("execution/enable", 0)
+        )
 
     def _node_def(self) -> dict[str, NodeInfo]:
-        nd = {
-            **self._node_def_gen2(),
-            "execution/enable": NodeInfo(
-                type=NodeType.INT, default=0, handler=self._trig_execute
-            ),
-        }
+        nd = self._node_def_gen2()
+        nd["execution/enable"] = NodeInfo(
+            type=NodeType.INT, default=0, handler=self._trig_execute
+        )
         assert self._zsync_ports is not None
         for zsync in range(self._zsync_ports):
             nd[f"zsyncs/{zsync}/connection/status"] = NodeInfo(
@@ -759,7 +798,40 @@ class DevEmuQHUB(DevEmuLeader):
         self._zsync_ports = 56
 
 
-class DevEmuSHFQABase(Gen2Base):
+class DevEmuSHFBase(Gen2Base):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def _int_trig_execute(self, node: NodeBase):
+        if node.value != 0:
+            self._emulator_state.send_trigger()
+            self.schedule(
+                delay=0.001,
+                action=self._set_val,
+                argument=("system/internaltrigger/enable", 0),
+            )
+
+    def _sw_trig_execute(self, node: NodeBase):
+        if node.value != 0:
+            self._emulator_state.send_trigger()
+            self.schedule(
+                delay=0.001,
+                action=self._set_val,
+                argument=("system/swtriggers/0/single", 0),
+            )
+
+    def _node_def_shf(self):
+        nd = self._node_def_gen2()
+        nd["system/internaltrigger/enable"] = NodeInfo(
+            type=NodeType.INT, default=0, handler=self._int_trig_execute
+        )
+        nd["system/swtriggers/0/single"] = NodeInfo(
+            type=NodeType.INT, default=0, handler=self._sw_trig_execute
+        )
+        return nd
+
+
+class DevEmuSHFQABase(DevEmuSHFBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._qa_pipeliner = PipelinerEmu(
@@ -767,6 +839,13 @@ class DevEmuSHFQABase(Gen2Base):
             pipeliner_base="qachannels",
             pipeliner_stop_hook=self._pipeliner_done,
         )
+        self._armed_qa_awgs: set[int] = set()
+
+    def trigger(self):
+        super().trigger()
+        for channel in self._armed_qa_awgs:
+            self._awg_stop_qa(channel)
+        self._armed_qa_awgs.clear()
 
     def _make_measurement_properties(self, job_id=0):
         return {
@@ -774,6 +853,19 @@ class DevEmuSHFQABase(Gen2Base):
             # 1 ms per job, in 0.25 ns time base
             "firstSampleTimestamp": 4_000_000 * job_id,
         }
+
+    def _side_effects_qa(self, channel: int):
+        out_ovr_node = f"qachannels/{channel}/output/overrangecount"
+        out_ovr_opt = self._dev_opts.get(out_ovr_node, None)
+        if out_ovr_opt == _INC_ON_RUN:
+            out_ovr_count = self._get_node(out_ovr_node).value
+            self._set_val(out_ovr_node, out_ovr_count + 1)
+
+        in_ovr_node = f"qachannels/{channel}/input/overrangecount"
+        in_ovr_opt = self._dev_opts.get(in_ovr_node, None)
+        if in_ovr_opt == _INC_ON_RUN:
+            in_ovr_count = self._get_node(in_ovr_node).value
+            self._set_val(in_ovr_node, in_ovr_count + 1)
 
     def _push_readout_result(
         self, channel: int, length: int, averages: int, job_id: int = 0
@@ -805,6 +897,7 @@ class DevEmuSHFQABase(Gen2Base):
         )
 
     def _pipeliner_done(self, channel: int):
+        self._side_effects_qa(channel)
         pipelined_nodes: dict[str, Any] = {}
         for job_id, slot in enumerate(self._qa_pipeliner._pipelined[channel]):
             pipelined_nodes |= slot
@@ -871,14 +964,16 @@ class DevEmuSHFQABase(Gen2Base):
                 )
 
     def _awg_stop_qa(self, channel: int):
+        self._side_effects_qa(channel)
         self._set_val(f"qachannels/{channel}/generator/enable", 0)
         self._measurement_done(channel)
 
-    def _awg_execute_qa(self, node: NodeBase, channel: int):
-        if node.value == 0:
-            return
-        if not self._qa_pipeliner.is_active(channel):
-            self.schedule(delay=0.001, action=self._awg_stop_qa, argument=(channel,))
+    def _awg_enable_qa(self, node: NodeBase, channel: int):
+        if node.value != 0:
+            if not self._qa_pipeliner.is_active(channel):
+                self._armed_qa_awgs.add(channel)
+        elif channel in self._armed_qa_awgs:
+            self._armed_qa_awgs.remove(channel)
 
     def _enable_result_logger(self, node: NodeBase, channel: int, spectroscopy: bool):
         if node.value:
@@ -922,7 +1017,7 @@ class DevEmuSHFQABase(Gen2Base):
             nd[f"qachannels/{channel}/generator/enable"] = NodeInfo(
                 type=NodeType.INT,
                 default=0,
-                handler=partial(self._awg_execute_qa, channel=channel),
+                handler=partial(self._awg_enable_qa, channel=channel),
             )
             for path_part in [
                 "readout/result/length",
@@ -952,6 +1047,13 @@ class DevEmuSHFQABase(Gen2Base):
                     self._enable_result_logger, channel=channel, spectroscopy=False
                 ),
             )
+            nd[f"qachannels/{channel}/output/overrangecount"] = NodeInfo(
+                type=NodeType.INT, default=0
+            )
+            nd[f"qachannels/{channel}/input/overrangecount"] = NodeInfo(
+                type=NodeType.INT, default=0
+            )
+
             for integrator in range(16):
                 nd[f"qachannels/{channel}/readout/result/data/{integrator}/wave"] = (
                     NodeInfo(type=NodeType.VECTOR_COMPLEX)
@@ -978,21 +1080,46 @@ class DevEmuSHFQA(DevEmuSHFQABase):
                 default=self._dev_opts.get("features/options", ""),
             ),
         }
-        nd.update(self._node_def_gen2())
+        nd.update(self._node_def_shf())
         nd.update(self._node_def_qa())
         return nd
 
 
-class DevEmuSHFSGBase(Gen2Base):
+class DevEmuSHFSGBase(DevEmuSHFBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._sg_pipeliner = PipelinerEmu(parent=self, pipeliner_base="sgchannels")
+        self._sg_pipeliner = PipelinerEmu(
+            parent=self,
+            pipeliner_base="sgchannels",
+            pipeliner_stop_hook=self._pipeliner_done,
+        )
+        self._armed_sg_awgs: set[int] = set()
+
+    def trigger(self):
+        super().trigger()
+        for channel in self._armed_sg_awgs:
+            self._awg_stop_sg(channel)
+        self._armed_sg_awgs.clear()
+
+    def _side_effects_sg(self, channel: int):
+        out_ovr_node = f"sgchannels/{channel}/output/overrangecount"
+        out_ovr_opt = self._dev_opts.get(out_ovr_node, None)
+        if out_ovr_opt == _INC_ON_RUN:
+            out_ovr_count = self._get_node(out_ovr_node).value
+            self._set_val(out_ovr_node, out_ovr_count + 1)
+
+    def _pipeliner_done(self, channel: int):
+        self._side_effects_sg(channel)
 
     def _awg_stop_sg(self, channel: int):
+        self._side_effects_sg(channel)
         self._set_val(f"sgchannels/{channel}/awg/enable", 0)
 
-    def _awg_execute_sg(self, node: NodeBase, channel: int):
-        self.schedule(delay=0.001, action=self._awg_stop_sg, argument=(channel,))
+    def _awg_enable_sg(self, node: NodeBase, channel: int):
+        if node.value != 0:
+            self._armed_sg_awgs.add(channel)
+        elif channel in self._armed_sg_awgs:
+            self._armed_sg_awgs.remove(channel)
 
     def _node_def_sg(self) -> dict[str, NodeInfo]:
         nd = self._sg_pipeliner._node_def_pipeliner()
@@ -1000,7 +1127,10 @@ class DevEmuSHFSGBase(Gen2Base):
             nd[f"sgchannels/{channel}/awg/enable"] = NodeInfo(
                 type=NodeType.INT,
                 default=0,
-                handler=partial(self._awg_execute_sg, channel=channel),
+                handler=partial(self._awg_enable_sg, channel=channel),
+            )
+            nd[f"sgchannels/{channel}/output/overrangecount"] = NodeInfo(
+                type=NodeType.INT, default=0
             )
         return nd
 
@@ -1017,7 +1147,7 @@ class DevEmuSHFSG(DevEmuSHFSGBase):
                 default=self._dev_opts.get("features/options", ""),
             ),
         }
-        nd.update(self._node_def_gen2())
+        nd.update(self._node_def_shf())
         nd.update(self._node_def_sg())
         return nd
 
@@ -1034,7 +1164,7 @@ class DevEmuSHFQC(DevEmuSHFQABase, DevEmuSHFSGBase):
                 default=self._dev_opts.get("features/options", "QC6CH"),
             ),
         }
-        nd.update(self._node_def_gen2())
+        nd.update(self._node_def_shf())
         nd.update(self._node_def_qa())
         nd.update(self._node_def_sg())
         return nd
@@ -1131,10 +1261,48 @@ class EmulatorState:
         self._dev_type_by_serial: dict[str, str] = {"ZI": "ZI"}
         self._options: dict[str, dict[str, Any]] = defaultdict(dict)
         self._scheduler = sched.scheduler()
+        self._devices: dict[str, ReferenceType[DevEmu]] = {}
+        self._events: dict[str, dict[str, list[PollEvent]]] = {}
 
     @property
     def scheduler(self) -> sched.scheduler:
         return self._scheduler
+
+    def make_device(self, serial: str) -> tuple[DevEmu, dict[str, list[PollEvent]]]:
+        dev_type = _dev_type_map.get(self.get_device_type(serial), DevEmuNONQC)
+        # if dev_type is None:
+        #     dev_type = _serial_to_device_type(serial)
+        device = self._get_device_by_serial(serial)
+        if device is None:
+            device = dev_type(serial=serial, emulator_state=self)
+            events = defaultdict(list)
+            self._devices[serial] = ref(device)
+            self._events[serial] = events
+        else:
+            assert isinstance(device, dev_type)
+            assert device.serial() == serial
+            events = self._events[serial]
+        return device, events
+
+    def _get_device_by_serial(self, serial: str) -> DevEmu | None:
+        dev_ref = self._devices.get(serial)
+        if dev_ref is None:
+            return None
+        device = dev_ref()
+        if device is None:
+            self._devices.pop(serial)
+        return device
+
+    def send_trigger(self):
+        alive = {}
+        for serial, dev_ref in self._devices.items():
+            dev = dev_ref()
+            if dev is None:
+                continue
+            alive[serial] = dev_ref
+            dev.trigger()
+        if len(alive) < len(self._devices):
+            self._devices = alive
 
     def map_device_type(self, serial: str, type: str):
         self._dev_type_by_serial[serial.upper()] = type.upper()
@@ -1172,17 +1340,11 @@ class ziDAQServerEmulator:
         super().__init__()
         self._devices: dict[str, DevEmu] = {}
 
-    def _device_factory(self, serial: str) -> DevEmu:
-        dev_type = _dev_type_map.get(self._emulator_state.get_device_type(serial))
-        if dev_type is None:
-            dev_type = _serial_to_device_type(serial)
-        return dev_type(serial=serial, emulator_state=self._emulator_state)
-
     def _device_lookup(self, serial: str, create: bool = True) -> DevEmu | None:
         serial = serial.upper()
         device = self._devices.get(serial)
         if device is None and create:
-            device = self._device_factory(serial)
+            device, _ = self._emulator_state.make_device(serial)
             self._devices[serial] = device
         return device
 
@@ -1418,11 +1580,7 @@ class KernelSessionEmulator:
 
     def __init__(self, serial: str, emulator_state: EmulatorState):
         self._emulator_state = emulator_state
-        dev_type = _dev_type_map.get(
-            emulator_state.get_device_type(serial), DevEmuNONQC
-        )
-        self._device = dev_type(serial=serial, emulator_state=emulator_state)
-        self._events: dict[str, list[PollEvent]] = defaultdict(list)
+        self._device, self._events = emulator_state.make_device(serial)
         self._cache: dict[str, Any] = {}
 
     def dev_path(self, path: str) -> str:

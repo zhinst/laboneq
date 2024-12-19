@@ -20,6 +20,10 @@ if TYPE_CHECKING:
     from typing import IO
 
 
+class SerializationNotSupportedError(RuntimeError):
+    pass
+
+
 class SerializeOpener(abc.ABC):
     """An protocol allowing serializers to open files and access options.
 
@@ -84,7 +88,7 @@ def serialize(obj: object, opener: SerializeOpener) -> None:
             A `SerializeOpener` for retrieving options and opening
             files to write objects to.
     """
-    raise TypeError(
+    raise SerializationNotSupportedError(
         f"Type {type(obj)!r} not supported by the serializer [name: {opener.name()}]."
     )
 

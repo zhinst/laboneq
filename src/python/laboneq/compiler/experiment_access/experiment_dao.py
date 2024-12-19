@@ -123,9 +123,6 @@ class ExperimentDAO:
     def device_infos(self) -> List[DeviceInfo]:
         return list(self._data["devices"].values())
 
-    def device_reference_clock(self, device_id):
-        return self._data["devices"][device_id].reference_clock
-
     def device_from_signal(self, signal_id):
         return self.device_info(self.signal_info(signal_id).device.uid)
 

@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from functools import cached_property
-from typing import TYPE_CHECKING, Dict, List, Mapping, Tuple
+from typing import TYPE_CHECKING, Iterator, Mapping
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types import enums as legacy_enums
@@ -53,9 +53,9 @@ def convert_logical_signal(target: legacy_lsg.LogicalSignal) -> LogicalSignal:
 
 
 def convert_logical_signal_groups_with_ls_mapping(
-    logical_signal_groups: Dict[str, legacy_lsg.LogicalSignalGroup],
-) -> Tuple[
-    Dict[str, LogicalSignalGroup], Dict[legacy_lsg.LogicalSignal, LogicalSignal]
+    logical_signal_groups: dict[str, legacy_lsg.LogicalSignalGroup],
+) -> tuple[
+    dict[str, LogicalSignalGroup], dict[legacy_lsg.LogicalSignal, LogicalSignal]
 ]:
     mapping = {}
     legacy_to_new = {}
@@ -145,14 +145,14 @@ class PortConverter:
         self._lookup = {port.path: port for port in self._ports}
 
     @property
-    def ports(self) -> List[Port]:
+    def ports(self) -> list[Port]:
         return self._ports
 
     def legacy_port_by_uid(self, uid: str) -> legacy_device.Port:
         return self._legacy_port_lookup[uid]
 
     @staticmethod
-    def convert_instrument_ports(target: ZIStandardInstrument) -> List[Port]:
+    def convert_instrument_ports(target: ZIStandardInstrument) -> list[Port]:
         if isinstance(target, legacy_instruments.HDAWG):
             return devices.hdawg_ports()
         elif isinstance(target, legacy_instruments.UHFQA):
@@ -176,7 +176,7 @@ class PortConverter:
         else:
             raise_not_implemented(target)
 
-    def ports_by_legacy_uid(self, uid: str) -> List[Port]:
+    def ports_by_legacy_uid(self, uid: str) -> list[Port]:
         port = self.legacy_port_by_uid(uid)
         # The connection is of type "IQ", so it refers to 2 ports
         if port.signal_type == legacy_enums.IOSignalType.IQ:
@@ -192,7 +192,7 @@ class LegacyConnectionFinder:
     def __init__(
         self,
         legacy_device: ZIStandardInstrument,
-        legacy_ls: List[legacy_lsg.LogicalSignal],
+        legacy_ls: list[legacy_lsg.LogicalSignal],
     ):
         self.legacy_device = legacy_device
         self.connections = legacy_device.connections
@@ -201,7 +201,7 @@ class LegacyConnectionFinder:
 
     def connections_from_port_to_local_logical_signal(
         self,
-    ) -> Tuple[legacy_lsg.LogicalSignal, legacy_device.Port]:
+    ) -> Iterator[tuple[legacy_lsg.LogicalSignal, legacy_device.Port]]:
         """Logical signal connections that point to the device."""
         for conn in self.connections:
             if logical_signal := self._legacy_ls_lookup.get(conn.remote_path):
@@ -213,7 +213,7 @@ class LegacyConnectionFinder:
 
     def connections_from_port_to_remote_logical_signal(
         self,
-    ) -> Tuple[legacy_lsg.LogicalSignal, legacy_device.Port]:
+    ) -> Iterator[tuple[legacy_lsg.LogicalSignal, legacy_device.Port]]:
         """Connections that point to the remote logical signal (not into this device)."""
         for conn in self.connections:
             remote_logical_signal = self._legacy_ls_lookup.get(conn.remote_path)
@@ -234,7 +234,9 @@ class LegacyConnectionFinder:
                             f" -> {remote_logical_signal.physical_channel.uid}"
                         )
 
-    def connections_from_port_to_another_device(self) -> Tuple[str, legacy_device.Port]:
+    def connections_from_port_to_another_device(
+        self,
+    ) -> Iterator[tuple[str, legacy_device.Port]]:
         """Connections that go into the another device port."""
         for conn in self.connections:
             remote_logical_signal = self._legacy_ls_lookup.get(conn.remote_path)
@@ -286,16 +288,14 @@ class InstrumentConverter:
             ref_clk.source = convert_reference_clock_source(
                 self._src.reference_clock_source
             )
-        if isinstance(self._src, legacy_instruments.PQSC):
-            ref_clk.frequency = self._src.reference_clock
         return ref_clk
 
     @cached_property
-    def ports(self) -> List[Port]:
+    def ports(self) -> list[Port]:
         return self.port_converter.ports
 
     @cached_property
-    def physical_channels(self) -> List[PhysicalChannel]:
+    def physical_channels(self) -> list[PhysicalChannel]:
         return list(self._physical_channels_map.values())
 
     @cached_property
@@ -318,7 +318,7 @@ class InstrumentConverter:
         return physical_chs
 
     @cached_property
-    def channel_map_entries(self) -> List[ChannelMapEntry]:
+    def channel_map_entries(self) -> list[ChannelMapEntry]:
         channel_map_entries = []
         for (
             logical_signal,
@@ -364,7 +364,7 @@ class _InstrumentsLookup:
 
     def get_instrument(self, uid_or_path: str) -> Instrument:
         try:
-            return self._mapping[uid_or_path]
+            return self._mapping[uid_or_path]  # @IgnoreException
         except KeyError:
             return self._mapping[LogicalSignalPhysicalChannelUID(uid_or_path).group]
 
@@ -400,8 +400,8 @@ def _make_internal_connection_to_same_type_input_port(
 
 
 def make_device_to_device_connections(
-    instrument_converters: List[InstrumentConverter],
-) -> List[SetupInternalConnection]:
+    instrument_converters: list[InstrumentConverter],
+) -> list[SetupInternalConnection]:
     conns = []
     instrument_lookup = _InstrumentsLookup(
         {s.uid: s.instrument for s in instrument_converters}

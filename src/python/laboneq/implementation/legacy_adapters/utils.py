@@ -1,13 +1,13 @@
 # Copyright 2023 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any
+from typing import Any, NoReturn
 
 from laboneq.core import path as legacy_path
 from laboneq.data.path import Separator
 
 
-def raise_not_implemented(obj: Any):
+def raise_not_implemented(obj: Any) -> NoReturn:
     raise NotImplementedError(f"Legacy converter could not convert: {obj} to new type.")
 
 

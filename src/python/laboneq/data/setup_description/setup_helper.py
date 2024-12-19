@@ -35,7 +35,7 @@ class InstrumentHelper:
             group, name = split_path(logical_signal)
             logical_signal = LogicalSignal(name=name, group=group)
         try:
-            return self._ls_to_pc[logical_signal]
+            return self._ls_to_pc[logical_signal]  # @IgnoreException
         except KeyError:
             for instr in self._instruments:
                 for conn in instr.connections:

@@ -22,14 +22,12 @@ def _split_shfqc(device: Instrument) -> Tuple[DeviceInfo, DeviceInfo]:
     shfqa = DeviceInfo(
         uid=device.uid,
         device_type=DeviceInfoType.SHFQA,
-        reference_clock=device.reference_clock.frequency,
         reference_clock_source=device.reference_clock.source,
         is_qc=True,
     )
     shfsg = DeviceInfo(
         uid=device.uid + VIRTUAL_SHFSG_UID_SUFFIX,
         device_type=DeviceInfoType.SHFSG,
-        reference_clock=device.reference_clock.frequency,
         reference_clock_source=device.reference_clock.source,
         is_qc=True,
     )
@@ -40,7 +38,6 @@ def _build_non_shfqc(device: Instrument) -> DeviceInfo:
     return DeviceInfo(
         uid=device.uid,
         device_type=DeviceInfoType(device.device_type.name.lower()),
-        reference_clock=device.reference_clock.frequency,
         reference_clock_source=device.reference_clock.source,
         is_qc=False,
     )

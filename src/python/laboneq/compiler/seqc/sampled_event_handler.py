@@ -72,7 +72,7 @@ def sort_events(events: List[AWGEvent]) -> List[AWGEvent]:
             # Some events do not have a priority, notably PLAY_WAVE.
             # This is required, play must happen after acquire for instance, something
             # that is not captured by the event list.
-            return event1.priority - event2.priority
+            return event1.priority - event2.priority  # @IgnoreException
         except TypeError:
             # legacy ordering based on type only
             later = {

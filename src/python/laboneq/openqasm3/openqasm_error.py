@@ -7,27 +7,18 @@ from openqasm3.ast import Span
 
 
 class OpenQasmException(Exception):
-    """Exception that can properly highlight the issue in the source text
+    """An exception class for OpenQASM related errors in LabOne Q.
 
-    >>> with open(__file__, "r") as f:
-    ...     src = f.read()
-    >>> mark = Span(9, 7 - 1, 9, 24 - 1)
-    >>> raise OpenQasmException(
-    ...     "Highlight the name of the class!", mark, src
-    ... )  # doctest: +ELLIPSIS
-    Traceback (most recent call last):
-      ...
-    laboneq.openqasm3.openqasm_error.OpenQasmException: Highlight the name of the class!
-    |  class OpenQasmException(Exception):
-             ^^^^^^^^^^^^^^^^^
+    The exception can highlight the issue in the source text.
 
-    If the source or the mark are not provided, it defaults to the usual behaviour of
+    If the `source` or the `mark` are not provided, it defaults to the usual behaviour of
     just printing the message.
 
-    >>> raise OpenQasmException("Something went wrong")
-    Traceback (most recent call last):
-      ...
-    laboneq.openqasm3.openqasm_error.OpenQasmException: Something went wrong
+    ```python
+    Unknown identifier 'frame0'
+    |          play(frame0, 10ns);
+               ^
+    ```
     """
 
     def __init__(self, msg=None, mark: Span | None = None, source: str | None = None):

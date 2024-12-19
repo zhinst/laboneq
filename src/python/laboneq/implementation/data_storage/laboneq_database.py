@@ -10,6 +10,9 @@ class DataStore(DataStorageServiceSqliteDict):
     """Default implementation of a data store.
 
     Forwards to `DataStorageServiceSqliteDict`.
+
+    !!! version-changed "Deprecated in version 2.43.0"
+        The integrated sqlite database component is now deprecated and will be removed in a future version.
     """
 
     pass

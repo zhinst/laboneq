@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import operator
-
 import re
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -35,7 +34,7 @@ from pycparser.c_parser import CParser
 
 from laboneq.compiler.common.compiler_settings import EXECUTETABLEENTRY_LATENCY
 from laboneq.core.utilities.prng import PRNG
-from laboneq.data.recipe import Recipe, TriggeringMode, RoutedOutput
+from laboneq.data.recipe import Recipe, RoutedOutput, TriggeringMode
 from laboneq.data.scheduled_experiment import ArtifactsCodegen
 
 if TYPE_CHECKING:
@@ -695,7 +694,7 @@ class SimpleRuntime:
 
         wave_format = ".csv" if known_wave.assigned_index == -1 else ".wave"
 
-        # Supporting only combinations emitted by L1Q compiler, not any possible SeqC
+        # Supporting only combinations emitted by LabOne Q compiler, not any possible SeqC
         # handle also instructions like `playWave(1, "", 2, w1);`
         wave_names = [
             None if arg == '""' else (arg.strip('"') + wave_format)
@@ -1180,7 +1179,7 @@ def preprocess_source(text):
 
     # repeat(n) {...} is not valid C, and topples the parser. Replace it with `for(n;;) {...}`.
     # Note that the result does not correspond to the usual C for-loop semantics.
-    # This is fine though, as we do not emit 'regular' for loops from L1Q.
+    # This is fine though, as we do not emit 'regular' for loops from LabOne Q.
     pattern = r"repeat\s*\((\d+)\)\s*{"
     regex = re.compile(pattern)
 

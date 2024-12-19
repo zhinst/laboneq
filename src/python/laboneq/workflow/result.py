@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
 
-from laboneq.workflow.highlight import pygmentize
+from laboneq.core.utilities.highlight import pygmentize
 from laboneq.workflow.taskview import TaskView
 
 if TYPE_CHECKING:

@@ -90,19 +90,19 @@ class OutputMute:
                 self._device_type,
                 self._generator.deferred_function_calls,
             )
+            self._generator.add_function_call_statement(
+                "setTrigger", [1], deferred=True
+            )
             self._generator.current_loop_stack_generator().add_play_zero_statement(
                 samples - self.delay_engage - self.delay_disengage,
                 self._device_type,
                 self._generator.deferred_function_calls,
             )
             self._generator.add_function_call_statement(
-                "setTrigger", [1], deferred=False
+                "setTrigger", [0], deferred=True
             )
             self._generator.current_loop_stack_generator().add_play_zero_statement(
                 self.delay_disengage,
                 self._device_type,
                 self._generator.deferred_function_calls,
-            )
-            self._generator.add_function_call_statement(
-                "setTrigger", [0], deferred=False
             )

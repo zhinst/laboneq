@@ -5,6 +5,7 @@ from .quantum_element import QuantumElement, QuantumElementSignalMap
 from .qubit import Qubit, QubitParameters
 from .transmon import Transmon, TransmonParameters
 from .qpu import QPU, QuantumPlatform
+from .quantum_operations import QuantumOperations, quantum_operation
 
 __all__ = [
     # Elements
@@ -17,4 +18,7 @@ __all__ = [
     # Platforms
     "QPU",
     "QuantumPlatform",
+    # Operations
+    "QuantumOperations",
+    "quantum_operation",
 ]

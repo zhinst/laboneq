@@ -83,7 +83,6 @@ class ReferenceClock:
     source: ReferenceClockSource | None = (
         None  # `None` means decision is deferred to controller
     )
-    frequency: float | None = None
 
 
 @dataclass(unsafe_hash=True)

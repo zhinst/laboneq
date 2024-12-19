@@ -43,7 +43,6 @@ def dump(experiment_dao: ExperimentDAO):
                 {"$ref": oscillator_id} for oscillator_id in oscillator_ids
             ]
         device_entries[device_entry["id"]] = device_entry
-        reference_clock = experiment_dao.device_reference_clock(device)
 
     retval["devices"] = list(sorted(device_entries.values(), key=lambda x: x["id"]))
 

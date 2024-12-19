@@ -1,7 +1,7 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from laboneq.core.types.enums.io_direction import IODirection
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
@@ -15,9 +15,6 @@ from .zi_standard_instrument import ZIStandardInstrument
 @dataclass(init=True, repr=True, order=True)
 class PQSC(ZIStandardInstrument):
     """Class representing a ZI PQSC instrument."""
-
-    #: The reference clock frequency
-    reference_clock: float = field(default=10e6)
 
     @property
     def ports(self):

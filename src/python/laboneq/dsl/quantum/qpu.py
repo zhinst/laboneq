@@ -183,6 +183,29 @@ class QPU:
             elif hasattr(obj, keys[-1]):
                 setattr(obj, keys[-1], value)
 
+    def override_qubits(
+        self, qubit_parameters: dict[str, dict[str, int | float | str | dict | None]]
+    ) -> QPU:
+        """Override qubit parameters and return a new QPU.
+
+        Arguments:
+            qubit_parameters:
+                The qubits and their parameters that need to be updated passed a dict
+                of the form:
+                    ```python
+                    {qb_uid: {qb_param_name: qb_param_value}}
+                    ```
+        Returns:
+            A new QPU with overridden qubit parameters.
+        Raises:
+            ValueError:
+                If one of the qubits passed is not found in the qpu.
+                If one of the parameters passed is not found in the qubit.
+        """
+        new_qpu = QPU(self.copy_qubits(), self.quantum_operations)
+        new_qpu.update_qubits(qubit_parameters)
+        return new_qpu
+
     def update_qubits(
         self,
         qubit_parameters: dict[str, dict[str, int | float | str | dict | None]],
@@ -236,3 +259,21 @@ class QPU:
         # TODO: Only works on the TunableTransmonQubit from laboneq_applications
         #       currently.
         return max([q.readout_integration_parameters()[1]["length"] for q in qubits])
+
+    def qubit_by_uid(self, uid: str) -> QuantumElement:
+        """Returns qubit by UID.
+
+        Arguments:
+            uid: Unique identifier of the qubit within the QPU.
+
+        Returns:
+            Qubit with given `uid`.
+
+        Raises:
+            KeyError: Qubit does not exist.
+        """
+        try:
+            return self._qubit_map[uid]
+        except KeyError:
+            msg = f"Qubit {uid} does not exist in the QPU."
+            raise KeyError(msg) from None

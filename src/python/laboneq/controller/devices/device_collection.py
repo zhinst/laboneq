@@ -498,7 +498,7 @@ class DeviceCollection:
         async with gather_and_apply(batch_set_multiple) as awaitables:
             for _, device in self.all:
                 awaitables.append(device.on_experiment_begin())
-        await self._update_warning_nodes()
+        await self._update_warning_nodes(init=True)
 
     async def on_after_nt_step(self):
         await self._update_warning_nodes()
@@ -657,11 +657,11 @@ class DeviceCollection:
             updated_daqs[server_uid] = daq
         self._daqs = updated_daqs
 
-    async def _update_warning_nodes(self):
+    async def _update_warning_nodes(self, init: bool = False):
         await self.poll_monitor()
 
         for _, device in self.all:
-            await device.update_warning_nodes()
+            await device.update_warning_nodes(init)
 
     async def fetch_device_errors(self) -> str | None:
         all_errors: list[str] = []

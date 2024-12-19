@@ -11,6 +11,7 @@ from older versions of LabOne Q.
 
 __all__ = [
     "CompiledExperimentSerializer",
+    "CalibrationSerializer",
     "DeviceSetupSerializer",
     "ExperimentSerializer",
     "QPUSerializer",
@@ -27,6 +28,7 @@ __all__ = [
 ]
 
 from .compiled_experiment import CompiledExperimentSerializer
+from .calibration import CalibrationSerializer
 from .device_setup import DeviceSetupSerializer
 from .experiment import ExperimentSerializer
 from .qpu import QPUSerializer
