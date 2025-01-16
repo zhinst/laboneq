@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+from contextlib import asynccontextmanager
 from enum import Enum
 import json
 
@@ -21,9 +22,10 @@ from laboneq.controller.communication import (
 )
 from laboneq.controller.devices.async_support import (
     ConditionsCheckerAsync,
+    DataServerConnection,
+    DataServerConnections,
     _gather,
     _gather_with_timeout,
-    async_check_dataserver_device_compatibility,
     gather_and_apply,
     wait_for_state_change,
 )
@@ -87,6 +89,7 @@ class DeviceCollection:
         self._ignore_version_mismatch = ignore_version_mismatch
         self._timeout_s: float = DEFAULT_TIMEOUT_S
         self._daqs: dict[str, DaqWrapper] = {}
+        self._data_servers = DataServerConnections()
         self._devices: dict[str, DeviceZI] = {}
         self._monitor_started = False
 
@@ -130,6 +133,11 @@ class DeviceCollection:
     def has_qhub(self) -> bool:
         return self._ds.has_qhub
 
+    @asynccontextmanager
+    async def capture_logs(self):
+        async with self._data_servers.capture_logs():
+            yield
+
     def set_timeout(self, timeout_s: float | None):
         self._timeout_s = DEFAULT_TIMEOUT_S if timeout_s is None else timeout_s
 
@@ -160,7 +168,6 @@ class DeviceCollection:
         await self._validate_dataserver_device_fw_compatibility(
             emulator_state=self.emulator_state if do_emulation else None,
             use_async_api=use_async_api,
-            timeout_s=self._timeout_s,
         )
         self._prepare_devices()
         for _, device in self.all:
@@ -171,7 +178,10 @@ class DeviceCollection:
                 timeout_s=self._timeout_s,
             )
         await self.start_monitor()
-        await self.configure_device_setup(reset_devices, use_async_api=use_async_api)
+        async with self.capture_logs():
+            await self.configure_device_setup(
+                reset_devices, use_async_api=use_async_api
+            )
 
     async def _configure_async(
         self,
@@ -545,7 +555,6 @@ class DeviceCollection:
         self,
         emulator_state: EmulatorState | None,
         use_async_api: bool,
-        timeout_s: float,
     ):
         """Validate dataserver and device firmware compatibility."""
 
@@ -557,17 +566,12 @@ class DeviceCollection:
 
         for server_uid, dev_serials in daq_dev_serials.items():
             if use_async_api:
-                server_qualifier = next(
-                    s[1] for s in self._ds.servers if s[0] == server_uid
-                )
-                await async_check_dataserver_device_compatibility(
-                    server_qualifier.host,
-                    server_qualifier.port,
-                    dev_serials,
-                    emulator_state,
-                    self._ignore_version_mismatch,
-                    timeout_s,
-                )
+                data_server_connection = self._data_servers.get(server_uid)
+                if data_server_connection is not None:
+                    data_server_connection.check_dataserver_device_compatibility(
+                        self._ignore_version_mismatch,
+                        dev_serials,
+                    )
             elif emulator_state is None and not self._ignore_version_mismatch:
                 try:
                     check_dataserver_device_compatibility(
@@ -624,10 +628,12 @@ class DeviceCollection:
 
     async def _prepare_daqs(self, do_emulation: bool, use_async_api: bool):
         updated_daqs: dict[str, DaqWrapper] = {}
+        updated_data_servers = DataServerConnections()
         for server_uid, server_qualifier in self._ds.servers:
             existing = self._daqs.get(server_uid)
             if existing is not None and existing.server_qualifier == server_qualifier:
                 updated_daqs[server_uid] = existing
+                updated_data_servers.add(server_uid, self._data_servers.get(server_uid))
                 continue
 
             _logger.info(
@@ -638,6 +644,16 @@ class DeviceCollection:
             daq: DaqWrapper
             if use_async_api:
                 daq = DaqWrapperDummy(server_qualifier)
+                if server_qualifier.port == -1:  # Dummy server
+                    data_server_connection = None
+                else:
+                    data_server_connection = await DataServerConnection.connect(
+                        server_qualifier.host,
+                        server_qualifier.port,
+                        self.emulator_state if do_emulation else None,
+                        self._timeout_s,
+                    )
+                updated_data_servers.add(server_uid, data_server_connection)
             else:
                 _logger.warning(
                     "\n\n"
@@ -656,6 +672,7 @@ class DeviceCollection:
                 await daq.validate_connection()
             updated_daqs[server_uid] = daq
         self._daqs = updated_daqs
+        self._data_servers = updated_data_servers
 
     async def _update_warning_nodes(self, init: bool = False):
         await self.poll_monitor()

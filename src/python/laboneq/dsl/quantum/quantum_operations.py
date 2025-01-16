@@ -449,16 +449,16 @@ class Operation:
         """
         return self._call(args, kw, omit_reserves=True)
 
-    def _duplicate_qubits(self, qubits: list[QuantumElement]) -> list[QuantumElement]:
-        """Return a list of duplicate qubits sorted by uid."""
+    def _duplicate_qubit_uids(self, qubits: list[QuantumElement]) -> list[str]:
+        """Return a list of sorted duplicate qubit uids."""
         seen_uids = set()
-        duplicate_qubits = set()
+        duplicate_qubit_uids = set()
         for q in qubits:
             if q.uid in seen_uids:
-                duplicate_qubits.add(q)
+                duplicate_qubit_uids.add(q.uid)
             else:
                 seen_uids.add(q.uid)
-        return sorted(duplicate_qubits, key=lambda q: q.uid)
+        return sorted(duplicate_qubit_uids)
 
     def _broadcast_call(
         self,
@@ -537,9 +537,9 @@ class Operation:
             )
 
         qubits = _qubits_from_args(args)
-        duplicate_qubits = self._duplicate_qubits(qubits)
-        if duplicate_qubits:
-            duplicate_uids = ", ".join(q.uid for q in duplicate_qubits)
+        duplicate_qubit_uids = self._duplicate_qubit_uids(qubits)
+        if duplicate_qubit_uids:
+            duplicate_uids = ", ".join(duplicate_qubit_uids)
             raise ValueError(
                 f"Quantum operation {self._op_name!r} was given the following"
                 f" non-unique qubits as arguments when being broadcast:"
@@ -612,9 +612,9 @@ class Operation:
                 f" The supported qubit types are: {supported_qubit_types}.",
             )
 
-        duplicate_qubits = self._duplicate_qubits(qubits)
-        if duplicate_qubits:
-            duplicate_uids = ", ".join(q.uid for q in duplicate_qubits)
+        duplicate_qubit_uids = self._duplicate_qubit_uids(qubits)
+        if duplicate_qubit_uids:
+            duplicate_uids = ", ".join(duplicate_qubit_uids)
             raise ValueError(
                 f"Quantum operation {self._op_name!r} was given the following"
                 f" non-unique qubits as arguments: {duplicate_uids}"

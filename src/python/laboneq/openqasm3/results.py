@@ -65,6 +65,21 @@ class ExternResult:
 
 @dataclass(frozen=True)
 class TranspileResult:
+    """A collection of the results of transpiling a QASM program.
+
+    Attributes:
+        section:
+            LabOneQ section.
+        acquire_loop_options:
+            Acquire loop options set in zi pragma.
+        implicit_calibration:
+            Implicit calibration set in zi pragma.
+        variables:
+            Global variables defined in the QASM program.
+
+    """
+
     section: Section
     acquire_loop_options: dict
     implicit_calibration: Calibration
+    variables: dict

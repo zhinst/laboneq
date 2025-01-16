@@ -443,10 +443,10 @@ def generate_device_setup(
             device_setup.add_connections(
                 current_readout["device"],
                 create_connection(
-                    to_signal=f"{qubit}/measure_line", ports=current_readout["port_out"]
+                    to_signal=f"{qubit}/measure", ports=current_readout["port_out"]
                 ),
                 create_connection(
-                    to_signal=f"{qubit}/acquire_line", ports=current_readout["port_in"]
+                    to_signal=f"{qubit}/acquire", ports=current_readout["port_in"]
                 ),
             )
             current_multiplex += 1
@@ -460,14 +460,14 @@ def generate_device_setup(
             device_setup.add_connections(
                 current_drive["device"],
                 create_connection(
-                    to_signal=f"{qubit}/drive_line", ports=current_drive["port"]
+                    to_signal=f"{qubit}/drive", ports=current_drive["port"]
                 ),
             )
             if multiplex_drive_lines:
                 device_setup.add_connections(
                     current_drive["device"],
                     create_connection(
-                        to_signal=f"{qubit}/drive_line_ef", ports=current_drive["port"]
+                        to_signal=f"{qubit}/drive_ef", ports=current_drive["port"]
                     ),
                 )
             drive_index += 1
@@ -481,7 +481,7 @@ def generate_device_setup(
                 device_setup.add_connections(
                     current_flux["device"],
                     create_connection(
-                        to_signal=f"{qubit}/flux_line", ports=current_flux["port"]
+                        to_signal=f"{qubit}/flux", ports=current_flux["port"]
                     ),
                 )
                 flux_index += 1

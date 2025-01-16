@@ -349,18 +349,17 @@ class Controller:
                     response_waiter.remaining_str(),
                 )
 
-        # Standalone workaround: The device is triggering itself,
-        # thus split the execution into AWG trigger arming and triggering
-        async with gather_and_apply(batch_set_multiple) as awaitables:
-            for _, device in self._devices.followers:
-                awaitables.append(device.collect_internal_start_execution_nodes())
-
     async def _execute_one_step_leaders(self, with_pipeliner: bool):
+        if self._use_async_api:
+            # With async API the trigger nodes are set in _wait_execution_to_stop
+            return
+
         _logger.debug("Settings nodes to start on leaders")
+
         async with gather_and_apply(batch_set_multiple) as awaitables:
-            for _, device in self._devices.leaders:
+            for _, device in self._devices.all:
                 awaitables.append(
-                    device.collect_execution_nodes(with_pipeliner=with_pipeliner)
+                    device.collect_start_trigger_nodes(with_pipeliner=with_pipeliner)
                 )
 
     async def _wait_execution_to_stop(
@@ -379,21 +378,42 @@ class Controller:
         )  # +10% and fixed 1sec guard time
 
         if self._use_async_api:
+            target_devs = [
+                device
+                for _, device in self._devices.all
+                if isinstance(device, DeviceBase)
+            ]
+            response_waiters = await _gather(
+                *(
+                    device.make_waiter_for_execution_done(
+                        acquisition_type=acquisition_type,
+                        with_pipeliner=rt_execution_info.with_pipeliner,
+                        timeout_s=guarded_wait_time,
+                    )
+                    for device in target_devs
+                )
+            )
+            await _gather(
+                *(
+                    device.collect_start_trigger_nodes(
+                        with_pipeliner=rt_execution_info.with_pipeliner
+                    )
+                    for device in target_devs
+                )
+            )
             await _gather(
                 *(
                     device.wait_for_execution_done(
-                        acquisition_type=acquisition_type,
-                        with_pipeliner=rt_execution_info.with_pipeliner,
-                        min_wait_time=min_wait_time,
+                        response_waiter=response_waiter,
                         timeout_s=guarded_wait_time,
+                        min_wait_time=min_wait_time,
                     )
-                    for _, device in self._devices.followers
-                    if isinstance(device, DeviceBase)
+                    for device, response_waiter in zip(target_devs, response_waiters)
                 )
             )
         else:
             response_waiter = ResponseWaiter()
-            for _, device in self._devices.followers:
+            for _, device in self._devices.all:
                 response_waiter.add_with_msg(
                     target=device,
                     conditions=device.conditions_for_execution_done(
@@ -565,34 +585,35 @@ class Controller:
         await self._connect_async()
         self._prepare_result_shapes()
         protected_session._set_experiment_results(self._results)
-        try:
-            await self._initialize_devices()
-            await self._devices.on_experiment_begin()
-
-            # Ensure no side effects from the previous execution in the same session
-            self._current_waves.clear()
-            self._nodes_from_artifact_replacement.clear()
-
-            _logger.info("Starting near-time execution...")
+        async with self._devices.capture_logs():
             try:
-                await NearTimeRunner(
-                    controller=self,
-                    protected_session=protected_session,
-                ).run(self._recipe_data.execution)
-            except AbortExecution:
-                # eat the exception
-                pass
-            _logger.info("Finished near-time execution.")
-        except LabOneQControllerException:
-            # Report device errors if any - it maybe useful to diagnose the original exception
-            device_errors = await self._devices.fetch_device_errors()
-            if device_errors is not None:
-                _logger.warning(device_errors)
-            raise
-        finally:
-            # Ensure that the experiment run time is not included in the idle timeout for the connection check.
-            self._last_connect_check_ts = time.monotonic()
-            await self._devices.on_experiment_end()
+                await self._initialize_devices()
+                await self._devices.on_experiment_begin()
+
+                # Ensure no side effects from the previous execution in the same session
+                self._current_waves.clear()
+                self._nodes_from_artifact_replacement.clear()
+
+                _logger.info("Starting near-time execution...")
+                try:
+                    await NearTimeRunner(
+                        controller=self,
+                        protected_session=protected_session,
+                    ).run(self._recipe_data.execution)
+                except AbortExecution:
+                    # eat the exception
+                    pass
+                _logger.info("Finished near-time execution.")
+            except LabOneQControllerException:
+                # Report device errors if any - it maybe useful to diagnose the original exception
+                device_errors = await self._devices.fetch_device_errors()
+                if device_errors is not None:
+                    _logger.warning(device_errors)
+                raise
+            finally:
+                # Ensure that the experiment run time is not included in the idle timeout for the connection check.
+                self._last_connect_check_ts = time.monotonic()
+                await self._devices.on_experiment_end()
 
     def results(self) -> ExperimentResults:
         return self._results

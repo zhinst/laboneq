@@ -148,11 +148,13 @@ class DeviceLeaderBase(DeviceBase):
 
         nc.add("triggers/out/0/enable", 1, cache=False)
 
-        try:
-            # Select the first ZSYNC port from downlinks.
-            first_valid_link_address = next(
-                (s for s in self._downlinks.keys() if s.startswith("ZSYNCS"))
-            )
+        # Select the first ZSYNC port from downlinks.
+        first_valid_link_address = next(
+            (s for s in self._downlinks.keys() if s.startswith("ZSYNCS")),
+            None,
+        )
+        # Do not touch any setting if there is no valid ZSYNC connection
+        if first_valid_link_address is not None:
             _, p_addr_str = first_valid_link_address.split("/")
             p_addr = int(p_addr_str)
 
@@ -161,9 +163,6 @@ class DeviceLeaderBase(DeviceBase):
             # `p_addr`. No valid connection -> no ZSYNC signal -> no trigger output
             # -> (probably nothing on the scope because trigger out is typically connected to a scope)
             nc.add("triggers/out/0/port", p_addr, cache=False)
-        except StopIteration:
-            # Do not touch any setting if there is no valid ZSYNC connection
-            pass
 
         nc.add("execution/enable", 1, cache=False)
 

@@ -1272,7 +1272,7 @@ class EmulatorState:
         dev_type = _dev_type_map.get(self.get_device_type(serial), DevEmuNONQC)
         # if dev_type is None:
         #     dev_type = _serial_to_device_type(serial)
-        device = self._get_device_by_serial(serial)
+        device = self.get_device_by_serial(serial)
         if device is None:
             device = dev_type(serial=serial, emulator_state=self)
             events = defaultdict(list)
@@ -1284,7 +1284,7 @@ class EmulatorState:
             events = self._events[serial]
         return device, events
 
-    def _get_device_by_serial(self, serial: str) -> DevEmu | None:
+    def get_device_by_serial(self, serial: str) -> DevEmu | None:
         dev_ref = self._devices.get(serial)
         if dev_ref is None:
             return None
@@ -1572,6 +1572,7 @@ class MockDataQueue:
         pass
 
 
+DUMP_TO_NODE_LOGGER_FROM_EMULATOR = False
 ASYNC_EMULATE_CACHE = False
 
 
@@ -1603,6 +1604,27 @@ class KernelSessionEmulator:
     ) -> list[str]:
         self._progress_scheduler()
         return []
+
+    def _log_to_node(self, method: str, path: str, value: Any):
+        zi_dev = self._emulator_state.get_device_by_serial("ZI")
+        if zi_dev is not None:
+            if value is None:
+                log_value = ""
+            elif isinstance(value, (int, float)):
+                log_value = f" value={value}"
+            elif isinstance(value, str):
+                if path.endswith("/data"):
+                    log_value = ' value="vector (?? B)"'
+                else:
+                    log_value = f" value={value}"
+            elif isinstance(value, (np.ndarray, bytes)):
+                log_value = ' value="vector (?? B)"'
+            else:
+                log_value = ' value="<unexpected type>"'
+            zi_dev.set(
+                "debug/log",
+                f'tracer="blocks_out" path="{path}" method="{method}"{log_value}',
+            )
 
     def _log_for_testing(self, value: MockAnnotatedValue):
         def _equal(cached, actual) -> bool:
@@ -1653,9 +1675,11 @@ class KernelSessionEmulator:
         else:
             log_repr = None
         if log_repr is not None:
-            _node_logger.debug(
-                f"set {value.path} {log_repr}", extra={"node_value": value.value}
-            )
+            if DUMP_TO_NODE_LOGGER_FROM_EMULATOR:
+                _node_logger.debug(
+                    f"set {value.path} {log_repr}", extra={"node_value": value.value}
+                )
+            self._log_to_node("set", value.path, value.value)
 
     async def set(self, value: MockAnnotatedValue) -> MockAnnotatedValue:
         self._progress_scheduler()
@@ -1678,7 +1702,9 @@ class KernelSessionEmulator:
         path: str,
     ) -> MockAnnotatedValue:
         self._progress_scheduler()
-        _node_logger.debug(f"get {path} -")
+        if DUMP_TO_NODE_LOGGER_FROM_EMULATOR:
+            _node_logger.debug(f"get {path} -")
+        self._log_to_node("get", path, None)
         value = self._device.get(self.dev_path(path))
         return make_annotated_value(path=path, value=value)
 
@@ -1688,7 +1714,7 @@ class KernelSessionEmulator:
         for ev in events:
             self._events[ev.path].append(ev.value)
 
-    async def subscribe(self, path: str, get_initial_value: bool = False):
+    async def subscribe(self, path: str, get_initial_value: bool = False, **kwargs):
         self._progress_scheduler()
         dev_path = self.dev_path(path)
         self._device.subscribe(dev_path)

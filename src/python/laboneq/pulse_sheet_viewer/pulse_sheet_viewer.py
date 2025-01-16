@@ -16,6 +16,7 @@ import flask.cli
 import numpy as np
 from flask import Flask, request
 
+import laboneq.core.path as qct_path
 from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.core.utilities.laboneq_compile import laboneq_compile
 from laboneq.simulator.output_simulator import OutputSimulator
@@ -55,21 +56,11 @@ def _fill_maybe_missing_information(
     return compiled_experiment
 
 
-def interactive_psv(
+def _interactive_psv_app(
     compiled_experiment: CompiledExperiment,
-    inline=True,
-    max_simulation_length: float | None = None,
-    max_events_to_publish: int = 1000,
+    max_simulation_length: float | None,
+    max_events_to_publish: int,
 ):
-    """Start an interactive pulse sheet viewer.
-
-    Args:
-        compiled_experiment: The compiled experiment to show.
-        inline: If `True`, displays the pulse sheet viewer in the Notebook.
-        max_simulation_length: Displays signals up to this time in seconds.
-            No signals beyond this time are shown. Default: 10ms.
-        max_events_to_publish: Number of events to show
-    """
     name = compiled_experiment.experiment.name
     compiled_experiment = _fill_maybe_missing_information(
         compiled_experiment, max_events_to_publish
@@ -91,7 +82,10 @@ def interactive_psv(
         signal_id = request.args.get("signal_id")
         start = float(request.args.get("start"))
         stop = float(request.args.get("stop"))
-        lsg, ls = exp.signals[signal_id].mapped_logical_signal_path.split("/")[2:]
+        signal_path = qct_path.remove_logical_signal_prefix(
+            exp.signals[signal_id].mapped_logical_signal_path
+        )
+        lsg, ls = qct_path.split(signal_path)
         pc = ds.logical_signal_groups[lsg].logical_signals[ls].physical_channel
         snip = simulation.get_snippet(pc, start, stop - start)
         return {
@@ -105,6 +99,28 @@ def interactive_psv(
     @app.route("/psv.html")
     def psv_html():
         return html_text
+
+    return app
+
+
+def interactive_psv(
+    compiled_experiment: CompiledExperiment,
+    inline=True,
+    max_simulation_length: float | None = None,
+    max_events_to_publish: int = 1000,
+):
+    """Start an interactive pulse sheet viewer.
+
+    Args:
+        compiled_experiment: The compiled experiment to show.
+        inline: If `True`, displays the pulse sheet viewer in the Notebook.
+        max_simulation_length: Displays signals up to this time in seconds.
+            No signals beyond this time are shown. Default: 10ms.
+        max_events_to_publish: Number of events to show
+    """
+    app = _interactive_psv_app(
+        compiled_experiment, max_simulation_length, max_events_to_publish
+    )
 
     with socketserver.TCPServer(("127.0.0.1", 0), None) as s:
         free_port = s.server_address[1]

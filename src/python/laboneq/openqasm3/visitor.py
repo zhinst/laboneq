@@ -24,7 +24,7 @@ from laboneq.dsl.enums import (
     SectionAlignment,
 )
 from laboneq.dsl.experiment import Section, Sweep
-from laboneq.dsl.quantum.quantum_element import QuantumElement, SignalType
+from laboneq.dsl.quantum.quantum_element import QuantumElement
 from laboneq.openqasm3.expression import eval_expression, eval_lvalue
 from laboneq.openqasm3.namespace import (
     Array,
@@ -114,8 +114,8 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
         # Default operations used when supplied `qops` does not implement them.
         self._default_ops = _DefaultOperations()
         # NOTE: The workaround of extern port declaration in the importer
-        # and declaration of hardware qubits inject info into the namespace
-        # When these are removed, the namespace should be created internally.
+        # and declaration of hardware qubits inject info into the namespace.
+        # When these workaround are removed, the namespace should be created internally.
         self.namespace = (
             NamespaceStack() if namespace is None else copy.deepcopy(namespace)
         )
@@ -131,54 +131,60 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
     ):
         self._program_gates[(name, tuple(qubit_names))] = section_factory
 
-    def _get_port(self, port: str):
+    def _retrieve_gate(self, loc: ast.Span, name: str, qubits: tuple[str, list[str]]):
+        """
+        Retrieve a gate from the default operations.
+        """
         try:
-            return self.supplied_externs[port]
+            if self.qops and name in self.qops:
+                return self.qops[name]
+            return self._default_ops[name]
         except KeyError:
-            msg = f"Port {port!r} not provided."
-            raise OpenQasmException(msg) from None
-
-    def _qubit_name_from_frame(self, frame):
-        signal_path = self._get_port(frame.port)
-        for name, qubit in self.qubits.items():
-            if signal_path in qubit.signals.values():
-                return name
+            msg = f"Quantum operation '{name}' for qubit(s) {qubits} not found."
+            raise OpenQasmException(msg, mark=loc) from None
 
     def _call_gate(
-        self, loc: ast.Span, name: str, qubits: tuple[str, ...], args=None, kwargs=None
-    ) -> Section:
+        self,
+        loc: ast.Span,
+        name: str,
+        qubits: tuple[str],
+        args=None,
+        kwargs=None,
+    ) -> Section | list[Section]:
+        """
+        Return a list of sections for broadcasting operations.
+        Otherwise, return a single section.
+        """
         args = args or ()
         kwargs = kwargs or {}
-        # Program gates priority over actual gates
         if (name, qubits) in self._program_gates:
             return self._program_gates[(name, qubits)](*args, **kwargs)
-        if self.qops is None:
-            raise OpenQasmException(
-                "QuantumOperations not supplied while gates are used in the program."
-            )
+        gate_callable = self._retrieve_gate(loc, name, qubits)
+        qubit_args = []
         try:
-            gate_callable = (
-                self.qops[name] if name in self.qops else self._default_ops[name]
-            )
+            for x in qubits:
+                if isinstance(x, (list, tuple)):
+                    qubit_args.append([self.qubits[qubit] for qubit in x])
+                else:
+                    qubit_args.append(self.qubits[x])
         except KeyError:
-            err_msg = f"Gate '{name}' for qubit(s) {qubits} not found."
+            err_msg = f"Qubit(s) {qubits} not supplied."
             raise OpenQasmException(err_msg, mark=loc) from None
-        try:
-            qubit_args = [self.qubits[x] for x in qubits]
-        except KeyError:
-            err_msg = f"Gate '{name}' for qubit(s) {qubits} not found."
-            raise OpenQasmException(err_msg, mark=loc) from None
+
         return gate_callable(*qubit_args, *args, **kwargs)
 
-    def _resolved_qubit_names(self, qubits_or_frames):
+    def _has_frame(self, qubits_or_frames) -> bool:
+        return any(isinstance(f, Frame) for f in qubits_or_frames)
+
+    def _frame_to_qubit(self, qubits_or_frames) -> list[str]:
         if all(isinstance(f, Frame) for f in qubits_or_frames):
-            names = [self._qubit_name_from_frame(frame) for frame in qubits_or_frames]
+            return [
+                self.namespace.lookup(frame.port).qubit for frame in qubits_or_frames
+            ]
         elif any(isinstance(f, Frame) for f in qubits_or_frames):
             msg = "Cannot mix frames and qubits."
             raise OpenQasmException(msg)
-        else:
-            names = [q.canonical_name for q in qubits_or_frames]
-        return names
+        return None
 
     def generic_visit(self, node: QASMNode, context=None):
         raise OpenQasmException(
@@ -248,13 +254,16 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
     def visit_Pragma(self, node: QASMNode):
         return self._handle_pragma(node)
 
-    def transpile(
+    def _transpile(
         self,
         parent: Union[ast.Program, ast.Box, ast.ForInLoop],
         uid_hint="",
-    ) -> TranspileResult:
-        sect = Section(uid=id_generator(uid_hint))
+    ) -> Section | None:
+        """Transpile an OpenQASM construct into a section.
 
+        Returns:
+            Built Section or None in case of no-operations.
+        """
         if isinstance(parent, ast.Program):
             body = parent.statements
         elif isinstance(
@@ -267,12 +276,20 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
         else:
             msg = f"Unsupported block type {type(parent)!r}"
             raise OpenQasmException(msg, mark=parent.span)
-        visitor = self
+        sect_children = []
         try:
             for child in body:
-                subsect = visitor.visit(child)
-                if subsect is not None:
-                    sect.add(subsect)
+                subsect = self.visit(child)
+                if isinstance(subsect, Section):
+                    if subsect.children:
+                        sect_children.append(subsect)
+                elif isinstance(subsect, list):
+                    sect_children.extend(subsect)
+                elif subsect is not None:
+                    raise RuntimeError(
+                        "Handlers must return Section, a list of Section or None"
+                    )
+
         except OpenQasmException as e:
             if e.mark is None:
                 e.mark = child.span
@@ -280,11 +297,23 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
         except Exception as e:
             msg = f"Failed to process statement: {e!r}"
             raise OpenQasmException(msg, mark=child.span) from e
+        if sect_children:
+            return Section(uid=id_generator(uid_hint), children=sect_children)
+        return None
 
+    def transpile(
+        self,
+        parent: Union[ast.Program, ast.Box, ast.ForInLoop],
+        uid_hint="",
+    ) -> TranspileResult:
+        sect = self._transpile(parent, uid_hint=uid_hint) or Section(
+            uid=id_generator(uid_hint)
+        )
         return TranspileResult(
             sect,
             acquire_loop_options=self.acquire_loop_options,
             implicit_calibration=self.implicit_calibration,
+            variables=self.namespace.current.local_scope,
         )
 
     def _handle_qubit_declaration(self, statement: ast.QubitDeclaration) -> None:
@@ -347,7 +376,6 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
                 msg = "Frame type initializer must be a 'newframe' function call."
                 raise OpenQasmException(msg, mark=statement.span)
             name = statement.identifier.name
-            port = statement.init_expression.arguments[0].name
             freq = eval_expression(
                 statement.init_expression.arguments[1],
                 namespace=self.namespace,
@@ -358,7 +386,8 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
                 namespace=self.namespace,
                 type_=(float, SweepParameter),
             )
-            self.namespace.current.declare_frame(name, port, freq, phase)
+            port = self.namespace.lookup(statement.init_expression.arguments[0].name)
+            self.namespace.current.declare_frame(name, port.canonical_name, freq, phase)
         elif isinstance(statement.type, ast.WaveformType):
             # waveforms can be declared only in cal blocks.
             value = eval_expression(
@@ -369,6 +398,19 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
                 # We need to handle this better.
             )
             self.namespace.current.declare_waveform(name, value)
+        elif isinstance(statement.type, ast.PortType):
+            try:
+                signal_path = self.supplied_externs[name]
+            except KeyError:
+                msg = f"Port {name!r} not provided."
+                raise OpenQasmException(msg) from None
+            for qname, qubit in self.qubits.items():
+                if signal_path in qubit.signals.values():
+                    self.namespace.current.declare_port(name, qname, signal_path)
+                    break
+            else:
+                msg = f"Port {name} maps to non-existed signal {signal_path}."
+                raise ValueError(msg)
         else:
             # TODO: We should set a clear boundary on what types are supported here
             # else should raise an exception
@@ -452,6 +494,28 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
             e.mark = statement.span
             raise
 
+    def _process_qubit_register(self, qubits) -> tuple[str | list[str]]:
+        qubit_names = []
+        _qubit_register_length = None
+        for qubit in qubits:
+            if isinstance(qubit, list):
+                # qubit register
+                qubit_names.append(tuple([q.canonical_name for q in qubit]))
+                if len(qubit) != _qubit_register_length:
+                    if _qubit_register_length is None:
+                        _qubit_register_length = len(qubit)
+                    else:
+                        msg = "Qubit registers must have the same length."
+                        raise ValueError(msg)
+            elif isinstance(qubit, QubitRef):
+                qubit_names.append(qubit.canonical_name)
+            else:
+                raise TypeError(f"Qubit expected, got '{type(qubit).__name__}'")
+
+        # TODO: Remove this restriction.
+        # qubit_names must be a tuple to be hashable for retrieving program_gates.
+        return tuple(qubit_names)
+
     def _handle_quantum_gate(self, statement: ast.QuantumGate):
         args = tuple(
             eval_expression(arg, namespace=self.namespace)
@@ -463,34 +527,44 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
         if not isinstance(statement.name, ast.Identifier):
             msg = "Gate name must be an identifier."
             raise OpenQasmException(msg, mark=statement.span)
+
         name = statement.name.name
-        qubit_names = []
-        for q in statement.qubits:
-            qubit = eval_expression(q, namespace=self.namespace)
-            try:
-                qubit_names.append(qubit.canonical_name)
-            except AttributeError as e:
-                msg = f"Qubit expected, got '{type(qubit).__name__}'"
-                raise OpenQasmException(msg, mark=q.span) from e
-        qubit_names = tuple(qubit_names)
-        section = self._call_gate(statement.span, name, qubit_names, args=args)
-        return section
+        qubits = [
+            eval_expression(q, namespace=self.namespace) for q in statement.qubits
+        ]
+        try:
+            qubit_names = self._process_qubit_register(qubits)
+        except (ValueError, TypeError) as e:
+            raise OpenQasmException(str(e), mark=statement.span) from None
+        return self._call_gate(
+            statement.span,
+            name,
+            qubit_names,
+            args=args,
+        )
 
     def _handle_box(self, statement: ast.Box):
         if statement.duration:
             raise ValueError("Box duration not yet supported.")
         with self.namespace.new_scope():
-            return self.transpile(statement, uid_hint="box").section
+            return self._transpile(statement, uid_hint="box")
 
     def _handle_barrier(self, statement: ast.QuantumBarrier):
+        # barrier can be applied to either qubits or frames
         qubits_or_frames = [
-            eval_expression(qubit, namespace=self.namespace)
-            for qubit in statement.qubits
+            eval_expression(q, namespace=self.namespace) for q in statement.qubits
         ]
-        # Avoid duplicate qubits due to openpulse frames
-        qubits = tuple(dict.fromkeys(self._resolved_qubit_names(qubits_or_frames)))
+        if self._has_frame(qubits_or_frames):
+            # Avoid duplicate qubits due to openpulse frames
+            qubits = tuple(dict.fromkeys(self._frame_to_qubit(qubits_or_frames)))
+        else:
+            qubits = self._process_qubit_register(qubits_or_frames)
         # If no arguments are given, reserve all qubits
-        return self._call_gate(statement.span, "barrier", qubits or tuple(self.qubits))
+        return self._call_gate(
+            statement.span,
+            "barrier",
+            qubits or tuple(self.qubits),
+        )
 
     def _handle_include(self, statement: ast.Include) -> None:
         if statement.filename != "stdgates.inc":
@@ -567,7 +641,7 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
 
     def _handle_calibration(self, statement: ast.CalibrationStatement):
         try:
-            return self.transpile(statement, uid_hint="calibration").section
+            return self._transpile(statement, uid_hint="calibration")
         except OpenQasmException as e:
             # Spans on exceptions from inside cal and defcal blocks
             # are relative to the cal block and not the original qasm
@@ -618,7 +692,7 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
         raise OpenQasmException(msg)
 
     def _handle_play(self, expr: ast.FunctionCall):
-        frame = eval_expression(expr.arguments[0], namespace=self.namespace)
+        frame: Frame = eval_expression(expr.arguments[0], namespace=self.namespace)
         arg1 = expr.arguments[1]
         if isinstance(arg1, ast.FunctionCall):
             if arg1.name.name == "scale":
@@ -631,10 +705,9 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
             waveform = arg1.name
             amplitude = None
         pulse = self._get_waveform(waveform)
-        drive_line = self._get_port(frame.port)
         sect = Section(uid=id_generator(f"play_{frame.port}"))
         sect.play(
-            signal=drive_line,
+            signal=self.namespace.lookup(frame.port).value,
             pulse=pulse,
             amplitude=amplitude,
         )
@@ -643,7 +716,7 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
     def _handle_set_frequency(self, expr: ast.FunctionCall):
         assert len(expr.arguments) == 2
         frame = eval_expression(expr.arguments[0], namespace=self.namespace)
-        signal = self._get_port(frame.port)
+        signal = self.namespace.lookup(frame.port).value
         freq = eval_expression(
             expr.arguments[1],
             namespace=self.namespace,
@@ -677,9 +750,23 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
         ]
         # OpenPulse allows for delaying only some of a qubit's signals
         selective_frame_delay = False
-        if all(isinstance(f, Frame) for f in qubits_or_frames):
+
+        if self._has_frame(qubits_or_frames):
+            # Avoid duplicate qubits due to openpulse frames
             selective_frame_delay = True
-        qubit_names = self._resolved_qubit_names(qubits_or_frames)
+            qubit_names = self._frame_to_qubit(qubits_or_frames)
+        else:
+            nested_qubit_names = self._process_qubit_register(qubits_or_frames)
+            # no broadcasting for delay operation
+            # so we need to flatten the qubit names
+            qubit_names = []
+            for qubit in nested_qubit_names:
+                if isinstance(qubit, (list, tuple)):
+                    qubit_names.extend(qubit)
+                else:
+                    qubit_names.append(qubit)
+        qubit_names = tuple(dict.fromkeys(qubit_names))
+
         qubits_str = "_".join(qubit_names)
         delay_section = Section(uid=id_generator(f"{qubits_str}_delay"))
         for qubit in qubit_names:
@@ -692,14 +779,13 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
             if selective_frame_delay:
                 for frame in qubits_or_frames:
                     delay_section.delay(
-                        signal=self._get_port(frame.port),
+                        signal=self.namespace.lookup(frame.port).value,
                         time=duration,
                     )
             else:
-                for role, sig in dsl_qubit.experiment_signals(with_types=True):
-                    if role != SignalType.DRIVE:
-                        continue
-                    delay_section.delay(sig.mapped_logical_signal_path, time=duration)
+                # TODO: Use the quantum operation delay
+                if "drive" in dsl_qubit.signals:
+                    delay_section.delay(dsl_qubit.signals["drive"], time=duration)
         if not delay_section.children:
             msg = (
                 f"Unable to apply delay to {qubit_names} due to missing drive signals."
@@ -741,11 +827,11 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
         if condition:
             if if_block:
                 with self.namespace.new_scope():
-                    return self.transpile(if_block, uid_hint="if_block").section
+                    return self._transpile(if_block, uid_hint="if_block")
         else:
             if else_block:
                 with self.namespace.new_scope():
-                    return self.transpile(else_block, uid_hint="else_block").section
+                    return self._transpile(else_block, uid_hint="else_block")
 
     def _handle_for_in_loop(self, statement: ast.ForInLoop):
         loop_var = statement.identifier.name
@@ -790,8 +876,9 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
 
         with self.namespace.new_scope():
             self.namespace.current.declare_classical_value(loop_var, sweep_param)
-            subsect = self.transpile(statement, uid_hint="block").section
-            sweep.add(subsect)
+            subsect = self._transpile(statement, uid_hint="block")
+            if isinstance(subsect, Section):
+                sweep.add(subsect)
 
         return sweep
 

@@ -426,7 +426,11 @@ class DeviceZI(INodeMonitorProvider):
     ) -> dict[str, tuple[Any, str]]:
         return {}
 
-    async def collect_internal_start_execution_nodes(self) -> list[DaqNodeSetAction]:
+    async def collect_start_trigger_nodes(
+        self, with_pipeliner: bool
+    ) -> list[DaqNodeSetAction]:
+        if self.is_leader():
+            return await self.collect_execution_nodes(with_pipeliner=with_pipeliner)
         return []
 
     def conditions_for_execution_done(
@@ -1473,7 +1477,7 @@ class DeviceBase(DeviceZI):
         rw.add_with_msg(
             nodes=self.conditions_for_execution_ready(with_pipeliner=with_pipeliner),
         )
-        await rw.prepare(get_initial_value=True)
+        await rw.prepare()
         await self.collect_execution_nodes(with_pipeliner=with_pipeliner)
         failed_nodes = await rw.wait()
         if len(failed_nodes) > 0:
@@ -1484,22 +1488,29 @@ class DeviceBase(DeviceZI):
                 "\n".join(failed_nodes),
             )
 
-    async def wait_for_execution_done(
+    async def make_waiter_for_execution_done(
         self,
         acquisition_type: AcquisitionType,
         with_pipeliner: bool,
-        min_wait_time: float,
         timeout_s: float,
     ):
-        rw = ResponseWaiterAsync(api=self._api, timeout_s=timeout_s)
-        rw.add_with_msg(
+        response_waiter = ResponseWaiterAsync(api=self._api, timeout_s=timeout_s)
+        response_waiter.add_with_msg(
             nodes=self.conditions_for_execution_done(
                 acquisition_type=acquisition_type,
                 with_pipeliner=with_pipeliner,
             ),
         )
-        await rw.prepare(get_initial_value=True)
-        failed_nodes = await rw.wait()
+        await response_waiter.prepare()
+        return response_waiter
+
+    async def wait_for_execution_done(
+        self,
+        response_waiter: ResponseWaiterAsync,
+        timeout_s: float,
+        min_wait_time: float,
+    ):
+        failed_nodes = await response_waiter.wait()
         if len(failed_nodes) > 0:
             _logger.warning(
                 (

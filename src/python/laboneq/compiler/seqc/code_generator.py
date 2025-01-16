@@ -394,7 +394,6 @@ class CodeGenerator(ICodeGenerator):
             event_list,
             {p.uid: p for p in self._ir.pulse_defs},
         )
-        self.gen_waves()
 
     def get_output(self):
         return SeqCGenOutput(
@@ -486,7 +485,7 @@ class CodeGenerator(ICodeGenerator):
                 device_long_readout_signals.append(signal_id)
         self._append_to_pulse_map(signature_pulse_map, sig_string)
 
-    def gen_waves(self):
+    def _gen_waves(self):
         for awg in self._awgs.values():
             # Handle integration weights separately
             for signal_obj in awg.signals:
@@ -791,6 +790,7 @@ class CodeGenerator(ICodeGenerator):
         for awg, target_fb_register in tgt_feedback_regs.items():
             feedback_reg_config = self._feedback_register_config[awg]
             feedback_reg_config.target_feedback_register = target_fb_register
+        self._gen_waves()
 
     @staticmethod
     def _calc_global_awg_params(awg: AWGInfo) -> tuple[float, float]:

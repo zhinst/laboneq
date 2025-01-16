@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-import dataclasses
+import attrs
 
 from laboneq.dsl.quantum import QuantumElement
 from laboneq.serializers.base import VersionedClassSerializer
@@ -33,11 +33,11 @@ class QuantumElementSerializer(VersionedClassSerializer[QuantumElement]):
                 # for import_cls
                 "quantum_element_class": f"{obj.__class__.__module__}.{obj.__class__.__name__}",
                 "uid": obj.uid,
-                "signals": obj.signals._items,
+                "signals": obj.signals,
                 # Base quantum element does not have parameters but this will change with the new qubit
                 # class.
                 "parameter_class": f"{obj.parameters.__class__.__module__}.{obj.parameters.__class__.__name__}",
-                "parameters": dataclasses.asdict(obj.parameters),
+                "parameters": attrs.asdict(obj.parameters),
             },
         }
 

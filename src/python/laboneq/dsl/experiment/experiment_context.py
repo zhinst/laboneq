@@ -59,7 +59,10 @@ class ExperimentContextManager:
 
     def __enter__(self):
         """Use as a context manager to define experiment context"""
-        experiment = Experiment(**self.kwargs)
+        extra_kwargs = {}
+        if "name" not in self.kwargs:
+            extra_kwargs["name"] = "unnamed"
+        experiment = Experiment(**self.kwargs, **extra_kwargs)
         experiment_ctx = ExperimentContext(experiment, calibration=None)
         push_context(experiment_ctx)
         return experiment

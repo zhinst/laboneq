@@ -250,7 +250,9 @@ class DeviceSHFSG(DeviceSHFBase):
             nc.add("system/synchronization/source", 1)  # external
         return await self.maybe_async(nc)
 
-    async def collect_internal_start_execution_nodes(self) -> list[DaqNodeSetAction]:
+    async def collect_start_trigger_nodes(
+        self, with_pipeliner: bool
+    ) -> list[DaqNodeSetAction]:
         nc = NodeCollector(base=f"/{self.serial}/")
         if self._emit_trigger:
             nc.add("system/internaltrigger/enable", 1, cache=False)

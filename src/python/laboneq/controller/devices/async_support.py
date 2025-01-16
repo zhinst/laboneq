@@ -8,7 +8,17 @@ from dataclasses import dataclass
 from enum import Enum, IntFlag
 import json
 import logging
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Literal, TypeVar, overload
+import shlex
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Coroutine,
+    Iterator,
+    Literal,
+    TypeVar,
+    overload,
+)
 from laboneq.controller.devices.device_utils import is_expected, to_l1_timeout
 
 import numpy as np
@@ -63,23 +73,6 @@ class _DeviceStatusFlag(IntFlag):
     UNKNOWN = 1 << 9
 
 
-async def _get_data_server_info(dataserver: DataServer) -> tuple[str, str, int]:
-    devices_node_path = "/zi/devices"
-    version_node_path = "/zi/about/version"
-    revision_node_path = "/zi/about/revision"
-
-    devices_json, version_str, revision_int = (
-        r.value
-        for r in await asyncio.gather(
-            dataserver.kernel_session.get(devices_node_path),
-            dataserver.kernel_session.get(version_node_path),
-            dataserver.kernel_session.get(revision_node_path),
-        )
-    )
-
-    return devices_json, version_str, revision_int
-
-
 def _get_device_statuses(
     devices_json: str, serials: list[str]
 ) -> dict[str, _DeviceStatusFlag]:
@@ -132,61 +125,173 @@ def _check_dataserver_device_compatibility(statuses: dict[str, _DeviceStatusFlag
         )
 
 
-async def async_check_dataserver_device_compatibility(
-    host: str,
-    port: int,
-    serials: list[str],
-    emulator_state: EmulatorState | None,
-    ignore_version_mismatch: bool,
-    timeout_s: float,
-):
-    if port == -1:  # Dummy server
-        return
+def parse_logfmt(log: str) -> dict[str, str]:
+    # Simplified logfmt parser
+    # Avoided using the logfmt library due to its apparent lack of maintenance.
+    return dict(tuple(part.split("=", 1)) for part in shlex.split(log) if "=" in part)
 
-    # TODO(2K): zhinst.core version check is only relevant for the AWG compiler.
-    # In the future, compile stage must store the actually used AWG compiler version
-    # in the compiled experiment data, and this version has to be checked against
-    # the data server version at experiment run.
-    python_api_version = LabOneVersion.from_version_string(zhinst_core_version())
 
-    if emulator_state is None:
-        dataserver = await DataServer.create(
-            host=host, port=port, timeout=to_l1_timeout(timeout_s)
-        )
-    else:
-        dataserver = MockInstrument(serial="ZI", emulator_state=emulator_state)
+class DataServerConnection:
+    _devices_node_path = "/zi/devices"
+    _version_node_path = "/zi/about/version"
+    _revision_node_path = "/zi/about/revision"
+    _log_node_path = "/zi/debug/log"
 
-    devices_json, version_str, revision_int = await _get_data_server_info(dataserver)
-    dataserver_version = LabOneVersion.from_dataserver_version_information(
-        version=version_str, revision=revision_int
-    )
+    def __init__(
+        self,
+        data_server: DataServer,
+        devices_json: str,
+        version_str: str,
+        revision_int: int,
+    ):
+        self._data_server = data_server
+        self._devices_json = devices_json
+        self._version_str = version_str
+        self._revision_int = revision_int
+        self._log_queue: DataQueue | None = None
+        self._log_records: list[AnnotatedValue] = []
 
-    if dataserver_version != python_api_version:
-        err_msg = f"Version of LabOne Data Server ({dataserver_version}) and Python API ({python_api_version}) do not match."
-        if ignore_version_mismatch:
-            _logger.warning("Ignoring that %s", err_msg)
+    @classmethod
+    async def connect(
+        cls,
+        host: str,
+        port: int,
+        emulator_state: EmulatorState | None,
+        timeout_s: float,
+    ) -> DataServerConnection:
+        if emulator_state is None:
+            data_server = await DataServer.create(
+                host=host, port=port, timeout=to_l1_timeout(timeout_s)
+            )
         else:
-            raise LabOneQControllerException(err_msg)
-    elif dataserver_version < MINIMUM_SUPPORTED_LABONE_VERSION:
-        err_msg = (
-            f"Version of LabOne Data Server '{dataserver_version}' is not supported. "
-            f"We recommend {RECOMMENDED_LABONE_VERSION}."
+            data_server = MockInstrument(serial="ZI", emulator_state=emulator_state)
+
+        devices_json, version_str, revision_int = (
+            r.value
+            for r in await asyncio.gather(
+                data_server.kernel_session.get(cls._devices_node_path),
+                data_server.kernel_session.get(cls._version_node_path),
+                data_server.kernel_session.get(cls._revision_node_path),
+            )
         )
-        if ignore_version_mismatch:
-            _logger.warning("Ignoring that %s", err_msg)
-        else:
-            raise LabOneQControllerException(err_msg)
 
-    _logger.info(
-        "Connected to Zurich Instruments LabOne Data Server version %s at %s:%s",
-        version_str,
-        host,
-        port,
-    )
+        _logger.info(
+            "Connected to Zurich Instruments LabOne Data Server version %s at %s:%s",
+            version_str,
+            host,
+            port,
+        )
 
-    if emulator_state is None:  # real server
-        statuses = _get_device_statuses(devices_json, serials)
-        _check_dataserver_device_compatibility(statuses)
+        return DataServerConnection(
+            data_server, devices_json, version_str, revision_int
+        )
+
+    @property
+    def data_server(self) -> DataServer:
+        return self._data_server
+
+    @property
+    def devices_json(self) -> str:
+        return self._devices_json
+
+    @property
+    def version_str(self) -> str:
+        return self._version_str
+
+    @property
+    def revision_int(self) -> int:
+        return self._revision_int
+
+    def check_dataserver_device_compatibility(
+        self, ignore_version_mismatch: bool, serials: list[str]
+    ):
+        # TODO(2K): zhinst.core version check is only relevant for the AWG compiler.
+        # In the future, compile stage must store the actually used AWG compiler version
+        # in the compiled experiment data, and this version has to be checked against
+        # the data server version at experiment run.
+        python_api_version = LabOneVersion.from_version_string(zhinst_core_version())
+
+        dataserver_version = LabOneVersion.from_dataserver_version_information(
+            version=self.version_str,
+            revision=self.revision_int,
+        )
+
+        if dataserver_version != python_api_version:
+            err_msg = f"Version of LabOne Data Server ({dataserver_version}) and Python API ({python_api_version}) do not match."
+            if ignore_version_mismatch:
+                _logger.warning("Ignoring that %s", err_msg)
+            else:
+                raise LabOneQControllerException(err_msg)
+        elif dataserver_version < MINIMUM_SUPPORTED_LABONE_VERSION:
+            err_msg = (
+                f"Version of LabOne Data Server '{dataserver_version}' is not supported. "
+                f"We recommend {RECOMMENDED_LABONE_VERSION}."
+            )
+            if ignore_version_mismatch:
+                _logger.warning("Ignoring that %s", err_msg)
+            else:
+                raise LabOneQControllerException(err_msg)
+
+        if isinstance(self._data_server, DataServer):  # Real server?
+            statuses = _get_device_statuses(self.devices_json, serials)
+            _check_dataserver_device_compatibility(statuses)
+
+    async def subscribe_logs(self):
+        self._log_records.clear()
+        self._log_queue = await self._data_server.kernel_session.subscribe(
+            self._log_node_path, level="debug"
+        )
+
+    async def unsubscribe_logs(self):
+        if self._log_queue is not None:
+            while not self._log_queue.empty():
+                self._log_records.append(self._log_queue.get_nowait())
+            self._log_queue.disconnect()
+            self._log_queue = None
+
+    def dump_logs(self, server_uid: str):
+        logger = logging.getLogger("node.log")
+        logger.debug(f"Node log from the data server with id '{server_uid}':")
+        for log_record in self._log_records:
+            log_fields = parse_logfmt(log_record.value)
+            tracer = log_fields.get("tracer")
+            if tracer == "blocks_out":
+                method = log_fields.get("method")
+                path = log_fields.get("path")
+                value = log_fields.get("value", "-")
+                logger.debug(f"  {method} {path} {value}")
+
+
+class DataServerConnections:
+    def __init__(self):
+        self._data_servers: dict[str, DataServerConnection | None] = {}
+
+    def add(self, server_uid: str, data_server_connection: DataServerConnection | None):
+        self._data_servers[server_uid] = data_server_connection
+
+    def get(self, server_uid: str) -> DataServerConnection | None:
+        return self._data_servers.get(server_uid)
+
+    @property
+    def _valid_data_servers(self) -> Iterator[tuple[str, DataServerConnection]]:
+        for server_uid, data_server in self._data_servers.items():
+            if data_server is not None:
+                yield server_uid, data_server
+
+    @asynccontextmanager
+    async def capture_logs(self):
+        try:
+            await _gather(*(ds.subscribe_logs() for _, ds in self._valid_data_servers))
+            yield
+        finally:
+            await _gather(
+                *(ds.unsubscribe_logs() for _, ds in self._valid_data_servers)
+            )
+            self.dump_logs()
+
+    def dump_logs(self):
+        for server_uid, data_server in self._valid_data_servers:
+            data_server.dump_logs(server_uid)
 
 
 async def create_device_kernel_session(

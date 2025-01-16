@@ -212,6 +212,9 @@ class DeviceSetup:
                 target = self.logical_signal_groups
             elif top_level_element == qct_path.PhysicalChannelGroups_Path:
                 target = self.physical_channel_groups
+            elif top_level_element in self.logical_signal_groups:
+                target = self.logical_signal_groups
+                path_elements.insert(0, top_level_element)
             else:
                 continue
 

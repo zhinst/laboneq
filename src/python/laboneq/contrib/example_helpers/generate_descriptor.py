@@ -333,20 +333,20 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/drive_line",
+                        "iq_signal": f"q{i}/drive",
                         "ports": f"SGCHANNELS/{i_qc_ch_6}/OUTPUT",
                     }
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/drive_line_ef",
+                        "iq_signal": f"q{i}/drive_ef",
                         "ports": f"SGCHANNELS/{i_qc_ch_6}/OUTPUT",
                     }
                 )
                 if include_cr_lines:
                     sig_dict.append(
                         {
-                            "iq_signal": f"q{i}/drive_line_cr",
+                            "iq_signal": f"q{i}/drive_cr",
                             "ports": f"SGCHANNELS/{i_qc_ch_6}/OUTPUT",
                         }
                     )
@@ -365,20 +365,20 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/drive_line",
+                        "iq_signal": f"q{i}/drive",
                         "ports": f"SGCHANNELS/{i_qc_ch_4}/OUTPUT",
                     }
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/drive_line_ef",
+                        "iq_signal": f"q{i}/drive_ef",
                         "ports": f"SGCHANNELS/{i_qc_ch_4}/OUTPUT",
                     }
                 )
                 if include_cr_lines:
                     sig_dict.append(
                         {
-                            "iq_signal": f"q{i}/drive_line_cr",
+                            "iq_signal": f"q{i}/drive_cr",
                             "ports": f"SGCHANNELS/{i_qc_ch_4}/OUTPUT",
                         }
                     )
@@ -397,20 +397,20 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/drive_line",
+                        "iq_signal": f"q{i}/drive",
                         "ports": f"SGCHANNELS/{i_qc_ch_2}/OUTPUT",
                     }
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/drive_line_ef",
+                        "iq_signal": f"q{i}/drive_ef",
                         "ports": f"SGCHANNELS/{i_qc_ch_2}/OUTPUT",
                     }
                 )
                 if include_cr_lines:
                     sig_dict.append(
                         {
-                            "iq_signal": f"q{i}/drive_line_cr",
+                            "iq_signal": f"q{i}/drive_cr",
                             "ports": f"SGCHANNELS/{i_qc_ch_2}/OUTPUT",
                         }
                     )
@@ -429,20 +429,20 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/drive_line",
+                        "iq_signal": f"q{i}/drive",
                         "ports": f"SGCHANNELS/{i_sg_ch_8}/OUTPUT",
                     }
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/drive_line_ef",
+                        "iq_signal": f"q{i}/drive_ef",
                         "ports": f"SGCHANNELS/{i_sg_ch_8}/OUTPUT",
                     }
                 )
                 if include_cr_lines:
                     sig_dict.append(
                         {
-                            "iq_signal": f"q{i}/drive_line_cr",
+                            "iq_signal": f"q{i}/drive_cr",
                             "ports": f"SGCHANNELS/{i_sg_ch_8}/OUTPUT",
                         }
                     )
@@ -461,20 +461,20 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/drive_line",
+                        "iq_signal": f"q{i}/drive",
                         "ports": f"SGCHANNELS/{i_sg_ch_4}/OUTPUT",
                     }
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/drive_line_ef",
+                        "iq_signal": f"q{i}/drive_ef",
                         "ports": f"SGCHANNELS/{i_sg_ch_4}/OUTPUT",
                     }
                 )
                 if include_cr_lines:
                     sig_dict.append(
                         {
-                            "iq_signal": f"q{i}/drive_line_cr",
+                            "iq_signal": f"q{i}/drive_cr",
                             "ports": f"SGCHANNELS/{i_sg_ch_4}/OUTPUT",
                         }
                     )
@@ -493,7 +493,7 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/drive_line",
+                        "iq_signal": f"q{i}/drive",
                         "ports": [f"SIGOUTS/{i_hd_ch_8}", f"SIGOUTS/{i_hd_ch_8+1}"],
                     }
                 )
@@ -512,7 +512,7 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/drive_line",
+                        "iq_signal": f"q{i}/drive",
                         "ports": [f"SIGOUTS/{i_hd_ch_4}", f"SIGOUTS/{i_hd_ch_4+1}"],
                     }
                 )
@@ -534,7 +534,7 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "rf_signal": f"q{i}/flux_line",
+                        "rf_signal": f"q{i}/flux",
                         "ports": f"SIGOUTS/{i_hd_ch_8}",
                     }
                 )
@@ -552,7 +552,7 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "rf_signal": f"q{i}/flux_line",
+                        "rf_signal": f"q{i}/flux",
                         "ports": f"SIGOUTS/{i_hd_ch_4}",
                     }
                 )
@@ -570,7 +570,7 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/flux_line",
+                        "iq_signal": f"q{i}/flux",
                         "ports": f"SGCHANNELS/{i_sg_ch_8}/OUTPUT",
                     }
                 )
@@ -588,7 +588,7 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/flux_line",
+                        "iq_signal": f"q{i}/flux",
                         "ports": f"SGCHANNELS/{i_sg_ch_4}/OUTPUT",
                     }
                 )
@@ -606,7 +606,7 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/flux_line",
+                        "iq_signal": f"q{i}/flux",
                         "ports": f"SGCHANNELS/{i_qc_ch_6}/OUTPUT",
                     }
                 )
@@ -624,7 +624,7 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/flux_line",
+                        "iq_signal": f"q{i}/flux",
                         "ports": f"SGCHANNELS/{i_qc_ch_4}/OUTPUT",
                     }
                 )
@@ -642,7 +642,7 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/flux_line",
+                        "iq_signal": f"q{i}/flux",
                         "ports": f"SGCHANNELS/{i_qc_ch_2}/OUTPUT",
                     }
                 )
@@ -666,13 +666,13 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/measure_line",
+                        "iq_signal": f"q{i}/measure",
                         "ports": f"QACHANNELS/{i_qc_qa_6}/OUTPUT",
                     }
                 )
                 sig_dict.append(
                     {
-                        "acquire_signal": f"q{i}/acquire_line",
+                        "acquire_signal": f"q{i}/acquire",
                         "ports": f"QACHANNELS/{i_qc_qa_6}/INPUT",
                     }
                 )
@@ -691,13 +691,13 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/measure_line",
+                        "iq_signal": f"q{i}/measure",
                         "ports": f"QACHANNELS/{i_qc_qa_4}/OUTPUT",
                     }
                 )
                 sig_dict.append(
                     {
-                        "acquire_signal": f"q{i}/acquire_line",
+                        "acquire_signal": f"q{i}/acquire",
                         "ports": f"QACHANNELS/{i_qc_qa_4}/INPUT",
                     }
                 )
@@ -716,13 +716,13 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/measure_line",
+                        "iq_signal": f"q{i}/measure",
                         "ports": f"QACHANNELS/{i_qc_qa_2}/OUTPUT",
                     }
                 )
                 sig_dict.append(
                     {
-                        "acquire_signal": f"q{i}/acquire_line",
+                        "acquire_signal": f"q{i}/acquire",
                         "ports": f"QACHANNELS/{i_qc_qa_2}/INPUT",
                     }
                 )
@@ -741,13 +741,13 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/measure_line",
+                        "iq_signal": f"q{i}/measure",
                         "ports": f"QACHANNELS/{i_qa_ch_4}/OUTPUT",
                     }
                 )
                 sig_dict.append(
                     {
-                        "acquire_signal": f"q{i}/acquire_line",
+                        "acquire_signal": f"q{i}/acquire",
                         "ports": f"QACHANNELS/{i_qa_ch_4}/INPUT",
                     }
                 )
@@ -766,13 +766,13 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/measure_line",
+                        "iq_signal": f"q{i}/measure",
                         "ports": f"QACHANNELS/{i_qa_ch_2}/OUTPUT",
                     }
                 )
                 sig_dict.append(
                     {
-                        "acquire_signal": f"q{i}/acquire_line",
+                        "acquire_signal": f"q{i}/acquire",
                         "ports": f"QACHANNELS/{i_qa_ch_2}/INPUT",
                     }
                 )
@@ -791,13 +791,13 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/measure_line",
+                        "iq_signal": f"q{i}/measure",
                         "ports": [f"SIGOUTS/{i_uhfqa_ch}", f"SIGOUTS/{i_uhfqa_ch+1}"],
                     }
                 )
                 sig_dict.append(
                     {
-                        "acquire_signal": f"q{i}/acquire_line",
+                        "acquire_signal": f"q{i}/acquire",
                     }
                 )
                 i_uhfqa_ch += 2
@@ -818,13 +818,13 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/measure_line",
+                        "iq_signal": f"q{i}/measure",
                         "ports": f"QACHANNELS/{i_qc_qa_6}/OUTPUT",
                     }
                 )
                 sig_dict.append(
                     {
-                        "acquire_signal": f"q{i}/acquire_line",
+                        "acquire_signal": f"q{i}/acquire",
                         "ports": f"QACHANNELS/{i_qc_qa_6}/INPUT",
                     }
                 )
@@ -847,13 +847,13 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/measure_line",
+                        "iq_signal": f"q{i}/measure",
                         "ports": f"QACHANNELS/{i_qc_qa_4}/OUTPUT",
                     }
                 )
                 sig_dict.append(
                     {
-                        "acquire_signal": f"q{i}/acquire_line",
+                        "acquire_signal": f"q{i}/acquire",
                         "ports": f"QACHANNELS/{i_qc_qa_4}/INPUT",
                     }
                 )
@@ -876,13 +876,13 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/measure_line",
+                        "iq_signal": f"q{i}/measure",
                         "ports": f"QACHANNELS/{i_qc_qa_2}/OUTPUT",
                     }
                 )
                 sig_dict.append(
                     {
-                        "acquire_signal": f"q{i}/acquire_line",
+                        "acquire_signal": f"q{i}/acquire",
                         "ports": f"QACHANNELS/{i_qc_qa_2}/INPUT",
                     }
                 )
@@ -905,13 +905,13 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/measure_line",
+                        "iq_signal": f"q{i}/measure",
                         "ports": f"QACHANNELS/{i_qa_ch_4}/OUTPUT",
                     }
                 )
                 sig_dict.append(
                     {
-                        "acquire_signal": f"q{i}/acquire_line",
+                        "acquire_signal": f"q{i}/acquire",
                         "ports": f"QACHANNELS/{i_qa_ch_4}/INPUT",
                     }
                 )
@@ -934,13 +934,13 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/measure_line",
+                        "iq_signal": f"q{i}/measure",
                         "ports": f"QACHANNELS/{i_qa_ch_2}/OUTPUT",
                     }
                 )
                 sig_dict.append(
                     {
-                        "acquire_signal": f"q{i}/acquire_line",
+                        "acquire_signal": f"q{i}/acquire",
                         "ports": f"QACHANNELS/{i_qa_ch_2}/INPUT",
                     }
                 )
@@ -963,13 +963,13 @@ for how to set them up without a PQSC.
                 )
                 sig_dict.append(
                     {
-                        "iq_signal": f"q{i}/measure_line",
+                        "iq_signal": f"q{i}/measure",
                         "ports": [f"SIGOUTS/{i_uhfqa_ch}", f"SIGOUTS/{i_uhfqa_ch+1}"],
                     }
                 )
                 sig_dict.append(
                     {
-                        "acquire_signal": f"q{i}/acquire_line",
+                        "acquire_signal": f"q{i}/acquire",
                     }
                 )
                 current_qubit += 1

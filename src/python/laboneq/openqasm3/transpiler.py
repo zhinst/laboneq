@@ -10,6 +10,7 @@ from itertools import chain
 
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.dsl import enums, parameter, quantum
+from laboneq.dsl.calibration import Calibration
 from laboneq.dsl.experiment import Experiment, Section
 from laboneq.dsl.experiment.experiment_signal import ExperimentSignal
 from laboneq.dsl.quantum.quantum_element import QuantumElement
@@ -18,6 +19,38 @@ from laboneq.openqasm3.options import MultiProgramOptions, SingleProgramOptions
 from laboneq.openqasm3 import device
 
 _logger = logging.getLogger(__name__)
+
+
+def _calibration_from_qubits(
+    qubits: list[QuantumElement],
+) -> dict[str,]:
+    """Return the calibration objects from a list of qubits."""
+    calibration = {}
+    for qubit in qubits:
+        if isinstance(qubit, QuantumElement):
+            calibration.update(qubit.calibration())
+        else:
+            # handle lists or tuples of qubits:
+            for q in qubit:
+                calibration.update(q.calibration())
+    return calibration
+
+
+def _copy_set_frequency_calibration(implicit_calibration: Calibration, exp: Experiment):
+    """Copy set_frequency values from the implicit visitor calibration to the experiment."""
+    # TODO: This function should be removed and instead the experiment calibration should be
+    #       accessible in the visitor so that it can be modified directly if needed.
+    #       Possibly we could do this using a `set_frequency` quantum operation.
+    for signal, signal_calibration in implicit_calibration.items():
+        exp_signal = exp.signals[signal]
+        if exp_signal.calibration is None or exp_signal.calibration.oscillator is None:
+            raise ValueError(
+                f"Sweeping or setting the frequency of signal {signal!r}"
+                f" requires a signal calibration with oscillator to be set."
+            )
+        exp_signal.calibration.oscillator.frequency = (
+            signal_calibration.oscillator.frequency
+        )
 
 
 class OpenQASMTranspiler:
@@ -147,7 +180,7 @@ class OpenQASMTranspiler:
                 **acquisition_type**:
                     The type of acquisition to perform.
                     The acquisition type may also be specified within the
-                    OpenQASM program using `pragma zi.acqusition_type raw`,
+                    OpenQASM program using `pragma zi.acquisition_type raw`,
                     for example.
                     If an acquisition type is passed here, it overrides
                     any value set by a pragma.
@@ -198,6 +231,10 @@ class OpenQASMTranspiler:
 
         # TODO: feed qubits directly to experiment when feature is implemented
         exp = Experiment(signals=_experiment_signals(qubit_map))
+
+        calibration = Calibration(_calibration_from_qubits(qubit_map.values()))
+        exp.set_calibration(calibration)
+
         with exp.acquire_loop_rt(
             count=options.count,
             averaging_mode=options.averaging_mode,
@@ -206,7 +243,7 @@ class OpenQASMTranspiler:
         ) as loop:
             loop.add(qasm_section)
 
-        exp.set_calibration(ret.implicit_calibration)
+        _copy_set_frequency_calibration(ret.implicit_calibration, exp)
         return exp
 
     def batch_experiment(
@@ -274,7 +311,7 @@ class OpenQASMTranspiler:
                 **acquisition_type**:
                     The type of acquisition to perform.
                     The acquisition type may also be specified within the
-                    OpenQASM program using `pragma zi.acqusition_type raw`,
+                    OpenQASM program using `pragma zi.acquisition_type raw`,
                     for example.
                     If an acquisition type is passed here, it overrides
                     any value set by a pragma.
@@ -358,6 +395,10 @@ class OpenQASMTranspiler:
                 )
 
         exp = Experiment(signals=_experiment_signals(qubit_map))
+
+        calibration = Calibration(_calibration_from_qubits(qubit_map.values()))
+        exp.set_calibration(calibration)
+
         experiment_index = parameter.LinearSweepParameter(
             uid="index",
             start=0,

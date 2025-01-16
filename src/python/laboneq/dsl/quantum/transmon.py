@@ -1,22 +1,35 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+# This module and the qubit module are both deprecated.
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Optional
+
+import attrs
 
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration import Calibration, Oscillator, SignalCalibration
-from laboneq.dsl.device import LogicalSignalGroup
-from laboneq.dsl.device.io_units import LogicalSignal
 from laboneq.dsl.enums import ModulationType
-from laboneq.dsl.quantum.quantum_element import QuantumElement, SignalType
+from laboneq.dsl.quantum.quantum_element import (
+    QuantumElement,
+    QuantumParameters,
+)
 
 
 @classformatter
-@dataclass
-class TransmonParameters:
+@attrs.define(kw_only=True)
+class TransmonParameters(QuantumParameters):
+    """A class for the parameters of a superconducting, flux-tuneable transmon qubit.
+
+    !!! version-changed "Deprecated in version 2.43.0."
+
+        This class is deprecated and was intended primarily for demonstration purposes.
+        Instead of using it write a class that directly inherits from
+        [QuantumParameters][laboneq.dsl.quantum.quantum_element.QuantumParameters].
+    """
+
     #: Resonance frequency of the qubits g-e transition.
     resonance_frequency_ge: Optional[float] = None
     #: Resonance frequency of the qubits e-f transition.
@@ -38,7 +51,7 @@ class TransmonParameters:
     #: offset voltage for flux control line - defaults to 0.
     flux_offset_voltage: Optional[float] = 0
     #: Free form dictionary of user defined parameters.
-    user_defined: dict | None = field(default_factory=dict)
+    user_defined: dict | None = attrs.field(factory=dict)
 
     @property
     def drive_frequency_ge(self) -> float | None:
@@ -66,107 +79,64 @@ class TransmonParameters:
 
 
 @classformatter
-@dataclass(init=False, repr=True, eq=False)
+@attrs.define()
 class Transmon(QuantumElement):
-    """A class for a superconducting, flux-tuneable Transmon Qubit."""
+    """A class for a superconducting, flux-tuneable Transmon Qubit.
 
-    parameters: TransmonParameters
+    !!! version-changed "Deprecated in version 2.43.0."
 
-    def __init__(
-        self,
-        uid: str | None = None,
-        signals: dict[str, LogicalSignal | str] | None = None,
-        parameters: TransmonParameters | dict[str, Any] | None = None,
-    ):
-        """
-        Initializes a new Transmon Qubit.
+        This class is deprecated and was intended primarily for demonstration purposes.
+        Instead of using it write a class that directly inherits from
+        [QuantumElement][laboneq.dsl.quantum.quantum_element.QuantumElement].
+    """
 
-        Args:
-            uid: A unique identifier for the Qubit.
-            signals: A mapping of logical signals associated with the qubit.
-                Qubit accepts the following keys in the mapping: 'drive', 'measure', 'acquire', 'flux'
+    PARAMETERS_TYPE = TransmonParameters
 
-                This is so that the Qubit parameters are assigned into the correct signal lines in
-                calibration.
-            parameters: Parameters associated with the qubit.
-                Required for generating calibration and experiment signals via `calibration()` and `experiment_signals()`.
-        """
-        if parameters is None:
-            self.parameters = TransmonParameters()
-        elif isinstance(parameters, dict):
-            self.parameters = TransmonParameters(**parameters)
-        else:
-            self.parameters = parameters
-        super().__init__(uid=uid, signals=signals)
+    REQUIRED_SIGNALS = (
+        "acquire",
+        "drive",
+        "measure",
+    )
 
-    @classmethod
-    def from_logical_signal_group(
-        cls,
-        uid: str,
-        lsg: LogicalSignalGroup,
-        parameters: TransmonParameters | dict[str, Any] | None = None,
-    ) -> "Transmon":
-        """Transmon Qubit from logical signal group.
+    OPTIONAL_SIGNALS = (
+        "drive_ef",
+        "drive_cr",
+        "flux",
+    )
 
-        Args:
-            uid: A unique identifier for the Qubit.
-            lsg: Logical signal group.
-                Transmon Qubit understands the following signal line names:
+    SIGNAL_ALIASES = {
+        "acquire_line": "acquire",
+        "drive_line": "drive",
+        "measure_line": "measure",
+        "drive_ef_line": "drive_ef",
+        "drive_line_ef": "drive_ef",
+        "drive_cr_line": "drive_cr",
+        "flux_line": "flux",
+    }
 
-                    - drive: 'drive', 'drive_line'
-                    - drive_ef: 'drive_ef', 'drive_line_ef'
-                    - measure: 'measure', 'measure_line'
-                    - acquire: 'acquire', 'acquire_line'
-                    - flux: 'flux', 'flux_line'
+    def calibration(self) -> Calibration:
+        """Return the experiment calibration for this transmon.
 
-                This is so that the Qubit parameters are assigned into the correct signal lines in
-                calibration.
-            parameters: Parameters associated with the qubit.
-        """
-        signal_type_map = {
-            SignalType.DRIVE: ["drive", "drive_line"],
-            SignalType.DRIVE_EF: ["drive_ef", "drive_line_ef"],
-            SignalType.MEASURE: ["measure", "measure_line"],
-            SignalType.ACQUIRE: ["acquire", "acquire_line"],
-            SignalType.FLUX: ["flux", "flux_line"],
-        }
-        if parameters is None:
-            parameters = TransmonParameters()
-        elif isinstance(parameters, dict):
-            parameters = TransmonParameters(**parameters)
-        return cls._from_logical_signal_group(
-            uid=uid,
-            lsg=lsg,
-            parameters=parameters,
-            signal_type_map=signal_type_map,
-        )
-
-    def calibration(self, set_local_oscillators=True) -> Calibration:
-        """Generate calibration from the parameters and attached signal lines.
-
-        `Qubit` requires `parameters` for it to be able to produce calibration objects.
-
-        Args:
-            set_local_oscillators (bool):
-                If True, adds local oscillator settings to the calibration.
+        Calibration for each experiment signal is generated from the transmon
+        parameters.
 
         Returns:
-            calibration:
-                Prefilled calibration object from Qubit parameters.
+            The experiment calibration.
         """
         drive_lo = None
         readout_lo = None
-        if set_local_oscillators:
-            if self.parameters.drive_lo_frequency is not None:
-                drive_lo = Oscillator(
-                    uid=f"{self.uid}_drive_local_osc",
-                    frequency=self.parameters.drive_lo_frequency,
-                )
-            if self.parameters.readout_lo_frequency is not None:
-                readout_lo = Oscillator(
-                    uid=f"{self.uid}_readout_local_osc",
-                    frequency=self.parameters.readout_lo_frequency,
-                )
+        readout_oscillator = None
+
+        if self.parameters.drive_lo_frequency is not None:
+            drive_lo = Oscillator(
+                uid=f"{self.uid}_drive_local_osc",
+                frequency=self.parameters.drive_lo_frequency,
+            )
+        if self.parameters.readout_lo_frequency is not None:
+            readout_lo = Oscillator(
+                uid=f"{self.uid}_readout_local_osc",
+                frequency=self.parameters.readout_lo_frequency,
+            )
         if self.parameters.readout_frequency is not None:
             readout_oscillator = Oscillator(
                 uid=f"{self.uid}_readout_acquire_osc",
@@ -199,14 +169,14 @@ class Transmon(QuantumElement):
             calib[self.signals["drive_ef"]] = sig_cal
         if "measure" in self.signals:
             sig_cal = SignalCalibration()
-            if self.parameters.readout_frequency is not None:
+            if readout_oscillator:
                 sig_cal.oscillator = readout_oscillator
             sig_cal.local_oscillator = readout_lo
             sig_cal.range = self.parameters.readout_range_out
             calib[self.signals["measure"]] = sig_cal
         if "acquire" in self.signals:
             sig_cal = SignalCalibration()
-            if self.parameters.readout_frequency is not None:
+            if readout_oscillator:
                 sig_cal.oscillator = readout_oscillator
             sig_cal.local_oscillator = readout_lo
             sig_cal.range = self.parameters.readout_range_in

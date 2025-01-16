@@ -47,7 +47,7 @@ class Function:
 
 
 @dataclass
-class Waveform:
+class Waveform(ClassicalRef):
     """A waveform data"""
 
     canonical_name: str
@@ -63,6 +63,21 @@ class Waveform:
             return self.value
         else:
             return PulseSampled(samples=self.value)
+
+
+@dataclass
+class Port(ClassicalRef):
+    """An abstract port.
+
+    Attributes:
+        canonical_name: Declared name.
+        qubit: Qubit UID.
+        value: Signal the port is attached to.
+    """
+
+    canonical_name: str
+    qubit: str
+    value: str
 
 
 @dataclass
@@ -95,7 +110,18 @@ class BaseNamespace(abc.ABC):
     def declare_classical_value(self, name, value): ...
 
     @abc.abstractmethod
-    def declare_frame(self, name, port, frequency, phase): ...
+    def declare_port(self, name: str, qubit: str, value: str) -> Port:
+        """Declare abstract port."""
+
+    @abc.abstractmethod
+    def declare_frame(
+        self, name: str, port: str, frequency: float, phase: float
+    ) -> Frame:
+        """Declare abstract frame."""
+
+    @abc.abstractmethod
+    def declare_waveform(self, name: str, value: Any) -> Waveform:
+        """Declare abstract waveform."""
 
     @abc.abstractmethod
     def declare_reference(self, name, value): ...
@@ -139,6 +165,11 @@ class DefaultNamespace(BaseNamespace):
         # Instead we treat them as references (to Python objects).
         # TODO: Enforce constantness of constants. Currently they are implemented as variables
         return self.declare_reference(name, value)
+
+    def declare_port(self, name: str, qubit: str, value: str) -> Port:
+        self._check_duplicate(name)
+        self.local_scope[name] = Port(canonical_name=name, qubit=qubit, value=value)
+        return self.local_scope[name]
 
     def declare_frame(
         self, name: str, port: str, frequency: float, phase: float
