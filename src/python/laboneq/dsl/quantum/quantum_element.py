@@ -23,6 +23,10 @@ from laboneq.dsl.experiment import ExperimentSignal
 class QuantumParameters:
     """Calibration parameters for a [QuantumElement][laboneq.dsl.quantum.quantum_element.QuantumElement]."""
 
+    def copy(self):
+        """Returns a copy of the parameters."""
+        return self.replace()
+
     def replace(self, **changes: dict[str, object]):
         """Return a new set of parameters with changes applied.
 
@@ -293,6 +297,10 @@ class QuantumElement:
             A list of experiment signals.
         """
         return [ExperimentSignal(uid=k, map_to=k) for k in self.signals.values()]
+
+    def copy(self):
+        """Returns a copy of the qubit."""
+        return self.replace()
 
     def replace(self, **parameter_changes: dict[str, object]) -> QuantumElement:
         """Return a new quantum element with the parameter changes applied.

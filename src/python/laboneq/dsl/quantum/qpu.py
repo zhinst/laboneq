@@ -19,7 +19,6 @@ compile and run experiments on real devices.
 
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Sequence
 
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
@@ -29,7 +28,7 @@ from laboneq.dsl.session import Session
 if TYPE_CHECKING:
     from laboneq.dsl.device import DeviceSetup
     from laboneq.dsl.quantum.quantum_operations import QuantumOperations
-    from laboneq.workflow.typing import Qubits
+    from laboneq.workflow.typing import QuantumElements
 
 
 @classformatter
@@ -118,7 +117,7 @@ class QPU:
 
     def __init__(
         self,
-        qubits: Qubits,
+        qubits: QuantumElements,
         quantum_operations: QuantumOperations,
     ) -> None:
         self.qubits: list[QuantumElement] = (
@@ -140,9 +139,9 @@ class QPU:
         yield "qubits", [q.uid for q in self.qubits]
         yield "quantum_operations", type(self.quantum_operations).__qualname__
 
-    def copy_qubits(self) -> Qubits:
+    def copy_qubits(self) -> QuantumElements:
         """Return new qubits that are a copy of the original qubits."""
-        return deepcopy(self.qubits)
+        return [q.replace() for q in self.qubits]
 
     @classmethod
     def _get_invalid_param_paths(cls, qubit, overrides: dict[str, Any]) -> Sequence:
@@ -162,26 +161,6 @@ class QPU:
                 else:
                     obj = getattr(obj, key)
         return invalid_params
-
-    @classmethod
-    def _override_qubit_parameters(cls, qubit, overrides: dict) -> None:
-        invalid_params = cls._get_invalid_param_paths(qubit, overrides)
-        if invalid_params:
-            raise ValueError(
-                f"Update parameters do not match the qubit "
-                f"parameters: {invalid_params}",
-            )
-
-        for param_path, value in overrides.items():
-            keys = param_path.split(".")
-            obj = qubit.parameters
-            for key in keys[:-1]:
-                obj = obj[key] if isinstance(obj, dict) else getattr(obj, key)
-            if isinstance(obj, dict):
-                if keys[-1] in obj:
-                    obj[keys[-1]] = value
-            elif hasattr(obj, keys[-1]):
-                setattr(obj, keys[-1], value)
 
     def override_qubits(
         self, qubit_parameters: dict[str, dict[str, int | float | str | dict | None]]
@@ -238,11 +217,10 @@ class QPU:
             )
 
         for qid, params_dict in qubit_parameters.items():
-            qubit = self._qubit_map[qid]
-            self._override_qubit_parameters(qubit, params_dict)
+            self._qubit_map[qid].update(**params_dict)
 
     @staticmethod
-    def measure_section_length(qubits: Qubits) -> float:
+    def measure_section_length(qubits: QuantumElements) -> float:
         """Calculates the length of the measure section for multiplexed readout.
 
         In order to allow the qubits to have different readout and/or integration

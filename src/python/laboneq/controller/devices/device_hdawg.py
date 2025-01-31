@@ -14,9 +14,6 @@ from laboneq.controller.attribute_value_tracker import (
     AttributeName,
     DeviceAttributesView,
 )
-from laboneq.controller.communication import (
-    DaqNodeSetAction,
-)
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
 from laboneq.controller.devices.device_utils import FloatWithTolerance, NodeCollector
 from laboneq.controller.devices.device_zi import (
@@ -25,7 +22,7 @@ from laboneq.controller.devices.device_zi import (
     delay_to_rounded_samples,
 )
 from laboneq.controller.attribute_value_tracker import DeviceAttribute
-from laboneq.controller.devices.zi_node_monitor import (
+from laboneq.controller.devices.node_control import (
     Command,
     Condition,
     NodeControlBase,
@@ -149,25 +146,12 @@ class DeviceHDAWG(DeviceBase):
         osc_index_base = osc_group * max_per_group
         return osc_index_base + previously_allocated
 
-    async def disable_outputs(
-        self, outputs: set[int], invert: bool
-    ) -> list[DaqNodeSetAction]:
+    async def disable_outputs(self, outputs: set[int], invert: bool):
         nc = NodeCollector(base=f"/{self.serial}/")
         for ch in range(self._channels):
             if (ch in outputs) != invert:
                 nc.add(f"sigouts/{ch}/on", 0, cache=False)
-        return await self.maybe_async(nc)
-
-    def _nodes_to_monitor_impl(self) -> list[str]:
-        nodes = super()._nodes_to_monitor_impl()
-        for awg in range(self._get_num_awgs()):
-            if self._api is None:
-                nodes.append(self.get_sequencer_paths(awg).enable)
-                nodes.append(self.get_sequencer_paths(awg).ready)
-            nodes.extend(
-                self._pipeliner.control_nodes(awg, use_async_api=self._api is not None)
-            )
-        return nodes
+        await self.set_async(nc)
 
     def update_clock_source(self, force_internal: bool | None):
         if force_internal or force_internal is None and self.is_standalone():
@@ -260,9 +244,7 @@ class DeviceHDAWG(DeviceBase):
             )
         return nodes
 
-    async def collect_awg_after_upload_nodes(
-        self, initialization: Initialization
-    ) -> list[DaqNodeSetAction]:
+    async def set_after_awg_upload(self, initialization: Initialization):
         nc = NodeCollector(base=f"/{self.serial}/")
 
         for awg in initialization.awgs or []:
@@ -275,24 +257,26 @@ class DeviceHDAWG(DeviceBase):
                 f"sines/{awg.awg * 2}/phaseshift",
                 90 if (awg.signal_type == SignalType.IQ) else 0,
             )
+            assert isinstance(awg.awg, int)
             nc.add(f"sines/{awg.awg * 2 + 1}/phaseshift", 0)
 
-        return await self.maybe_async(nc)
+        await self.set_async(nc)
 
-    async def collect_execution_nodes(
-        self, with_pipeliner: bool
-    ) -> list[DaqNodeSetAction]:
+    async def start_execution(self, with_pipeliner: bool):
         if with_pipeliner:
-            return await self.maybe_async(self._pipeliner.collect_execution_nodes())
-
-        return await super().collect_execution_nodes(with_pipeliner=with_pipeliner)
+            nc = self._pipeliner.collect_execution_nodes()
+        else:
+            nc = NodeCollector(base=f"/{self.serial}/")
+            for awg_index in self._allocated_awgs:
+                nc.add(f"awgs/{awg_index}/enable", 1, cache=False)
+        await self.set_async(nc)
 
     def conditions_for_execution_ready(
         self, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
         if with_pipeliner:
             conditions = self._pipeliner.conditions_for_execution_ready()
-        elif self.is_async_standalone:
+        elif self.is_standalone():
             conditions = {
                 f"/{self.serial}/awgs/{awg_index}/enable": (
                     [1, 0],
@@ -315,7 +299,7 @@ class DeviceHDAWG(DeviceBase):
     ) -> dict[str, tuple[Any, str]]:
         if with_pipeliner:
             conditions = self._pipeliner.conditions_for_execution_done()
-        elif self.is_async_standalone:
+        elif self.is_standalone():
             conditions = {}
         else:
             conditions = {
@@ -327,17 +311,15 @@ class DeviceHDAWG(DeviceBase):
             }
         return conditions
 
-    async def collect_execution_setup_nodes(
+    async def setup_one_step_execution(
         self, with_pipeliner: bool, has_awg_in_use: bool
-    ) -> list[DaqNodeSetAction]:
+    ):
         nc = NodeCollector(base=f"/{self.serial}/")
         if with_pipeliner and has_awg_in_use and not self.is_standalone():
             nc.add("system/synchronization/source", 1)  # external
-        return await self.maybe_async(nc)
+        await self.set_async(nc)
 
-    async def collect_execution_teardown_nodes(
-        self, with_pipeliner: bool
-    ) -> list[DaqNodeSetAction]:
+    async def teardown_one_step_execution(self, with_pipeliner: bool):
         nc = NodeCollector(base=f"/{self.serial}/")
 
         if with_pipeliner and not self.is_standalone():
@@ -353,14 +335,14 @@ class DeviceHDAWG(DeviceBase):
         # re-enable them in case the previous experiment had feedback.
         nc.add("raw/system/awg/runtimechecks/enable", int(self._enable_runtime_checks))
 
-        return await self.maybe_async(nc)
+        await self.set_async(nc)
 
-    async def collect_initialization_nodes(
+    async def apply_initialization(
         self,
         device_recipe_data: DeviceRecipeData,
         initialization: Initialization,
         recipe_data: RecipeData,
-    ) -> list[DaqNodeSetAction]:
+    ):
         _logger.debug("%s: Initializing device...", self.dev_repr)
         nc = NodeCollector(base=f"/{self.serial}/")
 
@@ -487,7 +469,7 @@ class DeviceHDAWG(DeviceBase):
         # therefore DIO could be configured after the AWG loading.
         nc.extend(self._collect_dio_configuration_nodes(initialization, recipe_data))
 
-        return await self.maybe_async(nc)
+        await self.set_async(nc)
 
     def pre_process_attributes(
         self,
@@ -638,12 +620,12 @@ class DeviceHDAWG(DeviceBase):
                 awg_iq_pair_set.add(awg_idx)
         return nc
 
-    async def collect_awg_before_upload_nodes(
+    async def set_before_awg_upload(
         self, initialization: Initialization, recipe_data: RecipeData
-    ) -> list[DaqNodeSetAction]:
+    ):
         nc = NodeCollector(base=f"/{self.serial}/")
         nc.add("system/awg/oscillatorcontrol", 1)
-        return await self.maybe_async(nc)
+        await self.set_async(nc)
 
     def add_command_table_header(self, body: dict) -> dict:
         return {
@@ -655,9 +637,9 @@ class DeviceHDAWG(DeviceBase):
     def command_table_path(self, awg_index: int) -> str:
         return f"/{self.serial}/awgs/{awg_index}/commandtable/"
 
-    async def collect_trigger_configuration_nodes(
+    async def configure_trigger(
         self, initialization: Initialization, recipe_data: RecipeData
-    ) -> list[DaqNodeSetAction]:
+    ):
         nc = NodeCollector(base=f"/{self.serial}/")
 
         for awg_key, awg_config in recipe_data.awg_configs.items():
@@ -672,7 +654,7 @@ class DeviceHDAWG(DeviceBase):
             nc.add("raw/system/awg/runtimechecks/enable", 0)
             break
 
-        return await self.maybe_async(nc)
+        await self.set_async(nc)
 
     def _collect_dio_configuration_nodes(
         self, initialization: Initialization, recipe_data: RecipeData
@@ -738,15 +720,14 @@ class DeviceHDAWG(DeviceBase):
 
         return nc
 
-    async def collect_reset_nodes(self) -> list[DaqNodeSetAction]:
+    async def reset_to_idle(self):
         nc = NodeCollector(base=f"/{self.serial}/")
         # Reset pipeliner first, attempt to set AWG enable leads to FW error if pipeliner was enabled.
         nc.extend(self._pipeliner.reset_nodes())
         nc.barrier()
         nc.add("awgs/*/enable", 0, cache=False)
         nc.add("system/synchronization/source", 0, cache=False)  # internal
-        reset_nodes = await self.maybe_async(nc)
+        await self.set_async(nc)
         # Reset errors must be the last operation, as above sets may cause errors.
         # See https://zhinst.atlassian.net/browse/HULK-1606
-        reset_nodes.extend(await super().collect_reset_nodes())
-        return reset_nodes
+        await super().reset_to_idle()

@@ -45,6 +45,7 @@ class SignalObj:
     base_delay_signal: float | None = None
     oscillator_frequency_sw: float | None = None
     oscillator_frequency_hw: float | None = None
+    local_oscillator_frequency: float | None = None
     channels: list[int] = field(default_factory=list)
     channel_to_port: dict[int, str] = field(default_factory=dict)
     awg: AWGInfo = None

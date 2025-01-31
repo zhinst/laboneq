@@ -12,7 +12,6 @@ import shlex
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     Coroutine,
     Iterator,
     Literal,
@@ -29,7 +28,6 @@ from laboneq.controller.devices.device_utils import (
 )
 
 from laboneq.controller.devices.zi_emulator import EmulatorState, MockInstrument
-from laboneq.controller.devices.zi_node_monitor import NodeMonitorBase
 
 from labone import DataServer, Instrument
 from labone.core import AnnotatedValue
@@ -48,8 +46,10 @@ from laboneq.controller.versioning import (
 
 if TYPE_CHECKING:
     from laboneq.core.types.numpy_support import NumPyArray
-    from laboneq.controller.communication import ServerQualifier
-    from laboneq.controller.devices.device_zi import DeviceQualifier
+    from laboneq.controller.devices.device_setup_dao import (
+        ServerQualifier,
+        DeviceQualifier,
+    )
 
 _logger = logging.getLogger(__name__)
 
@@ -139,11 +139,13 @@ class DataServerConnection:
 
     def __init__(
         self,
+        server_qualifier: ServerQualifier,
         data_server: DataServer,
         devices_json: str,
         version_str: str,
         revision_int: int,
     ):
+        self._server_qualifier = server_qualifier
         self._data_server = data_server
         self._devices_json = devices_json
         self._version_str = version_str
@@ -151,14 +153,19 @@ class DataServerConnection:
         self._log_queue: DataQueue | None = None
         self._log_records: list[AnnotatedValue] = []
 
+    @property
+    def server_qualifier(self) -> ServerQualifier:
+        return self._server_qualifier
+
     @classmethod
     async def connect(
         cls,
-        host: str,
-        port: int,
+        server_qualifier: ServerQualifier,
         emulator_state: EmulatorState | None,
         timeout_s: float,
     ) -> DataServerConnection:
+        host = server_qualifier.host
+        port = server_qualifier.port
         if emulator_state is None:
             data_server = await DataServer.create(
                 host=host, port=port, timeout=to_l1_timeout(timeout_s)
@@ -183,7 +190,7 @@ class DataServerConnection:
         )
 
         return DataServerConnection(
-            data_server, devices_json, version_str, revision_int
+            server_qualifier, data_server, devices_json, version_str, revision_int
         )
 
     @property
@@ -361,13 +368,6 @@ async def _gather_with_timeout(
     )
 
 
-@asynccontextmanager
-async def gather_and_apply(func: Callable[[list[U]], Coroutine[Any, Any, None]]):
-    awaitables: list[Coroutine[Any, Any, U]] = []
-    yield awaitables
-    await func(await _gather(*awaitables))
-
-
 def _resolve_type(value: Any, path: str) -> Any:
     if isinstance(value, Enum):
         return value.value
@@ -494,23 +494,6 @@ async def wait_for_state_change(
     queue.disconnect()
 
 
-class NodeMonitorAsync(NodeMonitorBase):
-    def __init__(self, api: Instrument):
-        super().__init__()
-
-    async def start(self):
-        pass
-
-    async def stop(self):
-        pass
-
-    async def poll(self):
-        pass
-
-    async def wait_for_state_by_get(self, path: str, expected: int):
-        pass
-
-
 def _from_annotated_value(annotated_value: AnnotatedValue) -> Any:
     value = annotated_value.value
     vector = getattr(value, "vector", None)
@@ -541,16 +524,11 @@ class ResponseWaiterAsync:
         self._nodes.update({path: val[0] for path, val in nodes.items()})
         self._messages.update({path: val[1] for path, val in nodes.items()})
 
-    async def prepare(self, get_initial_value: bool = False):
+    async def prepare(self):
         if len(self._nodes) == 0:
             return
         queues = await _gather(
-            *(
-                self._api.kernel_session.subscribe(
-                    path, get_initial_value=get_initial_value
-                )
-                for path in self._nodes
-            )
+            *(self._api.kernel_session.subscribe(path) for path in self._nodes)
         )
         for path, queue in zip(self._nodes.keys(), queues):
             self._queues[path] = queue

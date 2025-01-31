@@ -3,16 +3,19 @@
 
 import itertools
 import math
+from typing import Iterator
 
 from laboneq.compiler.common.compiler_settings import CompilerSettings, TINYSAMPLE
 from laboneq.compiler.common.device_type import DeviceType
+from laboneq.compiler.common import awg_info
 from laboneq.compiler.event_list.event_type import EventList, EventType
-from laboneq.compiler.event_list.event_list_generator import generate_event_list
-from laboneq.compiler.ir.ir import IRTree
+from laboneq.compiler.event_list import event_list_generator as event_gen
+from laboneq.compiler.ir import ir as ir_def
 from laboneq.data.compilation_job import OscillatorInfo
+from laboneq.compiler.seqc import ir as ir_seqc
 
 
-def _calculate_osc_phase(event_list: EventList, ir: IRTree):
+def _calculate_osc_phase(event_list: EventList, ir: ir_def.IRTree):
     """Traverse the event list, and elaborate the phase of each played pulse.
 
     For SW oscillators, calculate the time since the last set/reset of that oscillator,
@@ -125,7 +128,7 @@ def _remove_handled_oscillator_events(
     return filtered_events
 
 
-def _calculate_osc_freq(event_list: EventList, ir: IRTree):
+def _calculate_osc_freq(event_list: EventList, ir: ir_def.IRTree):
     """Traverse the event list, and elaborate the frequency of each played pulse."""
 
     priority_map = {
@@ -165,12 +168,12 @@ def _calculate_osc_freq(event_list: EventList, ir: IRTree):
     )
 
 
-def _start_events(ir: IRTree) -> EventList:
+def _create_start_events(devices: list[ir_def.DeviceIR]) -> EventList:
     retval = []
 
     # Add initial events to reset the NCOs.
     # Todo (PW): Drop once system tests have been migrated from legacy behaviour.
-    for device_info in ir.devices:
+    for device_info in devices:
         try:
             device_type = DeviceType.from_device_info_type(  # @IgnoreException
                 device_info.device_type
@@ -192,14 +195,16 @@ def _start_events(ir: IRTree) -> EventList:
 
 
 def generate_event_list_from_ir(
-    ir: IRTree, settings: CompilerSettings, expand_loops: bool, max_events: int
+    ir: ir_def.IRTree,
+    settings: CompilerSettings,
+    expand_loops: bool,
+    max_events: int,
 ) -> EventList:
-    event_list = _start_events(ir)
-
+    event_list = _create_start_events(ir.devices)
     if ir.root is not None:
         id_tracker = itertools.count()
         event_list.extend(
-            generate_event_list(
+            event_gen.generate_event_list(
                 ir.root,
                 start=0,
                 max_events=max_events,
@@ -208,7 +213,6 @@ def generate_event_list_from_ir(
                 settings=settings,
             )
         )
-
         # assign every event an id
         for event in event_list:
             if "id" not in event:
@@ -222,3 +226,56 @@ def generate_event_list_from_ir(
     _calculate_osc_phase(event_list, ir)
 
     return event_list
+
+
+@event_gen.generate_event_list.register
+def generate_event_list_single_awg(
+    ir: ir_seqc.SingleAwgIR,
+    start: int,
+    max_events: int,
+    id_tracker: Iterator[int],
+    expand_loops,
+    settings: CompilerSettings,
+) -> EventList:
+    return [
+        e
+        for l in event_gen.generate_children_events(
+            ir, start, max_events, settings, id_tracker, expand_loops
+        )
+        for e in l
+    ]
+
+
+def event_list_per_awg(
+    tree: ir_def.IRTree,
+    settings: CompilerSettings,
+) -> dict[awg_info.AwgKey, EventList]:
+    """Generate event list per AWG in the tree root."""
+    event_lists_by_awg = {}
+    id_tracker = itertools.count()
+    for awg_ir in tree.root.children:
+        assert isinstance(awg_ir, ir_seqc.SingleAwgIR)
+        event_list = _create_start_events(
+            [dev for dev in tree.devices if dev.uid == awg_ir.awg.device_id]
+        )
+        event_list.extend(
+            event_gen.generate_event_list(
+                awg_ir,
+                start=0,
+                settings=settings,
+                max_events=float("inf"),
+                expand_loops=False,
+                id_tracker=id_tracker,
+            )
+        )
+        for event in event_list:
+            if "id" not in event:
+                # assign every event an id
+                event["id"] = next(id_tracker)
+            # convert time from units of tiny samples to seconds
+            event["time"] = event["time"] * TINYSAMPLE
+
+        event_list = _calculate_osc_freq(event_list, tree)
+        _calculate_osc_phase(event_list, tree)
+        event_lists_by_awg[awg_ir.awg.key] = event_list
+    return event_lists_by_awg

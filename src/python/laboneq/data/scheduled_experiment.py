@@ -147,7 +147,7 @@ class ScheduledExperiment:
     recipe: Recipe | None = None
 
     #: Compiler artifacts specific to backend(s)
-    artifacts: CompilerArtifact | dict[int, CompilerArtifact] | None = None
+    artifacts: CompilerArtifact | None = None
 
     def __getattr__(self, attr):
         return getattr(self.artifacts, attr)  # @IgnoreException

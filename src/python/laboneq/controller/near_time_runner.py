@@ -10,10 +10,6 @@ from inspect import iscoroutinefunction
 from typing import TYPE_CHECKING, Any
 
 
-from laboneq.controller.communication import (
-    DaqNodeSetAction,
-    batch_set,
-)
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.protected_session import ProtectedSession
 from laboneq.controller.util import LabOneQControllerException, SweepParamsTracker
@@ -106,18 +102,14 @@ class NearTimeRunner(AsyncExecutorBase):
 
         await self.controller._configure_triggers()
 
-        user_set_node_actions: list[DaqNodeSetAction] = []
         for device, nc in self.user_set_nodes.items():
-            user_set_node_actions.extend(await device.maybe_async(nc))
+            await device.set_async(nc)
         self.user_set_nodes.clear()
 
-        nt_sweep_nodes = await self.controller._prepare_nt_step(
-            self.sweep_params_tracker
-        )
+        await self.controller._prepare_nt_step(self.sweep_params_tracker)
 
-        step_prepare_nodes = await self.controller._prepare_rt_execution()
+        await self.controller._prepare_rt_execution()
 
-        await batch_set([*user_set_node_actions, *nt_sweep_nodes, *step_prepare_nodes])
         self.sweep_params_tracker.clear_for_next_step()
 
         await self.controller._initialize_awgs(

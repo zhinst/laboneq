@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from typing import TYPE_CHECKING, Any, NoReturn
 
 import numpy as np
@@ -13,9 +12,6 @@ import numpy as np
 from laboneq.controller.attribute_value_tracker import (
     AttributeName,
     DeviceAttributesView,
-)
-from laboneq.controller.communication import (
-    DaqNodeSetAction,
 )
 from laboneq.controller.devices.async_support import _gather, canonical_vector
 from laboneq.controller.devices.device_utils import NodeCollector
@@ -25,7 +21,7 @@ from laboneq.controller.devices.device_zi import (
     delay_to_rounded_samples,
     RawReadoutData,
 )
-from laboneq.controller.devices.zi_node_monitor import (
+from laboneq.controller.devices.node_control import (
     Command,
     Response,
     Setting,
@@ -110,32 +106,18 @@ class DeviceUHFQA(DeviceBase):
             return None
         return previously_allocated
 
-    async def disable_outputs(
-        self, outputs: set[int], invert: bool
-    ) -> list[DaqNodeSetAction]:
+    async def disable_outputs(self, outputs: set[int], invert: bool):
         nc = NodeCollector(base=f"/{self.serial}/")
         for ch in range(self._channels):
             if (ch in outputs) != invert:
                 nc.add(f"sigouts/{ch}/on", 0, cache=False)
-        return await self.maybe_async(nc)
+        await self.set_async(nc)
 
     def _result_node_integrator(self, result_index: int):
         return f"/{self.serial}/qas/0/result/data/{result_index}/wave"
 
     def _result_node_monitor(self, ch: int):
         return f"/{self.serial}/qas/0/monitor/inputs/{ch}/wave"
-
-    def _nodes_to_monitor_impl(self) -> list[str]:
-        nodes = super()._nodes_to_monitor_impl()
-        if self._api is None:
-            for awg in range(self._get_num_awgs()):
-                nodes.append(self.get_sequencer_paths(awg).enable)
-                nodes.append(self.get_sequencer_paths(awg).ready)
-            for result_index in range(self._integrators):
-                nodes.append(self._result_node_integrator(result_index))
-            nodes.append(self._result_node_monitor(0))
-            nodes.append(self._result_node_monitor(1))
-        return nodes
 
     def _error_ambiguous_upstream(self) -> NoReturn:
         raise LabOneQControllerException(
@@ -269,6 +251,12 @@ class DeviceUHFQA(DeviceBase):
         nc.add("qas/0/monitor/enable", 1 if enable else 0)
         return nc
 
+    async def start_execution(self, with_pipeliner: bool):
+        nc = NodeCollector(base=f"/{self.serial}/")
+        for awg_index in self._allocated_awgs:
+            nc.add(f"awgs/{awg_index}/enable", 1, cache=False)
+        await self.set_async(nc)
+
     def conditions_for_execution_ready(
         self, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
@@ -319,12 +307,12 @@ class DeviceUHFQA(DeviceBase):
                 range_list,
             )
 
-    async def collect_initialization_nodes(
+    async def apply_initialization(
         self,
         device_recipe_data: DeviceRecipeData,
         initialization: Initialization,
         recipe_data: RecipeData,
-    ) -> list[DaqNodeSetAction]:
+    ):
         _logger.debug("%s: Initializing device...", self.dev_repr)
 
         nc = NodeCollector(base=f"/{self.serial}/")
@@ -358,7 +346,7 @@ class DeviceUHFQA(DeviceBase):
                 self._validate_range(output, is_out=True)
                 nc.add(f"sigouts/{output.channel}/range", output.range)
 
-        return await self.maybe_async(nc)
+        await self.set_async(nc)
 
     def collect_prepare_nt_step_nodes(
         self, attributes: DeviceAttributesView, recipe_data: RecipeData
@@ -524,9 +512,9 @@ class DeviceUHFQA(DeviceBase):
 
         return nc
 
-    async def collect_awg_before_upload_nodes(
+    async def set_before_awg_upload(
         self, initialization: Initialization, recipe_data: RecipeData
-    ) -> list[DaqNodeSetAction]:
+    ):
         acquisition_type = RtExecutionInfo.get_acquisition_type(
             recipe_data.rt_execution_infos
         )
@@ -536,12 +524,9 @@ class DeviceUHFQA(DeviceBase):
             nc = self._configure_standard_mode_nodes(
                 acquisition_type, initialization.device_uid, recipe_data
             )
+        await self.set_async(nc)
 
-        return await self.maybe_async(nc)
-
-    async def collect_awg_after_upload_nodes(
-        self, initialization: Initialization
-    ) -> list[DaqNodeSetAction]:
+    async def set_after_awg_upload(self, initialization: Initialization):
         nc = NodeCollector(base=f"/{self.serial}/")
         inputs = initialization.inputs
         if len(initialization.measurements) > 0:
@@ -562,11 +547,11 @@ class DeviceUHFQA(DeviceBase):
             self._validate_range(dev_input, is_out=False)
             nc.add(f"sigins/{dev_input.channel}/range", dev_input.range)
 
-        return await self.maybe_async(nc)
+        await self.set_async(nc)
 
-    async def collect_trigger_configuration_nodes(
+    async def configure_trigger(
         self, initialization: Initialization, recipe_data: RecipeData
-    ) -> list[DaqNodeSetAction]:
+    ):
         nc = NodeCollector(base=f"/{self.serial}/")
 
         # Loop over at least AWG instance to cover the case that the instrument is only used as a
@@ -597,33 +582,19 @@ class DeviceUHFQA(DeviceBase):
             nc.add(f"triggers/out/{trigger_index}/drive", 1)
             nc.add(f"triggers/out/{trigger_index}/source", 32 + trigger_index)
 
-        return await self.maybe_async(nc)
+        await self.set_async(nc)
 
-    async def on_experiment_begin(self) -> list[DaqNodeSetAction]:
-        if self._api is not None:
-            nodes = [
-                *(
-                    self._result_node_integrator(result_index)
-                    for result_index in range(self._integrators)
-                ),
-                self._result_node_monitor(0),
-                self._result_node_monitor(1),
-            ]
-            await _gather(
-                *(self._subscriber.subscribe(self._api, node) for node in nodes)
-            )
-
-        return await super().on_experiment_begin()
-
-    async def _get_integrator_measurement_data(
-        self, result_index, num_results, averages_divider: int
-    ):
-        impl = (
-            self._get_integrator_measurement_data_sync
-            if self._api is None
-            else self._get_integrator_measurement_data_async
-        )
-        return await impl(result_index, num_results, averages_divider)
+    async def on_experiment_begin(self):
+        nodes = [
+            *(
+                self._result_node_integrator(result_index)
+                for result_index in range(self._integrators)
+            ),
+            self._result_node_monitor(0),
+            self._result_node_monitor(1),
+        ]
+        await _gather(*(self._subscriber.subscribe(self._api, node) for node in nodes))
+        await super().on_experiment_begin()
 
     def _ch_repr_readout(self, ch: int) -> str:
         return f"{self.dev_repr}:readout{ch}"
@@ -641,7 +612,7 @@ class DeviceUHFQA(DeviceBase):
                 "or the measurement was not started."
             )
 
-    async def _get_integrator_measurement_data_async(
+    async def _get_integrator_measurement_data(
         self, result_index, num_results, averages_divider: int
     ):
         result_path = self._result_node_integrator(result_index)
@@ -657,39 +628,11 @@ class DeviceUHFQA(DeviceBase):
             )
             # Not dividing by averages_divider - it appears poll data is already divided.
             return node_val[0:num_results]
-        except TimeoutError:
+        except (TimeoutError, asyncio.TimeoutError):
             _logger.error(
                 f"{self._ch_repr_readout(result_index)}: Failed to receive a result from {result_path} within {timeout_s} seconds."
             )
             return np.array([], dtype=np.complex128)
-
-    async def _get_integrator_measurement_data_sync(
-        self, result_index, num_results, averages_divider: int
-    ):
-        result_path = self._result_node_integrator(result_index)
-        read_result_timeout_s = 5
-        last_result_received = None
-        while True:
-            node_data = self.node_monitor.pop(result_path)
-            if node_data is not None:
-                node_val = node_data["vector"]
-                self._check_result(
-                    node_val=node_val,
-                    num_results=num_results,
-                    ch_repr=self._ch_repr_readout(result_index),
-                )
-                # Not dividing by averages_divider - it appears poll data is already divided.
-                return node_val[0:num_results]
-            now = time.monotonic()
-            if last_result_received is None:
-                last_result_received = now
-            if now - last_result_received > read_result_timeout_s:
-                _logger.error(
-                    f"{self._ch_repr_readout(result_index)}: Failed to receive all results within {read_result_timeout_s} s, timing out."
-                )
-                return np.array([], dtype=np.complex128)
-            await asyncio.sleep(0.1)
-            await self.node_monitor.poll()
 
     async def get_measurement_data(
         self,
@@ -727,14 +670,6 @@ class DeviceUHFQA(DeviceBase):
             )
 
     async def _get_input_monitor_data(self, ch: int, num_results: int):
-        impl = (
-            self._get_input_monitor_data_sync
-            if self._api is None
-            else self._get_input_monitor_data_async
-        )
-        return await impl(ch, num_results)
-
-    async def _get_input_monitor_data_async(self, ch: int, num_results: int):
         result_path = self._result_node_monitor(ch)
         # TODO(2K): set timeout based on timeout_s from connect
         timeout_s = 5.0
@@ -748,37 +683,11 @@ class DeviceUHFQA(DeviceBase):
             )
             # Truncate returned vectors to the expected length -> hotfix for GCE-681
             return node_val[0:num_results]
-        except TimeoutError:
+        except (TimeoutError, asyncio.TimeoutError):
             _logger.error(
                 f"{self._ch_repr_monitor(ch)}: Failed to receive a result from {result_path} within {timeout_s} seconds."
             )
             return np.array([], dtype=np.complex128)
-
-    async def _get_input_monitor_data_sync(self, ch: int, num_results: int):
-        result_path = self._result_node_monitor(ch)
-        read_result_timeout_s = 5
-        last_result_received = None
-        while True:
-            node_data = self.node_monitor.pop(result_path)
-            if node_data is not None:
-                node_val = node_data["vector"]
-                self._check_result(
-                    node_val=node_val,
-                    num_results=num_results,
-                    ch_repr=self._ch_repr_monitor(ch),
-                )
-                # Truncate returned vectors to the expected length -> hotfix for GCE-681
-                return node_val[0:num_results]
-            now = time.monotonic()
-            if last_result_received is None:
-                last_result_received = now
-            if now - last_result_received > read_result_timeout_s:
-                _logger.error(
-                    f"{self._ch_repr_monitor(ch)}: Failed to receive all results within {read_result_timeout_s} s, timing out."
-                )
-                return np.array([], dtype=np.complex128)
-            await asyncio.sleep(0.1)
-            await self.node_monitor.poll()
 
     async def get_input_monitor_data(
         self, channel: int, num_results: int

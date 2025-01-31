@@ -25,26 +25,28 @@ from laboneq._utils import UIDReference, cached_method
 from laboneq.compiler.common.compiler_settings import CompilerSettings, TINYSAMPLE
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
-from laboneq.compiler.ir.acquire_group_ir import AcquireGroupIR
-from laboneq.compiler.ir.case_ir import CaseIR, EmptyBranchIR
-from laboneq.compiler.ir.interval_ir import IntervalIR
-from laboneq.compiler.ir.ir import IRTree, DeviceIR, SignalIR, PulseDefIR
-from laboneq.compiler.ir.loop_ir import LoopIR
-from laboneq.compiler.ir.loop_iteration_ir import (
+from laboneq.compiler.ir import (
+    AcquireGroupIR,
+    CaseIR,
+    EmptyBranchIR,
+    IntervalIR,
+    IRTree,
+    DeviceIR,
+    SignalIR,
+    PulseDefIR,
+    LoopIR,
     LoopIterationIR,
     LoopIterationPreambleIR,
-)
-from laboneq.compiler.ir.match_ir import MatchIR
-from laboneq.compiler.ir.oscillator_ir import (
     InitialOscillatorFrequencyIR,
     SetOscillatorFrequencyIR,
+    PPCStepIR,
+    PrecompClearIR,
+    PulseIR,
+    RootScheduleIR,
+    SectionIR,
+    MatchIR,
+    PhaseResetIR,
 )
-from laboneq.compiler.ir.phase_reset_ir import PhaseResetIR
-from laboneq.compiler.ir.ppc_step_ir import PPCStepIR
-from laboneq.compiler.ir.pulse_ir import PrecompClearIR, PulseIR
-from laboneq.compiler.ir.reserve_ir import ReserveIR
-from laboneq.compiler.ir.root_ir import RootScheduleIR
-from laboneq.compiler.ir.section_ir import SectionIR
 from laboneq.compiler.scheduler.acquire_group_schedule import AcquireGroupSchedule
 from laboneq.compiler.scheduler.case_schedule import CaseSchedule, EmptyBranch
 from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
@@ -96,37 +98,73 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 
-_schedule_to_ir = {
-    AcquireGroupSchedule: AcquireGroupIR,
-    CaseSchedule: CaseIR,
-    IntervalSchedule: IntervalIR,
-    LoopSchedule: LoopIR,
-    LoopIterationSchedule: LoopIterationIR,
-    LoopIterationPreambleSchedule: LoopIterationPreambleIR,
-    MatchSchedule: MatchIR,
-    OscillatorFrequencyStepSchedule: SetOscillatorFrequencyIR,
-    InitialOscillatorFrequencySchedule: InitialOscillatorFrequencyIR,
-    PhaseResetSchedule: PhaseResetIR,
-    PulseSchedule: PulseIR,
-    ReserveSchedule: ReserveIR,
-    RootSchedule: RootScheduleIR,
-    SectionSchedule: SectionIR,
-    PrecompClearSchedule: PrecompClearIR,
-    EmptyBranch: EmptyBranchIR,
-    PPCStepSchedule: PPCStepIR,
-}
 
+class _ScheduleToIRConverter:
+    def __init__(self):
+        self._schedule_to_ir = {
+            AcquireGroupSchedule: self._convert_to(AcquireGroupIR),
+            CaseSchedule: self._convert_to(CaseIR),
+            IntervalSchedule: self._convert_to(IntervalIR),
+            LoopSchedule: self._convert_to(LoopIR),
+            LoopIterationSchedule: self._convert_to(LoopIterationIR),
+            LoopIterationPreambleSchedule: self._convert_to(LoopIterationPreambleIR),
+            MatchSchedule: self._convert_to(MatchIR),
+            OscillatorFrequencyStepSchedule: self._convert_to(SetOscillatorFrequencyIR),
+            InitialOscillatorFrequencySchedule: self._convert_to(
+                InitialOscillatorFrequencyIR
+            ),
+            PhaseResetSchedule: self._convert_to(PhaseResetIR),
+            PulseSchedule: self._convert_to(PulseIR),
+            RootSchedule: self._convert_to(RootScheduleIR),
+            SectionSchedule: self._convert_to(SectionIR),
+            EmptyBranch: self._convert_to(EmptyBranchIR),
+            PPCStepSchedule: self._convert_to(PPCStepIR),
+        }
 
-@functools.lru_cache()
-def _all_slots(cls):
-    slots = set()
-    for base in cls.__mro__:
-        if isinstance(getattr(base, "__slots__", []), str):
-            slots.add(getattr(base, "__slots__", []))
-        else:
-            for attr in getattr(base, "__slots__", []):
-                slots.add(attr)
-    return [s for s in slots if not s.startswith("__")]
+    @staticmethod
+    def _all_slots(cls):
+        slots = set()
+        for base in cls.__mro__:
+            if isinstance(getattr(base, "__slots__", []), str):
+                slots.add(getattr(base, "__slots__", []))
+            else:
+                for attr in getattr(base, "__slots__", []):
+                    slots.add(attr)
+        return [s for s in slots if not s.startswith("__")]
+
+    @staticmethod
+    def _convert_to(obj):
+        slots = _ScheduleToIRConverter._all_slots(obj)
+
+        def convert(scheduler_obj):
+            return obj(**{s: getattr(scheduler_obj, s) for s in slots})
+
+        return convert
+
+    @functools.singledispatchmethod
+    def visit(self, node):
+        raise RuntimeError(f"Invalid node type: {type(node)}")
+
+    @visit.register
+    def visit_reserve(self, node: ReserveSchedule):
+        return None
+
+    @visit.register
+    def visit_precompensation(self, node: PrecompClearSchedule):
+        return PrecompClearIR(signals={node.pulse.pulse.signal.uid}, length=node.length)
+
+    @visit.register
+    def generic_visit(self, node: IntervalSchedule):
+        obj: IntervalIR = self._schedule_to_ir[type(node)](node)
+        obj.children = []
+        obj.children_start = []
+        assert len(node.children) == len(node.children_start)
+        for start, child in zip(node.children_start, node.children):
+            c = self.visit(child)
+            if c:
+                obj.children.append(c)
+                obj.children_start.append(start)
+        return obj
 
 
 @dataclasses.dataclass
@@ -161,7 +199,6 @@ class Scheduler:
 
         _, self._system_grid = self.grid(*self._experiment_dao.signals())
         self._root_schedule: Optional[IntervalSchedule] = None
-        self._root_ir: Optional[IntervalIR] = None
         self._scheduled_sections = {}
         self._max_acquisition_time_per_awg = {}
 
@@ -209,30 +246,11 @@ class Scheduler:
         ) in self._schedule_data.combined_warnings.values():
             warning_generator(warning_data)
 
-    def _schedule_to_ir(self, ir_node: IntervalIR, schedule_node: IntervalSchedule):
-        ir_children = []
-        for c in schedule_node.children:
-            c_ir = _schedule_to_ir[c.__class__](
-                **{s: getattr(c, s) for s in _all_slots(_schedule_to_ir[c.__class__])}
-            )
-            ir_children.append(c_ir)
-        ir_node.children = ir_children
-
-        for ir_c, schedule_c in zip(ir_node.children, schedule_node.children):
-            self._schedule_to_ir(ir_c, schedule_c)
-
     def generate_ir(self):
         root_ir = None
         if self._root_schedule is not None:
-            root_ir = RootScheduleIR(
-                **{
-                    s: getattr(self._root_schedule, s)
-                    for s in _all_slots(RootScheduleIR)
-                }
-            )
-            self._schedule_to_ir(root_ir, self._root_schedule)
+            root_ir = _ScheduleToIRConverter().visit(self._root_schedule)
         exp_info = self._experiment_dao.to_experiment_info()
-
         return IRTree(
             devices=[DeviceIR.from_device_info(dev) for dev in exp_info.devices],
             signals=[SignalIR.from_signal_info(sig) for sig in exp_info.signals],

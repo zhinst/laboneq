@@ -52,12 +52,12 @@ def analyze_loop_times(
 
     if plays_anything:
         _logger.debug(
-            "Analyzing loop events for awg %d of %s", awg.awg_number, awg.device_id
+            "Analyzing loop events for awg %d of %s", awg.awg_id, awg.device_id
         )
     else:
         _logger.debug(
             "Skipping analysis of loop events for awg %d of %s because nothing is played",
-            awg.awg_number,
+            awg.awg_id,
             awg.device_id,
         )
         return loop_events
@@ -358,7 +358,7 @@ def analyze_ppc_sweep_events(events: list[Any], awg: AWGInfo, global_delay: floa
         for index, event in enumerate(events)
         if event["event_type"] == EventType.PPC_SWEEP_STEP_START
         and event.get("qa_device") == awg.device_id
-        and event.get("qa_channel") == awg.awg_number
+        and event.get("qa_channel") == awg.awg_id
     ]
     ppc_start_ids = {e["id"] for _, e in ppc_sweep_start_events}
     ppc_sweep_end_events = [

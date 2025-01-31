@@ -31,4 +31,4 @@ class PulseIR(IntervalIR):
 
 @define(kw_only=True, slots=True)
 class PrecompClearIR(IntervalIR):
-    pulse: PulseIR
+    """Precompensation clear command on a specific signal."""

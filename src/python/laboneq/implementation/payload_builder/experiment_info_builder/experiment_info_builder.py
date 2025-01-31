@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import copy
 import itertools
 import logging
 import re
@@ -82,9 +81,9 @@ class ExperimentInfoBuilder:
         device_setup: Setup,
         signal_mappings: Dict[str, str],
     ):
-        self._experiment = copy.deepcopy(experiment)
-        self._device_setup = copy.deepcopy(device_setup)
-        self._signal_mappings = copy.deepcopy(signal_mappings)
+        self._experiment = experiment
+        self._device_setup = device_setup
+        self._signal_mappings = signal_mappings
         self._ls_to_exp_sig_mapping = {
             ls: exp for exp, ls in self._signal_mappings.items()
         }

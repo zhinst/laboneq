@@ -327,10 +327,11 @@ class SeqCLinker(ILinker):
         neartime_execution_steps = []
         for awg in rt_compiler_output.src.keys():
             seqc_name = _make_seqc_name(awg, step_indices)
+            assert isinstance(awg.awg_id, int)
             neartime_execution_steps.append(
                 NeartimeStep(
                     device_id=awg.device_id,
-                    awg_id=awg.awg_number,
+                    awg_id=awg.awg_id,
                     seqc_ref=seqc_name,
                     wave_indices_ref=seqc_name,
                     kernel_indices_ref=seqc_name,
@@ -347,7 +348,7 @@ class SeqCLinker(ILinker):
 def _make_seqc_name(awg: AwgKey, step_indices: list[int]) -> str:
     # Replace with UUID? Hash digest?
     step_indices_str = "[" + ",".join([str(i) for i in step_indices]) + "]"
-    return f"seq_{awg.device_id}_{awg.awg_number}_{step_indices_str}.seqc"
+    return f"seq_{awg.device_id}_{awg.awg_id}_{step_indices_str}.seqc"
 
 
 def _deep_compare(a: Any, b: Any) -> bool:

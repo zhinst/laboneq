@@ -214,7 +214,6 @@ def plot_simulation(
             channel,
             start=start_time,
             output_length=length,
-            channel_type=channel.type,
             get_trigger=True,
             get_marker=True,
             get_frequency=True,

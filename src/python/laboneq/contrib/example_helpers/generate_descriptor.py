@@ -29,6 +29,7 @@ def generate_descriptor(
     number_flux_lines=0,
     multiplex=False,
     number_multiplex=0,
+    include_ef_lines=True,
     include_cr_lines=False,
     drive_only=False,
     readout_only=False,
@@ -88,6 +89,7 @@ def generate_descriptor(
         filename: The file name to give to the YAML descriptor (e.g. `"yaml_descriptor"`).
         get_zsync: If True, starts a Session to communicate with the PQSC and
             listed devices to determine the connections of the ZSync cables.
+            This will also automatically query device options.
         get_dio: If True, starts a Session to determine the connections of HDAWG
             to UHFQA instruments via DIO cables.
         dummy_dio: Allows the user to specify a dictionary with a DIO connection
@@ -337,12 +339,13 @@ for how to set them up without a PQSC.
                         "ports": f"SGCHANNELS/{i_qc_ch_6}/OUTPUT",
                     }
                 )
-                sig_dict.append(
-                    {
-                        "iq_signal": f"q{i}/drive_ef",
-                        "ports": f"SGCHANNELS/{i_qc_ch_6}/OUTPUT",
-                    }
-                )
+                if include_ef_lines:
+                    sig_dict.append(
+                        {
+                            "iq_signal": f"q{i}/drive_ef",
+                            "ports": f"SGCHANNELS/{i_qc_ch_6}/OUTPUT",
+                        }
+                    )
                 if include_cr_lines:
                     sig_dict.append(
                         {
@@ -369,12 +372,13 @@ for how to set them up without a PQSC.
                         "ports": f"SGCHANNELS/{i_qc_ch_4}/OUTPUT",
                     }
                 )
-                sig_dict.append(
-                    {
-                        "iq_signal": f"q{i}/drive_ef",
-                        "ports": f"SGCHANNELS/{i_qc_ch_4}/OUTPUT",
-                    }
-                )
+                if include_ef_lines:
+                    sig_dict.append(
+                        {
+                            "iq_signal": f"q{i}/drive_ef",
+                            "ports": f"SGCHANNELS/{i_qc_ch_4}/OUTPUT",
+                        }
+                    )
                 if include_cr_lines:
                     sig_dict.append(
                         {
@@ -401,12 +405,13 @@ for how to set them up without a PQSC.
                         "ports": f"SGCHANNELS/{i_qc_ch_2}/OUTPUT",
                     }
                 )
-                sig_dict.append(
-                    {
-                        "iq_signal": f"q{i}/drive_ef",
-                        "ports": f"SGCHANNELS/{i_qc_ch_2}/OUTPUT",
-                    }
-                )
+                if include_ef_lines:
+                    sig_dict.append(
+                        {
+                            "iq_signal": f"q{i}/drive_ef",
+                            "ports": f"SGCHANNELS/{i_qc_ch_2}/OUTPUT",
+                        }
+                    )
                 if include_cr_lines:
                     sig_dict.append(
                         {
@@ -433,12 +438,13 @@ for how to set them up without a PQSC.
                         "ports": f"SGCHANNELS/{i_sg_ch_8}/OUTPUT",
                     }
                 )
-                sig_dict.append(
-                    {
-                        "iq_signal": f"q{i}/drive_ef",
-                        "ports": f"SGCHANNELS/{i_sg_ch_8}/OUTPUT",
-                    }
-                )
+                if include_ef_lines:
+                    sig_dict.append(
+                        {
+                            "iq_signal": f"q{i}/drive_ef",
+                            "ports": f"SGCHANNELS/{i_sg_ch_8}/OUTPUT",
+                        }
+                    )
                 if include_cr_lines:
                     sig_dict.append(
                         {
@@ -465,12 +471,13 @@ for how to set them up without a PQSC.
                         "ports": f"SGCHANNELS/{i_sg_ch_4}/OUTPUT",
                     }
                 )
-                sig_dict.append(
-                    {
-                        "iq_signal": f"q{i}/drive_ef",
-                        "ports": f"SGCHANNELS/{i_sg_ch_4}/OUTPUT",
-                    }
-                )
+                if include_ef_lines:
+                    sig_dict.append(
+                        {
+                            "iq_signal": f"q{i}/drive_ef",
+                            "ports": f"SGCHANNELS/{i_sg_ch_4}/OUTPUT",
+                        }
+                    )
                 if include_cr_lines:
                     sig_dict.append(
                         {
@@ -1006,20 +1013,36 @@ for how to set them up without a PQSC.
             for k in devid_uid:
                 session_device = session.connect_device(devid_uid[k].split("_")[1])
                 if "SHF" in session_device.device_type:
-                    print(devid_uid[k].split("_")[1])
                     session_device.system.clocks.referenceclock.in_.source(2)
                 if "HDAWG" in session_device.device_type:
-                    print(devid_uid[k].split("_")[1])
                     session_device.system.clocks.referenceclock.source(2)
                 if "UHFQA" in session_device.device_type:
                     continue
                 time.sleep(2)
+                # added to ask device to list its options
+                short_name = devid_uid[k].split("_")[0]
+                short_id = devid_uid[k].split("_")[1]
+                my_options = (
+                    f"{session_device.device_type}"
+                    + "/"
+                    + "/".join(str(session_device.device_options).split())
+                )
+                for v in instrument_dict[short_name]:
+                    for v_item in v.copy():
+                        if v[f"{v_item}"] == short_id:
+                            v["options"] = my_options
                 sig_dict = signal_and_port_dict.setdefault(f"PQSC_{pqsc[0]}", [])
                 sig_dict.append(
                     {
                         "to": f"{devid_uid[k]}",
                         "port": f"ZSYNCS/{PQSC.find_zsync_worker_port(self=device_pqsc, device=session_device)}",
                     }
+                )
+                print(devid_uid[k].split("_")[1])
+                print("Options: " + f"{my_options}")
+                print(
+                    "ZSync Port: "
+                    + f"{PQSC.find_zsync_worker_port(self=device_pqsc, device=session_device)}"
                 )
             if internal_clock is True:
                 sig_dict.append("internal_clock_signal")

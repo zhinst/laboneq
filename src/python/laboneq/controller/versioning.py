@@ -27,27 +27,13 @@ class LabOneVersion:
             return f"{self.major}.{self.minor:02d}.{self.patch}.{self.build}"
 
     def as_tuple(
-        self, *, omit_build: bool = False
-    ) -> tuple[int, int, int, int] | tuple[int, int, int] | tuple[int, int]:
-        """Return version as a tuple of integers. Particularly useful if one
-        wants to compare up to the build number.
-
-        Args:
-            omit_build: If the version supports patch number, returns (major,
-                minor, build) or (major, minor). Otherwise returns (major, minor,
-                patch, build) or (major, minor, patch).
-
-        """
-        if omit_build:
-            if self.patch is None:
-                return (self.major, self.minor)
-            else:
-                return (self.major, self.minor, self.patch)
+        self,
+    ) -> tuple[int, int, int, int] | tuple[int, int, int]:
+        """Return version as a tuple of integers."""
+        if self.patch is None:
+            return (self.major, self.minor, self.build)
         else:
-            if self.patch is None:
-                return (self.major, self.minor, self.build)
-            else:
-                return (self.major, self.minor, self.patch, self.build)
+            return (self.major, self.minor, self.patch, self.build)
 
     def as_dataserver_revision(self) -> int:
         """Pack revision information similar to how LabOne data server does it."""
@@ -117,7 +103,7 @@ class LabOneVersion:
         return cls(major=major, minor=minor, patch=patch, build=build)
 
 
-RECOMMENDED_LABONE_VERSION = LabOneVersion(major=24, minor=10, patch=None, build=0)
+RECOMMENDED_LABONE_VERSION = LabOneVersion(major=25, minor=1, patch=0, build=0)
 """This variable holds the version what we currently support and actively test against."""
 
 MINIMUM_SUPPORTED_LABONE_VERSION = LabOneVersion(
@@ -132,7 +118,7 @@ case an issue is found."""
 
 # LabOne Q version (major,minor) marked to remove support for all LabOne
 # versions less than RECOMMENDED_LABONE_VERSION.
-DROP_SUPPORT_FOR_PREVIOUS_L1 = (2, 41)
+DROP_SUPPORT_FOR_PREVIOUS_L1 = (2, 47)
 
 
 class SetupCaps:

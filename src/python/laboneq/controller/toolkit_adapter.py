@@ -65,9 +65,11 @@ class ToolkitDevices(Mapping):
             raise KeyError(f"No device found with serial or uid '{key}'")
 
         tk_session = self._tk_session(
-            device.daq.server_qualifier.host,
-            device.daq.server_qualifier.port,
-            device.daq._zi_api_object if device._api is None else None,
+            device.server_qualifier.host,
+            device.server_qualifier.port,
+            getattr(
+                device, "_zi_api_object", None
+            ),  # TODO(2K): Tests still provide a mock api object
         )
 
         return tk_session.devices[device.serial]

@@ -33,7 +33,7 @@ from laboneq.dsl.quantum import QuantumElement
 from collections.abc import Sequence
 
 __all__ = [
-    "Qubits",
+    "QuantumElements",
     "SimpleDict",
 ]
 
@@ -41,4 +41,4 @@ __all__ = [
 # Use of typing_extensions TypeAlias is to support Python 3.9.
 
 SimpleDict: TypeAlias = dict[str, Union[str, int, float, complex, bool, None]]
-Qubits: TypeAlias = Union[QuantumElement, Sequence[QuantumElement]]
+QuantumElements: TypeAlias = Union[QuantumElement, Sequence[QuantumElement]]

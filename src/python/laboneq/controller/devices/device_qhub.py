@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-from laboneq.controller.communication import DaqNodeSetAction, batch_set
 from laboneq.controller.devices.device_leader_base import DeviceLeaderBase
 from laboneq.controller.devices.device_utils import NodeCollector
 
@@ -19,7 +18,7 @@ class DeviceQHUB(DeviceLeaderBase):
             for v in values:
                 nc.add("value", v)
                 nc.barrier()
-            await batch_set(await self.maybe_async(nc))
+            await self.set_async(nc)
 
         await asyncio.sleep(2)
         await _set_debug_sequential(
@@ -48,11 +47,10 @@ class DeviceQHUB(DeviceLeaderBase):
         )
         await asyncio.sleep(2)
 
-    async def collect_reset_nodes(self) -> list[DaqNodeSetAction]:
-        reset_nodes = await super().collect_reset_nodes()
+    async def reset_to_idle(self):
+        await super().reset_to_idle()
         nc = NodeCollector(base=f"/{self.serial}/")
         # QHub does not automatically transition execution/enable to 0 (stop),
         # ensure it is on stop before we begin execution.
         nc.add("execution/enable", 0, cache=False)
-        reset_nodes.extend(await self.maybe_async(nc))
-        return reset_nodes
+        await self.set_async(nc)

@@ -12,7 +12,6 @@ from laboneq.controller.attribute_value_tracker import (
     DeviceAttribute,
     DeviceAttributesView,
 )
-from laboneq.controller.communication import DaqNodeSetAction
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import DeviceBase
 from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
@@ -57,17 +56,6 @@ class DeviceSHFPPC(DeviceBase):
         super().free_allocations()
         self._allocated_sweepers.clear()
 
-    def _nodes_to_monitor_impl(self):
-        nodes = super()._nodes_to_monitor_impl()
-        if self._api is None:
-            nodes.extend(
-                [
-                    f"/{self.serial}/ppchannels/{channel}/sweeper/enable"
-                    for channel in range(self._channels)
-                ]
-            )
-        return nodes
-
     def _key_to_path(self, key: str, ch: int):
         keys_to_paths = {
             "pump_on": f"/{self.serial}/ppchannels/{ch}/synthesizer/pump/on",
@@ -104,19 +92,18 @@ class DeviceSHFPPC(DeviceBase):
                         name=attribute_name, index=channel, value_or_param=settings[key]
                     )
 
-    async def collect_reset_nodes(self) -> list[DaqNodeSetAction]:
+    async def reset_to_idle(self):
+        await super().reset_to_idle()
         nc = NodeCollector(base=f"/{self.serial}/")
         nc.add("ppchannels/*/sweeper/enable", 0, cache=False)
-        reset_nodes = await super().collect_reset_nodes()
-        reset_nodes.extend(await self.maybe_async(nc))
-        return reset_nodes
+        await self.set_async(nc)
 
-    async def collect_initialization_nodes(
+    async def apply_initialization(
         self,
         device_recipe_data: DeviceRecipeData,
         initialization: Initialization,
         recipe_data: RecipeData,
-    ) -> list[DaqNodeSetAction]:
+    ):
         nc = NodeCollector()
         ppchannels = {
             settings["channel"]: settings
@@ -162,7 +149,7 @@ class DeviceSHFPPC(DeviceBase):
                 if key == "sweep_config":
                     self._allocated_sweepers.add(ch)
                 nc.add(self._key_to_path(key, ch), _convert(value))
-        return await self.maybe_async(nc)
+        await self.set_async(nc)
 
     def collect_prepare_nt_step_nodes(
         self, attributes: DeviceAttributesView, recipe_data: RecipeData
@@ -179,15 +166,11 @@ class DeviceSHFPPC(DeviceBase):
                     nc.add(path, value)
         return nc
 
-    async def collect_execution_nodes(
-        self, with_pipeliner: bool
-    ) -> list[DaqNodeSetAction]:
+    async def start_execution(self, with_pipeliner: bool):
         nc = NodeCollector(base=f"/{self.serial}/")
-
         for channel in sorted(self._allocated_sweepers):
             nc.add(f"ppchannels/{channel}/sweeper/enable", 1, cache=False)
-
-        return await self.maybe_async(nc)
+        await self.set_async(nc)
 
     def conditions_for_execution_ready(
         self, with_pipeliner: bool

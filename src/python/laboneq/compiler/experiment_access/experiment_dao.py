@@ -176,15 +176,13 @@ class ExperimentDAO:
         return [child.uid for child in self.section_info(section_id).children]
 
     @cached_method()
-    def all_section_children(self, section_id):
-        retval = []
-
-        direct_children = self.direct_section_children(section_id)
-        retval = retval + direct_children
-        for child in direct_children:
-            retval = retval + list(self.all_section_children(child))
-
-        return set(retval)
+    def all_section_children(self, section_id: str) -> set[str]:
+        """Returns UID of all children of an section."""
+        retval = set()
+        for child in self.direct_section_children(section_id):
+            retval.add(child)
+            retval.update(self.all_section_children(child))
+        return retval
 
     @cached_method()
     def section_parent(self, section_id) -> str | None:
@@ -232,14 +230,16 @@ class ExperimentDAO:
             if leader.device_type not in [DeviceInfoType.PQSC, DeviceInfoType.QHUB]
         ]
 
-    def section_signals(self, section_id):
+    def section_signals(self, section_id: str) -> set[str]:
         return {s.uid for s in self.section_info(section_id).signals}
 
     @cached_method()
-    def section_signals_with_children(self, section_id):
-        signals = set(self.section_signals(section_id))
-        for child in self.all_section_children(section_id):
-            signals |= self.section_signals(child)
+    def section_signals_with_children(self, section_id: str) -> set[str]:
+        """Returns UIDs of the signals in the section and its' children."""
+        section = self.section_info(section_id)
+        signals = self.section_signals(section.uid)
+        for child in section.children:
+            signals.update(self.section_signals_with_children(child.uid))
         return signals
 
     def pulses(self) -> list[str]:

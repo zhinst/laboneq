@@ -6,7 +6,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import math
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any, Dict, cast
 
 from sortedcontainers import SortedDict
 from zhinst.core import __version__ as zhinst_version
@@ -910,7 +910,7 @@ def generate_recipe(
             signal_type = AWGSignalType.IQ
         recipe_generator.add_awg(
             device_id=device_id,
-            awg_number=awg.awg_number,
+            awg_number=cast(int, awg.awg_id),
             signal_type=signal_type.value,
             feedback_register_config=combined_compiler_output.feedback_register_configurations.get(
                 awg.key

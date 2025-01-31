@@ -79,7 +79,7 @@ class RealtimeCompiler:
             raise Exception("Invalid device class encountered")
 
         # The backends mutate the IR as they lower it. If we use more than 1, we
-        # must provide each ith a pristine copy of the original IR.
+        # must provide each with a pristine copy of the original IR.
         maybe_copy = copy.deepcopy if len(device_classes) > 1 else lambda x: x
 
         for device_class in device_classes:

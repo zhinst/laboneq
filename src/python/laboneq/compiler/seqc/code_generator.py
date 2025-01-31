@@ -22,7 +22,7 @@ from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.shfppc_sweeper_config import SHFPPCSweeperConfig
 from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
 from laboneq.compiler.ir.ir import IRTree
-from laboneq.compiler.seqc.inline_sections_in_branch import inline_sections_in_branch
+from laboneq.compiler.seqc import passes
 from laboneq.compiler.seqc.linker import AwgWeights, SeqCGenOutput
 from laboneq._utils import ensure_list
 from laboneq.compiler.seqc.analyze_events import (
@@ -46,7 +46,7 @@ from laboneq.compiler.seqc.feedback_register_allocator import (
 )
 from laboneq.compiler.common.iface_code_generator import ICodeGenerator
 from laboneq.compiler.common.feedback_register_config import FeedbackRegisterConfig
-from laboneq.compiler.seqc.ir_to_event_list import generate_event_list_from_ir
+from laboneq.compiler.seqc import ir_to_event_list
 from laboneq.compiler.seqc.measurement_calculator import (
     IntegrationTimes,
     MeasurementCalculator,
@@ -117,7 +117,7 @@ def add_wait_trigger_statements(
 ):
     if awg.trigger_mode == TriggerMode.DIO_TRIGGER:
         # HDAWG+UHFQA connected via DIO, no PQSC
-        if awg.awg_number == 0:
+        if awg.awg_id == 0:
             assert (
                 awg.reference_clock_source != "internal"
             ), "HDAWG+UHFQA system can only be used with an external clock connected to HDAWG in order to prevent jitter."
@@ -384,15 +384,10 @@ class CodeGenerator(ICodeGenerator):
         self.EMIT_TIMING_COMMENTS = self._settings.EMIT_TIMING_COMMENTS
 
     def generate_code(self):
-        inline_sections_in_branch(self._ir)
-        event_list = generate_event_list_from_ir(
-            self._ir, self._settings, expand_loops=False, max_events=float("inf")
-        )
-        self.collect_qa_signals_by_handle(event_list)
-        self.gen_acquire_map(event_list)
+        passes.inline_sections_in_branch(self._ir)
         self.gen_seq_c(
-            event_list,
-            {p.uid: p for p in self._ir.pulse_defs},
+            self._ir,
+            pulse_defs={p.uid: p for p in self._ir.pulse_defs},
         )
 
     def get_output(self):
@@ -713,7 +708,7 @@ class CodeGenerator(ICodeGenerator):
         [unrolled_acquires] = open_acquisitions
         return unrolled_acquires
 
-    def gen_acquire_map(self, events: EventList):
+    def _gen_acquire_map(self, events: EventList):
         # timestamp -> map[signal -> handle]
         simultaneous_acquires: dict[float, dict[str, str]] = {}
 
@@ -725,7 +720,7 @@ class CodeGenerator(ICodeGenerator):
 
         self._simultaneous_acquires = list(simultaneous_acquires.values())
 
-    def collect_qa_signals_by_handle(self, events: EventList):
+    def _collect_qa_signals_by_handle(self, events: EventList):
         for event in events:
             if event["event_type"] != EventType.ACQUIRE_START:
                 continue
@@ -741,14 +736,38 @@ class CodeGenerator(ICodeGenerator):
             else:
                 assert self._qa_signals_by_handle[handle] == signal_obj
 
-    def gen_seq_c(self, events: EventList, pulse_defs: dict[str, PulseDef]):
+    def gen_seq_c(
+        self,
+        events_or_ir: EventList | IRTree,
+        pulse_defs: dict[str, PulseDef],
+    ):
+        # TODO: Remove 'events' API in favor of IR, requires fixing many tests
+        if isinstance(events_or_ir, IRTree):
+            events = ir_to_event_list.generate_event_list_from_ir(
+                events_or_ir,
+                self._settings,
+                expand_loops=False,
+                max_events=float("inf"),
+            )
+            ir_tree = passes.fanout_awgs(events_or_ir, self._awgs.values())
+            events_per_awg = ir_to_event_list.event_list_per_awg(
+                ir_tree, self._settings
+            )
+        else:
+            # This branch should only be encountered via tests
+            events = events_or_ir
+            events_per_awg = {awg: events for awg in self._awgs}
+
+        # TODO: Move information extraction to IR
+        self._collect_qa_signals_by_handle(events)
+        self._gen_acquire_map(events)
+
         (
             self._integration_times,
             self._signal_delays,
         ) = self._measurement_calculator.calculate_integration_times(
             self._signals, events
         )
-
         for signal_id, signal_obj in self._signals.items():
             code_generation_delay = self._signal_delays.get(signal_id)
             if code_generation_delay is not None:
@@ -782,9 +801,9 @@ class CodeGenerator(ICodeGenerator):
 
         for _, awg in sorted(
             self._awgs.items(),
-            key=lambda item: item[0].device_id + str(item[0].awg_number),
+            key=lambda item: item[0],
         ):
-            self._gen_seq_c_per_awg(awg, events, pulse_defs)
+            self._gen_seq_c_per_awg(awg, events_per_awg.get(awg.key, []), pulse_defs)
 
         tgt_feedback_regs = self._feedback_register_allocator.target_feedback_registers
         for awg, target_fb_register in tgt_feedback_regs.items():
@@ -851,7 +870,7 @@ class CodeGenerator(ICodeGenerator):
         _logger.debug(
             "Global delay for %s awg %s: %ss, calculated from all_relevant_delays %s",
             awg.device_id,
-            awg.awg_number,
+            awg.awg_id,
             EngNumber(global_delay or 0),
             [(s, EngNumber(d)) for s, d in all_relevant_delays.items()],
         )
@@ -1159,16 +1178,19 @@ class CodeGenerator(ICodeGenerator):
         events: EventList,
         pulse_defs: dict[str, PulseDef],
     ):
+        # TODO: Ensure AWG does not get any irrelevant events, it will result in extra looping.
+        #       There exists e.g Section, loop, subsection starts and ends which are
+        #       effectively always dropped.
         function_defs_generator = SeqCGenerator()
         declarations_generator = SeqCGenerator()
-        _logger.debug("Generating seqc for awg %d of %s", awg.awg_number, awg.device_id)
+        _logger.debug("Generating seqc for awg %d of %s", awg.awg_id, awg.device_id)
         _logger.debug("AWG Object = \n%s", awg)
         sampled_events = AWGSampledEventSequence()
 
         global_sampling_rate, global_delay = self._calc_global_awg_params(awg)
         if self.EMIT_TIMING_COMMENTS:
             declarations_generator.add_comment(
-                f"{awg.device_type}/{awg.awg_number} global delay {EngNumber(global_delay)} sampling_rate: {EngNumber(global_sampling_rate)}Sa/s "
+                f"{awg.device_type}/{awg.awg_id} global delay {EngNumber(global_delay)} sampling_rate: {EngNumber(global_sampling_rate)}Sa/s "
             )
 
         use_command_table = awg.device_type in (DeviceType.HDAWG, DeviceType.SHFSG)
@@ -1218,7 +1240,7 @@ class CodeGenerator(ICodeGenerator):
 
         _logger.debug(
             "Analyzing initialization events for awg %d of %s",
-            awg.awg_number,
+            awg.awg_id,
             awg.device_id,
         )
 
@@ -1490,7 +1512,7 @@ class CodeGenerator(ICodeGenerator):
 
         _logger.debug(
             "** Start processing events for awg %d of %s",
-            awg.awg_number,
+            awg.awg_id,
             awg.device_id,
         )
         command_table_tracker = CommandTableTracker(awg.device_type)
@@ -1537,7 +1559,7 @@ class CodeGenerator(ICodeGenerator):
             handler.handle_sampled_events(sampled_events)
         except EntryLimitExceededError as error:
             msg = (
-                f"Device '{awg.device_id}', AWG({awg.awg_number}): "
+                f"Device '{awg.device_id}', AWG({awg.awg_id}): "
                 "Exceeded maximum number of command table entries.\n"
                 "Try the following:\n"
                 "- Reduce the number of sweep steps\n"
@@ -1570,7 +1592,7 @@ class CodeGenerator(ICodeGenerator):
         for line in seq_c_text.splitlines():
             _logger.debug(line)
 
-        awg_key = AwgKey(awg.device_id, awg.awg_number)
+        awg_key = AwgKey(awg.device_id, awg.awg_id)
 
         self._src[awg_key] = {"text": seq_c_text}
         self._wave_indices_all[awg_key] = {"value": handler.wave_indices.wave_indices()}

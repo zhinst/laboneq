@@ -5,22 +5,18 @@ from __future__ import annotations
 
 import logging
 from enum import IntEnum
-from typing import Any
 
-from laboneq.controller.communication import (
-    DaqNodeSetAction,
-)
 from laboneq.controller.devices.async_support import ResponseWaiterAsync
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import DeviceBase
-from laboneq.controller.devices.zi_node_monitor import (
+from laboneq.controller.devices.node_control import (
     Setting,
     Condition,
     NodeControlBase,
     Response,
     WaitCondition,
 )
-from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
+from laboneq.controller.recipe_processor import RecipeData
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.data.recipe import Initialization
 
@@ -36,12 +32,6 @@ class DeviceLeaderBase(DeviceBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._use_internal_clock = False
-
-    def _nodes_to_monitor_impl(self) -> list[str]:
-        nodes = super()._nodes_to_monitor_impl()
-        if self._api is None:
-            nodes.append(f"/{self.serial}/execution/synchronization/enable")
-        return nodes
 
     def update_clock_source(self, force_internal: bool | None):
         self._use_internal_clock = force_internal is True
@@ -91,17 +81,7 @@ class DeviceLeaderBase(DeviceBase):
 
         return nodes
 
-    async def collect_initialization_nodes(
-        self,
-        device_recipe_data: DeviceRecipeData,
-        initialization: Initialization,
-        recipe_data: RecipeData,
-    ) -> list[DaqNodeSetAction]:
-        return []
-
-    async def configure_feedback(
-        self, recipe_data: RecipeData
-    ) -> list[DaqNodeSetAction]:
+    async def configure_feedback(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")
         min_wait_time = recipe_data.recipe.max_step_execution_time
         # This is required because PQSC/QHUB is only receiving the feedback events
@@ -138,11 +118,9 @@ class DeviceLeaderBase(DeviceBase):
                         awg_config.source_feedback_register,
                     )
                     nc.add(f"{reg_selector_base}/index", awg_config.fb_reg_source_index)
-        return await self.maybe_async(nc)
+        await self.set_async(nc)
 
-    async def collect_execution_nodes(
-        self, with_pipeliner: bool
-    ) -> list[DaqNodeSetAction]:
+    async def start_execution(self, with_pipeliner: bool):
         _logger.debug("Starting execution...")
         nc = NodeCollector(base=f"/{self.serial}/")
 
@@ -166,30 +144,12 @@ class DeviceLeaderBase(DeviceBase):
 
         nc.add("execution/enable", 1, cache=False)
 
-        return await self.maybe_async(nc)
+        await self.set_async(nc)
 
-    async def collect_execution_setup_nodes(
+    async def setup_one_step_execution(
         self, with_pipeliner: bool, has_awg_in_use: bool
-    ) -> list[DaqNodeSetAction]:
-        nc = NodeCollector(base=f"/{self.serial}/")
+    ):
         if with_pipeliner:
-            nc.add("execution/synchronization/enable", 1)
-        return await self.maybe_async(nc)
-
-    async def collect_execution_teardown_nodes(
-        self, with_pipeliner: bool
-    ) -> list[DaqNodeSetAction]:
-        nc = NodeCollector(base=f"/{self.serial}/")
-        if with_pipeliner:
-            nc.add("execution/synchronization/enable", 0)
-        return await self.maybe_async(nc)
-
-    async def conditions_for_sync_ready(
-        self, with_pipeliner: bool
-    ) -> dict[str, tuple[Any, str]]:
-        if not with_pipeliner:
-            return {}
-        if self._api is not None:
             # TODO(2K): Use timeout from connect
             rw = ResponseWaiterAsync(
                 api=self._api,
@@ -198,30 +158,31 @@ class DeviceLeaderBase(DeviceBase):
                 },
                 timeout_s=1.0,
             )
-            await rw.prepare(get_initial_value=True)
+            await rw.prepare()
+            nc = NodeCollector(base=f"/{self.serial}/")
+            nc.add("execution/synchronization/enable", 1)
+            await self.set_async(nc)
             if len(await rw.wait()) > 0:
                 raise LabOneQControllerException(
                     f"{self.dev_repr}: Internal error: Failed to enable synchronization"
                 )
-            return {}
-        return {
-            f"/{self.serial}/execution/synchronization/enable": (
-                1,  # sync enabled
-                "Failed to enable synchronization",
-            )
-        }
 
-    async def collect_trigger_configuration_nodes(
+    async def teardown_one_step_execution(self, with_pipeliner: bool):
+        nc = NodeCollector(base=f"/{self.serial}/")
+        if with_pipeliner:
+            nc.add("execution/synchronization/enable", 0)
+        await self.set_async(nc)
+
+    async def configure_trigger(
         self, initialization: Initialization, recipe_data: RecipeData
-    ) -> list[DaqNodeSetAction]:
+    ):
         nc = NodeCollector(base=f"/{self.serial}/")
         nc.add("system/clocks/referenceclock/out/enable", 1)
         nc.add("execution/repetitions", initialization.config.repetitions)
-        return await self.maybe_async(nc)
+        await self.set_async(nc)
 
-    async def collect_reset_nodes(self) -> list[DaqNodeSetAction]:
+    async def reset_to_idle(self):
+        await super().reset_to_idle()
         nc = NodeCollector(base=f"/{self.serial}/")
         nc.add("execution/synchronization/enable", 0, cache=False)
-        reset_nodes = await super().collect_reset_nodes()
-        reset_nodes.extend(await self.maybe_async(nc))
-        return reset_nodes
+        await self.set_async(nc)

@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 import logging
 from typing import TYPE_CHECKING, ItemsView, Iterator
 
-from laboneq.controller.communication import ServerQualifier
 from laboneq.controller.versioning import SetupCaps
 from laboneq.data.execution_payload import (
     TargetChannelCalibration,
@@ -33,6 +32,13 @@ class DeviceOptions:
     reference_clock_source: str | None = None
     expected_dev_type: str | None = None
     expected_dev_opts: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ServerQualifier:
+    host: str = "localhost"
+    port: int = 8004
+    ignore_version_mismatch: bool = False
 
 
 @dataclass

@@ -148,8 +148,7 @@ class MeasurementCalculator:
             if event_type == "ACQUIRE_START":
                 signal_id = event["signal"]
                 signal_info = signal_info_map[signal_id]
-                awg_id = (signal_info.awg.device_id, signal_info.awg.awg_number)
-                awgs_with_acquires.add(awg_id)
+                awgs_with_acquires.add(signal_info.awg.key)
 
             elif event_type == "SECTION_START":
                 section_uid = event["section_uid"]
@@ -171,7 +170,7 @@ class MeasurementCalculator:
 
             signal_id = event["signal"]
             signal_info = signal_info_map[signal_id]
-            awg_id = (signal_info.awg.device_id, signal_info.awg.awg_number)
+            awg_id = signal_info.awg.key
 
             if awg_id not in awgs_with_acquires:
                 continue

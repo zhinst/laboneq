@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "laboneq"
-version = "2.44.0"
+version = "2.45.0"
 description = "Zurich Instruments LabOne Q software framework for quantum computing control"
 license = { text = "Apache 2.0" }
 readme = "README.md"
@@ -38,7 +38,7 @@ dependencies = [
     "jsonschema >= 4.21.1",
     "matplotlib >= 3.8.3",
     "cycler >= 0.12.1",
-    "numpy >= 1.26.4, < 2.0",
+    "numpy >= 1.26",
     "openpulse ~= 1.0.1",
     "openqasm3 ~= 1.0.0",
     "orjson >= 3.9.15",
@@ -52,13 +52,13 @@ dependencies = [
     "sqlitedict >= 2.1.0",
     "sortedcollections >= 2.1.0",
     "lagom >= 2.6.0",
-    "attrs >= 24.1.0",
+    "attrs >= 24.3.0",
     "sortedcontainers >= 2.4.0",
     "typing_extensions >= 4.10.0",
-    "zhinst-core ~= 24.10.65175",
-    "zhinst-toolkit == 0.7.0",
-    "zhinst-utils == 0.5.0",
-    "zhinst-timing-models ~= 24.10.64896",
+    "zhinst-core ~= 25.1.0",
+    "zhinst-toolkit == 0.7.1",
+    "zhinst-utils == 0.6.0",
+    "zhinst-timing-models ~= 25.1.0",
     "labone == 3.2.1",
     "pygments >= 2.18.0"
 ]
@@ -143,10 +143,10 @@ mccabe.max-complexity = 10
 
 # Documentation notebooks (nbqa converts notebooks to .py)
 "examples/**/*.ipynb" = [
-  # Allow redefining values
-  "F811",
-  # Useless attribute access can display values in notebooks
-  "B018",
+    # Allow redefining values
+    "F811",
+    # Useless attribute access can display values in notebooks
+    "B018",
 ]
 
 # Ignore star import, mainly from laboneq.simple (TODO: Fix this)
@@ -156,7 +156,7 @@ mccabe.max-complexity = 10
 "resources/examples/*" = ["B015", "PERF"]
 "examples/*" = ["PERF"]
 "*.ipynb" = [
-    "F403",  # Notebooks utilize `from laboneq.simple import *`
+    "F403", # Notebooks utilize `from laboneq.simple import *`
 ]
 
 [tool.ruff.format]

@@ -7,7 +7,7 @@ import json
 import logging
 import math
 import re
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -24,15 +24,9 @@ from laboneq.controller.attribute_value_tracker import (  # pylint: disable=E040
     DeviceAttribute,
     DeviceAttributesView,
 )
-from laboneq.controller.communication import (
-    CachingStrategy,
-    DaqNodeSetAction,
-    DaqWrapper,
-)
 from laboneq.controller.devices.async_support import (
     AsyncSubscriber,
     ConditionsCheckerAsync,
-    NodeMonitorAsync,
     ResponseWaiterAsync,
     _gather,
     create_device_kernel_session,
@@ -41,15 +35,14 @@ from laboneq.controller.devices.async_support import (
 )
 from laboneq.controller.devices.device_setup_dao import (
     DeviceOptions,
+    ServerQualifier,
     DeviceQualifier,
     DeviceSetupDAO,
 )
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.zi_emulator import EmulatorState, MockInstrument
-from laboneq.controller.devices.zi_node_monitor import (
-    INodeMonitorProvider,
+from laboneq.controller.devices.node_control import (
     NodeControlBase,
-    NodeMonitorBase,
     filter_commands,
     filter_responses,
     filter_settings,
@@ -177,13 +170,30 @@ def delay_to_rounded_samples(
     return delay_rounded
 
 
-class DeviceZI(INodeMonitorProvider):
+class DeviceAbstract(ABC):
+    # TODO(2K): This is a dummy abstract base class to make ruff happy. To be removed.
+    @abstractmethod
+    def _dummy(self): ...
+
+
+class DeviceZI(DeviceAbstract):
     def __init__(
-        self, device_qualifier: DeviceQualifier, daq: DaqWrapper, setup_caps: SetupCaps
+        self,
+        server_qualifier: ServerQualifier,
+        device_qualifier: DeviceQualifier,
+        setup_caps: SetupCaps,
     ):
+        self._server_qualifier = server_qualifier
         self._device_qualifier = device_qualifier
         self._downlinks: dict[str, list[tuple[str, ReferenceType[DeviceZI]]]] = {}
         self._uplinks: list[ReferenceType[DeviceZI]] = []
+
+    def _dummy(self):
+        pass
+
+    @property
+    def server_qualifier(self):
+        return self._server_qualifier
 
     @property
     def device_qualifier(self):
@@ -204,15 +214,6 @@ class DeviceZI(INodeMonitorProvider):
     @property
     def is_secondary(self) -> bool:
         return False
-
-    ### Node monitoring
-    @property
-    @abstractmethod
-    def node_monitor(self) -> NodeMonitorBase:
-        pass
-
-    def nodes_to_monitor(self) -> list[str]:
-        return []
 
     def load_factory_preset_control_nodes(self) -> list[NodeControlBase]:
         return []
@@ -277,7 +278,6 @@ class DeviceZI(INodeMonitorProvider):
     async def connect(
         self,
         emulator_state: EmulatorState | None,
-        use_async_api: bool,
         disable_runtime_checks: bool,
         timeout_s: float,
     ):
@@ -287,10 +287,8 @@ class DeviceZI(INodeMonitorProvider):
     def disconnect(self):
         pass
 
-    async def disable_outputs(
-        self, outputs: set[int], invert: bool
-    ) -> list[DaqNodeSetAction]:
-        """Returns actions to disable the specified outputs for the device.
+    async def disable_outputs(self, outputs: set[int], invert: bool):
+        """Disables the specified outputs for the device.
 
         outputs: set(int)
             - When 'invert' is False: set of outputs to disable.
@@ -301,7 +299,7 @@ class DeviceZI(INodeMonitorProvider):
             Controls how 'outputs' argument is interpreted, see above. Special case: set
             to True along with empty 'outputs' to disable all outputs.
         """
-        return []
+        pass
 
     def clear_cache(self):
         pass
@@ -318,8 +316,8 @@ class DeviceZI(INodeMonitorProvider):
         pass
 
     ### Other methods
-    async def maybe_async(self, nodes: NodeCollector) -> list[DaqNodeSetAction]:
-        return []
+    async def set_async(self, nodes: NodeCollector):
+        pass
 
     def validate_scheduled_experiment(
         self, device_uid: str, scheduled_experiment: ScheduledExperiment
@@ -332,24 +330,24 @@ class DeviceZI(INodeMonitorProvider):
     ) -> Iterator[DeviceAttribute]:
         yield from []
 
-    async def collect_reset_nodes(self) -> list[DaqNodeSetAction]:
-        return []
+    async def reset_to_idle(self):
+        pass
 
-    async def collect_trigger_configuration_nodes(
+    async def configure_trigger(
         self, initialization: Initialization, recipe_data: RecipeData
-    ) -> list[DaqNodeSetAction]:
-        return []
+    ):
+        pass
 
-    async def collect_initialization_nodes(
+    async def apply_initialization(
         self,
         device_recipe_data: DeviceRecipeData,
         initialization: Initialization,
         recipe_data: RecipeData,
-    ) -> list[DaqNodeSetAction]:
-        return []
+    ):
+        pass
 
-    async def collect_osc_initialization_nodes(self) -> list[DaqNodeSetAction]:
-        return []
+    async def initialize_oscillators(self):
+        pass
 
     @abstractmethod
     async def prepare_artifacts(
@@ -357,11 +355,9 @@ class DeviceZI(INodeMonitorProvider):
         recipe_data: RecipeData,
         rt_section_uid: str,
         initialization: Initialization,
-        awg_index: int,
+        awg_index: int | str,
         nt_step_key: NtStepKey,
-    ) -> tuple[
-        DeviceZI, list[DaqNodeSetAction], list[DaqNodeSetAction], dict[str, Any]
-    ]:
+    ):
         pass
 
     def prepare_upload_binary_wave(
@@ -391,57 +387,37 @@ class DeviceZI(INodeMonitorProvider):
     ) -> NodeCollector:
         return NodeCollector()
 
-    async def collect_awg_before_upload_nodes(
+    async def set_before_awg_upload(
         self, initialization: Initialization, recipe_data: RecipeData
-    ) -> list[DaqNodeSetAction]:
-        return []
+    ):
+        pass
 
-    async def collect_awg_after_upload_nodes(
-        self, initialization: Initialization
-    ) -> list[DaqNodeSetAction]:
-        return []
+    async def set_after_awg_upload(self, initialization: Initialization):
+        pass
 
-    async def collect_execution_setup_nodes(
+    async def setup_one_step_execution(
         self, with_pipeliner: bool, has_awg_in_use: bool
-    ) -> list[DaqNodeSetAction]:
-        return []
+    ):
+        pass
 
-    async def collect_execution_nodes(
-        self, with_pipeliner: bool
-    ) -> list[DaqNodeSetAction]:
-        return []
+    async def configure_feedback(self, recipe_data: RecipeData):
+        pass
 
-    async def configure_feedback(
-        self, recipe_data: RecipeData
-    ) -> list[DaqNodeSetAction]:
-        return []
-
-    async def conditions_for_sync_ready(
-        self, with_pipeliner: bool
-    ) -> dict[str, tuple[Any, str]]:
-        return {}
+    async def start_execution(self, with_pipeliner: bool):
+        pass
 
     def conditions_for_execution_ready(
         self, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
         return {}
 
-    async def collect_start_trigger_nodes(
-        self, with_pipeliner: bool
-    ) -> list[DaqNodeSetAction]:
-        if self.is_leader():
-            return await self.collect_execution_nodes(with_pipeliner=with_pipeliner)
-        return []
-
     def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
         return {}
 
-    async def collect_execution_teardown_nodes(
-        self, with_pipeliner: bool
-    ) -> list[DaqNodeSetAction]:
-        return []
+    async def teardown_one_step_execution(self, with_pipeliner: bool):
+        pass
 
     async def fetch_errors(self) -> str | list[str]:
         return []
@@ -449,11 +425,11 @@ class DeviceZI(INodeMonitorProvider):
     def _collect_warning_nodes(self) -> list[tuple[str, str]]:
         return []
 
-    async def on_experiment_begin(self) -> list[DaqNodeSetAction]:
-        return []
+    async def on_experiment_begin(self):
+        pass
 
-    async def on_experiment_end(self) -> list[DaqNodeSetAction]:
-        return []
+    async def on_experiment_end(self):
+        pass
 
     ### Result processing
     async def get_result_data(self) -> Any:
@@ -487,15 +463,16 @@ class DeviceZI(INodeMonitorProvider):
 
 class DeviceBase(DeviceZI):
     def __init__(
-        self, device_qualifier: DeviceQualifier, daq: DaqWrapper, setup_caps: SetupCaps
+        self,
+        server_qualifier: ServerQualifier,
+        device_qualifier: DeviceQualifier,
+        setup_caps: SetupCaps,
     ):
-        super().__init__(device_qualifier, daq, setup_caps)
+        super().__init__(server_qualifier, device_qualifier, setup_caps)
         self._setup_caps = setup_caps
 
-        self._daq = daq
         self._api = None  # TODO(2K): Add type labone.Instrument
         self._subscriber = AsyncSubscriber()
-        self._node_monitor: NodeMonitorBase | None = None
         self.dev_type: str = "UNKNOWN"
         self.dev_opts: list[str] = []
         self._connected = False
@@ -505,14 +482,10 @@ class DeviceBase(DeviceZI):
         self._pipeliner_reload_tracker: dict[int, PipelinerReloadTracker] = defaultdict(
             PipelinerReloadTracker
         )
-        self._nodes_to_monitor: list[str] | None = None
         self._sampling_rate = None
         self._device_class = 0x0
         self._enable_runtime_checks = True
         self._warning_nodes: dict[str, int] = {}
-
-        if self._daq is None:
-            raise LabOneQControllerException("ZI devices need daq")
 
         if self.serial is None:
             raise LabOneQControllerException(
@@ -536,44 +509,14 @@ class DeviceBase(DeviceZI):
     def interface(self):
         return self.options.interface.lower()
 
-    @property
-    def daq(self):
-        return self._daq
-
-    @property
-    def node_monitor(self) -> NodeMonitorBase:
-        assert self._node_monitor is not None
-        return self._node_monitor
-
-    @property
-    def is_async_standalone(self) -> bool:
-        return self.is_standalone() and self._api is not None
-
-    async def maybe_async(self, nodes: NodeCollector) -> list[DaqNodeSetAction]:
-        if self._api is not None:
-            await set_parallel(self._api, nodes)
-            return []
-        return [
-            DaqNodeSetAction(
-                self.daq,
-                node.path,
-                node.value,
-                caching_strategy=(
-                    CachingStrategy.CACHE if node.cache else CachingStrategy.NO_CACHE
-                ),
-                filename=node.filename,
-            )
-            for node in nodes.set_actions()
-        ]
+    async def set_async(self, nodes: NodeCollector):
+        await set_parallel(self._api, nodes)
 
     def clear_cache(self):
-        if self._api is not None:
-            # TODO(2K): the code below is only needed to keep async API behavior
-            # in emulation mode matching that of legacy API with LabOne Q cache.
-            if isinstance(self._api, MockInstrument):
-                self._api.clear_cache()
-        else:
-            self.daq.clear_cache()
+        # TODO(2K): the code below is only needed to keep async API behavior
+        # in emulation mode matching that of legacy API with LabOne Q cache.
+        if isinstance(self._api, MockInstrument):
+            self._api.clear_cache()
 
     def add_command_table_header(self, body: dict) -> dict:
         # Stub, implement in sub-class
@@ -705,7 +648,6 @@ class DeviceBase(DeviceZI):
     async def _connect_to_data_server(
         self,
         emulator_state: EmulatorState | None,
-        use_async_api: bool,
         timeout_s: float,
     ):
         if self._connected:
@@ -713,17 +655,12 @@ class DeviceBase(DeviceZI):
 
         _logger.debug("%s: Connecting to %s interface.", self.dev_repr, self.interface)
         try:
-            if use_async_api:
-                self._api = await create_device_kernel_session(
-                    device_qualifier=self._device_qualifier,
-                    server_qualifier=self.daq.server_qualifier,
-                    emulator_state=emulator_state,
-                    timeout_s=timeout_s,
-                )
-                self._node_monitor = NodeMonitorAsync(self._api)
-            else:
-                self.daq.connectDevice(self.serial, self.interface)
-                self._node_monitor = self.daq.node_monitor
+            self._api = await create_device_kernel_session(
+                device_qualifier=self._device_qualifier,
+                server_qualifier=self._server_qualifier,
+                emulator_state=emulator_state,
+                timeout_s=timeout_s,
+            )
         except RuntimeError as exc:
             raise LabOneQControllerException(
                 f"{self.dev_repr}: Connecting failed"
@@ -748,49 +685,23 @@ class DeviceBase(DeviceZI):
     async def connect(
         self,
         emulator_state: EmulatorState | None,
-        use_async_api: bool,
         disable_runtime_checks: bool,
         timeout_s: float,
     ):
         self._enable_runtime_checks = not disable_runtime_checks
-        await self._connect_to_data_server(
-            emulator_state, use_async_api=use_async_api, timeout_s=timeout_s
-        )
-        if self._node_monitor is not None:
-            self.node_monitor.add_nodes(self.nodes_to_monitor())
+        await self._connect_to_data_server(emulator_state, timeout_s=timeout_s)
 
     def disconnect(self):
         if not self._connected:
             return
 
-        if self._api is None:
-            self.daq.disconnectDevice(self.serial)
-        else:
-            self._api = None  # TODO(2K): Proper disconnect?
+        self._api = None  # TODO(2K): Proper disconnect?
         self._connected = False
 
     def free_allocations(self):
         self._allocated_oscs.clear()
         self._allocated_awgs.clear()
         self._pipeliner_reload_tracker.clear()
-
-    def _nodes_to_monitor_impl(self) -> list[str]:
-        nodes = []
-        if self._api is None:
-            nodes.extend(
-                [node.path for node in self.load_factory_preset_control_nodes()]
-            )
-            nodes.extend([node.path for node in self.runtime_check_control_nodes()])
-            nodes.extend([node.path for node in self.clock_source_control_nodes()])
-            nodes.extend([node.path for node in self.system_freq_control_nodes()])
-            nodes.extend([node.path for node in self.rf_offset_control_nodes()])
-            nodes.extend([node.path for node in self.zsync_link_control_nodes()])
-        return nodes
-
-    def nodes_to_monitor(self) -> list[str]:
-        if self._nodes_to_monitor is None:
-            self._nodes_to_monitor = self._nodes_to_monitor_impl()
-        return self._nodes_to_monitor
 
     def _osc_group_by_channel(self, channel: int) -> int:
         return channel
@@ -836,28 +747,19 @@ class DeviceBase(DeviceZI):
                 )
             same_id_osc.channels.add(osc_param.channel)
 
-    async def on_experiment_begin(self) -> list[DaqNodeSetAction]:
-        if self._api is not None:
-            await _gather(
-                *(
-                    self._subscriber.subscribe(self._api, path, get_initial_value=True)
-                    for path, _ in self._collect_warning_nodes()
-                )
+    async def on_experiment_begin(self):
+        await _gather(
+            *(
+                self._subscriber.subscribe(self._api, path, get_initial_value=True)
+                for path, _ in self._collect_warning_nodes()
             )
-
-        return await super().on_experiment_begin()
+        )
+        await super().on_experiment_begin()
 
     async def update_warning_nodes(self, init: bool):
         for node, msg in self._collect_warning_nodes():
-            if self._api is None:
-                value = (
-                    self.node_monitor.get_last(node)
-                    if init
-                    else self.node_monitor.pop(node)
-                )
-            else:
-                updates = self._subscriber.get_updates(node)
-                value = updates[-1].value if len(updates) > 0 else None
+            updates = self._subscriber.get_updates(node)
+            value = updates[-1].value if len(updates) > 0 else None
 
             if not isinstance(value, int):
                 continue
@@ -881,9 +783,7 @@ class DeviceBase(DeviceZI):
         return NodeCollector()
 
     async def get_raw(self, path: str) -> dict[str, Any]:
-        if self._api is not None:
-            return await get_raw(self._api, path)
-        return self.daq.get_raw(path)
+        return await get_raw(self._api, path)
 
     def _adjust_frequency(self, freq):
         return freq
@@ -903,6 +803,10 @@ class DeviceBase(DeviceZI):
                     nc.add(self._make_osc_path(ch, osc.index), osc_freq_adjusted)
         return nc
 
+    async def emit_start_trigger(self, with_pipeliner: bool):
+        if self.is_leader():
+            await self.start_execution(with_pipeliner=with_pipeliner)
+
     def _choose_wf_collector(
         self, elf_nodes: NodeCollector, wf_nodes: NodeCollector
     ) -> NodeCollector:
@@ -916,12 +820,10 @@ class DeviceBase(DeviceZI):
         recipe_data: RecipeData,
         rt_section_uid: str,
         initialization: Initialization,
-        awg_index: int,
+        awg_index: int,  # type: ignore[override]
         nt_step_key: NtStepKey,
-    ) -> tuple[
-        DeviceZI, list[DaqNodeSetAction], list[DaqNodeSetAction], dict[str, Any]
-    ]:
-        # TODO(2K): Interface need to be more generic, abstract away DaqNodeSetAction
+    ):
+        assert isinstance(awg_index, int)
         artifacts = recipe_data.get_artifacts(self._device_class, ArtifactsCodegen)
         rt_execution_info = recipe_data.rt_execution_infos[rt_section_uid]
 
@@ -1043,17 +945,11 @@ class DeviceBase(DeviceZI):
         if rt_execution_info.with_pipeliner:
             upload_ready_conditions.update(self.pipeliner_ready_conditions(awg_index))
 
-        if self._api is not None:
-            # TODO(2K): Use timeout from connect
-            rw = ResponseWaiterAsync(self._api, upload_ready_conditions, timeout_s=10)
-            await rw.prepare()
-        elf_nodes_actions = await self.maybe_async(elf_nodes)
-        if self._api is not None:
-            await rw.wait()
-            upload_ready_conditions.clear()
-        wf_nodes_actions = await self.maybe_async(wf_nodes)
-
-        return self, elf_nodes_actions, wf_nodes_actions, upload_ready_conditions
+        rw = ResponseWaiterAsync(self._api, upload_ready_conditions, timeout_s=10)
+        await rw.prepare()
+        await self.set_async(elf_nodes)
+        await rw.wait()
+        await self.set_async(wf_nodes)
 
     @staticmethod
     def _contains_only_zero_or_one(a):
@@ -1372,7 +1268,7 @@ class DeviceBase(DeviceZI):
     def _get_num_awgs(self) -> int:
         return 0
 
-    async def collect_osc_initialization_nodes(self) -> list[DaqNodeSetAction]:
+    async def initialize_oscillators(self):
         nc = NodeCollector()
         osc_inits = {
             self._make_osc_path(ch, osc.index): osc.frequency
@@ -1381,29 +1277,17 @@ class DeviceBase(DeviceZI):
         }
         for path, freq in osc_inits.items():
             nc.add(path, 0 if freq is None else self._adjust_frequency(freq))
-        return await self.maybe_async(nc)
-
-    async def collect_execution_nodes(
-        self, with_pipeliner: bool
-    ) -> list[DaqNodeSetAction]:
-        nc = NodeCollector(base=f"/{self.serial}/")
-        _logger.debug("%s: Executing AWGS...", self.dev_repr)
-
-        for awg_index in self._allocated_awgs:
-            _logger.debug("%s: Starting AWG #%d sequencer", self.dev_repr, awg_index)
-            nc.add(f"awgs/{awg_index}/enable", 1, cache=False)
-
-        return await self.maybe_async(nc)
+        await self.set_async(nc)
 
     async def fetch_errors(self) -> str | list[str]:
         error_node = f"/{self.serial}/raw/error/json/errors"
         all_errors = await self.get_raw(error_node)
         return all_errors[error_node]
 
-    async def collect_reset_nodes(self) -> list[DaqNodeSetAction]:
+    async def reset_to_idle(self):
         nc = NodeCollector(base=f"/{self.serial}/")
         nc.add("raw/error/clear", 1, cache=False)
-        return await self.maybe_async(nc)
+        await self.set_async(nc)
 
     async def exec_config_step(
         self, control_nodes: list[NodeControlBase], config_name: str, timeout_s: float
@@ -1467,9 +1351,9 @@ class DeviceBase(DeviceZI):
                 f"Errors:\n{failures}"
             )
 
-    async def on_experiment_end(self) -> list[DaqNodeSetAction]:
+    async def on_experiment_end(self):
         self._subscriber.unsubscribe_all()
-        return await super().on_experiment_end()
+        await super().on_experiment_end()
 
     async def wait_for_execution_ready(self, with_pipeliner: bool):
         # TODO(2K): use timeout passed to connect
@@ -1478,7 +1362,7 @@ class DeviceBase(DeviceZI):
             nodes=self.conditions_for_execution_ready(with_pipeliner=with_pipeliner),
         )
         await rw.prepare()
-        await self.collect_execution_nodes(with_pipeliner=with_pipeliner)
+        await self.start_execution(with_pipeliner=with_pipeliner)
         failed_nodes = await rw.wait()
         if len(failed_nodes) > 0:
             _logger.warning(

@@ -233,13 +233,13 @@ def make_zi_devices(
     setup: DeviceSetup,
 ):
     zi_instruments = {
-        # Descriptor key: Intrument class, Reference clock option, connection builder.
+        # Descriptor key: Instrument class, Reference clock option, connection builder.
         T_HDAWG_DEVICE: (HDAWG, T_EXTCLK, _make_connection),
         T_UHFQA_DEVICE: (UHFQA, T_EXTCLK, _make_connection),
         T_SHFQA_DEVICE: (SHFQA, T_EXTCLK, _make_connection),
         T_SHFSG_DEVICE: (SHFSG, T_EXTCLK, _make_connection),
         T_SHFQC_DEVICE: (SHFQC, T_EXTCLK, _make_connection),
-        T_PRETTYPRINTER_DEVICE: (PRETTYPRINTERDEVICE, T_EXTCLK, _make_connection),
+        T_PRETTYPRINTER_DEVICE: (PRETTYPRINTERDEVICE, None, _make_connection),
         T_SHFPPC_DEVICE: (SHFPPC, T_EXTCLK, _make_ppc_connection),
         T_PQSC_DEVICE: (PQSC, T_INTCLK, _make_connection),
         T_QHUB_DEVICE: (QHUB, T_INTCLK, _make_connection),
@@ -262,7 +262,7 @@ def make_zi_devices(
                 )
             )
             conns = connections.get(uid, [])
-            if ref_clk in conns:
+            if ref_clk is not None and ref_clk in conns:
                 dev.reference_clock_source = ref_clk_types[ref_clk]
                 conns.remove(ref_clk)
             modifier.add_instrument(setup, dev)

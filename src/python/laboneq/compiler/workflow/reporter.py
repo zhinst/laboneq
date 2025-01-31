@@ -199,10 +199,11 @@ class CompilationReportGenerator(NtCompilerExecutorDelegate):
             else:
                 device_cell = ""
 
+            assert entry.awg is not None
             cells.extend(
                 [
                     device_cell,
-                    f"{entry.awg.awg_number}",
+                    f"{entry.awg.awg_id}",
                     f"{entry.seqc_loc}",
                     f"{entry.command_table_entries}",
                     f"{entry.wave_indices}",

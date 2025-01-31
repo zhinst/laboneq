@@ -994,7 +994,7 @@ class SampledEventHandler:
 
             # feedback through PQSC: assign index based on AWG number
             index_select = qa_register_bitshift // 2
-            codeword_bitshift = 2 * self.awg.awg_number + qa_register_bitshift % 2
+            codeword_bitshift = 2 * self.awg.awg_id + qa_register_bitshift % 2
 
         if local:
             self.feedback_register_config.source_feedback_register = "local"

@@ -253,6 +253,10 @@ class Session:
             connection_state:
                 The connection state of the session.
         """
+        if use_async_api is not None:
+            _logger.warning(
+                "The 'use_async_api' argument is deprecated and has no effect. The async API is always used."
+            )
         self._ignore_version_mismatch = ignore_version_mismatch
         if (
             self._connection_state.connected
@@ -270,7 +274,6 @@ class Session:
         controller.connect(
             do_emulation=self._connection_state.emulated,
             reset_devices=reset_devices,
-            use_async_api=use_async_api,
             disable_runtime_checks=disable_runtime_checks,
             timeout_s=timeout,
         )

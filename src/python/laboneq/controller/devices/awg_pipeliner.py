@@ -25,14 +25,6 @@ class AwgPipeliner:
         assert parent_device is not None
         return parent_device
 
-    def control_nodes(self, index: int, use_async_api: bool) -> list[str]:
-        if use_async_api:
-            return []
-        return [
-            f"{self._node_base}/{index}/pipeliner/availableslots",
-            f"{self._node_base}/{index}/pipeliner/status",
-        ]
-
     def prepare_for_upload(self, index: int) -> NodeCollector:
         self._pipeliner_slot_tracker[index] = 0
         nc = NodeCollector(base=f"{self._node_base}/")
@@ -61,7 +53,7 @@ class AwgPipeliner:
         return nc
 
     def conditions_for_execution_ready(self) -> dict[str, tuple[Any, str]]:
-        if self.parent_device.is_async_standalone:
+        if self.parent_device.is_standalone():
             return {
                 f"{self._node_base}/{index}/pipeliner/status": (
                     [1, 0],  # exec -> idle
@@ -78,7 +70,7 @@ class AwgPipeliner:
         }
 
     def conditions_for_execution_done(self) -> dict[str, tuple[Any, str]]:
-        if self.parent_device.is_async_standalone:
+        if self.parent_device.is_standalone():
             return {}
         return {
             f"{self._node_base}/{index}/pipeliner/status": (

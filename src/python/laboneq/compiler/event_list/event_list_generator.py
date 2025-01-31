@@ -10,31 +10,13 @@ from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.event_list.event_type import EventList, EventType
 from laboneq.compiler.common.play_wave_type import PlayWaveType
 from laboneq.compiler.common.pulse_parameters import encode_pulse_parameters
-from laboneq.compiler.ir.acquire_group_ir import AcquireGroupIR
-from laboneq.compiler.ir.case_ir import CaseIR, EmptyBranchIR
-from laboneq.compiler.ir.interval_ir import IntervalIR
-from laboneq.compiler.ir.loop_ir import LoopIR
-from laboneq.compiler.ir.loop_iteration_ir import (
-    LoopIterationIR,
-    LoopIterationPreambleIR,
-)
-from laboneq.compiler.ir.match_ir import MatchIR
-from laboneq.compiler.ir.oscillator_ir import (
-    InitialOscillatorFrequencyIR,
-    SetOscillatorFrequencyIR,
-)
-from laboneq.compiler.ir.phase_reset_ir import PhaseResetIR
-from laboneq.compiler.ir.ppc_step_ir import PPCStepIR
-from laboneq.compiler.ir.pulse_ir import PulseIR, PrecompClearIR
-from laboneq.compiler.ir.reserve_ir import ReserveIR
-from laboneq.compiler.ir.root_ir import RootScheduleIR
-from laboneq.compiler.ir.section_ir import SectionIR
+from laboneq.compiler import ir as ir_mod
 from laboneq.data.compilation_job import ParameterInfo
 
 
 @singledispatch
 def generate_event_list(
-    ir: IntervalIR,
+    ir: ir_mod.IntervalIR,
     start: int,
     max_events: int,
     id_tracker: Iterator[int],
@@ -46,7 +28,7 @@ def generate_event_list(
 
 @generate_event_list.register
 def generate_event_list_section(
-    section_ir: SectionIR,
+    section_ir: ir_mod.SectionIR,
     start: int,
     max_events: int,
     id_tracker: Iterator[int],
@@ -102,7 +84,7 @@ def generate_event_list_section(
             }
         ]
 
-    children_events = _children_events(
+    children_events = generate_children_events(
         section_ir, start, max_events, settings, id_tracker, expand_loops
     )
 
@@ -136,7 +118,7 @@ def generate_event_list_section(
 
 @generate_event_list.register
 def generate_event_list_acquire_group(
-    acquire_group_ir: AcquireGroupIR,
+    acquire_group_ir: ir_mod.AcquireGroupIR,
     start: int,
     _max_events: int,
     id_tracker: Iterator[int],
@@ -215,7 +197,7 @@ def generate_event_list_acquire_group(
 
 @generate_event_list.register
 def generate_event_list_oscillator_frequency_step(
-    ir: SetOscillatorFrequencyIR,
+    ir: ir_mod.SetOscillatorFrequencyIR,
     start: int,
     _max_events: int,
     id_tracker: Iterator[int],
@@ -254,7 +236,7 @@ def generate_event_list_oscillator_frequency_step(
 
 @generate_event_list.register
 def generate_event_list_initial_oscillator_frequency(
-    ir: InitialOscillatorFrequencyIR,
+    ir: ir_mod.InitialOscillatorFrequencyIR,
     start: int,
     _max_events: int,
     id_tracker: Iterator[int],
@@ -281,7 +263,7 @@ def generate_event_list_initial_oscillator_frequency(
 
 @generate_event_list.register
 def generate_event_list_root(
-    root_ir: RootScheduleIR,
+    root_ir: ir_mod.RootScheduleIR,
     start: int,
     max_events: int,
     id_tracker: Iterator[int],
@@ -289,7 +271,7 @@ def generate_event_list_root(
     settings: CompilerSettings,
 ) -> EventList:
     assert root_ir.length is not None
-    children_events = _children_events(
+    children_events = generate_children_events(
         root_ir, start, max_events - 2, settings, id_tracker, expand_loops
     )
 
@@ -298,7 +280,7 @@ def generate_event_list_root(
 
 @generate_event_list.register
 def generate_event_list_loop(
-    loop_ir: LoopIR,
+    loop_ir: ir_mod.LoopIR,
     start: int,
     max_events: int,
     id_tracker: Iterator[int],
@@ -312,7 +294,7 @@ def generate_event_list_loop(
     max_events -= 3
 
     if not loop_ir.compressed:  # unrolled loop
-        children_events = _children_events(
+        children_events = generate_children_events(
             loop_ir,
             start,
             max_events,
@@ -338,7 +320,7 @@ def generate_event_list_loop(
         if expand_loops:
             prototype = loop_ir.children[0]
             assert prototype.length is not None
-            assert isinstance(prototype, LoopIterationIR)
+            assert isinstance(prototype, ir_mod.LoopIterationIR)
             iteration_start = start
             for iteration in range(1, loop_ir.iterations):
                 max_events -= len(children_events[-1])
@@ -387,7 +369,7 @@ def generate_event_list_loop(
 
 @generate_event_list.register
 def generate_event_list_match(
-    match_ir: MatchIR,
+    match_ir: ir_mod.MatchIR,
     start: int,
     max_events: int,
     id_tracker: Iterator[int],
@@ -415,7 +397,7 @@ def generate_event_list_match(
 
 @generate_event_list.register
 def generate_event_list_case(
-    case_ir: CaseIR,
+    case_ir: ir_mod.CaseIR,
     start: int,
     max_events: int,
     id_tracker: Iterator[int],
@@ -434,7 +416,7 @@ def generate_event_list_case(
 
 @generate_event_list.register
 def generate_event_list_empty_branch(
-    ir: EmptyBranchIR,
+    ir: ir_mod.EmptyBranchIR,
     start: int,
     max_events: int,
     id_tracker: Iterator[int],
@@ -489,7 +471,7 @@ def generate_event_list_empty_branch(
 
 @generate_event_list.register
 def generate_event_list_loop_iteration(
-    loop_iteration_ir: LoopIterationIR,
+    loop_iteration_ir: ir_mod.LoopIterationIR,
     start: int,
     max_events: int,
     id_tracker: Iterator[int],
@@ -512,7 +494,7 @@ def generate_event_list_loop_iteration(
     # we'll add one LOOP_STEP_START, LOOP_STEP_END, LOOP_ITERATION_END each
     max_events -= 3
 
-    children_events = _children_events(
+    children_events = generate_children_events(
         loop_iteration_ir, start, max_events, settings, id_tracker, expand_loops
     )
 
@@ -567,7 +549,7 @@ def generate_event_list_loop_iteration(
 
 @generate_event_list.register
 def generate_event_list_loop_iteration_preamble(
-    preamble: LoopIterationPreambleIR,
+    preamble: ir_mod.LoopIterationPreambleIR,
     start: int,
     max_events: int,
     id_tracker: Iterator[int],
@@ -592,7 +574,7 @@ def generate_event_list_loop_iteration_preamble(
 
 @generate_event_list.register
 def generate_event_list_pulse(
-    pulse_ir: PulseIR,
+    pulse_ir: ir_mod.PulseIR,
     start: int,
     _max_events: int,
     id_tracker: Iterator[int],
@@ -712,7 +694,7 @@ def generate_event_list_pulse(
 
 @generate_event_list.register
 def generate_event_list_precomp_clear(
-    ir: PrecompClearIR,
+    ir: ir_mod.PrecompClearIR,
     start: int,
     max_events: int,
     id_tracker: Iterator[int],
@@ -724,22 +706,15 @@ def generate_event_list_precomp_clear(
         {
             "event_type": EventType.RESET_PRECOMPENSATION_FILTERS,
             "time": start,
-            "signal_id": ir.pulse.pulse.signal.uid,
-            "section_name": ir.pulse.section,
+            "signal_id": next(iter(ir.signals)),
             "id": next(id_tracker),
         }
     ]
 
 
 @generate_event_list.register
-def generate_event_list_reserve(ir: ReserveIR, *_, **__) -> EventList:
-    assert ir.length is not None
-    return []
-
-
-@generate_event_list.register
 def generate_event_list_phase_reset(
-    ir: PhaseResetIR,
+    ir: ir_mod.PhaseResetIR,
     start: int,
     max_events: int,
     id_tracker: Iterator[int],
@@ -774,7 +749,7 @@ def generate_event_list_phase_reset(
 
 @generate_event_list.register
 def generate_event_list_ppc_step(
-    ir: PPCStepIR,
+    ir: ir_mod.PPCStepIR,
     start: int,
     max_events: int,
     id_tracker: Iterator[int],
@@ -815,8 +790,8 @@ def generate_event_list_ppc_step(
     return [start_event, end_event]
 
 
-def _children_events(
-    ir: IntervalIR,
+def generate_children_events(
+    ir: ir_mod.IntervalIR,
     start: int,
     max_events: int,
     settings: CompilerSettings,
@@ -826,7 +801,7 @@ def _children_events(
 ) -> list[EventList]:
     assert ir.children_start is not None
 
-    if not isinstance(ir, SectionIR):
+    if not isinstance(ir, ir_mod.SectionIR):
         subsection_events = False
 
     if subsection_events:
@@ -860,10 +835,10 @@ def _children_events(
         [] for _ in range(len(ir.children) - len(event_list_nested))
     )
 
-    if subsection_events and isinstance(ir, SectionIR):
+    if subsection_events and isinstance(ir, ir_mod.SectionIR):
         # Wrap child sections in SUBSECTION_START & SUBSECTION_END.
         for i, child in enumerate(ir.children):
-            if isinstance(child, SectionIR):
+            if isinstance(child, ir_mod.SectionIR):
                 assert child.length is not None
                 start_id = next(id_tracker)
                 d = {"section_name": ir.section, "chain_element_id": start_id}

@@ -8,9 +8,8 @@ import logging
 import math
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Set, Tuple, Union, TYPE_CHECKING
+from typing import Any, Dict, List, TYPE_CHECKING
 
-from sortedcollections import SortedDict
 from laboneq.compiler.common.compiler_settings import TINYSAMPLE
 from laboneq.compiler.feedback_router.feedback_router import (
     calculate_feedback_register_layout,
@@ -50,6 +49,7 @@ from laboneq.data.compilation_job import (
     SignalInfo,
     SignalInfoType,
     DeviceInfoType,
+    ParameterInfo,
 )
 from laboneq.data.recipe import Recipe
 from laboneq.data.scheduled_experiment import ScheduledExperiment
@@ -58,9 +58,109 @@ from laboneq.executor.executor import Statement
 import laboneq.compiler.workflow.reporter  # noqa: F401
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from laboneq.compiler.workflow.on_device_delays import OnDeviceDelayCompensation
 
+
+AWGMapping = dict[AwgKey, AWGInfo]
+
 _logger = logging.getLogger(__name__)
+
+_registered_awg_calculation_hooks: list[Callable[[ExperimentDAO], AWGMapping]] = []
+
+
+def register_awg_calculation_hook(hook):
+    if hook not in _registered_awg_calculation_hooks:
+        _registered_awg_calculation_hooks.append(hook)
+    return hook
+
+
+@register_awg_calculation_hook
+def _calc_awgs(dao: ExperimentDAO):
+    awgs: AWGMapping = {}
+    signals_by_channel_and_awg: dict[
+        tuple[str, int, int], dict[str, set[str] | AWGInfo]
+    ] = {}
+    for signal_id in dao.signals():
+        signal_info: SignalInfo = dao.signal_info(signal_id)
+        device_id = signal_info.device.uid
+        device_type = DeviceType.from_device_info_type(signal_info.device.device_type)
+        if device_type.device_class != 0:
+            continue
+        for channel in sorted(signal_info.channels):
+            awg_id = calc_awg_number(channel, device_type)
+            key = AwgKey(device_id, awg_id)
+            awg = awgs.get(key)
+            if awg is None:
+                signal_type = signal_info.type.value
+                # Treat "integration" signal type same as "iq" at AWG level
+                if signal_type == "integration":
+                    signal_type = "iq"
+                awg = AWGInfo(
+                    device_id=device_id,
+                    signal_type=AWGSignalType(signal_type),
+                    awg_id=awg_id,
+                    device_type=device_type,
+                    sampling_rate=None,
+                    device_class=device_type.device_class,
+                )
+                awgs[key] = awg
+
+            awg.signal_channels.append((signal_id, channel))
+
+            if signal_info.type == SignalInfoType.IQ:
+                assert isinstance(awg.awg_id, int)
+                signal_channel_awg_key = (device_id, awg.awg_id, channel)
+                if signal_channel_awg_key in signals_by_channel_and_awg:
+                    signals_by_channel_and_awg[signal_channel_awg_key]["signals"].add(
+                        signal_id
+                    )
+                else:
+                    signals_by_channel_and_awg[signal_channel_awg_key] = {
+                        "awg": awg,
+                        "signals": {signal_id},
+                    }
+
+    for v in signals_by_channel_and_awg.values():
+        if len(v["signals"]) > 1 and v["awg"].device_type != DeviceType.SHFQA:
+            awg = v["awg"]
+            awg.signal_type = AWGSignalType.MULTI
+            _logger.debug("Changing signal type to multi: %s", awg)
+
+    for awg in awgs.values():
+        occupied_channels = {sc[1] for sc in awg.signal_channels}
+        if len(occupied_channels) == 2 and awg.signal_type not in [
+            AWGSignalType.IQ,
+            AWGSignalType.MULTI,
+        ]:
+            awg.signal_type = AWGSignalType.DOUBLE
+
+        # For each awg of a HDAWG, retrieve the delay of all of its rf_signals (for
+        # playZeros and check whether they are the same:
+        if awg.signal_type == AWGSignalType.IQ:
+            continue
+
+        signal_ids = set(sc[0] for sc in awg.signal_channels)
+        signal_delays = {
+            dao.signal_info(signal_id).delay_signal or 0.0 for signal_id in signal_ids
+        }
+        if any(isinstance(d, ParameterInfo) for d in signal_delays):
+            raise LabOneQException("Cannot sweep delay on RF channel")
+        if len(signal_delays) > 1:
+            delay_strings = ", ".join([f"{d * 1e9:.2f} ns" for d in signal_delays])
+            raise RuntimeError(
+                "Delays {" + str(delay_strings) + "} on awg "
+                f"{awg.device_id}:{awg.awg_id} with signals "
+                f"{signal_ids} differ."
+            )
+
+    return awgs
+
+
+def calc_awg_number(channel, device_type: DeviceType):
+    if device_type == DeviceType.UHFQA:
+        return 0
+    return int(math.floor(channel / device_type.channels_per_awg))
 
 
 @dataclass
@@ -68,9 +168,6 @@ class LeaderProperties:
     global_leader: str | None = None
     is_desktop_setup: bool = False
     internal_followers: List[str] = field(default_factory=list)
-
-
-_AWGMapping = Dict[str, Dict[int, AWGInfo]]
 
 
 @dataclass
@@ -89,6 +186,113 @@ class IntegrationUnitAllocation:
     has_local_bus: bool
 
 
+def get_total_rounded_delay(delay, signal_id, device_type, sampling_rate):
+    if delay < 0:
+        raise RuntimeError(f"Negative signal delay for signal {signal_id} specified.")
+    # Quantize to granularity and round ties towards zero
+    samples = delay * sampling_rate
+    samples_rounded = (
+        math.ceil(samples / device_type.sample_multiple + 0.5) - 1
+    ) * device_type.sample_multiple
+    delay_rounded = samples_rounded / sampling_rate
+    if abs(samples - samples_rounded) > 1:
+        _logger.debug(
+            "Signal delay %.2f ns of %s on a %s will be rounded to "
+            + "%.2f ns, a multiple of %d samples.",
+            delay * 1e9,
+            signal_id,
+            device_type.name,
+            delay_rounded * 1e9,
+            device_type.sample_multiple,
+        )
+    return delay_rounded
+
+
+def calc_integration_unit_allocation(
+    dao: ExperimentDAO,
+) -> dict[str, IntegrationUnitAllocation]:
+    integration_unit_allocation: dict[str, IntegrationUnitAllocation] = {}
+
+    integration_signals: list[SignalInfo] = [
+        signal_info
+        for signal in dao.signals()
+        if (signal_info := dao.signal_info(signal)).type == SignalInfoType.INTEGRATION
+    ]
+
+    # For alignment in feedback register, place qudits before qubits
+    integration_signals.sort(key=lambda s: (s.kernel_count or 0) <= 1)
+
+    for signal_info in integration_signals:
+        device_type = DeviceType.from_device_info_type(signal_info.device.device_type)
+        if device_type.device_class != 0:
+            continue
+        awg_nr = calc_awg_number(signal_info.channels[0], device_type)
+        num_acquire_signals = len(
+            [
+                x
+                for x in integration_unit_allocation.values()
+                if x.device_id == signal_info.device.uid and x.awg_nr == awg_nr
+            ]
+        )
+        if dao.acquisition_type == AcquisitionType.SPECTROSCOPY_PSD:
+            if device_type == device_type.UHFQA:
+                raise LabOneQException(
+                    "`AcquisitionType` `SPECTROSCOPY_PSD` not allowed on UHFQA"
+                )
+        integrators_per_signal = (
+            device_type.num_integration_units_per_acquire_signal
+            if dao.acquisition_type
+            in [
+                AcquisitionType.RAW,
+                AcquisitionType.INTEGRATION,
+            ]
+            or is_spectroscopy(dao.acquisition_type)
+            else 1
+        )
+        integration_unit_allocation[signal_info.uid] = IntegrationUnitAllocation(
+            device_id=signal_info.device.uid,
+            awg_nr=awg_nr,
+            channels=[
+                integrators_per_signal * num_acquire_signals + i
+                for i in range(integrators_per_signal)
+            ],
+            kernel_count=signal_info.kernel_count,
+            has_local_bus=signal_info.device.is_qc,
+        )
+    return integration_unit_allocation
+
+
+def calc_shfqa_generator_allocation(
+    dao: ExperimentDAO,
+) -> dict[str, _ShfqaGeneratorAllocation]:
+    shfqa_generator_allocation: dict[str, _ShfqaGeneratorAllocation] = {}
+    for signal_id in dao.signals():
+        signal_info = dao.signal_info(signal_id)
+        device_type = DeviceType.from_device_info_type(signal_info.device.device_type)
+        if signal_info.type != SignalInfoType.IQ or device_type != DeviceType.SHFQA:
+            continue
+        _logger.debug(
+            "_shfqa_generator_allocation: found SHFQA iq signal %s", signal_info
+        )
+        device_id = signal_info.device.uid
+        awg_nr = calc_awg_number(signal_info.channels[0], device_type)
+        num_generator_signals = len(
+            [
+                x
+                for x in shfqa_generator_allocation.values()
+                if x.device_id == device_id and x.awg_nr == awg_nr
+            ]
+        )
+
+        shfqa_generator_allocation[signal_id] = _ShfqaGeneratorAllocation(
+            device_id=device_id,
+            awg_nr=awg_nr,
+            channels=[num_generator_signals],
+        )
+
+    return shfqa_generator_allocation
+
+
 class Compiler:
     def __init__(self, settings: dict | None = None):
         self._experiment_dao: ExperimentDAO = None
@@ -102,7 +306,7 @@ class Compiler:
         self._clock_settings: dict[str, Any] = {}
         self._shfqa_generator_allocation: dict[str, _ShfqaGeneratorAllocation] = {}
         self._integration_unit_allocation: dict[str, IntegrationUnitAllocation] = {}
-        self._awgs: _AWGMapping = {}
+        self._awgs: AWGMapping = {}
         self._delays_by_signal: dict[str, OnDeviceDelayCompensation] = {}
         self._precompensations: dict[str, PrecompensationInfo] | None = None
         self._signal_objects: dict[str, SignalObj] = {}
@@ -113,7 +317,7 @@ class Compiler:
         self._check_tinysamples()
 
     @classmethod
-    def from_user_settings(cls, settings: dict) -> "Compiler":
+    def from_user_settings(cls, settings: dict) -> Compiler:
         return cls(compiler_settings.filter_user_settings(settings))
 
     def _check_tinysamples(self):
@@ -266,8 +470,8 @@ class Compiler:
         self._sampling_rate_tracker = SamplingRateTracker(dao, self._clock_settings)
 
         self._awgs = self._calc_awgs(dao)
-        self._shfqa_generator_allocation = self._calc_shfqa_generator_allocation(dao)
-        self._integration_unit_allocation = self._calc_integration_unit_allocation(dao)
+        self._shfqa_generator_allocation = calc_shfqa_generator_allocation(dao)
+        self._integration_unit_allocation = calc_integration_unit_allocation(dao)
         self._precompensations = compute_precompensations_and_delays(dao)
         self._delays_by_signal = self._adjust_signals_for_on_device_delays(
             signal_infos=[dao.signal_info(uid) for uid in dao.signals()],
@@ -299,216 +503,11 @@ class Compiler:
         )
 
     @staticmethod
-    def _get_total_rounded_delay(delay, signal_id, device_type, sampling_rate):
-        if delay < 0:
-            raise RuntimeError(
-                f"Negative signal delay for signal {signal_id} specified."
-            )
-        # Quantize to granularity and round ties towards zero
-        samples = delay * sampling_rate
-        samples_rounded = (
-            math.ceil(samples / device_type.sample_multiple + 0.5) - 1
-        ) * device_type.sample_multiple
-        delay_rounded = samples_rounded / sampling_rate
-        if abs(samples - samples_rounded) > 1:
-            _logger.debug(
-                "Signal delay %.2f ns of %s on a %s will be rounded to "
-                + "%.2f ns, a multiple of %d samples.",
-                delay * 1e9,
-                signal_id,
-                device_type.name,
-                delay_rounded * 1e9,
-                device_type.sample_multiple,
-            )
-        return delay_rounded
-
-    @staticmethod
-    def _calc_integration_unit_allocation(
-        dao: ExperimentDAO,
-    ) -> dict[str, IntegrationUnitAllocation]:
-        integration_unit_allocation: dict[str, IntegrationUnitAllocation] = {}
-
-        integration_signals: list[SignalInfo] = [
-            signal_info
-            for signal in dao.signals()
-            if (signal_info := dao.signal_info(signal)).type
-            == SignalInfoType.INTEGRATION
-        ]
-
-        # For alignment in feedback register, place qudits before qubits
-        integration_signals.sort(key=lambda s: (s.kernel_count or 0) <= 1)
-
-        for signal_info in integration_signals:
-            device_type = DeviceType.from_device_info_type(
-                signal_info.device.device_type
-            )
-            awg_nr = Compiler.calc_awg_number(signal_info.channels[0], device_type)
-            num_acquire_signals = len(
-                [
-                    x
-                    for x in integration_unit_allocation.values()
-                    if x.device_id == signal_info.device.uid and x.awg_nr == awg_nr
-                ]
-            )
-            if dao.acquisition_type == AcquisitionType.SPECTROSCOPY_PSD:
-                if device_type == device_type.UHFQA:
-                    raise LabOneQException(
-                        "`AcquisitionType` `SPECTROSCOPY_PSD` not allowed on UHFQA"
-                    )
-            integrators_per_signal = (
-                device_type.num_integration_units_per_acquire_signal
-                if dao.acquisition_type
-                in [
-                    AcquisitionType.RAW,
-                    AcquisitionType.INTEGRATION,
-                ]
-                or is_spectroscopy(dao.acquisition_type)
-                else 1
-            )
-            integration_unit_allocation[signal_info.uid] = IntegrationUnitAllocation(
-                device_id=signal_info.device.uid,
-                awg_nr=awg_nr,
-                channels=[
-                    integrators_per_signal * num_acquire_signals + i
-                    for i in range(integrators_per_signal)
-                ],
-                kernel_count=signal_info.kernel_count,
-                has_local_bus=signal_info.device.is_qc,
-            )
-        return integration_unit_allocation
-
-    @staticmethod
-    def _calc_shfqa_generator_allocation(
-        dao: ExperimentDAO,
-    ) -> dict[str, _ShfqaGeneratorAllocation]:
-        shfqa_generator_allocation: dict[str, _ShfqaGeneratorAllocation] = {}
-        for signal_id in dao.signals():
-            signal_info = dao.signal_info(signal_id)
-            device_type = DeviceType.from_device_info_type(
-                signal_info.device.device_type
-            )
-            if signal_info.type != SignalInfoType.IQ or device_type != DeviceType.SHFQA:
-                continue
-            _logger.debug(
-                "_shfqa_generator_allocation: found SHFQA iq signal %s", signal_info
-            )
-            device_id = signal_info.device.uid
-            awg_nr = Compiler.calc_awg_number(signal_info.channels[0], device_type)
-            num_generator_signals = len(
-                [
-                    x
-                    for x in shfqa_generator_allocation.values()
-                    if x.device_id == device_id and x.awg_nr == awg_nr
-                ]
-            )
-
-            shfqa_generator_allocation[signal_id] = _ShfqaGeneratorAllocation(
-                device_id=device_id,
-                awg_nr=awg_nr,
-                channels=[num_generator_signals],
-            )
-
-        return shfqa_generator_allocation
-
-    @staticmethod
-    def calc_awg_number(channel, device_type: DeviceType):
-        if device_type == DeviceType.UHFQA:
-            return 0
-        return int(math.floor(channel / device_type.channels_per_awg))
-
-    @staticmethod
     def _calc_awgs(dao: ExperimentDAO):
-        awgs: _AWGMapping = {}
-        signals_by_channel_and_awg: Dict[
-            Tuple[str, int, int], Dict[str, Union[Set, AWGInfo]]
-        ] = {}
-        for signal_id in dao.signals():
-            signal_info: SignalInfo = dao.signal_info(signal_id)
-            device_id = signal_info.device.uid
-            device_type = DeviceType.from_device_info_type(
-                signal_info.device.device_type
-            )
-            for channel in sorted(signal_info.channels):
-                awg_number = Compiler.calc_awg_number(channel, device_type)
-                device_awgs = awgs.setdefault(device_id, SortedDict())
-                awg = device_awgs.get(awg_number)
-                if awg is None:
-                    signal_type = signal_info.type.value
-                    # Treat "integration" signal type same as "iq" at AWG level
-                    if signal_type == "integration":
-                        signal_type = "iq"
-                    awg = AWGInfo(
-                        device_id=device_id,
-                        signal_type=AWGSignalType(signal_type),
-                        awg_number=awg_number,
-                        device_type=device_type,
-                        sampling_rate=None,
-                        device_class=device_type.device_class,
-                    )
-                    device_awgs[awg_number] = awg
-
-                awg.signal_channels.append((signal_id, channel))
-
-                if signal_info.type == SignalInfoType.IQ:
-                    signal_channel_awg_key = (device_id, awg.awg_number, channel)
-                    if signal_channel_awg_key in signals_by_channel_and_awg:
-                        signals_by_channel_and_awg[signal_channel_awg_key][
-                            "signals"
-                        ].add(signal_id)
-                    else:
-                        signals_by_channel_and_awg[signal_channel_awg_key] = {
-                            "awg": awg,
-                            "signals": {signal_id},
-                        }
-
-        for v in signals_by_channel_and_awg.values():
-            if len(v["signals"]) > 1 and v["awg"].device_type != DeviceType.SHFQA:
-                awg = v["awg"]
-                awg.signal_type = AWGSignalType.MULTI
-                _logger.debug("Changing signal type to multi: %s", awg)
-
-        for dev_awgs in awgs.values():
-            for awg in dev_awgs.values():
-                occupied_channels = {sc[1] for sc in awg.signal_channels}
-                if len(occupied_channels) == 2 and awg.signal_type not in [
-                    AWGSignalType.IQ,
-                    AWGSignalType.MULTI,
-                ]:
-                    awg.signal_type = AWGSignalType.DOUBLE
-
-                # For each awg of a HDAWG, retrieve the delay of all of its rf_signals (for
-                # playZeros and check whether they are the same:
-                if awg.signal_type == AWGSignalType.IQ:
-                    continue
-                signal_ids = set(sc[0] for sc in awg.signal_channels)
-                signal_delays = {
-                    dao.signal_info(signal_id).delay_signal or 0.0
-                    for signal_id in signal_ids
-                }
-                if len(signal_delays) > 1:
-                    delay_strings = ", ".join(
-                        [f"{d * 1e9:.2f} ns" for d in signal_delays]
-                    )
-                    raise RuntimeError(
-                        "Delays {" + str(delay_strings) + "} on awg "
-                        f"{awg.device_id}:{awg.awg_number} with signals "
-                        f"{signal_ids} differ."
-                    )
-
-        return awgs
-
-    def get_awg(self, signal_id) -> AWGInfo:
-        signal_info = self._experiment_dao.signal_info(signal_id)
-
-        device_id = signal_info.device.uid
-        device_type = DeviceType.from_device_info_type(signal_info.device.device_type)
-        awg_number = Compiler.calc_awg_number(signal_info.channels[0], device_type)
-        if (
-            signal_info.type == SignalInfoType.INTEGRATION
-            and device_type == DeviceType.UHFQA
-        ):
-            awg_number = 0
-        return self._awgs[device_id][awg_number]
+        d = {}
+        for hook in _registered_awg_calculation_hooks:
+            d.update(hook(dao))
+        return d
 
     def _adjust_signals_for_on_device_delays(
         self, signal_infos: list[SignalInfo], use_2ghz_for_hdawg: bool
@@ -556,6 +555,12 @@ class Compiler:
 
         delay_measure_acquire: Dict[AwgKey, DelayInfo] = {}
 
+        awgs_by_signal_id = {
+            signal_id: awg
+            for awg in self._awgs.values()
+            for signal_id, _ in awg.signal_channels
+        }
+
         for signal_id in self._experiment_dao.signals():
             signal_info: SignalInfo = self._experiment_dao.signal_info(signal_id)
             delay_signal = signal_info.delay_signal
@@ -577,13 +582,13 @@ class Compiler:
             start_delay += self._delays_by_signal[signal_id].on_signal
 
             if delay_signal is not None:
-                delay_signal = self._get_total_rounded_delay(
+                delay_signal = get_total_rounded_delay(
                     delay_signal, signal_id, device_type, sampling_rate
                 )
             else:
                 delay_signal = 0
 
-            awg = self.get_awg(signal_id)
+            awg = awgs_by_signal_id[signal_id]
             awg.trigger_mode = TriggerMode.NONE
             device_info = self._experiment_dao.device_info(device_id)
             try:
@@ -646,6 +651,8 @@ class Compiler:
             if isinstance(port_delay, str):  # NT sweep param
                 port_delay = math.nan
 
+            local_oscillator_frequency = self._experiment_dao.lo_frequency(signal_id)
+
             if signal_type != "integration":
                 delay_info = delay_measure_acquire.setdefault(awg.key, DelayInfo())
                 delay_info.port_delay_gen = port_delay
@@ -668,6 +675,7 @@ class Compiler:
                 hw_oscillator=hw_oscillator,
                 is_qc=device_info.is_qc,
                 automute=signal_info.automute,
+                local_oscillator_frequency=local_oscillator_frequency,
             )
             signal_objects[signal_id] = signal_obj
             awg.signals.append(signal_obj)
@@ -715,7 +723,7 @@ class Compiler:
         self._analyze_setup(self._experiment_dao)
         self._process_experiment()
 
-        awgs: list[AWGInfo] = [awg for d in self._awgs.values() for awg in d.values()]
+        awgs: list[AWGInfo] = sorted(self._awgs.values(), key=lambda awg: awg.key)
 
         self._recipe = generate_recipe(
             awgs,

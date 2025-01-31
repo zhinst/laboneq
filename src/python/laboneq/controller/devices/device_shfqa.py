@@ -6,7 +6,6 @@ import asyncio
 
 import itertools
 import logging
-import time
 from typing import TYPE_CHECKING, Any, Iterator
 from weakref import ref
 
@@ -16,9 +15,6 @@ from laboneq.controller.attribute_value_tracker import (
     AttributeName,
     DeviceAttribute,
     DeviceAttributesView,
-)
-from laboneq.controller.communication import (
-    DaqNodeSetAction,
 )
 from laboneq.controller.devices.async_support import _gather, canonical_properties
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
@@ -277,20 +273,19 @@ class DeviceSHFQA(DeviceSHFBase):
     def _make_osc_path(self, channel: int, index: int) -> str:
         return f"/{self.serial}/qachannels/{channel}/oscs/{index}/freq"
 
-    async def disable_outputs(
-        self, outputs: set[int], invert: bool
-    ) -> list[DaqNodeSetAction]:
+    async def disable_outputs(self, outputs: set[int], invert: bool):
         nc = NodeCollector(base=f"/{self.serial}/")
         for ch in range(self._channels):
             if (ch in outputs) != invert:
                 nc.add(f"qachannels/{ch}/output/on", 0, cache=False)
-        return await self.maybe_async(nc)
+        await self.set_async(nc)
 
-    async def on_experiment_end(self) -> list[DaqNodeSetAction]:
+    async def on_experiment_end(self):
+        await super().on_experiment_end()
         nc = NodeCollector(base=f"/{self.serial}/")
         # in CW spectroscopy mode, turn off the tone
         nc.add("qachannels/*/spectroscopy/envelope/enable", 1, cache=False)
-        return (await super().on_experiment_end()) + (await self.maybe_async(nc))
+        await self.set_async(nc)
 
     def _result_node_readout(self, ch: int, integrator: int) -> str:
         return f"/{self.serial}/qachannels/{ch}/readout/result/data/{integrator}/wave"
@@ -300,23 +295,6 @@ class DeviceSHFQA(DeviceSHFBase):
 
     def _result_node_scope(self, ch: int) -> str:
         return f"/{self.serial}/scopes/0/channels/{ch}/wave"
-
-    def _nodes_to_monitor_impl(self) -> list[str]:
-        nodes = super()._nodes_to_monitor_impl()
-        if self._api is None:
-            nodes.extend([path for path, _ in self._collect_warning_nodes()])
-        for awg in range(self._get_num_awgs()):
-            if self._api is None:
-                nodes.append(self.get_sequencer_paths(awg).enable)
-                for result_index in range(self._integrators):
-                    nodes.append(self._result_node_readout(awg, result_index))
-                nodes.append(self._result_node_spectroscopy(awg))
-                # 1:1 mapping of QA channels to scope channels
-                nodes.append(self._result_node_scope(awg))
-            nodes.extend(
-                self._pipeliner.control_nodes(awg, use_async_api=self._api is not None)
-            )
-        return nodes
 
     def configure_acquisition(
         self,
@@ -331,6 +309,7 @@ class DeviceSHFQA(DeviceSHFBase):
     ) -> NodeCollector:
         nc = NodeCollector()
         average_mode = 0 if averaging_mode == AveragingMode.CYCLIC else 1
+        assert isinstance(awg_key.awg_index, int)
         nc.extend(
             self._configure_readout(
                 acquisition_type,
@@ -382,6 +361,7 @@ class DeviceSHFQA(DeviceSHFBase):
             AcquisitionType.DISCRIMINATION,
         ]
         channel = awg_key.awg_index
+        assert isinstance(channel, int)
         nc = NodeCollector(base=f"/{self.serial}/")
         first_job_in_pipeline = pipeliner_job in [0, None]
         if enable:
@@ -521,33 +501,29 @@ class DeviceSHFQA(DeviceSHFBase):
         nc.add("enable", 1 if enable else 0)
         return nc
 
-    async def collect_execution_nodes(
-        self, with_pipeliner: bool
-    ) -> list[DaqNodeSetAction]:
+    async def start_execution(self, with_pipeliner: bool):
         if with_pipeliner:
             nc = self._pipeliner.collect_execution_nodes()
         else:
             nc = NodeCollector(base=f"/{self.serial}/")
             for awg_index in self._allocated_awgs:
                 nc.add(f"qachannels/{awg_index}/generator/enable", 1, cache=False)
-        return await self.maybe_async(nc)
+        await self.set_async(nc)
 
-    async def collect_execution_setup_nodes(
+    async def setup_one_step_execution(
         self, with_pipeliner: bool, has_awg_in_use: bool
-    ) -> list[DaqNodeSetAction]:
-        hw_sync = with_pipeliner and has_awg_in_use
+    ):
+        hw_sync = with_pipeliner and (has_awg_in_use or self.options.is_qc)
         nc = NodeCollector(base=f"/{self.serial}/")
         if hw_sync and self._emit_trigger:
             nc.add("system/internaltrigger/synchronization/enable", 1)  # enable
         if hw_sync and not self._emit_trigger:
             nc.add("system/synchronization/source", 1)  # external
-        return await self.maybe_async(nc)
+        await self.set_async(nc)
 
-    async def collect_start_trigger_nodes(
-        self, with_pipeliner: bool
-    ) -> list[DaqNodeSetAction]:
-        nc = NodeCollector(base=f"/{self.serial}/")
+    async def emit_start_trigger(self, with_pipeliner: bool):
         if self._emit_trigger:
+            nc = NodeCollector(base=f"/{self.serial}/")
             nc.add(
                 (
                     "system/internaltrigger/enable"
@@ -557,7 +533,7 @@ class DeviceSHFQA(DeviceSHFBase):
                 1,
                 cache=False,
             )
-        return await self.maybe_async(nc)
+            await self.set_async(nc)
 
     def conditions_for_execution_ready(
         self, with_pipeliner: bool
@@ -592,9 +568,7 @@ class DeviceSHFQA(DeviceSHFBase):
             }
         return conditions
 
-    async def collect_execution_teardown_nodes(
-        self, with_pipeliner: bool
-    ) -> list[DaqNodeSetAction]:
+    async def teardown_one_step_execution(self, with_pipeliner: bool):
         nc = NodeCollector(base=f"/{self.serial}/")
 
         if not self.is_standalone():
@@ -602,10 +576,17 @@ class DeviceSHFQA(DeviceSHFBase):
             # HULK-1707: this must happen before disabling the synchronization of the last AWG
             nc.add("system/synchronization/source", 0)
 
+        # In case of hold-off errors, the result logger may still be waiting. Disabling
+        # the result logger then generates an error.
+        # We thus reset the result logger now (rather than waiting for the beginning of
+        # the next experiment or RT execution), so the error is correctly associated
+        # with the _current_ job.
+        nc.add("qachannels/*/readout/result/enable", 0, cache=False)
+
         if with_pipeliner:
             nc.extend(self._pipeliner.reset_nodes())
 
-        return await self.maybe_async(nc)
+        await self.set_async(nc)
 
     def pre_process_attributes(
         self,
@@ -641,12 +622,12 @@ class DeviceSHFQA(DeviceSHFBase):
                     value_or_param=io.lo_frequency,
                 )
 
-    async def collect_initialization_nodes(
+    async def apply_initialization(
         self,
         device_recipe_data: DeviceRecipeData,
         initialization: Initialization,
         recipe_data: RecipeData,
-    ) -> list[DaqNodeSetAction]:
+    ):
         _logger.debug("%s: Initializing device...", self.dev_repr)
 
         nc = NodeCollector(base=f"/{self.serial}/")
@@ -694,7 +675,7 @@ class DeviceSHFQA(DeviceSHFBase):
                 self._validate_range(input, is_out=False)
                 nc.add(f"qachannels/{input.channel}/input/range", input.range)
 
-        return await self.maybe_async(nc)
+        await self.set_async(nc)
 
     def collect_prepare_nt_step_nodes(
         self, attributes: DeviceAttributesView, recipe_data: RecipeData
@@ -1087,9 +1068,9 @@ class DeviceSHFQA(DeviceSHFBase):
             > 0
         )
 
-    async def collect_awg_before_upload_nodes(
+    async def set_before_awg_upload(
         self, initialization: Initialization, recipe_data: RecipeData
-    ) -> list[DaqNodeSetAction]:
+    ):
         nc = NodeCollector(base=f"/{self.serial}/")
 
         acquisition_type = RtExecutionInfo.get_acquisition_type(
@@ -1139,11 +1120,11 @@ class DeviceSHFQA(DeviceSHFBase):
                     )
                 )
 
-        return await self.maybe_async(nc)
+        await self.set_async(nc)
 
-    async def collect_trigger_configuration_nodes(
+    async def configure_trigger(
         self, initialization: Initialization, recipe_data: RecipeData
-    ) -> list[DaqNodeSetAction]:
+    ):
         _logger.debug("Configuring triggers...")
         self._wait_for_awgs = True
         self._emit_trigger = False
@@ -1186,52 +1167,25 @@ class DeviceSHFQA(DeviceSHFBase):
                 channel,
             )
 
-        return await self.maybe_async(nc)
+        await self.set_async(nc)
 
-    async def on_experiment_begin(self) -> list[DaqNodeSetAction]:
-        if self._api is not None:
-            nodes = [
-                *(
-                    self._result_node_readout(awg, result_index)
-                    for awg in range(self._get_num_awgs())
-                    for result_index in range(self._integrators)
-                ),
-                *(
-                    self._result_node_spectroscopy(awg)
-                    for awg in range(self._get_num_awgs())
-                ),
-                *(self._result_node_scope(awg) for awg in range(self._get_num_awgs())),
-            ]
-            await _gather(
-                *(self._subscriber.subscribe(self._api, node) for node in nodes)
-            )
-
-        return await super().on_experiment_begin()
+    async def on_experiment_begin(self):
+        nodes = [
+            *(
+                self._result_node_readout(awg, result_index)
+                for awg in range(self._get_num_awgs())
+                for result_index in range(self._integrators)
+            ),
+            *(
+                self._result_node_spectroscopy(awg)
+                for awg in range(self._get_num_awgs())
+            ),
+            *(self._result_node_scope(awg) for awg in range(self._get_num_awgs())),
+        ]
+        await _gather(*(self._subscriber.subscribe(self._api, node) for node in nodes))
+        await super().on_experiment_begin()
 
     async def get_measurement_data(
-        self,
-        recipe_data: RecipeData,
-        channel: int,
-        rt_execution_info: RtExecutionInfo,
-        result_indices: list[int],
-        num_results: int,
-        hw_averages: int,
-    ) -> RawReadoutData:
-        impl = (
-            self.get_measurement_data_sync
-            if self._api is None
-            else self.get_measurement_data_async
-        )
-        return await impl(
-            recipe_data,
-            channel,
-            rt_execution_info,
-            result_indices,
-            num_results,
-            hw_averages,
-        )
-
-    async def get_measurement_data_async(
         self,
         recipe_data: RecipeData,
         channel: int,
@@ -1308,7 +1262,7 @@ class DeviceSHFQA(DeviceSHFBase):
                 rt_result.metadata.setdefault(job_id, {})["timestamp"] = (
                     timestamp_clock_cycles * TIME_STAMP_TIMEBASE
                 )
-        except TimeoutError:
+        except (TimeoutError, asyncio.TimeoutError):
             _logger.error(
                 f"{ch_repr}: Failed to receive all results within {timeout_s} s, timing out."
             )
@@ -1323,119 +1277,10 @@ class DeviceSHFQA(DeviceSHFBase):
             rt_result.vector = rt_result.vector.real
         return rt_result
 
-    async def get_measurement_data_sync(
-        self,
-        recipe_data: RecipeData,
-        channel: int,
-        rt_execution_info: RtExecutionInfo,
-        result_indices: list[int],
-        num_results: int,
-        hw_averages: int,
-    ) -> RawReadoutData:
-        assert len(result_indices) == 1
-        result_path = (
-            self._result_node_spectroscopy(channel)
-            if is_spectroscopy(rt_execution_info.acquisition_type)
-            else self._result_node_readout(channel, result_indices[0])
-        )
-        ch_repr = (
-            f"{self.dev_repr}:ch{channel}:spectroscopy"
-            if is_spectroscopy(rt_execution_info.acquisition_type)
-            else f"{self.dev_repr}:ch{channel}:readout{result_indices[0]}"
-        )
-
-        pipeliner_jobs = rt_execution_info.pipeliner_jobs
-
-        rt_result = RawReadoutData(
-            np.full(pipeliner_jobs * num_results, np.nan, dtype=np.complex128)
-        )
-        jobs_processed: set[int] = set()
-
-        expected_job_id = 0  # TODO(2K): For compatibility with 23.10
-
-        read_result_timeout_s = 5
-        last_result_received = None
-        while True:
-            job_result = self.node_monitor.pop(result_path)
-            if job_result is None:
-                if len(jobs_processed) == pipeliner_jobs:
-                    break
-                now = time.monotonic()
-                if last_result_received is None:
-                    last_result_received = now
-                if now - last_result_received > read_result_timeout_s:
-                    _logger.error(
-                        f"{ch_repr}: Failed to receive all results within {read_result_timeout_s} s, timing out."
-                    )
-                    break
-                await asyncio.sleep(0.1)
-                await self.node_monitor.poll()
-                continue
-            else:
-                last_result_received = None
-
-            job_id = job_result["properties"]["jobid"]
-            expected_job_id += 1
-            if job_id in jobs_processed:
-                _logger.error(
-                    f"{ch_repr}: Ignoring duplicate job id {job_id} in the results."
-                )
-                continue
-            if job_id >= pipeliner_jobs:
-                _logger.error(
-                    f"{ch_repr}: Ignoring job id {job_id} in the results, as it "
-                    f"falls outside the defined range of {pipeliner_jobs} jobs."
-                )
-                continue
-            jobs_processed.add(job_id)
-
-            num_samples = job_result["properties"].get("numsamples", num_results)
-
-            if num_samples != num_results:
-                _logger.error(
-                    f"{ch_repr}: The number of measurements acquired ({num_samples}) "
-                    f"does not match the number of measurements defined ({num_results}). "
-                    "Possibly the time between measurements within a loop is too short, "
-                    "or the measurement was not started."
-                )
-
-            valid_samples = min(num_results, num_samples)
-            np.put(
-                rt_result.vector,
-                range(job_id * num_results, job_id * num_results + valid_samples),
-                job_result["vector"][:valid_samples],
-                mode="clip",
-            )
-
-            timestamp_clock_cycles = job_result["properties"]["firstSampleTimestamp"]
-            rt_result.metadata.setdefault(job_id, {})["timestamp"] = (
-                timestamp_clock_cycles * TIME_STAMP_TIMEBASE
-            )
-
-        missing_jobs = set(range(pipeliner_jobs)) - jobs_processed
-        if len(missing_jobs) > 0:
-            _logger.error(
-                f"{ch_repr}: Results for job id(s) {missing_jobs} are missing."
-            )
-
-        if rt_execution_info.acquisition_type == AcquisitionType.DISCRIMINATION:
-            rt_result.vector = rt_result.vector.real
-        return rt_result
-
-    async def get_input_monitor_data(
-        self, channel: int, num_results: int
-    ) -> RawReadoutData:
-        impl = (
-            self._get_input_monitor_data_sync
-            if self._api is None
-            else self._get_input_monitor_data_async
-        )
-        return await impl(channel, num_results)
-
     def _ch_repr_scope(self, ch: int) -> str:
         return f"{self.dev_repr}:scope:ch{ch}"
 
-    async def _get_input_monitor_data_async(
+    async def get_input_monitor_data(
         self, channel: int, num_results: int
     ) -> RawReadoutData:
         result_path = self._result_node_scope(channel)
@@ -1445,35 +1290,14 @@ class DeviceSHFQA(DeviceSHFBase):
             node_data = await self._subscriber.get(result_path, timeout_s=timeout_s)
             node_val = node_data.value.vector
             return RawReadoutData(node_val[0:num_results])
-        except TimeoutError:
+        except (TimeoutError, asyncio.TimeoutError):
             _logger.error(
                 f"{self._ch_repr_scope(channel)}: Failed to receive a result from {result_path} within {timeout_s} seconds."
             )
             return RawReadoutData(np.array([], dtype=np.complex128))
 
-    async def _get_input_monitor_data_sync(
-        self, channel: int, num_results: int
-    ) -> RawReadoutData:
-        result_path_ch = self._result_node_scope(channel)
-        read_result_timeout_s = 5
-        last_result_received = None
-        while True:
-            node_data = self.node_monitor.pop(result_path_ch)
-            if node_data is not None:
-                data = node_data["vector"][0:num_results]
-                return RawReadoutData(data)
-            now = time.monotonic()
-            if last_result_received is None:
-                last_result_received = now
-            if now - last_result_received > read_result_timeout_s:
-                _logger.error(
-                    f"{self._ch_repr_scope(channel)}: Failed to receive all raw results within {read_result_timeout_s} s, timing out."
-                )
-                return RawReadoutData(np.array([], dtype=np.complex128))
-            await asyncio.sleep(0.1)
-            await self.node_monitor.poll()
-
-    async def collect_reset_nodes(self) -> list[DaqNodeSetAction]:
+    async def reset_to_idle(self):
+        await super().reset_to_idle()
         nc = NodeCollector(base=f"/{self.serial}/")
         # Reset pipeliner first, attempt to set generator enable leads to FW error if pipeliner was enabled.
         nc.extend(self._pipeliner.reset_nodes())
@@ -1496,9 +1320,7 @@ class DeviceSHFQA(DeviceSHFBase):
         nc.add("qachannels/*/oscs/*/gain", 1.0, cache=False)
         nc.add("scopes/0/enable", 0, cache=False)
         nc.add("scopes/0/channels/*/enable", 0, cache=False)
-        reset_nodes = await super().collect_reset_nodes()
-        reset_nodes.extend(await self.maybe_async(nc))
-        return reset_nodes
+        await self.set_async(nc)
 
     def _collect_warning_nodes(self) -> list[tuple[str, str]]:
         warning_nodes = []

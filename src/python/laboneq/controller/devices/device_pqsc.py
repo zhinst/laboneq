@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from laboneq.controller.devices.device_leader_base import DeviceLeaderBase
-from laboneq.controller.devices.zi_node_monitor import (
+from laboneq.controller.devices.node_control import (
     Command,
     WaitCondition,
     NodeControlBase,

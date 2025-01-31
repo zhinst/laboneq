@@ -11,44 +11,27 @@ import re
 from collections import defaultdict
 from typing import TYPE_CHECKING, Callable, Iterator, cast
 
-from zhinst.utils.api_compatibility import check_dataserver_device_compatibility
-
-from laboneq.controller.communication import (
-    DaqWrapper,
-    DaqWrapperDryRun,
-    DaqWrapperDummy,
-    batch_set,
-    batch_set_multiple,
-)
 from laboneq.controller.devices.async_support import (
     ConditionsCheckerAsync,
     DataServerConnection,
     DataServerConnections,
     _gather,
     _gather_with_timeout,
-    gather_and_apply,
     wait_for_state_change,
 )
 from laboneq.controller.devices.device_factory import DeviceFactory
 from laboneq.controller.devices.device_qhub import DeviceQHUB
-from laboneq.controller.devices.device_setup_dao import DeviceSetupDAO
+from laboneq.controller.devices.device_setup_dao import DeviceSetupDAO, ServerQualifier
 from laboneq.controller.devices.device_utils import (
     NodeCollector,
     prepare_emulator_state,
 )
 from laboneq.controller.devices.device_zi import DeviceBase, DeviceZI
 from laboneq.controller.devices.zi_emulator import EmulatorState
-from laboneq.controller.devices.zi_node_monitor import (
-    ConditionsChecker,
+from laboneq.controller.devices.node_control import (
     NodeControlBase,
     NodeControlKind,
-    NodeMonitorBase,
-    ResponseWaiter,
-    filter_commands,
-    filter_settings,
     filter_states,
-    filter_responses,
-    filter_wait_conditions,
 )
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.controller.versioning import SetupCaps
@@ -88,10 +71,8 @@ class DeviceCollection:
         self._emulator_state: EmulatorState | None = None
         self._ignore_version_mismatch = ignore_version_mismatch
         self._timeout_s: float = DEFAULT_TIMEOUT_S
-        self._daqs: dict[str, DaqWrapper] = {}
         self._data_servers = DataServerConnections()
         self._devices: dict[str, DeviceZI] = {}
-        self._monitor_started = False
 
     @property
     def emulator_state(self) -> EmulatorState:
@@ -119,15 +100,6 @@ class DeviceCollection:
         for uid, device in self._devices.items():
             if device.is_follower():
                 yield uid, device
-
-    @property
-    def node_monitors(self) -> Iterator[NodeMonitorBase]:
-        already_considered = set()
-        for _, device in self.all:
-            node_monitor = device.node_monitor
-            if node_monitor not in already_considered:
-                already_considered.add(node_monitor)
-                yield node_monitor
 
     @property
     def has_qhub(self) -> bool:
@@ -161,27 +133,19 @@ class DeviceCollection:
         self,
         do_emulation: bool,
         reset_devices: bool = False,
-        use_async_api: bool = False,
         disable_runtime_checks: bool = False,
     ):
-        await self._prepare_daqs(do_emulation=do_emulation, use_async_api=use_async_api)
-        await self._validate_dataserver_device_fw_compatibility(
-            emulator_state=self.emulator_state if do_emulation else None,
-            use_async_api=use_async_api,
-        )
+        await self._prepare_daqs(do_emulation=do_emulation)
+        await self._validate_dataserver_device_fw_compatibility()
         self._prepare_devices()
         for _, device in self.all:
             await device.connect(
                 self.emulator_state if do_emulation else None,
-                use_async_api=use_async_api,
                 disable_runtime_checks=disable_runtime_checks,
                 timeout_s=self._timeout_s,
             )
-        await self.start_monitor()
         async with self.capture_logs():
-            await self.configure_device_setup(
-                reset_devices, use_async_api=use_async_api
-            )
+            await self.configure_device_setup(reset_devices=reset_devices)
 
     async def _configure_async(
         self,
@@ -200,105 +164,10 @@ class DeviceCollection:
             )
         )
 
-    async def _configure_parallel(
-        self,
-        devices: list[DeviceZI],
-        control_nodes_getter: Callable[[DeviceZI], list[NodeControlBase]],
-        config_name: str,
-    ):
-        conditions_checker = ConditionsChecker()
-        response_waiter = ResponseWaiter()
-        set_nodes: dict[DeviceZI, NodeCollector] = defaultdict(NodeCollector)
-
-        def _add_set_nodes(device: DeviceZI, nodes: list[NodeControlBase]):
-            for node in nodes:
-                set_nodes[device].add(
-                    path=node.path,
-                    value=node.raw_value,
-                    cache=False,
-                )
-
-        for device in devices:
-            dev_nodes = control_nodes_getter(device)
-
-            # 1. Collect all nodes that are not in the desired state for the device
-            dev_conditions_checker = ConditionsChecker()
-            dev_conditions_checker.add(
-                target=device,
-                conditions={n.path: n.value for n in filter_states(dev_nodes)},
-            )
-            conditions_checker.add_from(dev_conditions_checker)
-            failed = dev_conditions_checker.check_all()
-
-            commands = filter_commands(dev_nodes)
-            if len(commands) > 0:
-                # 1a. Has unconditional commands? Use simplified flow.
-                _add_set_nodes(device, commands)
-                response_waiter.add(
-                    target=device,
-                    conditions={n.path: n.value for n in filter_responses(dev_nodes)},
-                )
-                if failed:
-                    response_waiter.add(
-                        target=device,
-                        conditions={
-                            n.path: n.value for n in filter_wait_conditions(dev_nodes)
-                        },
-                    )
-            else:
-                # 1b. Is device already in the desired state?
-                if not failed:
-                    continue
-
-                failed_paths = [path for path, _ in failed]
-                failed_nodes = [n for n in dev_nodes if n.path in failed_paths]
-                response_waiter.add(
-                    target=device,
-                    conditions={
-                        n.path: n.value for n in filter_wait_conditions(failed_nodes)
-                    },
-                )
-
-                _add_set_nodes(device, filter_settings(dev_nodes))
-                response_waiter.add(
-                    target=device,
-                    conditions={n.path: n.value for n in filter_responses(dev_nodes)},
-                )
-
-        # 2. Apply any necessary node changes (which may be empty)
-        if len(set_nodes) > 0:
-            async with gather_and_apply(batch_set_multiple) as awaitables:
-                for device, nc in set_nodes.items():
-                    awaitables.append(device.maybe_async(nc))
-
-        # 3. Wait for responses to the changes in step 2 and settling of dependent states
-        if len(response_waiter.remaining()) == 0:
-            # Nothing to wait for, e.g. all devices were already configured as desired?
-            return
-
-        timeout = 10
-        if not await response_waiter.wait_all(timeout=timeout):
-            raise LabOneQControllerException(
-                f"Internal error: {config_name} for devices "
-                f"{[d.dev_repr for d in devices]} is not complete within {timeout}s. "
-                f"Not fulfilled:\n{response_waiter.remaining_str()}"
-            )
-
-        # 4. Recheck all the conditions, as some may have potentially changed as a result of step 2
-        failed = conditions_checker.check_all()
-        if failed:
-            raise LabOneQControllerException(
-                f"Internal error: {config_name} for devices "
-                f"{[d.dev_repr for d in devices]} failed. "
-                f"Errors:\n{conditions_checker.failed_str(failed)}"
-            )
-
-    async def configure_device_setup(self, reset_devices: bool, use_async_api: bool):
+    async def configure_device_setup(self, reset_devices: bool):
         _logger.info("Configuring the device setup")
 
-        configure = self._configure_async if use_async_api else self._configure_parallel
-
-        await self.flush_monitor()  # Ensure status is up-to-date
+        configure = self._configure_async
 
         def _followers_of(parents: list[DeviceZI]) -> list[DeviceZI]:
             children = []
@@ -315,8 +184,6 @@ class DeviceCollection:
                 lambda d: cast(DeviceZI, d).load_factory_preset_control_nodes(),
                 "Reset to factory defaults",
             )
-            # Consume any updates resulted from the above reset
-            await self.flush_monitor()
             # TODO(2K): Error check
             for _, device in self.all:
                 device.clear_cache()
@@ -331,51 +198,31 @@ class DeviceCollection:
                 "QHUB: Reference clock switching",
             )
             # Check if zsync link is already established
-            if use_async_api:
-                async_checkers: list[ConditionsCheckerAsync] = []
-                for dev in followers:
-                    if isinstance(dev, DeviceBase):
-                        async_checker = ConditionsCheckerAsync(
-                            dev._api,
-                            {
-                                n.path: n.value
-                                for n in filter_states(dev.clock_source_control_nodes())
-                            },
-                        )
-                    async_checkers.append(async_checker)
-                for dev in leaders:
-                    if isinstance(dev, DeviceBase):
-                        async_checker = ConditionsCheckerAsync(
-                            dev._api,
-                            {
-                                n.path: n.value
-                                for n in filter_states(dev.zsync_link_control_nodes())
-                            },
-                        )
-                    async_checkers.append(async_checker)
-                dev_results = await _gather(
-                    *(async_checker.check() for async_checker in async_checkers)
-                )
-                failed = [res for dev_res in dev_results for res in dev_res]
-            else:
-                check_zsync_link = ConditionsChecker()
-                for dev in followers:
-                    check_zsync_link.add(
-                        target=dev,
-                        conditions={
+            async_checkers: list[ConditionsCheckerAsync] = []
+            for dev in followers:
+                if isinstance(dev, DeviceBase):
+                    async_checker = ConditionsCheckerAsync(
+                        dev._api,
+                        {
                             n.path: n.value
                             for n in filter_states(dev.clock_source_control_nodes())
                         },
                     )
-                for dev in leaders:
-                    check_zsync_link.add(
-                        target=dev,
-                        conditions={
+                async_checkers.append(async_checker)
+            for dev in leaders:
+                if isinstance(dev, DeviceBase):
+                    async_checker = ConditionsCheckerAsync(
+                        dev._api,
+                        {
                             n.path: n.value
                             for n in filter_states(dev.zsync_link_control_nodes())
                         },
                     )
-                failed = check_zsync_link.check_all()
+                async_checkers.append(async_checker)
+            dev_results = await _gather(
+                *(async_checker.check() for async_checker in async_checkers)
+            )
+            failed = [res for dev_res in dev_results for res in dev_res]
             if len(failed) > 0:
                 # Switch followers to ZSync, but don't wait for completion yet
                 for dev in followers:
@@ -390,34 +237,24 @@ class DeviceCollection:
                     if ref_set is not None:
                         nc = NodeCollector()
                         nc.add(ref_set.path, ref_set.value)
-                        await batch_set(await dev.maybe_async(nc))
+                        await dev.set_async(nc)
                 # Reset the QHub phy. TODO(2K): This is the actual workaround, remove this whole block once fixed.
                 for dev in leaders:
                     if isinstance(dev, DeviceQHUB):
                         await dev.qhub_reset_zsync_phy()
                 # Wait for completion using the dumb get method, as the streamed state sequence may be unreliable
                 # with this workaround due to unexpected state bouncing.
-                if use_async_api:
-                    results = await _gather_with_timeout(
-                        *(
-                            wait_for_state_change(async_checker._api, path, expected)
-                            for async_checker in async_checkers
-                            for path, expected in async_checker._conditions.items()
-                        ),
-                        timeout_s=10,  # TODO(2K): use timeout passed to connect
-                    )
-                    for res in results:
-                        if isinstance(res, Exception):
-                            raise res
-                else:
-                    for (
-                        node_monitor,
-                        daq_conditions,
-                    ) in check_zsync_link._conditions.items():
-                        for path, expected in daq_conditions.items():
-                            await node_monitor.wait_for_state_by_get(path, expected)
-                    # Consume any updates resulted from the above manipulations
-                    await self.flush_monitor()
+                results = await _gather_with_timeout(
+                    *(
+                        wait_for_state_change(async_checker._api, path, expected)
+                        for async_checker in async_checkers
+                        for path, expected in async_checker._conditions.items()
+                    ),
+                    timeout_s=10,  # TODO(2K): use timeout passed to connect
+                )
+                for res in results:
+                    if isinstance(res, Exception):
+                        raise res
             # From here we will continue with the regular config. Since the ZSync link is now established,
             # the respective actions from the regular config will be skipped.
 
@@ -456,11 +293,10 @@ class DeviceCollection:
         _logger.info("The device setup is configured")
 
     async def disconnect(self):
-        await self.reset_monitor()
         for _, device in self.all:
             device.disconnect()
         self._devices = {}
-        self._daqs = {}
+        self._data_servers = DataServerConnections()
         self._emulator_state = None
 
     async def disable_outputs(
@@ -495,19 +331,19 @@ class DeviceCollection:
                 if maybe_device_uid is not None:
                     outputs_per_device[maybe_device_uid].update(outputs)
 
-        async with gather_and_apply(batch_set_multiple) as awaitables:
-            for device_uid, outputs in outputs_per_device.items():
-                device = self.find_by_uid(device_uid)
-                awaitables.append(device.disable_outputs(outputs, invert))
+        await _gather(
+            *(
+                self.find_by_uid(device_uid).disable_outputs(outputs, invert)
+                for device_uid, outputs in outputs_per_device.items()
+            )
+        )
 
     def free_allocations(self):
         for _, device in self.all:
             device.free_allocations()
 
     async def on_experiment_begin(self):
-        async with gather_and_apply(batch_set_multiple) as awaitables:
-            for _, device in self.all:
-                awaitables.append(device.on_experiment_begin())
+        await _gather(*(device.on_experiment_begin() for _, device in self.all))
         await self._update_warning_nodes(init=True)
 
     async def on_after_nt_step(self):
@@ -517,45 +353,9 @@ class DeviceCollection:
             raise LabOneQControllerException(device_errors)
 
     async def on_experiment_end(self):
-        async with gather_and_apply(batch_set_multiple) as awaitables:
-            for _, device in self.all:
-                awaitables.append(device.on_experiment_end())
+        await _gather(*(device.on_experiment_end() for _, device in self.all))
 
-    async def start_monitor(self):
-        if self._monitor_started:
-            return
-        await _gather(*(node_monitor.start() for node_monitor in self.node_monitors))
-
-        response_waiter = ResponseWaiter()
-        for _, device in self.all:
-            response_waiter.add(
-                target=device,
-                conditions={path: None for path in device.nodes_to_monitor()},
-            )
-
-        if not await response_waiter.wait_all(timeout=2):
-            raise LabOneQControllerException(
-                f"Internal error: Didn't get all the status node values within 2s. "
-                f"Missing:\n{response_waiter.remaining_str()}"
-            )
-
-        self._monitor_started = True
-
-    async def flush_monitor(self):
-        await _gather(*(node_monitor.flush() for node_monitor in self.node_monitors))
-
-    async def poll_monitor(self):
-        await _gather(*(node_monitor.poll() for node_monitor in self.node_monitors))
-
-    async def reset_monitor(self):
-        await _gather(*(node_monitor.reset() for node_monitor in self.node_monitors))
-        self._monitor_started = False
-
-    async def _validate_dataserver_device_fw_compatibility(
-        self,
-        emulator_state: EmulatorState | None,
-        use_async_api: bool,
-    ):
+    async def _validate_dataserver_device_fw_compatibility(self):
         """Validate dataserver and device firmware compatibility."""
 
         daq_dev_serials: dict[str, list[str]] = defaultdict(list)
@@ -565,29 +365,26 @@ class DeviceCollection:
             )
 
         for server_uid, dev_serials in daq_dev_serials.items():
-            if use_async_api:
-                data_server_connection = self._data_servers.get(server_uid)
-                if data_server_connection is not None:
-                    data_server_connection.check_dataserver_device_compatibility(
-                        self._ignore_version_mismatch,
-                        dev_serials,
-                    )
-            elif emulator_state is None and not self._ignore_version_mismatch:
-                try:
-                    check_dataserver_device_compatibility(
-                        self._daqs[server_uid]._zi_api_object, dev_serials
-                    )
-                except Exception as error:  # noqa: PERF203
-                    raise LabOneQControllerException(str(error)) from error
+            data_server_connection = self._data_servers.get(server_uid)
+            if data_server_connection is not None:
+                data_server_connection.check_dataserver_device_compatibility(
+                    self._ignore_version_mismatch,
+                    dev_serials,
+                )
 
     def _prepare_devices(self):
         updated_devices: dict[str, DeviceZI] = {}
         for device_qualifier in self._ds.instruments:
             device = self._devices.get(device_qualifier.uid)
             if device is None or device.device_qualifier != device_qualifier:
-                daq = self._daqs[device_qualifier.server_uid]
+                data_server = self._data_servers.get(device_qualifier.server_uid)
+                server_qualifier = (
+                    ServerQualifier()
+                    if data_server is None
+                    else data_server.server_qualifier
+                )
                 device = DeviceFactory.create(
-                    device_qualifier, daq, self._ds.setup_caps
+                    server_qualifier, device_qualifier, self._ds.setup_caps
                 )
             device.remove_all_links()
             updated_devices[device_qualifier.uid] = device
@@ -626,57 +423,31 @@ class DeviceCollection:
 
             dev.update_from_device_setup(self._ds)
 
-    async def _prepare_daqs(self, do_emulation: bool, use_async_api: bool):
-        updated_daqs: dict[str, DaqWrapper] = {}
+    async def _prepare_daqs(self, do_emulation: bool):
         updated_data_servers = DataServerConnections()
         for server_uid, server_qualifier in self._ds.servers:
-            existing = self._daqs.get(server_uid)
+            existing = updated_data_servers.get(server_uid)
             if existing is not None and existing.server_qualifier == server_qualifier:
-                updated_daqs[server_uid] = existing
                 updated_data_servers.add(server_uid, self._data_servers.get(server_uid))
                 continue
 
-            _logger.info(
-                "Connecting to data server at %s:%s",
-                server_qualifier.host,
-                server_qualifier.port,
-            )
-            daq: DaqWrapper
-            if use_async_api:
-                daq = DaqWrapperDummy(server_qualifier)
-                if server_qualifier.port == -1:  # Dummy server
-                    data_server_connection = None
-                else:
-                    data_server_connection = await DataServerConnection.connect(
-                        server_qualifier.host,
-                        server_qualifier.port,
-                        self.emulator_state if do_emulation else None,
-                        self._timeout_s,
-                    )
-                updated_data_servers.add(server_uid, data_server_connection)
+            if server_qualifier.port == -1:  # Dummy server
+                data_server_connection = None
             else:
-                _logger.warning(
-                    "\n\n"
-                    "====================================================================================\n"
-                    "The synchronous API you enabled is deprecated for LabOne Q and will soon be removed.\n"
-                    "Please contact Zurich Instruments about the use case for the synchronous API, unless\n"
-                    "it's a known limitation regarding the missing node log, which is set to be fixed.\n"
-                    "====================================================================================\n"
+                _logger.info(
+                    "Connecting to data server at %s:%s",
+                    server_qualifier.host,
+                    server_qualifier.port,
                 )
-                if do_emulation:
-                    daq = DaqWrapperDryRun(
-                        server_uid, server_qualifier, self.emulator_state
-                    )
-                else:
-                    daq = DaqWrapper(server_uid, server_qualifier)
-                await daq.validate_connection()
-            updated_daqs[server_uid] = daq
-        self._daqs = updated_daqs
+                data_server_connection = await DataServerConnection.connect(
+                    server_qualifier,
+                    self.emulator_state if do_emulation else None,
+                    self._timeout_s,
+                )
+            updated_data_servers.add(server_uid, data_server_connection)
         self._data_servers = updated_data_servers
 
     async def _update_warning_nodes(self, init: bool = False):
-        await self.poll_monitor()
-
         for _, device in self.all:
             await device.update_warning_nodes(init)
 

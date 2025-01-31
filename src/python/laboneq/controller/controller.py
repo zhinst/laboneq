@@ -9,23 +9,17 @@ import threading
 import time
 from collections import defaultdict
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Callable, cast
 
 import numpy as np
 import zhinst.utils
 from numpy import typing as npt
 
 from laboneq import __version__
-from laboneq.controller.communication import (
-    DaqNodeSetAction,
-    batch_set,
-    batch_set_multiple,
-)
-from laboneq.controller.devices.async_support import _gather, gather_and_apply
+from laboneq.controller.devices.async_support import _gather
 from laboneq.controller.devices.device_collection import DeviceCollection
 from laboneq.controller.devices.device_utils import NodeCollector, zhinst_core_version
 from laboneq.controller.devices.device_zi import DeviceBase, DeviceZI
-from laboneq.controller.devices.zi_node_monitor import ResponseWaiter
 from laboneq.controller.near_time_runner import NearTimeRunner
 from laboneq.controller.protected_session import ProtectedSession
 from laboneq.controller.recipe_processor import (
@@ -70,8 +64,6 @@ _logger = logging.getLogger(__name__)
 # executed in a batch.
 CONNECT_CHECK_HOLDOFF = 10  # sec
 
-USE_ASYNC_API_BY_DEFAULT = True
-
 
 class Controller:
     _thread_local = threading.local()
@@ -84,7 +76,6 @@ class Controller:
     ):
         self._ignore_version_mismatch = ignore_version_mismatch
         self._do_emulation = True
-        self._use_async_api = USE_ASYNC_API_BY_DEFAULT
 
         _zhinst_core_version = LabOneVersion.from_version_string(zhinst_core_version())
         self._check_zhinst_core_version_support(_zhinst_core_version)
@@ -149,95 +140,54 @@ class Controller:
             )
 
     async def _reset_to_idle_state(self):
-        async with gather_and_apply(batch_set_multiple) as awaitables:
-            for _, device in self._devices.all:
-                awaitables.append(device.collect_reset_nodes())
+        await _gather(*(device.reset_to_idle() for _, device in self._devices.all))
 
     async def _apply_recipe_initializations(self):
-        async with gather_and_apply(batch_set_multiple) as awaitables:
-            for initialization in self._recipe_data.initializations:
-                device = self._devices.find_by_uid(initialization.device_uid)
-                awaitables.append(
-                    device.collect_initialization_nodes(
-                        self._recipe_data.device_settings[initialization.device_uid],
-                        initialization,
-                        self._recipe_data,
-                    )
+        awaitables = []
+        for initialization in self._recipe_data.initializations:
+            device = self._devices.find_by_uid(initialization.device_uid)
+            awaitables.append(
+                device.apply_initialization(
+                    self._recipe_data.device_settings[initialization.device_uid],
+                    initialization,
+                    self._recipe_data,
                 )
-                awaitables.append(device.collect_osc_initialization_nodes())
+            )
+            awaitables.append(device.initialize_oscillators())
+        await _gather(*awaitables)
 
     async def _set_nodes_before_awg_program_upload(self):
-        async with gather_and_apply(batch_set_multiple) as awaitables:
-            for initialization in self._recipe_data.initializations:
-                device = self._devices.find_by_uid(initialization.device_uid)
-                awaitables.append(
-                    device.collect_awg_before_upload_nodes(
-                        initialization, self._recipe_data
-                    )
-                )
-
-    async def _perform_awg_upload(
-        self,
-        artifacts: list[
-            tuple[
-                DeviceZI, list[DaqNodeSetAction], list[DaqNodeSetAction], dict[str, Any]
-            ]
-        ],
-    ):
-        elf_upload_conditions: dict[DeviceZI, dict[str, Any]] = defaultdict(dict)
-        elf_node_settings: list[DaqNodeSetAction] = []
-        wf_node_settings: list[DaqNodeSetAction] = []
-
-        for device, elf_nodes, wf_nodes, upload_ready_conditions in artifacts:
-            elf_node_settings.extend(elf_nodes)
-            wf_node_settings.extend(wf_nodes)
-            if len(upload_ready_conditions) > 0:
-                elf_upload_conditions[device].update(upload_ready_conditions)
-
-        # Upload AWG programs, waveforms, and command tables:
-        if len(elf_upload_conditions) > 0:
-            await self._devices.flush_monitor()
-
-        _logger.debug("Started upload of AWG programs...")
-        await batch_set(elf_node_settings)
-
-        if len(elf_upload_conditions) > 0:
-            _logger.debug("Waiting for devices...")
-            response_waiter = ResponseWaiter()
-            for device, conditions in elf_upload_conditions.items():
-                response_waiter.add(target=device, conditions=conditions)
-            timeout_s = 10
-            if not await response_waiter.wait_all(timeout=timeout_s):
-                raise LabOneQControllerException(
-                    f"AWGs not in ready state within timeout ({timeout_s} s). "
-                    f"Not fulfilled:\n{response_waiter.remaining_str()}"
-                )
-        if len(wf_node_settings) > 0:
-            _logger.debug("Started upload of waveforms...")
-            await batch_set(wf_node_settings)
-        _logger.debug("Finished upload.")
+        await _gather(
+            *(
+                self._devices.find_by_uid(
+                    initialization.device_uid
+                ).set_before_awg_upload(initialization, self._recipe_data)
+                for initialization in self._recipe_data.initializations
+            )
+        )
 
     async def _upload_awg_programs(self, nt_step_key: NtStepKey, rt_section_uid: str):
         recipe_data = self._recipe_data
 
-        async with gather_and_apply(self._perform_awg_upload) as awaitables:
-            for initialization in recipe_data.initializations:
-                if not initialization.awgs:
-                    continue
+        awaitables = []
+        for initialization in recipe_data.initializations:
+            if not initialization.awgs:
+                continue
 
-                device = self._devices.find_by_uid(initialization.device_uid)
+            device = self._devices.find_by_uid(initialization.device_uid)
 
-                for awg_obj in initialization.awgs:
-                    awg_index = awg_obj.awg
-                    awaitables.append(
-                        device.prepare_artifacts(
-                            recipe_data=recipe_data,
-                            rt_section_uid=rt_section_uid,
-                            initialization=initialization,
-                            awg_index=awg_index,
-                            nt_step_key=nt_step_key,
-                        )
+            for awg_obj in initialization.awgs:
+                awg_index = awg_obj.awg
+                awaitables.append(
+                    device.prepare_artifacts(
+                        recipe_data=recipe_data,
+                        rt_section_uid=rt_section_uid,
+                        initialization=initialization,
+                        awg_index=awg_index,
+                        nt_step_key=nt_step_key,
                     )
+                )
+        await _gather(*awaitables)
 
     async def _replace_artifacts(self, rt_section_uid: str):
         rt_execution_info = self._recipe_data.rt_execution_infos[rt_section_uid]
@@ -247,17 +197,19 @@ class Controller:
                 "Cannot replace waveforms in combination with the pipeliner"
             )
 
-        nodes_to_replace_artifacts = []
         for device, nc in self._nodes_from_artifact_replacement.items():
-            nodes_to_replace_artifacts.extend(await device.maybe_async(nc))
+            await device.set_async(nc)
         self._nodes_from_artifact_replacement.clear()
-        await batch_set(nodes_to_replace_artifacts)
 
     async def _set_nodes_after_awg_program_upload(self):
-        async with gather_and_apply(batch_set_multiple) as awaitables:
-            for initialization in self._recipe_data.initializations:
-                device = self._devices.find_by_uid(initialization.device_uid)
-                awaitables.append(device.collect_awg_after_upload_nodes(initialization))
+        await _gather(
+            *(
+                self._devices.find_by_uid(
+                    initialization.device_uid
+                ).set_after_awg_upload(initialization)
+                for initialization in self._recipe_data.initializations
+            )
+        )
 
     async def _initialize_awgs(self, nt_step: NtStepKey, rt_section_uid: str):
         await self._set_nodes_before_awg_program_upload()
@@ -274,41 +226,31 @@ class Controller:
         await self._devices.on_after_nt_step()
 
     async def _configure_triggers(self):
-        async with gather_and_apply(batch_set_multiple) as awaitables:
-            for uid, device in itertools.chain(
-                self._devices.leaders, self._devices.followers
-            ):
-                init = self._recipe_data.get_initialization_by_device_uid(uid)
-                if init is None:
-                    continue
-                awaitables.append(
-                    device.collect_trigger_configuration_nodes(init, self._recipe_data)
-                )
+        awaitables = []
+        for uid, device in itertools.chain(
+            self._devices.leaders, self._devices.followers
+        ):
+            init = self._recipe_data.get_initialization_by_device_uid(uid)
+            if init is None:
+                continue
+            awaitables.append(device.configure_trigger(init, self._recipe_data))
+        await _gather(*awaitables)
 
-    async def _prepare_nt_step(
-        self, sweep_params_tracker: SweepParamsTracker
-    ) -> list[DaqNodeSetAction]:
+    async def _prepare_nt_step(self, sweep_params_tracker: SweepParamsTracker):
         for param in sweep_params_tracker.updated_params():
             self._recipe_data.attribute_value_tracker.update(
                 param, sweep_params_tracker.get_param(param)
             )
 
-        nt_sweep_nodes: list[DaqNodeSetAction] = []
         for device_uid, device in self._devices.all:
-            nt_sweep_nodes.extend(
-                await device.maybe_async(
-                    device.collect_prepare_nt_step_nodes(
-                        self._recipe_data.attribute_value_tracker.device_view(
-                            device_uid
-                        ),
-                        self._recipe_data,
-                    )
+            await device.set_async(
+                device.collect_prepare_nt_step_nodes(
+                    self._recipe_data.attribute_value_tracker.device_view(device_uid),
+                    self._recipe_data,
                 )
             )
 
         self._recipe_data.attribute_value_tracker.reset_updated()
-
-        return nt_sweep_nodes
 
     async def _initialize_devices(self):
         await self._reset_to_idle_state()
@@ -318,49 +260,13 @@ class Controller:
     async def _execute_one_step_followers(self, with_pipeliner: bool):
         _logger.debug("Settings nodes to start on followers")
 
-        if self._use_async_api:
-            await _gather(
-                *(
-                    device.wait_for_execution_ready(with_pipeliner=with_pipeliner)
-                    for _, device in self._devices.followers
-                    if isinstance(device, DeviceBase)
-                )
+        await _gather(
+            *(
+                device.wait_for_execution_ready(with_pipeliner=with_pipeliner)
+                for _, device in self._devices.followers
+                if isinstance(device, DeviceBase)
             )
-        else:
-            async with gather_and_apply(batch_set_multiple) as awaitables:
-                for _, device in self._devices.followers:
-                    awaitables.append(
-                        device.collect_execution_nodes(with_pipeliner=with_pipeliner)
-                    )
-
-            response_waiter = ResponseWaiter()
-            for _, device in self._devices.followers:
-                response_waiter.add_with_msg(
-                    target=device,
-                    conditions=device.conditions_for_execution_ready(
-                        with_pipeliner=with_pipeliner
-                    ),
-                )
-            if not await response_waiter.wait_all(timeout=2):
-                _logger.warning(
-                    "Conditions to start RT on followers still not fulfilled after 2"
-                    " seconds, nonetheless trying to continue..."
-                    "\nNot fulfilled:\n%s",
-                    response_waiter.remaining_str(),
-                )
-
-    async def _execute_one_step_leaders(self, with_pipeliner: bool):
-        if self._use_async_api:
-            # With async API the trigger nodes are set in _wait_execution_to_stop
-            return
-
-        _logger.debug("Settings nodes to start on leaders")
-
-        async with gather_and_apply(batch_set_multiple) as awaitables:
-            for _, device in self._devices.all:
-                awaitables.append(
-                    device.collect_start_trigger_nodes(with_pipeliner=with_pipeliner)
-                )
+        )
 
     async def _wait_execution_to_stop(
         self, acquisition_type: AcquisitionType, rt_execution_info: RtExecutionInfo
@@ -377,100 +283,64 @@ class Controller:
             min_wait_time * 1.1 + 1
         )  # +10% and fixed 1sec guard time
 
-        if self._use_async_api:
-            target_devs = [
-                device
-                for _, device in self._devices.all
-                if isinstance(device, DeviceBase)
-            ]
-            response_waiters = await _gather(
-                *(
-                    device.make_waiter_for_execution_done(
-                        acquisition_type=acquisition_type,
-                        with_pipeliner=rt_execution_info.with_pipeliner,
-                        timeout_s=guarded_wait_time,
-                    )
-                    for device in target_devs
+        target_devs = [
+            device for _, device in self._devices.all if isinstance(device, DeviceBase)
+        ]
+        response_waiters = await _gather(
+            *(
+                device.make_waiter_for_execution_done(
+                    acquisition_type=acquisition_type,
+                    with_pipeliner=rt_execution_info.with_pipeliner,
+                    timeout_s=guarded_wait_time,
                 )
+                for device in target_devs
             )
-            await _gather(
-                *(
-                    device.collect_start_trigger_nodes(
-                        with_pipeliner=rt_execution_info.with_pipeliner
-                    )
-                    for device in target_devs
+        )
+        await _gather(
+            *(
+                device.emit_start_trigger(
+                    with_pipeliner=rt_execution_info.with_pipeliner
                 )
+                for device in target_devs
             )
-            await _gather(
-                *(
-                    device.wait_for_execution_done(
-                        response_waiter=response_waiter,
-                        timeout_s=guarded_wait_time,
-                        min_wait_time=min_wait_time,
-                    )
-                    for device, response_waiter in zip(target_devs, response_waiters)
+        )
+        await _gather(
+            *(
+                device.wait_for_execution_done(
+                    response_waiter=response_waiter,
+                    timeout_s=guarded_wait_time,
+                    min_wait_time=min_wait_time,
                 )
+                for device, response_waiter in zip(target_devs, response_waiters)
             )
-        else:
-            response_waiter = ResponseWaiter()
-            for _, device in self._devices.all:
-                response_waiter.add_with_msg(
-                    target=device,
-                    conditions=device.conditions_for_execution_done(
-                        acquisition_type,
-                        with_pipeliner=rt_execution_info.with_pipeliner,
-                    ),
-                )
-            if not await response_waiter.wait_all(timeout=guarded_wait_time):
-                _logger.warning(
-                    (
-                        "Stop conditions still not fulfilled after %f s, estimated"
-                        " execution time was %.2f s. Continuing to the next step."
-                        "\nNot fulfilled:\n%s"
-                    ),
-                    guarded_wait_time,
-                    min_wait_time,
-                    response_waiter.remaining_str(),
-                )
+        )
 
     async def _setup_one_step_execution(self, with_pipeliner: bool):
-        async with gather_and_apply(batch_set_multiple) as awaitables:
-            for device_uid, device in self._devices.all:
-                has_awg_in_use = any(
-                    init.device_uid == device_uid and len(init.awgs) > 0
-                    for init in self._recipe_data.initializations
+        await _gather(
+            *(
+                device.setup_one_step_execution(
+                    with_pipeliner=with_pipeliner,
+                    has_awg_in_use=any(
+                        init.device_uid == device_uid and len(init.awgs) > 0
+                        for init in self._recipe_data.initializations
+                    ),
                 )
-                awaitables.append(
-                    device.collect_execution_setup_nodes(
-                        with_pipeliner=with_pipeliner, has_awg_in_use=has_awg_in_use
-                    )
-                )
-        response_waiter = ResponseWaiter()
-        for _, device in self._devices.leaders:
-            response_waiter.add_with_msg(
-                target=device,
-                conditions=await device.conditions_for_sync_ready(
-                    with_pipeliner=with_pipeliner
-                ),
+                for device_uid, device in self._devices.all
             )
-        if not await response_waiter.wait_all(timeout=1.0):
-            raise LabOneQControllerException(response_waiter.remaining_str())
+        )
 
     async def _teardown_one_step_execution(self, with_pipeliner: bool):
-        async with gather_and_apply(batch_set_multiple) as awaitables:
-            for _, device in self._devices.all:
-                awaitables.append(
-                    device.collect_execution_teardown_nodes(
-                        with_pipeliner=with_pipeliner
-                    )
-                )
+        await _gather(
+            *(
+                device.teardown_one_step_execution(with_pipeliner=with_pipeliner)
+                for _, device in self._devices.all
+            )
+        )
 
     async def _execute_one_step(
         self, acquisition_type: AcquisitionType, rt_section_uid: str
     ):
         _logger.debug("Step executing")
-
-        await self._devices.flush_monitor()
 
         rt_execution_info = self._recipe_data.rt_execution_infos[rt_section_uid]
 
@@ -481,9 +351,6 @@ class Controller:
         # Can't batch everything together, because PQSC/QHUB needs to start execution after HDs
         # otherwise it can finish before AWGs are started, and the trigger is lost.
         await self._execute_one_step_followers(
-            with_pipeliner=rt_execution_info.with_pipeliner
-        )
-        await self._execute_one_step_leaders(
             with_pipeliner=rt_execution_info.with_pipeliner
         )
 
@@ -502,15 +369,12 @@ class Controller:
         self,
         do_emulation: bool = True,
         reset_devices: bool = False,
-        use_async_api: bool | None = None,
         disable_runtime_checks: bool = True,
         timeout_s: float | None = None,
     ):
         # Remember settings for later implicit connect check
         self._do_emulation = do_emulation
         self._devices.set_timeout(timeout_s)
-        if use_async_api is not None:
-            self._use_async_api = use_async_api
         self._event_loop.run(
             self._connect_async,
             reset_devices=reset_devices,
@@ -528,7 +392,6 @@ class Controller:
             await self._devices.connect(
                 do_emulation=self._do_emulation,
                 reset_devices=reset_devices,
-                use_async_api=self._use_async_api,
                 disable_runtime_checks=disable_runtime_checks,
             )
         self._last_connect_check_ts = now
@@ -553,7 +416,6 @@ class Controller:
 
     def disconnect(self):
         self._event_loop.run(self._disconnect_async)
-        self._use_async_api = USE_ASYNC_API_BY_DEFAULT
 
     async def _disconnect_async(self):
         _logger.info("Disconnecting from all devices and servers...")
@@ -575,16 +437,16 @@ class Controller:
         scheduled_experiment: ScheduledExperiment,
         protected_session: ProtectedSession | None = None,
     ):
-        self._recipe_data = pre_process_compiled(scheduled_experiment, self._devices)
-        await self._execute_compiled_impl(
-            protected_session=protected_session or ProtectedSession(None)
-        )
-
-    async def _execute_compiled_impl(self, protected_session: ProtectedSession):
         # Ensure all connect configurations are still valid!
         await self._connect_async()
+
+        self._recipe_data = pre_process_compiled(scheduled_experiment, self._devices)
         self._prepare_result_shapes()
+
+        if protected_session is None:
+            protected_session = ProtectedSession(None)
         protected_session._set_experiment_results(self._results)
+
         async with self._devices.capture_logs():
             try:
                 await self._initialize_devices()
@@ -618,11 +480,12 @@ class Controller:
     def results(self) -> ExperimentResults:
         return self._results
 
-    def _find_awg(self, seqc_name: str) -> tuple[str, int]:
+    def _find_awg(self, seqc_name: str) -> tuple[str | None, int | None]:
         # TODO(2K): Do this in the recipe preprocessor, or even modify the compiled experiment
         #  data model
         for rt_exec_step in self._recipe_data.recipe.realtime_execution_init:
             if rt_exec_step.program_ref == seqc_name:
+                assert isinstance(rt_exec_step.awg_id, int)
                 return rt_exec_step.device_id, rt_exec_step.awg_id
         return None, None
 
@@ -676,6 +539,7 @@ class Controller:
             assert isinstance(target_wave_index, int)
             seqc_name = repl.awg_id
             awg = self._find_awg(seqc_name)
+            assert awg[0] is not None and awg[1] is not None
             device = self._devices.find_by_uid(awg[0])
 
             if repl.replacement_type == ReplacementType.I_Q:
@@ -720,13 +584,13 @@ class Controller:
             nodes = device.prepare_upload_command_table(awg_index, command_table)
             self._nodes_from_artifact_replacement[device].extend(nodes)
 
-    async def _prepare_rt_execution(self) -> list[DaqNodeSetAction]:
-        nodes_to_prepare_rt = []
-        for _, device in self._devices.leaders:
-            nodes_to_prepare_rt.extend(
-                await device.configure_feedback(self._recipe_data)
+    async def _prepare_rt_execution(self):
+        await _gather(
+            *(
+                device.configure_feedback(self._recipe_data)
+                for _, device in self._devices.leaders
             )
-        return nodes_to_prepare_rt
+        )
 
     def _prepare_result_shapes(self):
         self._results = ExperimentResults()
@@ -832,7 +696,7 @@ class Controller:
         if rt_execution_info.acquisition_type == AcquisitionType.RAW:
             assert awg_config.raw_acquire_length is not None
             raw_results = await device.get_input_monitor_data(
-                awg_key.awg_index, awg_config.raw_acquire_length
+                cast(int, awg_key.awg_index), awg_config.raw_acquire_length
             )
             # Copy to all result handles, but actually only one handle is supported for now
             for signal in awg_config.acquire_signals:
@@ -892,7 +756,7 @@ class Controller:
         assert awg_config.result_length is not None, "AWG not producing results"
         raw_readout = await device.get_measurement_data(
             self._recipe_data,
-            awg_key.awg_index,
+            cast(int, awg_key.awg_index),
             rt_execution_info,
             integrator_allocation.channels,
             awg_config.result_length,

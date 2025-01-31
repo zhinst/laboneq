@@ -1063,6 +1063,7 @@ def analyze_recipe(
         )
         awg_index = 0
         for awg in init.awgs:
+            assert isinstance(awg.awg, int)
             awg_nr = awg.awg
             rt_exec_step = next(
                 r

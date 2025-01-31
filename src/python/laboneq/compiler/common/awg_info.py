@@ -17,14 +17,14 @@ if TYPE_CHECKING:
 @dataclass(init=True, repr=True, order=True, frozen=True)
 class AwgKey:
     device_id: str
-    awg_number: int
+    awg_id: int | str
 
 
 @dataclass
 class AWGInfo:
     device_id: str
     signal_type: AWGSignalType
-    awg_number: int
+    awg_id: int | str  # actual type depends on device class
     device_type: DeviceType
     sampling_rate: float
     device_class: int = 0x0
@@ -35,4 +35,4 @@ class AWGInfo:
 
     @property
     def key(self) -> AwgKey:
-        return AwgKey(self.device_id, self.awg_number)
+        return AwgKey(self.device_id, self.awg_id)

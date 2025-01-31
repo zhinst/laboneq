@@ -47,7 +47,7 @@ HandleResultShapes = dict[AcquireHandle, HandleResultShape]
 @dataclass(frozen=True)
 class AwgKey:
     device_uid: str
-    awg_index: int
+    awg_index: int | str
 
 
 @dataclass
@@ -421,6 +421,7 @@ def _calculate_awg_configs(
                         "Global feedback over QHub is not implemented."
                     )
                 awg_config.fb_reg_source_index = awg.feedback_register_index_select
+                assert isinstance(awg.awg, int)
                 awg_config.fb_reg_target_index = awg.awg
             awg_config.register_selector_shift = awg.codeword_bitshift
             awg_config.register_selector_bitmask = awg.codeword_bitmask
