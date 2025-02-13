@@ -143,7 +143,9 @@ class OutputSimulator:
         output_simulator = OutputSimulator(compiled_experiment)
 
         # By default, simulation is stopped after 10 ms, but it can be explicitly specified
-        output_simulator = OutputSimulator(compiled_experiment, max_simulation_length=10e-3)
+        output_simulator = OutputSimulator(
+            compiled_experiment, max_simulation_length=10e-3
+        )
 
         # Also the maximum output snippet length is configurable, defaulting to 1us
         output_simulator = OutputSimulator(compiled_experiment, max_output_length=5e-6)

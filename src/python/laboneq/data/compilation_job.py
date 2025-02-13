@@ -128,7 +128,7 @@ class PulseDef:
     # auto generated __eq__ fails to compare array-likes correctly
     def __eq__(self, other: object) -> bool:
         if isinstance(other, PulseDef):
-            if self.samples is None != other.samples is None:
+            if (self.samples is None) != (other.samples is None):
                 return False
             samples_equal = (
                 self.samples is None and other.samples is None

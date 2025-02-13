@@ -218,6 +218,7 @@ class SampledEventHandler:
         if state is None:
             # Playzeros were already added for match event
             self.seqc_tracker.add_required_playzeros(sampled_event)
+            self.seqc_tracker.flush_deferred_phase_changes()
             self.seqc_tracker.add_timing_comment(sampled_event.end)
 
         play_wave_channel = None
@@ -466,6 +467,11 @@ class SampledEventHandler:
         sampled_event: AWGEvent,
     ):
         assert self.seqc_tracker.current_time == sampled_event.start
+
+        # There cannot be any zero-length phase increments between the head playWave
+        # and the playHold.
+        assert not self.seqc_tracker.has_deferred_phase_changes()
+
         self.seqc_tracker.add_play_hold_statement(
             sampled_event.end - sampled_event.start
         )
@@ -473,6 +479,7 @@ class SampledEventHandler:
 
     def handle_amplitude_register_init(self, sampled_event):
         self.seqc_tracker.add_required_playzeros(sampled_event)
+        self.seqc_tracker.flush_deferred_phase_changes()
         assert self.use_command_table
         signature = sampled_event.params["playback_signature"]
         ct_index = self.command_table_tracker.lookup_index_by_signature(signature)
@@ -569,6 +576,7 @@ class SampledEventHandler:
             )
         )
         self.seqc_tracker.add_required_playzeros(sampled_event)
+        self.seqc_tracker.flush_deferred_phase_changes()
         if sampled_event.end > self.seqc_tracker.current_time:
             self.seqc_tracker.add_timing_comment(sampled_event.end)
 
@@ -621,6 +629,7 @@ class SampledEventHandler:
                 ct_index, comment="precomp_reset"
             )
             self.seqc_tracker.flush_deferred_function_calls()
+            assert not self.seqc_tracker.has_deferred_phase_changes()
             self.seqc_tracker.current_time = sampled_event.end
             return
 
@@ -676,6 +685,7 @@ class SampledEventHandler:
             # This way it is hidden in the lead time.
             self.seqc_tracker.add_function_call_statement("resetOscPhase")
             if ct_index is not None:
+                assert not self.seqc_tracker.has_deferred_phase_changes()
                 self.seqc_tracker.add_command_table_execution(ct_index)
         elif sampled_event.type == AWGEventType.RESET_PHASE:
             self.seqc_tracker.add_required_playzeros(sampled_event)
@@ -683,6 +693,7 @@ class SampledEventHandler:
                 "resetOscPhase", deferred=True
             )
             if ct_index is not None:
+                assert not self.seqc_tracker.has_deferred_phase_changes()
                 self.seqc_tracker.add_command_table_execution(ct_index)
 
     def handle_set_oscillator_frequency(self, sampled_event: AWGEvent):
@@ -788,6 +799,7 @@ class SampledEventHandler:
             self.seqc_tracker.current_loop_stack_generator(),
         )
         self.seqc_tracker.add_required_playzeros(sampled_event)
+        self.seqc_tracker.flush_deferred_phase_changes()
         if self.current_sequencer_step is not None:
             assert self.seqc_tracker.current_time % self.sequencer_step == 0
             self.current_sequencer_step = (
@@ -815,6 +827,7 @@ class SampledEventHandler:
                 for cg in self.seqc_tracker.loop_stack_generators[-1]
             )
             or self.seqc_tracker.deferred_function_calls.num_statements() > 0
+            or self.seqc_tracker.deferred_phase_changes.num_statements() > 0
         ):
             _logger.debug(
                 "  Processing ITERATE EVENT %s, loop stack is %s",
@@ -826,6 +839,7 @@ class SampledEventHandler:
                     f"ITERATE  {sampled_event.params}, current time = {self.seqc_tracker.current_time}"
                 )
             self.seqc_tracker.add_required_playzeros(sampled_event)
+            self.seqc_tracker.flush_deferred_phase_changes()
             self._increment_sequencer_step()
 
             loop_generator = SeqCGenerator()
@@ -893,7 +907,7 @@ class SampledEventHandler:
         signature.quantize_phase(0)
 
         ct_index = self.command_table_tracker.get_or_create_entry(signature, None)
-        self.seqc_tracker.add_command_table_execution(
+        self.seqc_tracker.add_phase_change(
             ct_index, comment=self._make_command_table_comment(signature)
         )
 
@@ -1037,7 +1051,7 @@ class SampledEventHandler:
             raise LabOneQException(
                 f"States missing in match statement with handle {handle}. First "
                 f"state: {first}, last state: {last}, number of states: "
-                f"{len(sorted_ct_entries)}, expected {last+1}, starting from 0."
+                f"{len(sorted_ct_entries)}, expected {last + 1}, starting from 0."
             )
 
         # Check whether we already have the same states in the command table:
@@ -1069,6 +1083,7 @@ class SampledEventHandler:
         assert start >= self.seqc_tracker.current_time
         assert start % self.sequencer_step == 0
         self.seqc_tracker.add_required_playzeros(ev)
+        self.seqc_tracker.flush_deferred_phase_changes()
         # Subtract the 3 cycles that we added (see match_schedule.py for details)
         assert self.current_sequencer_step is not None
         latency = (
@@ -1111,6 +1126,7 @@ class SampledEventHandler:
         except LabOneQException:
             pass  # Already declared, this is fine
         self.seqc_tracker.add_required_playzeros(match_event)
+        self.seqc_tracker.flush_deferred_phase_changes()
         if_generator = SeqCGenerator()
         conditions_bodies: list[tuple[str | None, SeqCGenerator]] = [
             (f"{var_name} == {state}", gen.compressed())
@@ -1144,7 +1160,7 @@ class SampledEventHandler:
             raise LabOneQException(
                 f"States missing in match statement (section {section}). First "
                 f"state: {first}, last state: {last}, number of states: "
-                f"{len(sorted_ct_entries)}, expected {last+1}, starting from 0."
+                f"{len(sorted_ct_entries)}, expected {last + 1}, starting from 0."
             )
 
         command_table_match_offset = len(self.command_table_tracker)
@@ -1166,6 +1182,7 @@ class SampledEventHandler:
         start = ev.start
         assert start >= self.seqc_tracker.current_time
         self.seqc_tracker.add_required_playzeros(ev)
+        self.seqc_tracker.flush_deferred_phase_changes()
         self.seqc_tracker.add_prng_match_command_table_execution(
             command_table_match_offset
         )

@@ -37,7 +37,12 @@ class HandleResultShape:
     base_shape: list[int]
     base_axis_name: list[str | list[str]]
     base_axis: list[NumPyArray | list[NumPyArray]]
-    additional_axis: int = 1
+    # If a handle is used in multiple acquires, it adds an extra result dimension.
+    # handle_acquire_count tracks the number of such acquires. This works only if
+    # outer loops are the same for all acquires with the same handle.
+    # base_shape is the result shape without this dimension. The extra dimension
+    # is added with the handle as the axis name if the count is >1.
+    handle_acquire_count: int = 1
 
 
 AcquireHandle = str
@@ -52,8 +57,11 @@ class AwgKey:
 
 @dataclass
 class AwgConfig:
+    # TODO(2K): use enum
+    device_type: str | None = None
     # QA
     raw_acquire_length: int | None = None
+    signal_raw_acquire_lengths: dict[str, int] = field(default_factory=dict)
     result_length: int | None = None
     acquire_signals: set[str] = field(default_factory=set)
     target_feedback_register: int | None = None
@@ -86,8 +94,8 @@ class RtExecutionInfo:
     pipeliner_job_count: int | None
     pipeliner_repetitions: int | None
 
-    # signal id -> set of section ids
-    acquire_sections: dict[str, set[str]] = field(default_factory=dict)
+    # acquire signal ids
+    acquire_signals: set[str] = field(default_factory=set)
 
     # signal -> flat list of result handles
     # TODO(2K): to be replaced by event-based calculation in the compiler
@@ -100,9 +108,6 @@ class RtExecutionInfo:
     @property
     def pipeliner_jobs(self) -> int:
         return self.pipeliner_job_count or 1
-
-    def add_acquire_section(self, signal_id: str, section_id: str):
-        self.acquire_sections.setdefault(signal_id, set()).add(section_id)
 
     @staticmethod
     def get_acquisition_type(rt_execution_infos: RtExecutionInfos) -> AcquisitionType:
@@ -289,7 +294,7 @@ class _LoopsPreprocessor(ExecutorBase):
         )
 
     def acquire_handler(self, handle: str, signal: str, parent_uid: str):
-        self.current_rt_info.add_acquire_section(signal, parent_uid)
+        self.current_rt_info.acquire_signals.add(signal)
 
         # Determine result shape for each acquire handle
         single_shot_cyclic = (
@@ -316,7 +321,7 @@ class _LoopsPreprocessor(ExecutorBase):
                 base_shape=shape, base_axis_name=axis_name, base_axis=axis
             )
         elif known_shape.base_shape == shape:
-            known_shape.additional_axis += 1
+            known_shape.handle_acquire_count += 1
         else:
             raise LabOneQControllerException(
                 f"Multiple acquire events with the same handle ('{handle}') and different result shapes are not allowed."
@@ -392,7 +397,7 @@ class _LoopsPreprocessor(ExecutorBase):
 def _calculate_awg_configs(
     rt_execution_infos: RtExecutionInfos,
     recipe: Recipe,
-    has_qhub: bool,
+    devices: DeviceCollection,
 ) -> AwgConfigs:
     awg_configs: AwgConfigs = defaultdict(AwgConfig)
 
@@ -408,15 +413,13 @@ def _calculate_awg_configs(
         awg_configs[awg_key].acquire_signals.add(integrator_allocation.signal_id)
 
     for initialization in recipe.initializations:
-        device_id = initialization.device_uid
-
         for awg in initialization.awgs or []:
-            awg_config = awg_configs[AwgKey(device_id, awg.awg)]
-
+            awg_config = awg_configs[AwgKey(initialization.device_uid, awg.awg)]
+            awg_config.device_type = initialization.device_type
             awg_config.target_feedback_register = awg.target_feedback_register
             awg_config.source_feedback_register = awg.source_feedback_register
             if awg_config.source_feedback_register not in (None, "local"):
-                if has_qhub:
+                if devices.has_qhub:
                     raise LabOneQControllerException(
                         "Global feedback over QHub is not implemented."
                     )
@@ -429,24 +432,29 @@ def _calculate_awg_configs(
             if initialization.device_type == "PRETTYPRINTERDEVICE":
                 awg_config.result_length = -1  # result shape determined by device
 
+    acquire_lengths = {al.signal_id: al.acquire_length for al in recipe.acquire_lengths}
     # As currently just a single RT execution per experiment is supported,
     # AWG configs are not cloned per RT execution. May need to be changed in the future.
     for rt_execution_info in rt_execution_infos.values():
         # Determine the raw acquisition lengths across various acquire events.
         # Will use the maximum length, as scope / monitor can only be configured for one.
-        # device_id -> set of raw acquisition lengths
-        raw_acquire_lengths: dict[str, set[int]] = defaultdict(set)
+        # device_uid + awg_index -> raw acquisition lengths
+        raw_acquire_lengths: dict[str, dict[str, int]] = defaultdict(dict)
+        raw_acquire_channels: dict[str, set[int]] = defaultdict(set)
         if rt_execution_info.acquisition_type == AcquisitionType.RAW:
-            for signal in rt_execution_info.acquire_sections:
+            for signal in rt_execution_info.acquire_signals:
                 awg_key = awg_key_by_acquire_signal(signal)
-                for al in recipe.acquire_lengths:
-                    if al.signal_id == signal:
-                        raw_acquire_lengths[awg_key.device_uid].add(al.acquire_length)
+                raw_acquire_lengths[awg_key.device_uid][signal] = acquire_lengths.get(
+                    signal, 0
+                )
+                assert isinstance(awg_key.awg_index, int)
+                raw_acquire_channels[awg_key.device_uid].add(awg_key.awg_index)
         for awg_key, awg_config in awg_configs.items():
+            dev_raw_acquire_lengths = raw_acquire_lengths.get(awg_key.device_uid, {})
             # Use dummy raw_acquire_length 4096 if there's no acquire statements in experiment
-            awg_config.raw_acquire_length = max(
-                raw_acquire_lengths.get(awg_key.device_uid, {4096})
-            )
+            raw_acquire_length = max(dev_raw_acquire_lengths.values(), default=4096)
+            awg_config.raw_acquire_length = raw_acquire_length
+            awg_config.signal_raw_acquire_lengths = dev_raw_acquire_lengths
 
             # signal_id -> sequence of handle/None for each result vector entry.
             # Important! Length must be equal for all acquire signals / integrators of one AWG.
@@ -467,9 +475,50 @@ def _calculate_awg_configs(
                     if rt_execution_info.averaging_mode == AveragingMode.SINGLE_SHOT
                     else 1
                 )
-                awg_config.result_length = (
-                    len(any_awg_signal_result_map) * mapping_repeats
-                )
+                result_length = len(any_awg_signal_result_map) * mapping_repeats
+                is_raw_acquisition = awg_key.device_uid in raw_acquire_lengths
+                if is_raw_acquisition:
+                    if (
+                        rt_execution_info.averaging_mode == AveragingMode.SEQUENTIAL
+                        and rt_execution_info.averages > 1
+                    ):
+                        raise LabOneQControllerException(
+                            "Sequential averaging is not supported for raw acquisitions."
+                        )
+                    device_type = awg_config.device_type
+                    if device_type is None:
+                        device_type = ""
+                    if device_type.startswith("SHFQA"):  # SHFQA or SHFQC/QA
+                        if devices.find_by_uid(awg_key.device_uid).options.is_qc:
+                            SCOPE_MEMORY_SIZE = 64 * 1024
+                        else:
+                            SCOPE_MEMORY_SIZE = 256 * 1024
+                        enabled_channels = raw_acquire_channels.get(
+                            awg_key.device_uid, {0}
+                        )
+                        if len(enabled_channels) < 2:
+                            ch_split = 1
+                        elif len(enabled_channels) == 2:
+                            ch_split = 2
+                        else:
+                            ch_split = 4
+                        max_length = (
+                            SCOPE_MEMORY_SIZE // ch_split // result_length
+                        ) & ~0xF
+                        max_segments = 1024
+                    else:
+                        max_length = 4096
+                        max_segments = 1
+                    if result_length > max_segments:
+                        raise LabOneQControllerException(
+                            f"A maximum of {max_segments} raw result(s) is supported per real-time execution."
+                        )
+                    if raw_acquire_length > max_length:
+                        raise LabOneQControllerException(
+                            "The total size of the requested raw traces exceeds the instrument's memory capacity."
+                        )
+
+                awg_config.result_length = result_length
 
     return awg_configs
 
@@ -537,7 +586,7 @@ def pre_process_compiled(
     lp.run(execution)
     rt_execution_infos = lp.rt_execution_infos
 
-    awg_configs = _calculate_awg_configs(rt_execution_infos, recipe, devices.has_qhub)
+    awg_configs = _calculate_awg_configs(rt_execution_infos, recipe, devices)
     attribute_value_tracker, oscillator_ids = _pre_process_attributes(recipe, devices)
 
     recipe_data = RecipeData(

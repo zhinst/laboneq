@@ -84,7 +84,6 @@ from laboneq.compiler.scheduler.utils import (
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import RepetitionMode
 from laboneq.data.compilation_job import (
-    OscillatorInfo,
     ParameterInfo,
     SectionAlignment,
     SectionInfo,
@@ -282,10 +281,6 @@ class Scheduler:
 
         # handle setting of initial oscillator frequencies
         set_osc_freq = []
-        oscs = [
-            self._experiment_dao.oscillator_info(osc)
-            for osc in self._experiment_dao.oscillators()
-        ]
         signal_infos = [
             self._experiment_dao.signal_info(s) for s in self._experiment_dao.signals()
         ]
@@ -293,68 +288,47 @@ class Scheduler:
         for signal in signal_infos:
             if signal.oscillator is not None:
                 osc_to_signals.setdefault(signal.oscillator.uid, []).append(signal)
-        param_id_to_osc: dict[str, list[OscillatorInfo]] = {}
-
-        # oscillators with fixed frequency
-        for osc in oscs:
-            if (
-                osc.frequency is not None
-                and not isinstance(osc.frequency, ParameterInfo)
-                and osc.uid in osc_to_signals
-            ):
-                osc_id = osc.uid
-                osc_signals = osc_to_signals[osc.uid]
-                swept_osc = SweptOscillator(
-                    osc_id,
-                    {s.uid for s in osc_signals},
-                    signal.device.uid,
-                    osc.is_hardware,
-                )
-                set_osc_freq.append(
-                    InitialOscillatorFrequencySchedule(
-                        length=0,
-                        signals={signal.uid for signal in osc_to_signals[osc_id]},
-                        grid=self._system_grid,
-                        section="preamble",
-                        oscillators=[swept_osc],
-                        values=[osc.frequency] * len(osc_signals),
-                    )
-                )
-
-        # nt frequency swept oscillators
-        for osc in oscs:
-            if isinstance(osc.frequency, ParameterInfo):
-                param_id_to_osc.setdefault(osc.frequency.uid, []).append(osc)
-        nt_swept_param_osc = [
-            (param, osc)
-            for param, oscs in param_id_to_osc.items()
-            if param in nt_parameters
-            for osc in oscs
-            if not osc.is_hardware
+        oscs = [
+            self._experiment_dao.oscillator_info(osc)
+            for osc in self._experiment_dao.oscillators()
         ]
-        for param, osc in nt_swept_param_osc:
-            osc_id = osc.uid
-            osc_signals = osc_to_signals[osc.uid]
+        for oscillator in oscs:
+            osc_id = oscillator.uid
+            frequency = oscillator.frequency
+            if frequency is None or osc_id not in osc_to_signals:
+                continue
+            if isinstance(frequency, ParameterInfo):
+                if oscillator.is_hardware:
+                    # HW oscillators are either set by the controller, or swept in a RT
+                    # loop. Either way, no need to set the initial frequency here. If we
+                    # did include it in the schedule this would count as a dependency on
+                    # the parameter, and force needless recompilation of each NT step.
+                    continue
+                if frequency.uid in nt_parameters:
+                    # this is a NT parameter
+                    frequency = nt_parameters[frequency.uid]
+                else:
+                    continue
+
+            osc_signals = osc_to_signals[osc_id]
             swept_osc = SweptOscillator(
                 osc_id,
                 {s.uid for s in osc_signals},
-                signal.device.uid,
-                osc.is_hardware,
+                osc_signals[0].device.uid,
+                oscillator.is_hardware,
             )
-            value = nt_parameters[param]
-            set_osc_freq.append(
-                InitialOscillatorFrequencySchedule(
-                    length=0,
-                    signals={signal.uid for signal in osc_to_signals[osc_id]},
-                    grid=self._system_grid,
-                    section="preamble",
-                    oscillators=[swept_osc],
-                    values=[value] * len(osc_signals),
-                )
-            )
+            set_osc_freq.append((frequency, swept_osc))
 
         if set_osc_freq:
-            root_schedule.children = set_osc_freq + root_schedule.children
+            root_schedule.children = [
+                InitialOscillatorFrequencySchedule(
+                    signals=set(s for _, o in set_osc_freq for s in o.signals),
+                    oscillators=[o for _, o in set_osc_freq],
+                    values=[f for f, _ in set_osc_freq],
+                    grid=self._system_grid,
+                    length=0,
+                )
+            ] + root_schedule.children
 
         root_schedule.calculate_timing(self._schedule_data, 0, False)
 
@@ -447,8 +421,7 @@ class Scheduler:
                     and oscillator_param_lookup[param.uid].id != oscillator.uid
                 ):
                     raise LabOneQException(
-                        "Frequency sweep parameter may drive only a single"
-                        " oscillator"
+                        "Frequency sweep parameter may drive only a single oscillator"
                     )
                 if param.uid not in oscillator_param_lookup:
                     oscillator_param_lookup[param.uid] = SweptOscillator(
@@ -653,7 +626,7 @@ class Scheduler:
                 grid = lcm(grid, lo_granularity_tinysamples)
                 _logger.info(
                     f"Phase reset in section '{section_id}' has extended the section's "
-                    f"timing grid to {grid*TINYSAMPLE*1e9:.2f} ns, so to be "
+                    f"timing grid to {grid * TINYSAMPLE * 1e9:.2f} ns, so to be "
                     f"commensurate with the local oscillator."
                 )
 
@@ -1072,9 +1045,9 @@ class Scheduler:
             assert pulse.set_oscillator_phase is None
             assert pulse.increment_oscillator_phase is None
 
-        assert (
-            len(set(offsets_int)) == 1
-        ), f"Cannot schedule pulses with different offsets in the multistate discrimination group in section '{section}'. "
+        assert len(set(offsets_int)) == 1, (
+            f"Cannot schedule pulses with different offsets in the multistate discrimination group in section '{section}'. "
+        )
 
         signal_id = pulses[0].signal.uid
         assert all(p.signal.uid == signal_id for p in pulses[1:])

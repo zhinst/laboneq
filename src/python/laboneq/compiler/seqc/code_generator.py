@@ -18,10 +18,15 @@ from numpy import typing as npt
 from engineering_notation import EngNumber
 import scipy.signal
 
+from laboneq.compiler.common.compiler_settings import (
+    TINYSAMPLE,
+    CompilerSettings,
+    round_min_playwave_hint,
+)
 from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.shfppc_sweeper_config import SHFPPCSweeperConfig
 from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
-from laboneq.compiler.ir.ir import IRTree
+from laboneq.compiler.ir.ir import IRTree, PulseDefIR
 from laboneq.compiler.seqc import passes
 from laboneq.compiler.seqc.linker import AwgWeights, SeqCGenOutput
 from laboneq._utils import ensure_list
@@ -80,10 +85,6 @@ from laboneq.compiler.seqc.awg_sampled_event import (
     AWGSampledEventSequence,
 )
 from laboneq.compiler.common.awg_signal_type import AWGSignalType
-from laboneq.compiler.common.compiler_settings import (
-    CompilerSettings,
-    round_min_playwave_hint,
-)
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.event_list.event_type import EventList, EventType
 from laboneq.compiler.common.pulse_parameters import decode_pulse_parameters
@@ -118,9 +119,9 @@ def add_wait_trigger_statements(
     if awg.trigger_mode == TriggerMode.DIO_TRIGGER:
         # HDAWG+UHFQA connected via DIO, no PQSC
         if awg.awg_id == 0:
-            assert (
-                awg.reference_clock_source != "internal"
-            ), "HDAWG+UHFQA system can only be used with an external clock connected to HDAWG in order to prevent jitter."
+            assert awg.reference_clock_source != "internal", (
+                "HDAWG+UHFQA system can only be used with an external clock connected to HDAWG in order to prevent jitter."
+            )
             init_generator.add_function_call_statement("waitDigTrigger", ["1"])
             init_generator.add_function_call_statement("setDIO", ["0xffffffff"])
             init_generator.add_function_call_statement("waitDIOTrigger")
@@ -379,15 +380,94 @@ class CodeGenerator(ICodeGenerator):
         self._qa_signals_by_handle: dict[str, SignalObj] = {}
         self._shfppc_sweep_configs: dict[AwgKey, SHFPPCSweeperConfig] = {}
         self._feedback_register_allocator: FeedbackRegisterAllocator | None = None
-        self._total_execution_time = None
+        self._total_execution_time: float | None = None
 
         self.EMIT_TIMING_COMMENTS = self._settings.EMIT_TIMING_COMMENTS
 
+    def collect_acquisition_data(
+        self, events_or_ir: EventList | IRTree
+    ) -> tuple[
+        dict[str, SignalObj],
+        list[dict[str, str]],
+        FeedbackRegisterAllocator,
+        IntegrationTimes,
+        SignalDelays,
+        float,
+    ]:
+        """Collect data from the event list/IR used to generate seqc code."""
+        # This is a temporary hack to obtain some acquisiton related
+        # data from the event list/IR used to generate seqc code. As we
+        # progress in converting these passes to use the IR instead of the
+        # event list, the calls in this method will be replaced piece by
+        # piece, until the whole code is converted to rust.
+
+        # TODO: Remove 'events' API in favor of IR, requires fixing many tests
+        if isinstance(events_or_ir, IRTree):
+            assert events_or_ir.root is not None
+            total_execution_time = events_or_ir.root.length * TINYSAMPLE
+
+            events = ir_to_event_list.generate_event_list_from_ir(
+                events_or_ir,
+                self._settings,
+                expand_loops=False,
+                max_events=float("inf"),
+            )
+
+            # The following event-based asserts shall be deleted once the event list is gone
+            assert (
+                total_execution_time == max([e.get("time", 0) for e in events])
+                if len(events) > 0
+                else None
+            )
+
+        else:
+            # This branch should only be encountered via tests
+            # TODO: Remove this code and the called functions when the event list is gone
+            events = events_or_ir
+            total_execution_time = (
+                max([e.get("time", 0) for e in events]) if len(events) > 0 else None
+            )
+
+        qa_signals_by_handle = self._collect_qa_signals_by_handle(events, self._signals)
+        simultaneous_acquires = self._gen_acquire_map(events)
+        feedback_register_allocator = FeedbackRegisterAllocator(self._signals, events)
+        (
+            integration_times,
+            signal_delays,
+        ) = self._measurement_calculator.calculate_integration_times(
+            self._signals, events
+        )
+
+        return (
+            qa_signals_by_handle,
+            simultaneous_acquires,
+            feedback_register_allocator,
+            integration_times,
+            signal_delays,
+            total_execution_time,
+        )
+
     def generate_code(self):
         passes.inline_sections_in_branch(self._ir)
+
+        (
+            qa_signals_by_handle,
+            simultaneous_acquires,
+            feedback_register_allocator,
+            integration_times,
+            signal_delays,
+            total_execution_time,
+        ) = self.collect_acquisition_data(self._ir)
+
         self.gen_seq_c(
             self._ir,
             pulse_defs={p.uid: p for p in self._ir.pulse_defs},
+            qa_signals_by_handle=qa_signals_by_handle,
+            simultaneous_acquires=simultaneous_acquires,
+            feedback_register_allocator=feedback_register_allocator,
+            integration_times=integration_times,
+            signal_delays=signal_delays,
+            total_execution_time=total_execution_time,
         )
 
     def get_output(self):
@@ -659,7 +739,6 @@ class CodeGenerator(ICodeGenerator):
         class LoopInfo:
             name: str
             start: float
-            end: float | None = None
             iterations: int = 0
 
         prng_loop_sections = {
@@ -689,10 +768,10 @@ class CodeGenerator(ICodeGenerator):
             ):
                 # exiting loop, pop from stack and replicate any open acquisitions N times
                 loop = loop_stack.pop()
-                loop.end = e["time"]
+                end = e["time"]
                 assert loop.name == section
 
-                length = (loop.end - loop.start) / loop.iterations
+                length = (end - loop.start) / loop.iterations
 
                 unrolled_acquires = []
                 for original_acquire in open_acquisitions.pop():
@@ -708,19 +787,22 @@ class CodeGenerator(ICodeGenerator):
         [unrolled_acquires] = open_acquisitions
         return unrolled_acquires
 
-    def _gen_acquire_map(self, events: EventList):
+    def _gen_acquire_map(self, events_or_ir: EventList) -> list[dict[str, str]]:
         # timestamp -> map[signal -> handle]
-        simultaneous_acquires: dict[float, dict[str, str]] = {}
+        simultaneous_acquires: dict[int, dict[str, str]] = {}
 
-        events = self._unroll_acquisition_in_prng_loops(events)
+        events = self._unroll_acquisition_in_prng_loops(events_or_ir)
 
         for e in events:
             time_events = simultaneous_acquires.setdefault(e["time"], {})
             time_events[e["signal"]] = e["acquire_handle"]
 
-        self._simultaneous_acquires = list(simultaneous_acquires.values())
+        return list(simultaneous_acquires.values())
 
-    def _collect_qa_signals_by_handle(self, events: EventList):
+    @staticmethod
+    def _collect_qa_signals_by_handle(events: EventList, signals: dict[str, SignalObj]):
+        # TODO: Remove once the event list is gone for good
+        qa_signals_by_handle: dict[str, SignalObj] = {}
         for event in events:
             if event["event_type"] != EventType.ACQUIRE_START:
                 continue
@@ -729,45 +811,42 @@ class CodeGenerator(ICodeGenerator):
                 # Some unit tests omit the handle
                 # this cannot be used for feedback anyway, so ignore
                 continue
-            signal_obj = self._signals[event["signal"]]
+            signal_obj = signals[event["signal"]]
 
-            if handle not in self._qa_signals_by_handle:
-                self._qa_signals_by_handle[handle] = signal_obj
+            if handle not in qa_signals_by_handle:
+                qa_signals_by_handle[handle] = signal_obj
             else:
-                assert self._qa_signals_by_handle[handle] == signal_obj
+                assert qa_signals_by_handle[handle] == signal_obj
+        return qa_signals_by_handle
 
     def gen_seq_c(
         self,
         events_or_ir: EventList | IRTree,
-        pulse_defs: dict[str, PulseDef],
+        pulse_defs: dict[str, PulseDefIR],
+        qa_signals_by_handle: dict[str, SignalObj],
+        simultaneous_acquires: list[dict[str, str]],
+        feedback_register_allocator: FeedbackRegisterAllocator,
+        integration_times: IntegrationTimes,
+        signal_delays: SignalDelays,
+        total_execution_time: float,
     ):
-        # TODO: Remove 'events' API in favor of IR, requires fixing many tests
+        # TODO: Remove state
+        self._integration_times = integration_times
+        self._signal_delays = signal_delays
+        self._simultaneous_acquires = simultaneous_acquires
+        self._qa_signals_by_handle = qa_signals_by_handle
+        self._feedback_register_allocator = feedback_register_allocator
+        self._total_execution_time = total_execution_time
+
         if isinstance(events_or_ir, IRTree):
-            events = ir_to_event_list.generate_event_list_from_ir(
-                events_or_ir,
-                self._settings,
-                expand_loops=False,
-                max_events=float("inf"),
-            )
             ir_tree = passes.fanout_awgs(events_or_ir, self._awgs.values())
             events_per_awg = ir_to_event_list.event_list_per_awg(
                 ir_tree, self._settings
             )
         else:
             # This branch should only be encountered via tests
-            events = events_or_ir
-            events_per_awg = {awg: events for awg in self._awgs}
+            events_per_awg = {awg: events_or_ir for awg in self._awgs}
 
-        # TODO: Move information extraction to IR
-        self._collect_qa_signals_by_handle(events)
-        self._gen_acquire_map(events)
-
-        (
-            self._integration_times,
-            self._signal_delays,
-        ) = self._measurement_calculator.calculate_integration_times(
-            self._signals, events
-        )
         for signal_id, signal_obj in self._signals.items():
             code_generation_delay = self._signal_delays.get(signal_id)
             if code_generation_delay is not None:
@@ -791,13 +870,8 @@ class CodeGenerator(ICodeGenerator):
                 EngNumber(signal_obj.on_device_delay),
             )
 
-        self._total_execution_time = events[-1].get("time") if len(events) > 0 else None
         self.sort_signals()
         self._integration_weights.clear()
-
-        self._feedback_register_allocator = FeedbackRegisterAllocator(
-            self._signals, events
-        )
 
         for _, awg in sorted(
             self._awgs.items(),
@@ -1722,9 +1796,9 @@ class CodeGenerator(ICodeGenerator):
                 if pulse_part.amplitude is not None:
                     amplitude *= pulse_part.amplitude
 
-                assert (
-                    not pulse_part.oscillator_phase
-                ), "oscillator phase should have been baked into pulse phase"
+                assert not pulse_part.oscillator_phase, (
+                    "oscillator phase should have been baked into pulse phase"
+                )
 
                 baseband_phase = pulse_part.increment_oscillator_phase
                 used_oscillator_frequency = pulse_part.oscillator_frequency
@@ -2049,6 +2123,7 @@ class CodeGenerator(ICodeGenerator):
                         _logger.warning("  %s", log_event)
                     raise Exception("Play and acquire must happen at the same time")
                 if len(play) > 0 or len(acquire) > 0:
+                    assert end is not None
                     end = (
                         round(end / DeviceType.SHFQA.sample_multiple)
                         * DeviceType.SHFQA.sample_multiple

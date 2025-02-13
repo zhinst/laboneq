@@ -52,7 +52,7 @@ class _DefaultOperations(quantum.QuantumOperations):
     QUBIT_TYPES = quantum.QuantumElement
 
     @quantum.quantum_operation
-    def barrier(self, *qubits):
+    def barrier(self, qubit):
         """Barrier gate.
 
         Reserves all signals on qubits.
@@ -147,31 +147,44 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
         self,
         loc: ast.Span,
         name: str,
-        qubits: tuple[str],
+        qubits: list[str | tuple[str]],
         args=None,
         kwargs=None,
-    ) -> Section | list[Section]:
+    ) -> Section:
         """
-        Return a list of sections for broadcasting operations.
-        Otherwise, return a single section.
+        Returns the section implementing the given gate.
+
+        When a gate is broadcast across multiple qubits, the underlying quantum
+        operation returns multiple sections (one for each element of the broadcast)
+        and this method wraps those sections in a single section to ensure correct
+        timing behaviour.
+
+        When a gate is not broadcast, this method returns the single section returned
+        by the quantum operation.
         """
         args = args or ()
         kwargs = kwargs or {}
-        if (name, qubits) in self._program_gates:
-            return self._program_gates[(name, qubits)](*args, **kwargs)
-        gate_callable = self._retrieve_gate(loc, name, qubits)
         qubit_args = []
+        broadcast = False
         try:
             for x in qubits:
                 if isinstance(x, (list, tuple)):
                     qubit_args.append([self.qubits[qubit] for qubit in x])
+                    broadcast = True
                 else:
                     qubit_args.append(self.qubits[x])
         except KeyError:
             err_msg = f"Qubit(s) {qubits} not supplied."
             raise OpenQasmException(err_msg, mark=loc) from None
+        if not broadcast:
+            if (name, tuple(qubits)) in self._program_gates:
+                return self._program_gates[(name, tuple(qubits))](*args, **kwargs)
+        gate_callable = self._retrieve_gate(loc, name, qubits)
 
-        return gate_callable(*qubit_args, *args, **kwargs)
+        secs = gate_callable(*qubit_args, *args, **kwargs)
+        if isinstance(secs, list):
+            return Section(uid=id_generator(f"{name}_broadcast"), children=secs)
+        return secs
 
     def _has_frame(self, qubits_or_frames) -> bool:
         return any(isinstance(f, Frame) for f in qubits_or_frames)
@@ -550,20 +563,36 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
             return self._transpile(statement, uid_hint="box")
 
     def _handle_barrier(self, statement: ast.QuantumBarrier):
-        # barrier can be applied to either qubits or frames
-        qubits_or_frames = [
-            eval_expression(q, namespace=self.namespace) for q in statement.qubits
-        ]
-        if self._has_frame(qubits_or_frames):
-            # Avoid duplicate qubits due to openpulse frames
-            qubits = tuple(dict.fromkeys(self._frame_to_qubit(qubits_or_frames)))
-        else:
-            qubits = self._process_qubit_register(qubits_or_frames)
         # If no arguments are given, reserve all qubits
+        if not statement.qubits:
+            qubits = self.qubits.keys()
+        else:
+            # barrier can be applied to either qubits or frames
+            qubits_or_frames = [
+                eval_expression(q, namespace=self.namespace) for q in statement.qubits
+            ]
+            if self._has_frame(qubits_or_frames):
+                # Avoid duplicate qubits due to openpulse frames
+                qubits = tuple(dict.fromkeys(self._frame_to_qubit(qubits_or_frames)))
+            else:
+                qubits = self._process_qubit_register(qubits_or_frames)
+        # force barrier to be broadcasted if more than one qubit are given
+        # or if a qubit register is given by putting all qubits in a list
+
+        input_qubits = []
+        if len(qubits) == 1:
+            input_qubits = qubits
+        else:
+            for qubit in qubits:
+                if isinstance(qubit, tuple):
+                    input_qubits.extend(qubit)
+                else:
+                    input_qubits.append(qubit)
+            input_qubits = [tuple(input_qubits)]
         return self._call_gate(
             statement.span,
             "barrier",
-            qubits or tuple(self.qubits),
+            input_qubits,
         )
 
     def _handle_include(self, statement: ast.Include) -> None:

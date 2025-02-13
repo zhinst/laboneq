@@ -242,12 +242,23 @@ class QuantumOperations:
         if cls.BASE_OPS is None:
             cls.BASE_OPS = {}
 
+        # Collect quantum operations from the class and its parent classes
+        base_ops = {}
+        for base in reversed(cls.mro()):
+            ops = getattr(base, "BASE_OPS", None)
+            if ops is None:
+                continue
+            base_ops.update(
+                {k: v for k, v in ops.items() if getattr(v, "_quantum_op", False)}
+            )
+
         quantum_ops = {
             k: v for k, v in cls.__dict__.items() if getattr(v, "_quantum_op", False)
         }
+
         for k in quantum_ops:
             delattr(cls, k)
-        cls.BASE_OPS = {**cls.BASE_OPS, **quantum_ops}
+        cls.BASE_OPS = {**base_ops, **quantum_ops}
 
         super().__init_subclass__(**kw)
 

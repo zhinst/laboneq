@@ -48,9 +48,9 @@ class SectionInliner:
                                 f" 'set_oscillator_phase' of software oscillator"
                                 f" '{osc.uid}' on signal '{signal_id}' not supported"
                             )
-                        assert (
-                            node.set_oscillator_phase is None
-                        ), "cannot set HW osc phase"
+                        assert node.set_oscillator_phase is None, (
+                            "cannot set HW osc phase"
+                        )
 
                         dt = DeviceType.from_device_info_type(signal.device.device_type)
                         if dt.is_qa_device:

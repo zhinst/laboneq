@@ -445,8 +445,7 @@ def combine_shfqa_and_shfsg(
 ) -> legacy_instruments.SHFQC:
     if shfqa.interface != shfsg.interface:
         raise AssertionError(
-            f"Virtual SHFQA {shfqa.uid} and SHFSG {shfsg.uid} have different"
-            " interfaces"
+            f"Virtual SHFQA {shfqa.uid} and SHFSG {shfsg.uid} have different interfaces"
         )
     if shfqa.server_uid != shfsg.server_uid:
         raise AssertionError(
@@ -455,8 +454,7 @@ def combine_shfqa_and_shfsg(
         )
     if shfqa.address != shfsg.address:
         raise AssertionError(
-            f"Virtual SHFQA {shfqa.uid} and SHFSG {shfsg.uid} have different"
-            " addresses"
+            f"Virtual SHFQA {shfqa.uid} and SHFSG {shfsg.uid} have different addresses"
         )
     if shfqa.reference_clock_source != shfsg.reference_clock_source:
         raise AssertionError(

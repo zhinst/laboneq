@@ -45,32 +45,39 @@ class state_emulation_pulse:
 
 def create_calibration_experiment(
     state_emulation_pulse,
-    qubit_state,
-    measure_signal,
+    qubit_states,
+    measure_signals,
     acquire_signal,
+    average_count=1024,
 ):
     """Experiment to calibrate state discrimination by playing a measurement pulse
     that emulates a certain qubit state response and acquiring the raw trace of the returned signal.
     """
 
-    @experiment(signals=["measure", "acquire"])
+    exp_signals = ["acquire"]
+    exp_signals.extend(f"measure_{state}" for state in qubit_states)
+
+    @experiment(signals=exp_signals)
     def exp():
-        map_signal("measure", measure_signal)
+        for it, state in enumerate(qubit_states):
+            map_signal(f"measure_{state}", measure_signals[it])
         map_signal("acquire", acquire_signal)
 
-        with acquire_loop_rt(count=1024, acquisition_type=AcquisitionType.RAW):
-            play(
-                signal="measure",
-                pulse=state_emulation_pulse.pulse,
-                phase=state_emulation_pulse.pulse_phase(qubit_state),
-                amplitude=state_emulation_pulse.pulse_amplitude(qubit_state),
-            )
-            acquire(
-                signal="acquire",
-                handle="raw",
-                length=state_emulation_pulse.pulse_length,
-            )
-            delay(signal="measure", time=1e-6)
+        with acquire_loop_rt(count=average_count, acquisition_type=AcquisitionType.RAW):
+            for state in qubit_states:
+                with section(name=f"measure_{state}_section"):
+                    play(
+                        signal=f"measure_{state}",
+                        pulse=state_emulation_pulse.pulse,
+                        phase=state_emulation_pulse.pulse_phase(state),
+                        amplitude=state_emulation_pulse.pulse_amplitude(state),
+                    )
+                    acquire(
+                        signal="acquire",
+                        handle=f"raw_{state}",
+                        length=state_emulation_pulse.pulse_length,
+                    )
+                    delay(signal=f"measure_{state}", time=1e-6)
 
     return exp()
 
@@ -105,7 +112,7 @@ def create_discrimination_experiment(
                 for it, _ in enumerate(measure_lines):
                     with section(
                         uid=f"measure_{it}",
-                        play_after=None if it == 0 else f"measure_{it-1}",
+                        play_after=None if it == 0 else f"measure_{it - 1}",
                     ):
                         play(
                             signal=f"measure_{it}",

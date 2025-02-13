@@ -5,13 +5,19 @@
 
 from __future__ import annotations
 
+from laboneq.contrib.example_helpers.device_setup_helper import (
+    create_TKSession,
+    connect_zsync,
+    return_instrument_options,
+    return_instrument_zsync_ports,
+)
 from laboneq.contrib.example_helpers.example_notebook_helper import (
     create_dummy_transmon,
     generate_dummy_transmon_parameters,
 )
 from laboneq.core.exceptions import LabOneQException
 from laboneq.dsl.device import DeviceSetup, create_connection
-from laboneq.dsl.device.instruments import HDAWG, PQSC, SHFQA, SHFQC, SHFSG, UHFQA, QHUB
+from laboneq.dsl.device.instruments import HDAWG, PQSC, QHUB, SHFQA, SHFQC, SHFSG, UHFQA
 
 
 # generate a device setup from a list of Instrument objects
@@ -31,6 +37,8 @@ def generate_device_setup(
     server_host: str = "localhost",
     server_port: str = "8004",
     setup_name: str = "my_QCCS",
+    query_zsync: bool = False,
+    query_options: bool = False,
     debug: bool = False,
 ) -> DeviceSetup:
     """A function to generate a DeviceSetup given a list of devices, based on standardised wiring assumptions.
@@ -73,6 +81,10 @@ def generate_device_setup(
             Defaults to the LabOne default setting "8004".
         setup_name: The name of your setup.
             Defaults to "my_QCCS"
+        query_zsync: Whether to query the PQSC or QHUB for the zsync ports of all connected instruments.
+            Defaults to False.
+        query_options: Whether to query all connected instruments for their options.
+            Defaults to False.
         debug: Whether to print optional debug information to console.
             Defaults to False.
 
@@ -144,6 +156,44 @@ def generate_device_setup(
             "Device Setup generation failed: Setups can only contain either a single PQSC or a single QHUB, not both."
         )
 
+    # query instruments for options / zsync connections
+    # TODO: what about UHFQA?
+    if query_options or query_zsync:
+        all_instruments = [hdawg, shfsg, shfqa, shfqc]
+        # generate lists of instrument ids
+        device_ids = [instrument["serial"] for instrument in hdawg]
+        device_ids.extend(instrument["serial"] for instrument in shfsg)
+        device_ids.extend(instrument["serial"] for instrument in shfqa)
+        device_ids.extend(instrument["serial"] for instrument in shfqc)
+        hub_id = pqsc[0]["serial"] if pqsc else qhub[0]["serial"]
+        # create connected toolkit session
+        tk_session = create_TKSession(
+            dataserver_ip=server_host, hub_id=hub_id, device_ids=device_ids
+        )
+        # query and update instrument options
+        if query_options:
+            option_dict = return_instrument_options(
+                session=tk_session, device_ids=device_ids
+            )
+            for serial, option in option_dict.items():
+                for instrument_list in all_instruments:
+                    for instrument in instrument_list:
+                        if instrument["serial"] == serial:
+                            instrument["options"] = option
+                            break
+        # query and update zsync port connections
+        if query_zsync:
+            connect_zsync(session=tk_session, device_ids=device_ids, waiting_time=2)
+            zsync_dict = return_instrument_zsync_ports(
+                session=tk_session, hub_id=hub_id, device_ids=device_ids
+            )
+            for serial, port in zsync_dict.items():
+                for instrument_list in all_instruments:
+                    for instrument in instrument_list:
+                        if instrument["serial"] == serial:
+                            instrument["zsync"] = port
+                            break
+
     # generate device setup including dataserver configuration
     device_setup = DeviceSetup(uid=setup_name)
     device_setup.add_dataserver(host=server_host, port=server_port)
@@ -159,6 +209,7 @@ def generate_device_setup(
     zsync = {}
     dio = {}
 
+    # UHFQA
     for id, instrument in enumerate(uhfqa):
         if "serial" not in instrument:
             raise LabOneQException(
@@ -189,6 +240,7 @@ def generate_device_setup(
         number_readout_acquire_lines += actual_multiplex
         instrument_list[instrument["serial"]] = f"uhfqa_{id}"
 
+    # HDAWG
     for id, instrument in enumerate(hdawg):
         if "serial" not in instrument:
             raise LabOneQException(
@@ -217,7 +269,7 @@ def generate_device_setup(
                 [
                     {
                         "device": f"hdawg_{id}",
-                        "port": [f"SIGOUTS/{2*it}", f"SIGOUTS/{2*it+1}"],
+                        "port": [f"SIGOUTS/{2 * it}", f"SIGOUTS/{2 * it + 1}"],
                     }
                     for it in range(int(instrument["number_of_channels"] / 2))
                 ]
@@ -241,6 +293,7 @@ def generate_device_setup(
             dio[instrument["serial"]] = instrument["dio"]
 
     # check if combination and wiring of HDAWG and UFQA instruments works
+    # TODO: ensure that for each UHFQA there is exactly one HDAWG connected to it via DIO
     if uhfqa:
         if hdawg:
             gen1_setup = True
@@ -253,6 +306,7 @@ def generate_device_setup(
                 "Device Setup generation failed: UHFQA requires a HDAWG to be used with LabOne Q."
             )
 
+    # SHFSG
     for id, instrument in enumerate(shfsg):
         if "serial" not in instrument:
             raise LabOneQException(
@@ -285,6 +339,7 @@ def generate_device_setup(
         if instrument["zsync"] is not None:
             zsync[instrument["serial"]] = instrument["zsync"]
 
+    # SHFQA
     for id, instrument in enumerate(shfqa):
         if "serial" not in instrument:
             raise LabOneQException(
@@ -313,8 +368,8 @@ def generate_device_setup(
             [
                 {
                     "device": f"shfqa_{id}",
-                    "port_out": "QACHANNELS/0/OUTPUT",
-                    "port_in": "QACHANNELS/0/INPUT",
+                    "port_out": f"QACHANNELS/{it}/OUTPUT",
+                    "port_in": f"QACHANNELS/{it}/INPUT",
                     "multiplex": actual_multiplex,
                 }
                 for it in range(instrument["number_of_channels"])
@@ -327,6 +382,7 @@ def generate_device_setup(
         if instrument["zsync"] is not None:
             zsync[instrument["serial"]] = instrument["zsync"]
 
+    # SHFQC
     for id, instrument in enumerate(shfqc):
         if "serial" not in instrument:
             raise LabOneQException(
@@ -374,6 +430,7 @@ def generate_device_setup(
         if instrument["zsync"] is not None:
             zsync[instrument["serial"]] = instrument["zsync"]
 
+    # PQSC
     for id, instrument in enumerate(pqsc):
         if "serial" not in instrument:
             raise LabOneQException(
@@ -392,6 +449,7 @@ def generate_device_setup(
         )
         instrument_list[instrument["serial"]] = f"pqsc_{id}"
 
+    # QHub
     for id, instrument in enumerate(qhub):
         if "serial" not in instrument:
             raise LabOneQException(
@@ -427,6 +485,7 @@ def generate_device_setup(
     # add logical signal lines for the specified number of qubits
     qubits = [f"q{it}" for it in range(number_qubits)]
 
+    # measurement lines
     if not drive_only:
         # add readout and acquire lines
         readout_index = 0
@@ -451,6 +510,7 @@ def generate_device_setup(
             )
             current_multiplex += 1
 
+    # control lines
     if not readout_only:
         # add drive and cr lines
         drive_index = 0
@@ -463,6 +523,7 @@ def generate_device_setup(
                     to_signal=f"{qubit}/drive", ports=current_drive["port"]
                 ),
             )
+            # add drive lines for higher qubit states - multiplexed with g-e drive lines
             if multiplex_drive_lines:
                 device_setup.add_connections(
                     current_drive["device"],
@@ -486,7 +547,7 @@ def generate_device_setup(
                 )
                 flux_index += 1
 
-    # add DIO and ZSync connections
+    # add DIO connections
     if dio and gen1_setup:
         for dio_in, dio_out in dio.items():
             # check if uhfqa is present in instrument list
@@ -501,6 +562,7 @@ def generate_device_setup(
                 raise LabOneQException(
                     f"Device Setup generation failed: UHFQA {dio_out} is not part of device setup "
                 )
+    # add ZSync connections
     if zsync:
         if pqsc:
             for zsync_in, zsync_id in zsync.items():
@@ -546,6 +608,8 @@ def generate_device_setup_qubits(
     setup_name: str = "my_QCCS",
     include_qubits: bool = True,
     calibrate_setup: bool = True,
+    query_zsync: bool = False,
+    query_options: bool = False,
     debug: bool = False,
 ):
     """A function to generate a DeviceSetup and a list of Transmon qubits
@@ -592,6 +656,10 @@ def generate_device_setup_qubits(
             Defaults to True.
         calibrate_setup: Whether to use the qubit properties to calibrate the device setup.
             Defaults to True.
+        query_zsync: Whether to query the PQSC or QHUB for the zsync ports of all connected instruments.
+            Defaults to False.
+        query_options: Whether to query all connected instruments for their options.
+            Defaults to False.
         debug: Whether to print optional debug information to console.
             Defaults to False.
 
@@ -616,6 +684,8 @@ def generate_device_setup_qubits(
         server_host=server_host,
         server_port=server_port,
         setup_name=setup_name,
+        query_zsync=query_zsync,
+        query_options=query_options,
         debug=debug,
     )
 

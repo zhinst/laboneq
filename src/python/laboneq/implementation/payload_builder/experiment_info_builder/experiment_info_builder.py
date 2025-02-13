@@ -405,9 +405,9 @@ class ExperimentInfoBuilder:
                 if from_device != signal_info.device:
                     msg = f"Error on signal {mapped_ls_path}: Output routing can be only applied within the same device SGCHANNELS: {signal_info.device.uid} != {from_pc.group}"
                     raise LabOneQException(msg)
-                assert (
-                    len(physical_channel.ports) == 1 and len(from_pc.ports) == 1
-                ), "Output SG physical channels must have exactly one port."
+                assert len(physical_channel.ports) == 1 and len(from_pc.ports) == 1, (
+                    "Output SG physical channels must have exactly one port."
+                )
                 to_port = physical_channel.ports[0]
                 from_port = from_pc.ports[0]
                 if to_port == from_port:
@@ -1084,9 +1084,9 @@ class ExperimentInfoBuilder:
         def traverse_check_all_rt_inside_rt_loop(section: SectionInfo):
             if section.averaging_mode is not None:
                 return
-            assert (
-                section.execution_type is not None
-            ), "should have been set in first traverse"
+            assert section.execution_type is not None, (
+                "should have been set in first traverse"
+            )
             if section.execution_type == ExecutionType.REAL_TIME:
                 raise LabOneQException(
                     f"Section '{section.uid}' is marked as real-time, but it is"

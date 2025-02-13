@@ -44,10 +44,10 @@ class LoopSchedule(SectionSchedule):
                 if child_length > adjusted_rep_time:
                     raise LabOneQException(
                         "Specified repetition time "
-                        f"({self.repetition_time*TINYSAMPLE*1e6:.3f} us) "
+                        f"({self.repetition_time * TINYSAMPLE * 1e6:.3f} us) "
                         f"is insufficient to fit the content of '{self.section}', "
                         f"iteration {iteration} "
-                        f"({child_length*TINYSAMPLE*1e6:.3f} us)"
+                        f"({child_length * TINYSAMPLE * 1e6:.3f} us)"
                     )
 
         if self.compressed:

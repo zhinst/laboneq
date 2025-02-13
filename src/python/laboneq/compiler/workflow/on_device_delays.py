@@ -56,9 +56,9 @@ def calculate_output_router_delays(
             signal_on_device_delays[uid] = 52
             for output in routing:
                 if output.from_signal:
-                    assert (
-                        output.from_signal in mapping
-                    ), "Source signal does not exists."
+                    assert output.from_signal in mapping, (
+                        "Source signal does not exists."
+                    )
                     signal_on_device_delays[output.from_signal] = 52
         else:
             if uid not in signal_on_device_delays:

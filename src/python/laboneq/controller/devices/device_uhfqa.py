@@ -669,7 +669,7 @@ class DeviceUHFQA(DeviceBase):
                 )
             )
 
-    async def _get_input_monitor_data(self, ch: int, num_results: int):
+    async def _get_input_monitor_data(self, ch: int, acquire_length: int):
         result_path = self._result_node_monitor(ch)
         # TODO(2K): set timeout based on timeout_s from connect
         timeout_s = 5.0
@@ -678,24 +678,24 @@ class DeviceUHFQA(DeviceBase):
             node_val = canonical_vector(node_data.value)
             self._check_result(
                 node_val=node_val,
-                num_results=num_results,
+                num_results=acquire_length,
                 ch_repr=self._ch_repr_monitor(ch),
             )
             # Truncate returned vectors to the expected length -> hotfix for GCE-681
-            return node_val[0:num_results]
+            return node_val[0:acquire_length]
         except (TimeoutError, asyncio.TimeoutError):
             _logger.error(
                 f"{self._ch_repr_monitor(ch)}: Failed to receive a result from {result_path} within {timeout_s} seconds."
             )
             return np.array([], dtype=np.complex128)
 
-    async def get_input_monitor_data(
-        self, channel: int, num_results: int
+    async def get_raw_data(
+        self, channel: int, acquire_length: int, acquires: int | None
     ) -> RawReadoutData:
         ch0, ch1 = await _gather(
-            self._get_input_monitor_data(0, num_results),
-            self._get_input_monitor_data(1, num_results),
+            self._get_input_monitor_data(0, acquire_length),
+            self._get_input_monitor_data(1, acquire_length),
         )
         return RawReadoutData(
-            np.array([complex(real, imag) for real, imag in zip(ch0, ch1)])
+            np.array([[complex(real, imag) for real, imag in zip(ch0, ch1)]])
         )

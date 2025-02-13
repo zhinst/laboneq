@@ -757,9 +757,9 @@ def analyze_play_wave_times(
         osc_iv.data["oscillator"] for osc_iv in oscillator_intervals.intervals
     }
     if len(used_oscillators) > 1:
-        assert (
-            use_command_table
-        ), "HW oscillator switching only possible in command-table mode"
+        assert use_command_table, (
+            "HW oscillator switching only possible in command-table mode"
+        )
 
     # Check whether any cut point is within a command table interval
     for cp in cut_points:

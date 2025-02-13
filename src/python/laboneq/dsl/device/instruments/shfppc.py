@@ -25,7 +25,7 @@ class SHFPPC(ZIStandardInstrument):
                 uid=f"PPCHANNELS/{ch}",
                 signal_type=IOSignalType.PPC,
                 physical_port_ids=[f"{ch}"],
-                connector_labels=[f"Signal Output {ch+1}"],
+                connector_labels=[f"Signal Output {ch + 1}"],
             )
             for ch in range(4)
         ]

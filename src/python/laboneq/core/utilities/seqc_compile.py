@@ -49,8 +49,7 @@ def seqc_compile_one(item: SeqCCompileItem):
     compiler_warnings = extra["messages"]
     if compiler_warnings:
         raise LabOneQException(
-            f"AWG compilation succeeded, but there are warnings:\n"
-            f"{compiler_warnings}"
+            f"AWG compilation succeeded, but there are warnings:\n{compiler_warnings}"
         )
 
     item.elf = elf

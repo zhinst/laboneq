@@ -492,6 +492,6 @@ def decode_errors(errors: str | list[str], dev_repr: str) -> list[str]:
                 DeviceErrorSeverity.error,
             ] and (message["code"] not in SUPPRESSED_WARNINGS):
                 collected_messages.append(
-                    f'{dev_repr}: ({message["code"]}) {message["message"]}'
+                    f"{dev_repr}: ({message['code']}) {message['message']}"
                 )
     return collected_messages

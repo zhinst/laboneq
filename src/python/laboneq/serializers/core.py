@@ -42,15 +42,23 @@ def _is_generic_type(obj: object) -> bool:
 
 
 def _serialize_object(
-    obj: object, options: SerializationOptions | None = None
+    obj: object, options: SerializationOptions | None = None, only_public=False
 ) -> JsonSerializableType:
     # TODO: Remove check and return if no serialize is found. Let orjson.dumps() handle
     #       simple types to avoid manual mapping.
     if _is_generic_type(obj):
         return obj
-    if (serializer := _registry(options)[type(obj)]) is not None:
-        return serializer.to_dict(obj, options)
-    raise RuntimeError(f"No serializer available for object of type {type(obj)!r}. ")
+    registry = _registry(options)
+    serializer = registry[type(obj)]
+    if serializer is None:
+        raise RuntimeError(
+            f"No serializer available for object of type {type(obj).__module__}.{type(obj).__name__}."
+        )
+    if only_public and not registry.is_public(type(obj)):
+        raise RuntimeError(
+            f"No serializer publicly available for objects of type {type(obj).__module__}.{type(obj).__name__}."
+        )
+    return serializer.to_dict(obj, options)
 
 
 def import_cls(full_name: str) -> type:
@@ -70,7 +78,7 @@ def to_dict(
     obj: object, options: SerializationOptions | None = None
 ) -> JsonSerializableType:
     """Store an object to a dict with only basic datatypes."""
-    serialized = _serialize_object(obj, options)
+    serialized = _serialize_object(obj, options, only_public=True)
     if isinstance(serialized, dict) and "__serializer__" in serialized:
         serialized["__creator__"] = ["laboneq", get_version()]
     return serialized

@@ -499,7 +499,7 @@ class OpenQASMTranspiler:
                     # Partial path
                     # Qubit signal lookup does not work with full paths (e.g. alias drive/drive_line)
                     out[name] = qubit.signals[signal]
-                elif signal in signal in self._qubit_signals:
+                elif signal in self._qubit_signals:
                     out[name] = signal
                 else:
                     msg = f"Invalid port mapping. Signal {function_or_port} could not be found within qubits."

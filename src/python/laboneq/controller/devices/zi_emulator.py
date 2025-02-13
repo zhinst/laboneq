@@ -676,8 +676,13 @@ class DevEmuUHFQA(DevEmuHW):
                 )
         if monitor_enable != 0:
             length = self._get_node("qas/0/monitor/length").value
-            self._set_val("qas/0/monitor/inputs/0/wave", ([52] * length, {}))
-            self._set_val("qas/0/monitor/inputs/1/wave", ([52] * length, {}))
+            self._set_val(
+                "qas/0/monitor/inputs/0/wave", (np.arange(length, dtype=np.float64), {})
+            )
+            self._set_val(
+                "qas/0/monitor/inputs/1/wave",
+                (-np.arange(length, dtype=np.float64), {}),
+            )
 
     def _awg_enable(self, node: NodeBase):
         self._armed_awg = node.value != 0
@@ -840,6 +845,8 @@ class DevEmuSHFQABase(DevEmuSHFBase):
             pipeliner_stop_hook=self._pipeliner_done,
         )
         self._armed_qa_awgs: set[int] = set()
+        self._scope_max_segments: int = 1024
+        self._scope_memory_size: int = 256 * 1024
 
     def trigger(self):
         super().trigger()
@@ -955,13 +962,51 @@ class DevEmuSHFQABase(DevEmuSHFBase):
             if scope_single != 0:
                 self._set_val("scopes/0/enable", 0)
             length = self._get_node("scopes/0/length").value
-            assert isinstance(length, int)
-            length &= ~0xF
-            for scope_ch in range(4):
+            enabled_channels = self._scope_enabled_channels()
+            segments = self._scope_segments()
+
+            # Emulate the scope output using structured data that allows tracking
+            # of the results assignment. Each sample value is calculated as
+            # <segment> * 10 + <channel> + <sample> * 1j
+            segment_samples = np.arange(length) * 1j
+            for scope_ch in enabled_channels:
+                data = [
+                    segment * 10 + scope_ch + segment_samples
+                    for segment in range(segments)
+                ]
                 self._set_val(
-                    f"scopes/0/channels/{scope_ch}/wave",
-                    (np.array([(52 + 52j)] * length), {}),
+                    f"scopes/0/channels/{scope_ch}/wave", (np.concatenate(data), {})
                 )
+
+    def _scope_enabled_channels(self) -> list[int]:
+        return [
+            scope_ch
+            for scope_ch in range(4)
+            if self._get_node(f"scopes/0/channels/{scope_ch}/enable").value != 0
+        ]
+
+    def _scope_segments(self) -> int:
+        if self._get_node("scopes/0/segments/enable").value != 0:
+            return self._get_node("scopes/0/segments/count").value
+        return 1
+
+    def _scope_adjust_segments(self, node: NodeBase):
+        if self._scope_segments() > self._scope_max_segments:
+            self._set_val("scopes/0/segments/count", self._scope_max_segments)
+        self._scope_adjust_length(node)
+
+    def _scope_adjust_length(self, node: NodeBase):
+        enabled_channels = self._scope_enabled_channels()
+        if len(enabled_channels) < 2:
+            ch_split = 1
+        elif len(enabled_channels) == 2:
+            ch_split = 2
+        else:
+            ch_split = 4
+        segments = self._scope_segments()
+        max_length = (self._scope_memory_size // ch_split // segments) & ~0xF
+        if self._get_node("scopes/0/length").value > max_length:
+            self._set_val("scopes/0/length", max_length)
 
     def _awg_stop_qa(self, channel: int):
         self._side_effects_qa(channel)
@@ -1061,7 +1106,21 @@ class DevEmuSHFQABase(DevEmuSHFBase):
             nd[f"qachannels/{channel}/spectroscopy/result/data/wave"] = NodeInfo(
                 type=NodeType.VECTOR_COMPLEX
             )
+            nd["scopes/0/length"] = NodeInfo(
+                type=NodeType.INT, default=4992, handler=self._scope_adjust_length
+            )
+            nd["scopes/0/segments/enable"] = NodeInfo(
+                type=NodeType.INT, default=0, handler=self._scope_adjust_length
+            )
+            nd["scopes/0/segments/count"] = NodeInfo(
+                type=NodeType.INT, default=1, handler=self._scope_adjust_segments
+            )
             for scope_ch in range(4):
+                nd[f"scopes/0/channels/{scope_ch}/enable"] = NodeInfo(
+                    type=NodeType.INT,
+                    default=1 if scope_ch == 0 else 0,
+                    handler=self._scope_adjust_length,
+                )
                 nd[f"scopes/0/channels/{scope_ch}/wave"] = NodeInfo(
                     type=NodeType.VECTOR_COMPLEX
                 )
@@ -1153,6 +1212,10 @@ class DevEmuSHFSG(DevEmuSHFSGBase):
 
 
 class DevEmuSHFQC(DevEmuSHFQABase, DevEmuSHFSGBase):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._scope_memory_size = 64 * 1024
+
     def _node_def(self) -> dict[str, NodeInfo]:
         nd = {
             "features/devtype": NodeInfo(
@@ -1273,6 +1336,7 @@ class EmulatorState:
         # if dev_type is None:
         #     dev_type = _serial_to_device_type(serial)
         device = self.get_device_by_serial(serial)
+        events: dict[str, list[PollEvent]]
         if device is None:
             device = dev_type(serial=serial, emulator_state=self)
             events = defaultdict(list)

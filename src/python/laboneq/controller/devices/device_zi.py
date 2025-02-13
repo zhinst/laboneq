@@ -448,8 +448,8 @@ class DeviceZI(DeviceAbstract):
             f"{self.__class__.__name__} does not support result retrieval"
         )
 
-    async def get_input_monitor_data(
-        self, channel: int, num_results: int
+    async def get_raw_data(
+        self, channel: int, acquire_length: int, acquires: int | None
     ) -> RawReadoutData:
         raise NotImplementedError(
             f"{self.__class__.__name__} does not support result retrieval"
@@ -929,15 +929,6 @@ class DeviceBase(DeviceZI):
                 )
             )
 
-            wf_eff.extend(
-                self.prepare_pipeliner_job_nodes(
-                    recipe_data,
-                    rt_section_uid,
-                    AwgKey(initialization.device_uid, awg_index),
-                    pipeliner_job,
-                )
-            )
-
             if rt_execution_info.with_pipeliner:
                 # For devices with pipeliner, wf_eff == elf_nodes
                 wf_eff.extend(self.pipeliner_commit(awg_index))
@@ -1210,15 +1201,6 @@ class DeviceBase(DeviceZI):
         artifacts: ArtifactsCodegen,
         integrator_allocations: list[IntegratorAllocation],
         kernel_ref: str,
-    ) -> NodeCollector:
-        return NodeCollector()
-
-    def prepare_pipeliner_job_nodes(
-        self,
-        recipe_data: RecipeData,
-        rt_section_uid: str,
-        awg_key: AwgKey,
-        pipeliner_job: int,
     ) -> NodeCollector:
         return NodeCollector()
 

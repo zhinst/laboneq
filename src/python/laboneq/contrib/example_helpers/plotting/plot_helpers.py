@@ -375,13 +375,13 @@ def plot_simulation(
                 c = (
                     cmap_i(i / len(x_all))
                     if len(x_all) > len(c_cycle) / 2
-                    else f"C{2*i}"
+                    else f"C{2 * i}"
                 )
                 axs.plot(x * xaxis_scaling, y1, label=label1, color=c)
                 c = (
                     cmap_q(i / len(x_all))
                     if len(x_all) > len(c_cycle) / 2
-                    else f"C{2*i+1}"
+                    else f"C{2 * i + 1}"
                 )
                 axs.plot(x * xaxis_scaling, y2, label=label2, color=c)
             axs.set_ylabel(yaxis_label)

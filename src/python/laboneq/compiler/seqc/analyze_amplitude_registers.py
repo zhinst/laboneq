@@ -64,7 +64,8 @@ def analyze_amplitude_register_set_events(
             continue
         if (amp_param := event.get("amplitude_parameter")) is not None:
             amplitude_parameters.add(amp_param)
-
+    if not amplitude_parameters:
+        return event_sequence, {}
     amp_register_counter = 1
     amplitude_register_by_parameter: dict[str, int] = {}
     available_registers = device_type.amplitude_register_count

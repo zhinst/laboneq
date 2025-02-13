@@ -35,9 +35,9 @@ class OutputMute:
         generator: SeqCTracker,
         duration_min: float,
     ):
-        assert (
-            device_type.supports_output_mute
-        ), f"Device {device_type.name.upper()} does not support output mute."
+        assert device_type.supports_output_mute, (
+            f"Device {device_type.name.upper()} does not support output mute."
+        )
         self._device_type = device_type
         self._generator = generator
 

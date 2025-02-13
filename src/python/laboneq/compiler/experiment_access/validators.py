@@ -213,7 +213,7 @@ def check_lo_frequency(dao: ExperimentDAO):
         for f in values:
             if abs(f % 200e6) > 1e-6:
                 raise LabOneQException(
-                    f"Cannot set local oscillator of signal {signal} to {f/1e9:.3} GHz."
+                    f"Cannot set local oscillator of signal {signal} to {f / 1e9:.3} GHz."
                     f" Only integer multiples of 200 MHz are accepted."
                 )
 

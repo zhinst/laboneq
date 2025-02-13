@@ -3,10 +3,9 @@
 
 from __future__ import annotations
 
-from typing import List, Optional, Set
+from typing import Iterator, List, Optional, Set
 
 from attrs import define, field
-
 
 # A deferred value is not really optional, but will initialized later; using this alias,
 # we can still use None as sentinel, but express that this property shall not be seen
@@ -28,5 +27,5 @@ class IntervalIR:
     #: The start points of the children *relative to the start of the interval itself*.
     children_start: List[int] = field(factory=list)
 
-    def iter_children(self):
+    def iter_children(self) -> Iterator[tuple[int, IntervalIR]]:
         return zip(self.children_start, self.children)

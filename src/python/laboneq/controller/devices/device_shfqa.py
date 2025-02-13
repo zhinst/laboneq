@@ -341,6 +341,7 @@ class DeviceSHFQA(DeviceSHFBase):
                     channel=awg_key.awg_index,
                     averages=averages,
                     acquire_length=awg_config.raw_acquire_length,
+                    acquires=awg_config.result_length,
                 )
             )
         return nc
@@ -472,7 +473,12 @@ class DeviceSHFQA(DeviceSHFBase):
         return nc
 
     def _configure_scope(
-        self, enable: bool, channel: int, averages: int, acquire_length: int
+        self,
+        enable: bool,
+        channel: int,
+        averages: int,
+        acquire_length: int,
+        acquires: int | None,
     ) -> NodeCollector:
         # TODO(2K): multiple acquire events
         nc = NodeCollector(base=f"/{self.serial}/scopes/0/")
@@ -486,13 +492,17 @@ class DeviceSHFQA(DeviceSHFBase):
             nc.add("averaging/count", averages)
             nc.add(f"channels/{channel}/enable", 1)
             nc.add(f"channels/{channel}/inputselect", channel)  # channelN_signal_input
-            # scope length has a granularity of 16
+            if acquires is not None and acquires > 1:
+                nc.add("segments/enable", 1)
+                nc.add("segments/count", acquires)
+            else:
+                nc.add("segments/enable", 0)
+            nc.barrier()
+            # Length has to be set after the segments are configured, as the maximum length
+            # (of a segment) is determined by the number of segments.
+            # Scope length has a granularity of 16.
             scope_length = (acquire_length + 0xF) & (~0xF)
             nc.add("length", scope_length)
-            nc.add("segments/enable", 0)
-            # TODO(2K): multiple acquire events per monitor
-            # "segments/enable", 1
-            # "segments/count", measurement.result_length
             # TODO(2K): only one trigger is possible for all channels. Which one to use?
             nc.add("trigger/channel", 64 + channel)  # channelN_sequencer_monitor0
             nc.add("trigger/enable", 1)
@@ -1280,21 +1290,26 @@ class DeviceSHFQA(DeviceSHFBase):
     def _ch_repr_scope(self, ch: int) -> str:
         return f"{self.dev_repr}:scope:ch{ch}"
 
-    async def get_input_monitor_data(
-        self, channel: int, num_results: int
+    async def get_raw_data(
+        self, channel: int, acquire_length: int, acquires: int | None
     ) -> RawReadoutData:
         result_path = self._result_node_scope(channel)
         # TODO(2K): set timeout based on timeout_s from connect
         timeout_s = 5.0
+        # Segment lengths are always multiples of 16 samples.
+        segment_length = (acquire_length + 0xF) & (~0xF)
+        if acquires is None:
+            acquires = 1
         try:
             node_data = await self._subscriber.get(result_path, timeout_s=timeout_s)
             node_val = node_data.value.vector
-            return RawReadoutData(node_val[0:num_results])
+            raw_data = np.reshape(node_val, (acquires, segment_length))
         except (TimeoutError, asyncio.TimeoutError):
             _logger.error(
                 f"{self._ch_repr_scope(channel)}: Failed to receive a result from {result_path} within {timeout_s} seconds."
             )
-            return RawReadoutData(np.array([], dtype=np.complex128))
+            raw_data = np.full((acquires, segment_length), np.nan, dtype=np.complex128)
+        return RawReadoutData(raw_data)
 
     async def reset_to_idle(self):
         await super().reset_to_idle()

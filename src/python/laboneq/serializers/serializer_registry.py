@@ -62,7 +62,7 @@ class SerializerRegistry:
                 self.serializers_by_type[types] = TypeRecord(serializer_id, public)
 
     def __getitem__(self, serializer_id: object) -> type[ClassSerializer[Any]] | None:
-        """Returns the serializer for the class."""
+        """Iterating through the MRO of the class, find the first registered serializer."""
 
         if isinstance(serializer_id, type):
             # Check if the given type derives any registered types.
@@ -75,11 +75,15 @@ class SerializerRegistry:
         raise ValueError(f"Invalid serializer ID/type {serializer_id!r}")
 
     def is_public(self, type: type) -> bool:
-        """Returns whether the type can be serialized at the top level."""
-        try:
-            return self.serializers_by_type[type].public
-        except KeyError:
-            return False
+        """Returns whether the type can be serialized at the top level.
+        Iterating through the MRO of the class, find the first registered serializer and
+        return whether it is public.
+        If no serializer is found, return False."""
+
+        for obj_type in type.mro():
+            if record := self.serializers_by_type.get(obj_type, None):
+                return record.public
+        return False
 
 
 # The global factory

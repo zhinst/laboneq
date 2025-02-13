@@ -230,7 +230,8 @@ class QuantumElement:
                 The logical signal group containing the quantum elements
                 signals.
             parameters:
-                A dictionary of quantum element parameters.
+                A dictionary of quantum element parameters or an instance of
+                QuantumParameters.
 
         Returns:
             A quantum element.
@@ -250,6 +251,7 @@ class QuantumElement:
         cls,
         device_setup: DeviceSetup,
         qubit_uids: list[str] | None = None,
+        parameters: dict[str, QuantumParameters | dict[str, Any]] | None = None,
     ) -> list[QuantumElement]:
         """Create a list of quantum elements from a device setup.
 
@@ -259,20 +261,32 @@ class QuantumElement:
             qubit_uids:
                 The set of logical signal group uids to create qubits from, or
                 `None` to create qubits from all logical signal groups.
+            parameters:
+                A dictionary mapping quantum element UIDs to the parameters for
+                that quantum element. Parameters may be specified either as
+                a dictionary of parameter names and values, or as instances of
+                the appropriate sub-class of `QuantumParameters`.
 
         Returns:
             A list of quantum elements.
 
-        !!! note
-            The device setup does not contain the qubit parameters so they
-            will need to be set separately.
+        !!! version-changed "Changed in version 2.46.0
+
+            The `parameters` argument was added.
+
+            In earlier versions, parameters needed to be set separately
+            after the quantum elements were created.
         """
         if qubit_uids is not None:
             qubit_uids = set(qubit_uids)
         else:
             qubit_uids = device_setup.logical_signal_groups.keys()
+        if parameters is None:
+            parameters = {}
         return [
-            cls.from_logical_signal_group(uid, lsg)
+            cls.from_logical_signal_group(
+                uid, lsg, parameters=parameters.get(uid, None)
+            )
             for uid, lsg in device_setup.logical_signal_groups.items()
             if uid in qubit_uids
         ]

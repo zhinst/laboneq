@@ -501,7 +501,7 @@ for how to set them up without a PQSC.
                 sig_dict.append(
                     {
                         "iq_signal": f"q{i}/drive",
-                        "ports": [f"SIGOUTS/{i_hd_ch_8}", f"SIGOUTS/{i_hd_ch_8+1}"],
+                        "ports": [f"SIGOUTS/{i_hd_ch_8}", f"SIGOUTS/{i_hd_ch_8 + 1}"],
                     }
                 )
                 i_hd_ch_8 += 2
@@ -520,7 +520,7 @@ for how to set them up without a PQSC.
                 sig_dict.append(
                     {
                         "iq_signal": f"q{i}/drive",
-                        "ports": [f"SIGOUTS/{i_hd_ch_4}", f"SIGOUTS/{i_hd_ch_4+1}"],
+                        "ports": [f"SIGOUTS/{i_hd_ch_4}", f"SIGOUTS/{i_hd_ch_4 + 1}"],
                     }
                 )
                 i_hd_ch_4 += 2
@@ -799,7 +799,7 @@ for how to set them up without a PQSC.
                 sig_dict.append(
                     {
                         "iq_signal": f"q{i}/measure",
-                        "ports": [f"SIGOUTS/{i_uhfqa_ch}", f"SIGOUTS/{i_uhfqa_ch+1}"],
+                        "ports": [f"SIGOUTS/{i_uhfqa_ch}", f"SIGOUTS/{i_uhfqa_ch + 1}"],
                     }
                 )
                 sig_dict.append(
@@ -971,7 +971,7 @@ for how to set them up without a PQSC.
                 sig_dict.append(
                     {
                         "iq_signal": f"q{i}/measure",
-                        "ports": [f"SIGOUTS/{i_uhfqa_ch}", f"SIGOUTS/{i_uhfqa_ch+1}"],
+                        "ports": [f"SIGOUTS/{i_uhfqa_ch}", f"SIGOUTS/{i_uhfqa_ch + 1}"],
                     }
                 )
                 sig_dict.append(

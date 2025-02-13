@@ -99,10 +99,7 @@ def return_(output: Any | None = None, /, **kwargs: object) -> None:  # noqa: AN
         TypeError: Function is called with positional and keyword arguments.
     """
     if output is not None and kwargs:
-        msg = (
-            "return_() takes either a single positional argument "
-            "or keyword arguments"
-        )
+        msg = "return_() takes either a single positional argument or keyword arguments"
         raise TypeError(msg)
     root = BlockBuilderContext.get_active()
     if root:

@@ -20,7 +20,15 @@ def make_acquired_result(
     axis: list[NumPyArray | list[NumPyArray]],
     handle: str,
 ) -> AcquiredResult:
+    """Factory function to decouple controller code from the public data model"""
     return AcquiredResult(data, axis_name, axis, handle=handle)
+
+
+def _get_nt_step_result(result: AcquiredResult, nt_step: NtStepKey):
+    inner_res = result.data
+    for index in nt_step.indices:
+        inner_res = inner_res[index]
+    return inner_res
 
 
 def build_partial_result(
@@ -42,12 +50,31 @@ def build_partial_result(
                     result.data[nt_step.indices] = raw_result[raw_result_idx]
                 break
     else:
-        inner_res = result.data
-        for index in nt_step.indices:
-            inner_res = inner_res[index]
-        res_flat = np.ravel(inner_res)
+        res_flat = np.ravel(_get_nt_step_result(result, nt_step))
         res_flat_idx = 0
         for raw_result_idx in range(len(raw_result)):
             if mapping[raw_result_idx % len(mapping)] == handle:
                 res_flat[res_flat_idx] = raw_result[raw_result_idx]
                 res_flat_idx += 1
+
+
+def build_raw_partial_result(
+    result: AcquiredResult,
+    nt_step: NtStepKey,
+    raw_segments: NumPyArray,
+    result_length: int,
+    mapping: list[str | None],
+    handle: str,
+):
+    assert result.data is not None, "Result data shape is not prepared"
+    result.last_nt_step = list(nt_step.indices)
+    inner_res = _get_nt_step_result(result, nt_step)
+    # The remaining dimensions correspond to the RT loops and multiple acquires
+    # and are flattened, except for the last one, which is for the raw wave samples.
+    acquires = np.multiply.reduce(inner_res.shape[:-1], initial=1, dtype=int)
+    res_flat = np.reshape(inner_res, (acquires, result_length))
+    res_flat_idx = 0
+    for raw_result_idx in range(len(raw_segments)):
+        if mapping[raw_result_idx % len(mapping)] == handle:
+            res_flat[res_flat_idx] = raw_segments[raw_result_idx][0:result_length]
+            res_flat_idx += 1

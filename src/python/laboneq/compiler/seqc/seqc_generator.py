@@ -419,7 +419,7 @@ class SeqCGenerator:
 
         elif statement["type"] == "assignWaveIndex":
             wave_channels = self._build_wave_channel_assignment(statement)
-            return f'assignWaveIndex({wave_channels},{statement["wave_index"]});\n'
+            return f"assignWaveIndex({wave_channels},{statement['wave_index']});\n"
 
         elif statement["type"] == "playWave":
             wave_channels = self._build_wave_channel_assignment(statement)

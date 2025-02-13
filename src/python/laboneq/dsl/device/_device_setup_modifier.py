@@ -683,9 +683,9 @@ def add_connection(
                     setup.physical_channel_groups[group] = pcg
 
                 # Logical signals
-                assert isinstance(
-                    pc, PhysicalChannel
-                ), "LogicalSignal must have a physical channel"
+                assert isinstance(pc, PhysicalChannel), (
+                    "LogicalSignal must have a physical channel"
+                )
                 ls = handler.make_logical_signal(connection, pc)
                 if ls:
                     group, name = ls.uid.split(qct_path.Separator)
@@ -734,6 +734,8 @@ def add_instrument(setup: DeviceSetup, instrument: Instrument):
         raise DeviceSetupInternalException(
             "Device setup instrument UIDs must be unique."
         )
+    if instrument.address in [device.address for device in setup.instruments]:
+        raise DeviceSetupInternalException("Device setup instruments must be unique.")
     if isinstance(instrument, ZIStandardInstrument):
         if not instrument.address:
             raise DeviceSetupInternalException("Instrument must have an address.")

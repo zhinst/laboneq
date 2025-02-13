@@ -93,17 +93,32 @@ class _AwgPruner:
         # NOTE: Union on singledispatch available from Python 3.11
         # Oscillator IR does not expose signals within oscillators, so
         # we must go oscillator by oscillator.
-        oscs_per_awg = [[]] * len(self._awg_trees)
-        for osc in node.oscillators:
+        oscs_per_awg = [[] for _ in self._awg_trees]
+        for osc, frequency in zip(node.oscillators, node.values):
             for idx, intersect in [
                 (idx, intersect)
                 for idx, x in enumerate(self._awg_trees)
                 if (intersect := osc.signals.intersection(x.signals))
             ]:
-                oscs_per_awg[idx].append(attrs.evolve(osc, signals=intersect))
-        for idx, oscs in enumerate(oscs_per_awg):
-            self._awg_trees[idx].push_raw(start, attrs.evolve(node, oscillators=oscs))
+                oscs_per_awg[idx].append(
+                    (attrs.evolve(osc, signals=intersect), frequency)
+                )
+        for idx, oscs_and_freqs in enumerate(oscs_per_awg):
+            if oscs_and_freqs:
+                oscs, freqs = zip(*oscs_and_freqs)
+                self._awg_trees[idx].push_raw(
+                    start, attrs.evolve(node, oscillators=oscs, values=freqs)
+                )
         return None
+
+    @visit.register
+    def visit_pulse(self, node: ir_mod.PulseIR, start: int):
+        [signal] = node.signals
+        for awg in self._awg_trees:
+            if signal in awg.signals:
+                # Pulse does not need copy, it has exactly single signal allocation
+                awg.push_raw(start, node)
+                return
 
     @visit.register
     def generic_visit(self, node: ir_mod.IntervalIR, start: int):

@@ -44,7 +44,7 @@ class SHFQA(ZIStandardInstrument):
                 uid=f"QACHANNELS/{ch}/INPUT",
                 signal_type=IOSignalType.IQ,
                 physical_port_ids=[f"{ch}"],
-                connector_labels=[f"Signal Input {ch+1}"],
+                connector_labels=[f"Signal Input {ch + 1}"],
             )
             for ch in range(4)
         )
@@ -55,7 +55,7 @@ class SHFQA(ZIStandardInstrument):
                 uid=f"QACHANNELS/{ch}/OUTPUT",
                 signal_type=IOSignalType.IQ,
                 physical_port_ids=[f"{ch}"],
-                connector_labels=[f"Signal Output {ch+1}"],
+                connector_labels=[f"Signal Output {ch + 1}"],
             )
             for ch in range(4)
         ]

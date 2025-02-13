@@ -25,7 +25,6 @@ class OscillatorFrequencyStepSchedule(IntervalSchedule):
 
 @define(kw_only=True, slots=True)
 class InitialOscillatorFrequencySchedule(IntervalSchedule):
-    section: str
     oscillators: List[SweptOscillator]
     values: List[float]
 

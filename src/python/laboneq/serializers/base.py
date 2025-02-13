@@ -31,7 +31,7 @@ class UnwrappedData:
     def __init__(self, data: JsonSerializableType):
         if not isinstance(data, dict):
             raise ValueError(
-                "Invalid serialization format. Expected a dict, got " f"{type(data)}."
+                f"Invalid serialization format. Expected a dict, got {type(data)}."
             )
         self.serializer = data["__serializer__"]
         self.version = data["__version__"]

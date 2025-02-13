@@ -26,6 +26,7 @@ class SeqCTracker:
         automute_playzeros: bool = False,
     ) -> None:
         self.deferred_function_calls = deferred_function_calls
+        self.deferred_phase_changes = SeqCGenerator()
         self.loop_stack_generators: List[List[SeqCGenerator]] = [
             [init_generator, SeqCGenerator()]
         ]
@@ -118,6 +119,20 @@ class SeqCTracker:
                 self.add_function_call_statement("waitWave")
             self.flush_deferred_function_calls()
 
+    def flush_deferred_phase_changes(self):
+        """Phase changes (i.e. command table entries that take zero time) are emitted
+        as late as possible, for example, we exchange it with a playZero that comes
+        immediately after. This allows the sequencer to add more work to the wave player,
+        and avoid gaps in the playback more effectively."""
+        if self.has_deferred_phase_changes():
+            self.current_loop_stack_generator().append_statements_from(
+                self.deferred_phase_changes
+            )
+            self.deferred_phase_changes.clear()
+
+    def has_deferred_phase_changes(self):
+        return self.deferred_phase_changes.num_statements() > 0
+
     def add_timing_comment(self, end_samples):
         if self.emit_timing_comments:
             start_time_ns = (
@@ -173,6 +188,11 @@ class SeqCTracker:
         assert latency is None or not isinstance(latency, int) or latency >= 31
         self.current_loop_stack_generator().add_command_table_execution(
             ct_index=ct_index, latency=latency, comment=comment
+        )
+
+    def add_phase_change(self, ct_index, comment=""):
+        self.deferred_phase_changes.add_command_table_execution(
+            ct_index=ct_index, comment=comment
         )
 
     def add_variable_assignment(self, variable_name, value):

@@ -233,9 +233,9 @@ def create_device_setup(
         ):
             j = 1
             for i in range(nprt):
-                assert (
-                    devprops.number_of_channels_per_sg_port == 1
-                ), "So far, only one channel per port is supported"
+                assert devprops.number_of_channels_per_sg_port == 1, (
+                    "So far, only one channel per port is supported"
+                )
                 ls_name = f"{name}_{k}_{j}"
                 port = f"{sgprf}{i}{devprops.sg_suffix}"
                 pulse_list = ["init", "start", "end", "1", "."] if cps else [""]

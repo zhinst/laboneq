@@ -47,9 +47,9 @@ def _generate_warning(warnings: List[Tuple[str, str, float]]):
     if not warnings:
         return
     n = len(warnings)
-    header = f"Due to feedback latency constraints, the timing of the following match section{'s'[:n^1]} with corresponding handle{'s'[:n^1]} were changed:"
+    header = f"Due to feedback latency constraints, the timing of the following match section{'s'[: n ^ 1]} with corresponding handle{'s'[: n ^ 1]} were changed:"
     messages = [
-        f"  - '{section}' with handle '{handle}', delayed by {1e9*delay:.2f} ns"
+        f"  - '{section}' with handle '{handle}', delayed by {1e9 * delay:.2f} ns"
         for section, handle, delay in warnings
     ]
     _logger.info(CompressableLogEntry(header, messages, max_messages=3))
@@ -67,8 +67,7 @@ def _compute_start_with_latency(
     acquire_pulse = schedule_data.acquire_pulses.get(handle)
     if not acquire_pulse or len(acquire_pulse) == 0:
         raise LabOneQException(
-            f"No acquire found for Match section '{section}' with handle"
-            f" '{handle}'."
+            f"No acquire found for Match section '{section}' with handle '{handle}'."
         )
     acquire_pulse = acquire_pulse[-1]
     if acquire_pulse.absolute_start is None:

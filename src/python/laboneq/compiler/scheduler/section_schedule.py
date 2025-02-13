@@ -214,8 +214,8 @@ class SectionSchedule(IntervalSchedule):
             if force_length < length:
                 raise LabOneQException(
                     f"Content of section '{self.section}' "
-                    f"({length*TINYSAMPLE*1e6:.3e} us) does not fit into "
-                    f"the requested fixed section length ({force_length*TINYSAMPLE*1e6:.3e} us)"
+                    f"({length * TINYSAMPLE * 1e6:.3e} us) does not fit into "
+                    f"the requested fixed section length ({force_length * TINYSAMPLE * 1e6:.3e} us)"
                 )
             self.length = length
             self.adjust_length(force_length)

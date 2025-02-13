@@ -146,7 +146,7 @@ class Workflow(Generic[Parameters]):
             blocks = collector.collect([WorkflowBlock, TaskBlock])
             allowed = {x.name for x in blocks[1:]}  # Ignore root workflow block
             if until not in allowed:
-                msg = f"Task or workflow '{until}' " "does not exist in the workflow."
+                msg = f"Task or workflow '{until}' does not exist in the workflow."
                 raise ValueError(msg)
 
     def resume(self, until: str | None = None) -> WorkflowResult:

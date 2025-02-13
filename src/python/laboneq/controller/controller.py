@@ -29,7 +29,11 @@ from laboneq.controller.recipe_processor import (
     RtExecutionInfo,
     pre_process_compiled,
 )
-from laboneq.controller.results import build_partial_result, make_acquired_result
+from laboneq.controller.results import (
+    build_partial_result,
+    build_raw_partial_result,
+    make_acquired_result,
+)
 from laboneq.controller.util import LabOneQControllerException, SweepParamsTracker
 from laboneq.controller.versioning import (
     MINIMUM_SUPPORTED_LABONE_VERSION,
@@ -600,50 +604,48 @@ class Controller:
             raise LabOneQControllerException(
                 "Multiple 'acquire_loop_rt' sections per experiment is not supported."
             )
+
         rt_info = next(iter(self._recipe_data.rt_execution_infos.values()))
         for handle, shape_info in self._recipe_data.result_shapes.items():
+            axis_name = deepcopy(shape_info.base_axis_name)
+            axis = deepcopy(shape_info.base_axis)
+            shape = deepcopy(shape_info.base_shape)
+
+            # Append extra dimension for multiple acquires with the same handle
+            if shape_info.handle_acquire_count > 1:
+                axis_name.append(handle)
+                axis.append(
+                    np.arange(shape_info.handle_acquire_count, dtype=np.float64)
+                )
+                shape.append(shape_info.handle_acquire_count)
+
+            # Append extra dimension for samples of the raw acquisition
             if rt_info.acquisition_type == AcquisitionType.RAW:
                 signal_id = rt_info.signal_by_handle(handle)
                 awg_config = self._recipe_data.awg_config_by_acquire_signal(signal_id)
-                # Use default length 4096, in case AWG config is not available
-                raw_acquire_length = (
-                    4096 if awg_config is None else awg_config.raw_acquire_length
-                )
-                assert raw_acquire_length is not None
-                # TODO: This result format does not work when sweeping in near-time, returns only
-                # results of the last sweep parameter value
-                empty_res = make_acquired_result(
-                    data=np.empty(shape=[raw_acquire_length], dtype=np.complex128),
-                    axis_name=["samples"],
-                    axis=[np.arange(raw_acquire_length)],
-                    handle=handle,
-                )
-                assert empty_res.data is not None
-                empty_res.data[:] = np.nan
-                self._results.acquired_results[handle] = empty_res
-            else:
-                axis_name = deepcopy(shape_info.base_axis_name)
-                axis = deepcopy(shape_info.base_axis)
-                shape = deepcopy(shape_info.base_shape)
-                if shape_info.additional_axis > 1:
-                    axis_name.append(handle)
-                    axis.append(
-                        np.linspace(
-                            0,
-                            shape_info.additional_axis - 1,
-                            shape_info.additional_axis,
-                        )
-                    )
-                    shape.append(shape_info.additional_axis)
-                empty_res = make_acquired_result(
-                    data=np.full(
-                        shape=tuple(shape), fill_value=np.nan, dtype=np.complex128
-                    ),
-                    axis_name=axis_name,
-                    axis=axis,
-                    handle=handle,
-                )
-                self._results.acquired_results[handle] = empty_res
+                if (
+                    awg_config is None
+                    or signal_id not in awg_config.signal_raw_acquire_lengths
+                ):
+                    # Use default length 4096, in case AWG config is not available
+                    raw_acquire_length = 4096
+                else:
+                    raw_acquire_length = awg_config.signal_raw_acquire_lengths[
+                        signal_id
+                    ]
+                axis_name.append("samples")
+                axis.append(np.arange(raw_acquire_length, dtype=np.float64))
+                shape.append(raw_acquire_length)
+
+            empty_result = make_acquired_result(
+                data=np.full(
+                    shape=tuple(shape), fill_value=np.nan, dtype=np.complex128
+                ),
+                axis_name=axis_name,
+                axis=axis,
+                handle=handle,
+            )
+            self._results.acquired_results[handle] = empty_result
 
     async def _read_one_step_results(self, nt_step: NtStepKey, rt_section_uid: str):
         rt_execution_info = self._recipe_data.rt_execution_infos[rt_section_uid]
@@ -695,22 +697,32 @@ class Controller:
         device = self._devices.find_by_uid(awg_key.device_uid)
         if rt_execution_info.acquisition_type == AcquisitionType.RAW:
             assert awg_config.raw_acquire_length is not None
-            raw_results = await device.get_input_monitor_data(
-                cast(int, awg_key.awg_index), awg_config.raw_acquire_length
+            raw_results = await device.get_raw_data(
+                channel=cast(int, awg_key.awg_index),
+                acquire_length=awg_config.raw_acquire_length,
+                acquires=awg_config.result_length,
             )
-            # Copy to all result handles, but actually only one handle is supported for now
+            # Raw data is per physical port, and is the same for all logical signals of the AWG
             for signal in awg_config.acquire_signals:
                 mapping = rt_execution_info.signal_result_map.get(signal, [])
+                signal_acquire_length = awg_config.signal_raw_acquire_lengths.get(
+                    signal
+                )
+                if signal_acquire_length is None:
+                    continue
                 unique_handles = set(mapping)
                 for handle in unique_handles:
                     if handle is None:
                         continue  # Ignore unused acquire signal if any
                     result = self._results.acquired_results[handle]
-                    assert result.data is not None
-                    for raw_result_idx, raw_result in np.ndenumerate(
-                        raw_results.vector
-                    ):
-                        result.data[raw_result_idx] = raw_result
+                    build_raw_partial_result(
+                        result=result,
+                        nt_step=nt_step,
+                        raw_segments=raw_results.vector,
+                        result_length=signal_acquire_length,
+                        mapping=mapping,
+                        handle=handle,
+                    )
         else:
             if rt_execution_info.averaging_mode == AveragingMode.SINGLE_SHOT:
                 effective_averages = 1
