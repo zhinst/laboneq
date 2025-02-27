@@ -15,7 +15,3 @@ class CaseIR(SectionIR):
     def from_section_ir(cls, schedule: SectionIR, state: int):
         """Down-cast from SectionIR."""
         return cls(**asdict(schedule, recurse=False), state=state)
-
-
-class EmptyBranchIR(CaseIR):
-    pass

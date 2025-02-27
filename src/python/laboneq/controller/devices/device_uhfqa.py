@@ -30,7 +30,6 @@ from laboneq.controller.devices.node_control import (
 from laboneq.controller.recipe_processor import (
     AwgConfig,
     AwgKey,
-    DeviceRecipeData,
     RecipeData,
     RtExecutionInfo,
     get_initialization_by_device_uid,
@@ -41,7 +40,6 @@ from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.data.recipe import (
     IO,
-    Initialization,
     IntegratorAllocation,
     OscillatorParam,
     TriggeringMode,
@@ -307,16 +305,12 @@ class DeviceUHFQA(DeviceBase):
                 range_list,
             )
 
-    async def apply_initialization(
-        self,
-        device_recipe_data: DeviceRecipeData,
-        initialization: Initialization,
-        recipe_data: RecipeData,
-    ):
+    async def apply_initialization(self, recipe_data: RecipeData):
         _logger.debug("%s: Initializing device...", self.dev_repr)
 
         nc = NodeCollector(base=f"/{self.serial}/")
 
+        initialization = recipe_data.get_initialization(self.device_qualifier.uid)
         outputs = initialization.outputs or []
         for output in outputs:
             self._warn_for_unsupported_param(
@@ -348,11 +342,11 @@ class DeviceUHFQA(DeviceBase):
 
         await self.set_async(nc)
 
-    def collect_prepare_nt_step_nodes(
+    def _collect_prepare_nt_step_nodes(
         self, attributes: DeviceAttributesView, recipe_data: RecipeData
     ) -> NodeCollector:
         nc = NodeCollector(base=f"/{self.serial}/")
-        nc.extend(super().collect_prepare_nt_step_nodes(attributes, recipe_data))
+        nc.extend(super()._collect_prepare_nt_step_nodes(attributes, recipe_data))
 
         for ch in range(self._channels):
             [scheduler_port_delay, port_delay], updated = attributes.resolve(
@@ -512,9 +506,7 @@ class DeviceUHFQA(DeviceBase):
 
         return nc
 
-    async def set_before_awg_upload(
-        self, initialization: Initialization, recipe_data: RecipeData
-    ):
+    async def set_before_awg_upload(self, recipe_data: RecipeData):
         acquisition_type = RtExecutionInfo.get_acquisition_type(
             recipe_data.rt_execution_infos
         )
@@ -522,12 +514,13 @@ class DeviceUHFQA(DeviceBase):
             nc = self._configure_spectroscopy_mode_nodes()
         else:
             nc = self._configure_standard_mode_nodes(
-                acquisition_type, initialization.device_uid, recipe_data
+                acquisition_type, self.device_qualifier.uid, recipe_data
             )
         await self.set_async(nc)
 
-    async def set_after_awg_upload(self, initialization: Initialization):
+    async def set_after_awg_upload(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")
+        initialization = recipe_data.get_initialization(self.device_qualifier.uid)
         inputs = initialization.inputs
         if len(initialization.measurements) > 0:
             [measurement] = initialization.measurements
@@ -549,9 +542,7 @@ class DeviceUHFQA(DeviceBase):
 
         await self.set_async(nc)
 
-    async def configure_trigger(
-        self, initialization: Initialization, recipe_data: RecipeData
-    ):
+    async def configure_trigger(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")
 
         # Loop over at least AWG instance to cover the case that the instrument is only used as a
@@ -565,6 +556,7 @@ class DeviceUHFQA(DeviceBase):
             nc.add(f"awgs/{awg_index}/dio/valid/polarity", 2)
             nc.add(f"awgs/{awg_index}/dio/valid/index", 16)
 
+        initialization = recipe_data.get_initialization(self.device_qualifier.uid)
         triggering_mode = initialization.config.triggering_mode
 
         if triggering_mode == TriggeringMode.DIO_FOLLOWER or triggering_mode is None:

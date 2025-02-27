@@ -28,7 +28,7 @@ from laboneq.controller.devices.node_control import (
     NodeControlBase,
     Setting,
 )
-from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
+from laboneq.controller.recipe_processor import RecipeData
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.data.recipe import (
@@ -212,9 +212,13 @@ class DeviceSHFSG(DeviceSHFBase):
             return super().clock_source_control_nodes()
 
     async def setup_one_step_execution(
-        self, with_pipeliner: bool, has_awg_in_use: bool
+        self, recipe_data: RecipeData, with_pipeliner: bool
     ):
-        hw_sync = with_pipeliner and has_awg_in_use and not self.is_secondary
+        hw_sync = (
+            with_pipeliner
+            and self._has_awg_in_use(recipe_data)
+            and not self.is_secondary
+        )
         nc = NodeCollector(base=f"/{self.serial}/")
         if hw_sync and self._emit_trigger:
             nc.add("system/internaltrigger/synchronization/enable", 1)  # enable
@@ -469,16 +473,12 @@ class DeviceSHFSG(DeviceSHFBase):
         nc.add("phaseshift", 0)
         return nc
 
-    async def apply_initialization(
-        self,
-        device_recipe_data: DeviceRecipeData,
-        initialization: Initialization,
-        recipe_data: RecipeData,
-    ):
+    async def apply_initialization(self, recipe_data: RecipeData):
         _logger.debug("%s: Initializing device...", self.dev_repr)
 
         nc = NodeCollector()
 
+        initialization = recipe_data.get_initialization(self.device_qualifier.uid)
         outputs = initialization.outputs or []
         for output in outputs:
             self._warn_for_unsupported_param(
@@ -564,11 +564,11 @@ class DeviceSHFSG(DeviceSHFBase):
 
         await self.set_async(nc)
 
-    def collect_prepare_nt_step_nodes(
+    def _collect_prepare_nt_step_nodes(
         self, attributes: DeviceAttributesView, recipe_data: RecipeData
     ) -> NodeCollector:
         nc = NodeCollector(base=f"/{self.serial}/")
-        nc.extend(super().collect_prepare_nt_step_nodes(attributes, recipe_data))
+        nc.extend(super()._collect_prepare_nt_step_nodes(attributes, recipe_data))
 
         for synth_idx in set(self._output_to_synth_map):
             [synth_cf], synth_cf_updated = attributes.resolve(
@@ -661,17 +661,20 @@ class DeviceSHFSG(DeviceSHFBase):
         )
         return nc
 
-    async def configure_trigger(
-        self, initialization: Initialization, recipe_data: RecipeData
-    ):
+    async def configure_trigger(self, recipe_data: RecipeData):
         _logger.debug("Configuring triggers...")
+        initialization = recipe_data.get_initialization(self.device_qualifier.uid)
+        if initialization.device_type is None:  # dummy initialization
+            # Happens for SHFQC/SG when only QA part is configured
+            return
+
         self._wait_for_awgs = True
         self._emit_trigger = False
 
         nc = NodeCollector(base=f"/{self.serial}/")
 
         for awg_key, awg_config in recipe_data.awg_configs.items():
-            if awg_key.device_uid != initialization.device_uid:
+            if awg_key.device_uid != self.device_qualifier.uid:
                 continue
 
             if awg_config.source_feedback_register is None:
@@ -732,7 +735,8 @@ class DeviceSHFSG(DeviceSHFBase):
         return f"/{self.serial}/sgchannels/{awg_index}/awg/commandtable/"
 
     async def reset_to_idle(self):
-        await super().reset_to_idle()
+        if not self.is_secondary:
+            await super().reset_to_idle()
         nc = NodeCollector(base=f"/{self.serial}/")
         # Reset pipeliner first, attempt to set AWG enable leads to FW error if pipeliner was enabled.
         nc.extend(self._pipeliner.reset_nodes())

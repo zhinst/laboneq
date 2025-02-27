@@ -18,7 +18,6 @@ from laboneq.controller.devices.node_control import (
 )
 from laboneq.controller.recipe_processor import RecipeData
 from laboneq.controller.util import LabOneQControllerException
-from laboneq.data.recipe import Initialization
 
 _logger = logging.getLogger(__name__)
 
@@ -147,7 +146,7 @@ class DeviceLeaderBase(DeviceBase):
         await self.set_async(nc)
 
     async def setup_one_step_execution(
-        self, with_pipeliner: bool, has_awg_in_use: bool
+        self, recipe_data: RecipeData, with_pipeliner: bool
     ):
         if with_pipeliner:
             # TODO(2K): Use timeout from connect
@@ -173,9 +172,8 @@ class DeviceLeaderBase(DeviceBase):
             nc.add("execution/synchronization/enable", 0)
         await self.set_async(nc)
 
-    async def configure_trigger(
-        self, initialization: Initialization, recipe_data: RecipeData
-    ):
+    async def configure_trigger(self, recipe_data: RecipeData):
+        initialization = recipe_data.get_initialization(self.device_qualifier.uid)
         nc = NodeCollector(base=f"/{self.serial}/")
         nc.add("system/clocks/referenceclock/out/enable", 1)
         nc.add("execution/repetitions", initialization.config.repetitions)

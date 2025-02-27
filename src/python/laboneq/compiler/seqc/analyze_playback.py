@@ -9,10 +9,9 @@ import logging
 import math
 from dataclasses import dataclass
 from math import ceil
-from typing import Any, Dict, Iterable, List, Set, Tuple
-
+from typing import Any, Dict, Iterable, List, Set, Tuple, TYPE_CHECKING
 from laboneq._rust.intervals import Interval, IntervalTree
-
+from laboneq.compiler.common.compiler_settings import TINYSAMPLE
 from laboneq.compiler.seqc.analyze_amplitude_registers import (
     analyze_amplitude_register_set_events,
 )
@@ -38,7 +37,6 @@ from laboneq.compiler.seqc.awg_sampled_event import (
 from laboneq.compiler.common.awg_signal_type import AWGSignalType
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.event_list.event_type import EventType
-from laboneq.compiler.common.play_wave_type import PlayWaveType
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.pulse_sampler import (
@@ -46,6 +44,9 @@ from laboneq.core.utilities.pulse_sampler import (
     interval_to_samples_with_errors,
     length_to_samples,
 )
+
+if TYPE_CHECKING:
+    from laboneq.compiler.seqc.passes.intervals import EmptyInterval
 
 _logger = logging.getLogger(__name__)
 
@@ -178,14 +179,9 @@ def _interval_list(events, states, signal_ids, delay, sub_channel):
     """Compute a flat list of (start, stop) intervals for all the playback events"""
 
     interval_zip: List[Tuple[_IntervalStartEvent, _IntervalEndEvent]] = []
-
     play_event_pairs = find_event_pairs(
         events, [EventType.PLAY_START], [EventType.PLAY_END]
     )
-    delay_event_pairs = find_event_pairs(
-        events, [EventType.DELAY_START], [EventType.DELAY_END]
-    )
-
     interval_zip.extend(
         (
             (
@@ -222,51 +218,12 @@ def _interval_list(events, states, signal_ids, delay, sub_channel):
             and states.get(start["section_name"], None) == state
         )
     )
-    interval_zip.extend(
-        (
-            (
-                _IntervalStartEvent(
-                    event_type="DELAY_START",
-                    signal_id=cur_signal_id,
-                    time=start["time"] + delay,
-                    play_wave_id=None,
-                    amplitude=None,
-                    index=index,
-                    oscillator_phase=None,
-                    oscillator_frequency=None,
-                    phase=None,
-                    sub_channel=sub_channel,
-                    increment_oscillator_phase=None,
-                    play_pulse_parameters=None,
-                    pulse_pulse_parameters=None,
-                    state=states.get(start["section_name"], None),
-                    markers=None,
-                    amp_param=None,
-                    incr_phase_param=None,
-                ),
-                _IntervalEndEvent(
-                    event_type="DELAY_END",
-                    time=end["time"] + delay,
-                    play_wave_id=None,
-                    index=index,
-                ),
-            )
-            for state in itertools.chain(set(states.values()), (None,))
-            for index, cur_signal_id in enumerate(signal_ids)
-            for _, (start, end) in delay_event_pairs
-            if start.get("play_wave_type") == PlayWaveType.EMPTY_CASE.name
-            and start["signal"] == cur_signal_id
-            and states.get(start["section_name"], None) == state
-        )
-    )
-
     if len(interval_zip) > 0:
         _logger.debug(
             "Analyzing play wave timings for %d play wave events on signals %s",
             len(interval_zip),
             signal_ids,
         )
-
     for ivzip in interval_zip:
         _logger.debug("Signals %s interval zip: %s", signal_ids, ivzip)
 
@@ -274,14 +231,54 @@ def _interval_list(events, states, signal_ids, delay, sub_channel):
 
 
 def _make_interval_tree(
-    events, states, signal_ids, delay, sub_channel, sampling_rate
+    events: list[dict],
+    states: dict,
+    signal_ids: list[str],
+    delay: float,
+    sub_channel: int,
+    sampling_rate: float,
+    empty_intervals: list[EmptyInterval] | None = None,
 ) -> IntervalTree:
     interval_zip = _interval_list(events, states, signal_ids, delay, sub_channel)
-
     intervals = []
+    if empty_intervals:
+        for index, sig in enumerate(signal_ids):
+            for branch in [iv for iv in empty_intervals if iv.signal == sig]:
+                assert branch.start != branch.end, "Interval cannot be zero length"
+                start = branch.start * TINYSAMPLE + delay
+                end = branch.end * TINYSAMPLE + delay
+                (
+                    (start_samples, end_samples),
+                    (start_rounding_error, _),
+                ) = interval_to_samples_with_errors(start, end, sampling_rate)
+                intervals.extend(
+                    (
+                        Interval(
+                            start_samples,
+                            end_samples,
+                            _PlayIntervalData(
+                                pulse=None,
+                                signal_id=sig,
+                                amplitude=None,
+                                channel=index,
+                                oscillator_phase=None,
+                                oscillator_frequency=None,
+                                increment_oscillator_phase=None,
+                                phase=None,
+                                sub_channel=sub_channel,
+                                play_pulse_parameters=None,
+                                pulse_pulse_parameters=None,
+                                state=branch.state,
+                                start_rounding_error=start_rounding_error,
+                                markers=None,
+                                amp_param=None,
+                                incr_phase_param=None,
+                            ),
+                        ),
+                    ),
+                )
     for interval_start, interval_end in interval_zip:
         oscillator_phase = interval_start.oscillator_phase
-
         # Note: the scheduler will already align all the pulses with the sample grid,
         # and the rounding error should be 0 except for some floating point epsilon.
         (
@@ -695,6 +692,7 @@ def analyze_play_wave_times(
     sub_channel: int | None = None,
     use_command_table: bool = False,
     use_amplitude_increment: bool = False,
+    empty_intervals: list[EmptyInterval] | None = None,
 ) -> AWGSampledEventSequence:
     signal_ids = list(signals.keys())
     sample_multiple = device_type.sample_multiple
@@ -719,7 +717,13 @@ def analyze_play_wave_times(
     )
 
     interval_tree = _make_interval_tree(
-        events, states, signal_ids, delay, sub_channel, sampling_rate
+        events,
+        states,
+        signal_ids,
+        delay,
+        sub_channel,
+        sampling_rate,
+        empty_intervals=empty_intervals,
     )
 
     sequence_end = _sequence_end(
@@ -832,12 +836,8 @@ def analyze_play_wave_times(
         events, device_type, sampling_rate, delay, use_command_table
     )
 
-    k: Interval
-    if isinstance(compacted_intervals, IntervalTree):
-        comp = compacted_intervals.intervals
-    else:
-        comp = compacted_intervals
-    for k in comp:
+    use_ct_hw_oscillator = use_command_table and device_type == DeviceType.SHFSG
+    for k in compacted_intervals:
         _logger.debug("Calculating signature for %s and its children", k)
 
         overlap: list[Interval] = interval_tree.overlap(k.begin, k.end)
@@ -854,30 +854,23 @@ def analyze_play_wave_times(
         for state, intervals in v_state.items():
             signature_pulses = []
             pulse_parameters = []
-            has_child = False
             for iv in sorted(intervals, key=lambda x: (x.begin, x.data.channel)):
                 pulse_signature, these_pulse_parameters = _make_pulse_signature(
                     iv, k, signal_ids, amplitude_register_by_param
                 )
                 signature_pulses.append(pulse_signature)
                 pulse_parameters.append(these_pulse_parameters)
-                has_child = True
-            waveform_signature = WaveformSignature(k.length(), tuple(signature_pulses))
-
-            if use_command_table and device_type == DeviceType.SHFSG:
-                ct_hw_oscillator = hw_oscillator
-            else:
-                ct_hw_oscillator = None
-
-            signature = PlaybackSignature(
-                waveform=waveform_signature,
-                hw_oscillator=ct_hw_oscillator,
-                pulse_parameters=tuple(pulse_parameters),
-                state=state,
-                clear_precompensation=False,
-            )
-
-            if has_child:
+            if signature_pulses:
+                waveform_signature = WaveformSignature(
+                    k.length(), tuple(signature_pulses)
+                )
+                signature = PlaybackSignature(
+                    waveform=waveform_signature,
+                    hw_oscillator=hw_oscillator if use_ct_hw_oscillator else None,
+                    pulse_parameters=tuple(pulse_parameters),
+                    state=state,
+                    clear_precompensation=False,
+                )
                 start = k.begin
                 interval_event = AWGEvent(
                     type=AWGEventType.PLAY_WAVE,
@@ -910,7 +903,7 @@ def analyze_play_wave_times(
         AWGEventType.PLAY_WAVE: 1,
         AWGEventType.MATCH: 1,
     }
-
+    interval_events.sort()
     for event_list in interval_events.sequence.values():
         for event in sorted(event_list, key=lambda x: priorities[x.type]):
             if event.type == AWGEventType.PLAY_WAVE:

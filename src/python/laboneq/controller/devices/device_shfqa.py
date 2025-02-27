@@ -33,7 +33,6 @@ from laboneq.controller.devices.device_zi import (
 from laboneq.controller.recipe_processor import (
     AwgConfig,
     AwgKey,
-    DeviceRecipeData,
     RecipeData,
     RtExecutionInfo,
     get_artifacts,
@@ -521,9 +520,11 @@ class DeviceSHFQA(DeviceSHFBase):
         await self.set_async(nc)
 
     async def setup_one_step_execution(
-        self, with_pipeliner: bool, has_awg_in_use: bool
+        self, recipe_data: RecipeData, with_pipeliner: bool
     ):
-        hw_sync = with_pipeliner and (has_awg_in_use or self.options.is_qc)
+        hw_sync = with_pipeliner and (
+            self._has_awg_in_use(recipe_data) or self.options.is_qc
+        )
         nc = NodeCollector(base=f"/{self.serial}/")
         if hw_sync and self._emit_trigger:
             nc.add("system/internaltrigger/synchronization/enable", 1)  # enable
@@ -632,16 +633,12 @@ class DeviceSHFQA(DeviceSHFBase):
                     value_or_param=io.lo_frequency,
                 )
 
-    async def apply_initialization(
-        self,
-        device_recipe_data: DeviceRecipeData,
-        initialization: Initialization,
-        recipe_data: RecipeData,
-    ):
+    async def apply_initialization(self, recipe_data: RecipeData):
         _logger.debug("%s: Initializing device...", self.dev_repr)
 
         nc = NodeCollector(base=f"/{self.serial}/")
 
+        initialization = recipe_data.get_initialization(self.device_qualifier.uid)
         outputs = initialization.outputs or []
         for output in outputs:
             self._warn_for_unsupported_param(
@@ -687,11 +684,11 @@ class DeviceSHFQA(DeviceSHFBase):
 
         await self.set_async(nc)
 
-    def collect_prepare_nt_step_nodes(
+    def _collect_prepare_nt_step_nodes(
         self, attributes: DeviceAttributesView, recipe_data: RecipeData
     ) -> NodeCollector:
         nc = NodeCollector(base=f"/{self.serial}/")
-        nc.extend(super().collect_prepare_nt_step_nodes(attributes, recipe_data))
+        nc.extend(super()._collect_prepare_nt_step_nodes(attributes, recipe_data))
 
         acquisition_type = RtExecutionInfo.get_acquisition_type(
             recipe_data.rt_execution_infos
@@ -1078,9 +1075,7 @@ class DeviceSHFQA(DeviceSHFBase):
             > 0
         )
 
-    async def set_before_awg_upload(
-        self, initialization: Initialization, recipe_data: RecipeData
-    ):
+    async def set_before_awg_upload(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")
 
         acquisition_type = RtExecutionInfo.get_acquisition_type(
@@ -1093,6 +1088,7 @@ class DeviceSHFQA(DeviceSHFBase):
                 0 if is_spectroscopy(acquisition_type) else 1,
             )
 
+        initialization = recipe_data.get_initialization(self.device_qualifier.uid)
         for measurement in initialization.measurements:
             if self._uses_lrt(
                 initialization.device_uid, measurement.channel, recipe_data
@@ -1132,15 +1128,14 @@ class DeviceSHFQA(DeviceSHFBase):
 
         await self.set_async(nc)
 
-    async def configure_trigger(
-        self, initialization: Initialization, recipe_data: RecipeData
-    ):
+    async def configure_trigger(self, recipe_data: RecipeData):
         _logger.debug("Configuring triggers...")
         self._wait_for_awgs = True
         self._emit_trigger = False
 
         nc = NodeCollector(base=f"/{self.serial}/")
 
+        initialization = recipe_data.get_initialization(self.device_qualifier.uid)
         triggering_mode = initialization.config.triggering_mode
 
         if triggering_mode == TriggeringMode.ZSYNC_FOLLOWER:

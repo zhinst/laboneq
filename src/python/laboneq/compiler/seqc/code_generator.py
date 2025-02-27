@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from itertools import groupby
 import math
 from numbers import Number
-from typing import Any, NamedTuple, Literal
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 import numpy as np
 from numpy import typing as npt
@@ -70,6 +70,7 @@ from laboneq.compiler.seqc.signatures import (
     PlaybackSignature,
     SamplesSignature,
     WaveformSignature,
+    FrozenWaveformSignature,
 )
 from laboneq.compiler.seqc.utils import normalize_phase
 from laboneq.compiler.seqc.wave_compressor import (
@@ -107,6 +108,10 @@ from laboneq.data.scheduled_experiment import (
     WeightInfo,
     COMPLEX_USAGE,
 )
+
+if TYPE_CHECKING:
+    from laboneq.compiler.seqc.passes.intervals import EmptyInterval
+
 
 _logger = logging.getLogger(__name__)
 
@@ -364,7 +369,7 @@ class CodeGenerator(ICodeGenerator):
         self._parameter_phase_increment_map: dict[
             AwgKey, dict[str, list[int | Literal[COMPLEX_USAGE]]]
         ] = {}
-        self._sampled_signatures: dict[str, dict[WaveformSignature, dict]] = {}
+        self._sampled_signatures: dict[str, dict[FrozenWaveformSignature, dict]] = {}
         self._integration_times: IntegrationTimes | None = None
         self._signal_delays: SignalDelays | None = None
         # awg key -> signal id -> kernel index -> kernel data
@@ -405,6 +410,12 @@ class CodeGenerator(ICodeGenerator):
         if isinstance(events_or_ir, IRTree):
             assert events_or_ir.root is not None
             total_execution_time = events_or_ir.root.length * TINYSAMPLE
+            measurement_info = passes.collect_measurement_info(
+                events_or_ir.root, self._signals
+            )
+            feedback_register_allocator = measurement_info.feedback_register_allocator
+            qa_signals_by_handle = measurement_info.qa_signals_by_handle
+            simultaneous_acquires = measurement_info.simultaneous_acquires
 
             events = ir_to_event_list.generate_event_list_from_ir(
                 events_or_ir,
@@ -412,14 +423,6 @@ class CodeGenerator(ICodeGenerator):
                 expand_loops=False,
                 max_events=float("inf"),
             )
-
-            # The following event-based asserts shall be deleted once the event list is gone
-            assert (
-                total_execution_time == max([e.get("time", 0) for e in events])
-                if len(events) > 0
-                else None
-            )
-
         else:
             # This branch should only be encountered via tests
             # TODO: Remove this code and the called functions when the event list is gone
@@ -427,10 +430,14 @@ class CodeGenerator(ICodeGenerator):
             total_execution_time = (
                 max([e.get("time", 0) for e in events]) if len(events) > 0 else None
             )
+            feedback_register_allocator = FeedbackRegisterAllocator(self._signals)
+            feedback_register_allocator.set_feedback_paths_from_events(events)
 
-        qa_signals_by_handle = self._collect_qa_signals_by_handle(events, self._signals)
-        simultaneous_acquires = self._gen_acquire_map(events)
-        feedback_register_allocator = FeedbackRegisterAllocator(self._signals, events)
+            qa_signals_by_handle = self._collect_qa_signals_by_handle(
+                events, self._signals
+            )
+            simultaneous_acquires = self._gen_acquire_map(events)
+
         (
             integration_times,
             signal_delays,
@@ -839,13 +846,19 @@ class CodeGenerator(ICodeGenerator):
         self._total_execution_time = total_execution_time
 
         if isinstance(events_or_ir, IRTree):
+            # The pass must happen after delay calculation as it relies on section information.
+            # TODO: Fix that this pass can happen as early as possible.
+            passes.inline_sections(self._ir.root)
+            osc_params = passes.calculate_oscillator_parameters(events_or_ir)
+            empty_intervals = passes.collect_empty_intervals(events_or_ir.root)
             ir_tree = passes.fanout_awgs(events_or_ir, self._awgs.values())
             events_per_awg = ir_to_event_list.event_list_per_awg(
-                ir_tree, self._settings
+                ir_tree, self._settings, osc_params
             )
         else:
             # This branch should only be encountered via tests
             events_per_awg = {awg: events_or_ir for awg in self._awgs}
+            empty_intervals = []
 
         for signal_id, signal_obj in self._signals.items():
             code_generation_delay = self._signal_delays.get(signal_id)
@@ -877,7 +890,12 @@ class CodeGenerator(ICodeGenerator):
             self._awgs.items(),
             key=lambda item: item[0],
         ):
-            self._gen_seq_c_per_awg(awg, events_per_awg.get(awg.key, []), pulse_defs)
+            self._gen_seq_c_per_awg(
+                awg,
+                events_per_awg.get(awg.key, []),
+                pulse_defs,
+                empty_intervals=empty_intervals,
+            )
 
         tgt_feedback_regs = self._feedback_register_allocator.target_feedback_registers
         for awg, target_fb_register in tgt_feedback_regs.items():
@@ -951,7 +969,10 @@ class CodeGenerator(ICodeGenerator):
 
         return global_sampling_rate, global_delay
 
-    def _emit_new_awg_events(self, old_event, new_events):
+    @staticmethod
+    def _emit_new_awg_events(
+        old_event, new_events
+    ) -> tuple[list[AWGEvent], dict[str, str]]:
         new_awg_events = []
         pulse_name_mapping = {}
         time = old_event.start
@@ -994,7 +1015,8 @@ class CodeGenerator(ICodeGenerator):
                 time += new_length
         return new_awg_events, pulse_name_mapping
 
-    def _pulses_compatible_for_compression(self, pulses: list[NamedTuple]):
+    @staticmethod
+    def _pulses_compatible_for_compression(pulses: list[NamedTuple]) -> bool:
         sorted_pulses = sorted(pulses, key=lambda x: x.start)
         n = len(sorted_pulses)
 
@@ -1007,14 +1029,17 @@ class CodeGenerator(ICodeGenerator):
 
         return True
 
+    @staticmethod
     def _compress_waves(
-        self,
         sampled_events: AWGSampledEventSequence,
         sampled_signatures: dict[WaveformSignature, dict],
-        signal_id: str,
         pulse_defs: dict[str, PulseDef],
         device_type: DeviceType,
     ):
+        """Compress waves.
+
+        Modifies `sampled_signatures` in-place.
+        """
         wave_compressor = WaveCompressor()
         compressed_waveform_signatures = set()
         for event_group in sampled_events.sequence.values():
@@ -1156,7 +1181,9 @@ class CodeGenerator(ICodeGenerator):
                         )
                         for pulse in wave_form.pulses
                     ]
-                    if not self._pulses_compatible_for_compression(pulse_compr_infos):
+                    if not CodeGenerator._pulses_compatible_for_compression(
+                        pulse_compr_infos
+                    ):
                         raise LabOneQException(
                             "overlapping pulses need to either all have can_compress=True or can_compress=False"
                         )
@@ -1187,7 +1214,7 @@ class CodeGenerator(ICodeGenerator):
                         sum(1 for event in new_events if isinstance(event, PlayHold)),
                     )
             for idx, new_events in event_replacement.items():
-                new_awg_events, pulse_name_mapping = self._emit_new_awg_events(
+                new_awg_events, pulse_name_mapping = CodeGenerator._emit_new_awg_events(
                     event_group[idx], new_events
                 )
 
@@ -1208,9 +1235,7 @@ class CodeGenerator(ICodeGenerator):
                             next(iter(new_waveform.samples.samples_map.values()))
                         )
 
-                        old_sampled_signature = self._sampled_signatures[signal_id][
-                            old_waveform
-                        ]
+                        old_sampled_signature = sampled_signatures[old_waveform]
                         new_sampled_signature = copy.deepcopy(old_sampled_signature)
 
                         # save old waveform such that we can clean the sampled signatures later on
@@ -1238,19 +1263,18 @@ class CodeGenerator(ICodeGenerator):
                             for signature in sp_map.instances:
                                 signature.length = new_length
 
-                        self._sampled_signatures[signal_id][new_waveform] = (
-                            new_sampled_signature
-                        )
+                        sampled_signatures[new_waveform] = new_sampled_signature
 
         # evict waveforms that have been compressed, and thus replaced with one or more, shorter, waves
         for waveform_signature in compressed_waveform_signatures:
-            self._sampled_signatures[signal_id].pop(waveform_signature)
+            sampled_signatures.pop(waveform_signature)
 
     def _gen_seq_c_per_awg(
         self,
         awg: AWGInfo,
         events: EventList,
         pulse_defs: dict[str, PulseDef],
+        empty_intervals: list[EmptyInterval] | None = None,
     ):
         # TODO: Ensure AWG does not get any irrelevant events, it will result in extra looping.
         #       There exists e.g Section, loop, subsection starts and ends which are
@@ -1260,6 +1284,8 @@ class CodeGenerator(ICodeGenerator):
         _logger.debug("Generating seqc for awg %d of %s", awg.awg_id, awg.device_id)
         _logger.debug("AWG Object = \n%s", awg)
         sampled_events = AWGSampledEventSequence()
+        # Signatures of this AWG
+        waveform_signatures: dict[str, dict[FrozenWaveformSignature, dict]] = {}
 
         global_sampling_rate, global_delay = self._calc_global_awg_params(awg)
         if self.EMIT_TIMING_COMMENTS:
@@ -1279,9 +1305,6 @@ class CodeGenerator(ICodeGenerator):
                 EventType.RESET_SW_OSCILLATOR_PHASE,
                 EventType.SET_OSCILLATOR_FREQUENCY_START,
             )
-            or set(
-                to_item["signal_id"] for to_item in event.get("trigger_output", [])
-            ).intersection(signal_ids)
         )
         for event in events:
             if (
@@ -1298,20 +1321,8 @@ class CodeGenerator(ICodeGenerator):
                 and event["section_name"] in own_sections
             ):
                 has_readout_feedback = True
-                use_command_table = True
         if has_readout_feedback:
             declarations_generator.add_variable_declaration("current_seq_step", 0)
-
-        if awg.device_type not in [DeviceType.HDAWG, DeviceType.SHFSG]:
-            use_command_table = False
-
-        # filter the event list
-        events = [
-            event
-            for event in events
-            if "section_name" not in event or event.get("section_name") in own_sections
-        ]
-
         _logger.debug(
             "Analyzing initialization events for awg %d of %s",
             awg.awg_id,
@@ -1337,6 +1348,7 @@ class CodeGenerator(ICodeGenerator):
         loop_events = analyze_loop_times(
             awg, events, global_sampling_rate, global_delay
         )
+        loop_events.sort()
         sampled_events.merge(loop_events)
 
         prng_setup = analyze_prng_times(events, global_sampling_rate, global_delay)
@@ -1421,6 +1433,7 @@ class CodeGenerator(ICodeGenerator):
                 waveform_size_hints=self.waveform_size_hints(awg.device_type),
                 use_command_table=use_command_table,
                 use_amplitude_increment=self._settings.USE_AMPLITUDE_INCREMENT,
+                empty_intervals=empty_intervals,
             )
 
             sampled_signatures = self._sample_pulses(
@@ -1434,32 +1447,28 @@ class CodeGenerator(ICodeGenerator):
                 mixer_type=mixer_type,
             )
 
-            self._sampled_signatures[virtual_signal_id] = sampled_signatures
             sampled_events.merge(interval_events)
 
             self._compress_waves(
                 sampled_events=sampled_events,
                 sampled_signatures=sampled_signatures,
-                signal_id=virtual_signal_id,
                 pulse_defs=pulse_defs,
                 device_type=awg.device_type,
             )
-
-            if virtual_signal_id in self._sampled_signatures:
-                for sig, sampled in self._sampled_signatures[virtual_signal_id].items():
-                    if not sampled:
-                        continue
-                    sig_string = sig.signature_string()
-
-                    length = sig.length
-                    declarations_generator.add_wave_declaration(
-                        awg.device_type,
-                        awg.signal_type.value,
-                        sig_string,
-                        length,
-                        "samples_marker1" in sampled,
-                        "samples_marker2" in sampled,
-                    )
+            waveform_signatures[virtual_signal_id] = {
+                k.to_frozen(): v for k, v in sampled_signatures.items()
+            }
+            for sig, sampled in waveform_signatures[virtual_signal_id].items():
+                if not sampled:
+                    continue
+                declarations_generator.add_wave_declaration(
+                    awg.device_type,
+                    awg.signal_type.value,
+                    sig.signature_string(),
+                    sig.length,
+                    "samples_marker1" in sampled,
+                    "samples_marker2" in sampled,
+                )
 
         elif awg.signal_type != AWGSignalType.DOUBLE:
             # AWGSignalType.IQ / AWGSignalType.SINGLE
@@ -1481,6 +1490,7 @@ class CodeGenerator(ICodeGenerator):
                     sub_channel=sub_channel,
                     use_command_table=use_command_table,
                     use_amplitude_increment=self._settings.USE_AMPLITUDE_INCREMENT,
+                    empty_intervals=empty_intervals,
                 )
 
                 sampled_signatures = self._sample_pulses(
@@ -1493,43 +1503,39 @@ class CodeGenerator(ICodeGenerator):
                     mixer_type=signal_obj.mixer_type,
                 )
 
-                self._sampled_signatures[signal_obj.id] = sampled_signatures
                 sampled_events.merge(interval_events)
 
                 self._compress_waves(
                     sampled_events=sampled_events,
                     sampled_signatures=sampled_signatures,
-                    signal_id=signal_obj.id,
                     pulse_defs=pulse_defs,
                     device_type=awg.device_type,
                 )
-
-                if signal_obj.id in self._sampled_signatures:
-                    signature_infos = []
-                    for sig, sampled in self._sampled_signatures[signal_obj.id].items():
-                        has_marker1 = False
-                        has_marker2 = False
-                        if sampled:
-                            if "samples_marker1" in sampled:
-                                has_marker1 = True
-                            if "samples_marker2" in sampled:
-                                has_marker2 = True
-
-                            sig_string = sig.signature_string()
-                            length = sig.length
-                            signature_infos.append(
-                                (sig_string, length, (has_marker1, has_marker2))
-                            )
-
-                    for siginfo in sorted(signature_infos):
-                        declarations_generator.add_wave_declaration(
-                            awg.device_type,
-                            signal_obj.signal_type,
-                            siginfo[0],
-                            siginfo[1],
-                            siginfo[2][0],
-                            siginfo[2][1],
-                        )
+                waveform_signatures[signal_obj.id] = {
+                    k.to_frozen(): v for k, v in sampled_signatures.items()
+                }
+                signature_infos = []
+                for sig, sampled in waveform_signatures[signal_obj.id].items():
+                    if not sampled:
+                        continue
+                    has_marker1 = False
+                    has_marker2 = False
+                    if "samples_marker1" in sampled:
+                        has_marker1 = True
+                    if "samples_marker2" in sampled:
+                        has_marker2 = True
+                    signature_infos.append(
+                        (sig.signature_string(), sig.length, (has_marker1, has_marker2))
+                    )
+                for siginfo in sorted(signature_infos):
+                    declarations_generator.add_wave_declaration(
+                        awg.device_type,
+                        signal_obj.signal_type,
+                        siginfo[0],
+                        siginfo[1],
+                        siginfo[2][0],
+                        siginfo[2][1],
+                    )
         else:  # awg.signal_type == AWGSignalType.DOUBLE
             assert len(awg.signals) == 2
             signal_a, signal_b = awg.signals
@@ -1545,6 +1551,7 @@ class CodeGenerator(ICodeGenerator):
                 amplitude_resolution_range=self.amplitude_resolution_range(),
                 waveform_size_hints=self.waveform_size_hints(awg.device_type),
                 use_command_table=False,  # do not set amplitude/oscillator phase via CT
+                empty_intervals=empty_intervals,
             )
 
             sampled_signatures = self._sample_pulses(
@@ -1557,43 +1564,39 @@ class CodeGenerator(ICodeGenerator):
                 mixer_type=signal_a.mixer_type,
             )
 
-            self._sampled_signatures[virtual_signal_id] = sampled_signatures
             sampled_events.merge(interval_events)
 
             self._compress_waves(
                 sampled_events=sampled_events,
                 sampled_signatures=sampled_signatures,
-                signal_id=virtual_signal_id,
                 pulse_defs=pulse_defs,
                 device_type=awg.device_type,
             )
-
-            if virtual_signal_id in self._sampled_signatures:
-                for sig, sampled in self._sampled_signatures[virtual_signal_id].items():
-                    if not sampled:
-                        continue
-                    sig_string = sig.signature_string()
-                    length = sig.length
-                    declarations_generator.add_wave_declaration(
-                        awg.device_type,
-                        awg.signal_type.value,
-                        sig_string,
-                        length,
-                        "samples_marker1" in sampled,
-                        "samples_marker2" in sampled,
-                    )
+            waveform_signatures[virtual_signal_id] = {
+                k.to_frozen(): v for k, v in sampled_signatures.items()
+            }
+            for sig, sampled in waveform_signatures[virtual_signal_id].items():
+                if not sampled:
+                    continue
+                declarations_generator.add_wave_declaration(
+                    awg.device_type,
+                    awg.signal_type.value,
+                    sig.signature_string(),
+                    sig.length,
+                    "samples_marker1" in sampled,
+                    "samples_marker2" in sampled,
+                )
+        self._sampled_signatures.update(waveform_signatures)
         self.post_process_sampled_events(awg, sampled_events)
-
         _logger.debug(
             "** Start processing events for awg %d of %s",
             awg.awg_id,
             awg.device_id,
         )
         command_table_tracker = CommandTableTracker(awg.device_type)
-
         deferred_function_calls = SeqCGenerator()
         init_generator = SeqCGenerator()
-
+        add_wait_trigger_statements(awg, init_generator, deferred_function_calls)
         seqc_tracker = SeqCTracker(
             init_generator=init_generator,
             deferred_function_calls=deferred_function_calls,
@@ -1605,9 +1608,7 @@ class CodeGenerator(ICodeGenerator):
             automute_playzeros_min_duration=self._settings.SHF_OUTPUT_MUTE_MIN_DURATION,
             automute_playzeros=any([sig.automute for sig in awg.signals]),
         )
-
         shfppc_sweeper_config_tracker = SHFPPCSweeperConfigTracker()
-
         handler = SampledEventHandler(
             seqc_tracker=seqc_tracker,
             command_table_tracker=command_table_tracker,
@@ -1622,14 +1623,29 @@ class CodeGenerator(ICodeGenerator):
             awg=awg,
             device_type=awg.device_type,
             channels=awg.signals[0].channels,
-            sampled_signatures=self._sampled_signatures,
             use_command_table=use_command_table,
             emit_timing_comments=self.EMIT_TIMING_COMMENTS,
             use_current_sequencer_step=has_readout_feedback,
         )
 
-        add_wait_trigger_statements(awg, init_generator, deferred_function_calls)
+        # Modify signatures in place to replace Signature waveforms with frozen waveforms.
+        # The frozen waveforms have precalculated signatures strings, which
+        # is costly to compute for each pulse.
+        frozen_wf_signatures = {
+            signature: signature
+            for wf in waveform_signatures.values()
+            for signature in wf.keys()
+        }
+        for awg_events in sampled_events.sequence.values():
+            for awg_event in awg_events:
+                if maybe_signature := awg_event.params.get("playback_signature"):
+                    if maybe_signature.waveform is None:
+                        continue
+                    maybe_signature.waveform = frozen_wf_signatures[
+                        maybe_signature.waveform
+                    ]
         try:
+            sampled_events.sort()
             handler.handle_sampled_events(sampled_events)
         except EntryLimitExceededError as error:
             msg = (
@@ -1726,10 +1742,9 @@ class CodeGenerator(ICodeGenerator):
         multi_iq_signal=False,
     ):
         sampled_signatures: dict[WaveformSignature, dict] = {}
-        # To produce deterministic SeqC, the playback signature order
-        # needs to be but PlaybackSignatures are comparable, so we
-        # use a dict for signatures as an easy insertion ordered set:
-        signatures: dict[PlaybackSignature, type(None)] = {}
+        # To produce deterministic SeqC, we use a dict for signatures
+        # as an easy insertion-ordered set.
+        signatures: dict[PlaybackSignature, type[None]] = {}
         for interval_event_list in interval_events.sequence.values():
             for interval_event in interval_event_list:
                 if interval_event.type != AWGEventType.PLAY_WAVE:
@@ -1747,14 +1762,6 @@ class CodeGenerator(ICodeGenerator):
         needs_conjugate = device_type == DeviceType.SHFSG
         for signature in signatures:
             length = signature.waveform.length
-            _logger.debug(
-                "Sampling pulses for signature %s for signal %s, length %d device type %s",
-                signature.waveform.signature_string(),
-                signal_id,
-                length,
-                device_type.value,
-            )
-
             if length % device_type.sample_multiple != 0:
                 raise Exception(
                     f"Length of signature {signature.waveform.signature_string()} is not divisible by {device_type.sample_multiple}, which it needs to be for {device_type.value}"
@@ -2118,9 +2125,6 @@ class CodeGenerator(ICodeGenerator):
                         acquire.append(x)
                         end = x.end if end is None else max(end, x.end)
                 if len(play) > 0 and len(acquire) == 0 and has_acquire:
-                    _logger.warning("Problem:")
-                    for log_event in sampled_event_list:
-                        _logger.warning("  %s", log_event)
                     raise Exception("Play and acquire must happen at the same time")
                 if len(play) > 0 or len(acquire) > 0:
                     assert end is not None

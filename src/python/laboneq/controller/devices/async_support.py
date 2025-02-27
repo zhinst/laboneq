@@ -27,14 +27,13 @@ from laboneq.controller.devices.device_utils import (
     zhinst_core_version,
 )
 
-from laboneq.controller.devices.zi_emulator import EmulatorState, MockInstrument
+from laboneq.controller.devices.zi_emulator import EmulatorState, KernelSessionEmulator
 
-from labone import DataServer, Instrument
-from labone.core import AnnotatedValue
-from labone.core.subscription import DataQueue
-from labone.core.shf_vector_data import (
+from zhinst.comms_schemas.labone import KernelSession, KernelInfo
+from zhinst.comms_schemas.labone.core import (
+    DataQueue,
+    AnnotatedValue,
     ShfGeneratorWaveformVectorData,
-    preprocess_complex_shf_waveform_vector,
 )
 
 from laboneq.controller.util import LabOneQControllerException
@@ -140,7 +139,7 @@ class DataServerConnection:
     def __init__(
         self,
         server_qualifier: ServerQualifier,
-        data_server: DataServer,
+        data_server: KernelSession,
         devices_json: str,
         version_str: str,
         revision_int: int,
@@ -167,18 +166,23 @@ class DataServerConnection:
         host = server_qualifier.host
         port = server_qualifier.port
         if emulator_state is None:
-            data_server = await DataServer.create(
-                host=host, port=port, timeout=to_l1_timeout(timeout_s)
+            data_server = await KernelSession.create(
+                kernel_info=KernelInfo.zi_connection(),
+                host=host,
+                port=port,
+                timeout=to_l1_timeout(timeout_s),
             )
         else:
-            data_server = MockInstrument(serial="ZI", emulator_state=emulator_state)
+            data_server = KernelSessionEmulator(
+                serial="ZI", emulator_state=emulator_state
+            )
 
         devices_json, version_str, revision_int = (
             r.value
             for r in await asyncio.gather(
-                data_server.kernel_session.get(cls._devices_node_path),
-                data_server.kernel_session.get(cls._version_node_path),
-                data_server.kernel_session.get(cls._revision_node_path),
+                data_server.get(cls._devices_node_path),
+                data_server.get(cls._version_node_path),
+                data_server.get(cls._revision_node_path),
             )
         )
 
@@ -194,7 +198,7 @@ class DataServerConnection:
         )
 
     @property
-    def data_server(self) -> DataServer:
+    def data_server(self) -> KernelSession:
         return self._data_server
 
     @property
@@ -239,13 +243,13 @@ class DataServerConnection:
             else:
                 raise LabOneQControllerException(err_msg)
 
-        if isinstance(self._data_server, DataServer):  # Real server?
+        if isinstance(self._data_server, KernelSession):  # Real server?
             statuses = _get_device_statuses(self.devices_json, serials)
             _check_dataserver_device_compatibility(statuses)
 
     async def subscribe_logs(self):
         self._log_records.clear()
-        self._log_queue = await self._data_server.kernel_session.subscribe(
+        self._log_queue = await self._data_server.subscribe(
             self._log_node_path, level="debug"
         )
 
@@ -260,13 +264,16 @@ class DataServerConnection:
         logger = logging.getLogger("node.log")
         logger.debug(f"Node log from the data server with id '{server_uid}':")
         for log_record in self._log_records:
+            if not isinstance(log_record.value, str):
+                continue
             log_fields = parse_logfmt(log_record.value)
             tracer = log_fields.get("tracer")
-            if tracer == "blocks_out":
-                method = log_fields.get("method")
-                path = log_fields.get("path")
-                value = log_fields.get("value", "-")
-                logger.debug(f"  {method} {path} {value}")
+            if tracer != "blocks_out":
+                continue
+            method = log_fields.get("method")
+            path = log_fields.get("path")
+            value = log_fields.get("value", "-")
+            logger.debug(f"  {method} {path} {value}")
 
 
 class DataServerConnections:
@@ -307,15 +314,17 @@ async def create_device_kernel_session(
     device_qualifier: DeviceQualifier,
     emulator_state: EmulatorState | None,
     timeout_s: float,
-) -> Instrument:
+) -> KernelSession:
     if emulator_state is not None:
-        return MockInstrument(
+        return KernelSessionEmulator(
             serial=device_qualifier.options.serial,
             emulator_state=emulator_state,
         )
-    return await Instrument.create(
-        serial=device_qualifier.options.serial,
-        interface=device_qualifier.options.interface,
+    return await KernelSession.create(
+        kernel_info=KernelInfo.device_connection(
+            device_id=device_qualifier.options.serial,
+            interface=device_qualifier.options.interface,
+        ),
         host=server_qualifier.host,
         port=server_qualifier.port,
         timeout=to_l1_timeout(timeout_s),
@@ -368,6 +377,32 @@ async def _gather_with_timeout(
     )
 
 
+def _preprocess_complex_shf_waveform_vector(
+    data: np.ndarray,
+) -> np.ndarray:
+    """Preprocess complex waveform vector data.
+
+    Complex waveform vectors are transmitted as two uint32 interleaved vectors.
+    This function converts the complex waveform vector data into the
+    corresponding uint32 vector.
+
+    Args:
+        data: The complex waveform vector data.
+
+    Returns:
+        The uint32 vector data.
+    """
+    _SHF_WAVEFORM_UNSIGNED_ENCODING_BITS = 18
+    _SHF_WAVEFORM_SIGNED_ENCODING_BITS = _SHF_WAVEFORM_UNSIGNED_ENCODING_BITS - 1
+    _SHF_WAVEFORM_SCALING = (1 << _SHF_WAVEFORM_SIGNED_ENCODING_BITS) - 1
+    real_scaled = np.round(np.real(data) * _SHF_WAVEFORM_SCALING).astype(np.uint32)
+    imag_scaled = np.round(np.imag(data) * _SHF_WAVEFORM_SCALING).astype(np.uint32)
+    decoded_data = np.empty((2 * data.size,), dtype=np.uint32)
+    decoded_data[::2] = real_scaled
+    decoded_data[1::2] = imag_scaled
+    return decoded_data
+
+
 def _resolve_type(value: Any, path: str) -> Any:
     if isinstance(value, Enum):
         return value.value
@@ -376,12 +411,10 @@ def _resolve_type(value: Any, path: str) -> Any:
     if isinstance(value, np.floating):
         return float(value)
     if np.iscomplexobj(value) and "spectroscopy/envelope/wave" in path.lower():
-        # TODO(2K): This conversion may not be entirely accurate, it is only known to match the expected node
-        # type and address the "Vector transfer error: data have different type than expected" error.
-        return np.frombuffer(
-            preprocess_complex_shf_waveform_vector(value)["vectorData"]["data"],
-            dtype=np.uint32,
-        )
+        # TODO(2K): This conversion address the "Vector transfer error: data have different type than expected"
+        # error. API should accept complex vector for the node instead, as per
+        # https://docs.zhinst.com/shfqa_user_manual/nodedoc.html#qachannels.
+        return _preprocess_complex_shf_waveform_vector(value)
     return value
 
 
@@ -391,17 +424,13 @@ class AnnotatedValueWithExtras(AnnotatedValue):
     filename: str | None = None
 
 
-async def set_parallel(api: Instrument, nodes: NodeCollector):
+async def set_parallel(api: KernelSession, nodes: NodeCollector):
     futures = []
     for node in nodes:
         if isinstance(node, NodeActionSet):
-            func = (
-                api.kernel_session.set_with_expression
-                if "*" in node.path
-                else api.kernel_session.set
-            )
+            func = api.set_with_expression if "*" in node.path else api.set
             type_adjusted_value = _resolve_type(node.value, node.path)
-            if isinstance(api, MockInstrument):
+            if isinstance(api, KernelSessionEmulator):
                 # Don't wrap into ShfGeneratorWaveformVectorData for emulation
                 # (see also code in "else" below)
                 # to avoid emulator dependency on labone-python
@@ -467,9 +496,9 @@ def parse_annotated_value(annotated_value: AnnotatedValue) -> Any:
     return effective_value
 
 
-async def get_raw(api: Instrument, path: str) -> dict[str, Any]:
+async def get_raw(api: KernelSession, path: str) -> dict[str, Any]:
     paths = path.split(",")
-    results = await _gather(*[api.kernel_session.get(p) for p in paths])
+    results = await _gather(*[api.get(p) for p in paths])
     return {r.path: parse_annotated_value(r) for r in results}
 
 
@@ -483,11 +512,11 @@ async def _yield():
 
 
 async def wait_for_state_change(
-    api: Instrument,
+    api: KernelSession,
     path: str,
     value: int | str,
 ):
-    queue = await api.kernel_session.subscribe(path, get_initial_value=True)
+    queue = await api.subscribe(path, get_initial_value=True)
     node_value = _from_annotated_value(await queue.get())
     while value != node_value:
         node_value = _from_annotated_value(await queue.get())
@@ -505,7 +534,7 @@ def _from_annotated_value(annotated_value: AnnotatedValue) -> Any:
 class ResponseWaiterAsync:
     def __init__(
         self,
-        api: Instrument,
+        api: KernelSession,
         nodes: dict[str, Any] | None = None,
         timeout_s: float | None = None,
     ):
@@ -527,9 +556,7 @@ class ResponseWaiterAsync:
     async def prepare(self):
         if len(self._nodes) == 0:
             return
-        queues = await _gather(
-            *(self._api.kernel_session.subscribe(path) for path in self._nodes)
-        )
+        queues = await _gather(*(self._api.subscribe(path) for path in self._nodes))
         for path, queue in zip(self._nodes.keys(), queues):
             self._queues[path] = queue
 
@@ -569,13 +596,13 @@ class ResponseWaiterAsync:
 
 
 class ConditionsCheckerAsync:
-    def __init__(self, api: Instrument, conditions: dict[str, Any]):
+    def __init__(self, api: KernelSession, conditions: dict[str, Any]):
         self._api = api
         self._conditions = conditions
 
     async def check(self) -> list[tuple[str, Any, Any]]:
         results: list[AnnotatedValue] = await _gather(
-            *(self._api.kernel_session.get(path) for path in self._conditions)
+            *(self._api.get(path) for path in self._conditions)
         )
         values = [(res.path, _from_annotated_value(res)) for res in results]
         mismatches = [
@@ -591,14 +618,14 @@ class AsyncSubscriber:
         self._subscriptions: dict[str, DataQueue] = {}
 
     async def subscribe(
-        self, api: Instrument, path: str, get_initial_value: bool = False
+        self, api: KernelSession, path: str, get_initial_value: bool = False
     ):
         if path in self._subscriptions:
             if get_initial_value:
                 self._subscriptions.pop(path).disconnect()
             else:
                 return  # Keep existing subscription
-        self._subscriptions[path] = await api.kernel_session.subscribe(
+        self._subscriptions[path] = await api.subscribe(
             path, get_initial_value=get_initial_value
         )
 

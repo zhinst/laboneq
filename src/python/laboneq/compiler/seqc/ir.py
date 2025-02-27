@@ -1,6 +1,8 @@
 # Copyright 2025 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+"""This module defines IR objects relevant for code generator."""
+
 from __future__ import annotations
 from attr import define
 

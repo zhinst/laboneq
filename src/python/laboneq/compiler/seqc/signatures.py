@@ -93,7 +93,22 @@ class WaveformSignature:
     pulses: Optional[Tuple[PulseSignature, ...]]
     samples: Optional[SamplesSignature] = field(default=None)
 
-    def signature_string(self):
+    def to_frozen(self) -> FrozenWaveformSignature:
+        """Create a frozen signature of the waveform.
+
+        This is required as the `WaveformSignature` itself can be modified
+        and attaching the signature string into it, would mess with it's hash
+        which is used for lookups.
+        """
+        return FrozenWaveformSignature(
+            signature=self.signature_string(),
+            length=self.length,
+            pulses=self.pulses,
+            hash_=hash(self),
+            samples=self.samples,
+        )
+
+    def signature_string(self) -> str:
         retval = "p_" + str(self.length).zfill(4)
         if self.pulses is not None:
             for pulse_entry in self.pulses:
@@ -143,11 +158,11 @@ class WaveformSignature:
             retval += f"_{self.samples.label}_"
 
         retval = string_sanitize(retval)
-        hashed_signature = self.stable_hash().hexdigest()[:7]
+        hashed_signature = self._stable_hash().hexdigest()[:7]
         retval += "_" + hashed_signature
         return retval
 
-    def stable_hash(self):
+    def _stable_hash(self):
         def default(obj):
             if isinstance(obj, frozenset):
                 return tuple(sorted(obj))
@@ -163,6 +178,30 @@ class WaveformSignature:
                 default=default,
             )
         )
+
+
+@dataclass
+class FrozenWaveformSignature(WaveformSignature):
+    """Frozen waveform signature.
+
+    Once the signature of a waveform has been fully established, we render it immutable.
+    """
+
+    hash_: str | None = None
+    signature: str | None = None
+
+    def __hash__(self):
+        return self.hash_
+
+    def __eq__(self, other):
+        return (
+            self.length == other.length
+            and self.pulses == other.pulses
+            and self.samples == other.samples
+        )
+
+    def signature_string(self) -> str:
+        return self.signature
 
 
 @dataclass(unsafe_hash=True)

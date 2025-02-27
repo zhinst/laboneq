@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "laboneq"
-version = "2.46.0"
+version = "2.47.0"
 description = "Zurich Instruments LabOne Q software framework for quantum computing control"
 license = { text = "Apache 2.0" }
 readme = "README.md"
@@ -32,91 +32,93 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 dependencies = [
+    "attrs >= 24.3.0",
+    "cycler >= 0.12.1",
     "engineering_notation >= 0.10.0",
     "flask >= 3.0.2",
     "intervaltree >= 3.1.0",
     "jsonschema >= 4.21.1",
+    "lagom >= 2.6.0",
     "matplotlib >= 3.8.3",
-    "cycler >= 0.12.1",
     "numpy >= 1.26",
     "openpulse ~= 1.0.1",
     "openqasm3 ~= 1.0.0",
     "orjson >= 3.9.15",
     "pybase64 >= 1.3.2",
     "pycparser >= 2.21",
+    "pygments >= 2.18.0",
     "python-box >= 7.1.1",
     "pyyaml >= 6.0.1",
     "requests >= 2.31.0",
     "rich >= 13.7.1",
     "scipy >= 1.12.0",
-    "sqlitedict >= 2.1.0",
     "sortedcollections >= 2.1.0",
-    "lagom >= 2.6.0",
-    "attrs >= 24.3.0",
     "sortedcontainers >= 2.4.0",
+    "sqlitedict >= 2.1.0",
     "typing_extensions >= 4.10.0",
+    "zhinst-comms-schemas==0.0.1",
     "zhinst-core ~= 25.1.0",
+    "zhinst-timing-models ~= 25.1.0",
     "zhinst-toolkit == 0.7.1",
     "zhinst-utils == 0.6.0",
-    "zhinst-timing-models ~= 25.1.0",
-    "labone == 3.2.1",
-    "pygments >= 2.18.0"
 ]
 
 [project.optional-dependencies]
 xarray = ["xarray >= 2024"]
+instrumentation = [
+    "opentelemetry-instrumentation",
+    "opentelemetry-api",
+    "wrapt"
+]
 
 [project.urls]
 Homepage = "https://github.com/zhinst/laboneq"
 
 [dependency-groups]
 dev = [
+    "cattrs >= 24.1.2",
+    "flaky == 3.8.1",
+    "freezegun >= 1.5.1",
+    "ipykernel >= 6.29.5",
+    "ipython >= 8.18.1",
+    "jsonschema >= 4.23.0",
+    "jupyter >= 1.1.1",
+    "nbconvert >= 7.16.6",
+    "nbmake >= 1.5.5",
+    "opentelemetry-api >= 1.29.0",
+    "opentelemetry-sdk >= 1.29.0",
+    "parse >= 1.20.2",
+    "plotly >= 6.0",
+    "pydeps >= 3.0.0",
     "pytest >= 8.3.4",
     "pytest-assume >= 2.4.3",
     "pytest-asyncio >= 0.25.3",
     "pytest-benchmark == 5.1.0",
     "pytest-cov >= 6.0.0",
-    "pytest-mock >= 3.14.0",
     "pytest-httpserver >= 1.1.1",
+    "pytest-mock >= 3.14.0",
     "pytest-xdist >= 3.6.1",
-    "jsonschema >= 4.23.0",
-    "requests >= 2.32.3",
-    "nbconvert >= 7.16.6",
-    "nbmake >= 1.5.5",
-    "RsInstrument >= 1.90.0",
-    "flaky == 3.8.1",
     "pyvisa-py == 0.5.3",
     "qiskit >= 1.3.2",
     "qiskit-experiments >= 0.8.1",
-    "ipykernel >= 6.29.5",
+    "requests >= 2.32.3",
+    "RsInstrument >= 1.90.0",
     "rustworkx >= 0.16.0",
-    "ipython >= 8.18.1",
-    "parse >= 1.20.2",
-    "opentelemetry-sdk >= 1.29.0",
-    "opentelemetry-api >= 1.29.0",
-    "cattrs >= 24.1.2",
-    "freezegun >= 1.5.1",
-    "pydeps >= 3.0.0",
 ]
 tools = [
-    "pre-commit >= 4.1.0",
-    "mypy >= 1.14.1",
-    "ruff == 0.9.4",
     "maturin >= 1.6, < 2.0",
-]
-ci = [
-    "click ~= 8.1.4",
-    "toml >= 0.10.2",
-    "python-gitlab >= 5.6.0",
-    "wheel-inspect >= 1.7.2",
+    "mypy >= 1.14.1",
+    "pip >= 25.0.1", # used by PyCharm for scanning the venv
+    "pre-commit >= 4.1.0",
+    "ruff ==0.9.7",
 ]
 
 [tool.uv]
 default-groups = ["dev", "tools"]
 cache-keys = [
-    {file = "pyproject.toml"},
-    {file = "src/rust/**/Cargo.toml"},
-    {file = "src/rust/**/*.rs"},
+    { file = "pyproject.toml" },
+    { file = "src/rust/**/Cargo.toml" },
+    { file = "src/rust/**/*.rs" },
 ]
 
 [tool.uv.sources]
@@ -155,24 +157,16 @@ exclude = [
 
 [tool.ruff.lint]
 select = [
-    # flake8-bugbear
-    "B",
-    # perflint
-    "PERF",
-    # pyflakes
-    "F",
-    # pycodestyle
-    "E",
-    "W",
-    # flake8-2020
+    "B", # flake8-bugbear
+    "PERF", # perflint
+    "F", # pyflakes
+    "E", # pycodestyle
+    "W", # flake8-2020
     "YTT",
-    # flake8-quotes
-    "Q",
+    "Q", # flake8-quotes
     "B019",
-    # isort
-    "I002",
-    # future annotations
-    "FA"
+    "I002", # isort
+    "FA", # future annotations
 ]
 
 ignore = [
@@ -181,8 +175,7 @@ ignore = [
     "E741",
     "E722",
     "E402",
-    # Do not assign a lambda expression, use a def
-    "E731"
+    "E731", # Do not assign a lambda expression, use a def
 ]
 
 # Allow autofix for all enabled rules (when `--fix`) is provided.

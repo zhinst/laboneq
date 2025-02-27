@@ -6,8 +6,8 @@ from __future__ import annotations
 from typing import Any, Dict, List, Literal, Optional
 
 from laboneq.compiler.common.awg_info import AwgKey
-from laboneq.compiler.event_list.event_type import EventType
 from laboneq.compiler.common.signal_obj import SignalObj
+from laboneq.compiler.event_list.event_type import EventType
 
 PQSC_FEEDBACK_REGISTER_COUNT = 32
 
@@ -22,7 +22,7 @@ class FeedbackRegisterAllocator:
 
     `PQSC_FEEDBACK_REGISTER_COUNT` registers are available in total."""
 
-    def __init__(self, signals: Dict[str, SignalObj], events: List[Dict[str, Any]]):
+    def __init__(self, signals: Dict[str, SignalObj]):
         self.signals = signals
         self.feedback_path: Dict[str, bool] = {}  # handle -> is_global
         self.target_feedback_registers: Dict[
@@ -31,11 +31,16 @@ class FeedbackRegisterAllocator:
 
         self._top = 0  # next free register
 
+    # TODO: Remove once the event list is gone
+    def set_feedback_paths_from_events(self, events: List[Dict[str, Any]]) -> None:
         for event in events:
             if event["event_type"] == EventType.SECTION_START:
                 handle = event.get("handle")
                 if handle is not None:
-                    self.feedback_path[handle] = not event["local"]
+                    self.set_feedback_path(handle, not event["local"])
+
+    def set_feedback_path(self, handle: str, via_pqsc: bool) -> None:
+        self.feedback_path[handle] = via_pqsc
 
     def allocate(self, signal_id: str, handle: str) -> Optional[int | Literal["local"]]:
         is_global = self.feedback_path.get(handle)

@@ -17,16 +17,18 @@ from laboneq.implementation.payload_builder.experiment_info_builder.experiment_i
 from laboneq.implementation.payload_builder.target_setup_generator import (
     TargetSetupGenerator,
 )
-from laboneq.interfaces.compilation_service.compilation_service_api import (
-    CompilationServiceAPI,
-)
 from laboneq.interfaces.payload_builder.payload_builder_api import PayloadBuilderAPI
+from laboneq.compiler import Compiler
+
+
+def _compile(job: CompilationJob):
+    compiler = Compiler(job.compiler_settings)
+    compiler_output = compiler.run(job)
+    compiler_output.scheduled_experiment.uid = uuid.uuid4().hex
+    return compiler_output.scheduled_experiment
 
 
 class PayloadBuilder(PayloadBuilderAPI):
-    def __init__(self, compilation_service: CompilationServiceAPI | None = None):
-        self._compilation_service: CompilationServiceAPI = compilation_service
-
     def build_payload(
         self,
         device_setup: Setup,
@@ -40,13 +42,8 @@ class PayloadBuilder(PayloadBuilderAPI):
         job = self.create_compilation_job(
             device_setup, experiment, signal_mappings, compiler_settings
         )
-
-        job_id = self._compilation_service.submit_compilation_job(job)
-
-        scheduled_experiment = self._compilation_service.compilation_job_result(job_id)
-
+        scheduled_experiment = _compile(job)
         target_setup = TargetSetupGenerator.from_setup(device_setup)
-
         run_job = ExecutionPayload(
             uid=uuid.uuid4().hex,
             target_setup=target_setup,

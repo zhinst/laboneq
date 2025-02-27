@@ -31,7 +31,7 @@ from laboneq.controller.devices.node_control import (
     Setting,
     WaitCondition,
 )
-from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
+from laboneq.controller.recipe_processor import RecipeData
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.data.recipe import (
@@ -244,9 +244,10 @@ class DeviceHDAWG(DeviceBase):
             )
         return nodes
 
-    async def set_after_awg_upload(self, initialization: Initialization):
+    async def set_after_awg_upload(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")
 
+        initialization = recipe_data.get_initialization(self.device_qualifier.uid)
         for awg in initialization.awgs or []:
             _logger.debug(
                 "%s: Configure modulation phase depending on IQ enabling on awg %d.",
@@ -312,10 +313,14 @@ class DeviceHDAWG(DeviceBase):
         return conditions
 
     async def setup_one_step_execution(
-        self, with_pipeliner: bool, has_awg_in_use: bool
+        self, recipe_data: RecipeData, with_pipeliner: bool
     ):
         nc = NodeCollector(base=f"/{self.serial}/")
-        if with_pipeliner and has_awg_in_use and not self.is_standalone():
+        if (
+            with_pipeliner
+            and self._has_awg_in_use(recipe_data)
+            and not self.is_standalone()
+        ):
             nc.add("system/synchronization/source", 1)  # external
         await self.set_async(nc)
 
@@ -339,13 +344,13 @@ class DeviceHDAWG(DeviceBase):
 
     async def apply_initialization(
         self,
-        device_recipe_data: DeviceRecipeData,
-        initialization: Initialization,
         recipe_data: RecipeData,
     ):
         _logger.debug("%s: Initializing device...", self.dev_repr)
         nc = NodeCollector(base=f"/{self.serial}/")
 
+        device_recipe_data = recipe_data.device_settings[self.device_qualifier.uid]
+        initialization = recipe_data.get_initialization(self.device_qualifier.uid)
         outputs = initialization.outputs or []
         for output in outputs:
             awg_idx = output.channel // 2
@@ -467,7 +472,7 @@ class DeviceHDAWG(DeviceBase):
         # This is a prerequisite for passing AWG checks in FW on the pipeliner commit.
         # Without the pipeliner, these checks are only performed when the AWG is enabled,
         # therefore DIO could be configured after the AWG loading.
-        nc.extend(self._collect_dio_configuration_nodes(initialization, recipe_data))
+        nc.extend(self._collect_dio_configuration_nodes(initialization))
 
         await self.set_async(nc)
 
@@ -493,12 +498,13 @@ class DeviceHDAWG(DeviceBase):
                 value_or_param=io.gains.off_diagonal,
             )
 
-    def collect_prepare_nt_step_nodes(
+    def _collect_prepare_nt_step_nodes(
         self, attributes: DeviceAttributesView, recipe_data: RecipeData
     ) -> NodeCollector:
         nc = NodeCollector(base=f"/{self.serial}/")
-        nc.extend(super().collect_prepare_nt_step_nodes(attributes, recipe_data))
+        nc.extend(super()._collect_prepare_nt_step_nodes(attributes, recipe_data))
 
+        device_recipe_data = recipe_data.device_settings[self.device_qualifier.uid]
         awg_iq_pair_set: set[int] = set()
         for ch in range(self._channels):
             [scheduler_port_delay, port_delay], updated = attributes.resolve(
@@ -532,12 +538,7 @@ class DeviceHDAWG(DeviceBase):
             awg_idx = ch // 2
             output_i = output_iq = ch % 2
             output_q = output_i ^ 1
-            if (
-                awg_idx
-                not in recipe_data.device_settings[
-                    self.device_qualifier.uid
-                ].iq_settings
-            ):
+            if awg_idx not in device_recipe_data.iq_settings:
                 # Fall back to old behavior (suitable for single channel output)
                 (
                     [output_gain_i_diagonal, output_gain_i_off_diagonal],
@@ -565,9 +566,7 @@ class DeviceHDAWG(DeviceBase):
                 if awg_idx in awg_iq_pair_set:
                     continue
                 # Set both I and Q channels at one loop
-                ch_i, ch_q = recipe_data.device_settings[
-                    self.device_qualifier.uid
-                ].iq_settings[awg_idx]
+                ch_i, ch_q = device_recipe_data.iq_settings[awg_idx]
                 (
                     [
                         output_gain_i_diagonal,
@@ -620,9 +619,7 @@ class DeviceHDAWG(DeviceBase):
                 awg_iq_pair_set.add(awg_idx)
         return nc
 
-    async def set_before_awg_upload(
-        self, initialization: Initialization, recipe_data: RecipeData
-    ):
+    async def set_before_awg_upload(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")
         nc.add("system/awg/oscillatorcontrol", 1)
         await self.set_async(nc)
@@ -637,14 +634,12 @@ class DeviceHDAWG(DeviceBase):
     def command_table_path(self, awg_index: int) -> str:
         return f"/{self.serial}/awgs/{awg_index}/commandtable/"
 
-    async def configure_trigger(
-        self, initialization: Initialization, recipe_data: RecipeData
-    ):
+    async def configure_trigger(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")
 
         for awg_key, awg_config in recipe_data.awg_configs.items():
             has_no_feedback = awg_config.source_feedback_register is None
-            if (awg_key.device_uid != initialization.device_uid) or has_no_feedback:
+            if (awg_key.device_uid != self.device_qualifier.uid) or has_no_feedback:
                 continue
 
             # HACK: HBAR-1427 and HBAR-2165 show that runtime checks generate
@@ -657,7 +652,7 @@ class DeviceHDAWG(DeviceBase):
         await self.set_async(nc)
 
     def _collect_dio_configuration_nodes(
-        self, initialization: Initialization, recipe_data: RecipeData
+        self, initialization: Initialization
     ) -> NodeCollector:
         _logger.debug("%s: Configuring trigger configuration nodes.", self.dev_repr)
         nc = NodeCollector(base=f"/{self.serial}/")

@@ -19,7 +19,9 @@ from typing import (
     Optional,
     Set,
     Tuple,
+    Iterator,
 )
+
 
 from laboneq._utils import UIDReference, cached_method
 from laboneq.compiler.common.compiler_settings import CompilerSettings, TINYSAMPLE
@@ -28,7 +30,6 @@ from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.ir import (
     AcquireGroupIR,
     CaseIR,
-    EmptyBranchIR,
     IntervalIR,
     IRTree,
     DeviceIR,
@@ -47,8 +48,10 @@ from laboneq.compiler.ir import (
     MatchIR,
     PhaseResetIR,
 )
+from laboneq.compiler.ir.voltage_offset import InitialOffsetVoltageIR
+from laboneq.compiler.ir.oscillator_ir import InitialLocalOscillatorFrequencyIR
 from laboneq.compiler.scheduler.acquire_group_schedule import AcquireGroupSchedule
-from laboneq.compiler.scheduler.case_schedule import CaseSchedule, EmptyBranch
+from laboneq.compiler.scheduler.case_schedule import CaseSchedule
 from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
 from laboneq.compiler.scheduler.loop_iteration_schedule import (
     LoopIterationSchedule,
@@ -60,7 +63,9 @@ from laboneq.compiler.scheduler.oscillator_schedule import (
     InitialOscillatorFrequencySchedule,
     OscillatorFrequencyStepSchedule,
     SweptOscillator,
+    InitialLocalOscillatorFrequencySchedule,
 )
+from laboneq.compiler.scheduler.voltage_offset import InitialOffsetVoltageSchedule
 from laboneq.compiler.scheduler.parameter_store import ParameterStore
 from laboneq.compiler.scheduler.phase_reset_schedule import PhaseResetSchedule
 from laboneq.compiler.scheduler.ppc_step_schedule import PPCStepSchedule
@@ -112,11 +117,14 @@ class _ScheduleToIRConverter:
             InitialOscillatorFrequencySchedule: self._convert_to(
                 InitialOscillatorFrequencyIR
             ),
+            InitialLocalOscillatorFrequencySchedule: self._convert_to(
+                InitialLocalOscillatorFrequencyIR
+            ),
+            InitialOffsetVoltageSchedule: self._convert_to(InitialOffsetVoltageIR),
             PhaseResetSchedule: self._convert_to(PhaseResetIR),
             PulseSchedule: self._convert_to(PulseIR),
             RootSchedule: self._convert_to(RootScheduleIR),
             SectionSchedule: self._convert_to(SectionIR),
-            EmptyBranch: self._convert_to(EmptyBranchIR),
             PPCStepSchedule: self._convert_to(PPCStepIR),
         }
 
@@ -259,26 +267,9 @@ class Scheduler:
             ],
         )
 
-    def _schedule_root(
-        self, nt_parameters: ParameterStore[str, float]
-    ) -> RootSchedule | None:
-        root_sections = self._experiment_dao.root_rt_sections()
-        if len(root_sections) == 0:
-            return None
-
-        self._repetition_info = self._resolve_repetition_time(root_sections)
-
-        # todo: we do currently not actually support multiple root sections in the DSL.
-        #  Some of our tests do however do this. For now, we always run all root
-        #  sections *in parallel*.
-        schedules = [self._schedule_section(s, nt_parameters) for s in root_sections]
-
-        signals = set()
-        for c in schedules:
-            signals.update(c.signals)
-
-        root_schedule = RootSchedule(grid=1, signals=signals, children=schedules)  # type: ignore
-
+    def _initial_oscillator_frequency(
+        self, nt_parameters
+    ) -> Iterator[InitialOscillatorFrequencySchedule]:
         # handle setting of initial oscillator frequencies
         set_osc_freq = []
         signal_infos = [
@@ -319,16 +310,107 @@ class Scheduler:
             )
             set_osc_freq.append((frequency, swept_osc))
 
-        if set_osc_freq:
-            root_schedule.children = [
-                InitialOscillatorFrequencySchedule(
-                    signals=set(s for _, o in set_osc_freq for s in o.signals),
-                    oscillators=[o for _, o in set_osc_freq],
-                    values=[f for f, _ in set_osc_freq],
+        if not set_osc_freq:
+            return
+
+        yield InitialOscillatorFrequencySchedule(
+            signals=set(s for _, o in set_osc_freq for s in o.signals),
+            oscillators=[o for _, o in set_osc_freq],
+            values=[f for f, _ in set_osc_freq],
+            grid=self._system_grid,
+            length=0,
+        )
+
+    def _initial_local_oscillator_frequency(
+        self, nt_parameters
+    ) -> Iterator[InitialLocalOscillatorFrequencySchedule]:
+        signal_infos = [
+            self._experiment_dao.signal_info(s) for s in self._experiment_dao.signals()
+        ]
+        for signal in signal_infos:
+            if (
+                DeviceType.from_device_info_type(signal.device.device_type).device_class
+                == 0
+            ):
+                # by default, do not emit local oscillator commands into the schedule;
+                # this prevents fast-path recompilation in case of near-time sweep
+                return
+            lo_frequency = signal.lo_frequency
+            if isinstance(lo_frequency, ParameterInfo):
+                try:
+                    lo_frequency: float = nt_parameters[lo_frequency.uid]
+                except KeyError as e:
+                    raise LabOneQException(
+                        "LO frequency sweep must be swept in near-time"
+                    ) from e
+            if lo_frequency is not None:
+                yield InitialLocalOscillatorFrequencySchedule(
                     grid=self._system_grid,
                     length=0,
+                    signals={signal.uid},
+                    value=lo_frequency,
                 )
-            ] + root_schedule.children
+
+    def _initial_voltage_offset(
+        self, nt_parameters
+    ) -> Iterator[InitialOffsetVoltageSchedule]:
+        signal_infos = [
+            self._experiment_dao.signal_info(s) for s in self._experiment_dao.signals()
+        ]
+        for signal in signal_infos:
+            if (
+                DeviceType.from_device_info_type(signal.device.device_type).device_class
+                == 0
+            ):
+                # by default, do not emit offset voltage commands into the schedule;
+                # this prevents fast-path recompilation in case of near-time sweep
+                return
+            voltage_offset = signal.voltage_offset
+            if isinstance(voltage_offset, ParameterInfo):
+                try:
+                    voltage_offset: float = nt_parameters[voltage_offset.uid]
+                except KeyError as e:
+                    raise LabOneQException(
+                        "voltage offset sweep must be in near-time"
+                    ) from e
+            if voltage_offset is not None:
+                yield InitialOffsetVoltageSchedule(
+                    grid=self._system_grid,
+                    length=0,
+                    signals={signal.uid},
+                    value=voltage_offset,
+                )
+
+    def _schedule_root(
+        self, nt_parameters: ParameterStore[str, float]
+    ) -> RootSchedule | None:
+        root_sections = self._experiment_dao.root_rt_sections()
+        if len(root_sections) == 0:
+            return None
+
+        self._repetition_info = self._resolve_repetition_time(root_sections)
+
+        # todo: we do currently not actually support multiple root sections in the DSL.
+        #  Some of our tests do however do this. For now, we always run all root
+        #  sections *in parallel*.
+        schedules = [self._schedule_section(s, nt_parameters) for s in root_sections]
+
+        signals = set()
+        for c in schedules:
+            signals.update(c.signals)
+
+        root_schedule = RootSchedule(grid=1, signals=signals, children=schedules)  # type: ignore
+
+        oscillator_init = self._initial_oscillator_frequency(nt_parameters)
+        local_oscillator_init = self._initial_local_oscillator_frequency(nt_parameters)
+        voltage_offset_init = self._initial_voltage_offset(nt_parameters)
+
+        root_schedule.children = [
+            *oscillator_init,
+            *local_oscillator_init,
+            *voltage_offset_init,
+            *root_schedule.children,
+        ]
 
         root_schedule.calculate_timing(self._schedule_data, 0, False)
 
@@ -1101,7 +1183,10 @@ class Scheduler:
 
         for i, cs in enumerate(children_schedules):
             if not cs.children:  # empty branch
-                children_schedules[i] = EmptyBranch(
+                # A case without children is 0 length by default, yet it must
+                # have a length for code generator, as each state must have an event.
+                children_schedules[i] = CaseSchedule(
+                    length=grid,
                     grid=grid,
                     sequencer_grid=grid,
                     signals=signals,
@@ -1109,7 +1194,6 @@ class Scheduler:
                     section=cs.section,
                     state=cs.state,
                 )
-
         if handle:
             try:
                 acquire_signal = dao.acquisition_signal(handle)

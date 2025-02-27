@@ -18,7 +18,7 @@ from laboneq.controller.attribute_value_tracker import (
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
-from laboneq.data.recipe import IO, Initialization, Recipe, SignalType
+from laboneq.data.recipe import IO, Initialization, OscillatorParam, Recipe, SignalType
 from laboneq.data.scheduled_experiment import CodegenWaveform, ScheduledExperiment
 from laboneq.executor.executor import (
     ExecutorBase,
@@ -30,6 +30,7 @@ from laboneq.executor.executor import (
 if TYPE_CHECKING:
     from laboneq.core.types.numpy_support import NumPyArray
     from laboneq.controller.devices.device_collection import DeviceCollection
+    from laboneq.controller.devices.device_setup_dao import DeviceUID
 
 
 @dataclass
@@ -51,7 +52,7 @@ HandleResultShapes = dict[AcquireHandle, HandleResultShape]
 
 @dataclass(frozen=True)
 class AwgKey:
-    device_uid: str
+    device_uid: DeviceUID
     awg_index: int | str
 
 
@@ -80,10 +81,7 @@ AwgConfigs = dict[AwgKey, AwgConfig]
 @dataclass
 class DeviceRecipeData:
     iq_settings: dict[int, tuple[int, int]] = field(default_factory=dict)
-
-
-DeviceId = str
-DeviceSettings = defaultdict[DeviceId, DeviceRecipeData]
+    osc_params: list[OscillatorParam] = field(default_factory=list)
 
 
 @dataclass
@@ -170,25 +168,21 @@ class RecipeData:
     execution: Sequence
     result_shapes: HandleResultShapes
     rt_execution_infos: RtExecutionInfos
-    device_settings: DeviceSettings
+    device_settings: dict[DeviceUID, DeviceRecipeData]
     awg_configs: AwgConfigs
     attribute_value_tracker: AttributeValueTracker
     oscillator_ids: list[str]
 
-    @property
-    def initializations(self) -> Iterator[Initialization]:
+    def get_initialization(self, device_uid: DeviceUID) -> Initialization:
         for initialization in self.recipe.initializations:
-            yield initialization
+            if initialization.device_uid == device_uid:
+                return initialization
+        return Initialization(device_uid=device_uid)
 
     def get_artifacts(self, device_class: int, artifacts_class: type[T]) -> T:
         return get_artifacts(
             self.scheduled_experiment.artifacts, device_class, artifacts_class
         )
-
-    def get_initialization_by_device_uid(
-        self, device_uid: str
-    ) -> Initialization | None:
-        return get_initialization_by_device_uid(self.recipe, device_uid)
 
     def awgs_producing_results(self) -> Iterator[tuple[AwgKey, AwgConfig]]:
         for awg_key, awg_config in self.awg_configs.items():
@@ -207,8 +201,11 @@ class RecipeData:
 
 
 def _pre_process_iq_settings_hdawg(
-    initialization: Initialization,
+    initialization: Initialization | None,
 ) -> dict[int, tuple[int, int]]:
+    if initialization is None or initialization.device_type != "HDAWG":
+        return {}
+
     # TODO(2K): Every pair of outputs with adjacent even+odd channel numbers (starting from 0)
     # is treated as an I/Q pair. I/Q pairs should be specified explicitly instead.
 
@@ -401,11 +398,14 @@ def _calculate_awg_configs(
 ) -> AwgConfigs:
     awg_configs: AwgConfigs = defaultdict(AwgConfig)
 
-    def awg_key_by_acquire_signal(signal_id: str) -> AwgKey:
+    def awg_key_by_acquire_signal(signal_id: str) -> AwgKey | None:
         return next(
-            awg_key
-            for awg_key, awg_config in awg_configs.items()
-            if signal_id in awg_config.acquire_signals
+            (
+                awg_key
+                for awg_key, awg_config in awg_configs.items()
+                if signal_id in awg_config.acquire_signals
+            ),
+            None,
         )
 
     for integrator_allocation in recipe.integrator_allocations:
@@ -443,12 +443,14 @@ def _calculate_awg_configs(
         raw_acquire_channels: dict[str, set[int]] = defaultdict(set)
         if rt_execution_info.acquisition_type == AcquisitionType.RAW:
             for signal in rt_execution_info.acquire_signals:
-                awg_key = awg_key_by_acquire_signal(signal)
-                raw_acquire_lengths[awg_key.device_uid][signal] = acquire_lengths.get(
-                    signal, 0
+                ac_awg_key = awg_key_by_acquire_signal(signal)
+                if ac_awg_key is None:
+                    continue
+                raw_acquire_lengths[ac_awg_key.device_uid][signal] = (
+                    acquire_lengths.get(signal, 0)
                 )
-                assert isinstance(awg_key.awg_index, int)
-                raw_acquire_channels[awg_key.device_uid].add(awg_key.awg_index)
+                assert isinstance(ac_awg_key.awg_index, int)
+                raw_acquire_channels[ac_awg_key.device_uid].add(ac_awg_key.awg_index)
         for awg_key, awg_config in awg_configs.items():
             dev_raw_acquire_lengths = raw_acquire_lengths.get(awg_key.device_uid, {})
             # Use dummy raw_acquire_length 4096 if there's no acquire statements in experiment
@@ -525,30 +527,33 @@ def _calculate_awg_configs(
 
 def _pre_process_attributes(
     recipe: Recipe, devices: DeviceCollection
-) -> tuple[AttributeValueTracker, list[str]]:
+) -> tuple[AttributeValueTracker, list[str], dict[str, list[OscillatorParam]]]:
     attribute_value_tracker = AttributeValueTracker()
     oscillator_ids: list[str] = []
     oscillators_check: dict[str, str | float] = {}
 
-    for oscillator_param in recipe.oscillator_params:
+    osc_params_per_device = defaultdict(list)
+    # Sort oscillator params by id to match the order in the compiler
+    for oscillator_param in sorted(recipe.oscillator_params, key=lambda p: p.id):
+        osc_params_per_device[oscillator_param.device_id].append(oscillator_param)
         value_or_param = oscillator_param.param or oscillator_param.frequency
         assert value_or_param is not None, "undefined oscillator frequency"
         if oscillator_param.id in oscillator_ids:
-            osc_index = oscillator_ids.index(oscillator_param.id)
+            osc_param_index = oscillator_ids.index(oscillator_param.id)
             if oscillators_check[oscillator_param.id] != value_or_param:
                 raise LabOneQControllerException(
                     f"Conflicting specifications for the same oscillator id '{oscillator_param.id}' "
                     f"in the recipe: '{oscillators_check[oscillator_param.id]}' != '{value_or_param}'"
                 )
         else:
-            osc_index = len(oscillator_ids)
+            osc_param_index = len(oscillator_ids)
             oscillator_ids.append(oscillator_param.id)
             oscillators_check[oscillator_param.id] = value_or_param
         attribute_value_tracker.add_attribute(
             device_uid=oscillator_param.device_id,
             attribute=DeviceAttribute(
                 name=AttributeName.OSCILLATOR_FREQ,
-                index=osc_index,
+                index=osc_param_index,
                 value_or_param=value_or_param,
             ),
         )
@@ -561,7 +566,7 @@ def _pre_process_attributes(
                 attribute=attribute,
             )
 
-    return attribute_value_tracker, oscillator_ids
+    return attribute_value_tracker, oscillator_ids, osc_params_per_device
 
 
 def pre_process_compiled(
@@ -575,19 +580,25 @@ def pre_process_compiled(
     assert recipe is not None
     execution = scheduled_experiment.execution
 
-    device_settings: DeviceSettings = defaultdict(DeviceRecipeData)
-    for initialization in recipe.initializations:
-        if initialization.device_type == "HDAWG":
-            device_settings[
-                initialization.device_uid
-            ].iq_settings = _pre_process_iq_settings_hdawg(initialization)
+    attribute_value_tracker, oscillator_ids, osc_params_per_device = (
+        _pre_process_attributes(recipe, devices)
+    )
+
+    device_settings: dict[DeviceUID, DeviceRecipeData] = {
+        device_uid: DeviceRecipeData(
+            iq_settings=_pre_process_iq_settings_hdawg(
+                get_initialization_by_device_uid(recipe, device_uid)
+            ),
+            osc_params=osc_params_per_device.get(device_uid, []),
+        )
+        for device_uid, _ in devices.all
+    }
 
     lp = _LoopsPreprocessor()
     lp.run(execution)
     rt_execution_infos = lp.rt_execution_infos
 
     awg_configs = _calculate_awg_configs(rt_execution_infos, recipe, devices)
-    attribute_value_tracker, oscillator_ids = _pre_process_attributes(recipe, devices)
 
     recipe_data = RecipeData(
         scheduled_experiment=scheduled_experiment,

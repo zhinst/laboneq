@@ -3,9 +3,7 @@
 
 from __future__ import annotations
 
-import itertools
 import logging
-import threading
 import time
 from collections import defaultdict
 from copy import deepcopy
@@ -44,7 +42,7 @@ from laboneq.controller.versioning import (
 from laboneq.core.exceptions import AbortExecution
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
-from laboneq.core.utilities.async_helpers import EventLoopHolder
+from laboneq.core.utilities.async_helpers import EventLoopMixIn
 from laboneq.core.utilities.replace_phase_increment import calc_ct_replacement
 from laboneq.core.utilities.replace_pulse import ReplacementType, calc_wave_replacements
 from laboneq.data.execution_payload import TargetSetup
@@ -69,9 +67,7 @@ _logger = logging.getLogger(__name__)
 CONNECT_CHECK_HOLDOFF = 10  # sec
 
 
-class Controller:
-    _thread_local = threading.local()
-
+class Controller(EventLoopMixIn):
     def __init__(
         self,
         target_setup: TargetSetup,
@@ -109,14 +105,6 @@ class Controller:
 
         _logger.info("VERSION: laboneq %s", __version__)
 
-    @property
-    def _event_loop(self) -> EventLoopHolder:
-        event_loop = getattr(self._thread_local, "laboneq_event_loop", None)
-        if event_loop is None:
-            event_loop = EventLoopHolder()
-            self._thread_local.laboneq_event_loop = event_loop
-        return event_loop
-
     def _check_zhinst_core_version_support(self, version: LabOneVersion):
         if version < MINIMUM_SUPPORTED_LABONE_VERSION:
             err_msg = f"'zhinst.core' version '{version}' is not supported. We recommend {RECOMMENDED_LABONE_VERSION}."
@@ -135,64 +123,6 @@ class Controller:
     def devices(self) -> dict[str, DeviceZI]:
         return self._devices.devices
 
-    def _allocate_resources(self):
-        self._devices.free_allocations()
-        osc_params = self._recipe_data.recipe.oscillator_params
-        for osc_param in sorted(osc_params, key=lambda p: p.id):
-            self._devices.find_by_uid(osc_param.device_id).allocate_osc(
-                osc_param, self._recipe_data
-            )
-
-    async def _reset_to_idle_state(self):
-        await _gather(*(device.reset_to_idle() for _, device in self._devices.all))
-
-    async def _apply_recipe_initializations(self):
-        awaitables = []
-        for initialization in self._recipe_data.initializations:
-            device = self._devices.find_by_uid(initialization.device_uid)
-            awaitables.append(
-                device.apply_initialization(
-                    self._recipe_data.device_settings[initialization.device_uid],
-                    initialization,
-                    self._recipe_data,
-                )
-            )
-            awaitables.append(device.initialize_oscillators())
-        await _gather(*awaitables)
-
-    async def _set_nodes_before_awg_program_upload(self):
-        await _gather(
-            *(
-                self._devices.find_by_uid(
-                    initialization.device_uid
-                ).set_before_awg_upload(initialization, self._recipe_data)
-                for initialization in self._recipe_data.initializations
-            )
-        )
-
-    async def _upload_awg_programs(self, nt_step_key: NtStepKey, rt_section_uid: str):
-        recipe_data = self._recipe_data
-
-        awaitables = []
-        for initialization in recipe_data.initializations:
-            if not initialization.awgs:
-                continue
-
-            device = self._devices.find_by_uid(initialization.device_uid)
-
-            for awg_obj in initialization.awgs:
-                awg_index = awg_obj.awg
-                awaitables.append(
-                    device.prepare_artifacts(
-                        recipe_data=recipe_data,
-                        rt_section_uid=rt_section_uid,
-                        initialization=initialization,
-                        awg_index=awg_index,
-                        nt_step_key=nt_step_key,
-                    )
-                )
-        await _gather(*awaitables)
-
     async def _replace_artifacts(self, rt_section_uid: str):
         rt_execution_info = self._recipe_data.rt_execution_infos[rt_section_uid]
         with_pipeliner = rt_execution_info.with_pipeliner
@@ -205,72 +135,45 @@ class Controller:
             await device.set_async(nc)
         self._nodes_from_artifact_replacement.clear()
 
-    async def _set_nodes_after_awg_program_upload(self):
-        await _gather(
-            *(
-                self._devices.find_by_uid(
-                    initialization.device_uid
-                ).set_after_awg_upload(initialization)
-                for initialization in self._recipe_data.initializations
-            )
+    async def _prepare_nt_step(
+        self,
+        sweep_params_tracker: SweepParamsTracker,
+        user_set_nodes: NodeCollector,
+        nt_step_key: NtStepKey,
+        rt_section_uid: str,
+    ):
+        # Trigger
+        await self._devices.for_each(DeviceBase.configure_trigger, self._recipe_data)
+
+        # NT Sweep parameters
+        for param, value in sweep_params_tracker.updated_params():
+            self._recipe_data.attribute_value_tracker.update(param, value)
+        await self._devices.for_each(
+            DeviceBase.set_nt_step_nodes, self._recipe_data, user_set_nodes
         )
-
-    async def _initialize_awgs(self, nt_step: NtStepKey, rt_section_uid: str):
-        await self._set_nodes_before_awg_program_upload()
-        await self._upload_awg_programs(
-            nt_step_key=nt_step, rt_section_uid=rt_section_uid
-        )
-        await self._replace_artifacts(rt_section_uid=rt_section_uid)
-        await self._set_nodes_after_awg_program_upload()
-
-    def _find_by_node_path(self, path: str) -> DeviceZI:
-        return self._devices.find_by_node_path(path)
-
-    async def _after_nt_step(self):
-        await self._devices.on_after_nt_step()
-
-    async def _configure_triggers(self):
-        awaitables = []
-        for uid, device in itertools.chain(
-            self._devices.leaders, self._devices.followers
-        ):
-            init = self._recipe_data.get_initialization_by_device_uid(uid)
-            if init is None:
-                continue
-            awaitables.append(device.configure_trigger(init, self._recipe_data))
-        await _gather(*awaitables)
-
-    async def _prepare_nt_step(self, sweep_params_tracker: SweepParamsTracker):
-        for param in sweep_params_tracker.updated_params():
-            self._recipe_data.attribute_value_tracker.update(
-                param, sweep_params_tracker.get_param(param)
-            )
-
-        for device_uid, device in self._devices.all:
-            await device.set_async(
-                device.collect_prepare_nt_step_nodes(
-                    self._recipe_data.attribute_value_tracker.device_view(device_uid),
-                    self._recipe_data,
-                )
-            )
-
         self._recipe_data.attribute_value_tracker.reset_updated()
 
-    async def _initialize_devices(self):
-        await self._reset_to_idle_state()
-        self._allocate_resources()
-        await self._apply_recipe_initializations()
+        # Feedback
+        await self._devices.for_each(DeviceBase.configure_feedback, self._recipe_data)
 
-    async def _execute_one_step_followers(self, with_pipeliner: bool):
-        _logger.debug("Settings nodes to start on followers")
-
-        await _gather(
-            *(
-                device.wait_for_execution_ready(with_pipeliner=with_pipeliner)
-                for _, device in self._devices.followers
-                if isinstance(device, DeviceBase)
-            )
+        # AWG / pipeliner upload
+        await self._devices.for_each(
+            DeviceBase.set_before_awg_upload, self._recipe_data
         )
+        await self._devices.for_each(
+            DeviceZI.prepare_artifacts,
+            recipe_data=self._recipe_data,
+            rt_section_uid=rt_section_uid,
+            nt_step_key=nt_step_key,
+        )
+        await self._replace_artifacts(rt_section_uid=rt_section_uid)
+        await self._devices.for_each(DeviceBase.set_after_awg_upload, self._recipe_data)
+
+    async def _after_nt_step(self):
+        await self._devices.for_each(DeviceBase.update_warning_nodes)
+        device_errors = await self._devices.fetch_device_errors()
+        if device_errors is not None:
+            raise LabOneQControllerException(device_errors)
 
     async def _wait_execution_to_stop(
         self, acquisition_type: AcquisitionType, rt_execution_info: RtExecutionInfo
@@ -319,28 +222,6 @@ class Controller:
             )
         )
 
-    async def _setup_one_step_execution(self, with_pipeliner: bool):
-        await _gather(
-            *(
-                device.setup_one_step_execution(
-                    with_pipeliner=with_pipeliner,
-                    has_awg_in_use=any(
-                        init.device_uid == device_uid and len(init.awgs) > 0
-                        for init in self._recipe_data.initializations
-                    ),
-                )
-                for device_uid, device in self._devices.all
-            )
-        )
-
-    async def _teardown_one_step_execution(self, with_pipeliner: bool):
-        await _gather(
-            *(
-                device.teardown_one_step_execution(with_pipeliner=with_pipeliner)
-                for _, device in self._devices.all
-            )
-        )
-
     async def _execute_one_step(
         self, acquisition_type: AcquisitionType, rt_section_uid: str
     ):
@@ -348,26 +229,23 @@ class Controller:
 
         rt_execution_info = self._recipe_data.rt_execution_infos[rt_section_uid]
 
-        await self._setup_one_step_execution(
-            with_pipeliner=rt_execution_info.with_pipeliner
+        await self._devices.for_each(
+            DeviceBase.setup_one_step_execution,
+            recipe_data=self._recipe_data,
+            with_pipeliner=rt_execution_info.with_pipeliner,
         )
 
-        # Can't batch everything together, because PQSC/QHUB needs to start execution after HDs
-        # otherwise it can finish before AWGs are started, and the trigger is lost.
-        await self._execute_one_step_followers(
-            with_pipeliner=rt_execution_info.with_pipeliner
+        await self._devices.for_each(
+            DeviceBase.wait_for_execution_ready,
+            with_pipeliner=rt_execution_info.with_pipeliner,
         )
-
-        _logger.debug("Execution started")
-
         await self._wait_execution_to_stop(
             acquisition_type, rt_execution_info=rt_execution_info
         )
-        await self._teardown_one_step_execution(
-            with_pipeliner=rt_execution_info.with_pipeliner
+        await self._devices.for_each(
+            DeviceBase.teardown_one_step_execution,
+            with_pipeliner=rt_execution_info.with_pipeliner,
         )
-
-        _logger.debug("Execution stopped")
 
     def connect(
         self,
@@ -453,8 +331,16 @@ class Controller:
 
         async with self._devices.capture_logs():
             try:
-                await self._initialize_devices()
-                await self._devices.on_experiment_begin()
+                await self._devices.for_each(DeviceBase.reset_to_idle)
+                self._devices.for_each_sync(
+                    DeviceBase.allocate_resources, self._recipe_data
+                )
+                await self._devices.for_each(
+                    DeviceBase.apply_initialization, self._recipe_data
+                )
+                await self._devices.for_each(DeviceBase.initialize_oscillators)
+                await self._devices.for_each(DeviceBase.on_experiment_begin)
+                await self._devices.for_each(DeviceBase.update_warning_nodes)
 
                 # Ensure no side effects from the previous execution in the same session
                 self._current_waves.clear()
@@ -479,7 +365,7 @@ class Controller:
             finally:
                 # Ensure that the experiment run time is not included in the idle timeout for the connection check.
                 self._last_connect_check_ts = time.monotonic()
-                await self._devices.on_experiment_end()
+                await self._devices.for_each(DeviceBase.on_experiment_end)
 
     def results(self) -> ExperimentResults:
         return self._results
@@ -587,14 +473,6 @@ class Controller:
             command_table = device.prepare_command_table(dummy_artifact, seqc_name)
             nodes = device.prepare_upload_command_table(awg_index, command_table)
             self._nodes_from_artifact_replacement[device].extend(nodes)
-
-    async def _prepare_rt_execution(self):
-        await _gather(
-            *(
-                device.configure_feedback(self._recipe_data)
-                for _, device in self._devices.leaders
-            )
-        )
 
     def _prepare_result_shapes(self):
         self._results = ExperimentResults()

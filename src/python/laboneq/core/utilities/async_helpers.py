@@ -80,3 +80,15 @@ class EventLoopHolder:
                 return future.result(timeout=0.1)  # @IgnoreException
             except concurrent.futures.TimeoutError:  # noqa: PERF203
                 pass
+
+
+class EventLoopMixIn:
+    _thread_local = threading.local()
+
+    @property
+    def _event_loop(self) -> EventLoopHolder:
+        event_loop = getattr(self._thread_local, "laboneq_event_loop", None)
+        if event_loop is None:
+            event_loop = EventLoopHolder()
+            self._thread_local.laboneq_event_loop = event_loop
+        return event_loop

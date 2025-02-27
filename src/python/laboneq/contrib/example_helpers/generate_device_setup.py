@@ -168,7 +168,10 @@ def generate_device_setup(
         hub_id = pqsc[0]["serial"] if pqsc else qhub[0]["serial"]
         # create connected toolkit session
         tk_session = create_TKSession(
-            dataserver_ip=server_host, hub_id=hub_id, device_ids=device_ids
+            dataserver_ip=server_host,
+            server_port=int(server_port),
+            hub_id=hub_id,
+            device_ids=device_ids,
         )
         # query and update instrument options
         if query_options:

@@ -82,6 +82,9 @@ class NodeCollector:
     ):
         self._nodes.append(NodeActionSet(self._base + path, value, cache, filename))
 
+    def add_node_action(self, node_action: NodeAction):
+        self._nodes.append(node_action)
+
     def barrier(self):
         self._nodes.append(NodeActionBarrier())
 

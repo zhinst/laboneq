@@ -12,6 +12,7 @@ from laboneq.core.exceptions import LabOneQException
 
 def create_TKSession(
     dataserver_ip: str = "localhost",
+    server_port: int | None = None,
     hub_id: str | None = None,
     device_ids: list[str] | None = None,
 ):
@@ -25,7 +26,7 @@ def create_TKSession(
             Defaults to None.
     """
     # create session
-    my_session = TKSession(dataserver_ip)
+    my_session = TKSession(dataserver_ip, server_port=server_port)
     # connect pqsc / QHUB
     if hub_id is not None:
         my_session.connect_device(hub_id)
@@ -47,8 +48,8 @@ def get_single_instrument_options(
         device_id: Identifier of an instrument connected to the toolkit session.
     """
     connected_devices = [id.upper() for id in session.devices]
-    if device_id in connected_devices:
-        device = session.devices[device_id]
+    if device_id.upper() in connected_devices:
+        device = session.devices[device_id.upper()]
         return device.device_type + "/" + "/".join(device.device_options.split())
     else:
         raise LabOneQException(f"Instrument {device_id} not connected to session.")
@@ -107,8 +108,8 @@ def return_instrument_zsync_ports(
         device_ids: List of Instrument identifiers as strings, i.e. ["DEV1234", "DEV2345"].
     """
     connected_devices = [id.upper() for id in session.devices]
-    if hub_id in connected_devices:
-        hub = session.devices[hub_id]
+    if hub_id.upper() in connected_devices:
+        hub = session.devices[hub_id.upper()]
     else:
         raise LabOneQException(f"Instrument {hub_id} not connected to session.")
     zsync_dict = hub.zsyncs["*"].connection.serial()

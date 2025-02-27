@@ -29,6 +29,12 @@ class InitialOscillatorFrequencySchedule(IntervalSchedule):
     values: List[float]
 
     def _calculate_timing(self, _schedule_data, start: int, *__, **___) -> int:
-        # Length must be set via parameter, so nothing to do here
-        assert self.length is not None
+        return start
+
+
+@define(kw_only=True, slots=True)
+class InitialLocalOscillatorFrequencySchedule(IntervalSchedule):
+    value: float
+
+    def _calculate_timing(self, _schedule_data, start: int, *__, **___) -> int:
         return start

@@ -40,7 +40,7 @@ from laboneq.controller.devices.device_setup_dao import (
     DeviceSetupDAO,
 )
 from laboneq.controller.devices.device_utils import NodeCollector
-from laboneq.controller.devices.zi_emulator import EmulatorState, MockInstrument
+from laboneq.controller.devices.zi_emulator import EmulatorState, KernelSessionEmulator
 from laboneq.controller.devices.node_control import (
     NodeControlBase,
     filter_commands,
@@ -53,7 +53,6 @@ from laboneq.controller.pipeliner_reload_tracker import PipelinerReloadTracker
 from laboneq.controller.recipe_processor import (
     AwgConfig,
     AwgKey,
-    DeviceRecipeData,
     RecipeData,
     RtExecutionInfo,
     get_wave,
@@ -95,6 +94,8 @@ class AwgCompilerStatus(Enum):
 
 @dataclass
 class AllocatedOscillator:
+    # Oscillators may be grouped in HW, restricting certain channels to oscillators
+    # from specific groups. Allocation is performed within each group.
     group: int
     channels: set[int]
     index: int
@@ -304,17 +305,6 @@ class DeviceZI(DeviceAbstract):
     def clear_cache(self):
         pass
 
-    ### Device resources allocation
-    def free_allocations(self):
-        pass
-
-    def allocate_osc(self, osc_param: OscillatorParam, recipe_data: RecipeData):
-        pass
-
-    ### Handling of device warnings
-    async def update_warning_nodes(self, init: bool):
-        pass
-
     ### Other methods
     async def set_async(self, nodes: NodeCollector):
         pass
@@ -330,32 +320,11 @@ class DeviceZI(DeviceAbstract):
     ) -> Iterator[DeviceAttribute]:
         yield from []
 
-    async def reset_to_idle(self):
-        pass
-
-    async def configure_trigger(
-        self, initialization: Initialization, recipe_data: RecipeData
-    ):
-        pass
-
-    async def apply_initialization(
-        self,
-        device_recipe_data: DeviceRecipeData,
-        initialization: Initialization,
-        recipe_data: RecipeData,
-    ):
-        pass
-
-    async def initialize_oscillators(self):
-        pass
-
     @abstractmethod
     async def prepare_artifacts(
         self,
         recipe_data: RecipeData,
         rt_section_uid: str,
-        initialization: Initialization,
-        awg_index: int | str,
         nt_step_key: NtStepKey,
     ):
         pass
@@ -382,27 +351,6 @@ class DeviceZI(DeviceAbstract):
     ) -> NodeCollector:
         return NodeCollector()
 
-    def collect_prepare_nt_step_nodes(
-        self, attributes: DeviceAttributesView, recipe_data: RecipeData
-    ) -> NodeCollector:
-        return NodeCollector()
-
-    async def set_before_awg_upload(
-        self, initialization: Initialization, recipe_data: RecipeData
-    ):
-        pass
-
-    async def set_after_awg_upload(self, initialization: Initialization):
-        pass
-
-    async def setup_one_step_execution(
-        self, with_pipeliner: bool, has_awg_in_use: bool
-    ):
-        pass
-
-    async def configure_feedback(self, recipe_data: RecipeData):
-        pass
-
     async def start_execution(self, with_pipeliner: bool):
         pass
 
@@ -424,12 +372,6 @@ class DeviceZI(DeviceAbstract):
 
     def _collect_warning_nodes(self) -> list[tuple[str, str]]:
         return []
-
-    async def on_experiment_begin(self):
-        pass
-
-    async def on_experiment_end(self):
-        pass
 
     ### Result processing
     async def get_result_data(self) -> Any:
@@ -509,13 +451,17 @@ class DeviceBase(DeviceZI):
     def interface(self):
         return self.options.interface.lower()
 
+    def _has_awg_in_use(self, recipe_data: RecipeData):
+        initialization = recipe_data.get_initialization(self.device_qualifier.uid)
+        return len(initialization.awgs) > 0
+
     async def set_async(self, nodes: NodeCollector):
         await set_parallel(self._api, nodes)
 
     def clear_cache(self):
         # TODO(2K): the code below is only needed to keep async API behavior
         # in emulation mode matching that of legacy API with LabOne Q cache.
-        if isinstance(self._api, MockInstrument):
+        if isinstance(self._api, KernelSessionEmulator):
             self._api.clear_cache()
 
     def add_command_table_header(self, body: dict) -> dict:
@@ -698,11 +644,6 @@ class DeviceBase(DeviceZI):
         self._api = None  # TODO(2K): Proper disconnect?
         self._connected = False
 
-    def free_allocations(self):
-        self._allocated_oscs.clear()
-        self._allocated_awgs.clear()
-        self._pipeliner_reload_tracker.clear()
-
     def _osc_group_by_channel(self, channel: int) -> int:
         return channel
 
@@ -717,12 +658,20 @@ class DeviceBase(DeviceZI):
     def _make_osc_path(self, channel: int, index: int) -> str:
         return f"/{self.serial}/oscs/{index}/freq"
 
-    def allocate_osc(self, osc_param: OscillatorParam, recipe_data: RecipeData):
+    def allocate_resources(self, recipe_data: RecipeData):
+        self._allocated_oscs.clear()
+        self._allocated_awgs.clear()
+        self._pipeliner_reload_tracker.clear()
+
+        device_recipe_data = recipe_data.device_settings[self.device_qualifier.uid]
+        for osc_param in device_recipe_data.osc_params:
+            self._allocate_osc_impl(osc_param, recipe_data)
+
+    def _allocate_osc_impl(self, osc_param: OscillatorParam, recipe_data: RecipeData):
         osc_group = self._osc_group_by_channel(osc_param.channel)
         osc_group_oscs = [o for o in self._allocated_oscs if o.group == osc_group]
         same_id_osc = next((o for o in osc_group_oscs if o.id == osc_param.id), None)
         if same_id_osc is None:
-            # pylint: disable=E1128
             new_index = self._get_next_osc_index(osc_group_oscs, osc_param, recipe_data)
             if new_index is None:
                 raise LabOneQControllerException(
@@ -754,9 +703,8 @@ class DeviceBase(DeviceZI):
                 for path, _ in self._collect_warning_nodes()
             )
         )
-        await super().on_experiment_begin()
 
-    async def update_warning_nodes(self, init: bool):
+    async def update_warning_nodes(self):
         for node, msg in self._collect_warning_nodes():
             updates = self._subscriber.get_updates(node)
             value = updates[-1].value if len(updates) > 0 else None
@@ -788,20 +736,48 @@ class DeviceBase(DeviceZI):
     def _adjust_frequency(self, freq):
         return freq
 
-    def collect_prepare_nt_step_nodes(
+    async def set_nt_step_nodes(
+        self, recipe_data: RecipeData, user_set_nodes: NodeCollector
+    ):
+        nc = NodeCollector()
+
+        if not self.is_secondary:
+            for node_action in user_set_nodes.set_actions():
+                if m := re.match(r"^/?(dev[^/]+)/.+", node_action.path.lower()):
+                    serial = m.group(1)
+                    if serial == self.serial:
+                        nc.add_node_action(node_action)
+
+        attributes = recipe_data.attribute_value_tracker.device_view(
+            self.device_qualifier.uid
+        )
+        nc.extend(self._collect_prepare_nt_step_nodes(attributes, recipe_data))
+
+        await self.set_async(nc)
+
+    def _collect_prepare_nt_step_nodes(
         self, attributes: DeviceAttributesView, recipe_data: RecipeData
     ) -> NodeCollector:
         nc = NodeCollector()
         for osc in self._allocated_oscs:
-            osc_index = recipe_data.oscillator_ids.index(osc.id)
+            osc_param_index = recipe_data.oscillator_ids.index(osc.id)
             [osc_freq], updated = attributes.resolve(
-                keys=[(AttributeName.OSCILLATOR_FREQ, osc_index)]
+                keys=[(AttributeName.OSCILLATOR_FREQ, osc_param_index)]
             )
             if updated:
                 osc_freq_adjusted = self._adjust_frequency(osc_freq)
                 for ch in osc.channels:
                     nc.add(self._make_osc_path(ch, osc.index), osc_freq_adjusted)
         return nc
+
+    async def set_before_awg_upload(self, recipe_data: RecipeData):
+        pass
+
+    async def set_after_awg_upload(self, recipe_data: RecipeData):
+        pass
+
+    async def configure_feedback(self, recipe_data: RecipeData):
+        pass
 
     async def emit_start_trigger(self, with_pipeliner: bool):
         if self.is_leader():
@@ -819,8 +795,29 @@ class DeviceBase(DeviceZI):
         self,
         recipe_data: RecipeData,
         rt_section_uid: str,
-        initialization: Initialization,
-        awg_index: int,  # type: ignore[override]
+        nt_step_key: NtStepKey,
+    ):
+        initialization = recipe_data.get_initialization(self.device_qualifier.uid)
+        if not initialization.awgs:
+            return
+
+        await _gather(
+            *(
+                self._prepare_artifacts_impl(
+                    recipe_data=recipe_data,
+                    rt_section_uid=rt_section_uid,
+                    awg_index=awg.awg,
+                    nt_step_key=nt_step_key,
+                )
+                for awg in initialization.awgs
+            )
+        )
+
+    async def _prepare_artifacts_impl(
+        self,
+        recipe_data: RecipeData,
+        rt_section_uid: str,
+        awg_index: int | str,
         nt_step_key: NtStepKey,
     ):
         assert isinstance(awg_index, int)
@@ -851,7 +848,7 @@ class DeviceBase(DeviceZI):
                 (
                     r
                     for r in recipe_data.recipe.realtime_execution_init
-                    if r.device_id == initialization.device_uid
+                    if r.device_id == self.device_qualifier.uid
                     and r.awg_id == awg_index
                     and r.nt_step == effective_nt_step
                 ),
@@ -870,7 +867,7 @@ class DeviceBase(DeviceZI):
                 self.prepare_readout_config_nodes(
                     recipe_data,
                     rt_section_uid,
-                    AwgKey(initialization.device_uid, awg_index),
+                    AwgKey(self.device_qualifier.uid, awg_index),
                     pipeliner_job if rt_execution_info.with_pipeliner else None,
                 )
             )
@@ -921,7 +918,7 @@ class DeviceBase(DeviceZI):
                 # TODO(2K): Cleanup arguments to prepare_upload_all_integration_weights
                 self.prepare_upload_all_integration_weights(
                     recipe_data,
-                    initialization.device_uid,
+                    self.device_qualifier.uid,
                     awg_index,
                     artifacts,
                     recipe_data.recipe.integrator_allocations,
@@ -1250,6 +1247,12 @@ class DeviceBase(DeviceZI):
     def _get_num_awgs(self) -> int:
         return 0
 
+    async def configure_trigger(self, recipe_data: RecipeData):
+        pass
+
+    async def apply_initialization(self, recipe_data: RecipeData):
+        pass
+
     async def initialize_oscillators(self):
         nc = NodeCollector()
         osc_inits = {
@@ -1335,9 +1338,17 @@ class DeviceBase(DeviceZI):
 
     async def on_experiment_end(self):
         self._subscriber.unsubscribe_all()
-        await super().on_experiment_end()
+
+    async def setup_one_step_execution(
+        self, recipe_data: RecipeData, with_pipeliner: bool
+    ):
+        pass
 
     async def wait_for_execution_ready(self, with_pipeliner: bool):
+        if not self.is_follower():
+            # Can't batch everything together, because PQSC/QHUB needs to start execution after HDs
+            # otherwise it can finish before AWGs are started, and the trigger is lost.
+            return
         # TODO(2K): use timeout passed to connect
         rw = ResponseWaiterAsync(api=self._api, timeout_s=2)
         rw.add_with_msg(

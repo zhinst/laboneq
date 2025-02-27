@@ -41,9 +41,12 @@ class ServerQualifier:
     ignore_version_mismatch: bool = False
 
 
+DeviceUID = str
+
+
 @dataclass
 class DeviceQualifier:
-    uid: str
+    uid: DeviceUID
     server_uid: str
     driver: str
     options: DeviceOptions

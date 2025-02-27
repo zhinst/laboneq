@@ -1648,6 +1648,9 @@ class KernelSessionEmulator:
         self._device, self._events = emulator_state.make_device(serial)
         self._cache: dict[str, Any] = {}
 
+    def clear_cache(self):  # TODO(2K): Remove once legacy API is gone
+        self._cache.clear()
+
     def dev_path(self, path: str) -> str:
         if path.startswith("/"):
             path = path[1:]
@@ -1785,15 +1788,3 @@ class KernelSessionEmulator:
         if get_initial_value:
             self._device.getAsEvent(dev_path)
         return MockDataQueue(path, self)
-
-
-class MockInstrument:
-    def __init__(self, serial: str, emulator_state: EmulatorState):
-        self._session = KernelSessionEmulator(serial, emulator_state)
-
-    @property
-    def kernel_session(self) -> KernelSessionEmulator:
-        return self._session
-
-    def clear_cache(self):  # TODO(2K): Remove once legacy API is gone
-        self.kernel_session._cache.clear()

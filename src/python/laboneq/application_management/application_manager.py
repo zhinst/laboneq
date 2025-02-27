@@ -6,16 +6,11 @@ from dataclasses import dataclass
 
 from lagom import ExplicitContainer, Singleton
 
-from laboneq.implementation.compilation_service.compilation_service_legacy import (
-    CompilationServiceLegacy,
-)
 from laboneq.implementation.experiment_workflow import ExperimentWorkflow
 from laboneq.implementation.payload_builder.payload_builder import PayloadBuilder
 from laboneq.implementation.runner.runner_legacy import RunnerLegacy
 from laboneq.interfaces.application_management.laboneq_settings import LabOneQSettings
-from laboneq.interfaces.compilation_service.compilation_service_api import (
-    CompilationServiceAPI,
-)
+
 from laboneq.interfaces.experiment.experiment_api import ExperimentAPI
 from laboneq.interfaces.payload_builder.payload_builder_api import PayloadBuilderAPI
 from laboneq.interfaces.runner.runner_api import RunnerAPI
@@ -53,10 +48,7 @@ class ApplicationManager:
         container[RunnerControlAPI] = Singleton(lambda: RunnerLegacy())
         # RunnerControlAPI and the RunnerAPI are currently implemented by the same object:
         container[RunnerAPI] = lambda c: c[RunnerControlAPI]
-        container[CompilationServiceAPI] = Singleton(lambda: CompilationServiceLegacy())
-        container[PayloadBuilderAPI] = Singleton(
-            lambda c: PayloadBuilder(compilation_service=c[CompilationServiceAPI])
-        )
+        container[PayloadBuilderAPI] = Singleton(lambda: PayloadBuilder())
         container[ExperimentAPI] = Singleton(
             lambda c: ExperimentWorkflow(
                 runner=c[RunnerAPI],

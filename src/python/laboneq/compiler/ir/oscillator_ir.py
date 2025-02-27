@@ -22,3 +22,8 @@ class SetOscillatorFrequencyIR(IntervalIR):
 class InitialOscillatorFrequencyIR(IntervalIR):
     oscillators: List[SweptOscillator]
     values: List[float]
+
+
+@define(kw_only=True, slots=True)
+class InitialLocalOscillatorFrequencyIR(IntervalIR):
+    value: float

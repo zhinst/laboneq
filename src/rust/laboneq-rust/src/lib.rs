@@ -9,7 +9,7 @@ mod intervals;
 mod _rust {
 
     use super::*;
-    #[pymodule(submodule)]
+    #[pymodule]
     mod intervals {
         #[pymodule_export]
         use crate::intervals::Interval;
@@ -29,7 +29,7 @@ mod _rust {
         // - https://github.com/PyO3/pyo3/issues/759
         // - https://docs.python.org/3/tutorial/modules.html#packages
         let intervals_module = m.getattr("intervals")?;
-        let modules = py.import_bound("sys")?.getattr("modules")?;
+        let modules = py.import("sys")?.getattr("modules")?;
         modules.set_item("laboneq._rust.intervals", intervals_module)?;
 
         Ok(())

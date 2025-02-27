@@ -18,6 +18,7 @@ __all__ = [
     "delay",
     "experiment",
     "experiment_calibration",
+    "for_each",
     "map_signal",
     "match",
     "measure",
@@ -26,6 +27,7 @@ __all__ = [
     "section",
     "set_node",
     "sweep",
+    "sweep_range",
     "uid",
     # pulse_library:
     "pulse_library",
@@ -48,6 +50,7 @@ from laboneq.dsl.experiment.builtins import (
     delay,
     experiment,
     experiment_calibration,
+    for_each,
     map_signal,
     match,
     measure,
@@ -56,6 +59,7 @@ from laboneq.dsl.experiment.builtins import (
     section,
     set_node,
     sweep,
+    sweep_range,
     uid,
 )
 from laboneq.dsl.experiment import pulse_library

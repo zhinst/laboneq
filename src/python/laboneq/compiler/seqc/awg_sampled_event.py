@@ -7,8 +7,6 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Callable
 
-from sortedcollections import SortedDict
-
 
 class AWGEventType(Enum):
     LOOP_STEP_START = auto()
@@ -54,18 +52,25 @@ class AWGEvent:
 
 @dataclass
 class AWGSampledEventSequence:
-    """Ordered mapping of the AWG timestamp in device samples to the events at that sample."""
+    """Mapping of the AWG timestamp in device samples to the events at that sample.
 
-    sequence: dict[int, list[AWGEvent]] = field(default_factory=SortedDict)
+    Use `.sort()` whenever sorted order is required.
+    """
+
+    sequence: dict[int, list[AWGEvent]] = field(default_factory=dict)
 
     def add(self, ts: int, event: AWGEvent):
-        events_at_ts = self.sequence.setdefault(ts, [])
-        events_at_ts.append(event)
+        if ts in self.sequence:
+            self.sequence[ts].append(event)
+        else:
+            self.sequence[ts] = [event]
 
     def merge(self, other: AWGSampledEventSequence):
         for ts, other_events in other.sequence.items():
-            events_at_ts = self.sequence.setdefault(ts, [])
-            events_at_ts.extend(other_events)
+            if ts in self.sequence:
+                self.sequence[ts].extend(other_events)
+            else:
+                self.sequence[ts] = other_events
 
     def has_matching_event(self, predicate: Callable[[AWGEvent], bool]) -> bool:
         return next(
@@ -77,3 +82,6 @@ class AWGSampledEventSequence:
             ),
             False,
         )
+
+    def sort(self):
+        self.sequence = {ts: self.sequence[ts] for ts in sorted(self.sequence)}

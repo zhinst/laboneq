@@ -21,6 +21,9 @@ if TYPE_CHECKING:
     )
     from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
     from laboneq.compiler.workflow.on_device_delays import OnDeviceDelayCompensation
+    from laboneq.compiler.workflow.compiler_output import (
+        CombinedRTCompilerOutputContainer,
+    )
 
     Callback: TypeAlias = Callable[
         [
@@ -47,7 +50,7 @@ def register_recipe_hook(device_class: int, hook: Callback):
 register_recipe_hook(0, generate_recipe)
 
 
-def generate_recipe(
+def generate_recipe_combined(
     awgs: list[AWGInfo],
     experiment_dao: ExperimentDAO,
     leader_properties: LeaderProperties,
@@ -56,7 +59,7 @@ def generate_recipe(
     integration_unit_allocation: dict[str, IntegrationUnitAllocation],
     delays_by_signal: dict[str, OnDeviceDelayCompensation],
     precompensations: dict[str, PrecompensationInfo],
-    combined_compiler_output,
+    combined_compiler_output: CombinedRTCompilerOutputContainer,
 ) -> Recipe:
     for device_class, output in combined_compiler_output.combined_output.items():
         return _registered_hooks[device_class](

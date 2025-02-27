@@ -154,7 +154,7 @@ impl<N: Ord + Clone + Copy, D: Clone> ArrayBackedIntervalTree<N, D> {
                 let end = max3(a[i].interval.end, end_left, end_right);
                 a[i].max = end;
             }
-            last_i = if (last_i >> k & 1) > 0 {
+            last_i = if ((last_i >> k) & 1) > 0 {
                 last_i - x
             } else {
                 last_i + x

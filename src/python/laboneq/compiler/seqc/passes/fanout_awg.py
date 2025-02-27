@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from functools import singledispatchmethod
 import attrs
 from typing import Iterable
 
@@ -79,12 +78,16 @@ class _AwgPruner:
         self._signals = set()
         return res
 
-    @singledispatchmethod
-    def visit(self, node, start: int):
-        raise RuntimeError("Nodes must be of type `IntervalIR`")
+    def visit(self, node: ir_mod.IntervalIR, start: int):
+        visitor = getattr(self, f"visit_{node.__class__.__name__}", self.generic_visit)
+        return visitor(node, start)
 
-    @visit.register(ir_mod.InitialOscillatorFrequencyIR)
-    @visit.register(ir_mod.SetOscillatorFrequencyIR)
+    def visit_InitialOscillatorFrequencyIR(self, node, start):
+        return self._handle_oscillator_node(node, start)
+
+    def visit_SetOscillatorFrequencyIR(self, node, start):
+        return self._handle_oscillator_node(node, start)
+
     def _handle_oscillator_node(
         self,
         node: ir_mod.InitialOscillatorFrequencyIR | ir_mod.SetOscillatorFrequencyIR,
@@ -111,8 +114,7 @@ class _AwgPruner:
                 )
         return None
 
-    @visit.register
-    def visit_pulse(self, node: ir_mod.PulseIR, start: int):
+    def visit_PulseIR(self, node: ir_mod.PulseIR, start: int):
         [signal] = node.signals
         for awg in self._awg_trees:
             if signal in awg.signals:
@@ -120,7 +122,6 @@ class _AwgPruner:
                 awg.push_raw(start, node)
                 return
 
-    @visit.register
     def generic_visit(self, node: ir_mod.IntervalIR, start: int):
         if not node.signals.intersection(self._signals):
             return None

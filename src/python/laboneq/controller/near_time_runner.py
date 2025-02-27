@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from collections import defaultdict
 
 import logging
 import traceback
@@ -22,7 +21,6 @@ from laboneq.executor.executor import AsyncExecutorBase, LoopFlags, LoopingMode
 if TYPE_CHECKING:
     from laboneq.core.types.numpy_support import NumPyArray
     from laboneq.controller.controller import Controller
-    from laboneq.controller.devices.device_zi import DeviceZI
 
 _logger = logging.getLogger(__name__)
 
@@ -32,7 +30,7 @@ class NearTimeRunner(AsyncExecutorBase):
         super().__init__(looping_mode=LoopingMode.NEAR_TIME_ONLY)
         self.controller = controller
         self.protected_session = protected_session
-        self.user_set_nodes: dict[DeviceZI, NodeCollector] = defaultdict(NodeCollector)
+        self.user_set_nodes = NodeCollector()
         self.nt_loop_indices: list[int] = []
         self.pipeliner_job: int = 0
         self.sweep_params_tracker = SweepParamsTracker()
@@ -41,8 +39,7 @@ class NearTimeRunner(AsyncExecutorBase):
         return NtStepKey(indices=tuple(self.nt_loop_indices))
 
     async def set_handler(self, path: str, value):
-        dev = self.controller._find_by_node_path(path)
-        self.user_set_nodes[dev].add(path, value, cache=False)
+        self.user_set_nodes.add(path, value, cache=False)
 
     async def nt_callback_handler(self, func_name: str, args: dict[str, Any]):
         func = self.controller._neartime_callbacks.get(func_name)
@@ -100,21 +97,14 @@ class NearTimeRunner(AsyncExecutorBase):
             # Skip the pipeliner loop iterations, except the first one - iterated by the pipeliner itself
             return
 
-        await self.controller._configure_triggers()
-
-        for device, nc in self.user_set_nodes.items():
-            await device.set_async(nc)
-        self.user_set_nodes.clear()
-
-        await self.controller._prepare_nt_step(self.sweep_params_tracker)
-
-        await self.controller._prepare_rt_execution()
-
-        self.sweep_params_tracker.clear_for_next_step()
-
-        await self.controller._initialize_awgs(
-            nt_step=self.nt_step(), rt_section_uid=uid
+        await self.controller._prepare_nt_step(
+            sweep_params_tracker=self.sweep_params_tracker,
+            user_set_nodes=self.user_set_nodes,
+            nt_step_key=self.nt_step(),
+            rt_section_uid=uid,
         )
+        self.sweep_params_tracker.clear_for_next_step()
+        self.user_set_nodes = NodeCollector()
 
         try:
             await self.controller._execute_one_step(

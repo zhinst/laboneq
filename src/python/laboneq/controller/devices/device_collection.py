@@ -9,7 +9,7 @@ import json
 import logging
 import re
 from collections import defaultdict
-from typing import TYPE_CHECKING, Callable, Iterator, cast
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Iterator, cast
 
 from laboneq.controller.devices.async_support import (
     ConditionsCheckerAsync,
@@ -90,18 +90,6 @@ class DeviceCollection:
             yield uid, device
 
     @property
-    def leaders(self) -> Iterator[tuple[str, DeviceZI]]:
-        for uid, device in self._devices.items():
-            if device.is_leader():
-                yield uid, device
-
-    @property
-    def followers(self) -> Iterator[tuple[str, DeviceZI]]:
-        for uid, device in self._devices.items():
-            if device.is_follower():
-                yield uid, device
-
-    @property
     def has_qhub(self) -> bool:
         return self._ds.has_qhub
 
@@ -167,8 +155,6 @@ class DeviceCollection:
     async def configure_device_setup(self, reset_devices: bool):
         _logger.info("Configuring the device setup")
 
-        configure = self._configure_async
-
         def _followers_of(parents: list[DeviceZI]) -> list[DeviceZI]:
             children = []
             for parent_dev in parents:
@@ -179,7 +165,7 @@ class DeviceCollection:
             return children
 
         if reset_devices:
-            await configure(
+            await self._configure_async(
                 [device for _, device in self.all if not device.is_secondary],
                 lambda d: cast(DeviceZI, d).load_factory_preset_control_nodes(),
                 "Reset to factory defaults",
@@ -189,10 +175,10 @@ class DeviceCollection:
                 device.clear_cache()
 
         if self.has_qhub:
-            leaders = [dev for _, dev in self.leaders]
+            leaders = [dev for dev in self._devices.values() if dev.is_leader()]
             followers = _followers_of(leaders)
             # Switch QHUB to the external clock as usual
-            await configure(
+            await self._configure_async(
                 leaders,
                 lambda d: cast(DeviceZI, d).clock_source_control_nodes(),
                 "QHUB: Reference clock switching",
@@ -276,9 +262,11 @@ class DeviceCollection:
             ).zsync_link_control_nodes(),
         }
 
-        leaders = [dev for _, dev in self.leaders]
-        if len(leaders) == 0:  # Happens for standalone devices
-            leaders = [dev for _, dev in self.followers]
+        leaders = [
+            dev
+            for dev in self._devices.values()
+            if dev.is_leader() or dev.is_standalone()
+        ]
         for config_name, control_nodes_getter in configs.items():
             # Begin by applying a config step from the leader(s), and then proceed with
             # the downstream devices. This is because downstream devices may rely on the
@@ -288,7 +276,7 @@ class DeviceCollection:
             # configuration step.
             targets = leaders
             while len(targets) > 0:
-                await configure(targets, control_nodes_getter, config_name)
+                await self._configure_async(targets, control_nodes_getter, config_name)
                 targets = _followers_of(targets)
         _logger.info("The device setup is configured")
 
@@ -338,22 +326,32 @@ class DeviceCollection:
             )
         )
 
-    def free_allocations(self):
-        for _, device in self.all:
-            device.free_allocations()
+    def for_each_sync(
+        self,
+        device_method: Callable[..., Any],
+        *args,
+        **kwargs,
+    ) -> list[Any]:
+        """Call a method on all devices of a given class."""
+        [class_name, method_name] = device_method.__qualname__.split(".", 1)
+        device_class = device_method.__globals__[class_name]
+        return [
+            # To keep polymorph behavior, we use getattr on the object instance
+            # to retrieve the actual method to call, using passed method only as
+            # a reference to the method name.
+            getattr(device, method_name)(*args, **kwargs)
+            for device in self._devices.values()
+            if isinstance(device, device_class)
+        ]
 
-    async def on_experiment_begin(self):
-        await _gather(*(device.on_experiment_begin() for _, device in self.all))
-        await self._update_warning_nodes(init=True)
-
-    async def on_after_nt_step(self):
-        await self._update_warning_nodes()
-        device_errors = await self.fetch_device_errors()
-        if device_errors is not None:
-            raise LabOneQControllerException(device_errors)
-
-    async def on_experiment_end(self):
-        await _gather(*(device.on_experiment_end() for _, device in self.all))
+    async def for_each(
+        self,
+        device_method: Callable[..., Coroutine[Any, Any, None]],
+        *args,
+        **kwargs,
+    ):
+        """Call an async method on all devices of a given class in parallel."""
+        await _gather(*self.for_each_sync(device_method, *args, **kwargs))
 
     async def _validate_dataserver_device_fw_compatibility(self):
         """Validate dataserver and device firmware compatibility."""
@@ -446,10 +444,6 @@ class DeviceCollection:
                 )
             updated_data_servers.add(server_uid, data_server_connection)
         self._data_servers = updated_data_servers
-
-    async def _update_warning_nodes(self, init: bool = False):
-        for _, device in self.all:
-            await device.update_warning_nodes(init)
 
     async def fetch_device_errors(self) -> str | None:
         all_errors: list[str] = []

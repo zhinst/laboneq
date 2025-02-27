@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+from typing import Iterator
 
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 
@@ -33,8 +34,9 @@ class SweepParamsTracker:
         self.sweep_param_values[param] = value
         self.sweep_param_updates.add(param)
 
-    def updated_params(self) -> set[str]:
-        return self.sweep_param_updates
+    def updated_params(self) -> Iterator[tuple[str, float]]:
+        for param in self.sweep_param_updates:
+            yield param, self.sweep_param_values[param]
 
     def clear_for_next_step(self):
         self.sweep_param_updates.clear()

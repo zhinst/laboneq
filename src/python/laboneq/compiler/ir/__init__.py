@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .acquire_group_ir import AcquireGroupIR
-from .case_ir import CaseIR, EmptyBranchIR
+from .case_ir import CaseIR
 from .interval_ir import IntervalIR
 from .ir import IRTree, DeviceIR, PulseDefIR, SignalIR
 from .loop_ir import LoopIR
@@ -18,7 +18,6 @@ from .section_ir import SectionIR
 __all__ = [
     "AcquireGroupIR",
     "CaseIR",
-    "EmptyBranchIR",
     "IntervalIR",
     "IRTree",
     "DeviceIR",

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 from functools import cmp_to_key
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Callable, List, Optional
 
 
 from laboneq._utils import flatten
@@ -24,7 +24,10 @@ from laboneq.compiler.seqc.seqc_generator import (
 from laboneq.compiler.seqc.shfppc_sweeper_config_tracker import (
     SHFPPCSweeperConfigTracker,
 )
-from laboneq.compiler.seqc.signatures import PlaybackSignature, WaveformSignature
+from laboneq.compiler.seqc.signatures import (
+    PlaybackSignature,
+    WaveformSignature,
+)
 from laboneq.compiler.seqc.awg_sampled_event import (
     AWGEvent,
     AWGEventType,
@@ -135,7 +138,6 @@ class SampledEventHandler:
         awg: AWGInfo,
         device_type: DeviceType,
         channels: List[int],
-        sampled_signatures: Dict[str, Dict[WaveformSignature, Dict]],
         use_command_table: bool,
         emit_timing_comments: bool,
         use_current_sequencer_step: bool,
@@ -153,10 +155,8 @@ class SampledEventHandler:
         self.awg = awg
         self.device_type = device_type
         self.channels = channels
-        self.sampled_signatures = sampled_signatures
         self.use_command_table = use_command_table
         self.emit_timing_comments = emit_timing_comments
-
         self.sampled_event_list: List[AWGEvent] = None  # type: ignore
         self.loop_stack: List[AWGEvent] = []
         self.last_event: Optional[AWGEvent] = None
@@ -188,7 +188,6 @@ class SampledEventHandler:
         sampled_event: AWGEvent,
     ):
         signature: PlaybackSignature = sampled_event.params["playback_signature"]
-        signal_id = sampled_event.params["signal_id"]
         state = signature.state
 
         match_statement_active = self.match_parent_event is not None
@@ -203,11 +202,7 @@ class SampledEventHandler:
             raise LabOneQException(
                 f"Found match/case statement for handle {handle} on unsupported device."
             )
-
-        if not (
-            signal_id in self.sampled_signatures
-            and signature.waveform in self.sampled_signatures[signal_id]
-        ):
+        if not signature.waveform:
             return False
 
         _logger.debug(
@@ -430,7 +425,7 @@ class SampledEventHandler:
             )
 
     @staticmethod
-    def _make_command_table_comment(signature: PlaybackSignature):
+    def _make_command_table_comment(signature: PlaybackSignature) -> str:
         parts = []
 
         if signature.hw_oscillator is not None:
@@ -529,21 +524,18 @@ class SampledEventHandler:
             signature: PlaybackSignature = play_event.params["playback_signature"]
             play_signature = signature.waveform
             signal_id = play_event.params.get("signal_id")
-            if signal_id is not None:
-                if play_signature in self.sampled_signatures[signal_id]:
-                    current_signal_obj = next(
-                        signal_obj
-                        for signal_obj in self.awg.signals
-                        if signal_obj.id == signal_id
-                    )
-                    generator_channels.update(current_signal_obj.channels)
-                    sig_string = play_signature.signature_string()
-
-                    self.wave_indices.add_numbered_wave(
-                        sig_string,
-                        "complex",
-                        current_signal_obj.channels[0],
-                    )
+            if signal_id is not None and play_signature:
+                current_signal_obj = next(
+                    signal_obj
+                    for signal_obj in self.awg.signals
+                    if signal_obj.id == signal_id
+                )
+                generator_channels.update(current_signal_obj.channels)
+                self.wave_indices.add_numbered_wave(
+                    play_signature.signature_string(),
+                    "complex",
+                    current_signal_obj.channels[0],
+                )
 
         integration_channels = list(
             flatten(

@@ -15,7 +15,7 @@ from laboneq.compiler.feedback_router.feedback_router import (
     calculate_feedback_register_layout,
     assign_feedback_registers,
 )
-from laboneq.compiler.recipe import generate_recipe
+from laboneq.compiler.recipe import generate_recipe_combined
 from laboneq.compiler.common import compiler_settings
 from laboneq.compiler.common.awg_info import AWGInfo, AwgKey
 from laboneq.compiler.common.awg_signal_type import AWGSignalType
@@ -725,7 +725,7 @@ class Compiler:
 
         awgs: list[AWGInfo] = sorted(self._awgs.values(), key=lambda awg: awg.key)
 
-        self._recipe = generate_recipe(
+        self._recipe = generate_recipe_combined(
             awgs,
             self._experiment_dao,
             self._leader_properties,

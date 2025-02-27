@@ -14,7 +14,7 @@ from laboneq.controller.attribute_value_tracker import (
 )
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import DeviceBase
-from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
+from laboneq.controller.recipe_processor import RecipeData
 from laboneq.core.types.enums import AcquisitionType
 from laboneq.data.calibration import CancellationSource
 from laboneq.data.recipe import Initialization
@@ -51,10 +51,6 @@ class DeviceSHFPPC(DeviceBase):
             self._channels = 2
         else:
             raise ValueError(f"Invalid device type: {self.dev_type}")
-
-    def free_allocations(self):
-        super().free_allocations()
-        self._allocated_sweepers.clear()
 
     def _key_to_path(self, key: str, ch: int):
         keys_to_paths = {
@@ -98,13 +94,9 @@ class DeviceSHFPPC(DeviceBase):
         nc.add("ppchannels/*/sweeper/enable", 0, cache=False)
         await self.set_async(nc)
 
-    async def apply_initialization(
-        self,
-        device_recipe_data: DeviceRecipeData,
-        initialization: Initialization,
-        recipe_data: RecipeData,
-    ):
+    async def apply_initialization(self, recipe_data: RecipeData):
         nc = NodeCollector()
+        initialization = recipe_data.get_initialization(self.device_qualifier.uid)
         ppchannels = {
             settings["channel"]: settings
             for settings in initialization.ppchannels or []
@@ -118,6 +110,7 @@ class DeviceSHFPPC(DeviceBase):
         # each channel uses the neighboring channel's synthesizer for generating the pump tone
         probe_synth_channel = [1, 0, 3, 2]
 
+        self._allocated_sweepers.clear()
         for ch, settings in ppchannels.items():
             for key, value in settings.items():
                 if key == "channel":
@@ -151,11 +144,11 @@ class DeviceSHFPPC(DeviceBase):
                 nc.add(self._key_to_path(key, ch), _convert(value))
         await self.set_async(nc)
 
-    def collect_prepare_nt_step_nodes(
+    def _collect_prepare_nt_step_nodes(
         self, attributes: DeviceAttributesView, recipe_data: RecipeData
     ) -> NodeCollector:
         nc = NodeCollector()
-        nc.extend(super().collect_prepare_nt_step_nodes(attributes, recipe_data))
+        nc.extend(super()._collect_prepare_nt_step_nodes(attributes, recipe_data))
         for ch in range(self._channels):
             for key, attr_name in DeviceSHFPPC.attribute_keys.items():
                 [value], updated = attributes.resolve(keys=[(attr_name, ch)])

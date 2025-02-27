@@ -16,8 +16,5 @@ class CaseSchedule(SectionSchedule):
         """Down-cast from SectionSchedule."""
         return cls(**asdict(schedule, recurse=False), state=state)
 
-
-class EmptyBranch(CaseSchedule):
     def _calculate_timing(self, _schedule_data, start: int, *__, **___) -> int:
-        self.length = self.grid
-        return start
+        return super()._calculate_timing(_schedule_data, start, *__, **___)

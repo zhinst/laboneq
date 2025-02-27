@@ -445,15 +445,15 @@ class RecipeGenerator:
 
             ppchannel["sweep_config"] = shfppc_sweep_configuration.build_table()
 
-    def add_neartime_execution_step(self, rt_step: NeartimeStep):
+    def add_neartime_execution_step(self, nt_step: NeartimeStep):
         self._recipe.realtime_execution_init.append(
             RealtimeExecutionInit(
-                device_id=rt_step.device_id,
-                awg_id=rt_step.awg_id,
-                program_ref=rt_step.seqc_ref,
-                wave_indices_ref=rt_step.wave_indices_ref,
-                kernel_indices_ref=rt_step.kernel_indices_ref,
-                nt_step=rt_step.key,
+                device_id=nt_step.device_id,
+                awg_id=nt_step.awg_id,
+                program_ref=nt_step.seqc_ref,
+                wave_indices_ref=nt_step.wave_indices_ref,
+                kernel_indices_ref=nt_step.kernel_indices_ref,
+                nt_step=nt_step.key,
             )
         )
 
