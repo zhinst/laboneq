@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from itertools import groupby
 import math
 from numbers import Number
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple
+from typing import Any, NamedTuple, Literal
 
 import numpy as np
 from numpy import typing as npt
@@ -27,7 +27,7 @@ from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.shfppc_sweeper_config import SHFPPCSweeperConfig
 from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
 from laboneq.compiler.ir.ir import IRTree, PulseDefIR
-from laboneq.compiler.seqc import passes
+from laboneq.compiler.seqc import passes, ir as ir_code
 from laboneq.compiler.seqc.linker import AwgWeights, SeqCGenOutput
 from laboneq._utils import ensure_list
 from laboneq.compiler.seqc.analyze_events import (
@@ -108,9 +108,6 @@ from laboneq.data.scheduled_experiment import (
     WeightInfo,
     COMPLEX_USAGE,
 )
-
-if TYPE_CHECKING:
-    from laboneq.compiler.seqc.passes.intervals import EmptyInterval
 
 
 _logger = logging.getLogger(__name__)
@@ -413,16 +410,11 @@ class CodeGenerator(ICodeGenerator):
             measurement_info = passes.collect_measurement_info(
                 events_or_ir.root, self._signals
             )
+            integration_times = measurement_info.integration_times
+            signal_delays = measurement_info.signal_delays
             feedback_register_allocator = measurement_info.feedback_register_allocator
             qa_signals_by_handle = measurement_info.qa_signals_by_handle
             simultaneous_acquires = measurement_info.simultaneous_acquires
-
-            events = ir_to_event_list.generate_event_list_from_ir(
-                events_or_ir,
-                self._settings,
-                expand_loops=False,
-                max_events=float("inf"),
-            )
         else:
             # This branch should only be encountered via tests
             # TODO: Remove this code and the called functions when the event list is gone
@@ -430,20 +422,18 @@ class CodeGenerator(ICodeGenerator):
             total_execution_time = (
                 max([e.get("time", 0) for e in events]) if len(events) > 0 else None
             )
+            (
+                integration_times,
+                signal_delays,
+            ) = self._measurement_calculator.calculate_integration_times(
+                self._signals, events
+            )
             feedback_register_allocator = FeedbackRegisterAllocator(self._signals)
             feedback_register_allocator.set_feedback_paths_from_events(events)
-
             qa_signals_by_handle = self._collect_qa_signals_by_handle(
                 events, self._signals
             )
             simultaneous_acquires = self._gen_acquire_map(events)
-
-        (
-            integration_times,
-            signal_delays,
-        ) = self._measurement_calculator.calculate_integration_times(
-            self._signals, events
-        )
 
         return (
             qa_signals_by_handle,
@@ -849,16 +839,19 @@ class CodeGenerator(ICodeGenerator):
             # The pass must happen after delay calculation as it relies on section information.
             # TODO: Fix that this pass can happen as early as possible.
             passes.inline_sections(self._ir.root)
-            osc_params = passes.calculate_oscillator_parameters(events_or_ir)
-            empty_intervals = passes.collect_empty_intervals(events_or_ir.root)
+            osc_params = passes.calculate_oscillator_parameters(events_or_ir.root)
             ir_tree = passes.fanout_awgs(events_or_ir, self._awgs.values())
+            ir_awgs = {awg.awg.key: awg for awg in ir_tree.root.children}
             events_per_awg = ir_to_event_list.event_list_per_awg(
                 ir_tree, self._settings, osc_params
             )
         else:
             # This branch should only be encountered via tests
             events_per_awg = {awg: events_or_ir for awg in self._awgs}
-            empty_intervals = []
+            ir_awgs = {
+                awg_key: ir_code.SingleAwgIR(awg=awg)
+                for awg_key, awg in self._awgs.items()
+            }
 
         for signal_id, signal_obj in self._signals.items():
             code_generation_delay = self._signal_delays.get(signal_id)
@@ -886,15 +879,14 @@ class CodeGenerator(ICodeGenerator):
         self.sort_signals()
         self._integration_weights.clear()
 
-        for _, awg in sorted(
-            self._awgs.items(),
+        for awg_key, ir_awg in sorted(
+            ir_awgs.items(),
             key=lambda item: item[0],
         ):
             self._gen_seq_c_per_awg(
-                awg,
-                events_per_awg.get(awg.key, []),
+                ir_awg,
+                events_per_awg.get(awg_key, []),
                 pulse_defs,
-                empty_intervals=empty_intervals,
             )
 
         tgt_feedback_regs = self._feedback_register_allocator.target_feedback_registers
@@ -1271,11 +1263,12 @@ class CodeGenerator(ICodeGenerator):
 
     def _gen_seq_c_per_awg(
         self,
-        awg: AWGInfo,
+        awg_ir: ir_code.SingleAwgIR,
         events: EventList,
         pulse_defs: dict[str, PulseDef],
-        empty_intervals: list[EmptyInterval] | None = None,
     ):
+        awg = awg_ir.awg
+        empty_intervals = passes.collect_empty_intervals(awg_ir)
         # TODO: Ensure AWG does not get any irrelevant events, it will result in extra looping.
         #       There exists e.g Section, loop, subsection starts and ends which are
         #       effectively always dropped.
@@ -1302,7 +1295,6 @@ class CodeGenerator(ICodeGenerator):
             or event["event_type"]
             in (
                 EventType.PARAMETER_SET,
-                EventType.RESET_SW_OSCILLATOR_PHASE,
                 EventType.SET_OSCILLATOR_FREQUENCY_START,
             )
         )

@@ -82,7 +82,7 @@ class HighPassCompensation(Observable):
     # high-pass filter time constant
     timeconstant: float = 1e-6
     # Deprecated. Choose the clearing mode of the high-pass filter
-    clearing: HighPassCompensationClearing = field(default=None)
+    clearing: HighPassCompensationClearing | None = field(default=None)
 
     def __post_init__(self):
         if self.clearing is not None:

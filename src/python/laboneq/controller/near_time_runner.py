@@ -100,7 +100,7 @@ class NearTimeRunner(AsyncExecutorBase):
         await self.controller._prepare_nt_step(
             sweep_params_tracker=self.sweep_params_tracker,
             user_set_nodes=self.user_set_nodes,
-            nt_step_key=self.nt_step(),
+            nt_step=self.nt_step(),
             rt_section_uid=uid,
         )
         self.sweep_params_tracker.clear_for_next_step()

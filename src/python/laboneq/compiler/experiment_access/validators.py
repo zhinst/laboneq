@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import typing
 
+import numpy as np
+
 from laboneq.compiler import DeviceType
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import ExecutionType
@@ -236,6 +238,34 @@ def freq_sweep_on_acquire_line_requires_spectroscopy_mode(dao: ExperimentDAO):
             )
 
 
+def check_phase_on_rf_signal_support(dao: ExperimentDAO):
+    for section_id in dao.sections():
+        for signal_id in dao.section_signals(section_id):
+            signal = dao.signal_info(signal_id)
+            device = signal.device
+            if device.device_type == DeviceInfoType.PRETTYPRINTERDEVICE:
+                continue
+
+            if (
+                signal.oscillator is not None and not signal.oscillator.is_hardware
+            ) or signal.type != SignalInfoType.RF:
+                continue
+
+            for ssp in dao.section_pulses(section_id, signal_id):
+                if ssp.phase is not None or (
+                    ssp.amplitude is not None
+                    and (
+                        isinstance(ssp.amplitude, ParameterInfo)
+                        and not np.all(np.isreal(ssp.amplitude.values))
+                    )
+                    or not np.isreal(ssp.amplitude)
+                ):
+                    raise LabOneQException(
+                        f"In section '{section_id}', signal '{signal_id}':"
+                        " baseband phase modulation not possible for RF signal with HW oscillator"
+                    )
+
+
 def check_phase_increments_support(dao: ExperimentDAO):
     for section_id in dao.sections():
         for signal_id in dao.section_signals(section_id):
@@ -243,13 +273,17 @@ def check_phase_increments_support(dao: ExperimentDAO):
             device = signal.device
             if device.device_type == DeviceInfoType.PRETTYPRINTERDEVICE:
                 continue
+
+            if (
+                signal.oscillator is not None and not signal.oscillator.is_hardware
+            ) or signal.type == SignalInfoType.IQ:
+                continue
+
             for ssp in dao.section_pulses(section_id, signal_id):
-                if ssp.increment_oscillator_phase is None:
-                    continue
-                if signal.type != SignalInfoType.IQ:
+                if ssp.increment_oscillator_phase is not None:
                     raise LabOneQException(
                         f"In section '{section_id}', signal '{signal_id}':"
-                        " phase increments are only supported on IQ signals"
+                        " phase increments are only supported on IQ signals, or on RF signals with SW modulation"
                     )
 
 

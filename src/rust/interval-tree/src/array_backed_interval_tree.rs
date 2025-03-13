@@ -12,8 +12,8 @@
 //!
 //! # Example
 //! ```
-//! use bio::data_structures::interval_tree::ArrayBackedIntervalTree;
-//! use bio::utils::Interval;
+//! use interval_tree::ArrayBackedIntervalTree;
+//! use interval_tree::Interval;
 //! use std::iter::FromIterator;
 //!
 //! let mut tree = ArrayBackedIntervalTree::new();

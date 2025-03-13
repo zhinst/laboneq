@@ -216,18 +216,18 @@ class LinearSweepParameter(_ParameterArithmeticMixin, Parameter):
     """
 
     # The starting value of the parameter sweep.
-    start: float = field(default=None)
+    start: float | None = field(default=None)
 
     # The final value of the parameter sweep.
-    stop: float = field(default=None)
+    stop: float | None = field(default=None)
 
     # The number of sweep steps in the parameter sweep.
-    count: int = field(default=None)
+    count: int | None = field(default=None)
 
     # The name of the sweep axis for this parameter used in the results.
     #
     # If this argument is not defined, the uid of the object will be used instead.
-    axis_name: str = field(default=None)
+    axis_name: str | None = field(default=None)
 
     def __eq__(self, other):
         if self is other:

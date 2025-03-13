@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional
+
 
 from laboneq.dsl.calibration.signal_calibration import SignalCalibration
 
@@ -19,8 +19,6 @@ class Calibratable(ABC):
             of [Calibratable][laboneq.dsl.calibration.calibratable.Calibratable]
             should document and set this attribute.
     """
-
-    calibration: Optional[SignalCalibration]
 
     @abstractmethod
     def is_calibrated(self) -> bool:

@@ -23,12 +23,12 @@ from laboneq.dsl.device.connection import InternalConnection, SignalConnection
 from laboneq.dsl.device.instruments import (
     HDAWG,
     PQSC,
+    PRETTYPRINTERDEVICE,
     QHUB,
     SHFPPC,
     SHFQA,
     SHFQC,
     SHFSG,
-    PRETTYPRINTERDEVICE,
     UHFQA,
     NonQC,
 )
@@ -373,7 +373,7 @@ class _DeviceSetupGenerator:
     def from_descriptor(
         yaml_text: str,
         server_host: str | None = None,
-        server_port: str | None = None,
+        server_port: str | int | None = None,
         setup_name: str | None = None,
     ):
         setup_desc = load(yaml_text, Loader=Loader)
@@ -395,7 +395,7 @@ class _DeviceSetupGenerator:
     def from_yaml(
         filepath,
         server_host: str | None = None,
-        server_port: str | None = None,
+        server_port: str | int | None = None,
         setup_name: str | None = None,
     ):
         with open(filepath) as fp:
@@ -422,7 +422,7 @@ class _DeviceSetupGenerator:
         dataservers: DataServersType | None = None,
         qubits: list | None = None,
         server_host: str | None = None,
-        server_port: str | None = None,
+        server_port: str | int | None = None,
         setup_name: str | None = None,
     ):
         # To avoid circular imports
@@ -462,7 +462,7 @@ class _DeviceSetupGenerator:
             dataservers = {
                 "zi_server": {
                     "host": server_host,
-                    "port": "8004" if server_port is None else server_port,
+                    "port": "8004" if server_port is None else str(server_port),
                 }
             }
 

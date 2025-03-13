@@ -765,14 +765,6 @@ def analyze_play_wave_times(
             "HW oscillator switching only possible in command-table mode"
         )
 
-    # Check whether any cut point is within a command table interval
-    for cp in cut_points:
-        for ivs in branching_intervals.values():
-            for iv in ivs:
-                assert not (iv.begin < cp < iv.end)
-
-    cut_points = sorted(list(cut_points))
-
     _logger.debug(
         "Collecting pulses to ensure waveform lengths are above the minimum of %d "
         "samples and are a multiple of %d samples for signal %s",
@@ -780,7 +772,6 @@ def analyze_play_wave_times(
         sample_multiple,
         signal_id,
     )
-
     # Adapt intervals to obey min/max playwave constraints and hints, keeping the used
     # pulses of each interval
     try:

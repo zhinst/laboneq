@@ -112,10 +112,7 @@ def prepare_emulator_state(ds: DeviceSetupDAO) -> EmulatorState:
     # Ensure emulated data server version matches installed zhinst.core
     #
     labonever = LabOneVersion.from_version_string(zhinst_core_version())
-    emulator_state.set_option("ZI", "about/version", labonever.as_dataserver_version())
-    emulator_state.set_option(
-        "ZI", "about/revision", labonever.as_dataserver_revision()
-    )
+    emulator_state.set_option("ZI", "about/fullversion", str(labonever))
 
     for device_qualifier in ds.instruments:
         options = device_qualifier.options

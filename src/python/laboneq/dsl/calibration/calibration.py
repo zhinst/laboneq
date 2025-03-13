@@ -3,11 +3,12 @@
 
 """A container for calibration items."""
 
-from dataclasses import dataclass, field
-from typing import Any, Dict
+from __future__ import annotations
 
-from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
-from laboneq.dsl.calibration.calibration_item import CalibrationItem
+from collections.abc import ItemsView, Iterator, KeysView, ValuesView
+import attrs
+from typing import Any
+from laboneq.dsl.calibration.signal_calibration import SignalCalibration
 
 
 def _sanitize_key(key: Any) -> str:
@@ -19,71 +20,76 @@ def _sanitize_key(key: Any) -> str:
         return key
 
 
-@classformatter
-@dataclass(init=True, repr=True, order=True)
+def _calibration_items_converter(
+    value: dict[str, SignalCalibration],
+) -> dict[str, SignalCalibration]:
+    return {_sanitize_key(k): v for k, v in value.items()}
+
+
+@attrs.define(slots=False)
 class Calibration:
     """Calibration object containing a dictionary of
-    [CalibrationItem][laboneq.dsl.calibration.CalibrationItem]s.
+    [SignalCalibration][laboneq.dsl.calibration.SignalCalibration]s.
 
     Attributes:
         calibration_items:
             mapping from a UID of a
             [Calibratable][laboneq.dsl.calibration.Calibratable] to
             the actual
-            [CalibrationItem][laboneq.dsl.calibration.CalibrationItem].
+            [SignalCalibration][laboneq.dsl.calibration.SignalCalibration].
     """
 
-    calibration_items: Dict[str, CalibrationItem] = field(default_factory=dict)
+    calibration_items: dict[str, SignalCalibration] = attrs.field(
+        factory=dict, converter=_calibration_items_converter
+    )
 
-    def __post_init__(self):
-        self.calibration_items = {
-            _sanitize_key(k): v for k, v in self.calibration_items.items()
-        }
+    def get(self, key) -> SignalCalibration | None:
+        return self.calibration_items.get(_sanitize_key(key))
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> SignalCalibration:
         return self.calibration_items[_sanitize_key(key)]
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key, value: SignalCalibration):
         self.calibration_items[_sanitize_key(key)] = value
 
     def __delitem__(self, key):
         del self.calibration_items[_sanitize_key(key)]
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         return iter(self.calibration_items)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.calibration_items)
 
-    def items(self):
-        """Return a iterator over calibration items.
+    def items(self) -> ItemsView[str, SignalCalibration]:
+        """Return an iterator over calibration items.
 
         Returns:
-            items (Iterator[tuple[str, CalibrationItem]]):
+            items (ItemsView[str, SignalCalibration]):
                 An iterator over tuples of UIDs and calibration items.
         """
         return self.calibration_items.items()
 
-    def keys(self):
+    def keys(self) -> KeysView[str]:
         """Returns an iterator over calibration UIDs.
 
         Returns:
-            keys (Iterator[str]):
+            keys (KeysView[str]):
                 An iterator over UIDs.
         """
         return self.calibration_items.keys()
 
-    def values(self):
+    def values(self) -> ValuesView[SignalCalibration]:
         """Returns an iterator over calibration items.
 
         Returns:
-            values (Iterator[CalibrationItem]):
+            values (ValuesView[SignalCalibration]):
                 An iterator over calibration items.
         """
         return self.calibration_items.values()
 
     @staticmethod
-    def load(filename: str):
+    def load(filename: str) -> Calibration:
         """Load calibration data from file.
 
         The file is in JSON format, as generated via

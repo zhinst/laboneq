@@ -221,8 +221,8 @@ class CompiledExperiment:
 
         replace_phase_increment(self, parameter, new_value)
 
-    @classmethod
-    def load(cls, filename: str) -> CompiledExperiment:
+    @staticmethod
+    def load(filename: str) -> CompiledExperiment:
         """Load a compiled experiment from a JSON file.
 
         Args:
@@ -230,7 +230,7 @@ class CompiledExperiment:
         """
         from laboneq.dsl.serialization import Serializer
 
-        return Serializer.from_json_file(filename, cls)
+        return Serializer.from_json_file(filename, CompiledExperiment)
 
     def save(self, filename: str):
         """Store a compiled experiment in a JSON file.

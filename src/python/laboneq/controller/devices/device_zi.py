@@ -12,9 +12,11 @@ from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator, cast
 from weakref import ReferenceType, ref
 
+from laboneq.controller.results import build_partial_result, build_raw_partial_result
+from laboneq.data.experiment_results import ExperimentResults
 import numpy as np
 import zhinst.core
 import zhinst.utils
@@ -325,7 +327,7 @@ class DeviceZI(DeviceAbstract):
         self,
         recipe_data: RecipeData,
         rt_section_uid: str,
-        nt_step_key: NtStepKey,
+        nt_step: NtStepKey,
     ):
         pass
 
@@ -351,22 +353,6 @@ class DeviceZI(DeviceAbstract):
     ) -> NodeCollector:
         return NodeCollector()
 
-    async def start_execution(self, with_pipeliner: bool):
-        pass
-
-    def conditions_for_execution_ready(
-        self, with_pipeliner: bool
-    ) -> dict[str, tuple[Any, str]]:
-        return {}
-
-    def conditions_for_execution_done(
-        self, acquisition_type: AcquisitionType, with_pipeliner: bool
-    ) -> dict[str, tuple[Any, str]]:
-        return {}
-
-    async def teardown_one_step_execution(self, with_pipeliner: bool):
-        pass
-
     async def fetch_errors(self) -> str | list[str]:
         return []
 
@@ -374,28 +360,14 @@ class DeviceZI(DeviceAbstract):
         return []
 
     ### Result processing
-    async def get_result_data(self) -> Any:
-        pass
-
-    async def get_measurement_data(
+    async def read_results(
         self,
         recipe_data: RecipeData,
-        channel: int,
+        nt_step: NtStepKey,
         rt_execution_info: RtExecutionInfo,
-        result_indices: list[int],
-        num_results: int,
-        hw_averages: int,
-    ) -> RawReadoutData:
-        raise NotImplementedError(
-            f"{self.__class__.__name__} does not support result retrieval"
-        )
-
-    async def get_raw_data(
-        self, channel: int, acquire_length: int, acquires: int | None
-    ) -> RawReadoutData:
-        raise NotImplementedError(
-            f"{self.__class__.__name__} does not support result retrieval"
-        )
+        results: ExperimentResults,
+    ):
+        pass
 
     async def exec_config_step(
         self, control_nodes: list[NodeControlBase], config_name: str, timeout_s: float
@@ -795,7 +767,7 @@ class DeviceBase(DeviceZI):
         self,
         recipe_data: RecipeData,
         rt_section_uid: str,
-        nt_step_key: NtStepKey,
+        nt_step: NtStepKey,
     ):
         initialization = recipe_data.get_initialization(self.device_qualifier.uid)
         if not initialization.awgs:
@@ -807,7 +779,7 @@ class DeviceBase(DeviceZI):
                     recipe_data=recipe_data,
                     rt_section_uid=rt_section_uid,
                     awg_index=awg.awg,
-                    nt_step_key=nt_step_key,
+                    nt_step=nt_step,
                 )
                 for awg in initialization.awgs
             )
@@ -818,7 +790,7 @@ class DeviceBase(DeviceZI):
         recipe_data: RecipeData,
         rt_section_uid: str,
         awg_index: int | str,
-        nt_step_key: NtStepKey,
+        nt_step: NtStepKey,
     ):
         assert isinstance(awg_index, int)
         artifacts = recipe_data.get_artifacts(self._device_class, ArtifactsCodegen)
@@ -840,9 +812,9 @@ class DeviceBase(DeviceZI):
 
         for pipeliner_job in range(rt_execution_info.pipeliner_jobs):
             effective_nt_step = (
-                NtStepKey(indices=tuple([*nt_step_key.indices, pipeliner_job]))
+                NtStepKey(indices=tuple([*nt_step.indices, pipeliner_job]))
                 if rt_execution_info.with_pipeliner
-                else nt_step_key
+                else nt_step
             )
             rt_exec_step = next(
                 (
@@ -1344,6 +1316,22 @@ class DeviceBase(DeviceZI):
     ):
         pass
 
+    async def start_execution(self, with_pipeliner: bool):
+        pass
+
+    def conditions_for_execution_ready(
+        self, with_pipeliner: bool
+    ) -> dict[str, tuple[Any, str]]:
+        return {}
+
+    def conditions_for_execution_done(
+        self, acquisition_type: AcquisitionType, with_pipeliner: bool
+    ) -> dict[str, tuple[Any, str]]:
+        return {}
+
+    async def teardown_one_step_execution(self, with_pipeliner: bool):
+        pass
+
     async def wait_for_execution_ready(self, with_pipeliner: bool):
         if not self.is_follower():
             # Can't batch everything together, because PQSC/QHUB needs to start execution after HDs
@@ -1399,3 +1387,150 @@ class DeviceBase(DeviceZI):
                 min_wait_time,
                 "\n".join(failed_nodes),
             )
+
+    async def read_results(
+        self,
+        recipe_data: RecipeData,
+        nt_step: NtStepKey,
+        rt_execution_info: RtExecutionInfo,
+        results: ExperimentResults,
+    ):
+        await _gather(
+            *(
+                self._read_one_awg_results(
+                    recipe_data,
+                    nt_step,
+                    rt_execution_info,
+                    results,
+                    awg_key,
+                    awg_config,
+                )
+                for awg_key, awg_config in recipe_data.awgs_producing_results()
+                if awg_key.device_uid == self.device_qualifier.uid
+            )
+        )
+
+    async def _read_one_awg_results(
+        self,
+        recipe_data: RecipeData,
+        nt_step: NtStepKey,
+        rt_execution_info: RtExecutionInfo,
+        results: ExperimentResults,
+        awg_key: AwgKey,
+        awg_config: AwgConfig,
+    ):
+        if rt_execution_info.acquisition_type == AcquisitionType.RAW:
+            assert awg_config.raw_acquire_length is not None
+            raw_results = await self.get_raw_data(
+                channel=cast(int, awg_key.awg_index),
+                acquire_length=awg_config.raw_acquire_length,
+                acquires=awg_config.result_length,
+            )
+            # Raw data is per physical port, and is the same for all logical signals of the AWG
+            for signal in awg_config.acquire_signals:
+                mapping = rt_execution_info.signal_result_map.get(signal, [])
+                signal_acquire_length = awg_config.signal_raw_acquire_lengths.get(
+                    signal
+                )
+                if signal_acquire_length is None:
+                    continue
+                unique_handles = set(mapping)
+                for handle in unique_handles:
+                    if handle is None:
+                        continue  # Ignore unused acquire signal if any
+                    result = results.acquired_results[handle]
+                    build_raw_partial_result(
+                        result=result,
+                        nt_step=nt_step,
+                        raw_segments=raw_results.vector,
+                        result_length=signal_acquire_length,
+                        mapping=mapping,
+                        handle=handle,
+                    )
+        else:
+            if rt_execution_info.averaging_mode == AveragingMode.SINGLE_SHOT:
+                effective_averages = 1
+            else:
+                effective_averages = rt_execution_info.averages
+            await _gather(
+                *(
+                    self._read_one_signal_result(
+                        recipe_data,
+                        nt_step,
+                        rt_execution_info,
+                        results,
+                        awg_key,
+                        awg_config,
+                        signal,
+                        effective_averages,
+                    )
+                    for signal in awg_config.acquire_signals
+                )
+            )
+
+    async def _read_one_signal_result(
+        self,
+        recipe_data: RecipeData,
+        nt_step: NtStepKey,
+        rt_execution_info: RtExecutionInfo,
+        results: ExperimentResults,
+        awg_key: AwgKey,
+        awg_config: AwgConfig,
+        signal: str,
+        effective_averages: int,
+    ):
+        integrator_allocation = next(
+            (
+                i
+                for i in recipe_data.recipe.integrator_allocations
+                if i.signal_id == signal
+            ),
+            None,
+        )
+        if integrator_allocation is None:
+            return
+        assert integrator_allocation.device_id == awg_key.device_uid
+        assert integrator_allocation.awg == awg_key.awg_index
+        assert awg_config.result_length is not None, "AWG not producing results"
+        raw_readout = await self.get_measurement_data(
+            recipe_data,
+            cast(int, awg_key.awg_index),
+            rt_execution_info,
+            integrator_allocation.channels,
+            awg_config.result_length,
+            effective_averages,
+        )
+        mapping = rt_execution_info.signal_result_map.get(signal, [])
+        unique_handles = set(mapping)
+        for handle in unique_handles:
+            if handle is None:
+                continue  # unused entries in sparse result vector map to None handle
+            result = results.acquired_results[handle]
+            build_partial_result(result, nt_step, raw_readout.vector, mapping, handle)
+
+        timestamps = results.pipeline_jobs_timestamps.setdefault(signal, [])
+
+        for job_id, v in raw_readout.metadata.items():
+            # make sure the list is long enough for this job id
+            timestamps.extend([float("nan")] * (job_id - len(timestamps) + 1))
+            timestamps[job_id] = v["timestamp"]
+
+    async def get_raw_data(
+        self, channel: int, acquire_length: int, acquires: int | None
+    ) -> RawReadoutData:
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support result retrieval"
+        )
+
+    async def get_measurement_data(
+        self,
+        recipe_data: RecipeData,
+        channel: int,
+        rt_execution_info: RtExecutionInfo,
+        result_indices: list[int],
+        num_results: int,
+        hw_averages: int,
+    ) -> RawReadoutData:
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support result retrieval"
+        )

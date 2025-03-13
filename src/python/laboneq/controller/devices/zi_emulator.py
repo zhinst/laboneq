@@ -417,14 +417,9 @@ class DevEmuZI(DevEmu):
 
     def _node_def(self) -> dict[str, NodeInfo]:
         return {
-            "about/version": NodeInfo(
+            "about/fullversion": NodeInfo(
                 type=NodeType.STR,
-                default=self._dev_opts.get("about/version", "99.99"),
-                read_only=True,
-            ),
-            "about/revision": NodeInfo(
-                type=NodeType.INT,
-                default=self._dev_opts.get("about/revision", 99999),
+                default=self._dev_opts.get("about/fullversion", "99.99.9.9999"),
                 read_only=True,
             ),
             "about/dataserver": NodeInfo(

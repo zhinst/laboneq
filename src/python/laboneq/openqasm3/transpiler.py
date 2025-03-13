@@ -41,14 +41,16 @@ def _copy_set_frequency_calibration(implicit_calibration: Calibration, exp: Expe
     # TODO: This function should be removed and instead the experiment calibration should be
     #       accessible in the visitor so that it can be modified directly if needed.
     #       Possibly we could do this using a `set_frequency` quantum operation.
+    exp_calibration = exp.get_calibration()
     for signal, signal_calibration in implicit_calibration.items():
-        exp_signal = exp.signals[signal]
-        if exp_signal.calibration is None or exp_signal.calibration.oscillator is None:
+        exp_signal_calibration = exp_calibration.get(signal)
+        if exp_signal_calibration is None or exp_signal_calibration.oscillator is None:
             raise ValueError(
                 f"Sweeping or setting the frequency of signal {signal!r}"
                 f" requires a signal calibration with oscillator to be set."
             )
-        exp_signal.calibration.oscillator.frequency = (
+        assert signal_calibration.oscillator is not None
+        exp_signal_calibration.oscillator.frequency = (
             signal_calibration.oscillator.frequency
         )
 

@@ -395,22 +395,22 @@ class Scheduler:
         #  sections *in parallel*.
         schedules = [self._schedule_section(s, nt_parameters) for s in root_sections]
 
+        oscillator_init = self._initial_oscillator_frequency(nt_parameters)
+        local_oscillator_init = self._initial_local_oscillator_frequency(nt_parameters)
+        voltage_offset_init = self._initial_voltage_offset(nt_parameters)
+
+        schedules = [
+            *oscillator_init,
+            *local_oscillator_init,
+            *voltage_offset_init,
+            *schedules,
+        ]
+
         signals = set()
         for c in schedules:
             signals.update(c.signals)
 
         root_schedule = RootSchedule(grid=1, signals=signals, children=schedules)  # type: ignore
-
-        oscillator_init = self._initial_oscillator_frequency(nt_parameters)
-        local_oscillator_init = self._initial_local_oscillator_frequency(nt_parameters)
-        voltage_offset_init = self._initial_voltage_offset(nt_parameters)
-
-        root_schedule.children = [
-            *oscillator_init,
-            *local_oscillator_init,
-            *voltage_offset_init,
-            *root_schedule.children,
-        ]
 
         root_schedule.calculate_timing(self._schedule_data, 0, False)
 

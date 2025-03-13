@@ -8,8 +8,8 @@ from typing import Dict
 import laboneq.core.path as qct_path
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 
-from ..calibration import Calibratable
-from .io_units import LogicalSignal
+from laboneq.dsl.calibration.calibratable import Calibratable
+from laboneq.dsl.device.io_units import LogicalSignal
 
 
 @classformatter

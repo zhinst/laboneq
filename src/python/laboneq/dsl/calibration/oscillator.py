@@ -5,13 +5,11 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.enums import CarrierType, ModulationType
 
-if TYPE_CHECKING:
-    from laboneq.dsl import Parameter
+from laboneq.dsl.parameter import Parameter
 
 oscillator_id = 0
 
@@ -57,7 +55,7 @@ class Oscillator:
     uid: str = field(default_factory=oscillator_uid_generator)
     frequency: float | Parameter | None = field(default=None)
     modulation_type: ModulationType = field(default=ModulationType.AUTO)
-    carrier_type: CarrierType = field(default=None)
+    carrier_type: CarrierType | None = field(default=None)
 
     def __post_init__(self):
         if self.carrier_type is not None:

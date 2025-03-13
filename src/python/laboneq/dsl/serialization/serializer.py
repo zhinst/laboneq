@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
-from typing import Dict
+from typing import Dict, TypeVar
 
 import orjson
 
@@ -16,6 +16,9 @@ from laboneq.dsl.serialization.class_config import (
     classes_by_short_name_ir,
     entity_config,
 )
+
+
+T = TypeVar("T")
 
 
 class Serializer:
@@ -98,7 +101,7 @@ class Serializer:
         return obj
 
     @staticmethod
-    def load(data, type_hint):
+    def load(data, type_hint: type[T]) -> T:
         if type_hint is dict:
             obj = copy.deepcopy(data)
         else:
@@ -111,7 +114,7 @@ class Serializer:
         return obj
 
     @staticmethod
-    def from_json_file(filename: str, type_hint):
+    def from_json_file(filename: str, type_hint: type[T]) -> T:
         try:
             with open(filename, mode="r") as file:
                 json_string = file.read()

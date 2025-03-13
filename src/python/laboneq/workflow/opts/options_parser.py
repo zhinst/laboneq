@@ -10,9 +10,19 @@ import sys
 import typing
 
 _PY_V39 = sys.version_info < (3, 10)
+_PY_LT_V313 = sys.version_info < (3, 13)
 
 if not _PY_V39:
     import types
+
+_typing_eval_type = typing._eval_type
+if _PY_LT_V313:
+    # type_params arg is introduced in 3.13 and not supplying it is deprecated at the same time.
+
+    def _eval_type(*args, type_params=None, **kwargs):
+        return _typing_eval_type(*args, **kwargs)
+else:
+    _eval_type = _typing_eval_type
 
 
 class TypeConvertError(Exception):
@@ -64,13 +74,20 @@ def _convert_str_type(
 ) -> type:
     """Convert a type in a string form to a type object, handling Union types.
 
+    !!! warning
+
+        It does no handle types with type parameters in them.
+
     Raises:
         TypeConvertError if the type cannot be resolved.
     """
     args = [arg.strip() for arg in t.split("|")]
     try:
         type_args = [
-            typing._eval_type(typing.ForwardRef(arg), globals_, locals_) for arg in args
+            _eval_type(  # We pass type_params=None because https://github.com/python/cpython/issues/118418
+                typing.ForwardRef(arg), globals_, locals_, type_params=None
+            )
+            for arg in args
         ]
     except (TypeError, SyntaxError, NameError) as e:
         raise TypeConvertError(f"Could not resolve type {t}.") from e

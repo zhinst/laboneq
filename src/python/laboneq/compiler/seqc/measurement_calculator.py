@@ -5,8 +5,11 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, List, Tuple
+from typing import Any, Iterable, List, Tuple
 
+from typing_extensions import TypeAlias
+
+from laboneq.compiler.common.awg_info import AwgKey
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.integration_times import (
     IntegrationTimes,
@@ -92,7 +95,35 @@ class SignalDelay:
     on_device: float
 
 
-SignalDelays = dict[str, SignalDelay]
+SignalDelays: TypeAlias = dict[str, SignalDelay]
+MeasurementInfos: TypeAlias = dict[tuple[str, AwgKey], _MeasurementInfo]
+
+
+def calculate_integration_times_from_intermediate_infos(
+    signal_info_map, intermediate_signal_infos
+) -> IntegrationTimes:
+    integration_times = IntegrationTimes()
+
+    for (section_uid, signal_id), inter_info in intermediate_signal_infos.items():
+        signal_info = signal_info_map[signal_id]
+        length = inter_info.end - inter_info.start
+
+        signal_integration_info = SignalIntegrationInfo(
+            is_play=inter_info.is_play,
+            length_in_samples=round(length * signal_info.awg.sampling_rate),
+        )
+
+        if signal_id in integration_times.signal_infos:
+            existing_signal_integration_info = integration_times.signal_infos[signal_id]
+            if existing_signal_integration_info != signal_integration_info:
+                raise ValueError(
+                    f"Signal {signal_id!r} has two different integration lengths:"
+                    f" {signal_integration_info!r} from section {section_uid} and"
+                    f" {existing_signal_integration_info!r} from an earlier section."
+                )
+        else:
+            integration_times.signal_infos[signal_id] = signal_integration_info
+    return integration_times
 
 
 class MeasurementCalculator:
@@ -105,18 +136,21 @@ class MeasurementCalculator:
             measurement_infos,
         ) = cls._integration_times(events, signal_info_map)
 
-        cls._validate_measurement_starts(measurement_infos)
-
-        signal_delays = cls._signal_delays(measurement_infos, signal_info_map)
+        signal_delays = cls.calculate_signal_delays(measurement_infos, signal_info_map)
 
         return integration_times, signal_delays
 
     @classmethod
+    def calculate_signal_delays(
+        cls, measurement_infos: MeasurementInfos, signal_info_map
+    ) -> SignalDelays:
+        cls._validate_measurement_starts(measurement_infos)
+        return cls._signal_delays(measurement_infos, signal_info_map)
+
+    @classmethod
     def _integration_times(
-        cls,
-        events,
-        signal_info_map,
-    ):
+        cls, events, signal_info_map
+    ) -> tuple[IntegrationTimes, MeasurementInfos]:
         """Calculate the integration times.
 
         Returns both the integration times and
@@ -263,37 +297,14 @@ class MeasurementCalculator:
                 else:
                     measurement_info.play_end = max(measurement_info.play_end, play_end)
 
-        integration_times = IntegrationTimes()
-
-        for (section_uid, signal_id), inter_info in intermediate_signal_infos.items():
-            signal_info = signal_info_map[signal_id]
-            length = inter_info.end - inter_info.start
-
-            signal_integration_info = SignalIntegrationInfo(
-                is_play=inter_info.is_play,
-                length_in_samples=round(length * signal_info.awg.sampling_rate),
-            )
-
-            if signal_id in integration_times.signal_infos:
-                existing_signal_integration_info = integration_times.signal_infos[
-                    signal_id
-                ]
-                if existing_signal_integration_info != signal_integration_info:
-                    raise ValueError(
-                        f"Signal {signal_id!r} has two different integration lengths:"
-                        f" {signal_integration_info!r} from section {section_uid} and"
-                        f" {existing_signal_integration_info!r} from an earlier section."
-                    )
-            else:
-                integration_times.signal_infos[signal_id] = signal_integration_info
+        integration_times = calculate_integration_times_from_intermediate_infos(
+            signal_info_map, intermediate_signal_infos
+        )
 
         return integration_times, measurement_infos
 
     @classmethod
-    def _validate_measurement_starts(
-        cls,
-        measurement_infos,
-    ):
+    def _validate_measurement_starts(cls, measurement_infos: MeasurementInfos):
         """Check that overlapping measurements on the same AWG start at the same time."""
         awg_measurement_intervals = defaultdict(list)
         for (_section_uid, awg_id), info in measurement_infos.items():
@@ -328,9 +339,11 @@ class MeasurementCalculator:
                             )
 
     @classmethod
-    def _signal_delays(cls, measurement_infos, signal_info_map):
+    def _signal_delays(
+        cls, measurement_infos: MeasurementInfos, signal_info_map
+    ) -> dict[str, SignalDelay]:
         """Calculate the signal delays."""
-        signal_delays = {}
+        signal_delays: dict[str, SignalDelay] = {}
         for key, measurement_info in measurement_infos.items():
             if (
                 measurement_info.play_start is None
@@ -393,8 +406,14 @@ class MeasurementCalculator:
 
     @classmethod
     def _signal_delays_uhfqa(
-        cls, acquires, acquire_delay, plays, _play_delay, sampling_rate, sample_multiple
-    ):
+        cls,
+        acquires: Iterable[str],
+        acquire_delay: int,
+        plays: Iterable[str],
+        _play_delay: int,
+        sampling_rate: float,
+        sample_multiple: int,
+    ) -> dict[str, SignalDelay]:
         """Return the signal delays for a set of acquires and plays that have common delays on a UHFQA device."""
         srconv = _SamplingRateConversions(sampling_rate, sample_multiple)
 
@@ -402,7 +421,7 @@ class MeasurementCalculator:
             acquire_delay
         )
 
-        signal_delays = {}
+        signal_delays: dict[str, SignalDelay] = {}
 
         for signal in plays:
             signal_delays[signal] = srconv.signal_delay_from_samples(
@@ -419,8 +438,14 @@ class MeasurementCalculator:
 
     @classmethod
     def _signal_delays_non_uhfqa(
-        cls, acquires, acquire_delay, plays, play_delay, sampling_rate, sample_multiple
-    ):
+        cls,
+        acquires: Iterable[str],
+        acquire_delay: int,
+        plays: Iterable[str],
+        play_delay: int,
+        sampling_rate: float,
+        sample_multiple: int,
+    ) -> dict[str, SignalDelay]:
         """Return the signal delays for a set of acquires and plays that have common delays on a non-UHFQA device."""
         srconv = _SamplingRateConversions(sampling_rate, sample_multiple)
 
@@ -431,7 +456,7 @@ class MeasurementCalculator:
             acquire_delay
         )
 
-        signal_delays = {}
+        signal_delays: dict[str, SignalDelay] = {}
 
         if play_delay > acquire_delay:
             for signal in plays:

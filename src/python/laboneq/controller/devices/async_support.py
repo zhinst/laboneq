@@ -35,6 +35,7 @@ from zhinst.comms_schemas.labone.core import (
     AnnotatedValue,
     ShfGeneratorWaveformVectorData,
 )
+from zhinst.comms_schemas.labone.core.errors import NotFoundError
 
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.controller.versioning import (
@@ -132,8 +133,7 @@ def parse_logfmt(log: str) -> dict[str, str]:
 
 class DataServerConnection:
     _devices_node_path = "/zi/devices"
-    _version_node_path = "/zi/about/version"
-    _revision_node_path = "/zi/about/revision"
+    _fullversion_node_path = "/zi/about/fullversion"
     _log_node_path = "/zi/debug/log"
 
     def __init__(
@@ -141,14 +141,12 @@ class DataServerConnection:
         server_qualifier: ServerQualifier,
         data_server: KernelSession,
         devices_json: str,
-        version_str: str,
-        revision_int: int,
+        fullversion_str: str,
     ):
         self._server_qualifier = server_qualifier
         self._data_server = data_server
         self._devices_json = devices_json
-        self._version_str = version_str
-        self._revision_int = revision_int
+        self._fullversion_str = fullversion_str
         self._log_queue: DataQueue | None = None
         self._log_records: list[AnnotatedValue] = []
 
@@ -177,24 +175,32 @@ class DataServerConnection:
                 serial="ZI", emulator_state=emulator_state
             )
 
-        devices_json, version_str, revision_int = (
-            r.value
-            for r in await asyncio.gather(
-                data_server.get(cls._devices_node_path),
-                data_server.get(cls._version_node_path),
-                data_server.get(cls._revision_node_path),
+        try:
+            (
+                devices_json,
+                fullversion_str,
+            ) = (
+                r.value
+                for r in await asyncio.gather(
+                    data_server.get(cls._devices_node_path),
+                    data_server.get(cls._fullversion_node_path),
+                )
             )
-        )
+        except NotFoundError as error:
+            raise LabOneQControllerException(
+                f"Data server at {host}:{port} does not provide required information. "
+                "Is it supported by this version of LabOne Q?"
+            ) from error
 
         _logger.info(
             "Connected to Zurich Instruments LabOne Data Server version %s at %s:%s",
-            version_str,
+            fullversion_str,
             host,
             port,
         )
 
         return DataServerConnection(
-            server_qualifier, data_server, devices_json, version_str, revision_int
+            server_qualifier, data_server, str(devices_json), str(fullversion_str)
         )
 
     @property
@@ -206,12 +212,8 @@ class DataServerConnection:
         return self._devices_json
 
     @property
-    def version_str(self) -> str:
-        return self._version_str
-
-    @property
-    def revision_int(self) -> int:
-        return self._revision_int
+    def fullversion_str(self) -> str:
+        return self._fullversion_str
 
     def check_dataserver_device_compatibility(
         self, ignore_version_mismatch: bool, serials: list[str]
@@ -222,10 +224,7 @@ class DataServerConnection:
         # the data server version at experiment run.
         python_api_version = LabOneVersion.from_version_string(zhinst_core_version())
 
-        dataserver_version = LabOneVersion.from_dataserver_version_information(
-            version=self.version_str,
-            revision=self.revision_int,
-        )
+        dataserver_version = LabOneVersion.from_version_string(self.fullversion_str)
 
         if dataserver_version != python_api_version:
             err_msg = f"Version of LabOne Data Server ({dataserver_version}) and Python API ({python_api_version}) do not match."
@@ -238,10 +237,7 @@ class DataServerConnection:
                 f"Version of LabOne Data Server '{dataserver_version}' is not supported. "
                 f"We recommend {RECOMMENDED_LABONE_VERSION}."
             )
-            if ignore_version_mismatch:
-                _logger.warning("Ignoring that %s", err_msg)
-            else:
-                raise LabOneQControllerException(err_msg)
+            raise LabOneQControllerException(err_msg)
 
         if isinstance(self._data_server, KernelSession):  # Real server?
             statuses = _get_device_statuses(self.devices_json, serials)

@@ -5,12 +5,13 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Union
+from typing import TYPE_CHECKING, Any
 
 from laboneq.core import path as qct_path
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
-from laboneq.dsl.calibration import Calibratable, Calibration, CalibrationItem
+from laboneq.dsl.calibration import Calibration
+from laboneq.dsl.calibration.signal_calibration import SignalCalibration
 from laboneq.dsl.device import _device_setup_modifier as setup_modifier
 from laboneq.dsl.device._device_setup_modifier import DeviceSetupInternalException
 from laboneq.dsl.device.connection import InternalConnection, SignalConnection
@@ -21,8 +22,8 @@ from laboneq.dsl.device.physical_channel_group import PhysicalChannelGroup
 from laboneq.dsl.device.servers import DataServer
 from laboneq.dsl.serialization import Serializer
 
-from ._device_setup_generator import _DeviceSetupGenerator
 from ...core.types.enums import IOSignalType
+from ._device_setup_generator import _DeviceSetupGenerator
 
 if TYPE_CHECKING:
     from laboneq.dsl import quantum
@@ -60,13 +61,13 @@ class DeviceSetup:
     """
 
     uid: str = field(default="unknown")
-    servers: Dict[str, DataServer] = field(default_factory=dict)
-    instruments: List[Instrument] = field(default_factory=list)
-    physical_channel_groups: Dict[str, PhysicalChannelGroup] = field(
+    servers: dict[str, DataServer] = field(default_factory=dict)
+    instruments: list[Instrument] = field(default_factory=list)
+    physical_channel_groups: dict[str, PhysicalChannelGroup] = field(
         default_factory=dict
     )
-    logical_signal_groups: Dict[str, LogicalSignalGroup] = field(default_factory=dict)
-    qubits: Dict[str, "quantum.QuantumElement"] = field(default_factory=dict)
+    logical_signal_groups: dict[str, LogicalSignalGroup] = field(default_factory=dict)
+    qubits: dict[str, "quantum.QuantumElement"] = field(default_factory=dict)
 
     def add_dataserver(
         self, host: str, port: int | str, uid: str = "zi_server", api_level: int = 6
@@ -175,9 +176,9 @@ class DeviceSetup:
 
     def _set_calibration(
         self,
-        calibration_item: CalibrationItem,
-        root_collection: Dict[str, Any],
-        path_elements: List[str],
+        calibration_item: SignalCalibration,
+        root_collection: dict[str, Any],
+        path_elements: list[str],
         path: str,
     ):
         if calibration_item is None:
@@ -206,9 +207,8 @@ class DeviceSetup:
                 path_elements.pop(0)
             top_level_element = path_elements.pop(0)
 
-            if top_level_element == qct_path.Instruments_Path:
-                target = self.instruments
-            elif top_level_element == qct_path.LogicalSignalGroups_Path:
+            target: dict[str, Any]
+            if top_level_element == qct_path.LogicalSignalGroups_Path:
                 target = self.logical_signal_groups
             elif top_level_element == qct_path.PhysicalChannelGroups_Path:
                 target = self.physical_channel_groups
@@ -219,23 +219,11 @@ class DeviceSetup:
                 continue
 
             self._set_calibration(
-                calibration.calibration_items[path], target, path_elements, path
+                calibration_item=calibration.calibration_items[path],
+                root_collection=target,
+                path_elements=path_elements,
+                path=path,
             )
-
-    def _get_instrument_calibration(self, rel_path_stack, orig_path):
-        if len(rel_path_stack) >= 1:
-            if rel_path_stack[0] not in self.instruments:
-                raise LabOneQException(
-                    f"No instrument found with id {rel_path_stack[0]}."
-                )
-            addressed_item = self.instruments[rel_path_stack[0]]
-        else:
-            raise ValueError(f"Invalid path: {rel_path_stack}")
-
-        if not isinstance(addressed_item, Calibratable):
-            raise LabOneQException(f"Not a calibratable item at {orig_path}.")
-
-        return addressed_item.calibration
 
     def _get_logical_signal_calibration(self, rel_path_stack, orig_path):
         if len(rel_path_stack) != 2:
@@ -289,8 +277,6 @@ class DeviceSetup:
             raise LabOneQException(f"No calibration found at {path}.")
 
         root, *rest = path_stack
-        if root == qct_path.Instruments_Path:
-            return self._get_instrument_calibration(rest, path)
         if root == qct_path.LogicalSignalGroups_Path:
             return self._get_logical_signal_calibration(rest, path)
         if root == qct_path.PhysicalChannelGroups_Path:
@@ -358,15 +344,15 @@ class DeviceSetup:
         }
         return calibratables
 
-    @classmethod
-    def load(cls, filename: str) -> DeviceSetup:
+    @staticmethod
+    def load(filename: str) -> DeviceSetup:
         """Load the device setup from a specified file.
 
         Args:
             filename (str): Filename.
         """
         # TODO ErC: Error handling
-        ds = Serializer.from_json_file(filename, cls)
+        ds = Serializer.from_json_file(filename, DeviceSetup)
         ds.check_no_rf_multiplexing()
         return ds
 
@@ -389,7 +375,7 @@ class DeviceSetup:
         cls,
         yaml_text: str,
         server_host: str | None = None,
-        server_port: str | None = None,
+        server_port: str | int | None = None,
         setup_name: str | None = None,
     ) -> DeviceSetup:
         """Construct the device setup from a YAML descriptor.
@@ -411,7 +397,7 @@ class DeviceSetup:
         cls,
         filepath,
         server_host: str | None = None,
-        server_port: str | None = None,
+        server_port: str | int | None = None,
         setup_name: str | None = None,
     ) -> DeviceSetup:
         """Construct the device setup from a YAML file.
@@ -431,9 +417,9 @@ class DeviceSetup:
     @classmethod
     def from_dict(
         cls,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         server_host: str | None = None,
-        server_port: Union[str, int] | None = None,
+        server_port: str | int | None = None,
         setup_name: str | None = None,
     ) -> DeviceSetup:
         """Construct the device setup from a Python dictionary.
@@ -467,7 +453,7 @@ class DeviceSetup:
         connections: ConnectionsType | None = None,
         dataservers: DataServersType | None = None,
         server_host: str | None = None,
-        server_port: str | None = None,
+        server_port: str | int | None = None,
         setup_name: str | None = None,
     ) -> DeviceSetup:
         """Construct the device setup from Python dicts, same structure as yaml

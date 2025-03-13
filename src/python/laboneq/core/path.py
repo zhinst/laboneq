@@ -5,8 +5,6 @@ Separator = "/"
 InstrumentOutputs = "$OUTPUTS"
 InstrumentInputs = "$INPUTS"
 
-Instruments_Path = "instruments"
-Instruments_Path_Abs = Separator + Instruments_Path
 LogicalSignalGroups_Path = "logical_signal_groups"
 LogicalSignalGroups_Path_Abs = Separator + LogicalSignalGroups_Path
 PhysicalChannelGroups_Path = "physical_channel_groups"

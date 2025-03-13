@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, final
+from typing import TYPE_CHECKING, Any, Callable, Iterator, NoReturn, final
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import DSLVersion
@@ -86,6 +86,11 @@ class Experiment:
                     signals_dict[s.uid] = s
             self.signals = signals_dict
 
+    @property
+    def _signals_dict(self) -> dict[str, ExperimentSignal]:
+        assert isinstance(self.signals, dict)
+        return self.signals
+
     def add_signal(
         self, uid: str | None = None, connect_to: LogicalSignalRef | None = None
     ) -> ExperimentSignal:
@@ -104,10 +109,10 @@ class Experiment:
 
         See also [map_signal][laboneq.dsl.experiment.experiment.Experiment.map_signal].
         """
-        if uid is not None and uid in self.signals.keys():
+        if uid is not None and uid in self._signals_dict.keys():
             raise LabOneQException(f"Signal with id {uid} already exists.")
         signal = ExperimentSignal(uid=uid, map_to=connect_to)
-        self.signals[uid] = signal
+        self._signals_dict[signal.uid] = signal
         return signal
 
     def add(self, section: Section):
@@ -118,7 +123,6 @@ class Experiment:
         """
         self._add_section_to_current_section(section)
 
-    @property
     def experiment_signals_uids(self) -> list[str]:
         """A list of experiment signal UIDs defined in this experiment.
 
@@ -127,7 +131,7 @@ class Experiment:
                 A list of the UIDs for the signals defined in this
                 experiment.
         """
-        return self.signals.keys
+        return list(self._signals_dict.keys())
 
     def list_experiment_signals(self) -> list[ExperimentSignal]:
         """A list of experiment signals defined in this experiment.
@@ -135,7 +139,7 @@ class Experiment:
         Returns:
             signals: List of defined experiment signals.
         """
-        return list(self.signals.values())
+        return list(self._signals_dict.values())
 
     def is_experiment_signal(self, uid: str) -> bool:
         """Check if an experiment signal is defined for this experiment.
@@ -149,7 +153,7 @@ class Experiment:
                 `True` if the experiment signal is defined in this
                 experiment, `False` otherwise.
         """
-        return uid in self.signals.keys()
+        return uid in self._signals_dict.keys()
 
     def map_signal(self, experiment_signal_uid: str, logical_signal: LogicalSignalRef):
         """Connect an experiment signal to a logical signal.
@@ -173,7 +177,7 @@ class Experiment:
                 f"prior to connect id to a LogicalSignal. "
             )
 
-        self.signals[experiment_signal_uid].map(logical_signal)
+        self._signals_dict[experiment_signal_uid].map(logical_signal)
 
     def reset_signal_map(self, signal_map: dict[str, LogicalSignalRef] | None = None):
         """Reset, i.e. disconnect, all defined signal connections and
@@ -183,7 +187,7 @@ class Experiment:
             signal_map: The new signal map to apply.
         """
 
-        for signal in self.signals.values():
+        for signal in self._signals_dict.values():
             signal.disconnect()
         if signal_map:
             self.set_signal_map(signal_map)
@@ -210,7 +214,7 @@ class Experiment:
         mapped_signals = list()
         not_mapped_signals = list()
 
-        for signal in self.signals.values():
+        for signal in self._signals_dict.values():
             if signal.is_mapped():
                 mapped_signals.append(signal.uid)
             else:
@@ -237,8 +241,8 @@ class Experiment:
         """
         return {
             signal.uid: signal.mapped_logical_signal_path
-            for signal in self.signals.values()
-            if signal.is_mapped()
+            for signal in self._signals_dict.values()
+            if signal.mapped_logical_signal_path is not None
         }
 
     def set_signal_map(self, signal_map: dict[str, LogicalSignalRef]):
@@ -251,14 +255,16 @@ class Experiment:
                 logical signal references to map them to.
         """
         for signal_uid, logical_signal_ref in signal_map.items():
-            if signal_uid not in self.signals.keys():
+            signal = self._signals_dict.get(signal_uid)
+            if signal is None:
                 self._signal_not_found_error(signal_uid, "Cannot apply signal map.")
-
-            self.signals[signal_uid].map(to=logical_signal_ref)
+            signal.map(to=logical_signal_ref)
 
     # Calibration ....................................
 
-    def _signal_not_found_error(self, signal_uid: str, msg: str | None = None):
+    def _signal_not_found_error(
+        self, signal_uid: str, msg: str | None = None
+    ) -> NoReturn:
         if msg is None:
             msg = ""
         raise LabOneQException(
@@ -275,13 +281,14 @@ class Experiment:
                 elements of the device setup the experiment
                 will be executed on.
         """
-        for signal_uid, calib_item in calibration.calibration_items.items():
+        for signal_uid, calib_item in calibration.items():
             if calib_item is not None:
-                if signal_uid not in self.signals.keys():
+                signal = self._signals_dict.get(signal_uid)
+                if signal is None:
                     self._signal_not_found_error(
                         signal_uid, "Cannot apply experiment signal calibration."
                     )
-                self.signals[signal_uid].calibration = calib_item
+                signal.calibration = calib_item
 
     def get_calibration(self) -> Calibration:
         """Return the current calibration of the experiment.
@@ -295,14 +302,13 @@ class Experiment:
         """
         from ..calibration import Calibration
 
-        experiment_signals_calibration = dict()
-        for sig in self.signals.values():
-            experiment_signals_calibration[sig.uid] = (
-                sig.calibration if sig.is_calibrated() else None
-            )
+        experiment_signals_calibration = {
+            sig.uid: sig.calibration
+            for sig in self._signals_dict.values()
+            if sig.calibration is not None
+        }
 
-        calibration = Calibration(calibration_items=experiment_signals_calibration)
-        return calibration
+        return Calibration(calibration_items=experiment_signals_calibration)
 
     def reset_calibration(self, calibration: Calibration | None = None):
         """Reset the experiment calibration.
@@ -316,11 +322,7 @@ class Experiment:
                 experiment calibration.
                 Default: `None`.
         """
-        try:
-            signals = self.signals.values()
-        except AttributeError:
-            signals = self.signals
-        for sig in signals:
+        for sig in self._signals_dict.values():
             sig.reset_calibration()
         if calibration:
             self.set_calibration(calibration)
@@ -347,7 +349,7 @@ class Experiment:
         from ..calibration import Calibratable
 
         calibratables = dict()
-        for signal in self.signals.values():
+        for signal in self._signals_dict.values():
             if isinstance(signal, Calibratable):
                 calibratables[signal.uid] = signal.create_info()
         return calibratables
@@ -1310,19 +1312,17 @@ class Experiment:
             retval.extend(Experiment._all_subsections(s))
         return retval
 
-    def _traverse(self):
-        staq = deque([self.sections[0]])
+    def _traverse(self) -> Iterator[Section]:
+        staq: deque[Section] = deque(self.sections)
 
         while len(staq):
             sec = staq.pop()
             yield sec
-            try:
-                staq.extendleft(sec.children)
-            except AttributeError:
-                pass
+            staq.extendleft(sec.sections)
 
-    def get_rt_acquire_loop(self) -> AcquireLoopRt:
+    def get_rt_acquire_loop(self) -> AcquireLoopRt | None:
         """Return the real-time acquire loop object."""
         for node in self._traverse():
             if isinstance(node, AcquireLoopRt):
                 return node
+        return None

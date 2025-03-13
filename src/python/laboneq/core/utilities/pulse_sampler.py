@@ -213,9 +213,6 @@ def sample_pulse(
     if signal_type == "iq":
         samples = np.exp(-1.0j * carrier_phase) * samples
     else:
-        # TODO: CM: seems unneccesary to check here again after the previous check in line 147 -> remove?
-        if not np.allclose(samples.imag, 0.0):
-            raise LabOneQException("Complex samples not permitted for RF signals")
         samples = np.cos(carrier_phase) * samples
 
     if mixer_type == MixerType.UHFQA_ENVELOPE and signal_type == "iq":

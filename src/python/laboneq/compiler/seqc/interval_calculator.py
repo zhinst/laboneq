@@ -12,7 +12,9 @@ from laboneq._rust.intervals import IntervalTree, Interval
 _logger = logging.getLogger(__name__)
 
 
-def are_cut_points_valid(interval_tree: IntervalTree, cut_points: List[int]):
+def are_cut_points_valid(
+    interval_tree: IntervalTree, cut_points: Iterable[int]
+) -> bool:
     for cut_point in cut_points:
         at_cut_point = interval_tree.at(cut_point)
         for iv in at_cut_point:
@@ -161,7 +163,7 @@ def calculate_intervals(
     play_wave_max_hint: int,
     cut_points: List[int],
     granularity: int = 16,
-    force_command_table_intervals: Iterable[MutableInterval] = (),
+    force_command_table_intervals: Iterable[MutableInterval] | None = None,
 ) -> list[Interval]:
     """
     Compute intervals (corresponding to eventual playWave statements in the code) from
@@ -213,7 +215,15 @@ def calculate_intervals(
     """
     if interval_tree.is_empty():
         return []
-
+    cut_points = sorted(list(cut_points))
+    force_command_table_intervals = force_command_table_intervals or []
+    # Check whether any cut point is within a command table interval
+    assert are_cut_points_valid(
+        IntervalTree(
+            [Interval(iv.begin, iv.end) for iv in force_command_table_intervals]
+        ),
+        cut_points,
+    )
     assert all(cut_point % granularity == 0 for cut_point in cut_points)
     assert min_play_wave % granularity == 0
     assert play_wave_max_hint % granularity == 0

@@ -4,7 +4,6 @@
 from .amplifier_pump import AmplifierPump, CancellationSource
 from .calibratable import Calibratable
 from .calibration import Calibration
-from .calibration_item import CalibrationItem
 from .mixer_calibration import MixerCalibration
 from .oscillator import Oscillator
 from .output_routing import OutputRoute

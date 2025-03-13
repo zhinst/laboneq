@@ -7,7 +7,7 @@ import logging
 import time
 from collections import defaultdict
 from copy import deepcopy
-from typing import TYPE_CHECKING, Callable, cast
+from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 import zhinst.utils
@@ -21,17 +21,11 @@ from laboneq.controller.devices.device_zi import DeviceBase, DeviceZI
 from laboneq.controller.near_time_runner import NearTimeRunner
 from laboneq.controller.protected_session import ProtectedSession
 from laboneq.controller.recipe_processor import (
-    AwgConfig,
-    AwgKey,
     RecipeData,
     RtExecutionInfo,
     pre_process_compiled,
 )
-from laboneq.controller.results import (
-    build_partial_result,
-    build_raw_partial_result,
-    make_acquired_result,
-)
+from laboneq.controller.results import make_acquired_result
 from laboneq.controller.util import LabOneQControllerException, SweepParamsTracker
 from laboneq.controller.versioning import (
     MINIMUM_SUPPORTED_LABONE_VERSION,
@@ -41,7 +35,6 @@ from laboneq.controller.versioning import (
 )
 from laboneq.core.exceptions import AbortExecution
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
-from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.core.utilities.async_helpers import EventLoopMixIn
 from laboneq.core.utilities.replace_phase_increment import calc_ct_replacement
 from laboneq.core.utilities.replace_pulse import ReplacementType, calc_wave_replacements
@@ -108,12 +101,7 @@ class Controller(EventLoopMixIn):
     def _check_zhinst_core_version_support(self, version: LabOneVersion):
         if version < MINIMUM_SUPPORTED_LABONE_VERSION:
             err_msg = f"'zhinst.core' version '{version}' is not supported. We recommend {RECOMMENDED_LABONE_VERSION}."
-            if not self._ignore_version_mismatch:
-                LabOneQControllerException(err_msg)
-            else:
-                _logger.debug(
-                    f"Ignoring because `ignore_version_mismatch=True`: {err_msg}"
-                )
+            raise LabOneQControllerException(err_msg)
 
     @property
     def setup_caps(self) -> SetupCaps:
@@ -139,7 +127,7 @@ class Controller(EventLoopMixIn):
         self,
         sweep_params_tracker: SweepParamsTracker,
         user_set_nodes: NodeCollector,
-        nt_step_key: NtStepKey,
+        nt_step: NtStepKey,
         rt_section_uid: str,
     ):
         # Trigger
@@ -164,7 +152,7 @@ class Controller(EventLoopMixIn):
             DeviceZI.prepare_artifacts,
             recipe_data=self._recipe_data,
             rt_section_uid=rt_section_uid,
-            nt_step_key=nt_step_key,
+            nt_step=nt_step,
         )
         await self._replace_artifacts(rt_section_uid=rt_section_uid)
         await self._devices.for_each(DeviceBase.set_after_awg_upload, self._recipe_data)
@@ -527,145 +515,13 @@ class Controller(EventLoopMixIn):
 
     async def _read_one_step_results(self, nt_step: NtStepKey, rt_section_uid: str):
         rt_execution_info = self._recipe_data.rt_execution_infos[rt_section_uid]
-
-        devices_to_process: set[str] = set()
-        for awg_key, awg_config in self._recipe_data.awgs_producing_results():
-            if awg_config.result_length == -1:
-                # AWGs are not relevant, result shape determined by device
-                devices_to_process.add(awg_key.device_uid)
-        if len(devices_to_process) > 0:
-            raw_results = await _gather(
-                *(
-                    self._devices.find_by_uid(device_uid).get_result_data()
-                    for device_uid in devices_to_process
-                )
-            )
-            for device_uid, raw_result_data in zip(devices_to_process, raw_results):
-                # results.data type is violated, the code below is currently for debugging only
-                handle = device_uid
-                results = self._results.acquired_results.get(handle)
-                if results is None:
-                    results = make_acquired_result(
-                        data=[],  # type: ignore
-                        axis_name=[],
-                        axis=[],
-                        handle=handle,
-                    )
-                    self._results.acquired_results[handle] = results
-                assert isinstance(results.data, list)
-                results.data.append(raw_result_data)
-            return
-
-        await _gather(
-            *(
-                self._read_one_awg_results(
-                    nt_step, rt_execution_info, awg_key, awg_config
-                )
-                for awg_key, awg_config in self._recipe_data.awgs_producing_results()
-            )
+        await self._devices.for_each(
+            DeviceZI.read_results,
+            recipe_data=self._recipe_data,
+            nt_step=nt_step,
+            rt_execution_info=rt_execution_info,
+            results=self._results,
         )
-
-    async def _read_one_awg_results(
-        self,
-        nt_step: NtStepKey,
-        rt_execution_info: RtExecutionInfo,
-        awg_key: AwgKey,
-        awg_config: AwgConfig,
-    ):
-        device = self._devices.find_by_uid(awg_key.device_uid)
-        if rt_execution_info.acquisition_type == AcquisitionType.RAW:
-            assert awg_config.raw_acquire_length is not None
-            raw_results = await device.get_raw_data(
-                channel=cast(int, awg_key.awg_index),
-                acquire_length=awg_config.raw_acquire_length,
-                acquires=awg_config.result_length,
-            )
-            # Raw data is per physical port, and is the same for all logical signals of the AWG
-            for signal in awg_config.acquire_signals:
-                mapping = rt_execution_info.signal_result_map.get(signal, [])
-                signal_acquire_length = awg_config.signal_raw_acquire_lengths.get(
-                    signal
-                )
-                if signal_acquire_length is None:
-                    continue
-                unique_handles = set(mapping)
-                for handle in unique_handles:
-                    if handle is None:
-                        continue  # Ignore unused acquire signal if any
-                    result = self._results.acquired_results[handle]
-                    build_raw_partial_result(
-                        result=result,
-                        nt_step=nt_step,
-                        raw_segments=raw_results.vector,
-                        result_length=signal_acquire_length,
-                        mapping=mapping,
-                        handle=handle,
-                    )
-        else:
-            if rt_execution_info.averaging_mode == AveragingMode.SINGLE_SHOT:
-                effective_averages = 1
-            else:
-                effective_averages = rt_execution_info.averages
-            await _gather(
-                *(
-                    self._read_one_signal_result(
-                        device,
-                        awg_key,
-                        awg_config,
-                        signal,
-                        rt_execution_info,
-                        effective_averages,
-                        nt_step,
-                    )
-                    for signal in awg_config.acquire_signals
-                )
-            )
-
-    async def _read_one_signal_result(
-        self,
-        device: DeviceZI,
-        awg_key: AwgKey,
-        awg_config: AwgConfig,
-        signal: str,
-        rt_execution_info: RtExecutionInfo,
-        effective_averages: int,
-        nt_step: NtStepKey,
-    ):
-        integrator_allocation = next(
-            (
-                i
-                for i in self._recipe_data.recipe.integrator_allocations
-                if i.signal_id == signal
-            ),
-            None,
-        )
-        if integrator_allocation is None:
-            return
-        assert integrator_allocation.device_id == awg_key.device_uid
-        assert integrator_allocation.awg == awg_key.awg_index
-        assert awg_config.result_length is not None, "AWG not producing results"
-        raw_readout = await device.get_measurement_data(
-            self._recipe_data,
-            cast(int, awg_key.awg_index),
-            rt_execution_info,
-            integrator_allocation.channels,
-            awg_config.result_length,
-            effective_averages,
-        )
-        mapping = rt_execution_info.signal_result_map.get(signal, [])
-        unique_handles = set(mapping)
-        for handle in unique_handles:
-            if handle is None:
-                continue  # unused entries in sparse result vector map to None handle
-            result = self._results.acquired_results[handle]
-            build_partial_result(result, nt_step, raw_readout.vector, mapping, handle)
-
-        timestamps = self._results.pipeline_jobs_timestamps.setdefault(signal, [])
-
-        for job_id, v in raw_readout.metadata.items():
-            # make sure the list is long enough for this job id
-            timestamps.extend([float("nan")] * (job_id - len(timestamps) + 1))
-            timestamps[job_id] = v["timestamp"]
 
     def _report_step_error(self, nt_step: NtStepKey, rt_section_uid: str, message: str):
         self._results.execution_errors.append(

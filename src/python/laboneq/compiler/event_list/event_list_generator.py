@@ -676,17 +676,6 @@ class EventListGenerator:
             }
             for device, duration in ir.hw_osc_devices
         ]
-
-        if ir.reset_sw_oscillators:
-            events.append(
-                {
-                    "event_type": EventType.RESET_SW_OSCILLATOR_PHASE,
-                    "time": start,
-                    "section_name": ir.section,
-                    "id": next(id_tracker),
-                }
-            )
-
         return events
 
     def visit_PPCStepIR(
