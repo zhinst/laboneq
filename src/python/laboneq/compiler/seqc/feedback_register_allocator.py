@@ -3,11 +3,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Dict, Literal, Optional
 
 from laboneq.compiler.common.awg_info import AwgKey
 from laboneq.compiler.common.signal_obj import SignalObj
-from laboneq.compiler.event_list.event_type import EventType
 
 PQSC_FEEDBACK_REGISTER_COUNT = 32
 
@@ -30,14 +29,6 @@ class FeedbackRegisterAllocator:
         ] = {}  # QA AWG -> allocated reg
 
         self._top = 0  # next free register
-
-    # TODO: Remove once the event list is gone
-    def set_feedback_paths_from_events(self, events: List[Dict[str, Any]]) -> None:
-        for event in events:
-            if event["event_type"] == EventType.SECTION_START:
-                handle = event.get("handle")
-                if handle is not None:
-                    self.set_feedback_path(handle, not event["local"])
 
     def set_feedback_path(self, handle: str, via_pqsc: bool) -> None:
         self.feedback_path[handle] = via_pqsc

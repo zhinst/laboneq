@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+from dataclasses import dataclass
 
 import attrs
 
@@ -62,6 +63,21 @@ case an issue is found."""
 DROP_SUPPORT_FOR_PREVIOUS_L1 = (2, 47)
 
 
+MIN_LABONE_VERSION_SHF_BUSY = LabOneVersion(year=25, month=4, patch=0, build=0)
+
+
+@dataclass
 class SetupCaps:
-    def __init__(self, version: LabOneVersion):
-        self._version = version
+    client_version: LabOneVersion
+    server_version: LabOneVersion | None = None
+
+    def for_server(self, server_version: LabOneVersion) -> SetupCaps:
+        return SetupCaps(
+            client_version=self.client_version, server_version=server_version
+        )
+
+    @property
+    def supports_shf_busy(self) -> bool:
+        if self.server_version is None:
+            return False
+        return self.server_version >= MIN_LABONE_VERSION_SHF_BUSY

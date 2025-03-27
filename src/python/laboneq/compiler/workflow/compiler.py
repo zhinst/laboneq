@@ -676,6 +676,7 @@ class Compiler:
                 is_qc=device_info.is_qc,
                 automute=signal_info.automute,
                 local_oscillator_frequency=local_oscillator_frequency,
+                signal_range=signal_info.signal_range,
             )
             signal_objects[signal_id] = signal_obj
             awg.signals.append(signal_obj)
@@ -691,7 +692,7 @@ class Compiler:
 
     def compiler_output(self) -> CompiledExperiment:
         return CompiledExperiment(
-            experiment_dict=ExperimentDAO.dump(self._experiment_dao),
+            experiment_dict=None,
             scheduled_experiment=ScheduledExperiment(
                 recipe=self._recipe,
                 artifacts=self._combined_compiler_output.get_artifacts(),

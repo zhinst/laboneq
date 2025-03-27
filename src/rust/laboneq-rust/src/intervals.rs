@@ -1,44 +1,18 @@
 // Copyright 2024 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use interval_calculator::interval::OrderedRange;
 use interval_tree::ArrayBackedIntervalTree;
+use pyo3::create_exception;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::gc::PyVisit;
 use pyo3::prelude::*;
+use pyo3::types::{PyList, PySet};
 use pyo3::PyTraverseError;
 use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
-
-#[derive(Clone, Eq, PartialEq, Hash)]
-struct OrderedRange<Num: Ord>(std::ops::Range<Num>);
-
-impl<Num: Ord> OrderedRange<Num> {
-    fn overlaps_range(&self, start: Num, stop: Num) -> bool {
-        self.0.start < stop && self.0.end > start
-    }
-
-    fn overlaps_point(&self, point: Num) -> bool {
-        self.0.contains(&point)
-    }
-}
-
-impl<Num: Ord> Ord for OrderedRange<Num> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        match self.0.start.cmp(&other.0.start) {
-            Ordering::Less => Ordering::Less,
-            Ordering::Greater => Ordering::Greater,
-            Ordering::Equal => self.0.end.cmp(&other.0.end),
-        }
-    }
-}
-
-impl<Num: Ord> PartialOrd for OrderedRange<Num> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
 
 #[pyclass]
 pub struct Interval {
@@ -378,4 +352,96 @@ impl IntervalTree {
     fn is_sorted(&self) -> bool {
         self.is_sorted
     }
+}
+
+create_exception!(module, MinimumWaveformLengthViolation, PyRuntimeError);
+
+#[pyfunction]
+#[pyo3(signature = (
+    ivt,
+    min_play_wave,
+    play_wave_size_hint,
+    play_zero_size_hint,
+    play_wave_max_hint,
+    cut_points,
+    granularity=None,
+    force_command_table_intervals=None
+))]
+#[allow(clippy::too_many_arguments)]
+pub fn calculate_intervals(
+    py: Python,
+    ivt: &IntervalTree,
+    min_play_wave: i64,
+    play_wave_size_hint: i64,
+    play_zero_size_hint: i64,
+    play_wave_max_hint: i64,
+    cut_points: &Bound<PyList>,
+    granularity: Option<i64>,
+    force_command_table_intervals: Option<&Bound<PySet>>,
+) -> PyResult<Vec<Interval>> {
+    if ivt.is_empty() {
+        return Ok(vec![]);
+    }
+    let cut_points = cut_points.extract::<Vec<i64>>()?;
+    let ct_intervals: Option<HashSet<OrderedRange<i64>>> = force_command_table_intervals
+        .map(|x| {
+            x.extract::<HashSet<(i64, i64)>>().map(|x| {
+                x.into_iter()
+                    .map(|(start, end)| OrderedRange(start..end))
+                    .collect()
+            })
+        })
+        .transpose()?;
+    let granularity = granularity.unwrap_or(16);
+    let play_wave_max_hint = match play_wave_max_hint {
+        0 => i64::MAX,
+        x => x,
+    };
+    let intervals: Vec<_> = ivt
+        .tree
+        .find(ivt.begin()?..ivt.end()?)
+        .iter()
+        .map(|x| OrderedRange(x.interval().start..x.interval().end))
+        .collect();
+
+    match interval_calculator::calculate_intervals(
+        &intervals,
+        &cut_points,
+        granularity,
+        min_play_wave,
+        play_wave_size_hint,
+        play_zero_size_hint,
+        Some(play_wave_max_hint),
+        ct_intervals.as_ref(),
+    ) {
+        Ok(x) => Ok(x
+            .iter()
+            .map(|iv| Interval {
+                range: iv.clone(),
+                data: py.None(),
+            })
+            .collect()),
+        Err(e) => match e {
+            interval_calculator::Error::MinimumWaveformLengthViolation(msg) => {
+                Err(MinimumWaveformLengthViolation::new_err(msg))
+            }
+            interval_calculator::Error::Anyhow(x) => Err(PyRuntimeError::new_err(x.to_string())),
+        },
+    }
+}
+
+pub fn create_py_module<'a>(
+    parent: &Bound<'a, PyModule>,
+    name: &str,
+) -> PyResult<Bound<'a, PyModule>> {
+    let py = parent.py();
+    let m = PyModule::new(parent.py(), name)?;
+    m.add_class::<IntervalTree>()?;
+    m.add_class::<Interval>()?;
+    m.add_function(wrap_pyfunction!(calculate_intervals, &m)?)?;
+    m.add(
+        "MinimumWaveformLengthViolation",
+        py.get_type::<MinimumWaveformLengthViolation>(),
+    )?;
+    Ok(m)
 }

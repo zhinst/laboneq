@@ -9,14 +9,6 @@ mod intervals;
 mod _rust {
 
     use super::*;
-    #[pymodule]
-    mod intervals {
-        #[pymodule_export]
-        use crate::intervals::Interval;
-
-        #[pymodule_export]
-        use crate::intervals::IntervalTree;
-    }
 
     #[pymodule_init]
     fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -28,10 +20,11 @@ mod _rust {
         // See:
         // - https://github.com/PyO3/pyo3/issues/759
         // - https://docs.python.org/3/tutorial/modules.html#packages
-        let intervals_module = m.getattr("intervals")?;
         let modules = py.import("sys")?.getattr("modules")?;
-        modules.set_item("laboneq._rust.intervals", intervals_module)?;
-
+        modules.set_item(
+            "laboneq._rust.intervals",
+            intervals::create_py_module(m, "intervals")?,
+        )?;
         Ok(())
     }
 }

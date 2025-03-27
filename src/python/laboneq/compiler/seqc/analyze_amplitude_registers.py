@@ -111,7 +111,6 @@ def analyze_amplitude_register_set_events(
         signature = PlaybackSignature(
             waveform=None,
             hw_oscillator=None,
-            pulse_parameters=(),
             amplitude_register=register,
             set_amplitude=value,
         )

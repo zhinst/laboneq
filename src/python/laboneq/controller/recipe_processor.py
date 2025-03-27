@@ -3,10 +3,11 @@
 
 from __future__ import annotations
 
+from collections.abc import ItemsView, Iterator
 import math
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Iterator, Literal, TypeVar, overload
+from typing import TYPE_CHECKING, Any, KeysView, Literal, TypeVar, overload
 
 import numpy as np
 
@@ -35,6 +36,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class HandleResultShape:
+    signal: str
     base_shape: list[int]
     base_axis_name: list[str | list[str]]
     base_axis: list[NumPyArray | list[NumPyArray]]
@@ -59,7 +61,8 @@ class AwgKey:
 @dataclass
 class AwgConfig:
     # TODO(2K): use enum
-    device_type: str | None = None
+    device_type: str | None
+    signals: set[str]
     # QA
     raw_acquire_length: int | None = None
     signal_raw_acquire_lengths: dict[str, int] = field(default_factory=dict)
@@ -75,7 +78,29 @@ class AwgConfig:
     register_selector_shift: int | None = None
 
 
-AwgConfigs = dict[AwgKey, AwgConfig]
+class AwgConfigs:
+    def __init__(self):
+        self._configs: dict[AwgKey, AwgConfig] = {}
+
+    def __getitem__(self, key: AwgKey) -> AwgConfig:
+        return self._configs[key]
+
+    def items(self) -> ItemsView[AwgKey, AwgConfig]:
+        return self._configs.items()
+
+    def keys(self) -> KeysView[AwgKey]:
+        return self._configs.keys()
+
+    def add(self, key: AwgKey, config: AwgConfig):
+        assert key not in self._configs
+        self._configs[key] = config
+
+    def by_signal(self, signal_id: str) -> tuple[AwgKey, AwgConfig]:
+        return next(
+            (key, config)
+            for key, config in self._configs.items()
+            if signal_id in config.signals
+        )
 
 
 @dataclass
@@ -91,9 +116,6 @@ class RtExecutionInfo:
     acquisition_type: AcquisitionType
     pipeliner_job_count: int | None
     pipeliner_repetitions: int | None
-
-    # acquire signal ids
-    acquire_signals: set[str] = field(default_factory=set)
 
     # signal -> flat list of result handles
     # TODO(2K): to be replaced by event-based calculation in the compiler
@@ -121,16 +143,6 @@ class RtExecutionInfo:
             AcquisitionType.INTEGRATION
             if rt_execution_info is None
             else rt_execution_info.acquisition_type
-        )
-
-    def signal_by_handle(self, handle: str) -> str | None:
-        return next(
-            (
-                signal
-                for signal, handles in self.signal_result_map.items()
-                if handle in handles
-            ),
-            None,
         )
 
 
@@ -188,16 +200,6 @@ class RecipeData:
         for awg_key, awg_config in self.awg_configs.items():
             if awg_config.result_length is not None:
                 yield awg_key, awg_config
-
-    def awg_config_by_acquire_signal(self, signal_id: str) -> AwgConfig | None:
-        return next(
-            (
-                awg_config
-                for awg_config in self.awg_configs.values()
-                if signal_id in awg_config.acquire_signals
-            ),
-            None,
-        )
 
 
 def _pre_process_iq_settings_hdawg(
@@ -291,8 +293,6 @@ class _LoopsPreprocessor(ExecutorBase):
         )
 
     def acquire_handler(self, handle: str, signal: str, parent_uid: str):
-        self.current_rt_info.acquire_signals.add(signal)
-
         # Determine result shape for each acquire handle
         single_shot_cyclic = (
             self.current_rt_info.averaging_mode == AveragingMode.SINGLE_SHOT
@@ -315,7 +315,10 @@ class _LoopsPreprocessor(ExecutorBase):
                 if not loop.is_averaging or single_shot_cyclic
             ]
             self.result_shapes[handle] = HandleResultShape(
-                base_shape=shape, base_axis_name=axis_name, base_axis=axis
+                signal=signal,
+                base_shape=shape,
+                base_axis_name=axis_name,
+                base_axis=axis,
             )
         elif known_shape.base_shape == shape:
             known_shape.handle_acquire_count += 1
@@ -396,28 +399,19 @@ def _calculate_awg_configs(
     recipe: Recipe,
     devices: DeviceCollection,
 ) -> AwgConfigs:
-    awg_configs: AwgConfigs = defaultdict(AwgConfig)
-
-    def awg_key_by_acquire_signal(signal_id: str) -> AwgKey | None:
-        return next(
-            (
-                awg_key
-                for awg_key, awg_config in awg_configs.items()
-                if signal_id in awg_config.acquire_signals
-            ),
-            None,
-        )
-
-    for integrator_allocation in recipe.integrator_allocations:
-        awg_key = AwgKey(integrator_allocation.device_id, integrator_allocation.awg)
-        awg_configs[awg_key].acquire_signals.add(integrator_allocation.signal_id)
+    awg_configs = AwgConfigs()
 
     for initialization in recipe.initializations:
         for awg in initialization.awgs or []:
-            awg_config = awg_configs[AwgKey(initialization.device_uid, awg.awg)]
-            awg_config.device_type = initialization.device_type
-            awg_config.target_feedback_register = awg.target_feedback_register
-            awg_config.source_feedback_register = awg.source_feedback_register
+            awg_config = AwgConfig(
+                device_type=initialization.device_type,
+                signals=set(awg.signals.keys()),
+                target_feedback_register=awg.target_feedback_register,
+                source_feedback_register=awg.source_feedback_register,
+                register_selector_shift=awg.codeword_bitshift,
+                register_selector_bitmask=awg.codeword_bitmask,
+                command_table_match_offset=awg.command_table_match_offset,
+            )
             if awg_config.source_feedback_register not in (None, "local"):
                 if devices.has_qhub:
                     raise LabOneQControllerException(
@@ -426,13 +420,16 @@ def _calculate_awg_configs(
                 awg_config.fb_reg_source_index = awg.feedback_register_index_select
                 assert isinstance(awg.awg, int)
                 awg_config.fb_reg_target_index = awg.awg
-            awg_config.register_selector_shift = awg.codeword_bitshift
-            awg_config.register_selector_bitmask = awg.codeword_bitmask
-            awg_config.command_table_match_offset = awg.command_table_match_offset
             if initialization.device_type == "PRETTYPRINTERDEVICE":
                 awg_config.result_length = -1  # result shape determined by device
+            awg_configs.add(AwgKey(initialization.device_uid, awg.awg), awg_config)
+
+    for integrator_allocation in recipe.integrator_allocations:
+        awg_key = AwgKey(integrator_allocation.device_id, integrator_allocation.awg)
+        awg_configs[awg_key].acquire_signals.add(integrator_allocation.signal_id)
 
     acquire_lengths = {al.signal_id: al.acquire_length for al in recipe.acquire_lengths}
+    acquire_signals = set(acquire_lengths.keys())
     # As currently just a single RT execution per experiment is supported,
     # AWG configs are not cloned per RT execution. May need to be changed in the future.
     for rt_execution_info in rt_execution_infos.values():
@@ -442,10 +439,8 @@ def _calculate_awg_configs(
         raw_acquire_lengths: dict[str, dict[str, int]] = defaultdict(dict)
         raw_acquire_channels: dict[str, set[int]] = defaultdict(set)
         if rt_execution_info.acquisition_type == AcquisitionType.RAW:
-            for signal in rt_execution_info.acquire_signals:
-                ac_awg_key = awg_key_by_acquire_signal(signal)
-                if ac_awg_key is None:
-                    continue
+            for signal in acquire_signals:
+                ac_awg_key, _ = awg_configs.by_signal(signal)
                 raw_acquire_lengths[ac_awg_key.device_uid][signal] = (
                     acquire_lengths.get(signal, 0)
                 )

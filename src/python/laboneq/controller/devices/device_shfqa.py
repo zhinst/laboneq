@@ -178,9 +178,6 @@ class DeviceSHFQA(DeviceSHFBase):
             ready=f"/{self.serial}/qachannels/{index}/generator/ready",
         )
 
-    def _get_num_awgs(self) -> int:
-        return self._channels
-
     def _validate_range(self, io: IO, is_out: bool):
         if io.range is None:
             return
@@ -279,13 +276,6 @@ class DeviceSHFQA(DeviceSHFBase):
                 nc.add(f"qachannels/{ch}/output/on", 0, cache=False)
         await self.set_async(nc)
 
-    async def on_experiment_end(self):
-        await super().on_experiment_end()
-        nc = NodeCollector(base=f"/{self.serial}/")
-        # in CW spectroscopy mode, turn off the tone
-        nc.add("qachannels/*/spectroscopy/envelope/enable", 1, cache=False)
-        await self.set_async(nc)
-
     def _result_node_readout(self, ch: int, integrator: int) -> str:
         return f"/{self.serial}/qachannels/{ch}/readout/result/data/{integrator}/wave"
 
@@ -294,6 +284,11 @@ class DeviceSHFQA(DeviceSHFBase):
 
     def _result_node_scope(self, ch: int) -> str:
         return f"/{self.serial}/scopes/0/channels/{ch}/wave"
+
+    def _busy_nodes(self) -> list[str]:
+        if not self._setup_caps.supports_shf_busy:
+            return []
+        return [f"/{self.serial}/qachannels/{ch}/busy" for ch in self._allocated_awgs]
 
     def configure_acquisition(
         self,
@@ -649,7 +644,6 @@ class DeviceSHFQA(DeviceSHFBase):
             self._warn_for_unsupported_param(
                 output.gains is None, "correction_matrix", output.channel
             )
-            self._allocated_awgs.add(output.channel)
             nc.add(f"qachannels/{output.channel}/output/on", 1 if output.enable else 0)
             if output.range is not None:
                 self._validate_range(output, is_out=True)
@@ -1177,18 +1171,24 @@ class DeviceSHFQA(DeviceSHFBase):
     async def on_experiment_begin(self):
         nodes = [
             *(
-                self._result_node_readout(awg, result_index)
-                for awg in range(self._get_num_awgs())
-                for result_index in range(self._integrators)
+                self._result_node_readout(ch, integrator)
+                for ch in self._allocated_awgs
+                for integrator in range(self._integrators)
             ),
-            *(
-                self._result_node_spectroscopy(awg)
-                for awg in range(self._get_num_awgs())
-            ),
-            *(self._result_node_scope(awg) for awg in range(self._get_num_awgs())),
+            *(self._result_node_spectroscopy(ch) for ch in self._allocated_awgs),
+            *(self._result_node_scope(ch) for ch in self._allocated_awgs),
         ]
-        await _gather(*(self._subscriber.subscribe(self._api, node) for node in nodes))
-        await super().on_experiment_begin()
+        await _gather(
+            super().on_experiment_begin(),
+            *(self._subscriber.subscribe(self._api, node) for node in nodes),
+        )
+
+    async def on_experiment_end(self):
+        await super().on_experiment_end()
+        nc = NodeCollector(base=f"/{self.serial}/")
+        # in CW spectroscopy mode, turn off the tone
+        nc.add("qachannels/*/spectroscopy/envelope/enable", 1, cache=False)
+        await self.set_async(nc)
 
     async def get_measurement_data(
         self,

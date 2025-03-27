@@ -284,7 +284,6 @@ class SampledEventHandler:
             ),
             clear_precompensation=True,
             hw_oscillator=None,
-            pulse_parameters=(),
         )
 
         if wave_index is None:
@@ -621,7 +620,6 @@ class SampledEventHandler:
                 ct_index, comment="precomp_reset"
             )
             self.seqc_tracker.flush_deferred_function_calls()
-            assert not self.seqc_tracker.has_deferred_phase_changes()
             self.seqc_tracker.current_time = sampled_event.end
             return
 
@@ -658,7 +656,6 @@ class SampledEventHandler:
             signature = PlaybackSignature(
                 waveform=None,
                 hw_oscillator=None,
-                pulse_parameters=(),
                 set_phase=0.0,
             )
 
@@ -670,6 +667,7 @@ class SampledEventHandler:
 
         _logger.debug("  Processing RESET PHASE event %s", sampled_event)
         start = sampled_event.start
+        self.seqc_tracker.discard_deferred_phase_changes()
         if sampled_event.type == AWGEventType.INITIAL_RESET_PHASE:
             if start > self.seqc_tracker.current_time:
                 self.seqc_tracker.add_required_playzeros(sampled_event)
@@ -677,7 +675,6 @@ class SampledEventHandler:
             # This way it is hidden in the lead time.
             self.seqc_tracker.add_function_call_statement("resetOscPhase")
             if ct_index is not None:
-                assert not self.seqc_tracker.has_deferred_phase_changes()
                 self.seqc_tracker.add_command_table_execution(ct_index)
         elif sampled_event.type == AWGEventType.RESET_PHASE:
             self.seqc_tracker.add_required_playzeros(sampled_event)
@@ -685,7 +682,6 @@ class SampledEventHandler:
                 "resetOscPhase", deferred=True
             )
             if ct_index is not None:
-                assert not self.seqc_tracker.has_deferred_phase_changes()
                 self.seqc_tracker.add_command_table_execution(ct_index)
 
     def handle_set_oscillator_frequency(self, sampled_event: AWGEvent):
@@ -889,7 +885,6 @@ class SampledEventHandler:
         signature = PlaybackSignature(
             waveform=None,
             hw_oscillator=sampled_event.params["oscillator"],
-            pulse_parameters=(),
             increment_phase=sampled_event.params["phase"],
             increment_phase_params=(sampled_event.params["parameter"],),
         )

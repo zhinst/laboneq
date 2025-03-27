@@ -217,6 +217,10 @@ class DevEmu(ABC):
         return new_node
 
     def _get_node(self, dev_path: str) -> NodeBase:
+        if len(dev_path) == 0:
+            # Generally, unknown nodes are implicitly created in emulation,
+            # but empty path is a clear error - raise to improve test coverage.
+            raise ValueError("Empty path is not allowed")
         node = self._node_tree.get(dev_path)
         if node is None:
             node = self._make_node(dev_path)
@@ -440,15 +444,8 @@ class DevEmuHW(DevEmu):
         self._set_val("system/preset/busy", 1)
         for p in self._node_tree.keys():
             if p not in ["system/preset/load", "system/preset/busy"]:
-                node_info = self._cached_node_def().get(p)
-                self._set_val(
-                    p,
-                    0
-                    if node_info is None
-                    else node_info.type.value()._value
-                    if node_info.default is None
-                    else node_info.default,
-                )
+                # set all nodes to their default values
+                self._set_val(p, self._make_node(p).value)
         self.schedule(delay=0.001, action=self._preset_loaded)
 
     def _node_def_common(self) -> dict[str, NodeInfo]:
@@ -718,6 +715,42 @@ class DevEmuUHFQA(DevEmuHW):
 
 
 class Gen2Base(DevEmuHW):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._busy: dict[int, int] = defaultdict(int)
+
+    def _busy_node(self, channel: int) -> str:
+        # Implement in derived classes that support busy flag and configure nodes
+        # with _assert_busy handler.
+        raise NotImplementedError("busy flag is not supported for this device")
+
+    def _assert_busy(self, node: NodeBase, channel: int):
+        # Busy should only be asserted if the originating node value is being changed,
+        # however this requires extra logic to track the previous value. For our testing
+        # purposes, we will simply assert busy on every set.
+        if self._busy[channel] == 0:
+            self.set(self._busy_node(channel), 1)
+        self._busy[channel] += 1
+        self.schedule(
+            delay=self._dev_opts.get(
+                f"{self._busy_node(channel)}/deassert_delay_s", 0.001
+            ),
+            action=self._deassert_busy,
+            argument=(channel,),
+        )
+
+    def _deassert_busy(self, channel: int):
+        if self._busy[channel] > 0:
+            self._busy[channel] -= 1
+        else:
+            _logger.warning(
+                "Event counter for /%d/%d is already 0 on deassertion.",
+                self.serial(),
+                self._busy_node(channel),
+            )
+        if self._busy[channel] == 0:
+            self.set(self._busy_node(channel), 0)
+
     def _ref_clock_switched(self, requested_source: int):
         # 0 - INTERNAL
         # 1 - EXTERNAL
@@ -848,6 +881,9 @@ class DevEmuSHFQABase(DevEmuSHFBase):
         for channel in self._armed_qa_awgs:
             self._awg_stop_qa(channel)
         self._armed_qa_awgs.clear()
+
+    def _busy_node(self, channel: int) -> str:
+        return f"qachannels/{channel}/busy"
 
     def _make_measurement_properties(self, job_id=0):
         return {
@@ -1101,24 +1137,47 @@ class DevEmuSHFQABase(DevEmuSHFBase):
             nd[f"qachannels/{channel}/spectroscopy/result/data/wave"] = NodeInfo(
                 type=NodeType.VECTOR_COMPLEX
             )
-            nd["scopes/0/length"] = NodeInfo(
-                type=NodeType.INT, default=4992, handler=self._scope_adjust_length
+
+            nd[f"qachannels/{channel}/centerfreq"] = NodeInfo(
+                type=NodeType.FLOAT, handler=partial(self._assert_busy, channel=channel)
             )
-            nd["scopes/0/segments/enable"] = NodeInfo(
-                type=NodeType.INT, default=0, handler=self._scope_adjust_length
+            nd[f"qachannels/{channel}/output/on"] = NodeInfo(
+                type=NodeType.INT, handler=partial(self._assert_busy, channel=channel)
             )
-            nd["scopes/0/segments/count"] = NodeInfo(
-                type=NodeType.INT, default=1, handler=self._scope_adjust_segments
+            nd[f"qachannels/{channel}/output/range"] = NodeInfo(
+                type=NodeType.FLOAT, handler=partial(self._assert_busy, channel=channel)
             )
-            for scope_ch in range(4):
-                nd[f"scopes/0/channels/{scope_ch}/enable"] = NodeInfo(
-                    type=NodeType.INT,
-                    default=1 if scope_ch == 0 else 0,
-                    handler=self._scope_adjust_length,
-                )
-                nd[f"scopes/0/channels/{scope_ch}/wave"] = NodeInfo(
-                    type=NodeType.VECTOR_COMPLEX
-                )
+            nd[f"qachannels/{channel}/output/rflfinterlock"] = NodeInfo(
+                type=NodeType.INT, handler=partial(self._assert_busy, channel=channel)
+            )
+            nd[f"qachannels/{channel}/output/rflfpath"] = NodeInfo(
+                type=NodeType.INT, handler=partial(self._assert_busy, channel=channel)
+            )
+            nd[f"qachannels/{channel}/input/range"] = NodeInfo(
+                type=NodeType.FLOAT, handler=partial(self._assert_busy, channel=channel)
+            )
+            nd[f"qachannels/{channel}/input/rflfpath"] = NodeInfo(
+                type=NodeType.INT, handler=partial(self._assert_busy, channel=channel)
+            )
+
+        nd["scopes/0/length"] = NodeInfo(
+            type=NodeType.INT, default=4992, handler=self._scope_adjust_length
+        )
+        nd["scopes/0/segments/enable"] = NodeInfo(
+            type=NodeType.INT, default=0, handler=self._scope_adjust_length
+        )
+        nd["scopes/0/segments/count"] = NodeInfo(
+            type=NodeType.INT, default=1, handler=self._scope_adjust_segments
+        )
+        for scope_ch in range(4):
+            nd[f"scopes/0/channels/{scope_ch}/enable"] = NodeInfo(
+                type=NodeType.INT,
+                default=1 if scope_ch == 0 else 0,
+                handler=self._scope_adjust_length,
+            )
+            nd[f"scopes/0/channels/{scope_ch}/wave"] = NodeInfo(
+                type=NodeType.VECTOR_COMPLEX
+            )
         return nd
 
 
@@ -1149,11 +1208,51 @@ class DevEmuSHFSGBase(DevEmuSHFBase):
         )
         self._armed_sg_awgs: set[int] = set()
 
+        dev_type = self._dev_opts.get("features/devtype", "SHFSG8")
+        dev_opts_str = self._dev_opts.get("features/options", "")
+        assert isinstance(dev_opts_str, str)
+        dev_opts = dev_opts_str.split("\n")
+        if dev_type == "SHFSG8":
+            self._output_to_synth_map = [0, 0, 1, 1, 2, 2, 3, 3]
+        elif dev_type == "SHFSG4":
+            self._output_to_synth_map = [0, 1, 2, 3]
+        elif dev_type == "SHFQC":
+            # Different numbering on SHFQC - index 0 are QA synths
+            if "QC2CH" in dev_opts:
+                self._output_to_synth_map = [1, 1]
+            elif "QC4CH" in dev_opts:
+                self._output_to_synth_map = [1, 1, 2, 2]
+            elif "QC6CH" in dev_opts:
+                self._output_to_synth_map = [1, 1, 2, 2, 3, 3]
+            else:
+                _logger.warning(
+                    "%s: No valid channel option found, provided options: [%s]. "
+                    "Assuming 2ch SHFQC device.",
+                    self.serial(),
+                    ", ".join(dev_opts),
+                )
+                self._output_to_synth_map = [1, 1]
+        else:
+            _logger.warning(
+                "%s: Unknown device type '%s', assuming SHFSG4 device.",
+                self.serial(),
+                dev_type,
+            )
+            self._output_to_synth_map = [0, 1, 2, 3]
+
     def trigger(self):
         super().trigger()
         for channel in self._armed_sg_awgs:
             self._awg_stop_sg(channel)
         self._armed_sg_awgs.clear()
+
+    def _busy_node(self, channel: int) -> str:
+        return f"sgchannels/{channel}/busy"
+
+    def _assert_busy_for_synthesizer(self, node: NodeBase, synthesizer: int):
+        for channel, synth in enumerate(self._output_to_synth_map):
+            if synth == synthesizer:
+                self._assert_busy(node, channel=channel)
 
     def _side_effects_sg(self, channel: int):
         out_ovr_node = f"sgchannels/{channel}/output/overrangecount"
@@ -1185,6 +1284,22 @@ class DevEmuSHFSGBase(DevEmuSHFBase):
             )
             nd[f"sgchannels/{channel}/output/overrangecount"] = NodeInfo(
                 type=NodeType.INT, default=0
+            )
+            nd[f"sgchannels/{channel}/output/on"] = NodeInfo(
+                type=NodeType.INT, handler=partial(self._assert_busy, channel=channel)
+            )
+            nd[f"sgchannels/{channel}/output/range"] = NodeInfo(
+                type=NodeType.FLOAT, handler=partial(self._assert_busy, channel=channel)
+            )
+            nd[f"sgchannels/{channel}/output/rflfpath"] = NodeInfo(
+                type=NodeType.INT, handler=partial(self._assert_busy, channel=channel)
+            )
+        for synthesizer in range(4):
+            nd[f"synthesizers/{synthesizer}/centerfreq"] = NodeInfo(
+                type=NodeType.FLOAT,
+                handler=partial(
+                    self._assert_busy_for_synthesizer, synthesizer=synthesizer
+                ),
             )
         return nd
 

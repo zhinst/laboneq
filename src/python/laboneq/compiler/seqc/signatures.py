@@ -6,7 +6,7 @@ from __future__ import annotations
 import hashlib
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, FrozenSet, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 from orjson import orjson
@@ -39,8 +39,8 @@ class PulseSignature:
     channel: Optional[int]
     # the sub-channel of the pulse (for SHFQA)
     sub_channel: Optional[int]
-    # additional user pulse parameters
-    pulse_parameters: FrozenSet[Tuple[str, str]]
+    # Pulse parameters ID
+    id_pulse_params: int | None
     # markers played during this pulse
     markers: Any
     # the preferred amplitude register for this pulse, will be aggregated into PlaybackSignature
@@ -214,7 +214,6 @@ class PlaybackSignature:
 
     waveform: Optional[WaveformSignature]
     hw_oscillator: str | None
-    pulse_parameters: Tuple[Tuple[frozenset, ...], ...]
     state: Optional[int] = None
     set_phase: float | None = None
     increment_phase: float | None = None

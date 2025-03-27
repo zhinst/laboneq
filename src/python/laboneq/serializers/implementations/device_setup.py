@@ -5,12 +5,12 @@ from __future__ import annotations
 
 from laboneq.dsl.device.device_setup import DeviceSetup
 from laboneq.serializers.base import LabOneQClassicSerializer, VersionedClassSerializer
-from laboneq.serializers.implementations._models import (
+from laboneq.serializers.implementations._models._device_setup import (
     DataServerModel,
-    ZIStandardInstrumentModel,
     LogicalSignalGroupModel,
     PhysicalChannelGroupModel,
-    make_laboneq_converter,
+    ZIStandardInstrumentModel,
+    make_converter,
 )
 from laboneq.serializers.implementations.quantum_element import QuantumElementSerializer
 from laboneq.serializers.serializer_registry import serializer
@@ -30,7 +30,7 @@ class DeviceSetupSerializer(VersionedClassSerializer[DeviceSetup]):
     def to_dict(
         cls, obj: DeviceSetup, options: SerializationOptions | None = None
     ) -> JsonSerializableType:
-        converter = make_laboneq_converter()
+        converter = make_converter()
         uid = obj.uid
         servers = {
             k: converter.unstructure(v, DataServerModel) for k, v in obj.servers.items()
@@ -70,8 +70,8 @@ class DeviceSetupSerializer(VersionedClassSerializer[DeviceSetup]):
         serialized_data: JsonSerializableType,
         options: DeserializationOptions | None = None,
     ) -> DeviceSetup:
+        converter = make_converter()
         se = serialized_data["__data__"]
-        converter = make_laboneq_converter()
         uid = se["uid"]
         servers = {
             k: converter.structure(v, DataServerModel) for k, v in se["servers"].items()

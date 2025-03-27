@@ -4,7 +4,7 @@
 from .acquire_group_ir import AcquireGroupIR
 from .case_ir import CaseIR
 from .interval_ir import IntervalIR
-from .ir import IRTree, DeviceIR, PulseDefIR, SignalIR
+from .ir import IRTree, DeviceIR, SignalIR
 from .loop_ir import LoopIR
 from .loop_iteration_ir import LoopIterationIR, LoopIterationPreambleIR
 from .match_ir import MatchIR
@@ -21,7 +21,6 @@ __all__ = [
     "IntervalIR",
     "IRTree",
     "DeviceIR",
-    "PulseDefIR",
     "SignalIR",
     "LoopIR",
     "LoopIterationIR",

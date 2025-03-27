@@ -252,7 +252,7 @@ class PrecompensationInfo:
     computed_delay_samples: int | None = None
 
 
-@dataclass
+@dataclass(unsafe_hash=True)
 class SignalRange:
     value: float
     unit: str | None

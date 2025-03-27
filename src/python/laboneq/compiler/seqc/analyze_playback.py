@@ -7,18 +7,18 @@ from __future__ import annotations
 import itertools
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import ceil
-from typing import Any, Dict, Iterable, List, Set, Tuple, TYPE_CHECKING
-from laboneq._rust.intervals import Interval, IntervalTree
+from typing import Any, Dict, Iterable, List, Tuple, TYPE_CHECKING, cast
+from laboneq._rust.intervals import (
+    Interval,
+    IntervalTree,
+    calculate_intervals,
+    MinimumWaveformLengthViolation,
+)
 from laboneq.compiler.common.compiler_settings import TINYSAMPLE
 from laboneq.compiler.seqc.analyze_amplitude_registers import (
     analyze_amplitude_register_set_events,
-)
-from laboneq.compiler.seqc.interval_calculator import (
-    MinimumWaveformLengthViolation,
-    MutableInterval,
-    calculate_intervals,
 )
 from laboneq.compiler.seqc.signatures import (
     PlaybackSignature,
@@ -40,7 +40,6 @@ from laboneq.compiler.event_list.event_type import EventType
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.pulse_sampler import (
-    combine_pulse_parameters,
     interval_to_samples_with_errors,
     length_to_samples,
 )
@@ -49,6 +48,20 @@ if TYPE_CHECKING:
     from laboneq.compiler.seqc.passes.intervals import EmptyInterval
 
 _logger = logging.getLogger(__name__)
+
+
+@dataclass
+class MutableInterval:
+    """Mutable proxy for intervaltree.Interval
+
+    Cannot actually live in an IntervalTree."""
+
+    begin: int
+    end: int | None
+    data: Any = field(default=None)
+
+    def immutable(self) -> Interval:
+        return Interval(self.begin, cast(int, self.end), self.data)
 
 
 @dataclass
@@ -64,8 +77,7 @@ class _IntervalStartEvent:
     phase: float | None
     sub_channel: int | None
     increment_oscillator_phase: float | None
-    play_pulse_parameters: dict[str, Any] | None
-    pulse_pulse_parameters: dict[str, Any] | None
+    id_pulse_params: int | None
     state: int | None
     markers: Any
     amp_param: str | None
@@ -91,8 +103,7 @@ class _PlayIntervalData:
     increment_oscillator_phase: float
     phase: float
     sub_channel: int
-    play_pulse_parameters: dict[str, Any] | None
-    pulse_pulse_parameters: dict[str, Any] | None
+    id_pulse_params: int | None
     state: int
     start_rounding_error: float
     markers: Any
@@ -197,8 +208,7 @@ def _interval_list(events, states, signal_ids, delay, sub_channel):
                     phase=start.get("phase"),
                     sub_channel=sub_channel,
                     increment_oscillator_phase=start.get("increment_oscillator_phase"),
-                    play_pulse_parameters=start.get("play_pulse_parameters"),
-                    pulse_pulse_parameters=start.get("pulse_pulse_parameters"),
+                    id_pulse_params=start.get("id_pulse_params"),
                     state=states.get(start["section_name"], None),
                     markers=start.get("markers"),
                     amp_param=start.get("amplitude_parameter"),
@@ -266,8 +276,7 @@ def _make_interval_tree(
                                 increment_oscillator_phase=None,
                                 phase=None,
                                 sub_channel=sub_channel,
-                                play_pulse_parameters=None,
-                                pulse_pulse_parameters=None,
+                                id_pulse_params=None,
                                 state=branch.state,
                                 start_rounding_error=start_rounding_error,
                                 markers=None,
@@ -303,8 +312,7 @@ def _make_interval_tree(
                         increment_oscillator_phase=interval_start.increment_oscillator_phase,
                         phase=interval_start.phase,
                         sub_channel=interval_start.sub_channel,
-                        play_pulse_parameters=interval_start.play_pulse_parameters,
-                        pulse_pulse_parameters=interval_start.pulse_pulse_parameters,
+                        id_pulse_params=interval_start.id_pulse_params,
                         state=interval_start.state,
                         start_rounding_error=start_rounding_error,
                         markers=interval_start.markers,
@@ -488,10 +496,9 @@ def _oscillator_switch_cut_points(
     sample_multiple,
     oscillator_phase_increment_times: set[int],
     branching_intervals: dict[str, list[MutableInterval]],
-) -> Tuple[AWGSampledEventSequence, Set]:
+) -> list[Interval]:
     cut_points = set()
 
-    osc_switch_events = AWGSampledEventSequence()
     hw_oscillators = {
         signal_id: signals[signal_id].hw_oscillator for signal_id in signals
     }
@@ -501,7 +508,7 @@ def _oscillator_switch_cut_points(
     if awg.signal_type == AWGSignalType.DOUBLE:
         # Skip for now. In double mode, 2 oscillators may (?) be active.
         # Still, oscillator switching is not supported on these instruments.
-        return osc_switch_events, cut_points
+        return [], cut_points
     if not device_type.supports_oscillator_switching:
         if len(hw_oscs_values) > 1:
             raise LabOneQException(
@@ -510,7 +517,7 @@ def _oscillator_switch_cut_points(
                 f"support oscillator switching."
             )
     if len(hw_oscs_values) <= 1:
-        return osc_switch_events, cut_points
+        return [], cut_points
 
     if None in hw_oscs_values:
         missing_oscillator_signal = next(
@@ -526,7 +533,7 @@ def _oscillator_switch_cut_points(
 
     if interval_tree.is_empty():
         # Nothing to do if there are no pulses in an experiment.
-        return osc_switch_events, cut_points
+        return [], cut_points
 
     osc_intervals_ = []
     for pulse_iv in interval_tree.intervals:
@@ -572,18 +579,11 @@ def _oscillator_switch_cut_points(
         # to the end of the sequence.
         if time >= osc_intervals.end():
             cut_points.add(ceil(time / sample_multiple) * sample_multiple)
-
-    oscillator_switch_events = AWGSampledEventSequence()
-    for iv in osc_intervals.intervals:
-        osc_switch_event = AWGEvent(
-            type=AWGEventType.SWITCH_OSCILLATOR,
-            start=iv.begin,
-            params={"oscillator": iv.data["oscillator"], "signal": iv.data["signal"]},
-        )
-        oscillator_switch_events.add(iv.begin, osc_switch_event)
+    osc_ivs = osc_intervals.intervals
+    for iv in osc_ivs:
         cut_points.add(iv.begin)
 
-    return oscillator_switch_events, cut_points
+    return osc_ivs, cut_points
 
 
 def _sequence_end(events, sampling_rate, sample_multiple, delay, waveform_size_hint):
@@ -599,24 +599,21 @@ def _sequence_end(events, sampling_rate, sample_multiple, delay, waveform_size_h
 
 def _oscillator_intervals(
     signals: Iterable[SignalObj],
-    oscillator_switch_events: AWGSampledEventSequence,
+    oscillator_switch_intervals: list[Interval],
     sequence_end,
-) -> IntervalTree:
+) -> list[Interval]:
     intervals_ = []
     start = 0
     active_oscillator = next(iter(signals)).hw_oscillator
-    for osc_event_time, osc_event in oscillator_switch_events.sequence.items():
-        if start != osc_event_time:
-            intervals_.append(
-                Interval(start, osc_event_time, {"oscillator": active_oscillator})
-            )
-        active_oscillator = osc_event[0].params["oscillator"]
-        start = osc_event_time
+    for osc_event in oscillator_switch_intervals:
+        osc_start = osc_event.begin
+        if start != osc_start:
+            intervals_.append(Interval(start, osc_start, active_oscillator))
+        active_oscillator = osc_event.data["oscillator"]
+        start = osc_start
     if start != sequence_end:
-        intervals_.append(
-            Interval(start, sequence_end, {"oscillator": active_oscillator})
-        )
-    return IntervalTree(intervals_)
+        intervals_.append(Interval(start, sequence_end, active_oscillator))
+    return intervals_
 
 
 def _make_pulse_signature(
@@ -645,16 +642,9 @@ def _make_pulse_signature(
         incr_phase_params = (data.incr_phase_param,)
     else:
         incr_phase_params = ()
-
-    combined_pulse_parameters = combine_pulse_parameters(
-        data.pulse_pulse_parameters, None, data.play_pulse_parameters
-    )
-
     amplitude_register = amplitude_registers.get(data.amp_param, 0)
-
     markers = data.markers
-
-    signature = PulseSignature(
+    return PulseSignature(
         start=start,
         pulse=data.pulse,
         length=pulse_iv.length(),
@@ -665,18 +655,11 @@ def _make_pulse_signature(
         increment_oscillator_phase=increment_oscillator_phase,
         channel=data.channel if len(signal_ids) > 1 else None,
         sub_channel=data.sub_channel,
-        pulse_parameters=None
-        if combined_pulse_parameters is None
-        else frozenset(combined_pulse_parameters.items()),
+        id_pulse_params=data.id_pulse_params,
         markers=tuple(frozenset(m.items()) for m in markers) if markers else None,
         preferred_amplitude_register=amplitude_register,
         incr_phase_params=incr_phase_params,
     )
-    pulse_parameters = (
-        frozenset((data.play_pulse_parameters or {}).items()),
-        frozenset((data.pulse_pulse_parameters or {}).items()),
-    )
-    return signature, pulse_parameters
 
 
 def analyze_play_wave_times(
@@ -743,7 +726,7 @@ def analyze_play_wave_times(
     )
 
     (
-        oscillator_switch_events,
+        oscillator_switch_intervals,
         oscillator_switch_cut_points,
     ) = _oscillator_switch_cut_points(
         interval_tree,
@@ -755,11 +738,9 @@ def analyze_play_wave_times(
 
     cut_points.update(oscillator_switch_cut_points)
     oscillator_intervals = _oscillator_intervals(
-        signals.values(), oscillator_switch_events, sequence_end
+        signals.values(), oscillator_switch_intervals, sequence_end
     )
-    used_oscillators = {
-        osc_iv.data["oscillator"] for osc_iv in oscillator_intervals.intervals
-    }
+    used_oscillators = {osc_iv for osc_iv in oscillator_intervals}
     if len(used_oscillators) > 1:
         assert use_command_table, (
             "HW oscillator switching only possible in command-table mode"
@@ -776,16 +757,20 @@ def analyze_play_wave_times(
     # pulses of each interval
     try:
         compacted_intervals = calculate_intervals(
-            interval_tree,
-            min_play_wave,
-            play_wave_size_hint,
-            play_zero_size_hint,
-            playwave_max_hint,
-            cut_points,
-            granularity=sample_multiple,
-            force_command_table_intervals=[
-                iv for ivs in branching_intervals.values() for iv in ivs
-            ],
+            ivt=interval_tree,
+            min_play_wave=int(min_play_wave),
+            play_wave_size_hint=int(play_wave_size_hint),
+            play_zero_size_hint=int(play_zero_size_hint),
+            play_wave_max_hint=int(playwave_max_hint),
+            cut_points=sorted(list(cut_points)),
+            granularity=int(sample_multiple),
+            force_command_table_intervals=set(
+                [
+                    (iv.begin, iv.end)
+                    for ivs in branching_intervals.values()
+                    for iv in ivs
+                ]
+            ),
         )
     except MinimumWaveformLengthViolation as e:
         raise LabOneQException(
@@ -828,13 +813,16 @@ def analyze_play_wave_times(
     )
 
     use_ct_hw_oscillator = use_command_table and device_type == DeviceType.SHFSG
+    oscillator_intervals = IntervalTree(oscillator_intervals)
     for k in compacted_intervals:
         _logger.debug("Calculating signature for %s and its children", k)
 
         overlap: list[Interval] = interval_tree.overlap(k.begin, k.end)
         _logger.debug("Overlap is %s", overlap)
-        [hw_oscillator_interval] = oscillator_intervals.overlap(k.begin, k.end)
-        hw_oscillator = hw_oscillator_interval.data["oscillator"]
+        hw_oscillator = None
+        if use_ct_hw_oscillator:
+            [hw_oscillator_interval] = oscillator_intervals.overlap(k.begin, k.end)
+            hw_oscillator = hw_oscillator_interval.data
 
         # Group by states for match/state sections
         v_state: Dict[int, list[Interval]] = {}
@@ -844,13 +832,11 @@ def analyze_play_wave_times(
 
         for state, intervals in v_state.items():
             signature_pulses = []
-            pulse_parameters = []
             for iv in sorted(intervals, key=lambda x: (x.begin, x.data.channel)):
-                pulse_signature, these_pulse_parameters = _make_pulse_signature(
+                pulse_signature = _make_pulse_signature(
                     iv, k, signal_ids, amplitude_register_by_param
                 )
                 signature_pulses.append(pulse_signature)
-                pulse_parameters.append(these_pulse_parameters)
             if signature_pulses:
                 waveform_signature = WaveformSignature(
                     k.length(), tuple(signature_pulses)
@@ -858,7 +844,6 @@ def analyze_play_wave_times(
                 signature = PlaybackSignature(
                     waveform=waveform_signature,
                     hw_oscillator=hw_oscillator if use_ct_hw_oscillator else None,
-                    pulse_parameters=tuple(pulse_parameters),
                     state=state,
                     clear_precompensation=False,
                 )
@@ -930,7 +915,6 @@ def analyze_play_wave_times(
                     #   - Only clear those registers that were indeed written in a branch
                     #   - ...
                     amplitude_register_values = [None] * amplitude_register_count
-
                 if signature not in signatures:
                     signatures.add(signature)
             elif event.type == AWGEventType.INIT_AMPLITUDE_REGISTER:

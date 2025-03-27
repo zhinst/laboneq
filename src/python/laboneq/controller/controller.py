@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections import defaultdict
@@ -72,7 +73,7 @@ class Controller(EventLoopMixIn):
 
         _zhinst_core_version = LabOneVersion.from_version_string(zhinst_core_version())
         self._check_zhinst_core_version_support(_zhinst_core_version)
-        self._setup_caps = SetupCaps(_zhinst_core_version)
+        self._setup_caps = SetupCaps(client_version=_zhinst_core_version)
 
         self._devices = DeviceCollection(
             target_setup=target_setup,
@@ -210,30 +211,39 @@ class Controller(EventLoopMixIn):
             )
         )
 
+    # TODO(2K): use timeout passed to connect
     async def _execute_one_step(
-        self, acquisition_type: AcquisitionType, rt_section_uid: str
+        self, *, acquisition_type: AcquisitionType, rt_section_uid: str, timeout_s=2.0
     ):
-        _logger.debug("Step executing")
-
         rt_execution_info = self._recipe_data.rt_execution_infos[rt_section_uid]
 
-        await self._devices.for_each(
-            DeviceBase.setup_one_step_execution,
-            recipe_data=self._recipe_data,
-            with_pipeliner=rt_execution_info.with_pipeliner,
-        )
+        try:
+            await self._devices.for_each(
+                DeviceBase.wait_for_channels_ready, timeout_s=timeout_s
+            )
 
-        await self._devices.for_each(
-            DeviceBase.wait_for_execution_ready,
-            with_pipeliner=rt_execution_info.with_pipeliner,
-        )
-        await self._wait_execution_to_stop(
-            acquisition_type, rt_execution_info=rt_execution_info
-        )
-        await self._devices.for_each(
-            DeviceBase.teardown_one_step_execution,
-            with_pipeliner=rt_execution_info.with_pipeliner,
-        )
+            await self._devices.for_each(
+                DeviceBase.setup_one_step_execution,
+                recipe_data=self._recipe_data,
+                with_pipeliner=rt_execution_info.with_pipeliner,
+            )
+
+            await self._devices.for_each(
+                DeviceBase.wait_for_execution_ready,
+                with_pipeliner=rt_execution_info.with_pipeliner,
+                timeout_s=timeout_s,
+            )
+            await self._wait_execution_to_stop(
+                acquisition_type, rt_execution_info=rt_execution_info
+            )
+            await self._devices.for_each(
+                DeviceBase.teardown_one_step_execution,
+                with_pipeliner=rt_execution_info.with_pipeliner,
+            )
+        except (asyncio.TimeoutError, TimeoutError) as e:
+            raise LabOneQControllerException(
+                "Timeout during execution of a near-time step"
+            ) from e
 
     def connect(
         self,
@@ -323,12 +333,12 @@ class Controller(EventLoopMixIn):
                 self._devices.for_each_sync(
                     DeviceBase.allocate_resources, self._recipe_data
                 )
+                await self._devices.for_each(DeviceBase.on_experiment_begin)
+                await self._devices.for_each(DeviceBase.init_warning_nodes)
                 await self._devices.for_each(
                     DeviceBase.apply_initialization, self._recipe_data
                 )
                 await self._devices.for_each(DeviceBase.initialize_oscillators)
-                await self._devices.for_each(DeviceBase.on_experiment_begin)
-                await self._devices.for_each(DeviceBase.update_warning_nodes)
 
                 # Ensure no side effects from the previous execution in the same session
                 self._current_waves.clear()
@@ -487,18 +497,13 @@ class Controller(EventLoopMixIn):
 
             # Append extra dimension for samples of the raw acquisition
             if rt_info.acquisition_type == AcquisitionType.RAW:
-                signal_id = rt_info.signal_by_handle(handle)
-                awg_config = self._recipe_data.awg_config_by_acquire_signal(signal_id)
-                if (
-                    awg_config is None
-                    or signal_id not in awg_config.signal_raw_acquire_lengths
-                ):
-                    # Use default length 4096, in case AWG config is not available
-                    raw_acquire_length = 4096
-                else:
-                    raw_acquire_length = awg_config.signal_raw_acquire_lengths[
-                        signal_id
-                    ]
+                signal_id = shape_info.signal
+                awg_key, awg_config = self._recipe_data.awg_configs.by_signal(signal_id)
+                raw_acquire_length = self._devices.find_by_uid(
+                    awg_key.device_uid
+                ).calc_raw_acquire_length(
+                    self._recipe_data, awg_key, awg_config, signal_id
+                )
                 axis_name.append("samples")
                 axis.append(np.arange(raw_acquire_length, dtype=np.float64))
                 shape.append(raw_acquire_length)
@@ -514,12 +519,11 @@ class Controller(EventLoopMixIn):
             self._results.acquired_results[handle] = empty_result
 
     async def _read_one_step_results(self, nt_step: NtStepKey, rt_section_uid: str):
-        rt_execution_info = self._recipe_data.rt_execution_infos[rt_section_uid]
         await self._devices.for_each(
             DeviceZI.read_results,
             recipe_data=self._recipe_data,
             nt_step=nt_step,
-            rt_execution_info=rt_execution_info,
+            rt_section_uid=rt_section_uid,
             results=self._results,
         )
 

@@ -2,18 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-import itertools
-from typing import Iterator, TYPE_CHECKING
 
-from laboneq.compiler.common.compiler_settings import CompilerSettings, TINYSAMPLE
-from laboneq.compiler.common import awg_info
-from laboneq.compiler.event_list.event_type import EventList, EventType
-from laboneq.compiler.event_list import event_list_generator as event_gen
+import itertools
+from typing import TYPE_CHECKING, Any
+
 from laboneq.compiler import ir as ir_def
+from laboneq.compiler.common import awg_info
+from laboneq.compiler.common.compiler_settings import TINYSAMPLE, CompilerSettings
 from laboneq.compiler.common.device_type import DeviceType
-from laboneq.compiler.seqc import ir as ir_seqc
-from laboneq.compiler.common.pulse_parameters import encode_pulse_parameters
 from laboneq.compiler.common.play_wave_type import PlayWaveType
+from laboneq.compiler.event_list import event_list_generator as event_gen
+from laboneq.compiler.event_list.event_type import EventList, EventType
+from laboneq.compiler.seqc import ir as ir_seqc
 
 if TYPE_CHECKING:
     from laboneq.compiler.seqc.passes.oscillator_parameters import (
@@ -28,6 +28,7 @@ def _create_start_events(devices: list[ir_def.DeviceIR]) -> EventList:
     # Todo (PW): Drop once system tests have been migrated from legacy behaviour.
     for device_info in devices:
         try:
+            assert device_info.device_type is not None
             device_type = DeviceType.from_device_info_type(  # @IgnoreException
                 device_info.device_type
             )
@@ -57,14 +58,9 @@ def generate_event_list_from_ir(
     if ir.root is not None:
         id_tracker = itertools.count()
         event_list.extend(
-            event_gen.EventListGenerator().run(
-                ir.root,
-                start=0,
-                max_events=max_events,
-                id_tracker=id_tracker,
-                expand_loops=expand_loops,
-                settings=settings,
-            )
+            event_gen.EventListGenerator(
+                id_tracker=id_tracker, expand_loops=expand_loops, settings=settings
+            ).run(ir.root, start=0, max_events=max_events)
         )
         for event in event_list:
             if "id" not in event:
@@ -80,26 +76,16 @@ class EventListGeneratorCodeGenerator(event_gen.EventListGenerator):
         ir: ir_seqc.SingleAwgIR,
         start: int,
         max_events: int,
-        id_tracker: Iterator[int],
-        expand_loops,
-        settings: CompilerSettings,
     ) -> EventList:
         return [
-            e
-            for l in self.generate_children_events(
-                ir, start, max_events, settings, id_tracker, expand_loops
-            )
-            for e in l
+            e for l in self.generate_children_events(ir, start, max_events) for e in l
         ]
 
     def visit_PulseIR(
         self,
         pulse_ir: ir_def.PulseIR,
         start: int,
-        _max_events: int,
-        id_tracker: Iterator[int],
-        _expand_loops,
-        _settings: CompilerSettings,
+        max_events: int,
     ) -> EventList:
         assert pulse_ir.length is not None
         if pulse_ir.pulse.pulse is not None:
@@ -107,9 +93,9 @@ class EventListGeneratorCodeGenerator(event_gen.EventListGenerator):
         else:
             play_wave_id = "delay"
 
-        start_id = next(id_tracker)
-        d_start = {"id": start_id}
-        d_end = {"id": next(id_tracker)}
+        start_id = next(self.id_tracker)
+        d_start: dict[str, Any] = {"id": start_id}
+        d_end: dict[str, Any] = {"id": next(self.id_tracker)}
         d_common = {
             "section_name": pulse_ir.section,
             "signal": pulse_ir.pulse.signal.uid,
@@ -131,15 +117,7 @@ class EventListGeneratorCodeGenerator(event_gen.EventListGenerator):
 
         if pulse_ir.markers is not None and len(pulse_ir.markers) > 0:
             d_start["markers"] = [vars(m) for m in pulse_ir.markers]
-
-        if pulse_ir.pulse_pulse_params:
-            d_start["pulse_pulse_parameters"] = encode_pulse_parameters(
-                pulse_ir.pulse_pulse_params
-            )
-        if pulse_ir.play_pulse_params:
-            d_start["play_pulse_parameters"] = encode_pulse_parameters(
-                pulse_ir.play_pulse_params
-            )
+        d_start["id_pulse_params"] = pulse_ir.pulse_pulse_params
 
         if (
             pulse_ir.pulse.signal.oscillator
@@ -176,6 +154,7 @@ class EventListGeneratorCodeGenerator(event_gen.EventListGenerator):
             ]
 
         if pulse_ir.is_acquire:
+            assert pulse_ir.integration_length is not None
             if pulse_ir.pulse.acquire_params is not None:
                 d_start["acquisition_type"] = [
                     pulse_ir.pulse.acquire_params.acquisition_type
@@ -218,10 +197,7 @@ class EventListGeneratorCodeGenerator(event_gen.EventListGenerator):
         self,
         acquire_group_ir: ir_def.AcquireGroupIR,
         start: int,
-        _max_events: int,
-        id_tracker: Iterator[int],
-        _expand_loops,
-        _settings: CompilerSettings,
+        max_events: int,
     ) -> EventList:
         assert acquire_group_ir.length is not None
         assert (
@@ -240,9 +216,10 @@ class EventListGeneratorCodeGenerator(event_gen.EventListGenerator):
             == p.acquire_params.acquisition_type
             for p in acquire_group_ir.pulses
         )
-        start_id = next(id_tracker)
+        start_id = next(self.id_tracker)
         signal_id = acquire_group_ir.pulses[0].signal.uid
         assert all(p.signal.uid == signal_id for p in acquire_group_ir.pulses)
+        assert all(p.pulse is not None for p in acquire_group_ir.pulses)
         d = {
             "section_name": acquire_group_ir.section,
             "signal": signal_id,
@@ -254,17 +231,7 @@ class EventListGeneratorCodeGenerator(event_gen.EventListGenerator):
             ],
             "acquire_handle": acquire_group_ir.pulses[0].acquire_params.handle,
         }
-
-        if acquire_group_ir.pulse_pulse_params:
-            d["pulse_pulse_parameters"] = [
-                encode_pulse_parameters(par) if par is not None else None
-                for par in acquire_group_ir.pulse_pulse_params
-            ]
-        if acquire_group_ir.play_pulse_params:
-            d["play_pulse_parameters"] = [
-                encode_pulse_parameters(par) if par is not None else None
-                for par in acquire_group_ir.play_pulse_params
-            ]
+        d["id_pulse_params"] = acquire_group_ir.pulse_pulse_params
         return [
             {
                 "event_type": EventType.ACQUIRE_START,
@@ -275,7 +242,7 @@ class EventListGeneratorCodeGenerator(event_gen.EventListGenerator):
             {
                 "event_type": EventType.ACQUIRE_END,
                 "time": start + acquire_group_ir.length,
-                "id": next(id_tracker),
+                "id": next(self.id_tracker),
                 **d,
             },
         ]
@@ -285,15 +252,10 @@ class EventListGeneratorCodeGenerator(event_gen.EventListGenerator):
         case_ir: ir_def.CaseIR,
         start: int,
         max_events: int,
-        id_tracker: Iterator[int],
-        expand_loops,
-        settings: CompilerSettings,
     ) -> EventList:
         if not case_ir.children:
             return []
-        return super().visit_CaseIR(
-            case_ir, start, max_events, id_tracker, expand_loops, settings
-        )
+        return super().visit_CaseIR(case_ir, start, max_events)
 
 
 def _apply_pulse_parameters(
@@ -322,23 +284,18 @@ def event_list_per_awg(
     osc_params: SoftwareOscillatorParameters,
 ) -> dict[awg_info.AwgKey, EventList]:
     """Generate event list per AWG in the tree root."""
+    assert tree.root is not None
     event_lists_by_awg = {}
     id_tracker = itertools.count()
+    event_list_generator = EventListGeneratorCodeGenerator(
+        expand_loops=False, settings=settings, id_tracker=id_tracker
+    )
     for awg_ir in tree.root.children:
         assert isinstance(awg_ir, ir_seqc.SingleAwgIR)
         event_list = _create_start_events(
             [dev for dev in tree.devices if dev.uid == awg_ir.awg.device_id]
         )
-        event_list.extend(
-            EventListGeneratorCodeGenerator().run(
-                awg_ir,
-                start=0,
-                settings=settings,
-                max_events=float("inf"),
-                expand_loops=False,
-                id_tracker=id_tracker,
-            )
-        )
+        event_list.extend(event_list_generator.run(awg_ir, start=0))
         _apply_pulse_parameters(event_list, osc_params)
         for event in event_list:
             if "id" not in event:

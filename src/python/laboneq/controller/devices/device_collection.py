@@ -17,7 +17,6 @@ from laboneq.controller.devices.async_support import (
     DataServerConnections,
     _gather,
     _gather_with_timeout,
-    wait_for_state_change,
 )
 from laboneq.controller.devices.device_factory import DeviceFactory
 from laboneq.controller.devices.device_qhub import DeviceQHUB
@@ -123,8 +122,7 @@ class DeviceCollection:
         reset_devices: bool = False,
         disable_runtime_checks: bool = False,
     ):
-        await self._prepare_daqs(do_emulation=do_emulation)
-        await self._validate_dataserver_device_fw_compatibility()
+        await self._prepare_data_servers(do_emulation=do_emulation)
         self._prepare_devices()
         for _, device in self.all:
             await device.connect(
@@ -231,11 +229,7 @@ class DeviceCollection:
                 # Wait for completion using the dumb get method, as the streamed state sequence may be unreliable
                 # with this workaround due to unexpected state bouncing.
                 results = await _gather_with_timeout(
-                    *(
-                        wait_for_state_change(async_checker._api, path, expected)
-                        for async_checker in async_checkers
-                        for path, expected in async_checker._conditions.items()
-                    ),
+                    *(async_checker.wait_by_get() for async_checker in async_checkers),
                     timeout_s=10,  # TODO(2K): use timeout passed to connect
                 )
                 for res in results:
@@ -353,75 +347,7 @@ class DeviceCollection:
         """Call an async method on all devices of a given class in parallel."""
         await _gather(*self.for_each_sync(device_method, *args, **kwargs))
 
-    async def _validate_dataserver_device_fw_compatibility(self):
-        """Validate dataserver and device firmware compatibility."""
-
-        daq_dev_serials: dict[str, list[str]] = defaultdict(list)
-        for device_qualifier in self._ds.instruments:
-            daq_dev_serials[device_qualifier.server_uid].append(
-                device_qualifier.options.serial
-            )
-
-        for server_uid, dev_serials in daq_dev_serials.items():
-            data_server_connection = self._data_servers.get(server_uid)
-            if data_server_connection is not None:
-                data_server_connection.check_dataserver_device_compatibility(
-                    self._ignore_version_mismatch,
-                    dev_serials,
-                )
-
-    def _prepare_devices(self):
-        updated_devices: dict[str, DeviceZI] = {}
-        for device_qualifier in self._ds.instruments:
-            device = self._devices.get(device_qualifier.uid)
-            if device is None or device.device_qualifier != device_qualifier:
-                data_server = self._data_servers.get(device_qualifier.server_uid)
-                server_qualifier = (
-                    ServerQualifier()
-                    if data_server is None
-                    else data_server.server_qualifier
-                )
-                device = DeviceFactory.create(
-                    server_qualifier, device_qualifier, self._ds.setup_caps
-                )
-            device.remove_all_links()
-            updated_devices[device_qualifier.uid] = device
-        self._devices = updated_devices
-
-        # Update device links and leader/follower status
-        for device_qualifier in self._ds.instruments:
-            from_dev = self._devices[device_qualifier.uid]
-            for from_port, to_dev_uid in self._ds.downlinks_by_device_uid(
-                device_qualifier.uid
-            ):
-                to_dev = self._devices.get(to_dev_uid)
-                if to_dev is None:
-                    raise LabOneQControllerException(
-                        f"Could not find destination device '{to_dev_uid}' for "
-                        f"the port '{from_port}' of the device '{device_qualifier.uid}'"
-                    )
-                from_dev.add_downlink(from_port, to_dev_uid, to_dev)
-                to_dev.add_uplink(from_dev)
-
-        # Move various device settings from device setup
-        for device_qualifier in self._ds.instruments:
-            dev = self._devices[device_qualifier.uid]
-
-            # Set the clock source (external by default)
-            # TODO(2K): Simplify the logic in this code snippet and the one in 'update_clock_source'.
-            # Currently, it adheres to the previously existing logic in the compiler, but it appears
-            # unnecessarily convoluted.
-            force_internal: bool | None = None
-            if device_qualifier.options.reference_clock_source is not None:
-                force_internal = (
-                    device_qualifier.options.reference_clock_source
-                    == ReferenceClockSource.INTERNAL
-                )
-            dev.update_clock_source(force_internal)
-
-            dev.update_from_device_setup(self._ds)
-
-    async def _prepare_daqs(self, do_emulation: bool):
+    async def _prepare_data_servers(self, do_emulation: bool):
         updated_data_servers = DataServerConnections()
         for server_uid, server_qualifier in self._ds.servers:
             existing = updated_data_servers.get(server_uid)
@@ -438,12 +364,73 @@ class DeviceCollection:
                     server_qualifier.port,
                 )
                 data_server_connection = await DataServerConnection.connect(
-                    server_qualifier,
-                    self.emulator_state if do_emulation else None,
-                    self._timeout_s,
+                    server_qualifier=server_qualifier,
+                    emulator_state=self.emulator_state if do_emulation else None,
+                    timeout_s=self._timeout_s,
+                    setup_caps=self._ds.setup_caps,
+                )
+                data_server_connection.check_dataserver_device_compatibility(
+                    self._ignore_version_mismatch,
+                    self._ds.server_device_serials(server_uid),
                 )
             updated_data_servers.add(server_uid, data_server_connection)
         self._data_servers = updated_data_servers
+
+    def _prepare_devices(self):
+        updated_devices: dict[str, DeviceZI] = {}
+        for device_qualifier in self._ds.devices:
+            device = self._devices.get(device_qualifier.uid)
+            if device is None or device.device_qualifier != device_qualifier:
+                data_server = self._data_servers.get(device_qualifier.server_uid)
+                server_qualifier = (
+                    ServerQualifier()
+                    if data_server is None
+                    else data_server.server_qualifier
+                )
+                setup_caps = (
+                    self._ds.setup_caps
+                    if data_server is None
+                    else data_server.setup_caps
+                )
+                device = DeviceFactory.create(
+                    server_qualifier, device_qualifier, setup_caps
+                )
+            device.remove_all_links()
+            updated_devices[device_qualifier.uid] = device
+        self._devices = updated_devices
+
+        # Update device links and leader/follower status
+        for device_qualifier in self._ds.devices:
+            from_dev = self._devices[device_qualifier.uid]
+            for from_port, to_dev_uid in self._ds.downlinks_by_device_uid(
+                device_qualifier.uid
+            ):
+                to_dev = self._devices.get(to_dev_uid)
+                if to_dev is None:
+                    raise LabOneQControllerException(
+                        f"Could not find destination device '{to_dev_uid}' for "
+                        f"the port '{from_port}' of the device '{device_qualifier.uid}'"
+                    )
+                from_dev.add_downlink(from_port, to_dev_uid, to_dev)
+                to_dev.add_uplink(from_dev)
+
+        # Move various device settings from device setup
+        for device_qualifier in self._ds.devices:
+            dev = self._devices[device_qualifier.uid]
+
+            # Set the clock source (external by default)
+            # TODO(2K): Simplify the logic in this code snippet and the one in 'update_clock_source'.
+            # Currently, it adheres to the previously existing logic in the compiler, but it appears
+            # unnecessarily convoluted.
+            force_internal: bool | None = None
+            if device_qualifier.options.reference_clock_source is not None:
+                force_internal = (
+                    device_qualifier.options.reference_clock_source
+                    == ReferenceClockSource.INTERNAL
+                )
+            dev.update_clock_source(force_internal)
+
+            dev.update_from_device_setup(self._ds)
 
     async def fetch_device_errors(self) -> str | None:
         all_errors: list[str] = []
@@ -466,12 +453,9 @@ def decode_errors(errors: str | list[str], dev_repr: str) -> list[str]:
     collected_messages: list[str] = []
     if not isinstance(errors, list):
         errors = [errors]
-    for error in errors:
+    for val in errors:
         # the key in error["vector"] looks like a dict, but it's a string. so we have to use
         # json.loads to convert it into a dict.
-        val = error.get("vector")
-        if val is None:
-            val = error.get("value")[-1]
         error_vector = json.loads(val)
         for message in error_vector["messages"]:
             severity = DeviceErrorSeverity(message["severity"])

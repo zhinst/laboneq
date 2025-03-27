@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import logging
-from copy import deepcopy
 from numbers import Complex
 from typing import Any, Callable, cast
 
@@ -294,10 +293,7 @@ def verify_amplitude_no_clipping(
         _logger.warning(message)
 
 
-def combine_pulse_parameters(initial_pulse, replaced_pulse, play):
-    combined_parameters = deepcopy(initial_pulse) or {}
-    if replaced_pulse is not None:
-        combined_parameters.update(replaced_pulse)
-    if play is not None:
-        combined_parameters.update(play)
-    return combined_parameters
+def combine_pulse_parameters(
+    initial_pulse: dict | None, replaced_pulse: dict | None, play: dict | None
+) -> dict:
+    return {**(initial_pulse or {}), **(replaced_pulse or {}), **(play or {})}

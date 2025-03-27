@@ -3,18 +3,18 @@
 
 from __future__ import annotations
 
-
 from laboneq.dsl.calibration.calibration import Calibration
 from laboneq.serializers.base import LabOneQClassicSerializer, VersionedClassSerializer
 from laboneq.serializers.serializer_registry import serializer
 from laboneq.serializers.types import (
     DeserializationOptions,
-    SerializationOptions,
     JsonSerializableType,
+    SerializationOptions,
 )
-from ._models import (
+
+from ._models._calibration import (
     CalibrationModel,
-    make_laboneq_converter,
+    make_converter,
 )
 
 
@@ -27,7 +27,7 @@ class CalibrationSerializer(VersionedClassSerializer[Calibration]):
     def to_dict(
         cls, obj: Calibration, options: SerializationOptions | None = None
     ) -> JsonSerializableType:
-        converter = make_laboneq_converter()
+        converter = make_converter()
         return {
             "__serializer__": cls.serializer_id(),
             "__version__": cls.version(),
@@ -40,7 +40,7 @@ class CalibrationSerializer(VersionedClassSerializer[Calibration]):
         serialized_data: JsonSerializableType,
         options: DeserializationOptions | None = None,
     ) -> Calibration:
-        converter = make_laboneq_converter()
+        converter = make_converter()
         return converter.structure(serialized_data["__data__"], CalibrationModel)
 
     @classmethod

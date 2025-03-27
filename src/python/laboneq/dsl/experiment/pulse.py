@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -113,16 +113,16 @@ class PulseFunctional(Pulse):
     uid: str = field(default_factory=pulse_id_generator)
 
     #: Amplitude of the pulse.
-    amplitude: float = field(default=None)
+    amplitude: float | None = field(default=None)
 
     #: Length of the pulse in seconds.
-    length: float = field(default=None)
+    length: float | None = field(default=None)
 
     #: Flag indicating whether the compiler should attempt to compress this pulse
     can_compress: bool = field(default=False)
 
     #: Optional (re)binding of user pulse parameters
-    pulse_parameters: Optional[Dict[str, Any]] = field(default=None)
+    pulse_parameters: dict[str, Any] | None = field(default=None)
 
     def __post_init__(self):
         if not isinstance(self.uid, str):

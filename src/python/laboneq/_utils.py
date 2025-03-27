@@ -3,6 +3,8 @@
 
 """General utility functions for development."""
 
+from __future__ import annotations
+
 import functools
 from collections import defaultdict
 from dataclasses import dataclass
@@ -12,7 +14,7 @@ from typing import Any, Callable, Iterable, TypeVar
 T = TypeVar("T", bound=Callable[..., Any])
 
 
-def cached_method(maxsize: int = 128, typed=False) -> Callable[[T], T]:
+def cached_method(maxsize: int | None = 128, typed=False) -> Callable[[T], T]:
     """Cache method decorator.
 
     Arguments are forwarded to `functools.lru_cache`

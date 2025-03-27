@@ -159,9 +159,6 @@ class DeviceSHFSG(DeviceSHFBase):
             ready=f"/{self.serial}/sgchannels/{index}/awg/ready",
         )
 
-    def _get_num_awgs(self) -> int:
-        return self._channels
-
     def _validate_range(self, io: IO):
         if io.range is None:
             return
@@ -197,6 +194,11 @@ class DeviceSHFSG(DeviceSHFBase):
 
     def _make_osc_path(self, channel: int, index: int) -> str:
         return f"/{self.serial}/sgchannels/{channel}/oscs/{index}/freq"
+
+    def _busy_nodes(self) -> list[str]:
+        if not self._setup_caps.supports_shf_busy:
+            return []
+        return [f"/{self.serial}/sgchannels/{ch}/busy" for ch in self._allocated_awgs]
 
     async def disable_outputs(self, outputs: set[int], invert: bool):
         nc = NodeCollector(base=f"/{self.serial}/")
@@ -490,7 +492,6 @@ class DeviceSHFSG(DeviceSHFBase):
                 output.gains is None, "correction_matrix", output.channel
             )
 
-            self._allocated_awgs.add(output.channel)
             if self._is_full_channel(output.channel):
                 nc.add(
                     f"/{self.serial}/sgchannels/{output.channel}/output/on",

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 import copy
 from dataclasses import dataclass, field
 import logging
@@ -146,6 +147,12 @@ class DeviceSetupDAO:
             if device.calibrations is not None
         }
 
+        self._server_device_serials: dict[str, list[str]] = defaultdict(list)
+        for device_qualifier in self._devices:
+            self._server_device_serials[device_qualifier.server_uid].append(
+                device_qualifier.options.serial
+            )
+
         self._setup_caps = setup_caps
 
     @property
@@ -153,8 +160,11 @@ class DeviceSetupDAO:
         return self._servers.items()
 
     @property
-    def instruments(self) -> Iterator[DeviceQualifier]:
+    def devices(self) -> Iterator[DeviceQualifier]:
         return iter(self._devices)
+
+    def server_device_serials(self, server_uid: str) -> list[str]:
+        return self._server_device_serials[server_uid]
 
     @property
     def has_uhf(self) -> bool:

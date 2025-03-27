@@ -7,12 +7,12 @@ import attrs
 
 from laboneq.dsl.quantum import QuantumElement
 from laboneq.serializers.base import VersionedClassSerializer
-from laboneq.serializers.core import import_cls, from_dict, to_dict
+from laboneq.serializers.core import from_dict, import_cls, to_dict
 from laboneq.serializers.serializer_registry import serializer
 from laboneq.serializers.types import (
-    SerializationOptions,
     DeserializationOptions,
     JsonSerializableType,
+    SerializationOptions,
 )
 
 

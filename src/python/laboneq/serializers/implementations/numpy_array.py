@@ -14,9 +14,9 @@ import pybase64
 from laboneq.serializers.base import VersionedClassSerializer
 from laboneq.serializers.serializer_registry import serializer
 from laboneq.serializers.types import (
-    SerializationOptions,
     DeserializationOptions,
     JsonSerializableType,
+    SerializationOptions,
 )
 
 

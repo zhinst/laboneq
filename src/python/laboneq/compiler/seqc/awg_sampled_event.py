@@ -22,7 +22,6 @@ class AWGEventType(Enum):
     ACQUIRE = auto()
     QA_EVENT = auto()
     TRIGGER_OUTPUT = auto()
-    SWITCH_OSCILLATOR = auto()
     MATCH = auto()
     PLAY_WAVE = auto()
     PLAY_HOLD = auto()

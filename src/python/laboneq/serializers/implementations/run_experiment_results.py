@@ -5,15 +5,15 @@ from __future__ import annotations
 
 import numpy as np
 
-from laboneq.workflow.tasks import RunExperimentResults
-from laboneq.workflow.tasks.run_experiment import AcquiredResult
 from laboneq.serializers.base import VersionedClassSerializer
 from laboneq.serializers.serializer_registry import serializer
 from laboneq.serializers.types import (
-    SerializationOptions,
     DeserializationOptions,
     JsonSerializableType,
+    SerializationOptions,
 )
+from laboneq.workflow.tasks import RunExperimentResults
+from laboneq.workflow.tasks.run_experiment import AcquiredResult
 
 
 @serializer(types=RunExperimentResults, public=True)

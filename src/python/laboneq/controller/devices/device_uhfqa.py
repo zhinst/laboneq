@@ -72,9 +72,6 @@ class DeviceUHFQA(DeviceBase):
         self._integrators = 10
         self._use_internal_clock = True
 
-    def _get_num_awgs(self) -> int:
-        return 1
-
     def validate_scheduled_experiment(
         self, device_uid: str, scheduled_experiment: ScheduledExperiment
     ):
@@ -318,7 +315,6 @@ class DeviceUHFQA(DeviceBase):
             )
 
             awg_idx = output.channel // 2
-            self._allocated_awgs.add(awg_idx)
 
             nc.add(f"sigouts/{output.channel}/on", 1 if output.enable else 0)
             if output.enable:
@@ -585,8 +581,10 @@ class DeviceUHFQA(DeviceBase):
             self._result_node_monitor(0),
             self._result_node_monitor(1),
         ]
-        await _gather(*(self._subscriber.subscribe(self._api, node) for node in nodes))
-        await super().on_experiment_begin()
+        await _gather(
+            super().on_experiment_begin(),
+            *(self._subscriber.subscribe(self._api, node) for node in nodes),
+        )
 
     def _ch_repr_readout(self, ch: int) -> str:
         return f"{self.dev_repr}:readout{ch}"

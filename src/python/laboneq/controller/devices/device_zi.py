@@ -29,11 +29,9 @@ from laboneq.controller.attribute_value_tracker import (  # pylint: disable=E040
 from laboneq.controller.devices.async_support import (
     AsyncSubscriber,
     ConditionsCheckerAsync,
+    InstrumentConnection,
     ResponseWaiterAsync,
     _gather,
-    create_device_kernel_session,
-    get_raw,
-    set_parallel,
 )
 from laboneq.controller.devices.device_setup_dao import (
     DeviceOptions,
@@ -42,7 +40,7 @@ from laboneq.controller.devices.device_setup_dao import (
     DeviceSetupDAO,
 )
 from laboneq.controller.devices.device_utils import NodeCollector
-from laboneq.controller.devices.zi_emulator import EmulatorState, KernelSessionEmulator
+from laboneq.controller.devices.zi_emulator import EmulatorState
 from laboneq.controller.devices.node_control import (
     NodeControlBase,
     filter_commands,
@@ -323,6 +321,15 @@ class DeviceZI(DeviceAbstract):
         yield from []
 
     @abstractmethod
+    def calc_raw_acquire_length(
+        self,
+        recipe_data: RecipeData,
+        awg_key: AwgKey,
+        awg_config: AwgConfig,
+        signal_id: str,
+    ) -> int: ...
+
+    @abstractmethod
     async def prepare_artifacts(
         self,
         recipe_data: RecipeData,
@@ -364,7 +371,7 @@ class DeviceZI(DeviceAbstract):
         self,
         recipe_data: RecipeData,
         nt_step: NtStepKey,
-        rt_execution_info: RtExecutionInfo,
+        rt_section_uid: str,
         results: ExperimentResults,
     ):
         pass
@@ -385,7 +392,7 @@ class DeviceBase(DeviceZI):
         super().__init__(server_qualifier, device_qualifier, setup_caps)
         self._setup_caps = setup_caps
 
-        self._api = None  # TODO(2K): Add type labone.Instrument
+        self._api = InstrumentConnection()
         self._subscriber = AsyncSubscriber()
         self.dev_type: str = "UNKNOWN"
         self.dev_opts: list[str] = []
@@ -412,10 +419,6 @@ class DeviceBase(DeviceZI):
             )
 
     @property
-    def has_awg(self) -> bool:
-        return self._get_num_awgs() > 0
-
-    @property
     def has_pipeliner(self) -> bool:
         return False
 
@@ -428,13 +431,12 @@ class DeviceBase(DeviceZI):
         return len(initialization.awgs) > 0
 
     async def set_async(self, nodes: NodeCollector):
-        await set_parallel(self._api, nodes)
+        await self._api.set_parallel(nodes)
 
     def clear_cache(self):
         # TODO(2K): the code below is only needed to keep async API behavior
         # in emulation mode matching that of legacy API with LabOne Q cache.
-        if isinstance(self._api, KernelSessionEmulator):
-            self._api.clear_cache()
+        self._api.clear_cache()
 
     def add_command_table_header(self, body: dict) -> dict:
         # Stub, implement in sub-class
@@ -538,6 +540,18 @@ class DeviceBase(DeviceZI):
                 value_or_param=input.port_delay,
             )
 
+    def calc_raw_acquire_length(
+        self,
+        recipe_data: RecipeData,
+        awg_key: AwgKey,
+        awg_config: AwgConfig,
+        signal_id: str,
+    ) -> int:
+        if signal_id not in awg_config.signal_raw_acquire_lengths:
+            # Use default length 4096, in case AWG config is not available
+            return 4096
+        return awg_config.signal_raw_acquire_lengths[signal_id]
+
     def _sigout_from_port(self, ports: list[str]) -> int | None:
         return None
 
@@ -573,7 +587,7 @@ class DeviceBase(DeviceZI):
 
         _logger.debug("%s: Connecting to %s interface.", self.dev_repr, self.interface)
         try:
-            self._api = await create_device_kernel_session(
+            self._api = await InstrumentConnection.connect(
                 device_qualifier=self._device_qualifier,
                 server_qualifier=self._server_qualifier,
                 emulator_state=emulator_state,
@@ -588,8 +602,7 @@ class DeviceBase(DeviceZI):
 
         dev_type_path = f"/{self.serial}/features/devtype"
         dev_opts_path = f"/{self.serial}/features/options"
-        dev_traits_raw = await self.get_raw(f"{dev_type_path},{dev_opts_path}")
-        dev_traits = {p: v["value"][-1] for p, v in dev_traits_raw.items()}
+        dev_traits = await self._api.get_raw(f"{dev_type_path},{dev_opts_path}")
         dev_type = dev_traits.get(dev_type_path)
         dev_opts = dev_traits.get(dev_opts_path)
         if isinstance(dev_type, str):
@@ -613,7 +626,7 @@ class DeviceBase(DeviceZI):
         if not self._connected:
             return
 
-        self._api = None  # TODO(2K): Proper disconnect?
+        self._api = InstrumentConnection()  # TODO(2K): Proper disconnect?
         self._connected = False
 
     def _osc_group_by_channel(self, channel: int) -> int:
@@ -630,6 +643,9 @@ class DeviceBase(DeviceZI):
     def _make_osc_path(self, channel: int, index: int) -> str:
         return f"/{self.serial}/oscs/{index}/freq"
 
+    def _busy_nodes(self) -> list[str]:
+        return []
+
     def allocate_resources(self, recipe_data: RecipeData):
         self._allocated_oscs.clear()
         self._allocated_awgs.clear()
@@ -638,6 +654,11 @@ class DeviceBase(DeviceZI):
         device_recipe_data = recipe_data.device_settings[self.device_qualifier.uid]
         for osc_param in device_recipe_data.osc_params:
             self._allocate_osc_impl(osc_param, recipe_data)
+
+        for awg_key in recipe_data.awg_configs.keys():
+            if awg_key.device_uid == self.device_qualifier.uid:
+                assert isinstance(awg_key.awg_index, int)
+                self._allocated_awgs.add(awg_key.awg_index)
 
     def _allocate_osc_impl(self, osc_param: OscillatorParam, recipe_data: RecipeData):
         osc_group = self._osc_group_by_channel(osc_param.channel)
@@ -671,16 +692,29 @@ class DeviceBase(DeviceZI):
     async def on_experiment_begin(self):
         await _gather(
             *(
-                self._subscriber.subscribe(self._api, path, get_initial_value=True)
+                self._subscriber.subscribe(self._api, path)
                 for path, _ in self._collect_warning_nodes()
-            )
+            ),
+            *(
+                self._subscriber.subscribe(self._api, path, get_initial=True)
+                for path in self._busy_nodes()
+            ),
         )
+
+    async def on_experiment_end(self):
+        self._subscriber.unsubscribe_all()
+
+    async def init_warning_nodes(self):
+        nodes = [node for node, _ in self._collect_warning_nodes()]
+        if len(nodes) == 0:
+            return
+        init_vals = await self._api.get_raw(",".join(nodes))
+        self._warning_nodes.update(init_vals)
 
     async def update_warning_nodes(self):
         for node, msg in self._collect_warning_nodes():
             updates = self._subscriber.get_updates(node)
             value = updates[-1].value if len(updates) > 0 else None
-
             if not isinstance(value, int):
                 continue
 
@@ -701,9 +735,6 @@ class DeviceBase(DeviceZI):
         recipe_data: RecipeData,
     ) -> NodeCollector:
         return NodeCollector()
-
-    async def get_raw(self, path: str) -> dict[str, Any]:
-        return await get_raw(self._api, path)
 
     def _adjust_frequency(self, freq):
         return freq
@@ -1216,9 +1247,6 @@ class DeviceBase(DeviceZI):
     def pipeliner_ready_conditions(self, index: int) -> dict[str, Any]:
         return {}
 
-    def _get_num_awgs(self) -> int:
-        return 0
-
     async def configure_trigger(self, recipe_data: RecipeData):
         pass
 
@@ -1238,7 +1266,7 @@ class DeviceBase(DeviceZI):
 
     async def fetch_errors(self) -> str | list[str]:
         error_node = f"/{self.serial}/raw/error/json/errors"
-        all_errors = await self.get_raw(error_node)
+        all_errors = await self._api.get_raw(error_node)
         return all_errors[error_node]
 
     async def reset_to_idle(self):
@@ -1286,7 +1314,7 @@ class DeviceBase(DeviceZI):
         nc = NodeCollector()
         for node in changes_to_apply:
             nc.add(node.path, node.raw_value)
-        await set_parallel(self._api, nc)
+        await self._api.set_parallel(nc)
 
         # 3. Wait for responses to the changes in step 2 and settling of dependent states
         failed_responses = await response_waiter.wait()
@@ -1308,8 +1336,13 @@ class DeviceBase(DeviceZI):
                 f"Errors:\n{failures}"
             )
 
-    async def on_experiment_end(self):
-        self._subscriber.unsubscribe_all()
+    async def wait_for_channels_ready(self, timeout_s: float):
+        await _gather(
+            *(
+                self._subscriber.wait_for(path, expected=0, timeout_s=timeout_s)
+                for path in self._busy_nodes()
+            )
+        )
 
     async def setup_one_step_execution(
         self, recipe_data: RecipeData, with_pipeliner: bool
@@ -1332,13 +1365,12 @@ class DeviceBase(DeviceZI):
     async def teardown_one_step_execution(self, with_pipeliner: bool):
         pass
 
-    async def wait_for_execution_ready(self, with_pipeliner: bool):
+    async def wait_for_execution_ready(self, with_pipeliner: bool, timeout_s: float):
         if not self.is_follower():
             # Can't batch everything together, because PQSC/QHUB needs to start execution after HDs
             # otherwise it can finish before AWGs are started, and the trigger is lost.
             return
-        # TODO(2K): use timeout passed to connect
-        rw = ResponseWaiterAsync(api=self._api, timeout_s=2)
+        rw = ResponseWaiterAsync(api=self._api, timeout_s=timeout_s)
         rw.add_with_msg(
             nodes=self.conditions_for_execution_ready(with_pipeliner=with_pipeliner),
         )
@@ -1347,9 +1379,10 @@ class DeviceBase(DeviceZI):
         failed_nodes = await rw.wait()
         if len(failed_nodes) > 0:
             _logger.warning(
-                "Conditions to start RT on followers still not fulfilled after 2"
+                "Conditions to start RT on followers still not fulfilled after %.1f"
                 " seconds, nonetheless trying to continue..."
                 "\nNot fulfilled:\n%s",
+                timeout_s,
                 "\n".join(failed_nodes),
             )
 
@@ -1392,9 +1425,10 @@ class DeviceBase(DeviceZI):
         self,
         recipe_data: RecipeData,
         nt_step: NtStepKey,
-        rt_execution_info: RtExecutionInfo,
+        rt_section_uid: str,
         results: ExperimentResults,
     ):
+        rt_execution_info = recipe_data.rt_execution_infos[rt_section_uid]
         await _gather(
             *(
                 self._read_one_awg_results(

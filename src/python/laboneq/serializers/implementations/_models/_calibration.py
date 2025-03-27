@@ -1,74 +1,22 @@
 # Copyright 2025 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-
-"""
-LabOneQ data classes could be divided into two categories:
-1. Data classes that are used as top-level objects, that can be serialized directly by users.
-2. Data classes that are used as attributes of other data classes.
-
-Only top-level data classes are versioned and have support for backward compatibility in serialization.
-When one or several of the attributes of a top-level data class are of a Tier-2 data class, the serialization
-shall be able to handle the recursive serialization of the nested data classes and bump the version
-when the nested data classes are updated.
-
-To solve this problem, we introduce the concept of "models" in the serialization process.
-The models are used as a up-to-date "blueprint" for LabOneQ data classes.
-When the data classes are updated, the discrepancy between the data classes and the models would
-cause the serialization of some of the top-level data classes to fail, prompting the developers to update
-the models and bump the version of the serializers.
-
-Models shall be either attrs classes or enums and shall have an attribute `_target_class` that
-points to the corresponding class that the model represents. The purpose of the `_target_class` attribute
-are two-fold:
-1. It indicates the class that the model represents, rather than relying on the class name.
-2. It provides a way to convert the model to the corresponding class during deserialization.
-
-**Notes on the implementation:**
-
-The original ideas is to use the `cattrs` library to serialize the data using the models in this module,
-then deserialize the dict using the models again (not the original classes because cattrs requires
-all the type classes available at the time of deserialization, which is not the case for some of the
-LabOneQ modules as we hide the imports into TYPECHECKING clauses to avoid the circular import).
-The models are then converted to the original classes.
-In this approach, the se/deserialization is automatic and would use:
-make_dict_(un)structure_fn and register_(un)structure_hook in cattrs, which requires internal type evaluation.
-Another example is Union [attrs, attrs] which fetch the hook for each type and hence also does type evaluation.
-
-This lean method unfortunately does not work with for all cases (especially for classes with attrs that
-have complicated and nested types) in Python 3.9.
-One example is that the union of 'types.GenericAlias' and 'types.GenericAlias' or None type is not supported
-in python 3.9
-
-The current implementation is a manual approach where we define the unstructure and structure methods and should work
-on all Python versions >= 3.9.
-The downside is that we have to manually define the unstructure and structure methods for each model.
-Using predicates helps to avoid type evaluation but could reduce performance a bit.
-
-When removing support for Python 3.9, we should switch to the automatic approach using cattrs by:
-- Remove the unstructure and structure methods from the models.
-- Register the models using cattrs.register_structure_hook and cattrs.register_unstructure_hook.
-"""
-
 from __future__ import annotations
-from collections.abc import Iterable
-import attrs
-import sys
-import inspect
 
+import sys
 from enum import Enum
+from functools import partial
 from typing import ClassVar, Type, Union
 
-from cattr import Converter
+import attrs
+from cattrs import Converter
+
 from laboneq.core.types.enums.carrier_type import CarrierType
 from laboneq.core.types.enums.high_pass_compensation_clearing import (
     HighPassCompensationClearing,
 )
-from laboneq.core.types.enums.io_direction import IODirection
-from laboneq.core.types.enums.io_signal_type import IOSignalType
 from laboneq.core.types.enums.modulation_type import ModulationType
 from laboneq.core.types.enums.port_mode import PortMode
-from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
 from laboneq.dsl.calibration import CancellationSource
 from laboneq.dsl.calibration.amplifier_pump import AmplifierPump
 from laboneq.dsl.calibration.calibration import Calibration
@@ -76,39 +24,25 @@ from laboneq.dsl.calibration.mixer_calibration import MixerCalibration
 from laboneq.dsl.calibration.oscillator import Oscillator
 from laboneq.dsl.calibration.output_routing import OutputRoute
 from laboneq.dsl.calibration.precompensation import (
+    BounceCompensation,
     ExponentialCompensation,
     FIRCompensation,
     HighPassCompensation,
     Precompensation,
-    BounceCompensation,
 )
 from laboneq.dsl.calibration.signal_calibration import SignalCalibration
-from laboneq.dsl.device.connection import Connection
-from laboneq.dsl.device.instruments.zi_standard_instrument import ZIStandardInstrument
-from laboneq.dsl.device.instruments.hdawg import HDAWG
-from laboneq.dsl.device.instruments.pqsc import PQSC
-from laboneq.dsl.device.instruments.shfppc import SHFPPC
-from laboneq.dsl.device.instruments.shfqa import SHFQA
-from laboneq.dsl.device.instruments.shfqc import SHFQC
-from laboneq.dsl.device.instruments.shfsg import SHFSG
-from laboneq.dsl.device.instruments.uhfqa import UHFQA
 from laboneq.dsl.device.io_units.logical_signal import LogicalSignal
-from laboneq.dsl.device.io_units.physical_channel import (
-    PhysicalChannel,
-    PhysicalChannelType,
-)
-from laboneq.dsl.device.logical_signal_group import LogicalSignalGroup
-from laboneq.dsl.device.physical_channel_group import PhysicalChannelGroup
-from laboneq.dsl.device.servers.data_server import DataServer
 from laboneq.dsl.experiment.experiment_signal import ExperimentSignal
 from laboneq.dsl.parameter import LinearSweepParameter, SweepParameter
-from cattrs.gen import make_dict_unstructure_fn, make_dict_structure_fn
-from cattrs.preconf.orjson import make_converter
-import numpy
 
-#
-# Enum models for the serialized data:
-#
+from ._common import (
+    ArrayLike_Model,
+    collect_models,
+    make_laboneq_converter,
+    register_models,
+    structure_union_generic_type,
+    unstructure_union_generic_type,
+)
 
 
 class CancellationSourceModel(Enum):
@@ -143,61 +77,6 @@ class HighPassCompensationClearingModel(Enum):
     BOTH = "BOTH"
     _target_class = HighPassCompensationClearing
 
-
-class IODirectionModel(Enum):
-    IN = "IN"
-    OUT = "OUT"
-    _target_class = IODirection
-
-
-class PhysicalChannelTypeModel(Enum):
-    IQ_CHANNEL = "iq_channel"
-    RF_CHANNEL = "rf_channel"
-    _target_class = PhysicalChannelType
-
-
-class IOSignalTypeModel(Enum):
-    I = "I"
-    Q = "Q"
-    IQ = "IQ"
-    RF = "RF"
-    SINGLE = "SINGLE"
-    LO = "LO"
-    DIO = "DIO"
-    ZSYNC = "ZSYNC"
-    PPC = "PPC"
-    _target_class = IOSignalType
-
-
-class ReferenceClockSourceModel(Enum):
-    INTERNAL = "internal"
-    EXTERNAL = "external"
-    _target_class = ReferenceClockSource
-
-
-#
-# Here goes the "funky" types
-#
-
-# cattrs does not work with typing.TypeAlias, which is the true identity of
-# np.typing.ArrayLike. Ideally, np.typing.ArrayLike should be as follows:
-# ArrayLike_Model = Union[
-#     numpy._typing._nested_sequence._NestedSequence[
-#         Union[bool, int, float, complex, str, bytes]
-#     ],
-#     numpy._typing._array_like._Buffer,
-#     numpy._typing._array_like._SupportsArray[numpy.dtype[Any]],
-#     numpy._typing._nested_sequence._NestedSequence[
-#         numpy._typing._array_like._SupportsArray[numpy.dtype[Any]]
-#     ],
-#     complex,
-#     bytes,
-# ]
-# But we will be more practical and use the following:
-ArrayLike_Model = Union[
-    numpy.ndarray,
-    list[Union[bool, int, float, complex, str, bytes]],
-]
 
 #
 # Attrs models for the serialized data:
@@ -282,40 +161,31 @@ class LinearSweepParameterModel:
 ParameterModel = Union[SweepParameterModel, LinearSweepParameterModel]
 
 
-def _unstructure_parameter_model(obj):
-    if isinstance(obj, SweepParameter):
-        d = _converter.unstructure(obj, SweepParameterModel)
-    elif isinstance(obj, LinearSweepParameter):
-        d = _converter.unstructure(obj, LinearSweepParameterModel)
-    else:
-        raise ValueError(
-            f"Unsupported parameter type: {type(obj)} when unstructuring ParameterModel"
-        )
-    return {"_type": type(obj).__name__, **d}
-
-
-def _structure_parameter_model(d, _):
-    dtype = d.get("_type", None)
-    if dtype is None:
-        raise ValueError("ParameterModel obj is missing the _type field")
-    elif dtype == "SweepParameter":
-        return _converter.structure(d, SweepParameterModel)
-    else:
-        return _converter.structure(d, LinearSweepParameterModel)
-
-
-def _unstructure_basic_or_parameter_model(obj):
-    return (
-        obj
-        if obj is None or isinstance(obj, (float, int))
-        else _unstructure_parameter_model(obj)
+def _unstructure_parameter_model(obj, _converter: Converter):
+    return unstructure_union_generic_type(
+        obj, [SweepParameterModel, LinearSweepParameterModel], _converter
     )
 
 
-def _structure_basic_or_parameter_model(v):
+def _structure_parameter_model(d, _, _converter: Converter):
+    # cattrs requires the type to be passed as the second argument
+    return structure_union_generic_type(
+        d, [SweepParameterModel, LinearSweepParameterModel], _converter
+    )
+
+
+def _unstructure_basic_or_parameter_model(obj, _converter: Converter):
+    return (
+        obj
+        if obj is None or isinstance(obj, (float, int, complex))
+        else _converter.unstructure(obj, ParameterModel)
+    )
+
+
+def _structure_basic_or_parameter_model(v, _converter: Converter):
     return (
         v
-        if v is None or isinstance(v, (float, int))
+        if v is None or isinstance(v, (float, int, complex))
         else _converter.structure(v, ParameterModel)
     )
 
@@ -331,7 +201,7 @@ class OscillatorModel:
     @classmethod
     def _unstructure(cls, obj):
         uid = obj.uid
-        frequency = _unstructure_basic_or_parameter_model(obj.frequency)
+        frequency = _unstructure_basic_or_parameter_model(obj.frequency, _converter)
         modulation_type = _converter.unstructure(
             obj.modulation_type, ModulationTypeModel
         )
@@ -354,7 +224,7 @@ class OscillatorModel:
             carrier_type = CarrierTypeModel._target_class.value(d["carrier_type"])
         return cls._target_class(
             uid=d["uid"],
-            frequency=_structure_basic_or_parameter_model(d["frequency"]),
+            frequency=_structure_basic_or_parameter_model(d["frequency"], _converter),
             modulation_type=mod_type,
             carrier_type=carrier_type,
         )
@@ -372,7 +242,8 @@ class MixerCalibrationModel:
         uid = obj.uid
         if obj.voltage_offsets:
             voltage_offsets = [
-                _unstructure_basic_or_parameter_model(i) for i in obj.voltage_offsets
+                _unstructure_basic_or_parameter_model(i, _converter)
+                for i in obj.voltage_offsets
             ]
         else:
             voltage_offsets = None
@@ -399,13 +270,14 @@ class MixerCalibrationModel:
         uid = d["uid"]
         if d["voltage_offsets"]:
             voltage_offsets = [
-                _structure_basic_or_parameter_model(i) for i in d["voltage_offsets"]
+                _structure_basic_or_parameter_model(i, _converter)
+                for i in d["voltage_offsets"]
             ]
         else:
             voltage_offsets = None
         if d["correction_matrix"]:
             correction_matrix = [
-                [_structure_basic_or_parameter_model(i) for i in row]
+                [_structure_basic_or_parameter_model(i, _converter) for i in row]
                 for row in d["correction_matrix"]
             ]
         else:
@@ -440,16 +312,20 @@ class AmplifierPumpModel:
         uid = obj.uid
         return {
             "uid": uid,
-            "pump_frequency": _unstructure_basic_or_parameter_model(obj.pump_frequency),
-            "pump_power": _unstructure_basic_or_parameter_model(obj.pump_power),
+            "pump_frequency": _unstructure_basic_or_parameter_model(
+                obj.pump_frequency, _converter
+            ),
+            "pump_power": _unstructure_basic_or_parameter_model(
+                obj.pump_power, _converter
+            ),
             "pump_on": obj.pump_on,
             "pump_filter_on": obj.pump_filter_on,
             "cancellation_on": obj.cancellation_on,
             "cancellation_phase": _unstructure_basic_or_parameter_model(
-                obj.cancellation_phase
+                obj.cancellation_phase, _converter
             ),
             "cancellation_attenuation": _unstructure_basic_or_parameter_model(
-                obj.cancellation_attenuation
+                obj.cancellation_attenuation, _converter
             ),
             "cancellation_source": _converter.unstructure(
                 obj.cancellation_source, CancellationSourceModel
@@ -458,23 +334,29 @@ class AmplifierPumpModel:
             "alc_on": obj.alc_on,
             "probe_on": obj.probe_on,
             "probe_frequency": _unstructure_basic_or_parameter_model(
-                obj.probe_frequency
+                obj.probe_frequency, _converter
             ),
-            "probe_power": _unstructure_basic_or_parameter_model(obj.probe_power),
+            "probe_power": _unstructure_basic_or_parameter_model(
+                obj.probe_power, _converter
+            ),
         }
 
     @classmethod
     def _structure(cls, d, _):
-        pump_frequency = _structure_basic_or_parameter_model(d["pump_frequency"])
-        pump_power = _structure_basic_or_parameter_model(d["pump_power"])
+        pump_frequency = _structure_basic_or_parameter_model(
+            d["pump_frequency"], _converter
+        )
+        pump_power = _structure_basic_or_parameter_model(d["pump_power"], _converter)
         cancellation_phase = _structure_basic_or_parameter_model(
-            d["cancellation_phase"]
+            d["cancellation_phase"], _converter
         )
         cancellation_attenuation = _structure_basic_or_parameter_model(
-            d["cancellation_attenuation"]
+            d["cancellation_attenuation"], _converter
         )
-        probe_frequency = _structure_basic_or_parameter_model(d["probe_frequency"])
-        probe_power = _structure_basic_or_parameter_model(d["probe_power"])
+        probe_frequency = _structure_basic_or_parameter_model(
+            d["probe_frequency"], _converter
+        )
+        probe_power = _structure_basic_or_parameter_model(d["probe_power"], _converter)
         return cls._target_class(
             uid=d["uid"],
             pump_frequency=pump_frequency,
@@ -516,9 +398,11 @@ class OutputRouteModel:
         return {
             "source": source,
             "amplitude_scaling": _unstructure_basic_or_parameter_model(
-                obj.amplitude_scaling
+                obj.amplitude_scaling, _converter
             ),
-            "phase_shift": _unstructure_basic_or_parameter_model(obj.phase_shift),
+            "phase_shift": _unstructure_basic_or_parameter_model(
+                obj.phase_shift, _converter
+            ),
         }
 
     @classmethod
@@ -526,9 +410,11 @@ class OutputRouteModel:
         return cls._target_class(
             source=d["source"],
             amplitude_scaling=_structure_basic_or_parameter_model(
-                d["amplitude_scaling"]
+                d["amplitude_scaling"], _converter
             ),
-            phase_shift=_structure_basic_or_parameter_model(d["phase_shift"]),
+            phase_shift=_structure_basic_or_parameter_model(
+                d["phase_shift"], _converter
+            ),
         )
 
 
@@ -803,10 +689,12 @@ class SignalCalibrationModel:
             else None
         )
         delay_signal = d["delay_signal"]
-        voltage_offset = _structure_basic_or_parameter_model(d["voltage_offset"])
+        voltage_offset = _structure_basic_or_parameter_model(
+            d["voltage_offset"], _converter
+        )
         range = d["range"]
         threshold = d["threshold"]
-        amplitude = _structure_basic_or_parameter_model(d["amplitude"])
+        amplitude = _structure_basic_or_parameter_model(d["amplitude"], _converter)
         amplifier_pump = (
             d["amplifier_pump"]
             if d["amplifier_pump"] is None
@@ -836,297 +724,6 @@ class SignalCalibrationModel:
 
 
 @attrs.define
-class DataServerModel:
-    uid: str
-    host: str
-    port: str | int
-    api_level: int
-    _target_class: ClassVar[Type] = DataServer
-
-    @classmethod
-    def _unstructure(cls, obj):
-        return {
-            "uid": obj.uid,
-            "host": obj.host,
-            "port": obj.port,
-            "api_level": obj.api_level,
-        }
-
-    @classmethod
-    def _structure(cls, obj, _):
-        return cls._target_class(
-            uid=obj["uid"],
-            host=obj["host"],
-            port=obj["port"],
-            api_level=obj["api_level"],
-        )
-
-
-@attrs.define
-class ConnectionModel:
-    direction: IODirectionModel
-    local_path: str | None
-    local_port: str | None
-    remote_path: str | None
-    remote_port: str | None
-    signal_type: IOSignalTypeModel | None
-    _target_class: ClassVar[Type] = Connection
-
-    @classmethod
-    def _unstructure(cls, obj):
-        return {
-            "direction": _converter.unstructure(
-                obj.direction, Union[IODirectionModel, None]
-            ),
-            "local_path": obj.local_path,
-            "local_port": obj.local_port,
-            "remote_path": obj.remote_path,
-            "remote_port": obj.remote_port,
-            "signal_type": _converter.unstructure(
-                obj.signal_type, Union[IOSignalTypeModel, None]
-            ),
-        }
-
-    @classmethod
-    def _structure(cls, obj, _):
-        return cls._target_class(
-            direction=None
-            if obj["direction"] is None
-            else IODirectionModel._target_class.value(obj["direction"]),
-            local_path=obj["local_path"],
-            local_port=obj["local_port"],
-            remote_path=obj["remote_path"],
-            remote_port=obj["remote_port"],
-            signal_type=None
-            if obj["signal_type"] is None
-            else IOSignalTypeModel._target_class.value(obj["signal_type"]),
-        )
-
-
-@attrs.define
-class ZIStandardInstrumentModel:
-    uid: str
-    interface: str
-    connections: list[ConnectionModel]
-    server_uid: str | None
-    address: str | None
-    device_options: str | None
-    reference_clock_source: ReferenceClockSourceModel | str | None
-    _target_class: ClassVar[Type] = ZIStandardInstrument
-    _instrument_map: ClassVar[dict] = {
-        "HDAWG": HDAWG,
-        "UHFQA": UHFQA,
-        "SHFQC": SHFQC,
-        "SHFSG": SHFSG,
-        "SHFPPC": SHFPPC,
-        "SHFQA": SHFQA,
-        "PQSC": PQSC,
-    }
-
-    @classmethod
-    def _unstructure(cls, obj):
-        if type(obj).__name__ not in cls._instrument_map:
-            raise ValueError(
-                f"Unsupported instrument type: {type(obj).__name__} when unstructuring ZIStandardInstrumentModel"
-            )
-        return {
-            "uid": obj.uid,
-            "interface": obj.interface,
-            "connections": [
-                _converter.unstructure(i, ConnectionModel) for i in obj.connections
-            ],
-            "server_uid": obj.server_uid,
-            "address": obj.address,
-            "device_options": obj.device_options,
-            "reference_clock_source": _converter.unstructure(
-                obj.reference_clock_source, Union[ReferenceClockSourceModel, str, None]
-            ),
-            "_instrument_type": type(obj).__name__,
-        }
-
-    @classmethod
-    def _structure(cls, obj, _):
-        if obj["_instrument_type"] not in cls._instrument_map:
-            raise ValueError(
-                f"Unsupported instrument type: {obj['_instrument_type']} when structuring InstrumentModel"
-            )
-        instrument = cls._instrument_map[obj["_instrument_type"]]
-        if obj["reference_clock_source"] is None or isinstance(
-            obj["reference_clock_source"], str
-        ):
-            ref_clk_source = obj["reference_clock_source"]
-        else:
-            ref_clk_source = ReferenceClockSourceModel._target_class.value(
-                obj["reference_clock_source"]
-            )
-        return instrument(
-            uid=obj["uid"],
-            interface=obj["interface"],
-            connections=[
-                _converter.structure(i, ConnectionModel) for i in obj["connections"]
-            ],
-            server_uid=obj["server_uid"],
-            address=obj["address"],
-            device_options=obj["device_options"],
-            reference_clock_source=ref_clk_source,
-        )
-
-
-@attrs.define
-class PhysicalChannelModel:
-    uid: str
-    name: str | None
-    type: PhysicalChannelTypeModel | None
-    path: str | None
-    calibration: SignalCalibrationModel | None
-    _target_class: ClassVar[Type] = PhysicalChannel
-
-    @classmethod
-    def _unstructure(cls, obj):
-        return {
-            "uid": obj.uid,
-            "name": obj.name,
-            "type": _converter.unstructure(obj.type, Union[PhysicalChannelType, None]),
-            "path": obj.path,
-            "calibration": _converter.unstructure(
-                obj._calibration, Union[SignalCalibrationModel, None]
-            ),
-        }
-
-    @classmethod
-    def _structure(cls, obj, _):
-        return cls._target_class(
-            uid=obj["uid"],
-            name=obj["name"],
-            type=None
-            if obj["type"] is None
-            else PhysicalChannelTypeModel._target_class.value(obj["type"]),
-            path=obj["path"],
-            calibration=None
-            if obj["calibration"] is None
-            else _converter.structure(obj["calibration"], SignalCalibrationModel),
-        )
-
-
-@attrs.define
-class PhysicalChannelGroupModel:
-    uid: str
-    channels: dict[str, PhysicalChannelModel]
-    _target_class: ClassVar[Type] = PhysicalChannelGroup
-
-    @classmethod
-    def _unstructure(cls, obj):
-        return {
-            "uid": obj.uid,
-            "channels": {
-                k: _converter.unstructure(v, PhysicalChannelModel)
-                for k, v in obj.channels.items()
-            },
-        }
-
-    @classmethod
-    def _structure(cls, obj, _):
-        return cls._target_class(
-            uid=obj["uid"],
-            channels={
-                k: _converter.structure(v, PhysicalChannelModel)
-                for k, v in obj["channels"].items()
-            },
-        )
-
-
-@attrs.define
-class LogicalSignalModel:
-    uid: str
-    name: str | None
-    calibration: SignalCalibration | None
-    physical_channel: PhysicalChannelModel | None
-    path: str | None
-    direction: IODirectionModel | None
-    _target_class: ClassVar[Type] = LogicalSignal
-
-    @classmethod
-    def _unstructure(cls, obj):
-        if obj.calibration:
-            calibration = _converter.unstructure(
-                obj.calibration, SignalCalibrationModel
-            )
-        else:
-            calibration = None
-        if obj.physical_channel:
-            physical_channel = _converter.unstructure(
-                obj.physical_channel, PhysicalChannelModel
-            )
-        else:
-            physical_channel = None
-        return {
-            "uid": obj.uid,
-            "name": obj.name,
-            "calibration": calibration,
-            "physical_channel": physical_channel,
-            "path": obj.path,
-            "direction": _converter.unstructure(obj.direction, IODirectionModel)
-            if obj.direction
-            else None,
-        }
-
-    @classmethod
-    def _structure(cls, obj, _):
-        if obj["calibration"]:
-            calibration = _converter.structure(
-                obj["calibration"], SignalCalibrationModel
-            )
-        else:
-            calibration = None
-        if obj["physical_channel"]:
-            physical_channel = _converter.structure(
-                obj["physical_channel"], PhysicalChannelModel
-            )
-        else:
-            physical_channel = None
-        return cls._target_class(
-            uid=obj["uid"],
-            name=obj["name"],
-            calibration=calibration,
-            physical_channel=physical_channel,
-            path=obj["path"],
-            direction=IODirectionModel._target_class.value(obj["direction"])
-            if obj["direction"]
-            else None,
-        )
-
-
-@attrs.define
-class LogicalSignalGroupModel:
-    uid: str | None
-    logical_signals: dict[str, LogicalSignalModel]
-    _target_class: ClassVar[Type] = LogicalSignalGroup
-
-    @classmethod
-    def _unstructure(cls, obj):
-        return {
-            "uid": obj.uid,
-            "logical_signals": {
-                k: _converter.unstructure(v, LogicalSignalModel)
-                for k, v in obj.logical_signals.items()
-            },
-        }
-
-    @classmethod
-    def _structure(cls, obj, _):
-        return cls._target_class(
-            uid=obj["uid"],
-            logical_signals={
-                k: _converter.structure(v, LogicalSignalModel)
-                for k, v in obj["logical_signals"].items()
-            },
-        )
-
-
-# Top-level models
-
-
-@attrs.define
 class CalibrationModel:
     calibration_items: dict[str, SignalCalibrationModel]
     _target_class: ClassVar[Type] = Calibration
@@ -1150,71 +747,18 @@ class CalibrationModel:
         )
 
 
-# Supporting functions for serialization
-
-
-def _register_models(converter, models: Iterable):
-    # Use predicate hooks to avoid type evaluation problems
-    # for complicate type in Python 3.9.
-    # TODO: When dropping support for Python 3.9,
-    # Remove registering predicate hooks (register_(un)structure_hook_func)
-    # and use dispatcher hooks instead (register_(un)structure_hook)
-    # See the docstring of this module for more details.
-    def _predicate(cls):
-        return lambda obj: obj is cls
-
-    for model in models:
-        if hasattr(model, "_unstructure"):
-            converter.register_unstructure_hook_func(
-                _predicate(model), model._unstructure
-            )
-        else:
-            converter.register_unstructure_hook(
-                model, make_dict_unstructure_fn(model, converter)
-            )
-        if hasattr(model, "_structure"):
-            converter.register_structure_hook_func(_predicate(model), model._structure)
-        else:
-            converter.register_structure_hook(
-                model, make_dict_structure_fn(model, converter)
-            )
-
-
-def _collect_models() -> frozenset:
-    """Collect all attrs models for serialization. Enum models are
-    already registered in the pre-configured converter."""
-    current_module = sys.modules[__name__]
-    subclasses = []
-    for _, cls in inspect.getmembers(current_module):
-        if attrs.has(cls) and hasattr(cls, "_target_class"):
-            subclasses.append(cls)
-
-    return frozenset(subclasses)
-
-
-def make_laboneq_converter() -> Converter:
-    converter = make_converter()
-    # Collect all attrs models for serialization
-    _register_models(converter, _collect_models())
-    converter.register_structure_hook(
-        ArrayLike_Model, lambda obj, cls: numpy.asarray(obj)
-    )
-    converter.register_unstructure_hook(
-        ArrayLike_Model,
-        lambda obj: obj.tolist() if isinstance(obj, numpy.ndarray) else obj,
-    )
-
-    converter.register_unstructure_hook(
+def make_converter():
+    _converter = make_laboneq_converter()
+    _converter.register_unstructure_hook(
         ParameterModel,
-        _unstructure_parameter_model,
+        partial(_unstructure_parameter_model, _converter=_converter),
     )
-    converter.register_structure_hook(
+    _converter.register_structure_hook(
         ParameterModel,
-        _structure_parameter_model,
+        partial(_structure_parameter_model, _converter=_converter),
     )
+    register_models(_converter, collect_models(sys.modules[__name__]))
+    return _converter
 
-    return converter
 
-
-# used internally for recursive serialization
-_converter = make_laboneq_converter()
+_converter = make_converter()

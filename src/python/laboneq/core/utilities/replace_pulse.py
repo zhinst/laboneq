@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 from numpy.typing import ArrayLike
 
-from laboneq.compiler.common.pulse_parameters import decode_pulse_parameters
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.core.utilities.pulse_sampler import (
     combine_pulse_parameters,
@@ -93,9 +92,9 @@ def _replace_pulse_in_wave(
             continue
         phase = instance.iq_phase or 0.0
         combined_pulse_parameters = combine_pulse_parameters(
-            decode_pulse_parameters(instance.pulse_pulse_parameters),
-            pulse_parameters,
-            decode_pulse_parameters(instance.play_pulse_parameters),
+            initial_pulse=instance.pulse_pulse_parameters,
+            replaced_pulse=pulse_parameters,
+            play=instance.play_pulse_parameters,
         )
         samples = sample_pulse(
             signal_type=pwm.signal_type,

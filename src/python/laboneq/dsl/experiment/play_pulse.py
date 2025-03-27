@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 
@@ -35,7 +35,7 @@ class PlayPulse(Operation):
     #: Modify the length of the pulse to the given value
     length: Union[float, Parameter] = field(default=None)
     #: Optional (re)binding of user pulse parameters
-    pulse_parameters: Optional[Dict[str, Any]] = field(default=None)
+    pulse_parameters: Optional[dict[str, Any]] = field(default=None)
     #: Clear the precompensation filter of the signal while playing the pulse.
     precompensation_clear: Optional[bool] = field(default=None)
     #: Instructions for playing marker signals while playing the pulse.

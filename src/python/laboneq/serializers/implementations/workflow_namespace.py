@@ -5,15 +5,16 @@
 """Serializer/Deserializer for workflow Namespace"""
 
 from __future__ import annotations
-from laboneq.workflow.blocks import Namespace
+
+from laboneq import serializers
 from laboneq.serializers.base import VersionedClassSerializer
 from laboneq.serializers.serializer_registry import serializer
-from laboneq import serializers
 from laboneq.serializers.types import (
-    SerializationOptions,
     DeserializationOptions,
     JsonSerializableType,
+    SerializationOptions,
 )
+from laboneq.workflow.blocks import Namespace
 
 
 @serializer(types=Namespace, public=True)

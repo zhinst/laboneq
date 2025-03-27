@@ -4,7 +4,6 @@
 """Base classes and utilities for LabOne Q serialization and deserialization."""
 
 from __future__ import annotations
-
 import importlib
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -78,6 +77,7 @@ def to_dict(
     obj: object, options: SerializationOptions | None = None
 ) -> JsonSerializableType:
     """Store an object to a dict with only basic datatypes."""
+
     serialized = _serialize_object(obj, options, only_public=True)
     if isinstance(serialized, dict) and "__serializer__" in serialized:
         serialized["__creator__"] = ["laboneq", get_version()]

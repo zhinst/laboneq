@@ -6,7 +6,6 @@ from typing import Optional
 
 import attr
 from attr import field
-from numpy.typing import ArrayLike
 
 from laboneq.compiler.ir.root_ir import RootScheduleIR
 from laboneq.data.compilation_job import (
@@ -44,32 +43,11 @@ class SignalIR:
 
 
 @attr.define(slots=True)
-class PulseDefIR:
-    uid: str = ""
-    amplitude: Optional[float] = None
-    can_compress: bool = False
-    function: Optional[str] = None
-    samples: Optional[ArrayLike] = None
-    length: float = 0.0
-
-    @classmethod
-    def from_pulse_def(cls, pulse_def: PulseDef):
-        return cls(
-            uid=pulse_def.uid,
-            amplitude=pulse_def.amplitude,
-            can_compress=pulse_def.can_compress,
-            function=pulse_def.function,
-            length=pulse_def.length,
-            samples=pulse_def.samples,
-        )
-
-
-@attr.define(slots=True)
 class IRTree:
     devices: list[DeviceIR] = field(factory=list)
     signals: list[SignalIR] = field(factory=list)
     root: Optional[RootScheduleIR] = None
-    pulse_defs: list[PulseDefIR] = field(factory=list)
+    pulse_defs: list[PulseDef] = field(factory=list)
 
     def round_trip(self):
         from laboneq.dsl.serialization import Serializer

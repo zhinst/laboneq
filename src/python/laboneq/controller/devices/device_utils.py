@@ -114,7 +114,7 @@ def prepare_emulator_state(ds: DeviceSetupDAO) -> EmulatorState:
     labonever = LabOneVersion.from_version_string(zhinst_core_version())
     emulator_state.set_option("ZI", "about/fullversion", str(labonever))
 
-    for device_qualifier in ds.instruments:
+    for device_qualifier in ds.devices:
         options = device_qualifier.options
         dev_type = calc_dev_type(device_qualifier)
         emulator_state.map_device_type(options.serial, dev_type)
@@ -134,7 +134,7 @@ def prepare_emulator_state(ds: DeviceSetupDAO) -> EmulatorState:
                 device_qualifier.uid
             ):
                 to_dev_qualifier = next(
-                    (i for i in ds.instruments if i.uid == to_dev_uid), None
+                    (i for i in ds.devices if i.uid == to_dev_uid), None
                 )
                 if to_dev_qualifier is None:
                     continue

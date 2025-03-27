@@ -12,6 +12,7 @@ import shlex
 from typing import (
     TYPE_CHECKING,
     Any,
+    Awaitable,
     Coroutine,
     Iterator,
     Literal,
@@ -42,6 +43,7 @@ from laboneq.controller.versioning import (
     MINIMUM_SUPPORTED_LABONE_VERSION,
     RECOMMENDED_LABONE_VERSION,
     LabOneVersion,
+    SetupCaps,
 )
 
 if TYPE_CHECKING:
@@ -128,7 +130,11 @@ def _check_dataserver_device_compatibility(statuses: dict[str, _DeviceStatusFlag
 def parse_logfmt(log: str) -> dict[str, str]:
     # Simplified logfmt parser
     # Avoided using the logfmt library due to its apparent lack of maintenance.
-    return dict(tuple(part.split("=", 1)) for part in shlex.split(log) if "=" in part)
+    def _split_key_value(part: str) -> tuple[str, str]:
+        [key, value] = part.split("=", 1)
+        return key, value
+
+    return dict(_split_key_value(part) for part in shlex.split(log) if "=" in part)
 
 
 class DataServerConnection:
@@ -142,6 +148,7 @@ class DataServerConnection:
         data_server: KernelSession,
         devices_json: str,
         fullversion_str: str,
+        setup_caps: SetupCaps,
     ):
         self._server_qualifier = server_qualifier
         self._data_server = data_server
@@ -149,10 +156,20 @@ class DataServerConnection:
         self._fullversion_str = fullversion_str
         self._log_queue: DataQueue | None = None
         self._log_records: list[AnnotatedValue] = []
+        self._setup_caps = setup_caps
+        self._server_setup_caps: SetupCaps | None = None
 
     @property
     def server_qualifier(self) -> ServerQualifier:
         return self._server_qualifier
+
+    @property
+    def setup_caps(self) -> SetupCaps:
+        if self._server_setup_caps is None:
+            raise LabOneQControllerException(
+                "Internal error: per-server setup capabilities are not initialized."
+            )
+        return self._server_setup_caps
 
     @classmethod
     async def connect(
@@ -160,6 +177,7 @@ class DataServerConnection:
         server_qualifier: ServerQualifier,
         emulator_state: EmulatorState | None,
         timeout_s: float,
+        setup_caps: SetupCaps,
     ) -> DataServerConnection:
         host = server_qualifier.host
         port = server_qualifier.port
@@ -173,7 +191,7 @@ class DataServerConnection:
         else:
             data_server = KernelSessionEmulator(
                 serial="ZI", emulator_state=emulator_state
-            )
+            )  # type: ignore
 
         try:
             (
@@ -200,7 +218,11 @@ class DataServerConnection:
         )
 
         return DataServerConnection(
-            server_qualifier, data_server, str(devices_json), str(fullversion_str)
+            server_qualifier=server_qualifier,
+            data_server=data_server,
+            devices_json=str(devices_json),
+            fullversion_str=str(fullversion_str),
+            setup_caps=setup_caps,
         )
 
     @property
@@ -238,6 +260,8 @@ class DataServerConnection:
                 f"We recommend {RECOMMENDED_LABONE_VERSION}."
             )
             raise LabOneQControllerException(err_msg)
+
+        self._server_setup_caps = self._setup_caps.for_server(dataserver_version)
 
         if isinstance(self._data_server, KernelSession):  # Real server?
             statuses = _get_device_statuses(self.devices_json, serials)
@@ -304,27 +328,90 @@ class DataServerConnections:
             data_server.dump_logs(server_uid)
 
 
-async def create_device_kernel_session(
-    *,
-    server_qualifier: ServerQualifier,
-    device_qualifier: DeviceQualifier,
-    emulator_state: EmulatorState | None,
-    timeout_s: float,
-) -> KernelSession:
-    if emulator_state is not None:
-        return KernelSessionEmulator(
-            serial=device_qualifier.options.serial,
-            emulator_state=emulator_state,
-        )
-    return await KernelSession.create(
-        kernel_info=KernelInfo.device_connection(
-            device_id=device_qualifier.options.serial,
-            interface=device_qualifier.options.interface,
-        ),
-        host=server_qualifier.host,
-        port=server_qualifier.port,
-        timeout=to_l1_timeout(timeout_s),
-    )
+class InstrumentConnection:
+    """Encapsulates the API implementation to prevent contaminating
+    the rest of the controller with API dependencies."""
+
+    def __init__(self, impl: KernelSession | None = None):
+        self._impl = impl
+
+    @staticmethod
+    async def connect(
+        *,
+        server_qualifier: ServerQualifier,
+        device_qualifier: DeviceQualifier,
+        emulator_state: EmulatorState | None,
+        timeout_s: float,
+    ) -> InstrumentConnection:
+        if emulator_state is None:
+            instrument = await KernelSession.create(
+                kernel_info=KernelInfo.device_connection(
+                    device_id=device_qualifier.options.serial,
+                    interface=device_qualifier.options.interface,
+                ),
+                host=server_qualifier.host,
+                port=server_qualifier.port,
+                timeout=to_l1_timeout(timeout_s),
+            )
+        else:
+            instrument = KernelSessionEmulator(
+                serial=device_qualifier.options.serial,
+                emulator_state=emulator_state,
+            )  # type: ignore
+        return InstrumentConnection(instrument)
+
+    @property
+    def impl(self) -> KernelSession:
+        assert self._impl is not None
+        return self._impl
+
+    def clear_cache(self):
+        if isinstance(self._impl, KernelSessionEmulator):
+            self._impl.clear_cache()
+
+    async def set_parallel(self, nodes: NodeCollector):
+        futures = []
+        for node in nodes:
+            if isinstance(node, NodeActionSet):
+                func = (
+                    self.impl.set_with_expression if "*" in node.path else self.impl.set
+                )
+                type_adjusted_value = _resolve_type(node.value, node.path)
+                val: AnnotatedValue
+                if isinstance(self._impl, KernelSessionEmulator):
+                    # Don't wrap into ShfGeneratorWaveformVectorData for emulation
+                    # (see also code in "else" below)
+                    # to avoid emulator dependency on labone-python
+                    val = AnnotatedValueWithExtras(
+                        path=node.path,
+                        value=type_adjusted_value,
+                        cache=node.cache,
+                        filename=node.filename,
+                    )
+                else:
+                    if (
+                        np.iscomplexobj(type_adjusted_value)
+                        and "generator/waveforms" in node.path.lower()
+                    ):
+                        type_adjusted_value = ShfGeneratorWaveformVectorData(
+                            complex=type_adjusted_value
+                        )
+                    val = AnnotatedValue(
+                        path=node.path,
+                        value=type_adjusted_value,
+                    )
+                futures.append(func(val))
+            else:
+                await _gather(*futures)
+                futures.clear()
+
+        if len(futures) > 0:
+            await _gather(*futures)
+
+    async def get_raw(self, path: str) -> dict[str, Any]:
+        paths = path.split(",")
+        results = await _gather(*[self.impl.get(p) for p in paths])
+        return {r.path: _from_annotated_value(r) for r in results}
 
 
 U = TypeVar("U")
@@ -332,18 +419,18 @@ U = TypeVar("U")
 
 @overload
 async def _gather(
-    *args: Coroutine[Any, Any, U], return_exceptions: Literal[False] = False
+    *args: Awaitable[U], return_exceptions: Literal[False] = False
 ) -> list[U]: ...
 
 
 @overload
 async def _gather(
-    *args: Coroutine[Any, Any, U], return_exceptions: Literal[True]
+    *args: Awaitable[U], return_exceptions: Literal[True]
 ) -> list[U | BaseException]: ...
 
 
 async def _gather(
-    *args: Coroutine[Any, Any, U], return_exceptions: bool = False
+    *args: Awaitable[U], return_exceptions: bool = False
 ) -> list[U] | list[U | BaseException]:
     if ASYNC_DEBUG_MODE:
         results: list[U | BaseException] = []
@@ -420,43 +507,6 @@ class AnnotatedValueWithExtras(AnnotatedValue):
     filename: str | None = None
 
 
-async def set_parallel(api: KernelSession, nodes: NodeCollector):
-    futures = []
-    for node in nodes:
-        if isinstance(node, NodeActionSet):
-            func = api.set_with_expression if "*" in node.path else api.set
-            type_adjusted_value = _resolve_type(node.value, node.path)
-            if isinstance(api, KernelSessionEmulator):
-                # Don't wrap into ShfGeneratorWaveformVectorData for emulation
-                # (see also code in "else" below)
-                # to avoid emulator dependency on labone-python
-                val = AnnotatedValueWithExtras(
-                    path=node.path,
-                    value=type_adjusted_value,
-                    cache=node.cache,
-                    filename=node.filename,
-                )
-            else:
-                if (
-                    np.iscomplexobj(type_adjusted_value)
-                    and "generator/waveforms" in node.path.lower()
-                ):
-                    type_adjusted_value = ShfGeneratorWaveformVectorData(
-                        complex=type_adjusted_value
-                    )
-                val = AnnotatedValue(
-                    path=node.path,
-                    value=type_adjusted_value,
-                )
-            futures.append(func(val))
-        else:
-            await _gather(*futures)
-            futures.clear()
-
-    if len(futures) > 0:
-        await _gather(*futures)
-
-
 _key_translate = {
     "job_id": "jobid",
     "jobId": "jobid",
@@ -473,52 +523,6 @@ def canonical_properties(properties: Any) -> dict[str, Any]:
     return {_key_translate.get(key, key): val for key, val in dict(properties).items()}
 
 
-def parse_annotated_value(annotated_value: AnnotatedValue) -> Any:
-    value = annotated_value.value
-    properties = getattr(value, "properties", None)
-    effective_value: Any
-    if properties is not None:
-        effective_value = [
-            {
-                "vector": value.vector,
-                "properties": canonical_properties(properties),
-            }
-        ]
-    else:
-        if isinstance(value, np.ndarray):
-            effective_value = [{"vector": value}]
-        else:
-            effective_value = {"value": [value]}
-    return effective_value
-
-
-async def get_raw(api: KernelSession, path: str) -> dict[str, Any]:
-    paths = path.split(",")
-    results = await _gather(*[api.get(p) for p in paths])
-    return {r.path: parse_annotated_value(r) for r in results}
-
-
-async def _yield():
-    # Yield to the event loop to fill queues with pending data
-    # Note: asyncio.sleep(0) is not sufficient. See:
-    # https://stackoverflow.com/questions/74493571/asyncio-sleep0-does-not-yield-control-to-the-event-loop
-    # https://bugs.python.org/issue40800
-    # TODO(2K): rework the logic to use proper async once the legacy API is removed.
-    await asyncio.sleep(0.0001)
-
-
-async def wait_for_state_change(
-    api: KernelSession,
-    path: str,
-    value: int | str,
-):
-    queue = await api.subscribe(path, get_initial_value=True)
-    node_value = _from_annotated_value(await queue.get())
-    while value != node_value:
-        node_value = _from_annotated_value(await queue.get())
-    queue.disconnect()
-
-
 def _from_annotated_value(annotated_value: AnnotatedValue) -> Any:
     value = annotated_value.value
     vector = getattr(value, "vector", None)
@@ -530,7 +534,7 @@ def _from_annotated_value(annotated_value: AnnotatedValue) -> Any:
 class ResponseWaiterAsync:
     def __init__(
         self,
-        api: KernelSession,
+        api: InstrumentConnection,
         nodes: dict[str, Any] | None = None,
         timeout_s: float | None = None,
     ):
@@ -552,7 +556,9 @@ class ResponseWaiterAsync:
     async def prepare(self):
         if len(self._nodes) == 0:
             return
-        queues = await _gather(*(self._api.subscribe(path) for path in self._nodes))
+        queues = await _gather(
+            *(self._api.impl.subscribe(path) for path in self._nodes)
+        )
         for path, queue in zip(self._nodes.keys(), queues):
             self._queues[path] = queue
 
@@ -592,13 +598,13 @@ class ResponseWaiterAsync:
 
 
 class ConditionsCheckerAsync:
-    def __init__(self, api: KernelSession, conditions: dict[str, Any]):
+    def __init__(self, api: InstrumentConnection, conditions: dict[str, Any]):
         self._api = api
         self._conditions = conditions
 
     async def check(self) -> list[tuple[str, Any, Any]]:
         results: list[AnnotatedValue] = await _gather(
-            *(self._api.get(path) for path in self._conditions)
+            *(self._api.impl.get(path) for path in self._conditions)
         )
         values = [(res.path, _from_annotated_value(res)) for res in results]
         mismatches = [
@@ -608,37 +614,49 @@ class ConditionsCheckerAsync:
         ]
         return mismatches
 
+    async def wait_by_get(self):
+        while len(await self.check()) > 0:
+            pass
+
 
 class AsyncSubscriber:
     def __init__(self):
         self._subscriptions: dict[str, DataQueue] = {}
+        self._last: dict[str, AnnotatedValue] = {}
 
-    async def subscribe(
-        self, api: KernelSession, path: str, get_initial_value: bool = False
-    ):
+    async def subscribe(self, api: InstrumentConnection, path: str, get_initial=False):
         if path in self._subscriptions:
-            if get_initial_value:
-                self._subscriptions.pop(path).disconnect()
-            else:
-                return  # Keep existing subscription
-        self._subscriptions[path] = await api.subscribe(
-            path, get_initial_value=get_initial_value
-        )
+            return  # Keep existing subscription
+        self._subscriptions[path] = await api.impl.subscribe(path)
+        if get_initial:
+            self._last[path] = await api.impl.get(path)
 
     async def get(self, path: str, timeout_s: float | None = None) -> AnnotatedValue:
         queue = self._subscriptions.get(path)
         assert queue is not None, f"path {path} is not subscribed"
-        return await asyncio.wait_for(queue.get(), timeout=timeout_s)
+        value = await asyncio.wait_for(queue.get(), timeout=timeout_s)
+        self._last[path] = value
+        return value
 
     def get_updates(self, path) -> list[AnnotatedValue]:
         updates = []
         queue = self._subscriptions.get(path)
         if queue is not None:
             while not queue.empty():
-                updates.append(queue.get_nowait())
+                value = queue.get_nowait()
+                self._last[path] = value
+                updates.append(value)
         return updates
 
     def unsubscribe_all(self):
         for queue in self._subscriptions.values():
             queue.disconnect()
         self._subscriptions.clear()
+        self._last.clear()
+
+    async def wait_for(self, path: str, expected: Any, timeout_s: float):
+        self.get_updates(path)
+        while path not in self._last or not is_expected(
+            _from_annotated_value(self._last[path]), expected
+        ):
+            await self.get(path, timeout_s=timeout_s)

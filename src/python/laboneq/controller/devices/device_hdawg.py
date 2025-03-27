@@ -122,9 +122,6 @@ class DeviceHDAWG(DeviceBase):
 
         self._multi_freq = "MF" in self.dev_opts
 
-    def _get_num_awgs(self) -> int:
-        return self._channels // 2
-
     def _osc_group_by_channel(self, channel: int) -> int:
         # For LabOne Q SW, the AWG oscillator control is always on, in which
         # case every pair of output channels share the same set of oscillators
@@ -145,6 +142,15 @@ class DeviceHDAWG(DeviceBase):
             return None
         osc_index_base = osc_group * max_per_group
         return osc_index_base + previously_allocated
+
+    def _busy_nodes(self) -> list[str]:
+        busy_nodes = []
+        for awg in self._allocated_awgs:
+            # We check busy always for both channels even if only
+            # one channel is used - overhead is minimal.
+            busy_nodes.append(f"/{self.serial}/sigouts/{awg * 2}/busy")
+            busy_nodes.append(f"/{self.serial}/sigouts/{awg * 2 + 1}/busy")
+        return busy_nodes
 
     async def disable_outputs(self, outputs: set[int], invert: bool):
         nc = NodeCollector(base=f"/{self.serial}/")
@@ -354,7 +360,6 @@ class DeviceHDAWG(DeviceBase):
         outputs = initialization.outputs or []
         for output in outputs:
             awg_idx = output.channel // 2
-            self._allocated_awgs.add(awg_idx)
 
             nc.add(f"sigouts/{output.channel}/on", 1 if output.enable else 0)
 

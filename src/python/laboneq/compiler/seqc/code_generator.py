@@ -26,7 +26,7 @@ from laboneq.compiler.common.compiler_settings import (
 from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.shfppc_sweeper_config import SHFPPCSweeperConfig
 from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
-from laboneq.compiler.ir.ir import IRTree, PulseDefIR
+from laboneq.compiler.ir.ir import IRTree
 from laboneq.compiler.seqc import passes, ir as ir_code
 from laboneq.compiler.seqc.linker import AwgWeights, SeqCGenOutput
 from laboneq._utils import ensure_list
@@ -88,12 +88,10 @@ from laboneq.compiler.seqc.awg_sampled_event import (
 from laboneq.compiler.common.awg_signal_type import AWGSignalType
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.event_list.event_type import EventList, EventType
-from laboneq.compiler.common.pulse_parameters import decode_pulse_parameters
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.common.trigger_mode import TriggerMode
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.pulse_sampler import (
-    combine_pulse_parameters,
     length_to_samples,
     sample_pulse,
     verify_amplitude_no_clipping,
@@ -108,7 +106,6 @@ from laboneq.data.scheduled_experiment import (
     WeightInfo,
     COMPLEX_USAGE,
 )
-
 
 _logger = logging.getLogger(__name__)
 
@@ -193,34 +190,37 @@ def calculate_integration_weights(
     acquire_events: AWGSampledEventSequence,
     signal_obj: SignalObj,
     pulse_defs: dict[str, PulseDef],
+    pulse_params: list[passes.PulseParams],
 ) -> list[IntegrationWeight]:
     integration_weights_by_pulse: dict[str, IntegrationWeight] = {}
     signal_id = signal_obj.id
-
+    already_handled = set()
     nr_of_weights_per_event = None
     for event_list in acquire_events.sequence.values():
         for event in event_list:
-            _logger.debug("For weights, look at %s", event)
-
-            assert event.params.get("signal_id", signal_id) == signal_id
             play_wave_ids: list[str] = ensure_list(event.params.get("play_wave_id"))
+            id_pulse_params: list[int] = ensure_list(event.params["id_pulse_params"])
+            oscillator_frequency: list[float] = ensure_list(
+                event.params["oscillator_frequency"]
+            )
+            amplitudes: list[float | complex] = ensure_list(event.params["amplitude"])
+            key_ = (
+                tuple(play_wave_ids),
+                tuple(id_pulse_params),
+                tuple(oscillator_frequency),
+                tuple(amplitudes),
+            )
+            if key_ in already_handled:
+                continue
+            assert event.params.get("signal_id", signal_id) == signal_id
             n = len(play_wave_ids)
-            play_pars = ensure_list(
-                event.params.get("play_pulse_parameters") or [None] * n
-            )
-            pulse_pars = ensure_list(
-                event.params.get("pulse_pulse_parameters") or [None] * n
-            )
+            [oscillator_frequency, *rest] = oscillator_frequency
+            assert all(oscillator_frequency == f for f in rest)
 
-            oscillator_frequency = event.params.get("oscillator_frequency", 0.0)
-            if isinstance(oscillator_frequency, list):
-                [oscillator_frequency, *rest] = oscillator_frequency
-                assert all(oscillator_frequency == f for f in rest)
-
-            filtered_pulses: list[tuple[str, Any, Any]] = [
-                (play_wave_id, play_par, pulse_par)
-                for play_wave_id, play_par, pulse_par in zip(
-                    play_wave_ids, play_pars, pulse_pars
+            filtered_pulses: list[tuple[str, int | None]] = [
+                (play_wave_id, param_id)
+                for play_wave_id, param_id in zip(
+                    play_wave_ids, id_pulse_params or [None] * len(play_wave_ids)
                 )
                 if play_wave_id is not None
                 and (pulse_def := pulse_defs.get(play_wave_id)) is not None
@@ -228,13 +228,12 @@ def calculate_integration_weights(
                 and (pulse_def.samples is not None or pulse_def.function is not None)
             ]
 
-            assert n == len(play_pars) == len(pulse_pars)
             if nr_of_weights_per_event is None:
                 nr_of_weights_per_event = n
             else:
                 assert n == nr_of_weights_per_event
                 if any(
-                    w not in integration_weights_by_pulse for w, _, _ in filtered_pulses
+                    w not in integration_weights_by_pulse for w, _ in filtered_pulses
                 ):
                     # Event uses different pulse UIDs than earlier event
                     raise LabOneQException(
@@ -243,24 +242,23 @@ def calculate_integration_weights(
                         f" {list(integration_weights_by_pulse.keys())}"
                     )
 
-            for play_wave_id, play_par, pulse_par in filtered_pulses:
+            for play_wave_id, pulse_param_id in filtered_pulses:
                 pulse_def = pulse_defs[play_wave_id]
                 samples = pulse_def.samples
                 pulse_amplitude: Number = pulse_def.amplitude
                 assert isinstance(pulse_amplitude, Number)
-
-                play_amplitude = event.params.get("amplitude", 1.0)
-                if isinstance(play_amplitude, list):
-                    [play_amplitude, *rest] = play_amplitude
-                    assert all(a == play_amplitude for a in rest)
+                play_amplitude = amplitudes[0]
+                [play_amplitude, *rest] = amplitudes
+                assert all(a == play_amplitude for a in rest)
                 amplitude = pulse_amplitude * play_amplitude
 
                 length = pulse_def.length
                 if length is None:
                     length = len(samples) / signal_obj.awg.sampling_rate
-
-                pulse_parameters = combine_pulse_parameters(pulse_par, None, play_par)
-                pulse_parameters = decode_pulse_parameters(pulse_parameters)
+                if pulse_param_id is not None:
+                    params_pulse_combined = pulse_params[pulse_param_id].combined()
+                else:
+                    params_pulse_combined = None
                 iw_samples = sample_pulse(
                     signal_type="iq",
                     sampling_rate=signal_obj.awg.sampling_rate,
@@ -270,7 +268,7 @@ def calculate_integration_weights(
                     modulation_frequency=oscillator_frequency,
                     samples=samples,
                     mixer_type=signal_obj.mixer_type,
-                    pulse_parameters=pulse_parameters,
+                    pulse_parameters=params_pulse_combined,
                 )
 
                 if (
@@ -320,7 +318,7 @@ def calculate_integration_weights(
                             )
                 # This relies on the dict remembering insertion order.
                 integration_weights_by_pulse[play_wave_id] = integration_weight
-
+            already_handled.add(key_)
     return list(integration_weights_by_pulse.values())
 
 
@@ -386,85 +384,17 @@ class CodeGenerator(ICodeGenerator):
 
         self.EMIT_TIMING_COMMENTS = self._settings.EMIT_TIMING_COMMENTS
 
-    def collect_acquisition_data(
-        self, events_or_ir: EventList | IRTree
-    ) -> tuple[
-        dict[str, SignalObj],
-        list[dict[str, str]],
-        FeedbackRegisterAllocator,
-        IntegrationTimes,
-        SignalDelays,
-        float,
-    ]:
-        """Collect data from the event list/IR used to generate seqc code."""
-        # This is a temporary hack to obtain some acquisiton related
-        # data from the event list/IR used to generate seqc code. As we
-        # progress in converting these passes to use the IR instead of the
-        # event list, the calls in this method will be replaced piece by
-        # piece, until the whole code is converted to rust.
-
-        # TODO: Remove 'events' API in favor of IR, requires fixing many tests
-        if isinstance(events_or_ir, IRTree):
-            assert events_or_ir.root is not None
-            total_execution_time = events_or_ir.root.length * TINYSAMPLE
-            measurement_info = passes.collect_measurement_info(
-                events_or_ir.root, self._signals
-            )
-            integration_times = measurement_info.integration_times
-            signal_delays = measurement_info.signal_delays
-            feedback_register_allocator = measurement_info.feedback_register_allocator
-            qa_signals_by_handle = measurement_info.qa_signals_by_handle
-            simultaneous_acquires = measurement_info.simultaneous_acquires
-        else:
-            # This branch should only be encountered via tests
-            # TODO: Remove this code and the called functions when the event list is gone
-            events = events_or_ir
-            total_execution_time = (
-                max([e.get("time", 0) for e in events]) if len(events) > 0 else None
-            )
-            (
-                integration_times,
-                signal_delays,
-            ) = self._measurement_calculator.calculate_integration_times(
-                self._signals, events
-            )
-            feedback_register_allocator = FeedbackRegisterAllocator(self._signals)
-            feedback_register_allocator.set_feedback_paths_from_events(events)
-            qa_signals_by_handle = self._collect_qa_signals_by_handle(
-                events, self._signals
-            )
-            simultaneous_acquires = self._gen_acquire_map(events)
-
-        return (
-            qa_signals_by_handle,
-            simultaneous_acquires,
-            feedback_register_allocator,
-            integration_times,
-            signal_delays,
-            total_execution_time,
-        )
-
     def generate_code(self):
         passes.inline_sections_in_branch(self._ir)
-
-        (
-            qa_signals_by_handle,
-            simultaneous_acquires,
-            feedback_register_allocator,
-            integration_times,
-            signal_delays,
-            total_execution_time,
-        ) = self.collect_acquisition_data(self._ir)
-
+        measurement_info = passes.collect_measurement_info(self._ir.root, self._signals)
         self.gen_seq_c(
-            self._ir,
             pulse_defs={p.uid: p for p in self._ir.pulse_defs},
-            qa_signals_by_handle=qa_signals_by_handle,
-            simultaneous_acquires=simultaneous_acquires,
-            feedback_register_allocator=feedback_register_allocator,
-            integration_times=integration_times,
-            signal_delays=signal_delays,
-            total_execution_time=total_execution_time,
+            qa_signals_by_handle=measurement_info.qa_signals_by_handle,
+            simultaneous_acquires=measurement_info.simultaneous_acquires,
+            feedback_register_allocator=measurement_info.feedback_register_allocator,
+            integration_times=measurement_info.integration_times,
+            signal_delays=measurement_info.signal_delays,
+            total_execution_time=self._ir.root.length * TINYSAMPLE,
         )
 
     def get_output(self):
@@ -731,95 +661,9 @@ class CodeGenerator(ICodeGenerator):
             group = list(group)
             assert all(np.all(group[0][1] == g[1]) for g in group[1:])
 
-    def _unroll_acquisition_in_prng_loops(self, events: EventList):
-        @dataclass
-        class LoopInfo:
-            name: str
-            start: float
-            iterations: int = 0
-
-        prng_loop_sections = {
-            e["section_name"]
-            for e in events
-            if e["event_type"] == EventType.DRAW_PRNG_SAMPLE
-        }
-
-        loop_stack: list[LoopInfo] = []
-        open_acquisitions: list[EventList] = [[]]
-
-        for e in events:
-            if e["event_type"] == EventType.ACQUIRE_START:
-                open_acquisitions[-1].append(e)
-            elif (
-                e["event_type"] == EventType.LOOP_START
-                and (section := e["section_name"]) in prng_loop_sections
-            ):
-                # entering new nested loop, push onto stack
-                loop_stack.append(
-                    LoopInfo(name=section, start=e["time"], iterations=e["iterations"])
-                )
-                open_acquisitions.append([])
-            elif (
-                e["event_type"] == EventType.LOOP_END
-                and (section := e["section_name"]) in prng_loop_sections
-            ):
-                # exiting loop, pop from stack and replicate any open acquisitions N times
-                loop = loop_stack.pop()
-                end = e["time"]
-                assert loop.name == section
-
-                length = (end - loop.start) / loop.iterations
-
-                unrolled_acquires = []
-                for original_acquire in open_acquisitions.pop():
-                    extra_acquires = [
-                        original_acquire.copy() for _ in range(loop.iterations)
-                    ]
-                    for i in range(1, loop.iterations):
-                        extra_acquires[i]["time"] += i * length
-                    unrolled_acquires.extend(extra_acquires)
-
-                open_acquisitions[-1].extend(unrolled_acquires)
-
-        [unrolled_acquires] = open_acquisitions
-        return unrolled_acquires
-
-    def _gen_acquire_map(self, events_or_ir: EventList) -> list[dict[str, str]]:
-        # timestamp -> map[signal -> handle]
-        simultaneous_acquires: dict[int, dict[str, str]] = {}
-
-        events = self._unroll_acquisition_in_prng_loops(events_or_ir)
-
-        for e in events:
-            time_events = simultaneous_acquires.setdefault(e["time"], {})
-            time_events[e["signal"]] = e["acquire_handle"]
-
-        return list(simultaneous_acquires.values())
-
-    @staticmethod
-    def _collect_qa_signals_by_handle(events: EventList, signals: dict[str, SignalObj]):
-        # TODO: Remove once the event list is gone for good
-        qa_signals_by_handle: dict[str, SignalObj] = {}
-        for event in events:
-            if event["event_type"] != EventType.ACQUIRE_START:
-                continue
-            handle = event["acquire_handle"]
-            if handle is None:
-                # Some unit tests omit the handle
-                # this cannot be used for feedback anyway, so ignore
-                continue
-            signal_obj = signals[event["signal"]]
-
-            if handle not in qa_signals_by_handle:
-                qa_signals_by_handle[handle] = signal_obj
-            else:
-                assert qa_signals_by_handle[handle] == signal_obj
-        return qa_signals_by_handle
-
     def gen_seq_c(
         self,
-        events_or_ir: EventList | IRTree,
-        pulse_defs: dict[str, PulseDefIR],
+        pulse_defs: dict[str, PulseDef],
         qa_signals_by_handle: dict[str, SignalObj],
         simultaneous_acquires: list[dict[str, str]],
         feedback_register_allocator: FeedbackRegisterAllocator,
@@ -835,23 +679,17 @@ class CodeGenerator(ICodeGenerator):
         self._feedback_register_allocator = feedback_register_allocator
         self._total_execution_time = total_execution_time
 
-        if isinstance(events_or_ir, IRTree):
-            # The pass must happen after delay calculation as it relies on section information.
-            # TODO: Fix that this pass can happen as early as possible.
-            passes.inline_sections(self._ir.root)
-            osc_params = passes.calculate_oscillator_parameters(events_or_ir.root)
-            ir_tree = passes.fanout_awgs(events_or_ir, self._awgs.values())
-            ir_awgs = {awg.awg.key: awg for awg in ir_tree.root.children}
-            events_per_awg = ir_to_event_list.event_list_per_awg(
-                ir_tree, self._settings, osc_params
-            )
-        else:
-            # This branch should only be encountered via tests
-            events_per_awg = {awg: events_or_ir for awg in self._awgs}
-            ir_awgs = {
-                awg_key: ir_code.SingleAwgIR(awg=awg)
-                for awg_key, awg in self._awgs.items()
-            }
+        # The pass must happen after delay calculation as it relies on section information.
+        # TODO: Fix that this pass can happen as early as possible.
+        passes.inline_sections(self._ir.root)
+        osc_params = passes.calculate_oscillator_parameters(self._ir.root)
+        # Detach must happen before creating the event list
+        user_pulse_params = passes.detach_pulse_params(self._ir.root)
+        ir_tree = passes.fanout_awgs(self._ir, self._awgs.values())
+        ir_awgs = {awg.awg.key: awg for awg in ir_tree.root.children}
+        events_per_awg = ir_to_event_list.event_list_per_awg(
+            ir_tree, self._settings, osc_params
+        )
 
         for signal_id, signal_obj in self._signals.items():
             code_generation_delay = self._signal_delays.get(signal_id)
@@ -884,9 +722,7 @@ class CodeGenerator(ICodeGenerator):
             key=lambda item: item[0],
         ):
             self._gen_seq_c_per_awg(
-                ir_awg,
-                events_per_awg.get(awg_key, []),
-                pulse_defs,
+                ir_awg, events_per_awg.get(awg_key, []), pulse_defs, user_pulse_params
             )
 
         tgt_feedback_regs = self._feedback_register_allocator.target_feedback_registers
@@ -1266,6 +1102,7 @@ class CodeGenerator(ICodeGenerator):
         awg_ir: ir_code.SingleAwgIR,
         events: EventList,
         pulse_defs: dict[str, PulseDef],
+        user_pulse_params: passes.PulseParams,
     ):
         awg = awg_ir.awg
         empty_intervals = passes.collect_empty_intervals(awg_ir)
@@ -1372,7 +1209,10 @@ class CodeGenerator(ICodeGenerator):
                 )
                 self._integration_weights[awg.key][signal_obj.id] = (
                     calculate_integration_weights(
-                        acquire_events, signal_obj, pulse_defs
+                        acquire_events,
+                        signal_obj,
+                        pulse_defs,
+                        pulse_params=user_pulse_params,
                     )
                 )
 
@@ -1437,6 +1277,7 @@ class CodeGenerator(ICodeGenerator):
                 device_type=awg.device_type,
                 multi_iq_signal=True,
                 mixer_type=mixer_type,
+                params=user_pulse_params,
             )
 
             sampled_events.merge(interval_events)
@@ -1493,6 +1334,7 @@ class CodeGenerator(ICodeGenerator):
                     signal_type=signal_obj.signal_type,
                     device_type=awg.device_type,
                     mixer_type=signal_obj.mixer_type,
+                    params=user_pulse_params,
                 )
 
                 sampled_events.merge(interval_events)
@@ -1554,6 +1396,7 @@ class CodeGenerator(ICodeGenerator):
                 signal_type=signal_a.signal_type,
                 device_type=awg.device_type,
                 mixer_type=signal_a.mixer_type,
+                params=user_pulse_params,
             )
 
             sampled_events.merge(interval_events)
@@ -1731,8 +1574,10 @@ class CodeGenerator(ICodeGenerator):
         signal_type: str,
         device_type: DeviceType,
         mixer_type: MixerType | None,
+        params: list[passes.PulseParams],
         multi_iq_signal=False,
     ):
+        params = params or {}
         sampled_signatures: dict[WaveformSignature, dict] = {}
         # To produce deterministic SeqC, we use a dict for signatures
         # as an easy insertion-ordered set.
@@ -1772,9 +1617,7 @@ class CodeGenerator(ICodeGenerator):
             assert signature.waveform is not None
             assert signature.waveform.pulses is not None
 
-            for pulse_part, (play_pulse_parameters, pulse_pulse_parameters) in zip(
-                signature.waveform.pulses, signature.pulse_parameters
-            ):
+            for pulse_part in signature.waveform.pulses:
                 _logger.debug(" Sampling pulse part %s", pulse_part)
                 pulse_def = pulse_defs[pulse_part.pulse]
 
@@ -1821,13 +1664,15 @@ class CodeGenerator(ICodeGenerator):
                 iq_phase = normalize_phase(iq_phase)
 
                 samples = pulse_def.samples
-
-                decoded_pulse_parameters = decode_pulse_parameters(
-                    {}
-                    if pulse_part.pulse_parameters is None
-                    else {k: v for k, v in pulse_part.pulse_parameters}
-                )
-
+                if pulse_part.id_pulse_params is not None:
+                    pulse_params = params[pulse_part.id_pulse_params]
+                    params_pulse_pulse = pulse_params.pulse_params
+                    params_pulse_play = pulse_params.play_params
+                    params_pulse_combined = pulse_params.combined()
+                else:
+                    params_pulse_pulse = None
+                    params_pulse_play = None
+                    params_pulse_combined = None
                 sampled_pulse = sample_pulse(
                     signal_type=sampling_signal_type,
                     sampling_rate=sampling_rate,
@@ -1838,7 +1683,7 @@ class CodeGenerator(ICodeGenerator):
                     phase=iq_phase,
                     samples=samples,
                     mixer_type=mixer_type,
-                    pulse_parameters=decoded_pulse_parameters,
+                    pulse_parameters=params_pulse_combined,
                     markers=[{k: v for k, v in m} for m in pulse_part.markers]
                     if pulse_part.markers
                     else None,
@@ -1961,12 +1806,8 @@ class CodeGenerator(ICodeGenerator):
                         iq_phase=iq_phase,
                         channel=pulse_part.channel,
                         needs_conjugate=needs_conjugate,
-                        play_pulse_parameters=None
-                        if play_pulse_parameters is None
-                        else {k: v for k, v in play_pulse_parameters},
-                        pulse_pulse_parameters=None
-                        if pulse_pulse_parameters is None
-                        else {k: v for k, v in pulse_pulse_parameters},
+                        play_pulse_parameters=params_pulse_play,
+                        pulse_pulse_parameters=params_pulse_pulse,
                         has_marker1=has_marker1,
                         has_marker2=has_marker2,
                         can_compress=pulse_def.can_compress,

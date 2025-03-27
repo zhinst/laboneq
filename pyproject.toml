@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "laboneq"
-version = "2.48.0"
+version = "2.49.0"
 description = "Zurich Instruments LabOne Q software framework for quantum computing control"
 license = { text = "Apache 2.0" }
 readme = "README.md"
@@ -108,7 +108,7 @@ tools = [
     "mypy >= 1.14.1",
     "pip >= 25.0.1", # used by PyCharm for scanning the venv
     "pre-commit >= 4.1.0",
-    "ruff ==0.9.10",
+    "ruff ==0.11.2",
 ]
 
 [tool.uv]

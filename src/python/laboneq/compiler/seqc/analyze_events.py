@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, List, cast
 
 from engineering_notation import EngNumber
 from sortedcontainers import SortedDict
@@ -441,8 +441,7 @@ def analyze_acquire_times(
         acquire_handle: str
         oscillator_frequency: float
         amplitude: float
-        play_pulse_parameters: Optional[Dict[str, Any]]
-        pulse_pulse_parameters: Optional[Dict[str, Any]]
+        id_pulse_params: int | None
         channels: list[int | list[int]]
         priority: int
 
@@ -463,8 +462,7 @@ def analyze_acquire_times(
                     event["acquire_handle"],
                     event.get("oscillator_frequency", 0.0),
                     event.get("amplitude", 1.0),
-                    event.get("play_pulse_parameters"),
-                    event.get("pulse_pulse_parameters"),
+                    event.get("id_pulse_params"),
                     event.get("channel") or channels,
                     priority=index,
                 )
@@ -520,8 +518,7 @@ def analyze_acquire_times(
                 "amplitude": interval_start.amplitude,
                 "feedback_register": feedback_register,
                 "channels": interval_start.channels,
-                "play_pulse_parameters": interval_start.play_pulse_parameters,
-                "pulse_pulse_parameters": interval_start.pulse_pulse_parameters,
+                "id_pulse_params": interval_start.id_pulse_params,
             },
         )
 

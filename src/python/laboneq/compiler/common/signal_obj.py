@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from laboneq.core.types.enums.mixer_type import MixerType
+from laboneq.data.compilation_job import SignalRange
 
 if TYPE_CHECKING:
     from laboneq.compiler.common.awg_info import AWGInfo
@@ -36,6 +37,7 @@ class SignalObj:
       corresponding measure pulse on the same AWG
     - automute: The signal output can be automatically muted when no waveforms
         are played.
+    - signal_range: The selected input our output range of the signal.
     """
 
     id: str
@@ -57,3 +59,4 @@ class SignalObj:
     hw_oscillator: str | None = None
     is_qc: bool | None = None
     automute: bool = False
+    signal_range: SignalRange | None = None

@@ -108,7 +108,7 @@ class NearTimeRunner(AsyncExecutorBase):
 
         try:
             await self.controller._execute_one_step(
-                acquisition_type, rt_section_uid=uid
+                acquisition_type=acquisition_type, rt_section_uid=uid
             )
             await self.controller._read_one_step_results(
                 nt_step=self.nt_step(), rt_section_uid=uid

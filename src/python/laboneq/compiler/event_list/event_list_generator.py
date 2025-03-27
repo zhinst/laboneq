@@ -2,64 +2,56 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from typing import Iterator
 
-from laboneq.compiler.common.compiler_settings import CompilerSettings
-from laboneq.compiler.event_list.event_type import EventList, EventType
-from laboneq.compiler.common.play_wave_type import PlayWaveType
-from laboneq.compiler.common.pulse_parameters import encode_pulse_parameters
+import itertools
+from typing import Any, Callable, Iterator
+
 from laboneq.compiler import ir as ir_mod
+from laboneq.compiler.common.compiler_settings import CompilerSettings
+from laboneq.compiler.common.play_wave_type import PlayWaveType
+from laboneq.compiler.event_list.event_type import EventList, EventType
 from laboneq.data.compilation_job import ParameterInfo
 
 
 class EventListGenerator:
     """Event list generator."""
 
+    def __init__(
+        self,
+        id_tracker: Iterator[int] | None = None,
+        expand_loops: bool = False,
+        settings: CompilerSettings | None = None,
+    ):
+        self.id_tracker = itertools.count() if id_tracker is None else id_tracker
+        self.expand_loops = expand_loops
+        self.settings = CompilerSettings() if settings is None else settings
+
     # This is consumed mainly by the PSV and attached to the
     # CompiledExperiment with compiler flag `OUTPUT_EXTRAS`
     def run(
-        self,
-        ir: ir_mod.IntervalIR,
-        start: int,
-        max_events: int,
-        id_tracker: Iterator[int],
-        expand_loops,
-        settings: CompilerSettings,
+        self, ir: ir_mod.IntervalIR, start: int, max_events: int | float = float("inf")
     ) -> EventList:
-        return self.visit(ir, start, max_events, id_tracker, expand_loops, settings)
+        return self.visit(ir, start, max_events)
 
     def visit(
-        self,
-        ir: ir_mod.IntervalIR,
-        start: int,
-        max_events: int,
-        id_tracker: Iterator[int],
-        expand_loops,
-        settings: CompilerSettings,
+        self, ir: ir_mod.IntervalIR, start: int, max_events: int | float = float("inf")
     ) -> EventList:
-        visitor = getattr(self, f"visit_{ir.__class__.__name__}", self.generic_visit)
-        return visitor(ir, start, max_events, id_tracker, expand_loops, settings)
+        visitor: Callable[..., EventList] = getattr(
+            self, f"visit_{ir.__class__.__name__}", self.generic_visit
+        )
+        return visitor(ir, start, max_events)
 
     def generic_visit(
-        self,
-        node: ir_mod.IntervalIR,
-        start,
-        max_events,
-        id_tracker,
-        expand_loops,
-        settings,
+        self, node: ir_mod.IntervalIR, start: int, max_events: int | float
     ):
-        for child in node.children:
-            self.visit(child, start, max_events, id_tracker, expand_loops, settings)
+        return [
+            event
+            for child in node.children
+            for event in self.visit(child, start, max_events)
+        ]
 
     def visit_SectionIR(
-        self,
-        section_ir: ir_mod.SectionIR,
-        start: int,
-        max_events: int,
-        id_tracker: Iterator[int],
-        expand_loops,
-        settings: CompilerSettings,
+        self, section_ir: ir_mod.SectionIR, start: int, max_events: int | float
     ) -> EventList:
         assert section_ir.length is not None
 
@@ -98,7 +90,7 @@ class EventListGenerator:
                     "section_name": section_ir.section,
                     "range": section_ir.prng_setup.range,
                     "seed": section_ir.prng_setup.seed,
-                    "id": next(id_tracker),
+                    "id": next(self.id_tracker),
                 }
             ]
             prng_drop_events = [
@@ -106,15 +98,13 @@ class EventListGenerator:
                     "event_type": EventType.DROP_PRNG_SETUP,
                     "time": start + section_ir.length,
                     "section_name": section_ir.section,
-                    "id": next(id_tracker),
+                    "id": next(self.id_tracker),
                 }
             ]
 
-        children_events = self.generate_children_events(
-            section_ir, start, max_events, settings, id_tracker, expand_loops
-        )
+        children_events = self.generate_children_events(section_ir, start, max_events)
 
-        start_id = next(id_tracker)
+        start_id = next(self.id_tracker)
         d = {"section_name": section_ir.section, "chain_element_id": start_id}
         return [
             {
@@ -131,7 +121,7 @@ class EventListGenerator:
             {
                 "event_type": EventType.SECTION_END,
                 "time": start + section_ir.length,
-                "id": next(id_tracker),
+                "id": next(self.id_tracker),
                 **d,
             },
         ]
@@ -140,10 +130,7 @@ class EventListGenerator:
         self,
         acquire_group_ir: ir_mod.AcquireGroupIR,
         start: int,
-        _max_events: int,
-        id_tracker: Iterator[int],
-        _expand_loops,
-        _settings: CompilerSettings,
+        max_events: int,
     ) -> EventList:
         assert acquire_group_ir.length is not None
         assert (
@@ -163,9 +150,10 @@ class EventListGenerator:
             == p.acquire_params.acquisition_type
             for p in acquire_group_ir.pulses
         )
-        start_id = next(id_tracker)
+        start_id = next(self.id_tracker)
         signal_id = acquire_group_ir.pulses[0].signal.uid
         assert all(p.signal.uid == signal_id for p in acquire_group_ir.pulses)
+        assert all(p.pulse is not None for p in acquire_group_ir.pulses)
         d = {
             "section_name": acquire_group_ir.section,
             "signal": signal_id,
@@ -179,17 +167,7 @@ class EventListGenerator:
             ],
             "acquire_handle": acquire_group_ir.pulses[0].acquire_params.handle,
         }
-
-        if acquire_group_ir.pulse_pulse_params:
-            d["pulse_pulse_parameters"] = [
-                encode_pulse_parameters(par) if par is not None else None
-                for par in acquire_group_ir.pulse_pulse_params
-            ]
-        if acquire_group_ir.play_pulse_params:
-            d["play_pulse_parameters"] = [
-                encode_pulse_parameters(par) if par is not None else None
-                for par in acquire_group_ir.play_pulse_params
-            ]
+        d["id_pulse_params"] = acquire_group_ir.pulse_pulse_params
         for pulse in acquire_group_ir.pulses:
             params_list = [
                 getattr(pulse, f).uid
@@ -207,7 +185,7 @@ class EventListGenerator:
             {
                 "event_type": EventType.ACQUIRE_END,
                 "time": start + acquire_group_ir.length,
-                "id": next(id_tracker),
+                "id": next(self.id_tracker),
                 **d,
             },
         ]
@@ -216,17 +194,14 @@ class EventListGenerator:
         self,
         ir: ir_mod.SetOscillatorFrequencyIR,
         start: int,
-        _max_events: int,
-        id_tracker: Iterator[int],
-        _expand_loops: bool,
-        _settings: CompilerSettings,
+        max_events: int,
     ) -> EventList:
         assert ir.length is not None
         retval = []
         for param, osc, value in zip(ir.params, ir.oscillators, ir.values):
             if not osc.is_hardware:
                 continue
-            start_id = next(id_tracker)
+            start_id = next(self.id_tracker)
             retval.extend(
                 [
                     {
@@ -242,12 +217,6 @@ class EventListGenerator:
                         "id": start_id,
                         "chain_element_id": start_id,
                     },
-                    {
-                        "event_type": EventType.SET_OSCILLATOR_FREQUENCY_END,
-                        "time": start + ir.length,
-                        "id": next(id_tracker),
-                        "chain_element_id": start_id,
-                    },
                 ]
             )
         return retval
@@ -256,10 +225,7 @@ class EventListGenerator:
         self,
         ir: ir_mod.InitialOscillatorFrequencyIR,
         start: int,
-        _max_events: int,
-        id_tracker: Iterator[int],
-        _expand_loops: bool,
-        _settings: CompilerSettings,
+        max_events: int,
     ) -> EventList:
         return []
 
@@ -268,14 +234,9 @@ class EventListGenerator:
         root_ir: ir_mod.RootScheduleIR,
         start: int,
         max_events: int,
-        id_tracker: Iterator[int],
-        expand_loops: bool,
-        settings: CompilerSettings,
     ) -> EventList:
         assert root_ir.length is not None
-        children_events = self.generate_children_events(
-            root_ir, start, max_events - 2, settings, id_tracker, expand_loops
-        )
+        children_events = self.generate_children_events(root_ir, start, max_events - 2)
 
         return [e for l in children_events for e in l]
 
@@ -284,9 +245,6 @@ class EventListGenerator:
         loop_ir: ir_mod.LoopIR,
         start: int,
         max_events: int,
-        id_tracker: Iterator[int],
-        expand_loops,
-        settings: CompilerSettings,
     ) -> EventList:
         assert loop_ir.children_start is not None
         assert loop_ir.length is not None
@@ -299,9 +257,6 @@ class EventListGenerator:
                 loop_ir,
                 start,
                 max_events,
-                settings,
-                id_tracker,
-                expand_loops,
                 subsection_events=False,
             )
         else:
@@ -310,15 +265,12 @@ class EventListGenerator:
                     loop_ir.children[0],
                     start + loop_ir.children_start[0],
                     max_events,
-                    id_tracker,
-                    expand_loops,
-                    settings,
                 )
             ]
             iteration_event = children_events[0][-1]
             assert iteration_event["event_type"] == EventType.LOOP_ITERATION_END
             iteration_event["compressed"] = True
-            if expand_loops:
+            if self.expand_loops:
                 prototype = loop_ir.children[0]
                 assert prototype.length is not None
                 assert isinstance(prototype, ir_mod.LoopIterationIR)
@@ -334,9 +286,6 @@ class EventListGenerator:
                             shadow_iteration,
                             iteration_start,
                             max_events,
-                            id_tracker,
-                            expand_loops,
-                            settings,
                         )
                     )
 
@@ -347,7 +296,7 @@ class EventListGenerator:
                     #  incrementing after the fact
                     e["nesting_level"] += 1
 
-        start_id = next(id_tracker)
+        start_id = next(self.id_tracker)
         d = {
             "section_name": loop_ir.section,
             "nesting_level": 0,
@@ -355,14 +304,8 @@ class EventListGenerator:
         }
         return [
             {"event_type": EventType.SECTION_START, "time": start, "id": start_id, **d},
-            {
-                "event_type": EventType.LOOP_START,
-                "time": start,
-                "iterations": loop_ir.iterations,
-                "compressed": loop_ir.compressed,
-                **d,
-            },
             *[e for l in children_events for e in l],
+            # to do: Is this really needed by the pulse sheet viewer?
             {"event_type": EventType.LOOP_END, "time": start + loop_ir.length, **d},
             {"event_type": EventType.SECTION_END, "time": start + loop_ir.length, **d},
         ]
@@ -372,14 +315,9 @@ class EventListGenerator:
         match_ir: ir_mod.MatchIR,
         start: int,
         max_events: int,
-        id_tracker: Iterator[int],
-        expand_loops,
-        settings: CompilerSettings,
     ) -> EventList:
         assert match_ir.length is not None
-        events = self.visit_SectionIR(
-            match_ir, start, max_events, id_tracker, expand_loops, settings
-        )
+        events = self.visit_SectionIR(match_ir, start, max_events)
         if len(events) == 0:
             return []
         section_start_event = events[0]
@@ -399,15 +337,10 @@ class EventListGenerator:
         case_ir: ir_mod.CaseIR,
         start: int,
         max_events: int,
-        id_tracker: Iterator[int],
-        expand_loops,
-        settings: CompilerSettings,
     ) -> EventList:
         assert case_ir.length is not None
 
-        events = self.visit_SectionIR(
-            case_ir, start, max_events, id_tracker, expand_loops, settings
-        )
+        events = self.visit_SectionIR(case_ir, start, max_events)
         for e in events:
             e["state"] = case_ir.state
         return events
@@ -417,9 +350,6 @@ class EventListGenerator:
         loop_iteration_ir: ir_mod.LoopIterationIR,
         start: int,
         max_events: int,
-        id_tracker: Iterator[int],
-        expand_loops,
-        settings: CompilerSettings,
     ) -> EventList:
         assert loop_iteration_ir.length is not None
         common = {
@@ -438,7 +368,7 @@ class EventListGenerator:
         max_events -= 3
 
         children_events = self.generate_children_events(
-            loop_iteration_ir, start, max_events, settings, id_tracker, expand_loops
+            loop_iteration_ir, start, max_events
         )
 
         prng_sample_events = drop_prng_sample_events = []
@@ -494,23 +424,13 @@ class EventListGenerator:
         preamble: ir_mod.LoopIterationPreambleIR,
         start: int,
         max_events: int,
-        id_tracker: Iterator[int],
-        expand_loops,
-        settings: CompilerSettings,
     ):
         # The preamble is not represented in the event list. We transparently pass through
         # all child events.
 
         events = []
         for child, child_start in zip(preamble.children, preamble.children_start):
-            child_events = self.visit(
-                child,
-                start + child_start,
-                max_events,
-                id_tracker,
-                expand_loops,
-                settings,
-            )
+            child_events = self.visit(child, start + child_start, max_events)
             max_events -= len(child_events)
             if max_events <= 0:
                 break
@@ -522,10 +442,7 @@ class EventListGenerator:
         self,
         pulse_ir: ir_mod.PulseIR,
         start: int,
-        _max_events: int,
-        id_tracker: Iterator[int],
-        _expand_loops,
-        _settings: CompilerSettings,
+        max_events: int,
     ) -> EventList:
         assert pulse_ir.length is not None
         params_list = [
@@ -538,9 +455,9 @@ class EventListGenerator:
         else:
             play_wave_id = "delay"
 
-        start_id = next(id_tracker)
-        d_start = {"id": start_id}
-        d_end = {"id": next(id_tracker)}
+        start_id = next(self.id_tracker)
+        d_start: dict[str, Any] = {"id": start_id}
+        d_end: dict[str, Any] = {"id": next(self.id_tracker)}
         d_common = {
             "section_name": pulse_ir.section,
             "signal": pulse_ir.pulse.signal.uid,
@@ -563,16 +480,7 @@ class EventListGenerator:
 
         if pulse_ir.markers is not None and len(pulse_ir.markers) > 0:
             d_start["markers"] = [vars(m) for m in pulse_ir.markers]
-
-        if pulse_ir.pulse_pulse_params:
-            d_start["pulse_pulse_parameters"] = encode_pulse_parameters(
-                pulse_ir.pulse_pulse_params
-            )
-        if pulse_ir.play_pulse_params:
-            d_start["play_pulse_parameters"] = encode_pulse_parameters(
-                pulse_ir.play_pulse_params
-            )
-
+        d_start["id_pulse_params"] = pulse_ir.pulse_pulse_params
         if pulse_ir.increment_oscillator_phase is not None:
             d_start["increment_oscillator_phase"] = pulse_ir.increment_oscillator_phase
         if pulse_ir.set_oscillator_phase is not None:
@@ -598,6 +506,7 @@ class EventListGenerator:
             ]
 
         if pulse_ir.is_acquire:
+            assert pulse_ir.integration_length is not None
             if pulse_ir.pulse.acquire_params is not None:
                 d_start["acquisition_type"] = [
                     pulse_ir.pulse.acquire_params.acquisition_type
@@ -641,9 +550,6 @@ class EventListGenerator:
         ir: ir_mod.PrecompClearIR,
         start: int,
         max_events: int,
-        id_tracker: Iterator[int],
-        expand_loops,
-        settings: CompilerSettings,
     ) -> EventList:
         assert ir.length is not None
         return [
@@ -651,7 +557,7 @@ class EventListGenerator:
                 "event_type": EventType.RESET_PRECOMPENSATION_FILTERS,
                 "time": start,
                 "signal_id": next(iter(ir.signals)),
-                "id": next(id_tracker),
+                "id": next(self.id_tracker),
             }
         ]
 
@@ -660,9 +566,6 @@ class EventListGenerator:
         ir: ir_mod.PhaseResetIR,
         start: int,
         max_events: int,
-        id_tracker: Iterator[int],
-        expand_loops,
-        settings: CompilerSettings,
     ) -> EventList:
         assert ir.length is not None
         events = [
@@ -670,7 +573,7 @@ class EventListGenerator:
                 "event_type": EventType.RESET_HW_OSCILLATOR_PHASE,
                 "time": start,
                 "section_name": ir.section,
-                "id": next(id_tracker),
+                "id": next(self.id_tracker),
                 "duration": duration,
                 "device_id": device,
             }
@@ -683,14 +586,11 @@ class EventListGenerator:
         ir: ir_mod.PPCStepIR,
         start: int,
         max_events: int,
-        id_tracker: Iterator[int],
-        _expand_loops,
-        _settings: CompilerSettings,
     ) -> EventList:
         if max_events < 2:
             return []
 
-        start_id = next(id_tracker)
+        start_id = next(self.id_tracker)
         start_event = {
             "event_type": EventType.PPC_SWEEP_STEP_START,
             "time": start,
@@ -724,10 +624,7 @@ class EventListGenerator:
         self,
         ir: ir_mod.IntervalIR,
         start: int,
-        max_events: int,
-        settings: CompilerSettings,
-        id_tracker: Iterator[int],
-        expand_loops: bool,
+        max_events: int | float,
         subsection_events=True,
     ) -> list[EventList]:
         assert ir.children_start is not None
@@ -739,23 +636,14 @@ class EventListGenerator:
             # take into account that we'll wrap with subsection events
             max_events -= 2 * len(ir.children)
 
-        event_list_nested = []
+        event_list_nested: list[EventList] = []
         assert ir.children_start is not None
         assert ir.length is not None
         for child_start, child in ir.iter_children():
             if max_events <= 0:
                 break
 
-            event_list_nested.append(
-                self.visit(
-                    child,
-                    start + child_start,
-                    max_events,
-                    id_tracker,
-                    expand_loops,
-                    settings,
-                )
-            )
+            event_list_nested.append(self.visit(child, start + child_start, max_events))
             max_events -= len(event_list_nested[-1])
 
         # if event_list_nested was cut because max_events was exceeded, pad with empty
@@ -771,7 +659,7 @@ class EventListGenerator:
             for i, child in enumerate(ir.children):
                 if isinstance(child, ir_mod.SectionIR):
                     assert child.length is not None
-                    start_id = next(id_tracker)
+                    start_id = next(self.id_tracker)
                     d = {"section_name": ir.section, "chain_element_id": start_id}
                     event_list_nested[i] = [
                         {
@@ -786,7 +674,7 @@ class EventListGenerator:
                             "event_type": EventType.SUBSECTION_END,
                             "time": ir.children_start[i] + child.length + start,
                             "subsection_name": child.section,
-                            "id": next(id_tracker),
+                            "id": next(self.id_tracker),
                             **d,
                         },
                     ]

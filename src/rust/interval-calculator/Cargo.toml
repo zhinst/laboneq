@@ -1,0 +1,11 @@
+[package]
+name = "interval-calculator"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+publish.workspace = true
+license = "MIT"
+
+[dependencies]
+thiserror = "2.0.0"
+anyhow = "1.0"

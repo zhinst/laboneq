@@ -130,6 +130,15 @@ class SeqCTracker:
             )
             self.deferred_phase_changes.clear()
 
+    def discard_deferred_phase_changes(self):
+        """Sometimes, it is useful to discard pending phase changes without ever
+        applying them.
+
+        For example, when we've accumulated deferred phase increments, but then
+        encounter a phase reset, the phase changes are nullified anyway.
+        """
+        self.deferred_phase_changes.clear()
+
     def has_deferred_phase_changes(self):
         return self.deferred_phase_changes.num_statements() > 0
 

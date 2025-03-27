@@ -22,7 +22,6 @@ from typing import (
     Iterator,
 )
 
-
 from laboneq._utils import UIDReference, cached_method
 from laboneq.compiler.common.compiler_settings import CompilerSettings, TINYSAMPLE
 from laboneq.compiler.common.device_type import DeviceType
@@ -34,7 +33,6 @@ from laboneq.compiler.ir import (
     IRTree,
     DeviceIR,
     SignalIR,
-    PulseDefIR,
     LoopIR,
     LoopIterationIR,
     LoopIterationPreambleIR,
@@ -262,9 +260,7 @@ class Scheduler:
             devices=[DeviceIR.from_device_info(dev) for dev in exp_info.devices],
             signals=[SignalIR.from_signal_info(sig) for sig in exp_info.signals],
             root=root_ir,
-            pulse_defs=[
-                PulseDefIR.from_pulse_def(pulse) for pulse in exp_info.pulse_defs
-            ],
+            pulse_defs=exp_info.pulse_defs,
         )
 
     def _initial_oscillator_frequency(
@@ -926,7 +922,7 @@ class Scheduler:
 
         signal_grid, sequencer_grid = self.grid(*signals)
 
-        signal_grids = {self.grid(s)[0] for s in signals}
+        signal_grids = {self.signal_grid(s) for s in signals}
         if section_info.on_system_grid:
             grid = lcm(grid, self._system_grid)
         if len(signal_grids) > 1:
@@ -960,7 +956,7 @@ class Scheduler:
         current_parameters: ParameterStore[str, float],
     ) -> PulseSchedule:
         # todo: add memoization
-        grid, _ = self.grid(pulse.signal.uid)
+        grid = self.signal_grid(pulse.signal.uid)
 
         def resolve_value_or_parameter(name, default):
             if (value := getattr(pulse, name)) is None:
@@ -1029,12 +1025,12 @@ class Scheduler:
                     params[param] = resolved
 
         pulse_pulse_params = None
-        if pulse.pulse_pulse_parameters is not None:
+        if pulse.pulse_pulse_parameters:
             pulse_pulse_params = pulse.pulse_pulse_parameters.copy()
             resolve_pulse_params(pulse_pulse_params)
 
         play_pulse_params = None
-        if pulse.play_pulse_parameters is not None:
+        if pulse.play_pulse_parameters:
             play_pulse_params = pulse.play_pulse_parameters.copy()
             resolve_pulse_params(play_pulse_params)
 
@@ -1104,7 +1100,7 @@ class Scheduler:
         current_parameters: ParameterStore[str, float],
     ) -> AcquireGroupSchedule:
         # Take the first one, they all run on the same device
-        grid, _ = self.grid(pulses[0].signal.uid)
+        grid = self.signal_grid(pulses[0].signal.uid)
         offsets_int = []
         lengths_int = []
         amplitudes = []
@@ -1341,7 +1337,7 @@ class Scheduler:
             if len(pulses) == 0:
                 # the section occupies the signal via a reserve, so add a placeholder
                 # to include this signal in the grid calculation
-                signal_grid, _ = self.grid(signal_id)
+                signal_grid = self.signal_grid(signal_id)
                 pulse_schedules.append(ReserveSchedule.create(signal_id, signal_grid))
                 continue
 
@@ -1369,6 +1365,16 @@ class Scheduler:
                 )
 
         return subsection_schedules + pulse_schedules
+
+    @cached_method(None)
+    def signal_grid(self, signal_id: str) -> int:
+        signal = self._schedule_data.experiment_dao.signal_info(signal_id)
+        device = signal.device
+        assert device is not None
+
+        sample_rate = self._sampling_rate_tracker.sampling_rate_for_device(device.uid)
+        signal_grid = round(1 / (TINYSAMPLE * sample_rate))
+        return signal_grid
 
     def grid(self, *signal_ids: Iterable[str]) -> Tuple[int, int]:
         """Compute signal and sequencer grid for the given signals. If multiple signals
