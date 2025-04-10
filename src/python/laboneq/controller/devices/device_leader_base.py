@@ -151,11 +151,12 @@ class DeviceLeaderBase(DeviceBase):
         if with_pipeliner:
             # TODO(2K): Use timeout from connect
             rw = ResponseWaiterAsync(
-                api=self._api,
-                nodes={
+                api=self._api, dev_repr=self.dev_repr, timeout_s=1.0
+            )
+            rw.add_nodes(
+                {
                     f"/{self.serial}/execution/synchronization/enable": 1  # sync enabled
-                },
-                timeout_s=1.0,
+                }
             )
             await rw.prepare()
             nc = NodeCollector(base=f"/{self.serial}/")

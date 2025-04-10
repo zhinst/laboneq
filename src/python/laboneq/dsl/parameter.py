@@ -3,8 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-
+import attrs
 import numpy as np
 from numpy.lib.mixins import NDArrayOperatorsMixin
 from numpy.typing import ArrayLike
@@ -32,7 +31,7 @@ def _compare_nested(a, b):
 
 
 @classformatter
-@dataclass(init=True, repr=True, order=True)
+@attrs.define
 class Parameter:
     """Parent class for sweep parameters in a LabOne Q Experiment.
 
@@ -42,7 +41,7 @@ class Parameter:
             one will be automatically generated.
     """
 
-    uid: str = field(default_factory=parameter_id_generator)
+    uid: str = attrs.field(factory=parameter_id_generator)
 
 
 class _ParameterArithmeticMixin(NDArrayOperatorsMixin):
@@ -89,7 +88,7 @@ class _ParameterArithmeticMixin(NDArrayOperatorsMixin):
 
 
 @classformatter
-@dataclass(init=True, repr=True, order=True)
+@attrs.define(eq=False)
 class SweepParameter(_ParameterArithmeticMixin, Parameter):
     """An arbitrary sweep parameter.
 
@@ -146,11 +145,13 @@ class SweepParameter(_ParameterArithmeticMixin, Parameter):
         Support for applying numpy ufuncs (e.g. ``np.sin``) was added.
     """
 
-    values: ArrayLike | None = field(default=None)
-    axis_name: str | None = field(default=None)
-    driven_by: list[SweepParameter | LinearSweepParameter] | None = field(default=None)
+    values: ArrayLike | None = attrs.field(default=None)
+    axis_name: str | None = attrs.field(default=None)
+    driven_by: list[SweepParameter | LinearSweepParameter] | None = attrs.field(
+        default=None
+    )
 
-    def __post_init__(self):
+    def __attrs_post_init__(self):
         if self.driven_by:
             self_shape = np.shape(self.values)
             other_shapes = [np.shape(other.values) for other in self.driven_by]
@@ -181,7 +182,7 @@ class SweepParameter(_ParameterArithmeticMixin, Parameter):
 
 
 @classformatter
-@dataclass(init=True, repr=True, order=True)
+@attrs.define(eq=False)
 class LinearSweepParameter(_ParameterArithmeticMixin, Parameter):
     """A linear sweep parameter.
 
@@ -216,18 +217,18 @@ class LinearSweepParameter(_ParameterArithmeticMixin, Parameter):
     """
 
     # The starting value of the parameter sweep.
-    start: float | None = field(default=None)
+    start: float | None = attrs.field(default=None)
 
     # The final value of the parameter sweep.
-    stop: float | None = field(default=None)
+    stop: float | None = attrs.field(default=None)
 
     # The number of sweep steps in the parameter sweep.
-    count: int | None = field(default=None)
+    count: int | None = attrs.field(default=None)
 
     # The name of the sweep axis for this parameter used in the results.
     #
     # If this argument is not defined, the uid of the object will be used instead.
-    axis_name: str | None = field(default=None)
+    axis_name: str | None = attrs.field(default=None)
 
     def __eq__(self, other):
         if self is other:
@@ -240,7 +241,7 @@ class LinearSweepParameter(_ParameterArithmeticMixin, Parameter):
             and _compare_nested(self.values, other.values)
         )
 
-    def __post_init__(self):
+    def __attrs_post_init__(self):
         if self.count is None or self.start is None or self.stop is None:
             raise RuntimeError(
                 f"LinearSweepParameter {self.uid}: one of start, stop, count is None"

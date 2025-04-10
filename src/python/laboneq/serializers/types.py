@@ -38,9 +38,21 @@ class SerializationOptions:
 
 @dataclass
 class DeserializationOptions:
-    """Options for deserializing (loading) objects."""
+    """Options for deserializing (loading) objects.
+
+    Attributes:
+        serializer_registry:
+            The registry from which to look up the serializer.
+        force:
+            Deserializers may perform sanity checks during deserialization and raise errors
+            if they are not met. Setting `force` to true requests that the deserializer convert
+            these errors to warnings instead. Notably this will force the CompiledExperiment
+            deserializer to attempt to load compiled experiments saved with earlier or later
+            versions of LabOne Q.
+    """
 
     serializer_registry: SerializerRegistry | None = None
+    force: bool = False
 
 
 T = TypeVar("T")

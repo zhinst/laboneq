@@ -6,8 +6,11 @@
 from __future__ import annotations
 
 from collections.abc import ItemsView, Iterator, KeysView, ValuesView
+import warnings
 import attrs
 from typing import Any
+
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration.signal_calibration import SignalCalibration
 
 
@@ -26,6 +29,7 @@ def _calibration_items_converter(
     return {_sanitize_key(k): v for k, v in value.items()}
 
 
+@classformatter
 @attrs.define(slots=False)
 class Calibration:
     """Calibration object containing a dictionary of
@@ -95,9 +99,18 @@ class Calibration:
         The file is in JSON format, as generated via
         [.save()][laboneq.dsl.calibration.Calibration.save].
 
+        !!! version-changed "Deprecated in version 2.50.0"
+            Use `laboneq.simple.load` instead.
+
         Args:
             filename: The filename to load data from.
         """
+        warnings.warn(
+            "The `Calibration.load` method is deprecated and will be removed in future releases. "
+            "Please use the `load` function from the `laboneq.simple` module instead. ",
+            FutureWarning,
+            stacklevel=2,
+        )
         # TODO ErC: Error handling
         from ..serialization import Serializer
 
@@ -108,9 +121,18 @@ class Calibration:
 
         The file is written in JSON format.
 
+        !!! version-changed "Deprecated in version 2.50.0"
+            Use `laboneq.simple.save` instead.
+
         Args:
             filename: The filename to save data to.
         """
+        warnings.warn(
+            "The `Calibration.save` method is deprecated and will be removed in future releases. "
+            "Please use the `save` function from the `laboneq.simple` module instead. ",
+            FutureWarning,
+            stacklevel=2,
+        )
         from ..serialization import Serializer
 
         # TODO ErC: Error handling

@@ -17,6 +17,8 @@ from ._models._calibration import (
     make_converter,
 )
 
+_converter = make_converter()
+
 
 @serializer(types=Calibration, public=True)
 class CalibrationSerializer(VersionedClassSerializer[Calibration]):
@@ -27,11 +29,10 @@ class CalibrationSerializer(VersionedClassSerializer[Calibration]):
     def to_dict(
         cls, obj: Calibration, options: SerializationOptions | None = None
     ) -> JsonSerializableType:
-        converter = make_converter()
         return {
             "__serializer__": cls.serializer_id(),
             "__version__": cls.version(),
-            "__data__": converter.unstructure(obj, CalibrationModel),
+            "__data__": _converter.unstructure(obj, CalibrationModel),
         }
 
     @classmethod
@@ -40,8 +41,7 @@ class CalibrationSerializer(VersionedClassSerializer[Calibration]):
         serialized_data: JsonSerializableType,
         options: DeserializationOptions | None = None,
     ) -> Calibration:
-        converter = make_converter()
-        return converter.structure(serialized_data["__data__"], CalibrationModel)
+        return _converter.structure(serialized_data["__data__"], CalibrationModel)
 
     @classmethod
     def from_dict_v1(

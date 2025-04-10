@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
+import attrs
 import warnings
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from laboneq.core.exceptions import LabOneQException
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 
 @classformatter
-@dataclass(init=False, repr=True, order=True)
+@attrs.define(init=False)
 class Results:
     """Results of an LabOne Q experiment.
 
@@ -47,13 +47,13 @@ class Results:
         Use `neartime_callback_results` instead.
     """
 
-    experiment: Experiment = field(default=None)
-    device_setup: DeviceSetup = field(default=None)
-    compiled_experiment: CompiledExperiment = field(default=None)
-    acquired_results: AcquiredResults = field(default=AcquiredResults)
-    neartime_callback_results: dict[str, list[Any]] = field(default=None)
-    execution_errors: list[tuple[list[int], str, str]] = field(default=None)
-    pipeline_jobs_timestamps: dict[str, list[float]] = field(default_factory=dict)
+    experiment: Experiment = attrs.field(default=None)
+    device_setup: DeviceSetup = attrs.field(default=None)
+    compiled_experiment: CompiledExperiment = attrs.field(default=None)
+    acquired_results: AcquiredResults = attrs.field(default=AcquiredResults)
+    neartime_callback_results: dict[str, list[Any]] = attrs.field(default=None)
+    execution_errors: list[tuple[list[int], str, str]] = attrs.field(default=None)
+    pipeline_jobs_timestamps: dict[str, list[float]] = attrs.field(factory=dict)
 
     def __init__(
         self,
@@ -94,17 +94,6 @@ class Results:
             stacklevel=2,
         )
         return self.neartime_callback_results
-
-    def __eq__(self, other):
-        if self is other:
-            return True
-        return (
-            self.experiment == other.experiment
-            and self.device_setup == other.device_setup
-            and self.compiled_experiment == other.compiled_experiment
-            and self.acquired_results == other.acquired_results
-            and self.neartime_callback_results == other.neartime_callback_results
-        )
 
     def _check_handle(self, handle: str) -> None:
         if handle not in self.acquired_results:
@@ -236,8 +225,36 @@ class Results:
         return self.experiment.get_signal_map()
 
     @staticmethod
-    def load(filename) -> Results:
+    def load(filename: str) -> Results:
+        """Load the result from a specified file.
+
+        !!! version-changed "Deprecated in version 2.50.0"
+            Use `laboneq.simple.load` instead.
+
+        Args:
+            filename: The file to load the result from.
+        """
+        warnings.warn(
+            "The `Results.load` method is deprecated and will be removed in future releases. "
+            "Please use the `load` function from the `laboneq.simple` module instead. ",
+            FutureWarning,
+            stacklevel=2,
+        )
         return Serializer.from_json_file(filename, Results)
 
-    def save(self, filename):
+    def save(self, filename: str) -> None:
+        """Save the result to a specified file.
+
+        !!! version-changed "Deprecated in version 2.50.0"
+            Use `laboneq.simple.save` instead.
+
+        Args:
+            filename (str): The name of the file to save the result to.
+        """
+        warnings.warn(
+            "The `Results.save` method is deprecated and will be removed in future releases. "
+            "Please use the `save` function from the `laboneq.simple` module instead. ",
+            FutureWarning,
+            stacklevel=2,
+        )
         Serializer.to_json_file(self, filename)

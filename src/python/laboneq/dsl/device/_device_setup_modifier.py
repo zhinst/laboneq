@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 import laboneq.core.path as qct_path
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums.io_direction import IODirection
+from laboneq.dsl.device._calibration_mediator import CalibrationMediator
 from laboneq.dsl.device.connection import (
     Connection,
     InternalConnection,
@@ -642,70 +643,79 @@ def add_connection(
         QHUB: _QHUBGenerator,
         PRETTYPRINTERDEVICE: _PRETTYPRINTERDEVICEGenerator,
     }
-    if dev := setup.instrument_by_uid(instrument):
-        handler = HANDLERS[dev.__class__]
-        if isinstance(dev, PRETTYPRINTERDEVICE):
-            try:
-                [port] = connection.ports
-            except ValueError as e:
-                raise DeviceSetupInternalException(
-                    "'ports' field must be a list with a single item"
-                ) from e
-            dev.append_port(port, connection.type)
-        else:
-            _raise_for_invalid_ports(dev, connection.ports)
-
-        # Device connections
-        new_conns = handler.make_connections(connection)
-        for conn in dev.connections:
-            for new_conn in new_conns:
-                if isinstance(connection, SignalConnection):
-                    _InstrumentGenerator.raise_for_invalid_connection(conn, new_conn)
-                    _InstrumentGenerator.raise_for_existing_connection(conn, new_conn)
-                if isinstance(connection, InternalConnection):
-                    _InstrumentGenerator.raise_for_invalid_connection(conn, new_conn)
-
-        if isinstance(connection, SignalConnection):
-            # Physical signals
-            pc = handler.make_physical_channel(
-                instrument, connection.ports, connection.type
-            )
-            if pc:
-                group, name = pc.uid.split(qct_path.Separator)
-                if group in setup.physical_channel_groups:
-                    if name in setup.physical_channel_groups[group].channels:
-                        pc = setup.physical_channel_groups[group].channels[name]
-                    else:
-                        setup.physical_channel_groups[group].channels[name] = pc
-                else:
-                    pcg = PhysicalChannelGroup(uid=group)
-                    pcg.channels[name] = pc
-                    setup.physical_channel_groups[group] = pcg
-
-                # Logical signals
-                assert isinstance(pc, PhysicalChannel), (
-                    "LogicalSignal must have a physical channel"
-                )
-                ls = handler.make_logical_signal(connection, pc)
-                if ls:
-                    group, name = ls.uid.split(qct_path.Separator)
-                    if group in setup.logical_signal_groups:
-                        if name in setup.logical_signal_groups[group].logical_signals:
-                            raise DeviceSetupInternalException(
-                                f"Signal {connection.uid} already exists."
-                            )
-                        else:
-                            setup.logical_signal_groups[group].logical_signals[name] = (
-                                ls
-                            )
-                    else:
-                        lsg = LogicalSignalGroup(uid=group)
-                        lsg.logical_signals[name] = ls
-                        setup.logical_signal_groups[group] = lsg
-
-        dev.connections.extend(new_conns)
-    else:
+    dev = setup.instrument_by_uid(instrument)
+    if dev is None:
         raise DeviceSetupInternalException(f"Instrument {instrument} not found.")
+
+    handler = HANDLERS[dev.__class__]
+    if isinstance(dev, PRETTYPRINTERDEVICE):
+        try:
+            [port] = connection.ports
+        except ValueError as e:
+            raise DeviceSetupInternalException(
+                "'ports' field must be a list with a single item"
+            ) from e
+        dev.append_port(port, connection.type)
+    else:
+        _raise_for_invalid_ports(dev, connection.ports)
+
+    # Device connections
+    new_conns = handler.make_connections(connection)
+    for conn in dev.connections:
+        for new_conn in new_conns:
+            if isinstance(connection, SignalConnection):
+                _InstrumentGenerator.raise_for_invalid_connection(conn, new_conn)
+                _InstrumentGenerator.raise_for_existing_connection(conn, new_conn)
+            if isinstance(connection, InternalConnection):
+                _InstrumentGenerator.raise_for_invalid_connection(conn, new_conn)
+
+    if isinstance(connection, SignalConnection):
+        # Physical signals
+        pc = handler.make_physical_channel(
+            instrument, connection.ports, connection.type
+        )
+        if pc:
+            group, name = pc.uid.split(qct_path.Separator)
+            if group in setup.physical_channel_groups:
+                if name in setup.physical_channel_groups[group].channels:
+                    pc = setup.physical_channel_groups[group].channels[name]
+                else:
+                    setup.physical_channel_groups[group].channels[name] = pc
+                pcg = setup.physical_channel_groups[group]
+            else:
+                pcg = PhysicalChannelGroup(uid=group)
+                pcg.channels[name] = pc
+                setup.physical_channel_groups[group] = pcg
+
+            # Mediator responsible for making sure calibration changes propagate
+            # between the physical channel and the logical signals its mapped to.
+            if pc.uid in setup._calibration_mediators:
+                mediator = setup._calibration_mediators[pc.uid]
+            else:
+                mediator = CalibrationMediator(pc)
+                setup._calibration_mediators[pc.uid] = mediator
+
+            # Logical signals
+            assert isinstance(pc, PhysicalChannel), (
+                "LogicalSignal must have a physical channel"
+            )
+            ls = handler.make_logical_signal(connection, pc)
+            if ls:
+                mediator.add_logical_signal(ls)
+                group, name = ls.uid.split(qct_path.Separator)
+                if group in setup.logical_signal_groups:
+                    if name in setup.logical_signal_groups[group].logical_signals:
+                        raise DeviceSetupInternalException(
+                            f"Signal {connection.uid} already exists."
+                        )
+                    else:
+                        setup.logical_signal_groups[group].logical_signals[name] = ls
+                else:
+                    lsg = LogicalSignalGroup(uid=group)
+                    lsg.logical_signals[name] = ls
+                    setup.logical_signal_groups[group] = lsg
+
+    dev.connections.extend(new_conns)
 
 
 def add_dataserver(setup: DeviceSetup, dataserver):

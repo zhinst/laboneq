@@ -4,13 +4,39 @@
 from __future__ import annotations
 
 import itertools
-from typing import Any, Callable, Iterator
+from collections import defaultdict
+from typing import Any, Callable, Iterator, NamedTuple
+
+from typing_extensions import TypeAlias
 
 from laboneq.compiler import ir as ir_mod
 from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.play_wave_type import PlayWaveType
 from laboneq.compiler.event_list.event_type import EventList, EventType
 from laboneq.data.compilation_job import ParameterInfo
+
+
+class PositionInterval(NamedTuple):
+    start: int
+    end: int
+
+
+IrPositionMap: TypeAlias = dict[int, PositionInterval]
+
+
+class IrPositionMapper:
+    def __init__(self):
+        self.id_tracker = itertools.count()
+        self.ir_position_map: IrPositionMap = {}
+
+    def create_ir_position_map(self, ir: ir_mod.IntervalIR | None) -> IrPositionMap:
+        if ir is None:
+            return self.ir_position_map
+        start_id = next(self.id_tracker)
+        for node in ir.children:
+            self.create_ir_position_map(node)
+        self.ir_position_map[id(ir)] = PositionInterval(start_id, next(self.id_tracker))
+        return self.ir_position_map
 
 
 class EventListGenerator:
@@ -21,8 +47,14 @@ class EventListGenerator:
         id_tracker: Iterator[int] | None = None,
         expand_loops: bool = False,
         settings: CompilerSettings | None = None,
+        ir_id_map: IrPositionMap | None = None,
     ):
         self.id_tracker = itertools.count() if id_tracker is None else id_tracker
+        self.ir_id_map = (
+            defaultdict(lambda: PositionInterval(0, 0))
+            if ir_id_map is None
+            else ir_id_map
+        )
         self.expand_loops = expand_loops
         self.settings = CompilerSettings() if settings is None else settings
 
@@ -69,6 +101,7 @@ class EventListGenerator:
                 "section_name": section_ir.section,
                 "bit": bit,
                 "signal": trigger_signal,
+                "position": self.ir_id_map[id(section_ir)].start,
             }
 
             trigger_set_events.append({**event, "change": "SET", "time": start})
@@ -91,6 +124,7 @@ class EventListGenerator:
                     "range": section_ir.prng_setup.range,
                     "seed": section_ir.prng_setup.seed,
                     "id": next(self.id_tracker),
+                    "position": self.ir_id_map[id(section_ir)].start,
                 }
             ]
             prng_drop_events = [
@@ -98,6 +132,7 @@ class EventListGenerator:
                     "event_type": EventType.DROP_PRNG_SETUP,
                     "time": start + section_ir.length,
                     "section_name": section_ir.section,
+                    "position": self.ir_id_map[id(section_ir)].start,
                     "id": next(self.id_tracker),
                 }
             ]
@@ -111,6 +146,7 @@ class EventListGenerator:
                 "event_type": EventType.SECTION_START,
                 "time": start,
                 "id": start_id,
+                "position": self.ir_id_map[id(section_ir)].start,
                 **d,
             },
             *trigger_set_events,
@@ -180,6 +216,7 @@ class EventListGenerator:
                 "event_type": EventType.ACQUIRE_START,
                 "time": start + acquire_group_ir.offset,
                 "id": start_id,
+                "position": self.ir_id_map[id(acquire_group_ir)].start,
                 **d,
             },
             {
@@ -216,6 +253,7 @@ class EventListGenerator:
                         "oscillator_id": osc.id,
                         "id": start_id,
                         "chain_element_id": start_id,
+                        "position": self.ir_id_map[id(ir)].start,
                     },
                 ]
             )
@@ -271,7 +309,7 @@ class EventListGenerator:
             assert iteration_event["event_type"] == EventType.LOOP_ITERATION_END
             iteration_event["compressed"] = True
             if self.expand_loops:
-                prototype = loop_ir.children[0]
+                [prototype] = loop_ir.children
                 assert prototype.length is not None
                 assert isinstance(prototype, ir_mod.LoopIterationIR)
                 iteration_start = start
@@ -371,6 +409,10 @@ class EventListGenerator:
             loop_iteration_ir, start, max_events
         )
 
+        prio_start, prio_end = self.ir_id_map.get(
+            id(loop_iteration_ir), PositionInterval(0, 0)
+        )
+
         prng_sample_events = drop_prng_sample_events = []
         if loop_iteration_ir.prng_sample is not None:
             prng_sample_events = [
@@ -378,6 +420,7 @@ class EventListGenerator:
                     "event_type": EventType.DRAW_PRNG_SAMPLE,
                     "time": start,
                     "sample_name": loop_iteration_ir.prng_sample,
+                    "position": prio_start,
                     **common,
                 }
             ]
@@ -386,12 +429,18 @@ class EventListGenerator:
                     "event_type": EventType.DROP_PRNG_SAMPLE,
                     "time": end,
                     "sample_name": loop_iteration_ir.prng_sample,
+                    "position": prio_end,
                     **common,
                 }
             ]
 
         event_list = [
-            {"event_type": EventType.LOOP_STEP_START, "time": start, **common},
+            {
+                "event_type": EventType.LOOP_STEP_START,
+                "time": start,
+                "position": prio_start,
+                **common,
+            },
             *[
                 {
                     "event_type": EventType.PARAMETER_SET,
@@ -405,10 +454,22 @@ class EventListGenerator:
             ],
             *prng_sample_events,
             *[e for l in children_events for e in l],
-            {"event_type": EventType.LOOP_STEP_END, "time": end, **common},
+            {
+                "event_type": EventType.LOOP_STEP_END,
+                "time": end,
+                "position": prio_end,
+                **common,
+            },
             *drop_prng_sample_events,
             *(
-                [{"event_type": EventType.LOOP_ITERATION_END, "time": end, **common}]
+                [
+                    {
+                        "event_type": EventType.LOOP_ITERATION_END,
+                        "time": end,
+                        "position": prio_end,
+                        **common,
+                    }
+                ]
                 if loop_iteration_ir.iteration == 0
                 else []
             ),
@@ -456,7 +517,10 @@ class EventListGenerator:
             play_wave_id = "delay"
 
         start_id = next(self.id_tracker)
-        d_start: dict[str, Any] = {"id": start_id}
+        d_start: dict[str, Any] = {
+            "id": start_id,
+            "position": self.ir_id_map[id(pulse_ir)].start,
+        }
         d_end: dict[str, Any] = {"id": next(self.id_tracker)}
         d_common = {
             "section_name": pulse_ir.section,
@@ -558,6 +622,7 @@ class EventListGenerator:
                 "time": start,
                 "signal_id": next(iter(ir.signals)),
                 "id": next(self.id_tracker),
+                "position": self.ir_id_map[id(ir)].start,
             }
         ]
 
@@ -576,6 +641,7 @@ class EventListGenerator:
                 "id": next(self.id_tracker),
                 "duration": duration,
                 "device_id": device,
+                "position": self.ir_id_map[id(ir)].start,
             }
             for device, duration in ir.hw_osc_devices
         ]
@@ -600,12 +666,14 @@ class EventListGenerator:
             "qa_channel": ir.qa_channel,
             "ppc_device": ir.ppc_device,
             "ppc_channel": ir.ppc_channel,
+            "position": self.ir_id_map[id(ir)].start,
         }
         end_event = {
             "event_type": EventType.PPC_SWEEP_STEP_END,
             "time": start + ir.trigger_duration,
             "id": start_id,
             "chain_element_id": start_id,
+            "position": self.ir_id_map[id(ir)].end,
         }
 
         for field in [

@@ -7,8 +7,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from laboneq.workflow import task
-
+from laboneq import workflow
 from laboneq.workflow.tasks.common.attribute_wrapper import find_common_prefix
 
 if TYPE_CHECKING:
@@ -35,11 +34,27 @@ def _validate_handles(experiment: Experiment) -> None:
         )
 
 
-@task
+@workflow.task_options
+class CompileExperimentOptions:
+    """Options for the compile_experiment task.
+
+    Attributes:
+        compiler_settings:
+            Optional settings to pass to the compiler.
+            Default: None.
+    """
+
+    compiler_settings: dict | None = workflow.option_field(
+        None,
+        description="Optional settings to pass to the compiler.",
+    )
+
+
+@workflow.task
 def compile_experiment(
     session: Session,
     experiment: Experiment,
-    compiler_settings: dict | None = None,
+    options: CompileExperimentOptions | None = None,
 ) -> CompiledExperiment:
     """A task to compile the specified experiment for a given setup.
 
@@ -51,13 +66,14 @@ def compile_experiment(
             A calibrated session to compile the experiment for.
         experiment:
             The LabOne Q DSL experiment to compile.
-        compiler_settings:
-            Optional settings to pass to the compiler.
+        options:
+            The options for this task as an instance of [CompileExperimentOptions].
 
     Returns:
         [CompiledExperiment][laboneq.core.types.compiled_experiment.CompiledExperiment]
             The `laboneq` compiled experiment.
     """
+    opts = CompileExperimentOptions() if options is None else options
     try:
         _validate_handles(experiment)
     except ValueError as error:
@@ -66,5 +82,5 @@ def compile_experiment(
         ) from error
     return session.compile(
         experiment=experiment,
-        compiler_settings=compiler_settings,
+        compiler_settings=opts.compiler_settings,
     )

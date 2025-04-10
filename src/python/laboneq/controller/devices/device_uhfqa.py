@@ -259,7 +259,7 @@ class DeviceUHFQA(DeviceBase):
         for awg_index in self._allocated_awgs:
             conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = (
                 1,
-                f"{self.dev_repr}: AWG {awg_index + 1} didn't start.",
+                f"AWG {awg_index} didn't start.",
             )
         return conditions
 
@@ -270,7 +270,7 @@ class DeviceUHFQA(DeviceBase):
         for awg_index in self._allocated_awgs:
             conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = (
                 0,
-                f"{self.dev_repr}: AWG {awg_index + 1} didn't stop. Missing start trigger? Check DIO.",
+                f"AWG {awg_index} didn't stop. Missing start trigger? Check DIO.",
             )
         return conditions
 

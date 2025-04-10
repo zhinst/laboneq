@@ -3,11 +3,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import attrs
 from typing import TYPE_CHECKING
 
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
-from laboneq.dsl.calibration.observable import Observable
 
 if TYPE_CHECKING:
     from laboneq.dsl.parameter import Parameter
@@ -24,8 +23,8 @@ def mixer_calib_id_generator():
 
 
 @classformatter
-@dataclass(init=True, repr=True, order=True)
-class MixerCalibration(Observable):
+@attrs.define
+class MixerCalibration:
     """Data object containing mixer calibration correction settings.
 
     Attributes:
@@ -50,6 +49,6 @@ class MixerCalibration(Observable):
             )
     """
 
-    uid: str = field(default_factory=mixer_calib_id_generator)
+    uid: str = attrs.field(factory=mixer_calib_id_generator)
     voltage_offsets: list[float | Parameter] | None = None
     correction_matrix: list[list[float | Parameter]] | None = None

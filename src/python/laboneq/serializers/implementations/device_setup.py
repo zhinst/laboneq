@@ -20,6 +20,8 @@ from laboneq.serializers.types import (
     SerializationOptions,
 )
 
+_converter = make_converter()
+
 
 @serializer(types=DeviceSetup, public=True)
 class DeviceSetupSerializer(VersionedClassSerializer[DeviceSetup]):
@@ -30,21 +32,21 @@ class DeviceSetupSerializer(VersionedClassSerializer[DeviceSetup]):
     def to_dict(
         cls, obj: DeviceSetup, options: SerializationOptions | None = None
     ) -> JsonSerializableType:
-        converter = make_converter()
         uid = obj.uid
         servers = {
-            k: converter.unstructure(v, DataServerModel) for k, v in obj.servers.items()
+            k: _converter.unstructure(v, DataServerModel)
+            for k, v in obj.servers.items()
         }
         instruments = [
-            converter.unstructure(instrument, ZIStandardInstrumentModel)
+            _converter.unstructure(instrument, ZIStandardInstrumentModel)
             for instrument in obj.instruments
         ]
         physical_channels_groups = {
-            k: converter.unstructure(v, PhysicalChannelGroupModel)
+            k: _converter.unstructure(v, PhysicalChannelGroupModel)
             for k, v in obj.physical_channel_groups.items()
         }
         logical_signal_groups = {
-            k: converter.unstructure(v, LogicalSignalGroupModel)
+            k: _converter.unstructure(v, LogicalSignalGroupModel)
             for k, v in obj.logical_signal_groups.items()
         }
         qubits = {
@@ -70,22 +72,22 @@ class DeviceSetupSerializer(VersionedClassSerializer[DeviceSetup]):
         serialized_data: JsonSerializableType,
         options: DeserializationOptions | None = None,
     ) -> DeviceSetup:
-        converter = make_converter()
         se = serialized_data["__data__"]
         uid = se["uid"]
         servers = {
-            k: converter.structure(v, DataServerModel) for k, v in se["servers"].items()
+            k: _converter.structure(v, DataServerModel)
+            for k, v in se["servers"].items()
         }
         instruments = [
-            converter.structure(instrument, ZIStandardInstrumentModel)
+            _converter.structure(instrument, ZIStandardInstrumentModel)
             for instrument in se["instruments"]
         ]
         physical_channel_groups = {
-            k: converter.structure(v, PhysicalChannelGroupModel)
+            k: _converter.structure(v, PhysicalChannelGroupModel)
             for k, v in se["physical_channel_groups"].items()
         }
         logical_signal_groups = {
-            k: converter.structure(v, LogicalSignalGroupModel)
+            k: _converter.structure(v, LogicalSignalGroupModel)
             for k, v in se["logical_signal_groups"].items()
         }
         qubits = {

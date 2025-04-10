@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 from dataclasses import asdict, is_dataclass
+import attrs
 from typing import Any, Callable, Optional
 
 from laboneq.core.types import enums as legacy_enums
+from laboneq.core.types.enums.modulation_type import ModulationType
 from laboneq.data import calibration
 from laboneq.dsl import calibration as legacy_calibration
 from laboneq.dsl import parameter as legacy_parameter
@@ -15,11 +17,13 @@ from laboneq.implementation.legacy_adapters.utils import (
 )
 
 
-def _change_dataclass_type(source: Any, target: Any) -> Any:
+def _change_type(source: Any, target: Any) -> Any:
     if source is None:
         return None
     if is_dataclass(source):
         return target(**asdict(source))
+    if attrs.has(source.__class__):
+        return target(**attrs.asdict(source))
     raise_not_implemented(source)
 
 
@@ -119,8 +123,8 @@ def convert_precompensation(
     new.uid = obj.uid
     new.exponential = convert_exponential(obj.exponential)
     new.high_pass = convert_highpass_compensation(obj.high_pass)
-    new.bounce = _change_dataclass_type(obj.bounce, calibration.BounceCompensation)
-    new.FIR = _change_dataclass_type(obj.FIR, calibration.FIRCompensation)
+    new.bounce = _change_type(obj.bounce, calibration.BounceCompensation)
+    new.FIR = _change_type(obj.FIR, calibration.FIRCompensation)
     return new
 
 
@@ -176,8 +180,18 @@ def convert_calibration(
             continue
         else:
             new = calibration.SignalCalibration()
-            new.oscillator = convert_oscillator(legacy_ls.oscillator)
+            new.oscillator = convert_oscillator(getattr(legacy_ls, "oscillator", None))
             if legacy_ls.local_oscillator is not None:
+                if (
+                    legacy_ls.local_oscillator.modulation_type
+                    == ModulationType.SOFTWARE
+                ):
+                    raise ValueError(
+                        "Encountered `ModulationType.SOFTWARE` in local oscillator configuration "
+                        "which is not allowed. Make sure modulation type for "
+                        "all local oscillator calibration settings is set to "
+                        "either `ModulationType.HARDWARE` or `ModulationType.AUTO`."
+                    )
                 new.local_oscillator_frequency = convert_maybe_parameter(
                     legacy_ls.local_oscillator.frequency
                 )
@@ -186,11 +200,11 @@ def convert_calibration(
             )
             new.precompensation = convert_precompensation(legacy_ls.precompensation)
             new.port_delay = convert_maybe_parameter(legacy_ls.port_delay)
-            new.delay_signal = legacy_ls.delay_signal
+            new.delay_signal = getattr(legacy_ls, "delay_signal", None)
             new.port_mode = convert_port_mode(legacy_ls.port_mode)
             new.voltage_offset = convert_maybe_parameter(legacy_ls.voltage_offset)
             new.range = legacy_ls.range
-            new.threshold = legacy_ls.threshold
+            new.threshold = getattr(legacy_ls, "threshold", None)
             new.amplitude = convert_maybe_parameter(legacy_ls.amplitude)
             new.amplifier_pump = convert_amplifier_pump(legacy_ls.amplifier_pump)
             if legacy_ls.added_outputs is not None:
@@ -201,7 +215,7 @@ def convert_calibration(
                         phase=convert_maybe_parameter(router.phase_shift),
                     )
                     new.output_routing.append(routing)
-            new.automute = legacy_ls.automute
+            new.automute = getattr(legacy_ls, "automute", None)
         cals[uid_formatter(uid)] = new
 
     return calibration.Calibration(cals)

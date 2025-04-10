@@ -171,7 +171,7 @@ class DeviceSHFPPC(DeviceBase):
         conditions = {
             f"/{self.serial}/ppchannels/{channel}/sweeper/enable": (
                 1,
-                f"{self.dev_repr}: Sweeper {channel} didn't start.",
+                f"Sweeper {channel} didn't start.",
             )
             for channel in self._allocated_sweepers
         }
@@ -183,7 +183,7 @@ class DeviceSHFPPC(DeviceBase):
         conditions = {
             f"/{self.serial}/ppchannels/{sweeper_index}/sweeper/enable": (
                 0,
-                f"{self.dev_repr}: Sweeper on channel {sweeper_index} didn't stop. Check trigger connection.",
+                f"Sweeper on channel {sweeper_index} didn't stop. Check trigger connection.",
             )
             for sweeper_index in self._allocated_sweepers
         }

@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
+import attrs
 import warnings
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from laboneq._utils import id_generator
@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
 
 @classformatter
-@dataclass(init=True, repr=True, order=True)
+@attrs.define(slots=False)
 class Section:
     """Representation of a section. A section is a logical concept that groups multiple operations into a single entity
     that can be though of a container. A section can either contain other sections or a list of operations (but not both
@@ -80,7 +80,7 @@ class Section:
             List of children. Each child may be another section or an
             operation.
             Default: `[]`.
-        trigger (dict[str, dict]):
+        trigger (dict[str, dict[str, int]]):
             Optional trigger pulses to play during this section.
             See [Experiment.section][laboneq.dsl.experiment.experiment.Experiment.section].
             Default: `{}`.
@@ -97,34 +97,34 @@ class Section:
     """
 
     # Unique identifier of the section.
-    uid: str | None = field(default=None)
+    uid: str | None = attrs.field(default=None)
 
     # Non-unique name for the section.
-    name: str = field(default="unnamed")
+    name: str = attrs.field(default="unnamed")
 
     # Alignment of operations and subsections within this section.
-    alignment: SectionAlignment = field(default=SectionAlignment.LEFT)
+    alignment: SectionAlignment = attrs.field(default=SectionAlignment.LEFT)
 
-    execution_type: ExecutionType | None = field(default=None)
+    execution_type: ExecutionType | None = attrs.field(default=None)
 
     # Minimal length of the section in seconds. The scheduled section might be slightly longer, as its length is rounded to the next multiple of the section timing grid.
-    length: float | None = field(default=None)
+    length: float | None = attrs.field(default=None)
 
     # Play after the section with the given ID.
-    play_after: str | Section | list[str | Section] | None = field(default=None)
+    play_after: str | Section | list[str | Section] | None = attrs.field(default=None)
 
     # List of children. Each child may be another section or an operation.
-    children: list[Section | Operation] = field(default_factory=list)
+    children: list[Section | Operation] = attrs.field(factory=list)
 
     # Optional trigger pulses to play during this section.
     # See [Experiment.section][laboneq.dsl.experiment.experiment.Experiment.section].
-    trigger: dict[str, dict] = field(default_factory=dict)
+    trigger: dict[str, dict[str, int]] = attrs.field(factory=dict)
 
     # Whether to escalate to the system grid even if tighter alignment is possible.
     # See [Experiment.section][laboneq.dsl.experiment.experiment.Experiment.section].
-    on_system_grid: bool | None = field(default=False)
+    on_system_grid: bool | None = attrs.field(default=False)
 
-    def __post_init__(self):
+    def __attrs_post_init__(self):
         if self.uid is None:
             self.uid = id_generator("s")
 
@@ -362,7 +362,7 @@ class Section:
 
 
 @classformatter
-@dataclass(init=True, repr=True, order=True)
+@attrs.define
 class AcquireLoopNt(Section):
     """Near time acquire loop.
 
@@ -395,12 +395,12 @@ class AcquireLoopNt(Section):
     """
 
     # Averaging method. One of sequential, cyclic and single_shot.
-    averaging_mode: AveragingMode = field(default=AveragingMode.CYCLIC)
+    averaging_mode: AveragingMode = attrs.field(default=AveragingMode.CYCLIC)
     # Number of loops.
-    count: int = field(default=None)
-    execution_type: ExecutionType = field(default=ExecutionType.NEAR_TIME)
+    count: int | None = attrs.field(default=None)
+    execution_type: ExecutionType = attrs.field(default=ExecutionType.NEAR_TIME)
 
-    def __post_init__(self):
+    def __attrs_post_init__(self):
         warnings.warn(
             "AcquireLoopNt and acquire_loop_nt are deprecated and may be"
             " removed in a future version of LabOne Q. Use a sweep outside"
@@ -408,11 +408,11 @@ class AcquireLoopNt(Section):
             FutureWarning,
             stacklevel=2,
         )
-        super().__post_init__()
+        super().__attrs_post_init__()
 
 
 @classformatter
-@dataclass(init=True, repr=True, order=True)
+@attrs.define
 class AcquireLoopRt(Section):
     """Real time acquire loop.
 
@@ -447,22 +447,22 @@ class AcquireLoopRt(Section):
     """
 
     # Type of the acquisition. One of integration trigger, spectroscopy, discrimination, demodulation and RAW. The default acquisition type is INTEGRATION.
-    acquisition_type: AcquisitionType = field(default=AcquisitionType.INTEGRATION)
+    acquisition_type: AcquisitionType = attrs.field(default=AcquisitionType.INTEGRATION)
     # Averaging method. One of sequential, cyclic and single_shot.
-    averaging_mode: AveragingMode = field(default=AveragingMode.CYCLIC)
+    averaging_mode: AveragingMode = attrs.field(default=AveragingMode.CYCLIC)
     # Number of loops.
-    count: int = field(default=None)
-    execution_type: ExecutionType = field(default=ExecutionType.REAL_TIME)
+    count: int | None = attrs.field(default=None)
+    execution_type: ExecutionType = attrs.field(default=ExecutionType.REAL_TIME)
     # Repetition method. One of fastest, constant and auto.
-    repetition_mode: RepetitionMode = field(default=RepetitionMode.FASTEST)
+    repetition_mode: RepetitionMode = attrs.field(default=RepetitionMode.FASTEST)
     # The repetition time, when `repetition_mode` is
     # [RepetitionMode.CONSTANT][laboneq.core.types.enums.repetition_mode.RepetitionMode.CONSTANT].
-    repetition_time: float = field(default=None)
+    repetition_time: float | None = attrs.field(default=None)
     # When True, reset all oscillators at the start of every step.
-    reset_oscillator_phase: bool = field(default=False)
+    reset_oscillator_phase: bool = attrs.field(default=False)
 
-    def __post_init__(self):
-        super().__post_init__()
+    def __attrs_post_init__(self):
+        super().__attrs_post_init__()
         if self.repetition_mode == RepetitionMode.CONSTANT:
             if self.repetition_time is None:
                 raise LabOneQException(
@@ -471,7 +471,7 @@ class AcquireLoopRt(Section):
 
 
 @classformatter
-@dataclass(init=True, repr=True, order=True)
+@attrs.define
 class Sweep(Section):
     """Sweep loops.
 
@@ -498,14 +498,14 @@ class Sweep(Section):
     """
 
     # Parameters that should be swept.
-    parameters: list[Parameter] = field(default_factory=list)
+    parameters: list[Parameter] = attrs.field(factory=list)
     # When True, reset all oscillators at the start of every step.
-    reset_oscillator_phase: bool = field(default=False)
+    reset_oscillator_phase: bool = attrs.field(default=False)
     # When non-zero, split the sweep into N chunks.
-    chunk_count: int = field(default=1)
+    chunk_count: int = attrs.field(default=1)
 
-    def __post_init__(self):
-        super().__post_init__()
+    def __attrs_post_init__(self):
+        super().__attrs_post_init__()
         if self.parameters is None:
             self.parameters = []
         else:
@@ -523,7 +523,7 @@ class Sweep(Section):
     }
 )
 @classformatter
-@dataclass(init=True, repr=True, order=True)
+@attrs.define
 class Match(Section):
     """Execute one of the child branches depending on condition.
 
@@ -592,7 +592,7 @@ class Match(Section):
     }
 )
 @classformatter
-@dataclass(init=True, repr=True, order=True)
+@attrs.define
 class Case(Section):
     """Branch in a match section.
 
@@ -652,11 +652,11 @@ class Case(Section):
     }
 )
 @classformatter
-@dataclass(init=True, repr=True, order=True)
+@attrs.define
 class PRNGSetup(Section):
     """Setup and seed the pseudo random number generator."""
 
-    prng: PRNG = None
+    prng: PRNG | None = None
 
     def __iter__(self):
         return iter(self.prng)
@@ -669,6 +669,6 @@ class PRNGSetup(Section):
     }
 )
 @classformatter
-@dataclass(init=True, repr=True, order=True)
+@attrs.define
 class PRNGLoop(Section):
-    prng_sample: PRNGSample = None
+    prng_sample: PRNGSample | None = None

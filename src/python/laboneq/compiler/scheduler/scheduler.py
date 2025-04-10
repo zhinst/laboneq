@@ -1257,6 +1257,10 @@ class Scheduler:
                 )
                 return match_schedule
 
+        raise LabOneQException(
+            f"Match statement for parameter {match_sweep_parameter.uid} is missing a case for value {val}."
+        )
+
     def _schedule_case(
         self, section_id: str, current_parameters: ParameterStore
     ) -> CaseSchedule:

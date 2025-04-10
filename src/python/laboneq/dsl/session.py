@@ -657,9 +657,19 @@ class Session:
         Returns:
             session:
                 A new session loaded from the file.
-        """
 
+        !!! version-changed "Deprecated in version 2.50.0"
+            The `load` method is deprecated and will be removed in a future version.
+            The new serialization framework does not support loading sessions.
+        """
         import json
+
+        warnings.warn(
+            "The 'load' method is deprecated and will be removed in a future version. "
+            "The new serialization framework does not support loading sessions.",
+            FutureWarning,
+            stacklevel=2,
+        )
 
         with open(filename, mode="r") as file:
             session_dict = json.load(file)
@@ -677,7 +687,19 @@ class Session:
 
         Args:
             filename: Filename (full path) of the file where the session should be stored in.
+
+        !!! version-changed "Deprecated in version 2.50.0"
+            The `save` method is deprecated and will be removed in a future version.
+            The new serialization framework does not support saving sessions.
         """
+
+        warnings.warn(
+            "The 'load' method is deprecated and will be removed in a future version. "
+            "The new serialization framework does not support loading sessions.",
+            FutureWarning,
+            stacklevel=2,
+        )
+
         # TODO ErC: Error handling
 
         serialized_dict = {}

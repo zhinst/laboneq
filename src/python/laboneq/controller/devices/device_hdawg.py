@@ -6,7 +6,6 @@ from __future__ import annotations
 import logging
 from enum import IntEnum
 from typing import Any, Iterator
-from weakref import ref
 
 import numpy as np
 
@@ -83,7 +82,9 @@ class DeviceHDAWG(DeviceBase):
         super().__init__(*args, **kwargs)
         self.dev_type = "HDAWG8"
         self.dev_opts = ["MF", "ME", "SKW"]
-        self._pipeliner = AwgPipeliner(ref(self), f"/{self.serial}/awgs", "AWG")
+        self._pipeliner = [
+            AwgPipeliner(f"/{self.serial}/awgs/{awg}", f"AWG{awg}") for awg in range(4)
+        ]
         self._channels = 8
         self._multi_freq = True
         self._reference_clock_source = ReferenceClockSourceHDAWG.INTERNAL
@@ -94,17 +95,22 @@ class DeviceHDAWG(DeviceBase):
         )
 
     @property
+    def sampling_rate(self) -> float:
+        assert self._sampling_rate is not None
+        return self._sampling_rate
+
+    @property
     def has_pipeliner(self) -> bool:
         return True
 
     def pipeliner_prepare_for_upload(self, index: int) -> NodeCollector:
-        return self._pipeliner.prepare_for_upload(index)
+        return self._pipeliner[index].prepare_for_upload()
 
     def pipeliner_commit(self, index: int) -> NodeCollector:
-        return self._pipeliner.commit(index)
+        return self._pipeliner[index].commit()
 
     def pipeliner_ready_conditions(self, index: int) -> dict[str, Any]:
-        return self._pipeliner.ready_conditions(index)
+        return self._pipeliner[index].ready_conditions()
 
     def _process_dev_opts(self):
         self._check_expected_dev_opts()
@@ -221,7 +227,7 @@ class DeviceHDAWG(DeviceBase):
         # of the experiment. Error message: Reinitialized signal output delay on
         # channel 0 (numbered from 0)'
         # See also https://zhinst.atlassian.net/browse/HBAR-1374?focusedCommentId=41373
-        nodes = [
+        nodes: list[NodeControlBase] = [
             Prepare(f"/{self.serial}/sigouts/{channel}/on", 0)
             for channel in range(self._channels)
         ]
@@ -229,7 +235,7 @@ class DeviceHDAWG(DeviceBase):
             [
                 Setting(
                     f"/{self.serial}/system/clocks/sampleclock/freq",
-                    self._sampling_rate,
+                    self.sampling_rate,
                 ),
                 Response(f"/{self.serial}/system/clocks/sampleclock/status", 0),
             ]
@@ -270,52 +276,53 @@ class DeviceHDAWG(DeviceBase):
         await self.set_async(nc)
 
     async def start_execution(self, with_pipeliner: bool):
-        if with_pipeliner:
-            nc = self._pipeliner.collect_execution_nodes()
-        else:
-            nc = NodeCollector(base=f"/{self.serial}/")
-            for awg_index in self._allocated_awgs:
+        nc = NodeCollector(base=f"/{self.serial}/")
+        for awg_index in self._allocated_awgs:
+            if with_pipeliner:
+                nc.extend(self._pipeliner[awg_index].collect_execution_nodes())
+            else:
                 nc.add(f"awgs/{awg_index}/enable", 1, cache=False)
         await self.set_async(nc)
 
     def conditions_for_execution_ready(
         self, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
-        if with_pipeliner:
-            conditions = self._pipeliner.conditions_for_execution_ready()
-        elif self.is_standalone():
-            conditions = {
-                f"/{self.serial}/awgs/{awg_index}/enable": (
+        conditions: dict[str, tuple[Any, str]] = {}
+        for awg_index in self._allocated_awgs:
+            if with_pipeliner:
+                conditions.update(
+                    self._pipeliner[awg_index].conditions_for_execution_ready(
+                        self.is_standalone()
+                    )
+                )
+            elif self.is_standalone():
+                conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = (
                     [1, 0],
-                    f"{self.dev_repr}: AWG {awg_index + 1} failed to transition to exec and back to stop.",
+                    f"AWG {awg_index} failed to transition to exec and back to stop.",
                 )
-                for awg_index in self._allocated_awgs
-            }
-        else:
-            conditions = {
-                f"/{self.serial}/awgs/{awg_index}/enable": (
+            else:
+                conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = (
                     1,
-                    f"{self.dev_repr}: AWG {awg_index + 1} didn't start.",
+                    f"AWG {awg_index} didn't start.",
                 )
-                for awg_index in self._allocated_awgs
-            }
         return conditions
 
     def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
-        if with_pipeliner:
-            conditions = self._pipeliner.conditions_for_execution_done()
-        elif self.is_standalone():
-            conditions = {}
-        else:
-            conditions = {
-                f"/{self.serial}/awgs/{awg_index}/enable": (
-                    0,
-                    f"{self.dev_repr}: AWG {awg_index + 1} didn't stop. Missing start trigger? Check ZSync.",
+        conditions: dict[str, tuple[Any, str]] = {}
+        for awg_index in self._allocated_awgs:
+            if with_pipeliner:
+                conditions.update(
+                    self._pipeliner[awg_index].conditions_for_execution_done(
+                        self.is_standalone()
+                    )
                 )
-                for awg_index in self._allocated_awgs
-            }
+            elif not self.is_standalone():
+                conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = (
+                    0,
+                    f"AWG {awg_index} didn't stop. Missing start trigger? Check ZSync.",
+                )
         return conditions
 
     async def setup_one_step_execution(
@@ -338,7 +345,8 @@ class DeviceHDAWG(DeviceBase):
             nc.add("system/synchronization/source", 0)
 
         if with_pipeliner:
-            nc.extend(self._pipeliner.reset_nodes())
+            for awg_index in self._allocated_awgs:
+                nc.extend(self._pipeliner[awg_index].reset_nodes())
 
         # HACK: HBAR-1427 and HBAR-2165 show that runtime checks generate
         # wrongly detected gaps when enabled during experiments with feedback.
@@ -525,11 +533,11 @@ class DeviceHDAWG(DeviceBase):
                         channel=ch,
                         dev_repr=self.dev_repr,
                         delay=output_delay,
-                        sample_frequency_hz=self._sampling_rate,
+                        sample_frequency_hz=self.sampling_rate,
                         granularity_samples=DELAY_NODE_GRANULARITY_SAMPLES,
                         max_node_delay_samples=DELAY_NODE_MAX_SAMPLES,
                     )
-                    / self._sampling_rate
+                    / self.sampling_rate
                 )
                 nc.add(f"sigouts/{ch}/delay", output_delay_rounded)
             [output_voltage_offset], updated = attributes.resolve(
@@ -723,7 +731,9 @@ class DeviceHDAWG(DeviceBase):
     async def reset_to_idle(self):
         nc = NodeCollector(base=f"/{self.serial}/")
         # Reset pipeliner first, attempt to set AWG enable leads to FW error if pipeliner was enabled.
-        nc.extend(self._pipeliner.reset_nodes())
+        nc.add("awgs/*/pipeliner/reset", 1, cache=False)
+        nc.add("awgs/*/pipeliner/mode", 0, cache=False)  # off
+        nc.add("awgs/*/synchronization/enable", 0, cache=False)
         nc.barrier()
         nc.add("awgs/*/enable", 0, cache=False)
         nc.add("system/synchronization/source", 0, cache=False)  # internal

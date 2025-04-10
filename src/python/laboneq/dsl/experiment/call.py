@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Union
+import attrs
+from typing import Any, Callable, Union
 
 from laboneq._utils import UIDReference
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
@@ -14,12 +14,12 @@ from .operation import Operation
 
 
 @classformatter
-@dataclass(init=False, repr=True, order=True)
+@attrs.define(init=False)
 class Call(Operation):
     """Class abstracting a function call."""
 
-    func_name: Union[str, Callable] = field(default=None)
-    args: Dict[str, Any] = field(default=None)
+    func_name: Union[str, Callable] = attrs.field(default=None)
+    args: dict[str, Any] = attrs.field(default=None)
 
     def __init__(self, func_name: Union[str, Callable], **kwargs):
         """Constructor.

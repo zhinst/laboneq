@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import attrs
 
-from laboneq.dsl.quantum import QuantumElement
+from laboneq.dsl.quantum import QuantumParameters, QuantumElement
 from laboneq.serializers.base import VersionedClassSerializer
 from laboneq.serializers.core import from_dict, import_cls, to_dict
 from laboneq.serializers.serializer_registry import serializer
@@ -14,6 +14,71 @@ from laboneq.serializers.types import (
     JsonSerializableType,
     SerializationOptions,
 )
+
+
+@serializer(types=[QuantumParameters], public=True)
+class QuantumParametersSerializer(VersionedClassSerializer[QuantumParameters]):
+    SERIALIZER_ID = "laboneq.serializers.implementations.QuantumParametersSerializer"
+    VERSION = 1
+
+    @classmethod
+    def to_dict(
+        cls, obj: QuantumParameters, options: SerializationOptions | None = None
+    ) -> JsonSerializableType:
+        return {
+            "__serializer__": cls.serializer_id(),
+            "__version__": cls.version(),
+            "__data__": {
+                "quantum_parameters_class": f"{obj.__class__.__module__}.{obj.__class__.__name__}",
+                "parameters": attrs.asdict(obj),
+            },
+        }
+
+    @classmethod
+    def from_dict_v1(
+        cls,
+        serialized_data: JsonSerializableType,
+        options: DeserializationOptions | None = None,
+    ) -> QuantumParameters:
+        data = serialized_data["__data__"]
+        qp_cls = import_cls(data["quantum_parameters_class"])
+        return qp_cls(**from_dict(data["parameters"]))
+
+
+class QuantumParametersContainer:
+    """A class for identifying a list as a list of quantum parameters."""
+
+    def __init__(self, quantum_parameters):
+        self.quantum_parameters = quantum_parameters
+
+
+@serializer(types=QuantumParametersContainer, public=True)
+class QuantumParametersContainerSerializer(VersionedClassSerializer[QuantumParameters]):
+    SERIALIZER_ID = (
+        "laboneq.serializers.implementations.QuantumParametersContainerSerializer"
+    )
+    VERSION = 1
+
+    @classmethod
+    def to_dict(
+        cls,
+        obj: QuantumParametersContainer,
+        options: SerializationOptions | None = None,
+    ) -> JsonSerializableType:
+        return {
+            "__serializer__": cls.serializer_id(),
+            "__version__": cls.version(),
+            "__data__": [to_dict(q) for q in obj.quantum_parameters],
+        }
+
+    @classmethod
+    def from_dict_v1(
+        cls,
+        serialized_data: JsonSerializableType,
+        options: DeserializationOptions | None = None,
+    ) -> list[QuantumParameters]:
+        data = serialized_data["__data__"]
+        return [from_dict(q) for q in data]
 
 
 @serializer(types=[QuantumElement], public=True)

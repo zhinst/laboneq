@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass, field
+import attrs
 from typing import List, Optional
 
 import numpy as np
@@ -12,7 +12,6 @@ from numpy.typing import ArrayLike
 
 from laboneq.core.types.enums import HighPassCompensationClearing
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
-from laboneq.dsl.calibration.observable import Observable, RecursiveObservable
 
 precompensation_id = 0
 
@@ -25,8 +24,8 @@ def precompensation_id_generator():
 
 
 @classformatter
-@dataclass
-class ExponentialCompensation(Observable):
+@attrs.define
+class ExponentialCompensation:
     """Parameters for exponential under- and overshoot compensation.
 
     Used to compensate for distortions due to LCR elements
@@ -54,8 +53,8 @@ class ExponentialCompensation(Observable):
 
 
 @classformatter
-@dataclass
-class HighPassCompensation(Observable):
+@attrs.define
+class HighPassCompensation:
     """Parameters for highpass filter signal precompensation.
 
     Used to compensate for distortions due to AC-coupling, DC-blocks and
@@ -82,21 +81,23 @@ class HighPassCompensation(Observable):
     # high-pass filter time constant
     timeconstant: float = 1e-6
     # Deprecated. Choose the clearing mode of the high-pass filter
-    clearing: HighPassCompensationClearing | None = field(default=None)
+    clearing: HighPassCompensationClearing | None = attrs.field(default=None)
 
-    def __post_init__(self):
-        if self.clearing is not None:
+    @clearing.validator
+    def _warn_deprecation_if_set(
+        self, attr: attrs.Attribute, value: HighPassCompensationClearing | None
+    ):
+        if value is not None:
             warnings.warn(
-                "`HighPassCompensation` argument `clearing` will be removed in the future versions. It has no functionality.",
+                f"`{self.__class__.__name__}` argument `{attr.name}` will be removed in a future version. It has no functionality.",
                 FutureWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
-        super().__post_init__()
 
 
 @classformatter
-@dataclass
-class FIRCompensation(Observable):
+@attrs.define
+class FIRCompensation:
     """Parameters for FIR filter signal precompensation.
 
     Used to compensate for short time-scale distortions.
@@ -122,7 +123,7 @@ class FIRCompensation(Observable):
     """
 
     # FIR filter coefficients
-    coefficients: ArrayLike = field(default_factory=lambda: np.zeros(40))
+    coefficients: ArrayLike = attrs.field(factory=lambda: np.zeros(40))
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, FIRCompensation):
@@ -132,8 +133,8 @@ class FIRCompensation(Observable):
 
 
 @classformatter
-@dataclass
-class BounceCompensation(Observable):
+@attrs.define
+class BounceCompensation:
     """Parameters for the bounce correction component of the signal
     precompensation.
 
@@ -168,8 +169,8 @@ class BounceCompensation(Observable):
 
 
 @classformatter
-@dataclass(init=True, repr=True, order=True)
-class Precompensation(RecursiveObservable):
+@attrs.define
+class Precompensation:
     """Signal precompensation parameters.
 
     Attributes:
@@ -203,19 +204,19 @@ class Precompensation(RecursiveObservable):
     """
 
     # Unique identifier. If left blank, a new unique ID will be generated.
-    uid: str = field(default_factory=precompensation_id_generator)
+    uid: str = attrs.field(factory=precompensation_id_generator)
 
     # Exponential precompensation filter
-    exponential: Optional[List[ExponentialCompensation]] = field(default=None)
+    exponential: Optional[List[ExponentialCompensation]] = attrs.field(default=None)
 
     # High-pass compensation
-    high_pass: Optional[HighPassCompensation] = field(default=None)
+    high_pass: Optional[HighPassCompensation] = attrs.field(default=None)
 
     # Bounce compensation
-    bounce: Optional[BounceCompensation] = field(default=None)
+    bounce: Optional[BounceCompensation] = attrs.field(default=None)
 
     # FIR filter coefficients
-    FIR: Optional[FIRCompensation] = field(default=None)
+    FIR: Optional[FIRCompensation] = attrs.field(default=None)
 
     def is_nonzero(self) -> bool:
         """Returns True if any filters are set.

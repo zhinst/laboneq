@@ -53,21 +53,24 @@ def generate_event_list_from_ir(
     settings: CompilerSettings,
     expand_loops: bool,
     max_events: int,
-) -> EventList:
+) -> tuple[EventList, event_gen.IrPositionMap]:
     event_list = _create_start_events(ir.devices)
+    ir_id_map = event_gen.IrPositionMapper().create_ir_position_map(ir.root)
     if ir.root is not None:
         id_tracker = itertools.count()
-        event_list.extend(
-            event_gen.EventListGenerator(
-                id_tracker=id_tracker, expand_loops=expand_loops, settings=settings
-            ).run(ir.root, start=0, max_events=max_events)
-        )
+        events = event_gen.EventListGenerator(
+            id_tracker=id_tracker,
+            expand_loops=expand_loops,
+            settings=settings,
+            ir_id_map=ir_id_map,
+        ).run(ir.root, start=0, max_events=max_events)
+        event_list.extend(events)
         for event in event_list:
             if "id" not in event:
                 event["id"] = next(id_tracker)
     for event in event_list:
         event["time"] = event["time"] * TINYSAMPLE
-    return event_list
+    return event_list, ir_id_map
 
 
 class EventListGeneratorCodeGenerator(event_gen.EventListGenerator):
@@ -94,7 +97,10 @@ class EventListGeneratorCodeGenerator(event_gen.EventListGenerator):
             play_wave_id = "delay"
 
         start_id = next(self.id_tracker)
-        d_start: dict[str, Any] = {"id": start_id}
+        d_start: dict[str, Any] = {
+            "id": start_id,
+            "position": self.ir_id_map[id(pulse_ir)].start,
+        }
         d_end: dict[str, Any] = {"id": next(self.id_tracker)}
         d_common = {
             "section_name": pulse_ir.section,
@@ -237,6 +243,7 @@ class EventListGeneratorCodeGenerator(event_gen.EventListGenerator):
                 "event_type": EventType.ACQUIRE_START,
                 "time": start + acquire_group_ir.offset,
                 "id": start_id,
+                "position": self.ir_id_map[id(acquire_group_ir)].start,
                 **d,
             },
             {
@@ -282,16 +289,24 @@ def event_list_per_awg(
     tree: ir_def.IRTree,
     settings: CompilerSettings,
     osc_params: SoftwareOscillatorParameters,
-) -> dict[awg_info.AwgKey, EventList]:
+) -> tuple[
+    dict[awg_info.AwgKey, EventList], dict[awg_info.AwgKey, event_gen.IrPositionMapper]
+]:
     """Generate event list per AWG in the tree root."""
     assert tree.root is not None
-    event_lists_by_awg = {}
+    event_lists_by_awg: dict[awg_info.AwgKey, EventList] = {}
+    ir_id_map_by_awg: dict[awg_info.AwgKey, event_gen.IrPositionMapper] = {}
     id_tracker = itertools.count()
-    event_list_generator = EventListGeneratorCodeGenerator(
-        expand_loops=False, settings=settings, id_tracker=id_tracker
-    )
+
     for awg_ir in tree.root.children:
         assert isinstance(awg_ir, ir_seqc.SingleAwgIR)
+        ir_id_map = event_gen.IrPositionMapper().create_ir_position_map(awg_ir)
+        event_list_generator = EventListGeneratorCodeGenerator(
+            expand_loops=False,
+            settings=settings,
+            id_tracker=id_tracker,
+            ir_id_map=ir_id_map,
+        )
         event_list = _create_start_events(
             [dev for dev in tree.devices if dev.uid == awg_ir.awg.device_id]
         )
@@ -302,4 +317,5 @@ def event_list_per_awg(
                 event["id"] = next(id_tracker)
             event["time"] = event["time"] * TINYSAMPLE
         event_lists_by_awg[awg_ir.awg.key] = event_list
-    return event_lists_by_awg
+        ir_id_map_by_awg[awg_ir.awg.key] = ir_id_map
+    return event_lists_by_awg, ir_id_map_by_awg

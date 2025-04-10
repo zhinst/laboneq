@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+from collections.abc import Iterable, Iterator
 import math
 
 from dataclasses import dataclass
 from importlib.metadata import version
-from typing import TYPE_CHECKING, Any, Iterator, Iterable
+from typing import TYPE_CHECKING, Any
 
 from laboneq.controller.devices.zi_emulator import EmulatorState
 from laboneq.controller.versioning import LabOneVersion
@@ -60,6 +61,13 @@ class NodeAction:
 
 
 @dataclass
+class NodePath(NodeAction):
+    """Use to collect node paths only, e.g. for subscribe."""
+
+    path: str
+
+
+@dataclass
 class NodeActionSet(NodeAction):
     path: str
     value: Any
@@ -82,6 +90,9 @@ class NodeCollector:
     ):
         self._nodes.append(NodeActionSet(self._base + path, value, cache, filename))
 
+    def add_path(self, path: str):
+        self._nodes.append(NodePath(self._base + path))
+
     def add_node_action(self, node_action: NodeAction):
         self._nodes.append(node_action)
 
@@ -100,6 +111,28 @@ class NodeCollector:
         for node in self._nodes:
             if isinstance(node, NodeActionSet):
                 yield node
+
+    def paths(self) -> Iterator[str]:
+        for node in self._nodes:
+            if isinstance(node, NodePath):
+                yield node.path
+
+    @staticmethod
+    def one(
+        path: str, value: Any, cache: bool = True, filename: str | None = None
+    ) -> NodeCollector:
+        nc = NodeCollector()
+        nc.add(path=path, value=value, cache=cache, filename=filename)
+        return nc
+
+    @staticmethod
+    def all(node_collectors: NodeCollector | Iterable[NodeCollector]) -> NodeCollector:
+        if isinstance(node_collectors, NodeCollector):
+            return node_collectors
+        all_nodes = NodeCollector()
+        for nc in node_collectors:
+            all_nodes.extend(nc)
+        return all_nodes
 
 
 def zhinst_core_version() -> str:

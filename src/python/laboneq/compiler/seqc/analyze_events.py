@@ -11,18 +11,18 @@ from typing import TYPE_CHECKING, Any, Dict, List, cast
 from engineering_notation import EngNumber
 from sortedcontainers import SortedDict
 
-from laboneq.compiler.seqc.feedback_register_allocator import (
-    FeedbackRegisterAllocator,
-)
-from laboneq.compiler.seqc.utils import resample_state
 from laboneq.compiler.common.awg_info import AWGInfo
+from laboneq.compiler.common.device_type import DeviceType
+from laboneq.compiler.event_list.event_type import EventType
 from laboneq.compiler.seqc.awg_sampled_event import (
     AWGEvent,
     AWGEventType,
     AWGSampledEventSequence,
 )
-from laboneq.compiler.common.device_type import DeviceType
-from laboneq.compiler.event_list.event_type import EventType
+from laboneq.compiler.seqc.feedback_register_allocator import (
+    FeedbackRegisterAllocator,
+)
+from laboneq.compiler.seqc.utils import resample_state
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.pulse_sampler import interval_to_samples, length_to_samples
 
@@ -63,32 +63,28 @@ def analyze_loop_times(
         return loop_events
 
     loop_step_start_events = [
-        (index, event)
-        for index, event in enumerate(events)
-        if event["event_type"] == "LOOP_STEP_START"
+        event for event in events if event["event_type"] == "LOOP_STEP_START"
     ]
     loop_step_end_events = [
-        (index, event)
-        for index, event in enumerate(events)
-        if event["event_type"] == "LOOP_STEP_END"
+        event for event in events if event["event_type"] == "LOOP_STEP_END"
     ]
     loop_iteration_events = [
-        (index, event)
-        for index, event in enumerate(events)
+        event
+        for event in events
         if event["event_type"] == "LOOP_ITERATION_END"
         and "compressed" in event
         and event["compressed"]
     ]
 
-    compressed_sections = {event["section_name"] for _, event in loop_iteration_events}
+    compressed_sections = {event["section_name"] for event in loop_iteration_events}
     section_repeats = {}
-    for _, event in loop_iteration_events:
+    for event in loop_iteration_events:
         if "num_repeats" in event:
             section_repeats[event["section_name"]] = event["num_repeats"]
 
     _logger.debug("Found %d loop step start events", len(loop_step_start_events))
     events_already_added = set()
-    for index, event in loop_step_start_events:
+    for event in loop_step_start_events:
         _logger.debug("  loop timing: processing  %s", event)
 
         event_time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
@@ -96,7 +92,7 @@ def analyze_loop_times(
             type=AWGEventType.LOOP_STEP_START,
             start=event_time_in_samples,
             end=event_time_in_samples,
-            priority=index,
+            priority=event["position"],
             params={
                 "nesting_level": event["nesting_level"],
                 "loop_id": event["section_name"],
@@ -116,7 +112,7 @@ def analyze_loop_times(
                 type=AWGEventType.PUSH_LOOP,
                 start=event_time_in_samples,
                 end=event_time_in_samples,
-                priority=index,
+                priority=event["position"],
                 params={
                     "nesting_level": event["nesting_level"],
                     "loop_id": event["section_name"],
@@ -127,13 +123,13 @@ def analyze_loop_times(
             _logger.debug("Added %s", push_event)
 
     _logger.debug("Found %d loop step end events", len(loop_step_end_events))
-    for index, event in loop_step_end_events:
+    for event in loop_step_end_events:
         event_time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
         loop_event = AWGEvent(
             type=AWGEventType.LOOP_STEP_END,
             start=event_time_in_samples,
             end=event_time_in_samples,
-            priority=index,
+            priority=event["position"],
             params={
                 "nesting_level": event["nesting_level"],
                 "loop_id": event["section_name"],
@@ -149,13 +145,13 @@ def analyze_loop_times(
             else:
                 _logger.debug("SKIP adding double %s", loop_event)
 
-    for index, event in loop_iteration_events:
+    for event in loop_iteration_events:
         event_time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
         iteration_event = AWGEvent(
             type=AWGEventType.ITERATE,
             start=event_time_in_samples,
             end=event_time_in_samples,
-            priority=index,
+            priority=event["position"],
             params={
                 "nesting_level": event["nesting_level"],
                 "loop_id": event["section_name"],
@@ -206,8 +202,8 @@ def analyze_precomp_reset_times(
     delay: float,
 ) -> AWGSampledEventSequence:
     precomp_events = [
-        (index, event)
-        for index, event in enumerate(events)
+        event
+        for event in events
         if (
             event["event_type"] == EventType.RESET_PRECOMPENSATION_FILTERS
             and event.get("signal_id", None) in signals
@@ -222,14 +218,14 @@ def analyze_precomp_reset_times(
 
     PRECOMP_RESET_LENGTH = 32
 
-    for index, event in precomp_events:
+    for event in precomp_events:
         event_time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
         signal_id = event.get("signal_id")
         sampled_event = AWGEvent(
             type=AWGEventType.RESET_PRECOMPENSATION_FILTERS,
             start=event_time_in_samples,
             end=event_time_in_samples + PRECOMP_RESET_LENGTH,
-            priority=index,
+            priority=event["position"],
             params={"signal_id": signal_id},
         )
         precomp_reset_events.add(event_time_in_samples, sampled_event)
@@ -253,8 +249,8 @@ def analyze_phase_reset_times(
     delay: float,
 ) -> AWGSampledEventSequence:
     reset_phase_events = [
-        (index, event)
-        for index, event in enumerate(events)
+        event
+        for event in events
         if event["event_type"]
         in (
             EventType.RESET_HW_OSCILLATOR_PHASE,
@@ -264,7 +260,7 @@ def analyze_phase_reset_times(
         and event["device_id"] == device_id
     ]
     phase_reset_events = AWGSampledEventSequence()
-    for index, event in reset_phase_events:
+    for event in reset_phase_events:
         event_time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
         event_type = (
             AWGEventType.RESET_PHASE
@@ -275,7 +271,9 @@ def analyze_phase_reset_times(
             type=event_type,
             start=event_time_in_samples,
             end=event_time_in_samples,
-            priority=index,
+            priority=event["position"]
+            if event["event_type"] == EventType.RESET_HW_OSCILLATOR_PHASE
+            else -100,
             params={
                 "device_id": device_id,
             },
@@ -316,7 +314,7 @@ def analyze_set_oscillator_times(
 
     retval = AWGSampledEventSequence()
 
-    for index, event in set_oscillator_events:
+    for _, event in set_oscillator_events:
         iteration = event["iteration"]
         if (
             abs(event["value"] - iteration * step_frequency - start_frequency)
@@ -330,7 +328,7 @@ def analyze_set_oscillator_times(
         set_oscillator_event = AWGEvent(
             type=AWGEventType.SET_OSCILLATOR_FREQUENCY,
             start=event_time_in_samples,
-            priority=index,
+            priority=event["position"],
             params={
                 "start_frequency": start_frequency,
                 "step_frequency": step_frequency,
@@ -354,16 +352,16 @@ def analyze_ppc_sweep_events(events: list[Any], awg: AWGInfo, global_delay: floa
     if awg.device_type != DeviceType.SHFQA:
         return AWGSampledEventSequence()
     ppc_sweep_start_events = [
-        (index, event)
-        for index, event in enumerate(events)
+        event
+        for event in events
         if event["event_type"] == EventType.PPC_SWEEP_STEP_START
         and event.get("qa_device") == awg.device_id
         and event.get("qa_channel") == awg.awg_id
     ]
-    ppc_start_ids = {e["id"] for _, e in ppc_sweep_start_events}
+    ppc_start_ids = {e["id"] for e in ppc_sweep_start_events}
     ppc_sweep_end_events = [
-        (index, event)
-        for index, event in enumerate(events)
+        event
+        for event in events
         if event["event_type"] == EventType.PPC_SWEEP_STEP_END
         and event["chain_element_id"] in ppc_start_ids
     ]
@@ -372,7 +370,7 @@ def analyze_ppc_sweep_events(events: list[Any], awg: AWGInfo, global_delay: floa
 
     sampling_rate = awg.sampling_rate
 
-    for index, event in ppc_sweep_start_events:
+    for event in ppc_sweep_start_events:
         event_time_in_samples = length_to_samples(
             event["time"] + global_delay, sampling_rate
         )
@@ -391,13 +389,13 @@ def analyze_ppc_sweep_events(events: list[Any], awg: AWGInfo, global_delay: floa
         ppc_sweep_start_event = AWGEvent(
             type=AWGEventType.PPC_SWEEP_STEP_START,
             start=event_time_in_samples,
-            priority=index,
+            priority=event["position"],
             params=params,
         )
 
         retval.add(event_time_in_samples, ppc_sweep_start_event)
 
-    for index, event in ppc_sweep_end_events:
+    for event in ppc_sweep_end_events:
         event_time_in_samples = length_to_samples(
             event["time"] + global_delay, sampling_rate
         )
@@ -405,7 +403,7 @@ def analyze_ppc_sweep_events(events: list[Any], awg: AWGInfo, global_delay: floa
         ppc_sweep_end_event = AWGEvent(
             type=AWGEventType.PPC_SWEEP_STEP_END,
             start=event_time_in_samples,
-            priority=index,
+            priority=event["position"],
             params={},
         )
 
@@ -464,9 +462,9 @@ def analyze_acquire_times(
                     event.get("amplitude", 1.0),
                     event.get("id_pulse_params"),
                     event.get("channel") or channels,
-                    priority=index,
+                    priority=event["position"],
                 )
-                for index, event in enumerate(events)
+                for event in events
                 if event["event_type"] in ["ACQUIRE_START"]
                 and event["signal"] == signal_id
             ],
@@ -531,8 +529,8 @@ def analyze_trigger_events(
     events: List[Dict], signal: SignalObj, loop_events: AWGSampledEventSequence
 ) -> AWGSampledEventSequence:
     digital_signal_change_events = [
-        (index, event)
-        for index, event in enumerate(events)
+        event
+        for event in events
         if event["event_type"] == EventType.DIGITAL_SIGNAL_STATE_CHANGE
         and signal.id == event["signal"]
     ]
@@ -542,11 +540,12 @@ def analyze_trigger_events(
 
     sampled_digital_signal_change_events = AWGSampledEventSequence()
 
-    for index, event in digital_signal_change_events:
+    for event in digital_signal_change_events:
         event: dict
         time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
         sampled_digital_signal_change_events.add(
-            time_in_samples, AWGEvent(type=None, params=event, priority=index)
+            time_in_samples,
+            AWGEvent(type=None, params=event, priority=event["position"]),
         )
 
     current_state = 0
@@ -618,8 +617,8 @@ def analyze_trigger_events(
 def analyze_prng_times(events, sampling_rate, delay):
     retval = AWGSampledEventSequence()
     filtered_events = (
-        (index, event)
-        for index, event in enumerate(events)
+        event
+        for event in events
         if event["event_type"]
         in (
             EventType.PRNG_SETUP,
@@ -628,14 +627,14 @@ def analyze_prng_times(events, sampling_rate, delay):
             EventType.DROP_PRNG_SAMPLE,
         )
     )
-    for index, event in filtered_events:
+    for event in filtered_events:
         event_time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
         if event["event_type"] == EventType.PRNG_SETUP:
             awg_event = AWGEvent(
                 type=AWGEventType.SETUP_PRNG,
                 start=event_time_in_samples,
                 end=event_time_in_samples,
-                priority=index,
+                priority=event["position"],
                 params={
                     "range": event["range"],
                     "seed": event["seed"],
@@ -647,7 +646,7 @@ def analyze_prng_times(events, sampling_rate, delay):
                 type=AWGEventType.DROP_PRNG_SETUP,
                 start=event_time_in_samples,
                 end=event_time_in_samples,
-                priority=index,
+                priority=event["position"],
                 params={"section": event["section_name"]},
             )
         elif event["event_type"] == EventType.DRAW_PRNG_SAMPLE:
@@ -655,7 +654,7 @@ def analyze_prng_times(events, sampling_rate, delay):
                 type=AWGEventType.PRNG_SAMPLE,
                 start=event_time_in_samples,
                 end=event_time_in_samples,
-                priority=index,
+                priority=event["position"],
                 params={
                     "sample_name": event["sample_name"],
                     "section_name": event["section_name"],
@@ -666,7 +665,7 @@ def analyze_prng_times(events, sampling_rate, delay):
                 type=AWGEventType.DROP_PRNG_SAMPLE,
                 start=event_time_in_samples,
                 end=event_time_in_samples,
-                priority=index,
+                priority=event["position"],
                 params={"sample_name": event["sample_name"]},
             )
         retval.add(event_time_in_samples, awg_event)

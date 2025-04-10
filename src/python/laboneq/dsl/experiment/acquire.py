@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import attrs
 from typing import Any
 
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
@@ -13,23 +13,23 @@ from .pulse import Pulse
 
 
 @classformatter
-@dataclass(init=True, repr=True, order=True)
+@attrs.define
 class Acquire(Operation):
     """Class representing an acquire operation that is used to acquire results."""
 
     #: Unique identifier of the signal where the result should be acquired.
-    signal: str = field(default=None)
+    signal: str | None = attrs.field(default=None)
 
     #: Unique identifier of the handle that will be used to access the acquired result.
-    handle: str = field(default=None)
+    handle: str | None = attrs.field(default=None)
 
     #: Pulse(s) used for the acquisition integration weight (only valid in integration mode).
-    kernel: Pulse | list[Pulse] | None = field(default=None)
+    kernel: Pulse | list[Pulse] | None = attrs.field(default=None)
 
     #: Integration length (only valid in spectroscopy mode).
-    length: float | None = field(default=None)
+    length: float | None = attrs.field(default=None)
 
     #: Optional (re)binding of user pulse parameters
-    pulse_parameters: dict[str, Any] | list[dict[str, Any] | None] | None = field(
+    pulse_parameters: dict[str, Any] | list[dict[str, Any] | None] | None = attrs.field(
         default=None
     )

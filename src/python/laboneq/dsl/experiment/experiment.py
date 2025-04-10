@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+import warnings
 
+import attrs
 from collections import deque
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Iterator, NoReturn, final
 
 from laboneq.core.exceptions import LabOneQException
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
 
 @final
 @classformatter
-@dataclass(init=True, repr=True, order=True)
+@attrs.define(slots=False)
 class Experiment:
     """LabOne Q Experiment.
 
@@ -63,20 +64,20 @@ class Experiment:
         The `name` attribute was added.
     """
 
-    uid: str | None = field(default=None)
-    name: str = field(default="unnamed")
-    signals: dict[str, ExperimentSignal] | list[ExperimentSignal | str] = field(
-        default_factory=dict
+    uid: str | None = attrs.field(default=None)
+    name: str = attrs.field(default="unnamed")
+    signals: dict[str, ExperimentSignal] | list[ExperimentSignal | str] = attrs.field(
+        factory=dict
     )
-    version: DSLVersion = field(default=DSLVersion.V3_0_0)
-    epsilon: float = field(default=0.0)
-    sections: list[Section] = field(default_factory=list)
+    version: DSLVersion = attrs.field(default=DSLVersion.V3_0_0)
+    epsilon: float = attrs.field(default=0.0)
+    sections: list[Section] = attrs.field(factory=list)
 
-    _section_stack: deque[Section] = field(
-        default_factory=deque, repr=False, compare=False, init=False
+    _section_stack: deque[Section] = attrs.field(
+        factory=deque, repr=False, order=False, init=False
     )
 
-    def __post_init__(self):
+    def __attrs_post_init__(self):
         if self.signals is not None and isinstance(self.signals, list):
             signals_dict = {}
             for s in self.signals:
@@ -1238,6 +1239,9 @@ class Experiment:
     def load(filename: str) -> Experiment:
         """Load an experiment from a JSON file.
 
+        !!! version-changed "Deprecated in version 2.50.0"
+            Use `laboneq.simple.load` instead.
+
         Arguments:
             filename:
                 The name of the file to load the experiment from.
@@ -1248,11 +1252,21 @@ class Experiment:
         """
         from ..serialization import Serializer
 
+        warnings.warn(
+            "The `Experiment.load` method is deprecated and will be removed in future releases. "
+            "Please use the `load` function from the `laboneq.simple` module instead. ",
+            FutureWarning,
+            stacklevel=2,
+        )
+
         # TODO ErC: Error handling
         return Serializer.from_json_file(filename, Experiment)
 
     def save(self, filename: str):
         """Save this experiment to a file.
+
+        !!! version-changed "Deprecated in version 2.50.0"
+            Use `laboneq.simple.save` instead.
 
         Arguments:
             filename:
@@ -1260,6 +1274,12 @@ class Experiment:
         """
         from ..serialization import Serializer
 
+        warnings.warn(
+            "The `Experiment.save` method is deprecated and will be removed in future releases. "
+            "Please use the `save` function from the `laboneq.simple` module instead. ",
+            FutureWarning,
+            stacklevel=2,
+        )
         # TODO ErC: Error handling
         Serializer.to_json_file(self, filename)
 

@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import Dict
+
+import attrs
 
 import laboneq.core.path as qct_path
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
@@ -12,13 +12,13 @@ from laboneq.dsl.device.io_units.physical_channel import PhysicalChannel
 
 
 @classformatter
-@dataclass
+@attrs.define
 class PhysicalChannelGroup:
     #: Unique identifier.
-    uid: str = field(default=None)
+    uid: str | None = attrs.field(default=None)
 
     #: The physical channels in this group.
-    channels: Dict[str, PhysicalChannel] = field(default_factory=dict)
+    channels: dict[str, PhysicalChannel] = attrs.field(factory=dict)
 
     def get_calibration(self):
         """Retrieve the calibration of the physical channel group."""

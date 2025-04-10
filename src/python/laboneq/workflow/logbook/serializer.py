@@ -177,10 +177,13 @@ def serialize_numpy_array(obj: np.ndarray, opener: SerializeOpener) -> None:
 from laboneq.dsl.experiment.experiment import Experiment
 from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.dsl.device.device_setup import DeviceSetup
-from laboneq.dsl.quantum import QPU, QuantumElement, Transmon
+from laboneq.dsl.quantum import QPU, QuantumParameters, QuantumElement, Transmon
 from laboneq.dsl.result.results import Results
 from laboneq.workflow.tasks import RunExperimentResults
-from laboneq.serializers.implementations.quantum_element import QuantumElementContainer
+from laboneq.serializers.implementations.quantum_element import (
+    QuantumParametersContainer,
+    QuantumElementContainer,
+)
 from laboneq.workflow import TaskOptions, WorkflowOptions
 
 
@@ -188,10 +191,12 @@ from laboneq.workflow import TaskOptions, WorkflowOptions
 @serialize.register(DeviceSetup)
 @serialize.register(Experiment)
 @serialize.register(QPU)
+@serialize.register(QuantumParameters)
 @serialize.register(QuantumElement)
 @serialize.register(Transmon)
 @serialize.register(Results)
 @serialize.register(RunExperimentResults)
+@serialize.register(QuantumParametersContainer)
 @serialize.register(QuantumElementContainer)
 @serialize.register(TaskOptions)
 @serialize.register(WorkflowOptions)
@@ -206,7 +211,9 @@ def serialize_laboneq_object(obj: object, opener: SerializeOpener) -> None:
 @serialize.register
 def serialize_list(obj: list, opener: SerializeOpener) -> None:
     """Serialize lists."""
-    if all(isinstance(x, QuantumElement) for x in obj):
+    if all(isinstance(x, QuantumParameters) for x in obj):
+        serialize_laboneq_object(QuantumParametersContainer(obj), opener)
+    elif all(isinstance(x, QuantumElement) for x in obj):
         serialize_laboneq_object(QuantumElementContainer(obj), opener)
     else:
         # TODO: We should be more careful about what we try serialize

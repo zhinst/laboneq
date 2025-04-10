@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import attrs
 from typing import Any
 
 import numpy as np
@@ -39,18 +39,18 @@ class Pulse:
 
 # TODO: PulseSampledReal and PulseSampledComplex should be the same function taking a single dimensional np.ndarray.
 @classformatter
-@dataclass(init=True, repr=True, order=True)
+@attrs.define(eq=False)
 class PulseSampled(Pulse):
     """Pulse envelope based on a list of real or complex-valued samples."""
 
     #: List of values for the pulse envelope.
     samples: ArrayLike
     #: Unique identifier of the pulse.
-    uid: str = field(default_factory=pulse_id_generator)
+    uid: str = attrs.field(factory=pulse_id_generator)
     #: Flag indicating whether the compiler should attempt to compress this pulse
     can_compress: bool = False
 
-    def __post_init__(self):
+    def __attrs_post_init__(self):
         if not isinstance(self.uid, str):
             raise LabOneQException("PulseSampled must have a string uid")
         self.samples = np.array(self.samples)
@@ -62,7 +62,7 @@ class PulseSampled(Pulse):
 
 
 @classformatter
-@dataclass(init=True, repr=True, order=False, eq=False)
+@attrs.define(eq=False)
 class PulseSampledReal(PulseSampled):
     """Pulse based on a list of real-valued samples.
 
@@ -70,8 +70,8 @@ class PulseSampledReal(PulseSampled):
         Use `PulseSampled` instead.
     """
 
-    def __post_init__(self):
-        super().__post_init__()
+    def __attrs_post_init__(self):
+        super().__attrs_post_init__()
         shape = np.shape(self.samples)
         if not len(shape) == 1:
             raise LabOneQException(
@@ -80,7 +80,7 @@ class PulseSampledReal(PulseSampled):
 
 
 @classformatter
-@dataclass(init=True, repr=True, order=False, eq=False)
+@attrs.define(eq=False)
 class PulseSampledComplex(PulseSampled):
     """Pulse base on a list of complex-valued samples.
 
@@ -88,7 +88,7 @@ class PulseSampledComplex(PulseSampled):
         Use `PulseSampled` instead.
     """
 
-    def __post_init__(self):
+    def __attrs_post_init__(self):
         if not np.iscomplexobj(self.samples):
             shape = np.shape(self.samples)
             if not (len(shape) == 2 and shape[1] == 2):
@@ -98,11 +98,11 @@ class PulseSampledComplex(PulseSampled):
             raw_array = np.transpose(self.samples)
             self.samples = raw_array[0] + 1j * raw_array[1]
 
-        super().__post_init__()
+        super().__attrs_post_init__()
 
 
 @classformatter
-@dataclass(init=True, repr=True, order=True)
+@attrs.define
 class PulseFunctional(Pulse):
     """Pulse based on a function."""
 
@@ -110,21 +110,21 @@ class PulseFunctional(Pulse):
     function: str
 
     #: Unique identifier of the pulse.
-    uid: str = field(default_factory=pulse_id_generator)
+    uid: str = attrs.field(factory=pulse_id_generator)
 
     #: Amplitude of the pulse.
-    amplitude: float | None = field(default=None)
+    amplitude: float | complex | np.number | None = attrs.field(default=None)
 
     #: Length of the pulse in seconds.
-    length: float | None = field(default=None)
+    length: float | None = attrs.field(default=None)
 
     #: Flag indicating whether the compiler should attempt to compress this pulse
-    can_compress: bool = field(default=False)
+    can_compress: bool = attrs.field(default=False)
 
     #: Optional (re)binding of user pulse parameters
-    pulse_parameters: dict[str, Any] | None = field(default=None)
+    pulse_parameters: dict[str, Any] | None = attrs.field(default=None)
 
-    def __post_init__(self):
+    def __attrs_post_init__(self):
         if not isinstance(self.uid, str):
             raise LabOneQException(f"{PulseFunctional.__name__} must have a string uid")
 

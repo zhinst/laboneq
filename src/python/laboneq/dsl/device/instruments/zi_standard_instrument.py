@@ -3,16 +3,23 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import attrs
 
 from laboneq.core.types.enums import ReferenceClockSource
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
-
 from ..instrument import Instrument
 
 
+def _reference_clock_source_converter(
+    value: ReferenceClockSource | str | None,
+) -> ReferenceClockSource | None:
+    if isinstance(value, str):
+        value = ReferenceClockSource(value.lower())
+    return value
+
+
 @classformatter
-@dataclass(init=True, repr=True, order=True)
+@attrs.define(slots=False)
 class ZIStandardInstrument(Instrument):
     """Base class representing a ZI instrument controlled via a LabOne Data Server.
 
@@ -24,19 +31,15 @@ class ZIStandardInstrument(Instrument):
             Options: 'internal', 'external'
     """
 
-    server_uid: str | None = field(default=None)
-    address: str | None = field(default=None)
-    device_options: str | None = field(default=None)
-    reference_clock_source: ReferenceClockSource | str | None = field(default=None)
-
-    def __post_init__(self):
-        if isinstance(self.reference_clock_source, str):
-            self.reference_clock_source = ReferenceClockSource(
-                self.reference_clock_source.lower()
-            )
+    server_uid: str | None = attrs.field(default=None)
+    address: str | None = attrs.field(default=None)
+    device_options: str | None = attrs.field(default=None)
+    reference_clock_source: ReferenceClockSource | None = attrs.field(
+        default=None, converter=_reference_clock_source_converter
+    )
 
     #: Device class
-    device_class: int = field(default=0x0)
+    device_class: int = attrs.field(default=0x0)
 
     def calc_options(self):
         return {

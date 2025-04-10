@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import attrs
 from typing import Optional
 
 from laboneq.core.types.enums import PortMode
@@ -29,7 +29,7 @@ def experiment_signal_id_generator():
 
 
 @classformatter
-@dataclass(init=False, repr=True, order=True)
+@attrs.define(init=False)
 class ExperimentSignal(Calibratable):
     """A signal within an experiment.
 
@@ -88,7 +88,7 @@ class ExperimentSignal(Calibratable):
             The SHFSG, SHFQA and SHFQC port mode signal calibration.
             Ignored if the `calibration` parameter is set.
         threshold:
-            The sginal calibration state discrimation threshold.
+            The signal calibration state discrimination threshold.
             Only supported for acquisition signals on the UHFQA, SHFQA
             and SHFQC.
             Ignored if the `calibration` parameter is set.

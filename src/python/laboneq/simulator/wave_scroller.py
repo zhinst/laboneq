@@ -266,6 +266,8 @@ class WaveScroller:
             if wave_data_indices is not None:
                 wave = 1j * self.sim.waves[wave_data_indices[self.ch[1] % 2]]
                 wave += self.sim.waves[wave_data_indices[self.ch[0] % 2]]
+                if self.sim.device_type == "SHFSG":
+                    wave = wave.conj()
 
                 # If the command table phase is set, assume that the signal is complex
                 # (rather than 2x real)

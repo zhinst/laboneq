@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import attrs
 from typing import Iterable, Optional
 
 from laboneq.core import path as qct_path
@@ -12,17 +12,18 @@ from laboneq.dsl.enums import IODirection, IOSignalType
 
 
 @classformatter
-@dataclass(init=True, repr=True, order=True)
+@attrs.define
 class Connection:
-    direction: IODirection = field(default=IODirection.OUT)
-    local_path: str | None = field(default=None)
-    local_port: str | None = field(default=None)
-    remote_path: str | None = field(default=None)
-    remote_port: str | None = field(default=None)
-    signal_type: Optional[IOSignalType] = field(default=None)
+    direction: IODirection = attrs.field(default=IODirection.OUT)
+    local_path: str | None = attrs.field(default=None)
+    local_port: str | None = attrs.field(default=None)
+    remote_path: str | None = attrs.field(default=None)
+    remote_port: str | None = attrs.field(default=None)
+    signal_type: Optional[IOSignalType] = attrs.field(default=None)
 
 
-@dataclass
+@classformatter
+@attrs.define
 class SignalConnection:
     """Connection to a logical signal
 
@@ -35,10 +36,10 @@ class SignalConnection:
 
     uid: str
     # Optional: inferred from device and ports
-    type: str | None = field(default=None)
-    ports: list[str] = field(default_factory=list)
+    type: str | None = attrs.field(default=None)
+    ports: list[str] = attrs.field(factory=list)
 
-    def __post_init__(self):
+    def __attrs_post_init__(self):
         parts = self.uid.split(qct_path.Separator)
         if len(parts) != 2 or (not parts[0] and parts[1]):
             raise ValueError(
@@ -54,7 +55,8 @@ class SignalConnection:
         return self.uid.split(qct_path.Separator)[1]
 
 
-@dataclass
+@classformatter
+@attrs.define(init=False)
 class InternalConnection:
     """Setup internal connection between Zurich Instrument devices.
 

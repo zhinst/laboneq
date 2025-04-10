@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+import warnings
 
 from laboneq.core.validators import dicts_equal
 from laboneq.data.scheduled_experiment import CodegenWaveform, ScheduledExperiment
@@ -24,10 +25,10 @@ class CompiledExperiment:
     """Data structure to store the output of the compiler.
 
     Attributes:
-        device_setup (DeviceSetup):
-            The device setup the experiment was compiled for.
-        experiment (Experiment):
-            The (uncompiled) experiment.
+        device_setup (DeviceSetup) (deprecated):
+            Deprecated. The device setup the experiment was compiled for.
+        experiment (Experiment) (deprecated):
+            Deprecated. The (uncompiled) experiment.
         experiment_dict (deprecated):
             Deprecated. A representation of the source experiment, using
             primitive Python datatypes only (dicts, lists, etc).
@@ -36,6 +37,12 @@ class CompiledExperiment:
             Internal. The internal representation of the compiled
             experiment. Available for debugging but subject to
             change in any LabOne Q release.
+
+    !!! version-changed "Deprecated in version 2.51.0"
+        The `.device_setup` and `.experiment` attributes were
+        deprecated in version 2.51.0 and will be removed in a
+        future release. Manage and track the device setup and experiment
+        separately if they are needed.
 
     !!! version-changed "Deprecated in version 2.14.0"
         The `.experiment_dict` attribute was deprecated in
@@ -225,19 +232,39 @@ class CompiledExperiment:
     def load(filename: str) -> CompiledExperiment:
         """Load a compiled experiment from a JSON file.
 
+        !!! version-changed "Deprecated in version 2.50.0"
+            Use `laboneq.simple.load` instead.
+
         Args:
             filename: The file to load the compiled experiment from.
         """
         from laboneq.dsl.serialization import Serializer
+
+        warnings.warn(
+            "The `CompiledExperiment.load` method is deprecated and will be removed in future releases. "
+            "Please use the `load` function from the `laboneq.simple` module instead. ",
+            FutureWarning,
+            stacklevel=2,
+        )
 
         return Serializer.from_json_file(filename, CompiledExperiment)
 
     def save(self, filename: str):
         """Store a compiled experiment in a JSON file.
 
+        !!! version-changed "Deprecated in version 2.50.0"
+            Use `laboneq.simple.save` instead.
+
         Args:
             filename: The file to save the compiled experiment to.
         """
         from laboneq.dsl.serialization import Serializer
+
+        warnings.warn(
+            "The `CompiledExperiment.save` method is deprecated and will be removed in future releases. "
+            "Please use the `save` function from the `laboneq.simple` module instead. ",
+            FutureWarning,
+            stacklevel=2,
+        )
 
         Serializer.to_json_file(self, filename)

@@ -148,52 +148,56 @@ fn merge_overlaps(intervals: &mut Vec<OrderedRange<i64>>) {
 
 /// Calculate intervals
 ///
-/// Computes intervals (corresponding to eventual playWave statements in the code) from
-/// pulses.
+/// Computes intervals (corresponding to eventual playWave statements in the
+/// code) from pulses.
 ///
 /// # Arguments
 ///
 /// * intervals - Pulse playbacks as intervals
 /// * cut_points - Timestamps of events that (probably) emit code. `intervals`
-///     must not span across a cut point. The function assumes `cut_points` are ordered.
-///     The gap between `cut_points` must be equal or larger than `min_play_wave`.
-/// * granularity - The waveform granularity of the hardware, i.e. waveform lengths, hints and cut points
-///     must be a multiple of this number.
-/// * min_play_wave - The hard lower limit on how long a playWave or playZero can be
-/// * play_wave_size_hint - Minimum length long we would like (but not require!) playWave() to be
-/// * play_zero_size_hint - Minimum length long we would like (but not require!) playZero() to be
-/// * play_wave_max_hint - An optional hint for maximum length on how long a playWave or playZero can be.
-///     Must be larger than `min_play_wave`.
-/// * ct_intervals - An optional collection of intervals within the `cut_points` for which all pulses
-///     must be merged to one interval because they are played as a single command
-///     table entry.
+///   must not span across a cut point. The function assumes `cut_points` are
+///   ordered. The gap between `cut_points` must be equal or larger than
+///   `min_play_wave`.
+/// * granularity - The waveform granularity of the hardware, i.e. waveform
+///   lengths, hints and cut points must be a multiple of this number.
+/// * min_play_wave - The hard lower limit on how long a playWave or playZero
+///   can be
+/// * play_wave_size_hint - Minimum length long we would like (but not require!)
+///   playWave() to be
+/// * play_zero_size_hint - Minimum length long we would like (but not require!)
+///   playZero() to be
+/// * play_wave_max_hint - An optional hint for maximum length on how long a
+///   playWave or playZero can be. Must be larger than `min_play_wave`.
+/// * ct_intervals - An optional collection of intervals within the `cut_points`
+///   for which all pulses must be merged to one interval because they are
+///   played as a single command table entry.
 ///
 /// # Returns
 ///
 /// Intervals that have been merged according to the rules below.
 ///
-/// Respecting `min_play_wave` and `play_wave_max_hint` is hard requirement: if they cannot
-/// be enforced, the algorithm fails loudly. By comparison `play_wave_size_hint` and
-/// `play_zero_size_hint` are merely hints.
+/// Respecting `min_play_wave` and `play_wave_max_hint` is hard requirement: if
+/// they cannot be enforced, the algorithm fails loudly. By comparison
+/// `play_wave_size_hint` and `play_zero_size_hint` are merely hints.
 ///
-/// The calculation happens in three passes: Passes 1 & 2 target the hard min & max
-/// waveform length, going over the segments from left-to-right and right-to-left.
-/// Pass 3 targets the length hints, left-to-right.
+/// The calculation happens in three passes: Passes 1 & 2 target the hard min &
+/// max waveform length, going over the segments from left-to-right and
+/// right-to-left. Pass 3 targets the length hints, left-to-right.
 ///
-/// In each pass, the algorithm keeps merging segments greedily until the total length
-/// exceeds the desired length, and then continues with the next segment. If it reaches
-/// the end of the pass, and no interval is left, it leaves the last interval at its
-/// current length. By combining a left-to-right with a right-to-left pass, all
-/// waveforms are guaranteed to exceed the `min_play_wave` length, if possible at all.
-/// If two consecutive cut points are spaced by less than `min_play_wave`, no solution
-/// may exist, and we fail.
+/// In each pass, the algorithm keeps merging segments greedily until the total
+/// length exceeds the desired length, and then continues with the next segment.
+/// If it reaches the end of the pass, and no interval is left, it leaves the
+/// last interval at its current length. By combining a left-to-right with a
+/// right-to-left pass, all waveforms are guaranteed to exceed the
+/// `min_play_wave` length, if possible at all. If two consecutive cut points
+/// are spaced by less than `min_play_wave`, no solution may exist, and we fail.
 ///
-/// In the third pass we also enforce the _maximum_ length. (In the first 2 passes, this
-/// is unnecessary; if we can't make one waveform long enough without making another too
-/// long, all is lost.)
+/// In the third pass we also enforce the _maximum_ length. (In the first 2
+/// passes, this is unnecessary; if we can't make one waveform long enough
+/// without making another too long, all is lost.)
 ///
-/// Note that at this time, we do not support pulses overlapping cut points. This is returns an
-/// error.
+/// Note that at this time, we do not support pulses overlapping cut points.
+/// This is returns an error.
 #[allow(clippy::too_many_arguments)]
 pub fn calculate_intervals(
     intervals: &[OrderedRange<i64>],

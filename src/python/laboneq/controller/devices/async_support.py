@@ -519,7 +519,8 @@ def canonical_vector(value: Any) -> NumPyArray:
     return getattr(value, "vector", value)
 
 
-def canonical_properties(properties: Any) -> dict[str, Any]:
+def canonical_properties(value: Any) -> dict[str, Any]:
+    properties = getattr(value, "properties", {})
     return {_key_translate.get(key, key): val for key, val in dict(properties).items()}
 
 
@@ -535,16 +536,15 @@ class ResponseWaiterAsync:
     def __init__(
         self,
         api: InstrumentConnection,
-        nodes: dict[str, Any] | None = None,
+        dev_repr: str,
         timeout_s: float | None = None,
     ):
         self._api = api
+        self._dev_repr = dev_repr
         self._nodes: dict[str, Any] = {}
         self._messages: dict[str, str] = {}
         self._timeout_s = timeout_s
         self._queues: dict[str, DataQueue] = {}
-        if nodes is not None:
-            self.add_nodes(nodes)
 
     def add_nodes(self, nodes: dict[str, Any]):
         self._nodes.update(nodes)
@@ -591,6 +591,8 @@ class ResponseWaiterAsync:
                     msg = self._messages.get(path)
                     if msg is None:
                         msg = f"{path}={expected}"
+                    else:
+                        msg = f"{self._dev_repr}: {msg}"
                     failed_nodes.append(msg)
         for queue in self._queues.values():
             queue.disconnect()
@@ -619,6 +621,12 @@ class ConditionsCheckerAsync:
             pass
 
 
+@dataclass
+class ResultData:
+    vector: NumPyArray
+    properties: dict[str, Any]
+
+
 class AsyncSubscriber:
     def __init__(self):
         self._subscriptions: dict[str, DataQueue] = {}
@@ -637,6 +645,13 @@ class AsyncSubscriber:
         value = await asyncio.wait_for(queue.get(), timeout=timeout_s)
         self._last[path] = value
         return value
+
+    async def get_result(self, path: str, timeout_s: float | None = None) -> ResultData:
+        value = await self.get(path=path, timeout_s=timeout_s)
+        return ResultData(
+            vector=canonical_vector(value.value),
+            properties=canonical_properties(value.value),
+        )
 
     def get_updates(self, path) -> list[AnnotatedValue]:
         updates = []

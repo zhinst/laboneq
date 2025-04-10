@@ -3,11 +3,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-
+import attrs
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.data.calibration import CancellationSource
-from laboneq.dsl.calibration.observable import Observable
 from laboneq.dsl.parameter import Parameter
 
 amplifier_pump_id = 0
@@ -21,8 +19,8 @@ def amplifier_pump_id_generator():
 
 
 @classformatter
-@dataclass(init=True, repr=True, order=True)
-class AmplifierPump(Observable):
+@attrs.define
+class AmplifierPump:
     """Settings for the SHF Parametric Pump Controller (SHFPPC).
 
     Attributes:
@@ -74,7 +72,7 @@ class AmplifierPump(Observable):
     """
 
     #: Unique identifier. If left blank, a new unique ID will be generated.
-    uid: str = field(default_factory=amplifier_pump_id_generator)
+    uid: str = attrs.field(factory=amplifier_pump_id_generator)
 
     pump_frequency: float | Parameter | None = None
     pump_power: float | Parameter | None = None

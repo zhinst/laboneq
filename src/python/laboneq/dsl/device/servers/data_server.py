@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from dataclasses import dataclass
+
+import attrs
 
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 
@@ -10,7 +11,7 @@ from .. import Server
 
 
 @classformatter
-@dataclass(init=True, repr=True, order=True)
+@attrs.define
 class DataServer(Server):
     """Class representing a LabOne Data Server.
 

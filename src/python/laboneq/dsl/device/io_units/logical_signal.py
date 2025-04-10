@@ -3,54 +3,38 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
-from dataclasses import dataclass, fields
+import attrs
 from typing import Optional, Union
 
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.core.types.enums import IODirection
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
-from laboneq.dsl.calibration import MixerCalibration, SignalCalibration
+from laboneq.dsl.calibration.mixer_calibration import MixerCalibration
+from laboneq.dsl.calibration.signal_calibration import (
+    SignalCalibration,
+)
 from laboneq.dsl.calibration.amplifier_pump import AmplifierPump
 from laboneq.dsl.calibration.calibratable import Calibratable
 from laboneq.dsl.device.io_units.physical_channel import (
-    PHYSICAL_CHANNEL_CALIBRATION_FIELDS,
     PhysicalChannel,
 )
 
 
 @classformatter
-@dataclass(init=False, repr=False, order=True)
+@attrs.define(repr=False, slots=False)
 class LogicalSignal(Calibratable):
     uid: str
-    name: str | None
-    _calibration: Optional[SignalCalibration]
-    _physical_channel: Optional[PhysicalChannel]
-    path: str | None
-    direction: Optional[IODirection]
+    direction: Optional[IODirection] = None
+    name: str | None = None
+    calibration: SignalCalibration | None = attrs.field(
+        default=None,
+        on_setattr=lambda self, attr, value: self._set_calibration(attr, value),
+    )
+    path: str | None = None
+    _physical_channel: Optional[PhysicalChannel] = None
 
-    def __init__(
-        self,
-        uid,
-        direction=None,
-        name=None,
-        calibration=None,
-        path=None,
-        physical_channel: PhysicalChannel | None = None,
-    ):
-        super().__init__()
-        self.uid = uid
-        self.name = name
-        self.direction = direction
-        self._calibration = calibration
-        self.path = path
-        self._physical_channel = physical_channel
-        if self.is_calibrated():
-            self.calibration.has_changed().connect(self._on_calibration_changed)
-        if physical_channel is not None:
-            physical_channel.calibration_has_changed().connect(
-                self._on_physical_channel_calibration_changed
-            )
+    def _set_calibration(self, attr, value):
+        return value
 
     def __hash__(self):
         # By default, dataclass does not generate a __hash__() method for LogicalSignal,
@@ -62,7 +46,7 @@ class LogicalSignal(Calibratable):
 
     def __repr__(self):
         field_values = []
-        for field in fields(self):
+        for field in attrs.fields(LogicalSignal):
             value = getattr(self, field.name)
             if field.name == "_calibration":
                 field_values.append(f"calibration={value!r}")
@@ -73,7 +57,7 @@ class LogicalSignal(Calibratable):
         return f"{self.__class__.__name__}({', '.join(field_values)})"
 
     def __rich_repr__(self):
-        for field in fields(self):
+        for field in attrs.fields(LogicalSignal):
             value = getattr(self, field.name)
             if field.name == "_calibration":
                 yield "calibration", value
@@ -244,106 +228,11 @@ class LogicalSignal(Calibratable):
         else:
             self.calibration.amplifier_pump = value
 
-    @property
-    def calibration(self) -> SignalCalibration | None:
-        return self._calibration
-
-    @calibration.setter
-    def calibration(self, new_calib: Optional[SignalCalibration]):
-        if new_calib is self._calibration:
-            return
-
-        # Ignore the physical channel properties that are None in the new object
-        if self.is_calibrated() and new_calib is not None:
-            for field in PHYSICAL_CHANNEL_CALIBRATION_FIELDS:
-                if getattr(new_calib, field) is None:
-                    old_value = getattr(self._calibration, field)
-                    setattr(new_calib, field, old_value)
-        elif self.is_calibrated() and new_calib is None:
-            self.reset_calibration()
-            return
-
-        with self._suspend_callback():  # disconnect old callback, reconnect new one
-            self._calibration = new_calib
-
-        if self.is_calibrated():
-            for key in self.calibration.observed_fields():
-                new_calib_attribute = getattr(self.calibration, key)
-                self._on_calibration_changed(self.calibration, key, new_calib_attribute)
-
-    def _on_calibration_changed(self, _: SignalCalibration, key: str, value):
-        """Called when the user modifies `LogicalSignal.calibration`"""
-        if self.physical_channel is None:
-            return
-
-        pc = self.physical_channel
-
-        if key in PHYSICAL_CHANNEL_CALIBRATION_FIELDS and value is not None:
-            with self._suspend_callback():
-                if pc.calibration is None:
-                    pc.calibration = SignalCalibration(**{key: value})
-                else:
-                    setattr(pc.calibration, key, value)
-
-    def _on_physical_channel_calibration_changed(
-        self, _: PhysicalChannel, key: str, value
-    ):
-        """Called when the user modifies `LogicalSignal.physical_channel.calibration`"""
-        if key == "calibration":  # Entire calibration object was replaced
-            calibration = value
-            with self._suspend_callback():
-                if not self.is_calibrated():
-                    self._calibration = SignalCalibration()
-                for field in PHYSICAL_CHANNEL_CALIBRATION_FIELDS:
-                    setattr(self._calibration, field, getattr(calibration, field, None))
-        else:
-            assert self.physical_channel.is_calibrated()
-            with self._suspend_callback():
-                if self._calibration is None:
-                    self._calibration = SignalCalibration(**{key: value})
-                else:
-                    setattr(self._calibration, key, value)
-
-    @contextmanager
-    def _suspend_callback(self):
-        if self.is_calibrated():
-            self._calibration.has_changed().disconnect(self._on_calibration_changed)
-        if self.physical_channel is not None:
-            self.physical_channel.calibration_has_changed().disconnect(
-                self._on_physical_channel_calibration_changed
-            )
-
-        yield
-
-        # By now any of the observables might have changed so test (for None) again.
-        if self.is_calibrated():
-            self._calibration.has_changed().connect(self._on_calibration_changed)
-        if self.physical_channel is not None:
-            self.physical_channel.calibration_has_changed().connect(
-                self._on_physical_channel_calibration_changed
-            )
-
     def is_calibrated(self) -> bool:
-        return self._calibration is not None
+        return self.calibration is not None
 
     def reset_calibration(self):
-        if not self.is_calibrated():
-            return
-        physical_channel_is_calibrated = any(
-            getattr(self._calibration, field) is not None
-            for field in PHYSICAL_CHANNEL_CALIBRATION_FIELDS
-        )
-        if physical_channel_is_calibrated:
-            for field in self.calibration.observed_fields():
-                if field in PHYSICAL_CHANNEL_CALIBRATION_FIELDS:
-                    continue
-                with self._suspend_callback():
-                    setattr(self.calibration, field, None)
-
-        if not physical_channel_is_calibrated:
-            # calibration is empty, no need to hold on to it
-            with self._suspend_callback():
-                self._calibration = None
+        self.calibration = None
 
     @property
     def physical_channel(self):

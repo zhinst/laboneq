@@ -3,13 +3,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
+import attrs
 from enum import Enum
 from typing import Optional
 
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration import Calibratable, SignalCalibration
-from laboneq.dsl.calibration.observable import Signal
+from laboneq.dsl.calibration.physical_channel_calibration import (
+    PhysicalChannelCalibration,
+)
+
+
+PHYSICAL_CHANNEL_CALIBRATION_FIELDS = tuple(
+    attrs.fields_dict(PhysicalChannelCalibration).keys()
+)
 
 
 class PhysicalChannelType(Enum):
@@ -17,22 +24,25 @@ class PhysicalChannelType(Enum):
     RF_CHANNEL = "rf_channel"
 
 
-PHYSICAL_CHANNEL_CALIBRATION_FIELDS = (
-    "local_oscillator",
-    "port_delay",
-    "port_mode",
-    "range",
-    "voltage_offset",
-    "mixer_calibration",
-    "precompensation",
-    "amplitude",
-    "added_outputs",
-    "amplifier_pump",
-)
+def _physical_calibration_to_signal_calibration(
+    value: PhysicalChannelCalibration | SignalCalibration | None,
+) -> SignalCalibration | None:
+    if isinstance(value, SignalCalibration):
+        return value
+    elif value is None:
+        return None
+
+    cal = SignalCalibration(
+        **attrs.asdict(
+            value,
+            recurse=False,
+        )
+    )
+    return cal
 
 
 @classformatter
-@dataclass(init=False, repr=False, order=True)
+@attrs.define(repr=False, slots=False)
 class PhysicalChannel(Calibratable):
     #: Unique identifier. Typically of the form
     # ``<device uid>/<channel name>``.
@@ -42,47 +52,38 @@ class PhysicalChannel(Calibratable):
     # Computed from the HW channel ids like:
     # [SIGOUTS/0, SIGOUTS/1] -> "sigouts_0_1"
     # [SIGOUTS/2] -> "sigouts_2"
-    name: str | None
+    name: str | None = None
 
     #: The type of the channel.
-    type: Optional[PhysicalChannelType]
+    type: Optional[PhysicalChannelType] = None
 
     #: Logical path to the channel. Typically of the form
     # ``/<device uid>/<channel name>``.
-    path: str | None
-    _calibration: Optional[SignalCalibration]
+    path: str | None = None
+    # TODO: Make the calibration type `PhysicalChannelCalibration`
+    calibration: SignalCalibration | None = attrs.field(
+        default=None,
+        converter=_physical_calibration_to_signal_calibration,
+        on_setattr=lambda self, attr, value: self._set_calibration(attr, value),
+    )
 
-    def __init__(
-        self,
-        uid,
-        name: str | None = None,
-        type: PhysicalChannelType | None = None,
-        path: str | None = None,
-        calibration: SignalCalibration | None = None,
-    ):
-        self.uid = uid
-        self.name = name
-        self.type = type
-        self.path = path
-        self._calibration = calibration
-        if self._calibration is not None:
-            self._calibration.has_changed().connect(self._on_calibration_changed)
-        self._signal_calibration_changed = Signal(self)
+    def _set_calibration(self, attr, value):
+        return value
 
     def __repr__(self):
         field_values = []
-        for field in fields(self):
+        for field in attrs.fields(PhysicalChannel):
             value = getattr(self, field.name)
-            if field.name == "_calibration":
+            if field.name == "calibration":
                 field_values.append(f"calibration={value!r}")
             else:
                 field_values.append(f"{field.name}={value!r}")
         return f"{self.__class__.__name__}({', '.join(field_values)})"
 
     def __rich_repr__(self):
-        for field in fields(self):
+        for field in attrs.fields(PhysicalChannel):
             value = getattr(self, field.name)
-            if field.name == "_calibration":
+            if field.name == "calibration":
                 yield "calibration", value
             else:
                 yield f"{field.name}", value
@@ -100,33 +101,3 @@ class PhysicalChannel(Calibratable):
 
     def reset_calibration(self):
         self.calibration = None
-
-    @property
-    def calibration(self) -> SignalCalibration:
-        return self._calibration
-
-    @calibration.setter
-    def calibration(self, new_calib: Optional[SignalCalibration]):
-        if new_calib == self._calibration:
-            return
-
-        if self._calibration is not None:
-            self._calibration.has_changed().disconnect(self._on_calibration_changed)
-        self._calibration = new_calib
-        if self._calibration is not None:
-            self._calibration.has_changed().connect(self._on_calibration_changed)
-
-        if new_calib is not None:
-            for key in PHYSICAL_CHANNEL_CALIBRATION_FIELDS:
-                new_calib_attribute = getattr(self.calibration, key)
-                self._on_calibration_changed(self.calibration, key, new_calib_attribute)
-        else:
-            # signal that the entire calibration has been deleted
-            self._signal_calibration_changed.fire("calibration", None)
-
-    def _on_calibration_changed(self, _: SignalCalibration, field: str, value):
-        if field in PHYSICAL_CHANNEL_CALIBRATION_FIELDS:
-            self._signal_calibration_changed.fire(field, value)
-
-    def calibration_has_changed(self):
-        return self._signal_calibration_changed

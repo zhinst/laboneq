@@ -687,7 +687,7 @@ class CodeGenerator(ICodeGenerator):
         user_pulse_params = passes.detach_pulse_params(self._ir.root)
         ir_tree = passes.fanout_awgs(self._ir, self._awgs.values())
         ir_awgs = {awg.awg.key: awg for awg in ir_tree.root.children}
-        events_per_awg = ir_to_event_list.event_list_per_awg(
+        events_per_awg, _ = ir_to_event_list.event_list_per_awg(
             ir_tree, self._settings, osc_params
         )
 

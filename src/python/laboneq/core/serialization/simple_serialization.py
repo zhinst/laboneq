@@ -122,13 +122,16 @@ def module_classes(modules_list, class_names=None):
 
 @functools.lru_cache()
 def all_slots(cls):
-    slots = set()
+    # store slots in a dictionary rather than a set to
+    # preserve ordering
+    slots = {}
     for base in cls.__mro__:
-        if isinstance(getattr(base, "__slots__", []), str):
-            slots.add(getattr(base, "__slots__", []))
+        base_slots = getattr(base, "__slots__", [])
+        if isinstance(base_slots, str):
+            slots[base_slots] = None
         else:
-            for attr in getattr(base, "__slots__", []):
-                slots.add(attr)
+            for attr in base_slots:
+                slots[attr] = None
     return list(slots)
 
 

@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+import warnings
 
+import attrs
 from collections import defaultdict
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from laboneq.core import path as qct_path
@@ -13,6 +14,7 @@ from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration import Calibration
 from laboneq.dsl.calibration.signal_calibration import SignalCalibration
 from laboneq.dsl.device import _device_setup_modifier as setup_modifier
+from laboneq.dsl.device._calibration_mediator import CalibrationMediator
 from laboneq.dsl.device._device_setup_modifier import DeviceSetupInternalException
 from laboneq.dsl.device.connection import InternalConnection, SignalConnection
 from laboneq.dsl.device.instruments import PQSC
@@ -38,7 +40,7 @@ if TYPE_CHECKING:
 
 
 @classformatter
-@dataclass(init=True, repr=True, order=True)
+@attrs.define(slots=False)
 class DeviceSetup:
     """Data object describing the device setup of a QCCS system.
 
@@ -60,14 +62,33 @@ class DeviceSetup:
             - `DeviceSetup.add_connections()`
     """
 
-    uid: str = field(default="unknown")
-    servers: dict[str, DataServer] = field(default_factory=dict)
-    instruments: list[Instrument] = field(default_factory=list)
-    physical_channel_groups: dict[str, PhysicalChannelGroup] = field(
-        default_factory=dict
-    )
-    logical_signal_groups: dict[str, LogicalSignalGroup] = field(default_factory=dict)
-    qubits: dict[str, "quantum.QuantumElement"] = field(default_factory=dict)
+    uid: str = attrs.field(default="unknown")
+    servers: dict[str, DataServer] = attrs.field(factory=dict)
+    instruments: list[Instrument] = attrs.field(factory=list)
+    physical_channel_groups: dict[str, PhysicalChannelGroup] = attrs.field(factory=dict)
+    logical_signal_groups: dict[str, LogicalSignalGroup] = attrs.field(factory=dict)
+    qubits: dict[str, "quantum.QuantumElement"] = attrs.field(factory=dict)
+
+    #: Mediators responsible for coupling calibration of physical channel and its mapped logical signals
+    _calibration_mediators: dict[str, CalibrationMediator] = attrs.field(init=False)
+
+    @_calibration_mediators.default
+    def _initialize_mediators(self):
+        mediators = {}
+        for group in self.logical_signal_groups.values():
+            for logical_signal in group.logical_signals.values():
+                pc = logical_signal.physical_channel
+                if pc is None:
+                    raise ValueError(
+                        "Found a logical signal not connected to any physical "
+                        "channel. Make sure you are constructing "
+                        "`DeviceSetup` using its `classmethod` constructors and "
+                        "not with its class constructor."
+                    )
+                mediator = mediators.get(pc.uid, CalibrationMediator(pc))
+                mediator.add_logical_signal(logical_signal)
+                mediators[pc.uid] = mediator
+        return mediators
 
     def add_dataserver(
         self, host: str, port: int | str, uid: str = "zi_server", api_level: int = 6
@@ -348,9 +369,18 @@ class DeviceSetup:
     def load(filename: str) -> DeviceSetup:
         """Load the device setup from a specified file.
 
+        !!! version-changed "Deprecated in version 2.50.0"
+            Use `laboneq.simple.load` instead.
+
         Args:
             filename (str): Filename.
         """
+        warnings.warn(
+            "The `DeviceSetup.load` method is deprecated and will be removed in future releases. "
+            "Please use the `load` function from the `laboneq.simple` module instead. ",
+            FutureWarning,
+            stacklevel=2,
+        )
         # TODO ErC: Error handling
         ds = Serializer.from_json_file(filename, DeviceSetup)
         ds.check_no_rf_multiplexing()
@@ -359,9 +389,18 @@ class DeviceSetup:
     def save(self, filename: str):
         """Save the device setup to a specified file.
 
+        !!! version-changed "Deprecated in version 2.50.0"
+            Use `laboneq.simple.save` instead.
+
         Args:
             filename (str): Filename.
         """
+        warnings.warn(
+            "The `DeviceSetup.save` method is deprecated and will be removed in future releases. "
+            "Please use the `save` function from the `laboneq.simple` module instead. ",
+            FutureWarning,
+            stacklevel=2,
+        )
         # TODO ErC: Error handling
         Serializer.to_json_file(self, filename)
 

@@ -229,7 +229,7 @@ class PhysicalChannelModel:
             "type": _converter.unstructure(obj.type, Union[PhysicalChannelType, None]),
             "path": obj.path,
             "calibration": _converter.unstructure(
-                obj._calibration, Union[SignalCalibrationModel, None]
+                obj.calibration, Union[SignalCalibrationModel, None]
             ),
         }
 

@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
+import attrs
 import typing
-from dataclasses import dataclass, field
 from typing import List
 
 from laboneq.core.types.enums.io_direction import IODirection
@@ -15,18 +15,18 @@ from .connection import Connection
 
 
 @classformatter
-@dataclass(init=True, repr=True, order=True)
+@attrs.define(slots=False)
 class Instrument:
     """Class representing an instrument."""
 
     #: Unique identifier.
-    uid: str = field(default=None)
+    uid: str = attrs.field(default=None)
 
     #: Interface of this instrument. The default is 1GbE (1 Gbit ethernet)
-    interface: str = field(default="1GbE")
+    interface: str = attrs.field(default="1GbE")
 
     #: Connections of this instrument.
-    connections: typing.List[Connection] = field(default_factory=list)
+    connections: typing.List[Connection] = attrs.field(factory=list)
 
     def output_by_uid(self, uid) -> Port | None:
         for o in self.ports:

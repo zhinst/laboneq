@@ -3,7 +3,7 @@
 
 
 class Operation:
-    """Class representing a operation.
+    """Class representing an operation.
 
     !!! version-changed "Changed in version 2.26.0"
         Removed `get_all_signals()`. The method did not produce meaningful results.

@@ -34,6 +34,31 @@ ArrayLike_Model = Union[
 ]
 
 
+@attrs.define
+class NumericModel:
+    """
+    A model representing numeric values: int, float, complex
+    and numpy numbers.
+
+    Defines an attrs-based model to enable `cattrs` to **automatically**
+    serialize and deserialize the following types:
+    - Unions of Python numeric types and NumPy number types
+    - Unions of numeric types and other attrs-based models
+    """
+
+    @classmethod
+    def _unstructure(cls, obj):
+        if isinstance(obj, numpy.complexfloating):
+            return [obj.real, obj.imag]
+        return obj
+
+    @classmethod
+    def _structure(cls, obj, _):
+        if isinstance(obj, list) and len(obj) == 2:
+            return numpy.complex128(obj[0], obj[1])
+        return obj
+
+
 # Supporting functions for serialization
 
 
@@ -48,7 +73,7 @@ def unstructure_union_generic_type(
         converter: The cattr converter that must know how to unstructure the objects.
     """
     for t in types:
-        if isinstance(obj, t._target_class):
+        if type(obj) is t._target_class:
             return {"_type": type(obj).__name__, **converter.unstructure(obj, t)}
     raise ValueError(
         f"Unsupported type: {type(obj).__name__} when unstructuring Union[{types}]"
@@ -113,6 +138,9 @@ def collect_models(module_models) -> frozenset:
 
 def make_laboneq_converter() -> Converter:
     converter = make_converter()
+    # TODO: Replace the following hooks for numpy
+    # with the serializer for numpy_array registered in the
+    # serializer registry
     converter.register_structure_hook(
         ArrayLike_Model, lambda obj, _: numpy.asarray(obj)
     )
@@ -120,4 +148,8 @@ def make_laboneq_converter() -> Converter:
         ArrayLike_Model,
         lambda obj: obj.tolist() if isinstance(obj, numpy.ndarray) else obj,
     )
+
+    converter.register_unstructure_hook(NumericModel, NumericModel._unstructure)
+    converter.register_structure_hook(NumericModel, NumericModel._structure)
+
     return converter

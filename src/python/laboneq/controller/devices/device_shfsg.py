@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING, Any, Iterator
-from weakref import ref
 
 import numpy as np
 from laboneq.controller.attribute_value_tracker import (
@@ -56,7 +55,10 @@ class DeviceSHFSG(DeviceSHFBase):
         super().__init__(*args, **kwargs)
         self.dev_type = "SHFSG8"
         self.dev_opts = []
-        self._pipeliner = AwgPipeliner(ref(self), f"/{self.serial}/sgchannels", "SG")
+        self._pipeliner = [
+            AwgPipeliner(f"/{self.serial}/sgchannels/{ch}", f"SG{ch}")
+            for ch in range(8)
+        ]
         # Available number of full output channels (Front panel outputs).
         self._outputs = 8
         # Available number of output channels (RTR option can extend these with internal channels on certain devices)
@@ -71,13 +73,13 @@ class DeviceSHFSG(DeviceSHFBase):
         return True
 
     def pipeliner_prepare_for_upload(self, index: int) -> NodeCollector:
-        return self._pipeliner.prepare_for_upload(index)
+        return self._pipeliner[index].prepare_for_upload()
 
     def pipeliner_commit(self, index: int) -> NodeCollector:
-        return self._pipeliner.commit(index)
+        return self._pipeliner[index].commit()
 
     def pipeliner_ready_conditions(self, index: int) -> dict[str, Any]:
-        return self._pipeliner.ready_conditions(index)
+        return self._pipeliner[index].ready_conditions()
 
     @property
     def dev_repr(self) -> str:
@@ -229,11 +231,11 @@ class DeviceSHFSG(DeviceSHFBase):
         await self.set_async(nc)
 
     async def start_execution(self, with_pipeliner: bool):
-        if with_pipeliner:
-            nc = self._pipeliner.collect_execution_nodes()
-        else:
-            nc = NodeCollector(base=f"/{self.serial}/")
-            for awg_index in self._allocated_awgs:
+        nc = NodeCollector(base=f"/{self.serial}/")
+        for awg_index in self._allocated_awgs:
+            if with_pipeliner:
+                nc.extend(self._pipeliner[awg_index].collect_execution_nodes())
+            else:
                 nc.add(f"sgchannels/{awg_index}/awg/enable", 1, cache=False)
         await self.set_async(nc)
 
@@ -243,16 +245,17 @@ class DeviceSHFSG(DeviceSHFBase):
         if not self._wait_for_awgs:
             return {}
 
-        if with_pipeliner:
-            conditions = self._pipeliner.conditions_for_execution_ready()
-        else:
-            conditions = {
-                self.get_sequencer_paths(awg_index).enable: (
-                    1,
-                    f"{self.dev_repr}: AWG {awg_index + 1} didn't start.",
+        conditions: dict[str, tuple[Any, str]] = {}
+        for awg_index in self._allocated_awgs:
+            if with_pipeliner:
+                conditions.update(
+                    self._pipeliner[awg_index].conditions_for_execution_ready()
                 )
-                for awg_index in self._allocated_awgs
-            }
+            else:
+                conditions[self.get_sequencer_paths(awg_index).enable] = (
+                    1,
+                    f"AWG {awg_index} didn't start.",
+                )
         return conditions
 
     async def emit_start_trigger(self, with_pipeliner: bool):
@@ -264,16 +267,17 @@ class DeviceSHFSG(DeviceSHFBase):
     def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
-        if with_pipeliner:
-            conditions = self._pipeliner.conditions_for_execution_done()
-        else:
-            conditions = {
-                self.get_sequencer_paths(awg_index).enable: (
-                    0,
-                    f"{self.dev_repr}: AWG {awg_index + 1} didn't stop. Missing start trigger? Check ZSync.",
+        conditions: dict[str, tuple[Any, str]] = {}
+        for awg_index in self._allocated_awgs:
+            if with_pipeliner:
+                conditions.update(
+                    self._pipeliner[awg_index].conditions_for_execution_done()
                 )
-                for awg_index in self._allocated_awgs
-            }
+            else:
+                conditions[self.get_sequencer_paths(awg_index).enable] = (
+                    0,
+                    f"AWG {awg_index} didn't stop. Missing start trigger? Check ZSync.",
+                )
         return conditions
 
     async def teardown_one_step_execution(self, with_pipeliner: bool):
@@ -284,7 +288,8 @@ class DeviceSHFSG(DeviceSHFBase):
             nc.add("system/synchronization/source", 0)
 
         if with_pipeliner:
-            nc.extend(self._pipeliner.reset_nodes())
+            for awg_index in self._allocated_awgs:
+                nc.extend(self._pipeliner[awg_index].reset_nodes())
 
         # HACK: HBAR-1427 and HBAR-2165 show that runtime checks generate
         # wrongly detected gaps when enabled during experiments with feedback.
@@ -740,7 +745,10 @@ class DeviceSHFSG(DeviceSHFBase):
             await super().reset_to_idle()
         nc = NodeCollector(base=f"/{self.serial}/")
         # Reset pipeliner first, attempt to set AWG enable leads to FW error if pipeliner was enabled.
-        nc.extend(self._pipeliner.reset_nodes())
+        nc.add("sgchannels/*/pipeliner/reset", 1, cache=False)
+        nc.add("sgchannels/*/pipeliner/mode", 0, cache=False)  # off
+        nc.add("sgchannels/*/synchronization/enable", 0, cache=False)
+        nc.barrier()
         nc.add("sgchannels/*/awg/enable", 0, cache=False)
         if not self.is_secondary:
             nc.add(

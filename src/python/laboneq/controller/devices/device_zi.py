@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 import json
 import logging
 import math
@@ -403,7 +404,7 @@ class DeviceBase(DeviceZI):
         self._pipeliner_reload_tracker: dict[int, PipelinerReloadTracker] = defaultdict(
             PipelinerReloadTracker
         )
-        self._sampling_rate = None
+        self._sampling_rate: float | None = None
         self._device_class = 0x0
         self._enable_runtime_checks = True
         self._warning_nodes: dict[str, int] = {}
@@ -430,8 +431,8 @@ class DeviceBase(DeviceZI):
         initialization = recipe_data.get_initialization(self.device_qualifier.uid)
         return len(initialization.awgs) > 0
 
-    async def set_async(self, nodes: NodeCollector):
-        await self._api.set_parallel(nodes)
+    async def set_async(self, nodes: NodeCollector | Iterable[NodeCollector]):
+        await self._api.set_parallel(NodeCollector.all(nodes))
 
     def clear_cache(self):
         # TODO(2K): the code below is only needed to keep async API behavior
@@ -936,7 +937,8 @@ class DeviceBase(DeviceZI):
         if rt_execution_info.with_pipeliner:
             upload_ready_conditions.update(self.pipeliner_ready_conditions(awg_index))
 
-        rw = ResponseWaiterAsync(self._api, upload_ready_conditions, timeout_s=10)
+        rw = ResponseWaiterAsync(api=self._api, dev_repr=self.dev_repr, timeout_s=10)
+        rw.add_nodes(upload_ready_conditions)
         await rw.prepare()
         await self.set_async(elf_nodes)
         await rw.wait()
@@ -1286,7 +1288,9 @@ class DeviceBase(DeviceZI):
 
         commands = filter_commands(control_nodes)
         responses = filter_responses(control_nodes)
-        response_waiter = ResponseWaiterAsync(self._api, timeout_s=timeout_s)
+        response_waiter = ResponseWaiterAsync(
+            api=self._api, dev_repr=self.dev_repr, timeout_s=timeout_s
+        )
         changes_to_apply = []
         if len(commands) > 0:
             # 1a. Has unconditional commands? Use simplified flow.
@@ -1370,7 +1374,9 @@ class DeviceBase(DeviceZI):
             # Can't batch everything together, because PQSC/QHUB needs to start execution after HDs
             # otherwise it can finish before AWGs are started, and the trigger is lost.
             return
-        rw = ResponseWaiterAsync(api=self._api, timeout_s=timeout_s)
+        rw = ResponseWaiterAsync(
+            api=self._api, dev_repr=self.dev_repr, timeout_s=timeout_s
+        )
         rw.add_with_msg(
             nodes=self.conditions_for_execution_ready(with_pipeliner=with_pipeliner),
         )
@@ -1392,7 +1398,9 @@ class DeviceBase(DeviceZI):
         with_pipeliner: bool,
         timeout_s: float,
     ):
-        response_waiter = ResponseWaiterAsync(api=self._api, timeout_s=timeout_s)
+        response_waiter = ResponseWaiterAsync(
+            api=self._api, dev_repr=self.dev_repr, timeout_s=timeout_s
+        )
         response_waiter.add_with_msg(
             nodes=self.conditions_for_execution_done(
                 acquisition_type=acquisition_type,

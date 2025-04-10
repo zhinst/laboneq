@@ -34,9 +34,11 @@ from laboneq.dsl.calibration.signal_calibration import SignalCalibration
 from laboneq.dsl.device.io_units.logical_signal import LogicalSignal
 from laboneq.dsl.experiment.experiment_signal import ExperimentSignal
 from laboneq.dsl.parameter import LinearSweepParameter, SweepParameter
+import numpy
 
 from ._common import (
     ArrayLike_Model,
+    NumericModel,
     collect_models,
     make_laboneq_converter,
     register_models,
@@ -175,19 +177,23 @@ def _structure_parameter_model(d, _, _converter: Converter):
 
 
 def _unstructure_basic_or_parameter_model(obj, _converter: Converter):
-    return (
-        obj
-        if obj is None or isinstance(obj, (float, int, complex))
-        else _converter.unstructure(obj, ParameterModel)
-    )
+    if obj is None:
+        return None
+    if isinstance(obj, (float, int, complex, numpy.number)):
+        return _converter.unstructure(obj, NumericModel)
+    else:
+        return _converter.unstructure(obj, ParameterModel)
 
 
 def _structure_basic_or_parameter_model(v, _converter: Converter):
-    return (
-        v
-        if v is None or isinstance(v, (float, int, complex))
-        else _converter.structure(v, ParameterModel)
-    )
+    if v is None:
+        return None
+    # TODO: Converting ParameterModel to an attrs-based model
+    # will help to remove these customized functions.
+    elif isinstance(v, (float, int, complex, numpy.number)) or isinstance(v, list):
+        return _converter.structure(v, NumericModel)
+    else:
+        return _converter.structure(v, ParameterModel)
 
 
 @attrs.define

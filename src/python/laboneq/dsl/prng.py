@@ -1,7 +1,7 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass, field
+import attrs
 import itertools
 from laboneq.core.utilities.prng import PRNG as prng_sim
 
@@ -18,26 +18,26 @@ def prng_sample_id_generator():
     return retval
 
 
-@dataclass
+@attrs.define
 class PRNG:
     """Class representing the on-device pseudo-random number generator."""
 
     range: int
-    seed: int = field(default=1)
+    seed: int = attrs.field(default=1)
 
     def __iter__(self):
         """Construct an iterator that simulates the PRNG."""
         return prng_sim(self.seed, upper=self.range - 1)
 
 
-@dataclass
+@attrs.define
 class PRNGSample:
     """Representation in the LabOne Q DSL of values drawn from an on-device PRNG.
 
     API is vaguely similar to that of `SweepParameter`."""
 
-    uid: str = field(default_factory=prng_sample_id_generator)
-    prng: PRNG = field(default_factory=PRNG)
+    uid: str = attrs.field(factory=prng_sample_id_generator)
+    prng: PRNG = attrs.field(factory=PRNG)
     count: int = 1
 
     @property

@@ -2,25 +2,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import Dict
+
+import attrs
 
 import laboneq.core.path as qct_path
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
-
 from laboneq.dsl.calibration.calibratable import Calibratable
 from laboneq.dsl.device.io_units import LogicalSignal
 
 
 @classformatter
-@dataclass(init=True, repr=True, order=True)
+@attrs.define
 class LogicalSignalGroup:
     """Group of logical signals. This could be used as a qubit representation with
     multiple logical signals driving a single qubit.
     """
 
-    uid: str = field(default=None)
-    logical_signals: Dict[str, LogicalSignal] = field(default_factory=dict)
+    uid: str = attrs.field(default=None)
+    logical_signals: dict[str, LogicalSignal] = attrs.field(factory=dict)
 
     def get_calibration(self):
         """Retrieve the calibration of the logical signal group."""

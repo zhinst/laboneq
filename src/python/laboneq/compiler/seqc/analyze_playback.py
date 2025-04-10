@@ -13,12 +13,21 @@ from typing import Any, Dict, Iterable, List, Tuple, TYPE_CHECKING, cast
 from laboneq._rust.intervals import (
     Interval,
     IntervalTree,
-    calculate_intervals,
     MinimumWaveformLengthViolation,
+    calculate_intervals,
 )
+from laboneq.compiler.common.awg_signal_type import AWGSignalType
 from laboneq.compiler.common.compiler_settings import TINYSAMPLE
+from laboneq.compiler.common.device_type import DeviceType
+from laboneq.compiler.common.signal_obj import SignalObj
+from laboneq.compiler.event_list.event_type import EventType
 from laboneq.compiler.seqc.analyze_amplitude_registers import (
     analyze_amplitude_register_set_events,
+)
+from laboneq.compiler.seqc.awg_sampled_event import (
+    AWGEvent,
+    AWGEventType,
+    AWGSampledEventSequence,
 )
 from laboneq.compiler.seqc.signatures import (
     PlaybackSignature,
@@ -29,15 +38,6 @@ from laboneq.compiler.seqc.signatures import (
     reduce_signature_phase,
 )
 from laboneq.compiler.seqc.utils import normalize_phase
-from laboneq.compiler.seqc.awg_sampled_event import (
-    AWGEvent,
-    AWGEventType,
-    AWGSampledEventSequence,
-)
-from laboneq.compiler.common.awg_signal_type import AWGSignalType
-from laboneq.compiler.common.device_type import DeviceType
-from laboneq.compiler.event_list.event_type import EventType
-from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.pulse_sampler import (
     interval_to_samples_with_errors,
@@ -174,9 +174,9 @@ def _analyze_branches(
 def find_event_pairs(events, start_types, end_types):
     start_events = {}
     end_events = {}
-    for index, event in enumerate(events):
+    for event in events:
         if event["event_type"] in start_types:
-            start_events[event["chain_element_id"]] = index, event
+            start_events[event["chain_element_id"]] = (event["position"], event)
         elif event["event_type"] in end_types:
             end_events[event["chain_element_id"]] = event
 
@@ -356,7 +356,7 @@ class _FrameChange:
 def _find_frame_changes(events, delay, sampling_rate):
     delays = find_event_pairs(events, [EventType.DELAY_START], [EventType.DELAY_END])
     virtual_z_gates = []
-    for index, (delay_start, _) in delays:
+    for _, (delay_start, _) in delays:
         incr_phase = delay_start.get("increment_oscillator_phase")
         set_phase = delay_start.get("set_oscillator_phase")
         assert set_phase is None, "should have been dissolved in scheduler"
@@ -370,7 +370,7 @@ def _find_frame_changes(events, delay, sampling_rate):
                     parameter=delay_start.get("phase_increment_parameter"),
                     signal=delay_start["signal"],
                     state=delay_start.get("state"),
-                    priority=index,
+                    priority=delay_start["position"],
                 )
             )
     return virtual_z_gates

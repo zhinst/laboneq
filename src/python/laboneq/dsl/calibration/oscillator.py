@@ -5,8 +5,9 @@ from __future__ import annotations
 
 import warnings
 import attrs
-from laboneq.dsl.enums import CarrierType, ModulationType
 
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
+from laboneq.dsl.enums import CarrierType, ModulationType
 from laboneq.dsl.parameter import Parameter
 
 oscillator_id = 0
@@ -30,6 +31,7 @@ def _carrier_type_validator(
         )
 
 
+@classformatter
 @attrs.define(slots=False)
 class Oscillator:
     """

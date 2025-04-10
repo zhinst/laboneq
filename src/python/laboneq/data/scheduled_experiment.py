@@ -7,6 +7,7 @@ import copy
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal
+from laboneq.executor.executor import Statement
 import numpy as np
 from numpy import typing as npt
 
@@ -149,6 +150,15 @@ class ScheduledExperiment:
     #: Compiler artifacts specific to backend(s)
     artifacts: CompilerArtifact | None = None
 
+    #: list of events as scheduled by the compiler.
+    schedule: dict[str, Any] | None = None
+
+    #: Experiment execution model
+    execution: Statement | None = None
+
+    compilation_job_hash: str | None = None
+    experiment_hash: str | None = None
+
     def __getattr__(self, attr):
         return getattr(self.artifacts, attr)  # @IgnoreException
 
@@ -163,15 +173,6 @@ class ScheduledExperiment:
             experiment_hash=self.experiment_hash,
         )
         return new_scheduled_experiment
-
-    #: list of events as scheduled by the compiler.
-    schedule: dict[str, Any] | None = None
-
-    #: Experiment execution model
-    execution: Any = None  # TODO(2K): 'Statement' type after refactoring
-
-    compilation_job_hash: str | None = None
-    experiment_hash: str | None = None
 
     def __eq__(self, other):
         if other is self:

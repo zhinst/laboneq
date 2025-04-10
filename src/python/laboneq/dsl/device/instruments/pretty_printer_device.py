@@ -1,7 +1,7 @@
 # Copyright 2023 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
+import attrs
 
 from laboneq.core.types.enums.io_direction import IODirection
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
@@ -12,11 +12,11 @@ from .zi_standard_instrument import ZIStandardInstrument
 
 
 @classformatter
-@dataclass(init=True, repr=True, order=True)
+@attrs.define(slots=False)
 class PRETTYPRINTERDEVICE(ZIStandardInstrument):
     """Class representing a virtual instrument that pretty prints some info about the experiment."""
 
-    def __post_init__(self):
+    def __attrs_post_init__(self):
         self.device_class = 0x1
         self._ports: list[Port] = []
 

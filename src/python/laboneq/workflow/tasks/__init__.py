@@ -7,6 +7,7 @@ from __future__ import annotations
 
 __all__ = [
     "compile_experiment",
+    "CompileExperimentOptions",
     "run_experiment",
     "RunExperimentOptions",
     "RunExperimentResults",
@@ -17,6 +18,6 @@ __all__ = [
 
 
 from .collect_experiment_results import append_result, combine_results
-from .compile_experiment import compile_experiment
+from .compile_experiment import compile_experiment, CompileExperimentOptions
 from .create_qasm_experiment import create_qasm_experiment
 from .run_experiment import RunExperimentOptions, RunExperimentResults, run_experiment

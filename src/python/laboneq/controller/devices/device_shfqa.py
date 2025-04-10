@@ -7,8 +7,8 @@ import asyncio
 import itertools
 import logging
 from typing import TYPE_CHECKING, Any, Iterator
-from weakref import ref
 
+from laboneq.controller.devices.qachannel import QAChannel
 import numpy as np
 
 from laboneq.controller.attribute_value_tracker import (
@@ -16,7 +16,7 @@ from laboneq.controller.attribute_value_tracker import (
     DeviceAttribute,
     DeviceAttributesView,
 )
-from laboneq.controller.devices.async_support import _gather, canonical_properties
+from laboneq.controller.devices.async_support import _gather
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
 from laboneq.controller.devices.device_shf_base import (
     DeviceSHFBase,
@@ -83,9 +83,6 @@ MAX_AVERAGES_SCOPE = 1 << 16
 MAX_AVERAGES_RESULT_LOGGER = 1 << 17
 MAX_RESULT_VECTOR_LENGTH = 1 << 19
 
-# value reported by /system/properties/timebase
-TIME_STAMP_TIMEBASE = 0.25e-9
-
 
 def calc_theoretical_assignment_vec(num_weights: int) -> NumPyArray:
     """Calculates the theoretical assignment vector, assuming that
@@ -119,7 +116,11 @@ class DeviceSHFQA(DeviceSHFBase):
         super().__init__(*args, **kwargs)
         self.dev_type = "SHFQA4"
         self.dev_opts = []
-        self._pipeliner = AwgPipeliner(ref(self), f"/{self.serial}/qachannels", "QA")
+        self._qachannels: list[QAChannel] = []
+        self._pipeliner = [
+            AwgPipeliner(f"/{self.serial}/qachannels/{ch}", f"QA{ch}")
+            for ch in range(4)
+        ]
         self._channels = 4
         self._integrators = 16
         self._long_readout_available = True
@@ -131,13 +132,13 @@ class DeviceSHFQA(DeviceSHFBase):
         return True
 
     def pipeliner_prepare_for_upload(self, index: int) -> NodeCollector:
-        return self._pipeliner.prepare_for_upload(index)
+        return self._pipeliner[index].prepare_for_upload()
 
     def pipeliner_commit(self, index: int) -> NodeCollector:
-        return self._pipeliner.commit(index)
+        return self._pipeliner[index].commit()
 
     def pipeliner_ready_conditions(self, index: int) -> dict[str, Any]:
-        return self._pipeliner.ready_conditions(index)
+        return self._pipeliner[index].ready_conditions()
 
     @property
     def dev_repr(self) -> str:
@@ -166,16 +167,28 @@ class DeviceSHFQA(DeviceSHFBase):
         else:
             self._integrators = 8
         self._long_readout_available = "LRT" in self.dev_opts
+        self._qachannels = [
+            QAChannel(
+                api=self._api,
+                subscriber=self._subscriber,
+                serial=self.serial,
+                channel=ch,
+                integrators=self._integrators,
+                repr_base=self.dev_repr,
+            )
+            for ch in range(self._channels)
+        ]
 
     def _get_sequencer_type(self) -> str:
         return "qa"
 
     def get_sequencer_paths(self, index: int) -> SequencerPaths:
+        qachannel = self._qachannels[index]
         return SequencerPaths(
-            elf=f"/{self.serial}/qachannels/{index}/generator/elf/data",
-            progress=f"/{self.serial}/qachannels/{index}/generator/elf/progress",
-            enable=f"/{self.serial}/qachannels/{index}/generator/enable",
-            ready=f"/{self.serial}/qachannels/{index}/generator/ready",
+            elf=qachannel.nodes.generator_elf_data,
+            progress=qachannel.nodes.generator_elf_progress,
+            enable=qachannel.nodes.generator_enable,
+            ready=qachannel.nodes.generator_ready,
         )
 
     def _validate_range(self, io: IO, is_out: bool):
@@ -267,20 +280,18 @@ class DeviceSHFQA(DeviceSHFBase):
         return previously_allocated
 
     def _make_osc_path(self, channel: int, index: int) -> str:
-        return f"/{self.serial}/qachannels/{channel}/oscs/{index}/freq"
+        return self._qachannels[channel].nodes.osc_freq[index]
 
     async def disable_outputs(self, outputs: set[int], invert: bool):
-        nc = NodeCollector(base=f"/{self.serial}/")
-        for ch in range(self._channels):
-            if (ch in outputs) != invert:
-                nc.add(f"qachannels/{ch}/output/on", 0, cache=False)
-        await self.set_async(nc)
-
-    def _result_node_readout(self, ch: int, integrator: int) -> str:
-        return f"/{self.serial}/qachannels/{ch}/readout/result/data/{integrator}/wave"
-
-    def _result_node_spectroscopy(self, ch: int) -> str:
-        return f"/{self.serial}/qachannels/{ch}/spectroscopy/result/data/wave"
+        await self.set_async(
+            NodeCollector.all(
+                [
+                    ch.disable_output()
+                    for ch in self._qachannels
+                    if (ch.channel in outputs) != invert
+                ]
+            )
+        )
 
     def _result_node_scope(self, ch: int) -> str:
         return f"/{self.serial}/scopes/0/channels/{ch}/wave"
@@ -288,7 +299,7 @@ class DeviceSHFQA(DeviceSHFBase):
     def _busy_nodes(self) -> list[str]:
         if not self._setup_caps.supports_shf_busy:
             return []
-        return [f"/{self.serial}/qachannels/{ch}/busy" for ch in self._allocated_awgs]
+        return [self._qachannels[ch].nodes.busy for ch in self._allocated_awgs]
 
     def configure_acquisition(
         self,
@@ -506,11 +517,11 @@ class DeviceSHFQA(DeviceSHFBase):
         return nc
 
     async def start_execution(self, with_pipeliner: bool):
-        if with_pipeliner:
-            nc = self._pipeliner.collect_execution_nodes()
-        else:
-            nc = NodeCollector(base=f"/{self.serial}/")
-            for awg_index in self._allocated_awgs:
+        nc = NodeCollector(base=f"/{self.serial}/")
+        for awg_index in self._allocated_awgs:
+            if with_pipeliner:
+                nc.extend(self._pipeliner[awg_index].collect_execution_nodes())
+            else:
                 nc.add(f"qachannels/{awg_index}/generator/enable", 1, cache=False)
         await self.set_async(nc)
 
@@ -544,34 +555,36 @@ class DeviceSHFQA(DeviceSHFBase):
     def conditions_for_execution_ready(
         self, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
-        if with_pipeliner:
-            conditions = self._pipeliner.conditions_for_execution_ready()
-        else:
-            # TODO(janl): Not sure whether we need this condition on the SHFQA (including SHFQC)
-            # as well. The state of the generator enable wasn't always picked up reliably, so we
-            # only check in cases where we rely on external triggering mechanisms.
-            conditions = {
-                self.get_sequencer_paths(awg_index).enable: (
-                    1,
-                    f"{self.dev_repr}: Readout pulse generator {awg_index + 1} didn't start.",
+        conditions: dict[str, tuple[Any, str]] = {}
+        for awg_index in self._allocated_awgs:
+            if with_pipeliner:
+                conditions.update(
+                    self._pipeliner[awg_index].conditions_for_execution_ready()
                 )
-                for awg_index in self._allocated_awgs
-            }
+            else:
+                # TODO(janl): Not sure whether we need this condition on the SHFQA (including SHFQC)
+                # as well. The state of the generator enable wasn't always picked up reliably, so we
+                # only check in cases where we rely on external triggering mechanisms.
+                conditions[self.get_sequencer_paths(awg_index).enable] = (
+                    1,
+                    f"Readout pulse generator {awg_index} didn't start.",
+                )
         return conditions
 
     def conditions_for_execution_done(
         self, acquisition_type: AcquisitionType, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
-        if with_pipeliner:
-            conditions = self._pipeliner.conditions_for_execution_done()
-        else:
-            conditions = {
-                self.get_sequencer_paths(awg_index).enable: (
-                    0,
-                    f"{self.dev_repr}: Generator {awg_index + 1} didn't stop. Missing start trigger? Check ZSync.",
+        conditions: dict[str, tuple[Any, str]] = {}
+        for awg_index in self._allocated_awgs:
+            if with_pipeliner:
+                conditions.update(
+                    self._pipeliner[awg_index].conditions_for_execution_done()
                 )
-                for awg_index in self._allocated_awgs
-            }
+            else:
+                conditions[self.get_sequencer_paths(awg_index).enable] = (
+                    0,
+                    f"Generator {awg_index} didn't stop. Missing start trigger? Check ZSync.",
+                )
         return conditions
 
     async def teardown_one_step_execution(self, with_pipeliner: bool):
@@ -590,7 +603,8 @@ class DeviceSHFQA(DeviceSHFBase):
         nc.add("qachannels/*/readout/result/enable", 0, cache=False)
 
         if with_pipeliner:
-            nc.extend(self._pipeliner.reset_nodes())
+            for awg_index in self._allocated_awgs:
+                nc.extend(self._pipeliner[awg_index].reset_nodes())
 
         await self.set_async(nc)
 
@@ -954,7 +968,7 @@ class DeviceSHFQA(DeviceSHFBase):
         return nc
 
     def _integrator_has_consistent_msd_num_state(
-        self, integrator_allocation: IntegratorAllocation.Data
+        self, integrator_allocation: IntegratorAllocation
     ):
         num_states = integrator_allocation.kernel_count + 1
         num_thresholds = len(integrator_allocation.thresholds)
@@ -1169,18 +1183,17 @@ class DeviceSHFQA(DeviceSHFBase):
         await self.set_async(nc)
 
     async def on_experiment_begin(self):
-        nodes = [
-            *(
-                self._result_node_readout(ch, integrator)
-                for ch in self._allocated_awgs
-                for integrator in range(self._integrators)
-            ),
-            *(self._result_node_spectroscopy(ch) for ch in self._allocated_awgs),
-            *(self._result_node_scope(ch) for ch in self._allocated_awgs),
+        subscribe_qa_nodes = [
+            self._qachannels[ch].subscribe_nodes() for ch in self._allocated_awgs
         ]
+        subscribe_scope_nodes = NodeCollector()
+        for ch in self._allocated_awgs:
+            subscribe_scope_nodes.add_path(self._result_node_scope(ch))
+
+        nodes = NodeCollector.all([*subscribe_qa_nodes, subscribe_scope_nodes])
         await _gather(
             super().on_experiment_begin(),
-            *(self._subscriber.subscribe(self._api, node) for node in nodes),
+            *(self._subscriber.subscribe(self._api, path) for path in nodes.paths()),
         )
 
     async def on_experiment_end(self):
@@ -1199,85 +1212,23 @@ class DeviceSHFQA(DeviceSHFBase):
         num_results: int,
         hw_averages: int,
     ) -> RawReadoutData:
-        assert len(result_indices) == 1
-        result_path = (
-            self._result_node_spectroscopy(channel)
-            if is_spectroscopy(rt_execution_info.acquisition_type)
-            else self._result_node_readout(channel, result_indices[0])
-        )
-        ch_repr = (
-            f"{self.dev_repr}:ch{channel}:spectroscopy"
-            if is_spectroscopy(rt_execution_info.acquisition_type)
-            else f"{self.dev_repr}:ch{channel}:readout{result_indices[0]}"
-        )
-
-        pipeliner_jobs = rt_execution_info.pipeliner_jobs
-
-        rt_result = RawReadoutData(
-            np.full(pipeliner_jobs * num_results, np.nan, dtype=np.complex128)
-        )
-        jobs_processed: set[int] = set()
-
-        expected_job_id = 0  # TODO(2K): For compatibility with 23.10
-
         # TODO(2K): set timeout based on timeout_s from connect
         timeout_s = 5
-        try:
-            while True:
-                if len(jobs_processed) == pipeliner_jobs:
-                    break
-                node_data = await self._subscriber.get(result_path, timeout_s=timeout_s)
-                job_result = node_data.value
-                properties = canonical_properties(job_result.properties)
 
-                job_id = properties["jobid"]
-                expected_job_id += 1
-                if job_id in jobs_processed:
-                    _logger.error(
-                        f"{ch_repr}: Ignoring duplicate job id {job_id} in the results."
-                    )
-                    continue
-                if job_id >= pipeliner_jobs:
-                    _logger.error(
-                        f"{ch_repr}: Ignoring job id {job_id} in the results, as it "
-                        f"falls outside the defined range of {pipeliner_jobs} jobs."
-                    )
-                    continue
-                jobs_processed.add(job_id)
-
-                num_samples = properties.get("numsamples", num_results)
-
-                if num_samples != num_results:
-                    _logger.error(
-                        f"{ch_repr}: The number of measurements acquired ({num_samples}) "
-                        f"does not match the number of measurements defined ({num_results}). "
-                        "Possibly the time between measurements within a loop is too short, "
-                        "or the measurement was not started."
-                    )
-
-                valid_samples = min(num_results, num_samples)
-                np.put(
-                    rt_result.vector,
-                    range(job_id * num_results, job_id * num_results + valid_samples),
-                    job_result.vector[:valid_samples],
-                    mode="clip",
-                )
-
-                timestamp_clock_cycles = properties["firstSampleTimestamp"]
-                rt_result.metadata.setdefault(job_id, {})["timestamp"] = (
-                    timestamp_clock_cycles * TIME_STAMP_TIMEBASE
-                )
-        except (TimeoutError, asyncio.TimeoutError):
-            _logger.error(
-                f"{ch_repr}: Failed to receive all results within {timeout_s} s, timing out."
+        if is_spectroscopy(rt_execution_info.acquisition_type):
+            return await self._qachannels[channel].get_spectroscopy_data(
+                pipeliner_jobs=rt_execution_info.pipeliner_jobs,
+                num_results=num_results,
+                timeout_s=timeout_s,
             )
 
-        missing_jobs = set(range(pipeliner_jobs)) - jobs_processed
-        if len(missing_jobs) > 0:
-            _logger.error(
-                f"{ch_repr}: Results for job id(s) {missing_jobs} are missing."
-            )
-
+        assert len(result_indices) == 1
+        rt_result = await self._qachannels[channel].get_readout_data(
+            pipeliner_jobs=rt_execution_info.pipeliner_jobs,
+            num_results=num_results,
+            timeout_s=timeout_s,
+            integrator=result_indices[0],
+        )
         if rt_execution_info.acquisition_type == AcquisitionType.DISCRIMINATION:
             rt_result.vector = rt_result.vector.real
         return rt_result
@@ -1310,7 +1261,10 @@ class DeviceSHFQA(DeviceSHFBase):
         await super().reset_to_idle()
         nc = NodeCollector(base=f"/{self.serial}/")
         # Reset pipeliner first, attempt to set generator enable leads to FW error if pipeliner was enabled.
-        nc.extend(self._pipeliner.reset_nodes())
+        nc.add("qachannels/*/pipeliner/reset", 1, cache=False)
+        nc.add("qachannels/*/pipeliner/mode", 0, cache=False)  # off
+        nc.add("qachannels/*/synchronization/enable", 0, cache=False)
+        nc.barrier()
         nc.add("qachannels/*/generator/enable", 0, cache=False)
         nc.add("system/synchronization/source", 0, cache=False)  # internal
         if self.options.is_qc:
