@@ -10,7 +10,6 @@ import math
 import re
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Iterator, cast
@@ -19,7 +18,6 @@ from weakref import ReferenceType, ref
 from laboneq.controller.results import build_partial_result, build_raw_partial_result
 from laboneq.data.experiment_results import ExperimentResults
 import numpy as np
-import zhinst.core
 import zhinst.utils
 
 from laboneq.controller.attribute_value_tracker import (  # pylint: disable=E0401
@@ -63,7 +61,6 @@ from laboneq.controller.versioning import SetupCaps
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.core.utilities.seqc_compile import SeqCCompileItem, seqc_compile_async
-from laboneq.core.utilities.string_sanitize import string_sanitize
 from laboneq.data.recipe import (
     Initialization,
     IntegratorAllocation,
@@ -81,10 +78,6 @@ if TYPE_CHECKING:
 
 
 _logger = logging.getLogger(__name__)
-
-seqc_osc_match = re.compile(
-    r'(\s*string\s+osc_node_)(\w+)(\s*=\s*"oscs/)[0-9]+(/freq"\s*;\s*)', re.ASCII
-)
 
 
 class AwgCompilerStatus(Enum):
@@ -1086,14 +1079,6 @@ class DeviceBase(DeviceZI):
         if command_table_body is None:
             return None
 
-        oscillator_map = {osc.id: osc.index for osc in self._allocated_oscs}
-        command_table_body = deepcopy(command_table_body)
-        for entry in command_table_body:
-            if "oscillatorSelect" not in entry:
-                continue
-            oscillator_uid = entry["oscillatorSelect"]["value"]["$ref"]
-            entry["oscillatorSelect"]["value"] = oscillator_map[oscillator_uid]
-
         return self.add_command_table_header(command_table_body)
 
     def prepare_seqc(
@@ -1108,30 +1093,7 @@ class DeviceBase(DeviceZI):
         if seqc is None:
             raise LabOneQControllerException(f"SeqC program '{seqc_ref}' not found")
 
-        # Substitute oscillator nodes by actual assignment
-        seqc_lines = seqc["text"].split("\n")
-        for i, seqc_line in enumerate(seqc_lines):
-            m = seqc_osc_match.match(seqc_line)
-            if m is not None:
-                param = m.group(2)
-                for osc in self._allocated_oscs:
-                    if osc.param == param:
-                        seqc_lines[i] = (
-                            f"{m.group(1)}{m.group(2)}{m.group(3)}{osc.index}{m.group(4)}"
-                        )
-
-        # Substitute oscillator index by actual assignment
-        for osc in self._allocated_oscs:
-            osc_index_symbol = string_sanitize(osc.id)
-            pattern = re.compile(rf"const {osc_index_symbol} = \w+;")
-            for i, l in enumerate(seqc_lines):
-                if not pattern.match(l):
-                    continue
-                seqc_lines[i] = f"const {osc_index_symbol} = {osc.index};  // final"
-
-        seqc_text = "\n".join(seqc_lines)
-
-        return seqc_text
+        return seqc["text"]
 
     def prepare_upload_elf(
         self, elf: bytes, awg_index: int, filename: str

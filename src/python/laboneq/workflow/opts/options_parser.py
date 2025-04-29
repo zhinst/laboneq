@@ -215,8 +215,21 @@ def check_type(
     origin = typing.get_origin(t)
     if origin is None:
         return isinstance(value, t)
+    _check_union = False
     if origin is typing.Union:
-        return any(isinstance(value, arg) for arg in typing.get_args(t))
+        _check_union = True
+    if not _PY_V39:
+        # Python 3.10+ a | b is of types.UnionType
+        if origin is types.UnionType:
+            _check_union = True
+    if _check_union:
+        return any(
+            isinstance(value, arg)
+            if typing.get_origin(arg) is None
+            else isinstance(value, typing.get_origin(arg))
+            for arg in typing.get_args(t)
+        )
+
     if origin is typing.Literal:
         return value in typing.get_args(t)
     # check containers  like List, Tuple, Set, Sequence

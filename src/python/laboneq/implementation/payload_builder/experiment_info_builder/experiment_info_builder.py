@@ -8,7 +8,7 @@ import logging
 import re
 from collections import defaultdict
 from types import SimpleNamespace
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, TypeVar
 import numpy as np
 
 from laboneq.core.path import LogicalSignalGroups_Path, insert_logical_signal_prefix
@@ -74,6 +74,9 @@ from laboneq.implementation.payload_builder.experiment_info_builder.device_info_
 _logger = logging.getLogger(__name__)
 
 
+T = TypeVar("T")
+
+
 class ExperimentInfoBuilder:
     def __init__(
         self,
@@ -88,7 +91,7 @@ class ExperimentInfoBuilder:
             ls: exp for exp, ls in self._signal_mappings.items()
         }
         self._params: dict[str, ParameterInfo] = {}
-        self._nt_only_params = []
+        self._nt_only_params: set[str] = set()
         self._oscillators: dict[str, OscillatorInfo] = {}
         self._signal_infos: dict[str, SignalInfo] = {}
         self._pulse_defs: dict[str, PulseDef] = {}
@@ -478,9 +481,7 @@ class ExperimentInfoBuilder:
 
         self._signal_infos[signal.uid] = signal_info
 
-    def _add_parameter(
-        self, value: Parameter | None, nt_only=False
-    ) -> float | ParameterInfo | None:
+    def _add_parameter(self, value: Parameter, nt_only=False) -> ParameterInfo:
         if isinstance(value, LinearSweepParameter):
             if value.count > 1:
                 step = (value.stop - value.start) / (value.count - 1)
@@ -519,14 +520,12 @@ class ExperimentInfoBuilder:
             raise LabOneQException(
                 f"Found multiple, inconsistent values for parameter {value.uid} with same UID."
             )
-        if nt_only and param_info not in self._nt_only_params:
-            self._nt_only_params.append(param_info.uid)
+        if nt_only:
+            self._nt_only_params.add(param_info.uid)
 
         return param_info
 
-    def opt_param(
-        self, value: float | int | complex | None | Parameter, nt_only=False
-    ) -> float | int | complex | ParameterInfo | None:
+    def opt_param(self, value: T | Parameter, nt_only=False) -> T | ParameterInfo:
         """Pass through numbers, but convert `Parameter` to `ParameterInfo`
 
         Args:

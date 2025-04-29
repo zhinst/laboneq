@@ -6,9 +6,10 @@ from __future__ import annotations
 import sys
 from enum import Enum
 from functools import partial
-from typing import ClassVar, Type, Union
+from typing import ClassVar, Optional, Type, Union
 
 import attrs
+import numpy
 from cattrs import Converter
 
 from laboneq.core.types.enums.carrier_type import CarrierType
@@ -17,6 +18,7 @@ from laboneq.core.types.enums.high_pass_compensation_clearing import (
 )
 from laboneq.core.types.enums.modulation_type import ModulationType
 from laboneq.core.types.enums.port_mode import PortMode
+from laboneq.core.types.units import Quantity, Unit
 from laboneq.dsl.calibration import CancellationSource
 from laboneq.dsl.calibration.amplifier_pump import AmplifierPump
 from laboneq.dsl.calibration.calibration import Calibration
@@ -34,7 +36,6 @@ from laboneq.dsl.calibration.signal_calibration import SignalCalibration
 from laboneq.dsl.device.io_units.logical_signal import LogicalSignal
 from laboneq.dsl.experiment.experiment_signal import ExperimentSignal
 from laboneq.dsl.parameter import LinearSweepParameter, SweepParameter
-import numpy
 
 from ._common import (
     ArrayLike_Model,
@@ -78,6 +79,12 @@ class HighPassCompensationClearingModel(Enum):
     FALL = "FALL"
     BOTH = "BOTH"
     _target_class = HighPassCompensationClearing
+
+
+class UnitModel(Enum):
+    volt = "volt"
+    dBm = "dBm"
+    _target_class = Unit
 
 
 #
@@ -124,7 +131,7 @@ class SweepParameterModel:
                     driven_by.append(_converter.structure(db, SweepParameterModel))
         return cls._target_class(
             uid=d["uid"],
-            values=d["values"],
+            values=_converter.structure(d["values"], ArrayLike_Model),
             axis_name=d["axis_name"],
             driven_by=driven_by,
         )
@@ -569,6 +576,19 @@ class BounceCompensationModel:
 
 
 @attrs.define
+class QuantityModel:
+    value: float
+    unit: UnitModel
+    _target_class: ClassVar[Type] = Quantity
+
+    @classmethod
+    def _structure(cls, obj, _):
+        return cls._target_class(
+            value=obj["value"], unit=UnitModel._target_class.value(obj["unit"])
+        )
+
+
+@attrs.define
 class SignalCalibrationModel:
     oscillator: OscillatorModel | None
     local_oscillator: OscillatorModel | None
@@ -578,7 +598,7 @@ class SignalCalibrationModel:
     port_mode: PortModeModel | None
     delay_signal: float | None
     voltage_offset: float | ParameterModel | None
-    range: int | float | None
+    range: int | float | QuantityModel | None
     threshold: float | list[float] | None
     amplitude: float | ParameterModel | None
     amplifier_pump: AmplifierPumpModel | None
@@ -625,7 +645,10 @@ class SignalCalibrationModel:
             or isinstance(obj.voltage_offset, (float, int))
             else _converter.unstructure(obj.voltage_offset, ParameterModel)
         )
-        range = obj.range
+        range = _converter.unstructure(
+            obj.range, Optional[Union[float, int, QuantityModel]]
+        )
+
         threshold = obj.threshold
         amplitude = (
             obj.amplitude
@@ -698,7 +721,9 @@ class SignalCalibrationModel:
         voltage_offset = _structure_basic_or_parameter_model(
             d["voltage_offset"], _converter
         )
-        range = d["range"]
+        range = _converter.structure(
+            d["range"], Optional[Union[float, int, QuantityModel]]
+        )
         threshold = d["threshold"]
         amplitude = _structure_basic_or_parameter_model(d["amplitude"], _converter)
         amplifier_pump = (

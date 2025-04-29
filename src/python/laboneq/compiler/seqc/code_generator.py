@@ -799,9 +799,9 @@ class CodeGenerator(ICodeGenerator):
 
     @staticmethod
     def _emit_new_awg_events(
-        old_event, new_events
+        old_event: AWGEvent, new_events: list[Any]
     ) -> tuple[list[AWGEvent], dict[str, str]]:
-        new_awg_events = []
+        new_awg_events: list[AWGEvent] = []
         pulse_name_mapping = {}
         time = old_event.start
         for new_event in new_events:
@@ -883,10 +883,7 @@ class CodeGenerator(ICodeGenerator):
                             event.params["play_wave_id"],
                         )
                 if event.type == AWGEventType.PLAY_WAVE:
-                    playback_signature: PlaybackSignature = event.params[
-                        "playback_signature"
-                    ]
-                    wave_form = playback_signature.waveform
+                    wave_form = event.signature.waveform
                     pulses_not_in_pulsedef = [
                         pulse.pulse
                         for pulse in wave_form.pulses
@@ -1049,16 +1046,10 @@ class CodeGenerator(ICodeGenerator):
                 old_event = event_group[idx]
                 event_group[idx : idx + 1] = new_awg_events
 
-                playback_signature: PlaybackSignature = old_event.params[
-                    "playback_signature"
-                ]
-                old_waveform = playback_signature.waveform
+                old_waveform = old_event.signature.waveform
                 for new_awg_event in new_awg_events:
                     if new_awg_event.type == AWGEventType.PLAY_WAVE:
-                        new_playback_signature: PlaybackSignature = (
-                            new_awg_event.params["playback_signature"]
-                        )
-                        new_waveform = new_playback_signature.waveform
+                        new_waveform = new_awg_event.signature.waveform
                         new_length = len(
                             next(iter(new_waveform.samples.samples_map.values()))
                         )
@@ -1188,7 +1179,9 @@ class CodeGenerator(ICodeGenerator):
 
         for signal_obj in awg.signals:
             set_oscillator_events = analyze_set_oscillator_times(
-                events, signal_obj, global_delay
+                events=events,
+                signal_obj=signal_obj,
+                global_delay=global_delay,
             )
             sampled_events.merge(set_oscillator_events)
 
@@ -1473,7 +1466,7 @@ class CodeGenerator(ICodeGenerator):
         }
         for awg_events in sampled_events.sequence.values():
             for awg_event in awg_events:
-                if maybe_signature := awg_event.params.get("playback_signature"):
+                if maybe_signature := awg_event.maybe_signature:
                     if maybe_signature.waveform is None:
                         continue
                     maybe_signature.waveform = frozen_wf_signatures[
@@ -1586,9 +1579,7 @@ class CodeGenerator(ICodeGenerator):
             for interval_event in interval_event_list:
                 if interval_event.type != AWGEventType.PLAY_WAVE:
                     continue
-                signature: PlaybackSignature = interval_event.params[
-                    "playback_signature"
-                ]
+                signature = interval_event.signature
                 _logger.debug("Signature found %s in %s", signature, interval_event)
                 if any(p.pulse for p in signature.waveform.pulses):
                     signatures[signature] = None

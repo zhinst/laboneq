@@ -61,7 +61,7 @@ class TargetDevice:
     server: TargetServer = None
     device_serial: str = None
     device_type: TargetDeviceType = None
-    device_options: str = None
+    device_options: str | None = None
     interface: str = None
     has_signals: bool | None = None
     connected_outputs: dict[str, list[int]] | None = None

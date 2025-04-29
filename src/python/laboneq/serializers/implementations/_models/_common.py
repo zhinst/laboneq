@@ -11,6 +11,9 @@ from cattrs import Converter
 from cattrs.gen import make_dict_structure_fn, make_dict_unstructure_fn
 from cattrs.preconf.orjson import make_converter
 
+from laboneq.serializers.core import from_dict
+from laboneq.serializers.implementations.numpy_array import NumpyArraySerializer
+
 # Common types
 
 # cattrs does not work with typing.TypeAlias, which is the true identity of
@@ -30,8 +33,22 @@ from cattrs.preconf.orjson import make_converter
 # But we will be more practical and use the following:
 ArrayLike_Model = Union[
     numpy.ndarray,
-    list[Union[bool, int, float, complex, str, bytes]],
+    list[Union[bool, int, float, str, bytes]],
 ]
+
+
+def _structure_arraylike(obj, _):
+    """Structure a numpy array or a list of numbers."""
+    if isinstance(obj, dict):
+        return from_dict(obj)
+    return numpy.asarray(obj)
+
+
+def _unstructure_arraylike(obj):
+    """Unstructure a numpy array or a list of numbers."""
+    if isinstance(obj, numpy.ndarray):
+        return NumpyArraySerializer.to_json_dict(obj)
+    return obj
 
 
 @attrs.define
@@ -48,7 +65,7 @@ class NumericModel:
 
     @classmethod
     def _unstructure(cls, obj):
-        if isinstance(obj, numpy.complexfloating):
+        if isinstance(obj, (numpy.complexfloating, complex)):
             return [obj.real, obj.imag]
         return obj
 
@@ -138,15 +155,11 @@ def collect_models(module_models) -> frozenset:
 
 def make_laboneq_converter() -> Converter:
     converter = make_converter()
-    # TODO: Replace the following hooks for numpy
-    # with the serializer for numpy_array registered in the
-    # serializer registry
-    converter.register_structure_hook(
-        ArrayLike_Model, lambda obj, _: numpy.asarray(obj)
-    )
+
+    converter.register_structure_hook(ArrayLike_Model, _structure_arraylike)
     converter.register_unstructure_hook(
         ArrayLike_Model,
-        lambda obj: obj.tolist() if isinstance(obj, numpy.ndarray) else obj,
+        _unstructure_arraylike,
     )
 
     converter.register_unstructure_hook(NumericModel, NumericModel._unstructure)

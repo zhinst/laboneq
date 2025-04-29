@@ -8,7 +8,7 @@ from .experiment import Experiment
 from .experiment_signal import ExperimentSignal
 from .operation import Operation
 from .play_pulse import PlayPulse
-from .pulse import PulseFunctional, PulseSampled, PulseSampledComplex, PulseSampledReal
+from .pulse import PulseFunctional, PulseSampled
 from .reserve import Reserve
 from .section import AcquireLoopNt, AcquireLoopRt, Case, Match, Section, Sweep
 from .set_node import SetNode

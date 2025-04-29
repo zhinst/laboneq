@@ -11,6 +11,7 @@ from typing import Callable, ClassVar, Optional, Type, Union
 import attrs
 from cattrs import Converter
 
+from laboneq._utils import UIDReference
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.core.types.enums.dsl_version import DSLVersion
@@ -378,10 +379,30 @@ class AcquireModel:
 
 
 @attrs.define
+class UIDReferenceModel:
+    """Reference to an object with an UID.
+
+    Args:
+        uid: UID of the referenced object.
+    """
+
+    uid: str
+    _target_class: ClassVar[Type] = UIDReference
+
+    @classmethod
+    def _structure(cls, obj, _):
+        return cls._target_class(uid=obj["uid"])
+
+
+@attrs.define
 class CallModel:
     func_name: str | Callable
     # args could be anything, here we limit it to simple types
-    args: dict[str, ParameterModel | str | int | float | bool | complex | None]
+    # and UIDReference
+    args: dict[
+        str,
+        ParameterModel | str | int | float | bool | complex | None | UIDReferenceModel,
+    ]
     _target_class: ClassVar[Type] = Call
 
     @classmethod
@@ -392,6 +413,14 @@ class CallModel:
             else v
             for k, v in obj.args.items()
         }
+        args = {}
+        for k, v in obj.args.items():
+            if isinstance(v, UIDReference):
+                args[k] = _converter.unstructure(v, UIDReferenceModel)
+            elif isinstance(v, (SweepParameter, LinearSweepParameter)):
+                args[k] = _converter.unstructure(v, ParameterModel)
+            else:
+                args[k] = v
 
         if callable(obj.func_name):
             func_name = obj.func_name.__name__
@@ -408,6 +437,8 @@ class CallModel:
         for k, v in obj["args"].items():
             if hasattr(v, "_type"):
                 args[k] = _converter.structure(v, ParameterModel)
+            elif isinstance(v, dict) and v.get("uid") is not None:
+                args[k] = _converter.structure(v, UIDReferenceModel)
             else:
                 args[k] = v
         return cls._target_class(

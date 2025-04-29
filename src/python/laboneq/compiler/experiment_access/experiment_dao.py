@@ -3,9 +3,9 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 import logging
 from collections import deque
-from typing import Any, List
 
 from jsonschema import ValidationError
 
@@ -48,7 +48,7 @@ class ExperimentDAO:
         else:
             self._loader = self._load_experiment(experiment)
             self._uid = "exp_from_json"
-        self._data: dict[str, Any] = self._loader.data()
+        self._data = self._loader.data()
         self._acquisition_type: AcquisitionType = self._loader.acquisition_type
 
         self.validate_experiment()
@@ -56,13 +56,13 @@ class ExperimentDAO:
     def to_experiment_info(self):
         return ExperimentInfo(
             uid=self._uid,
-            devices=list(self._data["devices"].values()),
-            signals=list(self._data["signals"].values()),
-            sections=list(self._data["sections"].values()),
-            global_leader_device=self._data["devices"][self.global_leader_device()]
+            devices=list(self._data.devices.values()),
+            signals=list(self._data.signals.values()),
+            sections=list(self._data.sections.values()),
+            global_leader_device=self._data.devices[self.global_leader_device()]
             if self.global_leader_device() is not None
             else None,
-            pulse_defs=list(self._data["pulses"].values()),
+            pulse_defs=list(self._data.pulses.values()),
         )
 
     def __eq__(self, other):
@@ -70,13 +70,13 @@ class ExperimentDAO:
             return False
 
         return self._acquisition_type == other._acquisition_type and dicts_equal(
-            self._data, other._data
+            asdict(self._data), asdict(other._data)
         )
 
     def add_signal(self, device_id, channels, signal_id, signal_type):
-        assert signal_id not in self._data["signals"]
+        assert signal_id not in self._data.signals
 
-        self._data["signals"][signal_id] = SignalInfo(
+        self._data.signals[signal_id] = SignalInfo(
             uid=signal_id,
             type=SignalInfoType(signal_type),
             device=self.device_info(device_id),
@@ -109,36 +109,36 @@ class ExperimentDAO:
         return self._acquisition_type
 
     def signals(self) -> list[str]:
-        return sorted([s.uid for s in self._data["signals"].values()])
+        return sorted([s.uid for s in self._data.signals.values()])
 
-    def devices(self) -> List[str]:
-        return [d.uid for d in self._data["devices"].values()]
+    def devices(self) -> list[str]:
+        return [d.uid for d in self._data.devices.values()]
 
     def global_leader_device(self) -> str:
-        return self._data["global_leader_device_id"]
+        return self._data.global_leader_device_id
 
-    def device_info(self, device_id) -> DeviceInfo | None:
-        return self._data["devices"].get(device_id)
+    def device_info(self, device_id) -> DeviceInfo:
+        return self._data.devices[device_id]
 
-    def device_infos(self) -> List[DeviceInfo]:
-        return list(self._data["devices"].values())
+    def device_infos(self) -> list[DeviceInfo]:
+        return list(self._data.devices.values())
 
-    def device_from_signal(self, signal_id):
+    def device_from_signal(self, signal_id) -> DeviceInfo:
         return self.device_info(self.signal_info(signal_id).device.uid)
 
     @cached_method()
     def signal_info(self, signal_id: str) -> SignalInfo:
-        return self._data["signals"][signal_id]
+        return self._data.signals[signal_id]
 
-    def sections(self) -> List[str]:
-        return list(self._data["sections"].keys())
+    def sections(self) -> list[str]:
+        return list(self._data.sections.keys())
 
-    def section_info(self, section_id) -> SectionInfo:
-        retval = self._data["sections"][section_id]
+    def section_info(self, section_id: str) -> SectionInfo:
+        retval = self._data.sections[section_id]
         return retval
 
-    def root_sections(self):
-        return self._data["root_sections"]
+    def root_sections(self) -> list[str]:
+        return self._data.root_sections
 
     @cached_method()
     def _has_near_time_child(self, section_id) -> str | None:
@@ -172,7 +172,7 @@ class ExperimentDAO:
         return tuple(retval)  # tuple is immutable, so no one can break memoization
 
     @cached_method()
-    def direct_section_children(self, section_id) -> List[str]:
+    def direct_section_children(self, section_id) -> list[str]:
         return [child.uid for child in self.section_info(section_id).children]
 
     @cached_method()
@@ -243,81 +243,64 @@ class ExperimentDAO:
         return signals
 
     def pulses(self) -> list[str]:
-        return list(self._data["pulses"].keys())
+        return list(self._data.pulses.keys())
 
     def pulse(self, pulse_id) -> PulseDef:
-        return self._data["pulses"].get(pulse_id)
+        return self._data.pulses.get(pulse_id)
 
-    def oscillator_info(self, oscillator_id) -> OscillatorInfo | None:
-        return self._data["oscillators"].get(oscillator_id)
+    def oscillator_info(self, oscillator_id) -> OscillatorInfo:
+        return self._data.oscillators[oscillator_id]
 
-    def hardware_oscillators(self) -> List[OscillatorInfo]:
-        oscillator_infos: List[OscillatorInfo] = []
-        for device in self.devices():
-            device_oscillators = self.device_oscillators(device)
-            for oscillator_id in device_oscillators:
-                info = self.oscillator_info(oscillator_id)
-                if info is not None and info.is_hardware:
-                    info.device_id = device
-                    oscillator_infos.append(info)
-
-        return sorted(oscillator_infos, key=lambda x: x.uid)
-
-    def device_oscillators(self, device_id) -> list[OscillatorInfo]:
-        return [
-            do["oscillator_id"]
-            for do in self._data["device_oscillators"].get(device_id, [])
-        ]
+    def device_oscillators(self, device_id) -> list[str]:
+        return list(self._data.device_oscillators.get(device_id, set()))
 
     def oscillators(self):
-        return list(self._data["oscillators"].keys())
+        return list(self._data.oscillators.keys())
 
     def signal_oscillator(self, signal_id):
-        return self._data["signals"][signal_id].oscillator
+        return self._data.signals[signal_id].oscillator
 
     def voltage_offset(self, signal_id) -> float | ParameterInfo:
-        return self._data["signals"][signal_id].voltage_offset
+        return self._data.signals[signal_id].voltage_offset
 
     def mixer_calibration(self, signal_id):
-        return self._data["signals"][signal_id].mixer_calibration
+        return self._data.signals[signal_id].mixer_calibration
 
     def precompensation(self, signal_id):
-        return self._data["signals"][signal_id].precompensation
+        return self._data.signals[signal_id].precompensation
 
     def lo_frequency(self, signal_id) -> float | ParameterInfo:
-        return self._data["signals"][signal_id].lo_frequency
+        return self._data.signals[signal_id].lo_frequency
 
     def signal_range(self, signal_id) -> SignalRange:
-        return self._data["signals"][signal_id].signal_range
+        return self._data.signals[signal_id].signal_range
 
     def port_delay(self, signal_id) -> float | ParameterInfo | None:
-        return self._data["signals"][signal_id].port_delay
+        return self._data.signals[signal_id].port_delay
 
     def port_mode(self, signal_id):
-        return self._data["signals"][signal_id].port_mode
+        return self._data.signals[signal_id].port_mode
 
     def threshold(self, signal_id):
-        return self._data["signals"][signal_id].threshold
+        return self._data.signals[signal_id].threshold
 
     def amplitude(self, signal_id) -> float | ParameterInfo | None:
-        return self._data["signals"][signal_id].amplitude
+        return self._data.signals[signal_id].amplitude
 
     def amplifier_pump(self, signal_id) -> AmplifierPumpInfo | None:
-        return self._data["signals"][signal_id].amplifier_pump
+        return self._data.signals[signal_id].amplifier_pump
 
     def section_pulses(self, section_id, signal_id) -> list[SectionSignalPulse]:
-        return (
-            self._data["section_signal_pulses"].get(section_id, {}).get(signal_id, [])
-        )
+        return self._data.section_signal_pulses.get(section_id, {}).get(signal_id, [])
 
-    def markers_on_signal(self, signal_id: str):
-        return self._data["signal_markers"].get(signal_id)
+    def markers_on_signal(self, signal_id: str) -> set[str] | None:
+        return self._data.signal_markers.get(signal_id)
 
-    def triggers_on_signal(self, signal_id: str):
-        return self._data["signal_trigger"].get(signal_id)
+    def triggers_on_signal(self, signal_id: str) -> int | None:
+        return self._data.signal_trigger.get(signal_id)
 
     def section_parameters(self, section_id) -> list[ParameterInfo]:
-        return self._data["section_parameters"].get(section_id, [])
+        return self._data.section_parameters.get(section_id, [])
 
     def validate_experiment(self):
         validators.shfqa_unique_measure_pulse(self)
@@ -334,4 +317,4 @@ class ExperimentDAO:
         validators.check_no_sweeping_acquire_pulses(self)
 
     def acquisition_signal(self, handle: str) -> str | None:
-        return self._data["handle_acquires"][handle]
+        return self._data.handle_acquires[handle]

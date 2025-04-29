@@ -2,5 +2,5 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .controller import Controller
-from .toolkit_adapter import MockedToolkit, ToolkitDevices
+from .toolkit_adapter import ToolkitDevices
 from .util import LabOneQControllerException

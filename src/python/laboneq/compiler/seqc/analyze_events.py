@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, cast
+from typing import TYPE_CHECKING, Any
 
 from engineering_notation import EngNumber
 from sortedcontainers import SortedDict
@@ -34,7 +34,7 @@ _logger = logging.getLogger(__name__)
 
 def analyze_loop_times(
     awg: AWGInfo,
-    events: List[Any],
+    events: list[dict[str, Any]],
     sampling_rate: float,
     delay: float,
 ) -> AWGSampledEventSequence:
@@ -196,8 +196,8 @@ def analyze_init_times(
 
 
 def analyze_precomp_reset_times(
-    events: List[Any],
-    signals: List[str],
+    events: list[dict[str, Any]],
+    signals: list[str],
     sampling_rate: float,
     delay: float,
 ) -> AWGSampledEventSequence:
@@ -243,7 +243,7 @@ def analyze_precomp_reset_times(
 
 
 def analyze_phase_reset_times(
-    events: List[Any],
+    events: list[dict[str, Any]],
     device_id: str,
     sampling_rate: float,
     delay: float,
@@ -283,7 +283,7 @@ def analyze_phase_reset_times(
 
 
 def analyze_set_oscillator_times(
-    events: List, signal_obj: SignalObj, global_delay: float
+    events: list[dict[str, Any]], signal_obj: SignalObj, global_delay: float
 ) -> AWGSampledEventSequence:
     signal_id = signal_obj.id
     device_id = signal_obj.awg.device_id
@@ -322,6 +322,9 @@ def analyze_set_oscillator_times(
         ):
             raise LabOneQException("Realtime oscillator sweeps must be linear")
 
+        oscillator_id: str = event["oscillator_id"]
+        osc_index = signal_obj.awg.oscs.get(oscillator_id)
+        osc_index_param = {} if osc_index is None else {"osc_index": osc_index}
         event_time_in_samples = length_to_samples(
             event["time"] + global_delay, sampling_rate
         )
@@ -335,7 +338,8 @@ def analyze_set_oscillator_times(
                 "parameter_name": event["parameter"]["id"],
                 "iteration": iteration,
                 "iterations": len(iterations),
-                "oscillator_id": event["oscillator_id"],
+                "oscillator_id": oscillator_id,
+                **osc_index_param,
             },
         )
 
@@ -413,7 +417,7 @@ def analyze_ppc_sweep_events(events: list[Any], awg: AWGInfo, global_delay: floa
 
 
 def analyze_acquire_times(
-    events: List[Any],
+    events: list[dict[str, Any]],
     signal_obj: SignalObj,
     feedback_register_allocator: FeedbackRegisterAllocator,
 ) -> AWGSampledEventSequence:
@@ -526,13 +530,15 @@ def analyze_acquire_times(
 
 
 def analyze_trigger_events(
-    events: List[Dict], signal: SignalObj, loop_events: AWGSampledEventSequence
+    events: list[dict[str, Any]],
+    signal: SignalObj,
+    loop_events: AWGSampledEventSequence,
 ) -> AWGSampledEventSequence:
     digital_signal_change_events = [
-        event
-        for event in events
-        if event["event_type"] == EventType.DIGITAL_SIGNAL_STATE_CHANGE
-        and signal.id == event["signal"]
+        ev
+        for ev in events
+        if ev["event_type"] == EventType.DIGITAL_SIGNAL_STATE_CHANGE
+        and signal.id == ev["signal"]
     ]
     delay = signal.total_delay
     sampling_rate = signal.awg.sampling_rate
@@ -540,37 +546,32 @@ def analyze_trigger_events(
 
     sampled_digital_signal_change_events = AWGSampledEventSequence()
 
-    for event in digital_signal_change_events:
-        event: dict
-        time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
+    for ev in digital_signal_change_events:
+        time_in_samples = length_to_samples(ev["time"] + delay, sampling_rate)
         sampled_digital_signal_change_events.add(
             time_in_samples,
-            AWGEvent(type=None, params=event, priority=event["position"]),
+            AWGEvent(type=None, params=ev, priority=ev["position"]),
         )
 
     current_state = 0
     retval = AWGSampledEventSequence()
     state_progression = SortedDict()
 
-    event_list: List[AWGEvent]
     for (
         time_in_samples,
         event_list,
     ) in sampled_digital_signal_change_events.sequence.items():
         if device_type in (DeviceType.SHFQA, DeviceType.SHFSG):
             for event in event_list:
-                event: AWGEvent
                 if event.params["bit"] > 0:
                     raise LabOneQException(
                         f"On device {device_type.value}, only a single trigger channel is "
                         f"available (section {event.params['section_name']})."
                     )
         for event in [e for e in event_list if e.params["change"] == "CLEAR"]:
-            event: AWGEvent
             mask = ~(2 ** event.params["bit"])
             current_state = current_state & mask
         for event in [e for e in event_list if e.params["change"] == "SET"]:
-            event: AWGEvent
             mask = 2 ** event.params["bit"]
             current_state = current_state | mask
         state_progression[time_in_samples] = current_state
@@ -598,10 +599,7 @@ def analyze_trigger_events(
     resampled_states = resample_state(loop_events.sequence.keys(), state_progression)
     if resampled_states:
         for time_in_samples, event_list in loop_events.sequence.items():
-            if any(
-                cast(AWGEvent, event).type == AWGEventType.PUSH_LOOP
-                for event in event_list
-            ):
+            if any(event.type == AWGEventType.PUSH_LOOP for event in event_list):
                 retval.add(
                     time_in_samples,
                     AWGEvent(

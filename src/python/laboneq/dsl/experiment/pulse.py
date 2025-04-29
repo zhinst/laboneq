@@ -37,7 +37,6 @@ class Pulse:
     """A pulse for playing during an experiment."""
 
 
-# TODO: PulseSampledReal and PulseSampledComplex should be the same function taking a single dimensional np.ndarray.
 @classformatter
 @attrs.define(eq=False)
 class PulseSampled(Pulse):
@@ -59,46 +58,6 @@ class PulseSampled(Pulse):
         if self is other:
             return True
         return self.uid == other.uid and _compare_nested(self.samples, other.samples)
-
-
-@classformatter
-@attrs.define(eq=False)
-class PulseSampledReal(PulseSampled):
-    """Pulse based on a list of real-valued samples.
-
-    !!! version-changed "Deprecated in version 2.29.0"
-        Use `PulseSampled` instead.
-    """
-
-    def __attrs_post_init__(self):
-        super().__attrs_post_init__()
-        shape = np.shape(self.samples)
-        if not len(shape) == 1:
-            raise LabOneQException(
-                "PulseSampledReal samples must be a one-dimensional array"
-            )
-
-
-@classformatter
-@attrs.define(eq=False)
-class PulseSampledComplex(PulseSampled):
-    """Pulse base on a list of complex-valued samples.
-
-    !!! version-changed "Deprecated in version 2.29.0"
-        Use `PulseSampled` instead.
-    """
-
-    def __attrs_post_init__(self):
-        if not np.iscomplexobj(self.samples):
-            shape = np.shape(self.samples)
-            if not (len(shape) == 2 and shape[1] == 2):
-                raise LabOneQException(
-                    "PulseSampledComplex samples must be pairs of real, imaginary values or a complex valued numpy array."
-                )
-            raw_array = np.transpose(self.samples)
-            self.samples = raw_array[0] + 1j * raw_array[1]
-
-        super().__attrs_post_init__()
 
 
 @classformatter

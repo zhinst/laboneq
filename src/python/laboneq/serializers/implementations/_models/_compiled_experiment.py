@@ -24,9 +24,9 @@ from laboneq.data.recipe import (
     OscillatorParam,
     RealtimeExecutionInit,
     Recipe,
+    RefClkType,
     RoutedOutput,
     SignalType,
-    RefClkType,
     SoftwareVersions,
     TriggeringMode,
 )
@@ -35,8 +35,9 @@ from laboneq.data.scheduled_experiment import (
     CompilerArtifact,
     ScheduledExperiment,
 )
-from laboneq.executor.executor import Statement
 from laboneq.dsl.serialization import Serializer
+from laboneq.executor.executor import Statement
+
 from ._common import (
     collect_models,
     make_laboneq_converter,

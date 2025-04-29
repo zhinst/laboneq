@@ -103,7 +103,13 @@ def analyze_amplitude_register_set_events(
         param_name = event["parameter"]["id"]
         if param_name not in amplitude_register_by_parameter:
             continue
-        value = event["value"]
+        # Take absolute value here, to be compatible with how we later lump the pulse
+        # amplitude into the amplitude registers.
+        # While this will require extra command table entries whenever the user sweeps
+        # amplitude across zero, it will work correctly even in the presence of _complex_
+        # values.
+        value = abs(event["value"])
+
         register = amplitude_register_by_parameter[param_name]
         event_time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
 

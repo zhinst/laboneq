@@ -13,7 +13,7 @@ from laboneq.dsl.parameter import Parameter
 oscillator_id = 0
 
 
-def oscillator_uid_generator():
+def oscillator_uid_generator() -> str:
     global oscillator_id
     retval = f"osc_{oscillator_id}"
     oscillator_id += 1

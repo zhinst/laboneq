@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Callable
 
+from laboneq.compiler.seqc.signatures import PlaybackSignature
+
 
 class AWGEventType(Enum):
     LOOP_STEP_START = auto()
@@ -47,6 +49,14 @@ class AWGEvent:
         return frozenset(
             (self.type, self.start, self.end, frozenset(self.params.items()))
         )
+
+    @property
+    def signature(self) -> PlaybackSignature:
+        return self.params["playback_signature"]
+
+    @property
+    def maybe_signature(self) -> PlaybackSignature | None:
+        return self.params.get("playback_signature")
 
 
 @dataclass

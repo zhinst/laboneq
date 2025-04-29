@@ -447,7 +447,7 @@ class SeqCGenerator:
             return f"playHold({statement['num_samples']});\n"
 
         elif statement["type"] == "constant":
-            if statement["comment"] is not None:
+            if statement.get("comment") is not None:
                 comment = "  // " + statement["comment"]
             else:
                 comment = ""

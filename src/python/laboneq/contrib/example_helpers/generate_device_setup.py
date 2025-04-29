@@ -6,8 +6,8 @@
 from __future__ import annotations
 
 from laboneq.contrib.example_helpers.device_setup_helper import (
-    create_TKSession,
     connect_zsync,
+    create_TKSession,
     return_instrument_options,
     return_instrument_zsync_ports,
 )
@@ -448,6 +448,9 @@ def generate_device_setup(
                 uid=f"pqsc_{id}",
                 address=instrument["serial"],
                 interface="1GBe" if not instrument["usb"] else "usb",
+                reference_clock_source="external"
+                if instrument["external_clock"]
+                else "internal",
             )
         )
         instrument_list[instrument["serial"]] = f"pqsc_{id}"
@@ -467,9 +470,12 @@ def generate_device_setup(
                 uid=f"qhub_{id}",
                 address=instrument["serial"],
                 interface="1GBe" if not instrument["usb"] else "usb",
+                reference_clock_source="external"
+                if instrument["external_clock"]
+                else "internal",
             )
         )
-        instrument_list[instrument["serial"]] = f"pqsc_{id}"
+        instrument_list[instrument["serial"]] = f"qhub_{id}"
 
     # check that instruments supplied are sufficient for specified needs
     if number_readout_acquire_lines < number_qubits and not drive_only:

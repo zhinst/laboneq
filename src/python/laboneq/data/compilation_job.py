@@ -101,8 +101,10 @@ class FollowerInfo:
 
 @dataclass
 class DeviceInfo:
-    uid: str = None
-    device_type: DeviceInfoType = None
+    uid: str
+    device_type: DeviceInfoType
+    dev_type: str | None = None
+    dev_opts: list[str] = field(default_factory=list)
     reference_clock_source: ReferenceClockSourceInfo | None = None
     is_qc: bool | None = None
     followers: list[FollowerInfo] = field(default_factory=list)
@@ -110,9 +112,9 @@ class DeviceInfo:
 
 @dataclass
 class OscillatorInfo:
-    uid: str = None
-    frequency: float | ParameterInfo = None
-    is_hardware: bool = None
+    uid: str
+    frequency: float | ParameterInfo | None = None
+    is_hardware: bool | None = None
 
 
 @dataclass()
@@ -285,7 +287,7 @@ class SignalInfo:
     channels: list[int] = field(default_factory=list)
     channel_to_port: dict[str, str] = field(default_factory=dict)
     type: SignalInfoType = None
-    voltage_offset: float | None = None
+    voltage_offset: float | ParameterInfo | None = None
     mixer_calibration: MixerCalibrationInfo | None = None
     precompensation: PrecompensationInfo | None = None
     lo_frequency: float | ParameterInfo | None = None
@@ -336,12 +338,12 @@ class Marker:
 
 @dataclass
 class ExperimentInfo:
-    uid: str = None
-    devices: list[DeviceInfo] = field(default_factory=list)
-    signals: list[SignalInfo] = field(default_factory=list)
-    sections: list[SectionInfo] = field(default_factory=list)
-    global_leader_device: DeviceInfo | None = None  # todo: remove
-    pulse_defs: list[PulseDef] = field(default_factory=list)
+    uid: str
+    devices: list[DeviceInfo]
+    signals: list[SignalInfo]
+    sections: list[SectionInfo]
+    global_leader_device: DeviceInfo | None  # todo: remove
+    pulse_defs: list[PulseDef]
 
 
 @dataclass

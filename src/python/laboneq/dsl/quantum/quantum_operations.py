@@ -26,12 +26,13 @@ if TYPE_CHECKING:
         QuantumElement,
         Section,
     )
+    from laboneq.dsl.quantum.qpu import QPU
 
 
 def quantum_operation(
     f: Callable | None = None, *, broadcast: bool = True, neartime: bool = False
 ) -> Callable:
-    """Decorator that marks an method as a quantum operation.
+    """Decorator that marks a method as a quantum operation.
 
     Methods marked as quantum operations are moved into the `BASE_OPS` dictionary
     of the `QuantumOperations` class they are defined in at the end of class
@@ -96,7 +97,7 @@ class _PulseCache:
 
     @classmethod
     def experiment_or_global_cache(cls) -> _PulseCache:
-        """Return an pulse cache.
+        """Return a pulse cache.
 
         If there is an active experiment context, return its cache. Otherwise
         return the global pulse cache.
@@ -214,6 +215,10 @@ def create_pulse(
 class QuantumOperations:
     """Quantum operations for a given qubit type.
 
+    Arguments:
+    qpu:
+        The quantum processing unit (QPU).
+
     Attributes:
         QUBIT_TYPES:
             (class attribute) The classes of qubits supported by this set of
@@ -226,12 +231,13 @@ class QuantumOperations:
     QUBIT_TYPES: type[QuantumElement] | tuple[type[QuantumElement]] | None = None
     BASE_OPS: dict[str, Callable] = None
 
-    def __init__(self):
+    def __init__(self, qpu: QPU | None = None):
         if self.QUBIT_TYPES is None:
             raise ValueError(
                 "Sub-classes of QuantumOperations must set the supported QUBIT_TYPES.",
             )
 
+        self.qpu = qpu
         self._ops = {}
 
         for name, f in self.BASE_OPS.items():
@@ -289,6 +295,19 @@ class QuantumOperations:
     def __dir__(self):
         """Return the attributes of these quantum operations."""
         return sorted(super().__dir__() + list(self._ops.keys()))
+
+    def attach_qpu(self, qpu: QPU) -> None:
+        """Attach a QPU to the set of quantum operations."""
+        if self.qpu is None:
+            self.qpu = qpu
+        else:
+            raise ValueError(
+                "Cannot attach QPU. There is an existing QPU attached to the quantum operations. You can detach the QPU using the `detach_qpu` method."
+            )
+
+    def detach_qpu(self) -> None:
+        """Detach a QPU from the set of quantum operations."""
+        self.qpu = None
 
     def keys(self) -> list[str]:
         """Return the names of the registered quantum operations."""

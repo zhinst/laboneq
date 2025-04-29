@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Union
 from numpy import typing as npt
 
 from laboneq.controller.protected_session import ProtectedSession
-from laboneq.controller.toolkit_adapter import MockedToolkit, ToolkitDevices
+from laboneq.controller.toolkit_adapter import ToolkitDevices
 from laboneq.core.exceptions import AbortExecution, LabOneQException
 from laboneq.core.types import CompiledExperiment
 from laboneq.core.utilities.environment import is_testing
@@ -279,7 +279,7 @@ class Session:
         )
         self._controller = controller
         if self._connection_state.emulated:
-            self._toolkit_devices = MockedToolkit()
+            self._toolkit_devices = ToolkitDevices()
         else:
             self._toolkit_devices = ToolkitDevices(controller.devices)
         self._connection_state.connected = True

@@ -46,8 +46,6 @@ from laboneq.dsl.experiment.experiment_signal import (
 from laboneq.dsl.experiment.play_pulse import PlayPulse as PlayPulseDSL
 from laboneq.dsl.experiment.pulse import PulseFunctional as PulseFunctionalDSL
 from laboneq.dsl.experiment.pulse import PulseSampled as PulseSampledDSL
-from laboneq.dsl.experiment.pulse import PulseSampledReal as PulseSampledRealDSL
-from laboneq.dsl.experiment.pulse import PulseSampledComplex as PulseSampledComplexDSL
 from laboneq.dsl.experiment.reserve import Reserve as ReserveDSL
 from laboneq.dsl.experiment.section import AcquireLoopNt as AcquireLoopNtDSL
 from laboneq.dsl.experiment.section import AcquireLoopRt as AcquireLoopRtDSL
@@ -431,8 +429,6 @@ converter_function_directory = {
     PRNGLoopDSL: convert_PRNGLoop,
     PulseFunctionalDSL: convert_PulseFunctional,
     PulseSampledDSL: convert_PulseSampled,
-    PulseSampledRealDSL: convert_PulseSampled,  # todo: walk inheritance tree to automatically fall back to parent converter
-    PulseSampledComplexDSL: convert_PulseSampled,
     ReserveDSL: convert_Reserve,
     SectionDSL: convert_Section,
     SetDSL: convert_Set,

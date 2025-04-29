@@ -639,11 +639,10 @@ class EventListGenerator:
                 "time": start,
                 "section_name": ir.section,
                 "id": next(self.id_tracker),
-                "duration": duration,
                 "device_id": device,
                 "position": self.ir_id_map[id(ir)].start,
             }
-            for device, duration in ir.hw_osc_devices
+            for device in ir.hw_osc_devices
         ]
         return events
 

@@ -15,6 +15,7 @@ from laboneq.data.execution_payload import (
     TargetChannelType,
     TargetDeviceType,
 )
+from laboneq.implementation.utils.devices import parse_device_options
 
 if TYPE_CHECKING:
     from laboneq.data.execution_payload import TargetDevice, TargetServer, TargetSetup
@@ -74,13 +75,10 @@ def _make_device_qualifier(
         gen2=has_shf,
         reference_clock_source=target_device.reference_clock_source,
     )
-    if target_device.device_options is not None:
-        opts = target_device.device_options.upper().split("/")
-        if len(opts) > 0 and opts[0] == "":
-            opts.pop(0)
-        if len(opts) > 0:
-            options.expected_dev_type = opts.pop(0)
-        options.expected_dev_opts = opts
+
+    options.expected_dev_type, options.expected_dev_opts = parse_device_options(
+        target_device.device_options
+    )
     if not target_device.has_signals and not target_device.internal_connections:
         # Treat devices without defined connections as non-QC
         driver = "NONQC"

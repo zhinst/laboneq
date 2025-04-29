@@ -3,12 +3,12 @@
 
 use interval_calculator::interval::OrderedRange;
 use interval_tree::ArrayBackedIntervalTree;
+use pyo3::PyTraverseError;
 use pyo3::create_exception;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::gc::PyVisit;
 use pyo3::prelude::*;
 use pyo3::types::{PyList, PySet};
-use pyo3::PyTraverseError;
 use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashSet, VecDeque};

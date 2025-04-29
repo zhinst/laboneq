@@ -45,7 +45,9 @@ from laboneq.core.types.enums.mixer_type import MixerType
 from laboneq.data.compilation_job import (
     CompilationJob,
     DeviceInfo,
+    OscillatorInfo,
     PrecompensationInfo,
+    ReferenceClockSourceInfo,
     SignalInfo,
     SignalInfoType,
     DeviceInfoType,
@@ -55,7 +57,9 @@ from laboneq.data.recipe import Recipe
 from laboneq.data.scheduled_experiment import ScheduledExperiment
 from laboneq.executor.executor import Statement
 
+# reporter import is required to register the CompilationReportGenerator hook
 import laboneq.compiler.workflow.reporter  # noqa: F401
+import numpy as np
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -75,6 +79,101 @@ def register_awg_calculation_hook(hook):
     return hook
 
 
+def _adjust_awg_signal_type(awg: AWGInfo):
+    occupied_channels = {sc[1] for sc in awg.signal_channels}
+    if len(occupied_channels) == 2 and awg.signal_type not in [
+        AWGSignalType.IQ,
+        AWGSignalType.MULTI,
+    ]:
+        awg.signal_type = AWGSignalType.DOUBLE
+
+
+def _verify_rf_signal_delays(awg: AWGInfo, dao: ExperimentDAO):
+    # For each awg of a HDAWG, retrieve the delay of all of its rf_signals (for
+    # playZeros and check whether they are the same:
+    if awg.signal_type == AWGSignalType.IQ:
+        return
+
+    signal_ids = set(sc[0] for sc in awg.signal_channels)
+    signal_delays = {
+        dao.signal_info(signal_id).delay_signal or 0.0 for signal_id in signal_ids
+    }
+    if any(isinstance(d, ParameterInfo) for d in signal_delays):
+        raise LabOneQException("Cannot sweep delay on RF channel")
+    if len(signal_delays) > 1:
+        delay_strings = ", ".join([f"{d * 1e9:.2f} ns" for d in signal_delays])
+        raise RuntimeError(
+            "Delays {" + str(delay_strings) + "} on awg "
+            f"{awg.device_id}:{awg.awg_id} with signals "
+            f"{signal_ids} differ."
+        )
+
+
+def _awg_oscs(device: DeviceInfo, awg_index: int) -> tuple[list[int], str | None]:
+    if device.device_type == DeviceInfoType.UHFQA:
+        return [0], None
+    if device.device_type == DeviceInfoType.HDAWG:
+        if "MF" in device.dev_opts:
+            return list(range(awg_index * 4, awg_index * 4 + 4)), None
+        else:
+            return [awg_index], "Missing MF option?"
+    if device.device_type == DeviceInfoType.SHFQA:
+        if "LRT" in device.dev_opts:
+            return list(range(6)), None
+        else:
+            return [0], "Missing LRT option?"
+    if device.device_type == DeviceInfoType.SHFSG:
+        return list(range(8)), None
+    return [], None
+
+
+def _allocate_oscillators(awg: AWGInfo, dao: ExperimentDAO):
+    assert isinstance(awg.awg_id, int)
+    available_oscs: list[int] | None = None
+    opt_msg: str | None = None
+    oscs: dict[str, OscillatorInfo] = {}
+    for signal_id in set(sc[0] for sc in awg.signal_channels):
+        signal_info = dao.signal_info(signal_id)
+        if available_oscs is None:
+            available_oscs, opt_msg = _awg_oscs(signal_info.device, awg.awg_id)
+        if (osc_info := signal_info.oscillator) is not None:
+            if osc_info.is_hardware is not True:
+                continue
+            if osc_info.frequency is None:
+                # TODO(2K): What does None frequency represent?
+                # Ignore such oscillators for now.
+                continue
+            if osc_info.uid not in oscs:
+                oscs[osc_info.uid] = osc_info
+
+    awg_osc_map: dict[str, tuple[int, Any]] = {}
+    # Ensure stable order of oscillator ids for allocation
+    for osc_uid in sorted(oscs.keys()):
+        osc_info = oscs[osc_uid]
+        assert available_oscs is not None
+        if len(available_oscs) == 0 and len(awg_osc_map) == 1:
+            known_osc, known_freq = next(iter(awg_osc_map.values()))
+            if (
+                isinstance(known_freq, float)
+                and isinstance(osc_info.frequency, float)
+                and np.isclose(known_freq, osc_info.frequency)
+            ):
+                # TODO(2K): This is a workaround for the case where measure and
+                # acquire signals on the same QA AWG, or two RF signals on the
+                # same HD AWG have different oscillators, but the same fixed
+                # frequency. In principle, this shouldn't be allowed, but previous
+                # code did allow it, and there are test cases relying on it.
+                awg_osc_map[osc_info.uid] = (known_osc, known_freq)
+                continue
+        if len(available_oscs) == 0:
+            msg = f"No free HW osc available for oscillator '{osc_info.uid}' on device '{awg.device_id}', AWG {awg.awg_id}."
+            if opt_msg is not None:
+                msg += " " + opt_msg
+            raise LabOneQException(msg)
+        awg_osc_map[osc_info.uid] = (available_oscs.pop(0), osc_info.frequency)
+    awg.oscs = {k: v[0] for k, v in awg_osc_map.items()}
+
+
 @register_awg_calculation_hook
 def _calc_awgs(dao: ExperimentDAO):
     awgs: AWGMapping = {}
@@ -82,7 +181,7 @@ def _calc_awgs(dao: ExperimentDAO):
         tuple[str, int, int], dict[str, set[str] | AWGInfo]
     ] = {}
     for signal_id in dao.signals():
-        signal_info: SignalInfo = dao.signal_info(signal_id)
+        signal_info = dao.signal_info(signal_id)
         device_id = signal_info.device.uid
         device_type = DeviceType.from_device_info_type(signal_info.device.device_type)
         if device_type.device_class != 0:
@@ -128,31 +227,9 @@ def _calc_awgs(dao: ExperimentDAO):
             _logger.debug("Changing signal type to multi: %s", awg)
 
     for awg in awgs.values():
-        occupied_channels = {sc[1] for sc in awg.signal_channels}
-        if len(occupied_channels) == 2 and awg.signal_type not in [
-            AWGSignalType.IQ,
-            AWGSignalType.MULTI,
-        ]:
-            awg.signal_type = AWGSignalType.DOUBLE
-
-        # For each awg of a HDAWG, retrieve the delay of all of its rf_signals (for
-        # playZeros and check whether they are the same:
-        if awg.signal_type == AWGSignalType.IQ:
-            continue
-
-        signal_ids = set(sc[0] for sc in awg.signal_channels)
-        signal_delays = {
-            dao.signal_info(signal_id).delay_signal or 0.0 for signal_id in signal_ids
-        }
-        if any(isinstance(d, ParameterInfo) for d in signal_delays):
-            raise LabOneQException("Cannot sweep delay on RF channel")
-        if len(signal_delays) > 1:
-            delay_strings = ", ".join([f"{d * 1e9:.2f} ns" for d in signal_delays])
-            raise RuntimeError(
-                "Delays {" + str(delay_strings) + "} on awg "
-                f"{awg.device_id}:{awg.awg_id} with signals "
-                f"{signal_ids} differ."
-            )
+        _adjust_awg_signal_type(awg)
+        _verify_rf_signal_delays(awg, dao)
+        _allocate_oscillators(awg, dao)
 
     return awgs
 
@@ -450,16 +527,22 @@ class Compiler:
             if is_hdawg_solo:
                 first_hdawg = self._get_first_instr_of(device_infos, "hdawg")
                 if first_hdawg.reference_clock_source is None:
-                    self._clock_settings[first_hdawg.uid] = "internal"
+                    self._clock_settings[first_hdawg.uid] = (
+                        ReferenceClockSourceInfo.INTERNAL
+                    )
             else:
                 if not has_hdawg and has_shfsg:  # SHFSG or SHFQC solo
                     first_shfsg = self._get_first_instr_of(device_infos, "shfsg")
                     if first_shfsg.reference_clock_source is None:
-                        self._clock_settings[first_shfsg.uid] = "internal"
+                        self._clock_settings[first_shfsg.uid] = (
+                            ReferenceClockSourceInfo.INTERNAL
+                        )
                 if not has_hdawg and has_shfqa:  # SHFQA or SHFQC solo
                     first_shfqa = self._get_first_instr_of(device_infos, "shfqa")
                     if first_shfqa.reference_clock_source is None:
-                        self._clock_settings[first_shfqa.uid] = "internal"
+                        self._clock_settings[first_shfqa.uid] = (
+                            ReferenceClockSourceInfo.INTERNAL
+                        )
 
         self._clock_settings["use_2GHz_for_HDAWG"] = has_shf
         self._leader_properties.global_leader = leader
@@ -591,12 +674,17 @@ class Compiler:
             awg = awgs_by_signal_id[signal_id]
             awg.trigger_mode = TriggerMode.NONE
             device_info = self._experiment_dao.device_info(device_id)
-            try:
-                awg.reference_clock_source = self._clock_settings[  # @IgnoreException
-                    device_id
-                ]
-            except KeyError:
-                awg.reference_clock_source = device_info.reference_clock_source
+
+            ref_clk_src = self._clock_settings.get(
+                device_id, device_info.reference_clock_source
+            )
+            ref_clk_str: str | None = None
+            if ref_clk_src == ReferenceClockSourceInfo.INTERNAL:
+                ref_clk_str = "internal"
+            if ref_clk_src == ReferenceClockSourceInfo.EXTERNAL:
+                ref_clk_str = "external"
+            awg.reference_clock_source = ref_clk_str
+
             if self._leader_properties.is_desktop_setup:
                 awg.trigger_mode = {
                     DeviceType.HDAWG: TriggerMode.DIO_TRIGGER
@@ -614,14 +702,7 @@ class Compiler:
                 "Adding signal %s with signal type %s", signal_id, signal_type
             )
 
-            oscillator_frequency_sw = None
-            oscillator_frequency_hw = None
-
             oscillator_info = self._experiment_dao.signal_oscillator(signal_id)
-            if oscillator_info is not None and not oscillator_info.is_hardware:
-                oscillator_frequency_sw = oscillator_info.frequency
-            if oscillator_info is not None and oscillator_info.is_hardware:
-                oscillator_frequency_hw = oscillator_info.frequency
             channels = copy.deepcopy(signal_info.channels)
             if signal_id in self._integration_unit_allocation:
                 channels = copy.deepcopy(
@@ -664,8 +745,6 @@ class Compiler:
                 delay_signal=delay_signal,
                 signal_type=signal_type,
                 awg=awg,
-                oscillator_frequency_sw=oscillator_frequency_sw,
-                oscillator_frequency_hw=oscillator_frequency_hw,
                 channels=channels,
                 channel_to_port={
                     int(c): p for c, p in signal_info.channel_to_port.items()

@@ -25,6 +25,7 @@ from laboneq.compiler.seqc.shfppc_sweeper_config_tracker import (
     SHFPPCSweeperConfigTracker,
 )
 from laboneq.compiler.seqc.signatures import (
+    HWOscillator,
     PlaybackSignature,
     WaveformSignature,
 )
@@ -187,7 +188,7 @@ class SampledEventHandler:
         self,
         sampled_event: AWGEvent,
     ):
-        signature: PlaybackSignature = sampled_event.params["playback_signature"]
+        signature = sampled_event.signature
         state = signature.state
 
         match_statement_active = self.match_parent_event is not None
@@ -427,8 +428,9 @@ class SampledEventHandler:
     def _make_command_table_comment(signature: PlaybackSignature) -> str:
         parts = []
 
-        if signature.hw_oscillator is not None:
-            parts.append(f"osc={signature.hw_oscillator}")
+        hw_oscillator = signature.hw_oscillator
+        if hw_oscillator is not None:
+            parts.append(f"osc={hw_oscillator.osc_index}|{hw_oscillator.osc_id}")
 
         if signature.set_phase is not None:
             parts.append(f"phase={signature.set_phase:.2g}")
@@ -471,11 +473,11 @@ class SampledEventHandler:
         )
         self.seqc_tracker.current_time = sampled_event.end
 
-    def handle_amplitude_register_init(self, sampled_event):
+    def handle_amplitude_register_init(self, sampled_event: AWGEvent):
         self.seqc_tracker.add_required_playzeros(sampled_event)
         self.seqc_tracker.flush_deferred_phase_changes()
         assert self.use_command_table
-        signature = sampled_event.params["playback_signature"]
+        signature = sampled_event.signature
         ct_index = self.command_table_tracker.lookup_index_by_signature(signature)
         if ct_index is None:
             ct_index = self.command_table_tracker.create_entry(signature, None)
@@ -520,10 +522,9 @@ class SampledEventHandler:
         generator_channels = set()
         play_event: AWGEvent
         for play_event in sampled_event.params["play_events"]:
-            signature: PlaybackSignature = play_event.params["playback_signature"]
-            play_signature = signature.waveform
+            waveform_signature = play_event.signature.waveform
             signal_id = play_event.params.get("signal_id")
-            if signal_id is not None and play_signature:
+            if signal_id is not None and waveform_signature:
                 current_signal_obj = next(
                     signal_obj
                     for signal_obj in self.awg.signals
@@ -531,7 +532,7 @@ class SampledEventHandler:
                 )
                 generator_channels.update(current_signal_obj.channels)
                 self.wave_indices.add_numbered_wave(
-                    play_signature.signature_string(),
+                    waveform_signature.signature_string(),
                     "complex",
                     current_signal_obj.channels[0],
                 )
@@ -694,6 +695,7 @@ class SampledEventHandler:
         iteration = sampled_event.params["iteration"]
         parameter_name = sampled_event.params["parameter_name"]
         param_stem = string_sanitize(parameter_name)
+        osc_index: int = sampled_event.params["osc_index"]
         counter_variable_name = string_sanitize(f"index_{parameter_name}")
         if iteration == 0:
             iterations = sampled_event.params["iterations"]
@@ -710,7 +712,7 @@ class SampledEventHandler:
             )
             self.function_defs_generator.add_function_def(
                 f"void set_{param_stem}(var arg_{param_stem}) {{\n"
-                f'  string osc_node_{param_stem} = "oscs/0/freq";\n'
+                f'  string osc_node_{param_stem} = "oscs/{osc_index}/freq";\n'
                 f"  {steps}\n"
                 f"}}\n"
             )
@@ -730,15 +732,14 @@ class SampledEventHandler:
         parameter_name = sampled_event.params["parameter_name"]
         counter_variable_name = string_sanitize(f"index_{parameter_name}")
         osc_id_symbol = string_sanitize(sampled_event.params["oscillator_id"])
+        osc_index: int = sampled_event.params["osc_index"]
 
         if not self.declarations_generator.is_variable_declared(counter_variable_name):
             self.declarations_generator.add_variable_declaration(
                 counter_variable_name, 0
             )
             self.declarations_generator.add_constant_definition(
-                osc_id_symbol,
-                0,
-                "preliminary! will be updated by controller",
+                osc_id_symbol, osc_index
             )
             self.declarations_generator.add_function_call_statement(
                 "configFreqSweep",
@@ -884,7 +885,9 @@ class SampledEventHandler:
     def handle_change_oscillator_phase(self, sampled_event: AWGEvent):
         signature = PlaybackSignature(
             waveform=None,
-            hw_oscillator=sampled_event.params["oscillator"],
+            hw_oscillator=HWOscillator.make(
+                sampled_event.params["oscillator"], sampled_event.params["osc_index"]
+            ),
             increment_phase=sampled_event.params["phase"],
             increment_phase_params=(sampled_event.params["parameter"],),
         )

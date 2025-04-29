@@ -213,7 +213,7 @@ class Controller(EventLoopMixIn):
 
     # TODO(2K): use timeout passed to connect
     async def _execute_one_step(
-        self, *, acquisition_type: AcquisitionType, rt_section_uid: str, timeout_s=2.0
+        self, *, acquisition_type: AcquisitionType, rt_section_uid: str, timeout_s=5.0
     ):
         rt_execution_info = self._recipe_data.rt_execution_infos[rt_section_uid]
 

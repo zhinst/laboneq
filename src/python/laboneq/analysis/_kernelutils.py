@@ -12,7 +12,7 @@ from laboneq.dsl.experiment import pulse_library as pl
 
 def calculate_integration_kernels(
     state_traces: list[NDArray],
-) -> list[pl.PulseSampledComplex]:
+) -> list[pl.PulseSampled]:
     """Calculates the optimal kernel arrays for state discrimination given a set of
     reference traces corresponding to measurement of each qubit state.
     The calculated kernels can directly be used as kernels in acquire statements.
@@ -43,12 +43,12 @@ def calculate_integration_kernels(
     n_traces = len(state_traces)
     settings = QuditSettings(state_traces)
     weights = settings.weights[: n_traces - 1]
-    return [pl.sampled_pulse_complex(weight.vector) for weight in weights]
+    return [pl.sampled_pulse(weight.vector) for weight in weights]
 
 
 def calculate_integration_kernels_thresholds(
     state_traces: list[NDArray],
-) -> tuple[list[pl.PulseSampledComplex], list[float]]:
+) -> tuple[list[pl.PulseSampled], list[float]]:
     """Calculates the optimal kernel arrays and threshold values for state discrimination given a set of
     reference traces corresponding to measurement of each qubit state.
 
@@ -76,4 +76,4 @@ def calculate_integration_kernels_thresholds(
     settings = QuditSettings(state_traces)
     weights = settings.weights[: n_traces - 1]
     thresholds = settings.thresholds
-    return [pl.sampled_pulse_complex(weight.vector) for weight in weights], thresholds
+    return [pl.sampled_pulse(weight.vector) for weight in weights], thresholds

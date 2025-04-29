@@ -204,6 +204,18 @@ class FrozenWaveformSignature(WaveformSignature):
         return self.signature
 
 
+@dataclass(frozen=True)
+class HWOscillator:
+    osc_id: str
+    osc_index: int
+
+    @staticmethod
+    def make(osc_id: str | None, osc_index: int) -> HWOscillator | None:
+        if osc_id is None:
+            return None
+        return HWOscillator(osc_id=osc_id, osc_index=osc_index)
+
+
 @dataclass(unsafe_hash=True)
 class PlaybackSignature:
     """Signature of the output produced by a single playback command.
@@ -213,7 +225,7 @@ class PlaybackSignature:
     information beyond the sampled waveform."""
 
     waveform: Optional[WaveformSignature]
-    hw_oscillator: str | None
+    hw_oscillator: HWOscillator | None
     state: Optional[int] = None
     set_phase: float | None = None
     increment_phase: float | None = None
@@ -394,7 +406,7 @@ def _aggregate_ct_amplitude(signature) -> PlaybackSignature:
 
 
 def _make_ct_amplitude_incremental(
-    signature, previous_amplitude_registers: list[float] | None
+    signature, previous_amplitude_registers: list[float | None] | None
 ) -> PlaybackSignature:
     if signature.state is not None:
         # For branches, we _must_ emit the same signature every time, and cannot depend
@@ -416,7 +428,7 @@ def _make_ct_amplitude_incremental(
 def reduce_signature_amplitude(
     signature: PlaybackSignature,
     use_command_table: bool = True,
-    previous_amplitude_registers: list[float] | None = None,
+    previous_amplitude_registers: list[float | None] | None = None,
 ) -> PlaybackSignature:
     """Reduce (simplify) the amplitude of the signature.
 

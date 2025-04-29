@@ -156,32 +156,26 @@ class JsonLoader(LoaderBase):
                 precompensation = None
             range = connection.get("range")
             range_unit = connection.get("range_unit")
-            if range is not None or range_unit is not None:
-                range = SignalRange(range, range_unit)
+            signal_range = None if range is None else SignalRange(range, range_unit)
             lo_frequency = connection.get("lo_frequency")
             port_delay = connection.get("port_delay")
             delay_signal = connection.get("delay_signal")
 
             self.add_signal_connection(
-                connection["signal"]["$ref"],
-                {
-                    "signal_id": connection["signal"]["$ref"],
-                    "device_id": connection["device"]["$ref"],
-                    "connection_type": connection["connection"]["type"],
-                    "channels": connection["connection"]["channels"],
-                    "voltage_offset": voltage_offset,
-                    "mixer_calibration": mixer_calibration,
-                    "precompensation": precompensation,
-                    "lo_frequency": lo_frequency,
-                    "range": range,
-                    "range_unit": range_unit,
-                    "port_delay": port_delay,
-                    "delay_signal": delay_signal,
-                    "port_mode": None,
-                    "threshold": None,
-                    "amplitude": None,
-                    "amplifier_pump": None,
-                },
+                signal_id=connection["signal"]["$ref"],
+                device_id=connection["device"]["$ref"],
+                channels=connection["connection"]["channels"],
+                voltage_offset=voltage_offset,
+                mixer_calibration=mixer_calibration,
+                precompensation=precompensation,
+                lo_frequency=lo_frequency,
+                signal_range=signal_range,
+                port_delay=port_delay,
+                delay_signal=delay_signal,
+                port_mode=None,
+                threshold=None,
+                amplitude=None,
+                amplifier_pump=None,
             )
 
     def _load_pulses(self, experiment):

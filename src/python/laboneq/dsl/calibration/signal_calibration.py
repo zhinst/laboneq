@@ -7,6 +7,7 @@ from typing import TypeVar
 
 from laboneq.core.types.enums import PortMode
 from laboneq.core.types.enums.modulation_type import ModulationType
+from laboneq.core.types.units import Quantity
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration.amplifier_pump import AmplifierPump
 from laboneq.dsl.calibration.mixer_calibration import MixerCalibration
@@ -77,7 +78,7 @@ class SignalCalibration:
         voltage_offset (float | Parameter | None):
             On the HDAWG lines, the voltage offset may be used to set a
             constant voltage offset on individual RF line.
-        range (int | float | None):
+        range (int | float | Quantity | None):
             The output or input range setting for the signal.
         threshold (float | list[float] | None):
             Specify the state discrimination threshold.
@@ -108,7 +109,7 @@ class SignalCalibration:
     oscillator: Oscillator | None = None
     port_delay: float | Parameter | None = None
     port_mode: PortMode | None = None
-    range: int | float | None = None
+    range: int | float | Quantity | None = None
     threshold: float | list[float] | None = None
     amplifier_pump: AmplifierPump | None = None
     added_outputs: list[OutputRoute] | None = None

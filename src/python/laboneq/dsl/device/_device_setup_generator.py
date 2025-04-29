@@ -193,8 +193,7 @@ def _port_decoder(
         local_ports.extend(ports)
 
     signal_keys = [T_IQ_SIGNAL, T_ACQUIRE_SIGNAL, T_RF_SIGNAL]
-    trigger_keys = []
-    trigger_keys.append(T_TO)
+    trigger_keys = [T_TO]
     path_keys = signal_keys + trigger_keys
     all_keys = path_keys + additional_switch_keys
 

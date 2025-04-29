@@ -1,7 +1,7 @@
 [workspace.package]
-version = "0.1.0"
+version = "2.51.0"
 authors = ["Zurich Instruments AG <info@zhinst.com>"]
-edition = "2021"
+edition = "2024"
 publish = false
 
 [workspace]

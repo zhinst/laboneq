@@ -691,7 +691,7 @@ class Scheduler:
             device_type = DeviceType.from_device_info_type(device.device_type)
             if not device_type.supports_reset_osc_phase:
                 continue
-            duration = device_type.reset_osc_duration / TINYSAMPLE
+            duration = round(device_type.reset_osc_duration / TINYSAMPLE)
             hw_osc_devices[device.uid] = duration
             length = max(length, duration)
             grid = lcm(grid, self._system_grid)
@@ -708,7 +708,7 @@ class Scheduler:
                     f"commensurate with the local oscillator."
                 )
 
-        hw_osc_devices = [(k, v) for k, v in hw_osc_devices.items()]
+        hw_osc_devices = list(hw_osc_devices)
         length = ceil_to_grid(length, grid)
 
         if reset_sw_oscillators:

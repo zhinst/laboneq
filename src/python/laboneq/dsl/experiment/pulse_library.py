@@ -4,15 +4,14 @@
 from __future__ import annotations
 
 from typing import Any, Callable, Dict
+import warnings
 
 import numpy as np
-
+from numpy.typing import ArrayLike
 from laboneq.core.utilities.pulse_sampler import _pulse_samplers, _pulse_factories
 from laboneq.dsl.experiment.pulse import (
     PulseFunctional,
     PulseSampled,
-    PulseSampledComplex,
-    PulseSampledReal,
 )
 
 # deprecated alias for _pulse_samples, use pulse_library.pulse_sampler(...) instead:
@@ -322,7 +321,9 @@ def cos2(x, **_):
     return np.cos(x * np.pi / 2) ** 2
 
 
-def sampled_pulse(samples, uid=None, can_compress=False):
+def sampled_pulse(
+    samples: ArrayLike, uid: str | None = None, can_compress: bool = False
+):
     """Create a pulse based on a array of waveform values.
 
     Arguments:
@@ -338,7 +339,9 @@ def sampled_pulse(samples, uid=None, can_compress=False):
         return PulseSampled(uid=uid, samples=samples, can_compress=can_compress)
 
 
-def sampled_pulse_real(samples, uid=None, can_compress=False):
+def sampled_pulse_real(
+    samples: ArrayLike, uid: str | None = None, can_compress: bool = False
+):
     """Create a pulse based on a array of real values.
 
     Arguments:
@@ -347,14 +350,24 @@ def sampled_pulse_real(samples, uid=None, can_compress=False):
 
     Returns:
         pulse (Pulse): Pulse based on the provided sample values.
+
+    !!! version-changed "Deprecated in version 2.51.0"
+        Use `sampled_pulse` instead.
+
     """
-    if uid is None:
-        return PulseSampledReal(samples=samples, can_compress=can_compress)
-    else:
-        return PulseSampledReal(uid=uid, samples=samples, can_compress=can_compress)
+    warnings.warn(
+        "The `sampled_pulse_real` function, along with `PulseSampledReal`, is deprecated. "
+        "Please use `sampled_pulse` instead, as `sampled_pulse_real` now calls `sampled_pulse` internally.",
+        FutureWarning,
+        stacklevel=2,
+    )
+
+    return sampled_pulse(samples, uid=uid, can_compress=can_compress)
 
 
-def sampled_pulse_complex(samples, uid=None, can_compress=False):
+def sampled_pulse_complex(
+    samples: ArrayLike, uid: str | None = None, can_compress: bool = False
+):
     """Create a pulse based on a array of complex values.
 
     Args:
@@ -363,11 +376,18 @@ def sampled_pulse_complex(samples, uid=None, can_compress=False):
 
     Returns:
         pulse (Pulse): Pulse based on the provided sample values.
+
+    !!! version-changed "Deprecated in version 2.51.0"
+        Use `sampled_pulse` instead.
     """
-    if uid is None:
-        return PulseSampledComplex(samples=samples, can_compress=can_compress)
-    else:
-        return PulseSampledComplex(uid=uid, samples=samples, can_compress=can_compress)
+    warnings.warn(
+        "The `sampled_pulse_complex` function, along with `PulseSampledComplex`, is deprecated. "
+        "Please use `sampled_pulse` instead, as `sampled_pulse_complex` now calls `sampled_pulse` internally.",
+        FutureWarning,
+        stacklevel=2,
+    )
+
+    return sampled_pulse(samples, uid=uid, can_compress=can_compress)
 
 
 def pulse_sampler(name: str) -> Callable:

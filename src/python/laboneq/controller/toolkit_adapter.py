@@ -3,22 +3,12 @@
 
 from __future__ import annotations
 from collections.abc import Mapping
-from unittest.mock import MagicMock
 
-import numpy as np
 import zhinst.core
 from zhinst.toolkit.driver.devices import DeviceType
 from zhinst.toolkit import Session as TKSession
 
 from laboneq.controller.devices.device_zi import DeviceBase, DeviceZI
-
-
-class MockedToolkit(MagicMock):
-    def __float__(self):
-        return 0
-
-    def __array__(self):
-        return np.array(0)
 
 
 class ToolkitDevices(Mapping):

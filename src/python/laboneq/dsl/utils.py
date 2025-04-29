@@ -31,28 +31,32 @@ def has_onboard_lo(device_setup: DeviceSetup, line: str) -> bool:
 
 
 def calibrate_devices(
-    device_setup: "DeviceSetup",
+    device_setup: DeviceSetup,
     qubit_frequencies: dict[str, float],
     line_modulations: dict[str, ModulationType],
     local_oscillators: dict[str, float] | None = None,
     sharing_oscillator: list[str] | None = None,
 ):
     """Convenience function to create a typical signal calibration and map"""
+    if sharing_oscillator is None:
+        sharing_oscillator = []
+
     signals = []
     signal_map = {}
 
     for q, f in qubit_frequencies.items():
         logical_signals = device_setup.logical_signal_groups[q].logical_signals
-        oscillator_store = {}
+        oscillator_store: dict[str, Oscillator] = {}
         for s, mod in line_modulations.items():
             signal_name = f"{q}_{s}"
             signals.append(ExperimentSignal(signal_name))
             logical_signal = logical_signals[f"{s}_line"]
             logical_signal.oscillator = oscillator_store.setdefault(
-                sharing_oscillator[0] if s in (sharing_oscillator or []) else s,
+                sharing_oscillator[0] if s in sharing_oscillator else s,
                 Oscillator(uid=f"{signal_name}_osc", frequency=f, modulation_type=mod),
             )
             if local_oscillators and s in local_oscillators:
+                assert logical_signal.calibration is not None
                 logical_signal.calibration.local_oscillator = Oscillator(
                     frequency=local_oscillators[s]
                 )

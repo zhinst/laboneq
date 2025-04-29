@@ -21,7 +21,7 @@ from laboneq.dsl.quantum.quantum_element import (
 @classformatter
 @attrs.define(kw_only=True)
 class TransmonParameters(QuantumParameters):
-    """A class for the parameters of a superconducting, flux-tuneable transmon qubit.
+    """A class for the parameters of a superconducting, flux-tunable transmon qubit.
 
     !!! version-changed "Deprecated in version 2.43.0."
 
@@ -30,13 +30,13 @@ class TransmonParameters(QuantumParameters):
         [QuantumParameters][laboneq.dsl.quantum.quantum_element.QuantumParameters].
     """
 
-    #: Resonance frequency of the qubits g-e transition.
+    #: resonance frequency of the qubits g-e transition.
     resonance_frequency_ge: Optional[float] = None
-    #: Resonance frequency of the qubits e-f transition.
+    #: resonance frequency of the qubits e-f transition.
     resonance_frequency_ef: Optional[float] = None
-    #: Local oscillator frequency for the drive signals.
+    #: local oscillator frequency for the drive signals.
     drive_lo_frequency: Optional[float] = None
-    #: Readout resonantor frequency of the qubit.
+    #: readout resonator frequency of the qubit.
     readout_resonator_frequency: Optional[float] = None
     #: local oscillator frequency for the readout lines.
     readout_lo_frequency: Optional[float] = None
@@ -50,12 +50,12 @@ class TransmonParameters(QuantumParameters):
     readout_range_in: Optional[float] = 10
     #: offset voltage for flux control line - defaults to 0.
     flux_offset_voltage: Optional[float] = 0
-    #: Free form dictionary of user defined parameters.
+    #: free form dictionary of user defined parameters.
     user_defined: dict | None = attrs.field(factory=dict)
 
     @property
     def drive_frequency_ge(self) -> float | None:
-        """Qubit drive frequency."""
+        """Qubit drive frequency for the g-e transition."""
         try:
             return self.resonance_frequency_ge - self.drive_lo_frequency
         except TypeError:
@@ -63,7 +63,7 @@ class TransmonParameters(QuantumParameters):
 
     @property
     def drive_frequency_ef(self) -> float | None:
-        """Qubit drive frequency."""
+        """Qubit drive frequency for the e-f transition."""
         try:
             return self.resonance_frequency_ef - self.drive_lo_frequency
         except TypeError:
@@ -81,7 +81,7 @@ class TransmonParameters(QuantumParameters):
 @classformatter
 @attrs.define()
 class Transmon(QuantumElement):
-    """A class for a superconducting, flux-tuneable Transmon Qubit.
+    """A class for a superconducting, flux-tunable Transmon Qubit.
 
     !!! version-changed "Deprecated in version 2.43.0."
 

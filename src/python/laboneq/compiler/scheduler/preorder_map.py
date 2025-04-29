@@ -42,7 +42,7 @@ def calculate_preorder_map(
             pass
         return max_depth
 
-    intervals = IntervalTree()
+    intervals: IntervalTree[str] = IntervalTree()
     if isinstance(schedule, SectionSchedule):
         # Draw the section on this row
         preorder_map[schedule.section] = current_depth

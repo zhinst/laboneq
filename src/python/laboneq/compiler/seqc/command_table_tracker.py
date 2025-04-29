@@ -87,11 +87,11 @@ class CommandTableTracker:
             if signature.waveform is not None:
                 length = signature.waveform.length
                 ct_entry["waveform"] = {"playZero": True, "length": length}
-
         else:
-            ct_entry["waveform"] = {"index": wave_index}
-            if signature.clear_precompensation:
-                ct_entry["waveform"]["precompClear"] = True
+            ct_entry["waveform"] = {
+                "index": wave_index,
+                **({"precompClear": True} if signature.clear_precompensation else {}),
+            }
         ct_entry.update(self._oscillator_config(signature))
         ct_entry.update(self._amplitude_config(signature))
         self._command_table.append(ct_entry)
@@ -103,7 +103,7 @@ class CommandTableTracker:
         d: dict[str, int | bool | dict] = {}
         oscillator = signature.hw_oscillator
         if oscillator is not None:
-            d["oscillatorSelect"] = {"value": {"$ref": oscillator}}
+            d["oscillatorSelect"] = {"value": oscillator.osc_index}
 
         ct_phase = None
         do_incr = None

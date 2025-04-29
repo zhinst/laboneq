@@ -507,17 +507,19 @@ mod tests {
         let play_zero_size_hint = 4;
         let play_wave_max_hint = None;
         let ct_intervals = None;
-        assert!(calculate_intervals(
-            &ivs,
-            &cut_points,
-            granularity,
-            min_play_wave,
-            play_wave_size_hint,
-            play_zero_size_hint,
-            play_wave_max_hint,
-            ct_intervals,
-        )
-        .is_err_and(|e| e.to_string() == "Cut points overlap intervals".to_string()));
+        assert!(
+            calculate_intervals(
+                &ivs,
+                &cut_points,
+                granularity,
+                min_play_wave,
+                play_wave_size_hint,
+                play_zero_size_hint,
+                play_wave_max_hint,
+                ct_intervals,
+            )
+            .is_err_and(|e| e.to_string() == "Cut points overlap intervals".to_string())
+        );
     }
 
     #[test]
@@ -530,17 +532,19 @@ mod tests {
         let play_zero_size_hint = 4;
         let play_wave_max_hint = None;
         let ct_intervals = None;
-        assert!(calculate_intervals(
-            &ivs,
-            &cut_points,
-            granularity,
-            min_play_wave,
-            play_wave_size_hint,
-            play_zero_size_hint,
-            play_wave_max_hint,
-            ct_intervals,
-        )
-        .is_err_and(|e| e.to_string() == "Cut point does not match granularity".to_string()));
+        assert!(
+            calculate_intervals(
+                &ivs,
+                &cut_points,
+                granularity,
+                min_play_wave,
+                play_wave_size_hint,
+                play_zero_size_hint,
+                play_wave_max_hint,
+                ct_intervals,
+            )
+            .is_err_and(|e| e.to_string() == "Cut point does not match granularity".to_string())
+        );
     }
 
     #[test]

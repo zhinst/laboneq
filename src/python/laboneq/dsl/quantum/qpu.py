@@ -19,15 +19,16 @@ compile and run experiments on real devices.
 
 from __future__ import annotations
 
+import inspect
 from typing import TYPE_CHECKING, Any, Sequence
 
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.quantum.quantum_element import QuantumElement
 from laboneq.dsl.session import Session
+from laboneq.dsl.quantum.quantum_operations import QuantumOperations
 
 if TYPE_CHECKING:
     from laboneq.dsl.device import DeviceSetup
-    from laboneq.dsl.quantum.quantum_operations import QuantumOperations
     from laboneq.workflow.typing import QuantumElements
 
 
@@ -118,11 +119,24 @@ class QPU:
     def __init__(
         self,
         qubits: QuantumElements,
-        quantum_operations: QuantumOperations,
+        quantum_operations: QuantumOperations | type[QuantumOperations],
     ) -> None:
         self.qubits: list[QuantumElement] = (
             [qubits] if isinstance(qubits, QuantumElement) else list(qubits)
         )
+
+        if isinstance(quantum_operations, QuantumOperations):
+            quantum_operations.attach_qpu(self)
+        elif inspect.isclass(quantum_operations) and issubclass(
+            quantum_operations, QuantumOperations
+        ):
+            quantum_operations = quantum_operations(self)
+        else:
+            raise TypeError(
+                f"quantum_operations has invalid type: {type(quantum_operations)}. "
+                f"Expected type: QuantumOperations | type[QuantumOperations]."
+            )
+
         self.quantum_operations = quantum_operations
         self._qubit_map = {q.uid: q for q in qubits}
 
@@ -167,6 +181,9 @@ class QPU:
     ) -> QPU:
         """Override qubit parameters and return a new QPU.
 
+        Note:
+            This method detaches the quantum operations from the QPU and attaches them to the new QPU.
+
         Arguments:
             qubit_parameters:
                 The qubits and their parameters that need to be updated passed a dict
@@ -181,6 +198,7 @@ class QPU:
                 If one of the qubits passed is not found in the qpu.
                 If one of the parameters passed is not found in the qubit.
         """
+        self.quantum_operations.detach_qpu()
         new_qpu = QPU(self.copy_qubits(), self.quantum_operations)
         new_qpu.update_qubits(qubit_parameters)
         return new_qpu

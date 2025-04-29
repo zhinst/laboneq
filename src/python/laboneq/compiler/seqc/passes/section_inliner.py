@@ -10,6 +10,32 @@ from laboneq.core.exceptions import LabOneQException
 from laboneq.compiler import ir
 
 
+def _inline_sections(node: ir.IntervalIR, start: int) -> None:
+    if type(node) is ir.SectionIR and not node.prng_setup and not node.trigger_output:
+        children = []
+        children_starts = []
+        for start_child, child in node.iter_children():
+            new_start, new_child = _inline_sections(child, start_child)
+            children.extend(new_child)
+            children_starts.extend([x + start for x in new_start])
+        return children_starts, children
+    else:
+        children = node.children
+        children_starts = node.children_start
+        node.children = []
+        node.children_start = []
+        for start_child, child in zip(children_starts, children):
+            new_start, new_child = _inline_sections(child, start_child)
+            node.children.extend(new_child)
+            node.children_start.extend(new_start)
+        idxs = sorted(
+            range(len(node.children_start)), key=lambda i: node.children_start[i]
+        )
+        node.children_start = [node.children_start[i] for i in idxs]
+        node.children = [node.children[i] for i in idxs]
+        return [start], [node]
+
+
 def inline_sections(node: ir.IntervalIR, start: int | None = None) -> None:
     """Inline sections that have no useful information.
 
@@ -18,24 +44,9 @@ def inline_sections(node: ir.IntervalIR, start: int | None = None) -> None:
 
     This pass operates in-place.
     """
-    start = 0 if start is None else 0
-    # We iterate backwards as the node.children is modified
-    for i in range(len(node.children) - 1, -1, -1):
-        child = node.children[i]
-        start_child = node.children_start[i]
-        inline_sections(child, start + start_child)
-        # Cannot use `isinstance()`, it must be the exact type `ir.SectionIR`
-        if type(child) is ir.SectionIR:
-            if not child.prng_setup and not child.trigger_output:
-                node.children.pop(i)
-                node.children_start.pop(i)
-                node.children.extend(child.children)
-                node.children_start.extend(
-                    [x + start_child for x in child.children_start]
-                )
-    idxs = sorted(range(len(node.children_start)), key=lambda i: node.children_start[i])
-    node.children_start = [node.children_start[i] for i in idxs]
-    node.children = [node.children[i] for i in idxs]
+    _, root = _inline_sections(node, start)
+    node.children = root[0].children
+    node.children_start = root[0].children_start
 
 
 class _SectionInliner:
