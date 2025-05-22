@@ -179,7 +179,6 @@ from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.dsl.device.device_setup import DeviceSetup
 from laboneq.dsl.quantum import QPU, QuantumParameters, QuantumElement, Transmon
 from laboneq.dsl.result.results import Results
-from laboneq.workflow.tasks import RunExperimentResults
 from laboneq.serializers.implementations.quantum_element import (
     QuantumParametersContainer,
     QuantumElementContainer,
@@ -195,7 +194,6 @@ from laboneq.workflow import TaskOptions, WorkflowOptions
 @serialize.register(QuantumElement)
 @serialize.register(Transmon)
 @serialize.register(Results)
-@serialize.register(RunExperimentResults)
 @serialize.register(QuantumParametersContainer)
 @serialize.register(QuantumElementContainer)
 @serialize.register(TaskOptions)

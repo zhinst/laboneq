@@ -40,16 +40,7 @@ class AwgPipeliner:
         nc.add("pipeliner/enable", 1, cache=False)
         return nc
 
-    def conditions_for_execution_ready(
-        self, is_standalone: bool = False
-    ) -> dict[str, tuple[Any, str]]:
-        if is_standalone:
-            return {
-                f"{self._node_base}/pipeliner/status": (
-                    [1, 0],  # exec -> idle
-                    f"Pipeliner for {self._unit} failed to transition to exec and back to stop.",
-                )
-            }
+    def conditions_for_execution_ready(self) -> dict[str, tuple[Any, str]]:
         return {
             f"{self._node_base}/pipeliner/status": (
                 1,  # exec
@@ -58,10 +49,21 @@ class AwgPipeliner:
         }
 
     def conditions_for_execution_done(
-        self, is_standalone: bool = False
+        self, with_execution_start: bool = False
     ) -> dict[str, tuple[Any, str]]:
-        if is_standalone:
-            return {}
+        """
+        If with_execution_start is True, constructs a condition that checks for execution start,
+        before the actual execution done condition. This is needed since in some situations (e.g. standalone HDAWG),
+        the execution happens in one go, and checking for these two states cannot be separated.
+        """
+
+        if with_execution_start:
+            return {
+                f"{self._node_base}/pipeliner/status": (
+                    [1, 0],  # exec -> idle
+                    f"Pipeliner for {self._unit} failed to transition to exec and back to stop.",
+                )
+            }
         return {
             f"{self._node_base}/pipeliner/status": (
                 0,  # idle

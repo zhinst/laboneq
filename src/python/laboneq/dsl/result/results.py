@@ -4,17 +4,21 @@
 from __future__ import annotations
 
 import attrs
-import warnings
+import copy
 from typing import TYPE_CHECKING, Any
+
+from typing_extensions import TypeAlias, deprecated
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
+from laboneq.core.utilities.attribute_wrapper import AttributeWrapper
 
 from ..calibration import Calibration
 from ..serialization import Serializer
 from .acquired_result import AcquiredResult, AcquiredResults
 
 if TYPE_CHECKING:
+    import numpy as np
     from numpy import typing as npt
 
     from laboneq.core.types import CompiledExperiment
@@ -22,25 +26,64 @@ if TYPE_CHECKING:
     from laboneq.dsl.experiment import Experiment
 
 
+ErrorList: TypeAlias = list[tuple[list[int], str, str]]
+
+
 @classformatter
-@attrs.define(init=False)
+@attrs.define
 class Results:
     """Results of an LabOne Q experiment.
 
+    In addition to being accessible via the attributes and methods defined below,
+    the `acquired_results` are also accessible directly on the result object
+    itself using either attribute or dictionary-like item lookup.
+
+    For example::
+
+        ```python
+        results = Results(
+            acquired_results={
+                "cal_trace/q0/g": AcquiredResult(
+                    data=numpy.array([1, 2, 3]),
+                    axis_name=["Amplitude"],
+                    axis=[numpy.array([0, 1, 2])],
+                ),
+            },
+        )
+
+        # These all return the same data:
+        results.cal_trace.q0.g
+        results["cal_trace"]["q0"]["g"]
+        results["cal_trace/q0/g"]
+        ```
+
     Attributes:
-        experiment (Experiment): The source experiment.
-        device_setup (DeviceSetup): The device setup on which the experiment was run.
-        compiled_experiment (CompiledExperiment): Compiled experiment.
-        acquired_results (AcquiredResults): The acquired results, organized by handle.
-        neartime_callback_results (dict[str, list[Any]]): List of the results of near-time callbacks by their name.
-        user_func_results (dict[str, list[Any]]): Deprecated. Alias for neartime_callback_results.
-        execution_errors (list[tuple[list[int], str, str]]): Any exceptions that occurred during the execution of the experiment.
+        experiment:
+            The source experiment. Deprecated.
+        device_setup:
+            The device setup on which the experiment was run. Deprecated.
+        compiled_experiment:
+            The compiled experiment that was executed. Deprecated.
+        acquired_results:
+            The acquired results, organized by handle.
+        neartime_callback_results:
+            Dictionary of the results of near-time callbacks by their name.
+        user_func_results:
+            Alias for neartime_callback_results. Deprecated.
+        execution_errors:
+            A list of errors that occurred during the execution of the experiment.
             Entries are tuples of:
 
                 * the indices of the loops where the error occurred
                 * the experiment section uid
                 * the error message
-        pipeline_jobs_timestamps (dict[str, list[float]]): The timestamps of all pipeline jobs, in seconds.  Organized by signal, then pipeline job id.
+        pipeline_jobs_timestamps:
+            The timestamps of all pipeline jobs, in seconds. Organized by signal, then pipeline job id.
+
+    !!! version-changed "Deprecated in version 2.52.0."
+        The `experiment`, `device_setup` and `compiled_experiment` attributes
+        were deprecated in version 2.52.0 and are only populated when
+        requested via `Session` or `Session.run`.
 
     !!! version-changed "Deprecated in version 2.19.0"
         The `user_func_results` attribute was deprecated in version 2.19.0.
@@ -50,50 +93,154 @@ class Results:
     experiment: Experiment = attrs.field(default=None)
     device_setup: DeviceSetup = attrs.field(default=None)
     compiled_experiment: CompiledExperiment = attrs.field(default=None)
-    acquired_results: AcquiredResults = attrs.field(default=AcquiredResults)
+    acquired_results: AcquiredResults = attrs.field(factory=AcquiredResults)
     neartime_callback_results: dict[str, list[Any]] = attrs.field(default=None)
-    execution_errors: list[tuple[list[int], str, str]] = attrs.field(default=None)
+    execution_errors: list[tuple[list[int], str, str]] = attrs.field(factory=list)
     pipeline_jobs_timestamps: dict[str, list[float]] = attrs.field(factory=dict)
 
-    def __init__(
-        self,
-        experiment: Experiment | None = None,
-        device_setup: DeviceSetup | None = None,
-        compiled_experiment: CompiledExperiment | None = None,
-        acquired_results: AcquiredResults | None = None,
-        neartime_callback_results: dict[str, list[Any]] | None = None,
-        execution_errors: list[tuple[list[int], str, str]] | None = None,
-        user_func_results: dict[str, list[Any]] | None = None,
-        pipeline_jobs_timestamps: dict[str, list[float]] | None = None,
-    ):
-        self.experiment = experiment
-        self.device_setup = device_setup
-        self.compiled_experiment = compiled_experiment
-        self.acquired_results = (
-            acquired_results if acquired_results is not None else AcquiredResults()
-        )
-        self.neartime_callback_results = neartime_callback_results
-        self.execution_errors = execution_errors
+    # Support for deprecated init parameters:
+    _user_func_results: dict[str, list[Any]] | None = attrs.field(default=None)
+    _data: AcquiredResults | None = attrs.field(default=None)
 
-        if user_func_results is not None:
-            if neartime_callback_results is not None:
+    _acquired_results_wrapper: AttributeWrapper | None = attrs.field(
+        init=False, default=None
+    )
+    _neartime_callbacks_wrapper: AttributeWrapper | None = attrs.field(
+        init=False, default=None
+    )
+
+    @classmethod
+    def _laboneq_exclude_from_legacy_serializer(cls):
+        return [
+            "_user_func_results",
+            "_data",
+            "_acquired_results_wrapper",
+            "_neartime_callbacks_wrapper",
+        ]
+
+    def __attrs_post_init__(self):
+        if self._user_func_results is not None:
+            if self.neartime_callback_results is None:
+                self.neartime_callback_results = self._user_func_results
+                self._user_func_results = None  # remove duplicate reference
+            elif not self._user_func_results:
+                # allow an empty _user_func_results to be passed to support the
+                # old laboneq serializer.
+                self._user_func_results = None
+            else:
                 raise LabOneQException(
-                    "Results can only be initialized with either 'neartime_callback_results' or 'user_func_results', not both."
+                    "Results can only be initialized with either 'neartime_callback_results'"
+                    " or 'user_func_results', not both."
                 )
-            self.neartime_callback_results = user_func_results
-        if pipeline_jobs_timestamps is None:
-            pipeline_jobs_timestamps = {}
-        self.pipeline_jobs_timestamps = pipeline_jobs_timestamps
+        if self._data is not None:
+            if not self.acquired_results:
+                self.acquired_results = self._data
+                self._data = None  # remove duplicate reference
+            elif not self._data:
+                # allow an empty _data to be passed
+                self._data = None
+            else:
+                raise LabOneQException(
+                    "Results can only be initialized with either 'acquired_results'"
+                    " or 'data', not both."
+                )
+
+        if self.neartime_callback_results is None:
+            self.neartime_callback_results = {}
+
+        self._acquired_results_wrapper = AttributeWrapper(self.acquired_results)
+        self._neartime_callbacks_wrapper = AttributeWrapper(
+            self.neartime_callback_results
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"<{type(self).__qualname__}"
+            f" id={id(self)}"
+            f" errors={bool(self.execution_errors)}"
+            f" len(acquired_results)={len(self.acquired_results)}"
+            f" len(neartime_callbacks)={len(self.neartime_callback_results)}"
+            ">"
+        )
+
+    def __rich_repr__(self):
+        yield "errors", self.errors
+        yield "data", self.data
+        yield "neartime_callbacks", self.neartime_callbacks
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._acquired_results_wrapper
+
+    def __deepcopy__(self, memo: dict) -> Results:
+        return self.__class__(
+            experiment=copy.deepcopy(self.experiment),
+            device_setup=copy.deepcopy(self.device_setup),
+            compiled_experiment=copy.deepcopy(self.compiled_experiment),
+            acquired_results=copy.deepcopy(self.acquired_results),
+            neartime_callback_results=copy.deepcopy(self.neartime_callback_results),
+            execution_errors=copy.deepcopy(self.execution_errors),
+            pipeline_jobs_timestamps=copy.deepcopy(self.pipeline_jobs_timestamps),
+        )
+
+    def __dir__(self):
+        return super().__dir__() + list(self._acquired_results_wrapper._key_cache)
+
+    def __getattr__(self, key: object) -> AttributeWrapper | object:
+        # This intentionally only looks up the keys on the wrapper and
+        # not arbitrary attributes
+        try:
+            return self._acquired_results_wrapper.__getitem__(key)
+        except KeyError as err:
+            raise AttributeError(*err.args) from None
+
+    def __getitem__(self, key: object) -> AttributeWrapper | ErrorList | object:
+        return self._acquired_results_wrapper.__getitem__(key)
 
     @property
+    @deprecated(
+        "The `.user_func_results` attribute is deprecated. Use"
+        " `.neartime_callback_results` instead.",
+        category=FutureWarning,
+    )
     def user_func_results(self):
-        """Deprecated. Alias for neartime_callback_results."""
-        warnings.warn(
-            "The 'user_func_results' attribute is deprecated. Use 'neartime_callback_results' instead.",
-            FutureWarning,
-            stacklevel=2,
-        )
+        """Alias for neartime_callback_results.
+
+        !!! version-changed "Deprecated in version 2.19.0"
+            The `.user_func_results attribute` was deprecated in version 2.19.0.
+            Use `.neartime_callback_results` instead.
+        """
         return self.neartime_callback_results
+
+    @property
+    def errors(self) -> ErrorList:
+        """The errors that occurred during running the experiment.
+
+        !!! version-added "Added in version 2.52.0"
+            The `.errors` attribute was added.
+            The name was chosen to match that used on the (now removed)
+            `RunExperimentResults` class.
+        """
+        return self.execution_errors
+
+    @property
+    def data(self) -> AttributeWrapper:
+        """The results acquired during the real-time experiment.
+
+        !!! version-added "Added in version 2.52.0"
+            The `.data` attribute was added.
+        """
+        return self._acquired_results_wrapper
+
+    @property
+    def neartime_callbacks(self) -> AttributeWrapper:
+        """The results of the near-time user callbacks.
+
+        !!! version-added "Added in version 2.52.0"
+            The `.neartime_callbacks` attribute was added.
+            The name was chosen to match that used on the (now removed)
+            `RunExperimentResults` class.
+        """
+        return self._neartime_callbacks_wrapper
 
     def _check_handle(self, handle: str) -> None:
         if handle not in self.acquired_results:
@@ -118,7 +265,7 @@ class Results:
         self._check_handle(handle)
         return self.acquired_results[handle]
 
-    def get_data(self, handle: str) -> npt.NDArray[Any]:
+    def get_data(self, handle: str) -> npt.NDArray[Any] | np.complex128:
         """Returns the acquired result data.
 
         Returns the result acquired for an 'acquire' event with the specific handle
@@ -206,55 +353,85 @@ class Results:
         return self.acquired_results[handle].last_nt_step
 
     @property
+    @deprecated(
+        "The `.device_calibration` property is deprecated. Use"
+        " `.device_setup.get_calibration()` instead.",
+        category=FutureWarning,
+    )
     def device_calibration(self) -> Calibration | None:
         """Get the device setup's calibration.
 
         See also
         [DeviceSetup.get_calibration][laboneq.dsl.device.device_setup.DeviceSetup.get_calibration].
+
+        !!! version-changed "Deprecated in version 2.52.0"
+            Use `.device_setup.get_calibration()` instead.
         """
         if self.device_setup is None:
             return None
         return self.device_setup.get_calibration()
 
     @property
+    @deprecated(
+        "The `.experiment_calibration` property is deprecated. Use"
+        " `.experiment.get_calibration()` instead.",
+        category=FutureWarning,
+    )
     def experiment_calibration(self):
+        """Return the experiment calibration.
+
+        !!! version-changed "Deprecated in version 2.52.0"
+            Use `.experiment.get_calibration()` instead.
+        """
+        if self.experiment is None:
+            return None
         return self.experiment.get_calibration()
 
     @property
+    @deprecated(
+        "The `.signal_map` property is deprecated. Use"
+        " `.experiment.get_signal_map()` instead.",
+        category=FutureWarning,
+    )
     def signal_map(self):
+        """Return the experiment signal map.
+
+        !!! version-changed "Deprecated in version 2.52.0"
+            Use `.experiment.get_signal_map()` instead.
+        """
+        if self.experiment is None:
+            return None
         return self.experiment.get_signal_map()
 
     @staticmethod
+    @deprecated(
+        "The `.load` method is deprecated. Use `q = laboneq.serializers.load(filename)`"
+        " instead.",
+        category=FutureWarning,
+    )
     def load(filename: str) -> Results:
         """Load the result from a specified file.
 
-        !!! version-changed "Deprecated in version 2.50.0"
-            Use `laboneq.simple.load` instead.
-
         Args:
             filename: The file to load the result from.
+
+        !!! version-changed "Deprecated in version 2.50.0"
+            Use `laboneq.simple.load` instead.
         """
-        warnings.warn(
-            "The `Results.load` method is deprecated and will be removed in future releases. "
-            "Please use the `load` function from the `laboneq.simple` module instead. ",
-            FutureWarning,
-            stacklevel=2,
-        )
         return Serializer.from_json_file(filename, Results)
 
+    @deprecated(
+        "The `.save` method is deprecated. Use"
+        " `laboneq.serializers.save(results, filename)` instead.",
+        category=FutureWarning,
+    )
     def save(self, filename: str) -> None:
         """Save the result to a specified file.
 
-        !!! version-changed "Deprecated in version 2.50.0"
-            Use `laboneq.simple.save` instead.
-
         Args:
             filename (str): The name of the file to save the result to.
+
+        !!! version-changed "Deprecated in version 2.50.0"
+            Use `laboneq.simple.save` instead.
         """
-        warnings.warn(
-            "The `Results.save` method is deprecated and will be removed in future releases. "
-            "Please use the `save` function from the `laboneq.simple` module instead. ",
-            FutureWarning,
-            stacklevel=2,
-        )
         Serializer.to_json_file(self, filename)

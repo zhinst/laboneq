@@ -8,9 +8,7 @@ from laboneq.data.compilation_job import CompilationJob, ExperimentInfo
 from laboneq.data.execution_payload import ExecutionPayload, TargetSetup
 from laboneq.data.experiment_description import Experiment
 from laboneq.data.setup_description import Setup
-from laboneq.executor.execution_from_new_experiment import (
-    ExecutionFactoryFromNewExperiment,
-)
+from laboneq.executor.execution_from_experiment import ExecutionFactoryFromExperiment
 from laboneq.implementation.payload_builder.experiment_info_builder.experiment_info_builder import (
     ExperimentInfoBuilder,
 )
@@ -25,6 +23,9 @@ def _compile(job: CompilationJob):
     compiler = Compiler(job.compiler_settings)
     compiler_output = compiler.run(job)
     compiler_output.scheduled_experiment.uid = uuid.uuid4().hex
+    compiler_output.scheduled_experiment.device_setup_fingerprint = (
+        job.experiment_info.device_setup_fingerprint
+    )
     return compiler_output.scheduled_experiment
 
 
@@ -75,7 +76,7 @@ class PayloadBuilder(PayloadBuilderAPI):
         experiment_info = self._extract_experiment_info(
             experiment, device_setup, signal_mappings
         )
-        execution = ExecutionFactoryFromNewExperiment().make(experiment)
+        execution = ExecutionFactoryFromExperiment().make(experiment)
         job = CompilationJob(
             experiment_info=experiment_info,
             execution=execution,

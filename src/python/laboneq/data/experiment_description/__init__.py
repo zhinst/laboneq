@@ -176,6 +176,7 @@ class Sweep(Section):
     reset_oscillator_phase: bool = None
     execution_type: ExecutionType = None
     chunk_count: int = 1
+    auto_chunking: bool = False
 
 
 @dataclass

@@ -224,7 +224,7 @@ class WaveScroller:
         if SimTarget.TRIGGER in self.sim_targets:
             self.trigger_snippet = np.zeros(snippet_length, dtype=np.uint8)
         if SimTarget.MARKER in self.sim_targets:
-            self.marker_snippet = np.zeros(snippet_length, dtype=np.complex128)
+            self.marker_snippet = np.zeros(snippet_length, dtype=np.uint8)
         if SimTarget.FREQUENCY in self.sim_targets:
             self.frequency_snippet = np.full(snippet_length, np.nan, dtype=np.float64)
 
@@ -308,32 +308,38 @@ class WaveScroller:
 
         markers = event.args[2] if len(event.args) > 2 else {}
 
-        if markers.get("marker1") and not (
-            self.channel_type == PhysicalChannelType.RF_CHANNEL and self.ch[0] % 2 == 1
+        if markers.get("marker1") and (
+            self.channel_type != PhysicalChannelType.RF_CHANNEL or self.ch[0] % 2 == 0
         ):
-            wave_arg_pos = (
-                len(event.args[0]) - 2
-                if event.args[2]["marker2"]
-                else len(event.args[0]) - 1
-            )
+            wave_arg_pos = -2 if markers["marker2"] else -1
             _slice_copy(
                 self.marker_snippet,
                 snippet_start_samples,
-                self.sim.waves[event.args[0][wave_arg_pos]],
+                self.sim.waves[wave_data_indices[wave_arg_pos]].astype(np.uint8),
                 event.start_samples,
                 event.length_samples,
             )
 
-        if markers.get("marker2") and not (
-            self.channel_type == PhysicalChannelType.RF_CHANNEL and self.ch[0] % 2 == 0
-        ):
-            _slice_add(
-                self.marker_snippet,
-                snippet_start_samples,
-                1j * self.sim.waves[event.args[0][len(event.args[0]) - 1]],
-                event.start_samples,
-                event.length_samples,
-            )
+        if markers.get("marker2"):
+            if (
+                self.channel_type == PhysicalChannelType.RF_CHANNEL
+                and self.ch[0] % 2 == 1
+            ):
+                _slice_add(
+                    self.marker_snippet,
+                    snippet_start_samples,
+                    self.sim.waves[wave_data_indices[-1]].astype(np.uint8),
+                    event.start_samples,
+                    event.length_samples,
+                )
+            elif self.channel_type == PhysicalChannelType.IQ_CHANNEL:
+                _slice_add(
+                    self.marker_snippet,
+                    snippet_start_samples,
+                    self.sim.waves[wave_data_indices[-1]].astype(np.uint8) << 1,
+                    event.start_samples,
+                    event.length_samples,
+                )
 
     def _process_play_hold(self, event: SeqCEvent, snippet_start_samples: int):
         _slice_set(
@@ -453,7 +459,11 @@ class WaveScroller:
                 )
 
     def _process_set_trigger(self, event: SeqCEvent, snippet_start_samples: int):
-        value: int = int(event.args[0])
+        [value] = event.args
+        value = int(value)
+        if self.channel_type == PhysicalChannelType.RF_CHANNEL:
+            [channel] = self.ch
+            value = (value >> channel) & 0b01
         wave_start_samples = event.start_samples - snippet_start_samples
         if 0 <= wave_start_samples <= len(self.trigger_snippet):
             self.trigger_snippet[self.last_trig_set_samples : wave_start_samples] = (

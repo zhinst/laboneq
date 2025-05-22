@@ -17,7 +17,7 @@ from laboneq.serializers.types import (
 @serializer(types=[QPU], public=True)
 class QPUSerializer(VersionedClassSerializer[QPU]):
     SERIALIZER_ID = "laboneq.serializers.implementations.QPUSerializer"
-    VERSION = 1
+    VERSION = 2
 
     @classmethod
     def to_dict(
@@ -28,7 +28,7 @@ class QPUSerializer(VersionedClassSerializer[QPU]):
             "__serializer__": cls.serializer_id(),
             "__version__": cls.version(),
             "__data__": {
-                "qubits": [to_dict(q) for q in obj.qubits],
+                "quantum_elements": [to_dict(q) for q in obj.quantum_elements],
                 # We should use __qualname__ here but that complicates things
                 # for import_cls
                 "quantum_operations_class": f"{qop_cls.__module__}.{qop_cls.__name__}",
@@ -46,6 +46,21 @@ class QPUSerializer(VersionedClassSerializer[QPU]):
         qop_cls = import_cls(data["quantum_operations_class"])
         qop = qop_cls()
         return QPU(
-            qubits=qubits,
+            quantum_elements=qubits,
+            quantum_operations=qop,
+        )
+
+    @classmethod
+    def from_dict_v2(
+        cls,
+        serialized_data: JsonSerializableType,
+        options: DeserializationOptions | None = None,
+    ) -> QPU:
+        data = serialized_data["__data__"]
+        quantum_elements = [from_dict(q) for q in data["quantum_elements"]]
+        qop_cls = import_cls(data["quantum_operations_class"])
+        qop = qop_cls()
+        return QPU(
+            quantum_elements=quantum_elements,
             quantum_operations=qop,
         )

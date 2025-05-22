@@ -641,10 +641,18 @@ class SimpleRuntime:
             self._update_wave_refs(wave_names, known_wave)
 
             uses_marker_1 = any(
-                ["marker1" in wave for wave in wave_names if wave is not None]
+                (
+                    wave.endswith("marker1.wave")
+                    for wave in wave_names
+                    if wave is not None
+                )
             )
             uses_marker_2 = any(
-                ["marker2" in wave for wave in wave_names if wave is not None]
+                (
+                    wave.endswith("marker2.wave")
+                    for wave in wave_names
+                    if wave is not None
+                )
             )
             length_samples = known_wave.length_samples
             wave_data_indices = known_wave.wave_data_idx
@@ -753,7 +761,9 @@ class SimpleRuntime:
             raise ValueError(f"Unknown signal type: {wave['type']}")
 
         for candidate_wave in self.waves.keys():
-            if wave["wave_name"] in candidate_wave and "marker" in candidate_wave:
+            if wave["wave_name"] in candidate_wave and (
+                "marker1.wave" in candidate_wave or "marker2.wave" in candidate_wave
+            ):
                 wave_names.append(candidate_wave)
 
         return wave_names, known_wave

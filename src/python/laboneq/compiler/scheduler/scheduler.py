@@ -23,6 +23,7 @@ from typing import (
 )
 
 from laboneq._utils import UIDReference, cached_method
+from laboneq.core.types.enums import AcquisitionType
 from laboneq.compiler.common.compiler_settings import CompilerSettings, TINYSAMPLE
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
@@ -102,7 +103,8 @@ _logger = logging.getLogger(__name__)
 
 
 class _ScheduleToIRConverter:
-    def __init__(self):
+    def __init__(self, acquisition_type: AcquisitionType | None):
+        self._acquisition_type = acquisition_type
         self._schedule_to_ir = {
             AcquireGroupSchedule: self._convert_to(AcquireGroupIR),
             CaseSchedule: self._convert_to(CaseIR),
@@ -118,10 +120,10 @@ class _ScheduleToIRConverter:
             InitialLocalOscillatorFrequencySchedule: self._convert_to(
                 InitialLocalOscillatorFrequencyIR
             ),
+            RootSchedule: self._convert_root_schedule,
             InitialOffsetVoltageSchedule: self._convert_to(InitialOffsetVoltageIR),
             PhaseResetSchedule: self._convert_to(PhaseResetIR),
             PulseSchedule: self._convert_to(PulseIR),
-            RootSchedule: self._convert_to(RootScheduleIR),
             SectionSchedule: self._convert_to(SectionIR),
             PPCStepSchedule: self._convert_to(PPCStepIR),
         }
@@ -145,6 +147,13 @@ class _ScheduleToIRConverter:
             return obj(**{s: getattr(scheduler_obj, s) for s in slots})
 
         return convert
+
+    def _convert_root_schedule(self, obj: RootSchedule) -> RootScheduleIR:
+        slots = _ScheduleToIRConverter._all_slots(IntervalIR)
+        return RootScheduleIR(
+            **{s: getattr(obj, s) for s in slots},
+            acquisition_type=self._acquisition_type,
+        )
 
     @functools.singledispatchmethod
     def visit(self, node):
@@ -254,7 +263,9 @@ class Scheduler:
     def generate_ir(self):
         root_ir = None
         if self._root_schedule is not None:
-            root_ir = _ScheduleToIRConverter().visit(self._root_schedule)
+            root_ir = _ScheduleToIRConverter(
+                acquisition_type=self._experiment_dao.acquisition_type
+            ).visit(self._root_schedule)
         exp_info = self._experiment_dao.to_experiment_info()
         return IRTree(
             devices=[DeviceIR.from_device_info(dev) for dev in exp_info.devices],
@@ -563,9 +574,10 @@ class Scheduler:
                 {p.uid for p in sweep_parameters}, signals
             )
 
-            if section_info.chunk_count > 1:
-                max_chunk_size = ceil(section_info.count / section_info.chunk_count)
-                chunk_index = current_parameters["__pipeline_index"]
+            if section_info.chunked:
+                chunk_index = current_parameters["__chunk_index"]
+                chunk_count = current_parameters["__chunk_count"]
+                max_chunk_size = ceil(section_info.count / chunk_count)
                 global_iterations = range(
                     chunk_index * max_chunk_size,
                     min((chunk_index + 1) * max_chunk_size, section_info.count),

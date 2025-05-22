@@ -183,6 +183,7 @@ def sweep(
     parameter: list[Parameter] | Parameter,
     *,
     chunk_count: int = 1,
+    auto_chunking: bool = False,
     reset_oscillator_phase: bool = False,
     uid: str | None = None,
     name: str = "unnamed",
@@ -203,8 +204,11 @@ def sweep(
         parameter:
             Parameters that should be swept.
         chunk_count (int):
-            Split the sweep into N chunks.
+            Split the sweep into N chunks. If auto chunking is enabled, this will be used as an initial guess.
             Default: `1`.
+        auto_chunking:
+            If True, the compiler will decide how many chunks to divide this sweep into
+            to respect resource limitations of instruments.
         reset_oscillator_phase (bool):
             When True, reset all oscillators at the start of every step.
             Default: `False`.
@@ -230,6 +234,7 @@ def sweep(
         alignment=alignment,
         reset_oscillator_phase=reset_oscillator_phase,
         chunk_count=chunk_count,
+        auto_chunking=auto_chunking,
     )
 
 

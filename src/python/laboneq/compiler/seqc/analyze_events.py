@@ -19,9 +19,6 @@ from laboneq.compiler.seqc.awg_sampled_event import (
     AWGEventType,
     AWGSampledEventSequence,
 )
-from laboneq.compiler.seqc.feedback_register_allocator import (
-    FeedbackRegisterAllocator,
-)
 from laboneq.compiler.seqc.utils import resample_state
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.pulse_sampler import interval_to_samples, length_to_samples
@@ -39,29 +36,6 @@ def analyze_loop_times(
     delay: float,
 ) -> AWGSampledEventSequence:
     loop_events = AWGSampledEventSequence()
-
-    plays_anything = False
-    signal_ids = [signal_obj.id for signal_obj in awg.signals]
-    for e in events:
-        if (
-            e["event_type"] in ["PLAY_START", "ACQUIRE_START"]
-            and e.get("signal") in signal_ids
-        ):
-            plays_anything = True
-            break
-
-    if plays_anything:
-        _logger.debug(
-            "Analyzing loop events for awg %d of %s", awg.awg_id, awg.device_id
-        )
-    else:
-        _logger.debug(
-            "Skipping analysis of loop events for awg %d of %s because nothing is played",
-            awg.awg_id,
-            awg.device_id,
-        )
-        return loop_events
-
     loop_step_start_events = [
         event for event in events if event["event_type"] == "LOOP_STEP_START"
     ]
@@ -172,27 +146,6 @@ def analyze_loop_times(
             )
 
     return loop_events
-
-
-def analyze_init_times(
-    device_id: str, sampling_rate: float, delay: float
-) -> AWGSampledEventSequence:
-    _logger.debug("Analyzing init events for device %s", device_id)
-    init_events = AWGSampledEventSequence()
-    delay_samples = length_to_samples(delay, sampling_rate)
-    init_events.add(
-        delay_samples,
-        AWGEvent(
-            type=AWGEventType.SEQUENCER_START,
-            start=delay_samples,
-            end=delay_samples,
-            priority=-100,
-            params={
-                "device_id": device_id,
-            },
-        ),
-    )
-    return init_events
 
 
 def analyze_precomp_reset_times(
@@ -419,7 +372,6 @@ def analyze_ppc_sweep_events(events: list[Any], awg: AWGInfo, global_delay: floa
 def analyze_acquire_times(
     events: list[dict[str, Any]],
     signal_obj: SignalObj,
-    feedback_register_allocator: FeedbackRegisterAllocator,
 ) -> AWGSampledEventSequence:
     signal_id = signal_obj.id
     sampling_rate = signal_obj.awg.sampling_rate
@@ -439,10 +391,8 @@ def analyze_acquire_times(
         event_type: str
         time: float
         play_wave_id: str
-        acquisition_type: list
         acquire_handle: str
         oscillator_frequency: float
-        amplitude: float
         id_pulse_params: int | None
         channels: list[int | list[int]]
         priority: int
@@ -460,10 +410,8 @@ def analyze_acquire_times(
                     event["event_type"],
                     event["time"] + delay,
                     event["play_wave_id"],
-                    event.get("acquisition_type", []),
                     event["acquire_handle"],
                     event.get("oscillator_frequency", 0.0),
-                    event.get("amplitude", 1.0),
                     event.get("id_pulse_params"),
                     event.get("channel") or channels,
                     priority=event["position"],
@@ -498,14 +446,6 @@ def analyze_acquire_times(
         if end_samples % sample_multiple != 0:
             end_samples = math.floor(end_samples / sample_multiple) * sample_multiple
 
-        feedback_register = (
-            None
-            if feedback_register_allocator is None
-            else feedback_register_allocator.allocate(
-                signal_id, interval_start.acquire_handle
-            )
-        )
-
         acquire_event = AWGEvent(
             type=AWGEventType.ACQUIRE,
             start=start_samples,
@@ -514,11 +454,7 @@ def analyze_acquire_times(
             params={
                 "signal_id": signal_id,
                 "play_wave_id": interval_start.play_wave_id,
-                "acquisition_type": interval_start.acquisition_type,
-                "acquire_handles": [interval_start.acquire_handle],
                 "oscillator_frequency": interval_start.oscillator_frequency,
-                "amplitude": interval_start.amplitude,
-                "feedback_register": feedback_register,
                 "channels": interval_start.channels,
                 "id_pulse_params": interval_start.id_pulse_params,
             },
@@ -531,27 +467,34 @@ def analyze_acquire_times(
 
 def analyze_trigger_events(
     events: list[dict[str, Any]],
-    signal: SignalObj,
+    signals: list[SignalObj],
     loop_events: AWGSampledEventSequence,
 ) -> AWGSampledEventSequence:
+    signal_by_id = {signal.id: signal for signal in signals}
     digital_signal_change_events = [
         ev
         for ev in events
         if ev["event_type"] == EventType.DIGITAL_SIGNAL_STATE_CHANGE
-        and signal.id == ev["signal"]
+        for signal in signals
+        if signal.id == ev["signal"]
     ]
-    delay = signal.total_delay
-    sampling_rate = signal.awg.sampling_rate
-    device_type = signal.awg.device_type
+
+    [sampling_rate] = {signal.awg.sampling_rate for signal in signals}
+    [device_type] = {signal.awg.device_type for signal in signals}
+    [hdawg_rf_mode] = {signal.signal_type == "single" for signal in signals}
 
     sampled_digital_signal_change_events = AWGSampledEventSequence()
 
     for ev in digital_signal_change_events:
+        delay = signal_by_id[ev["signal"]].total_delay
         time_in_samples = length_to_samples(ev["time"] + delay, sampling_rate)
         sampled_digital_signal_change_events.add(
             time_in_samples,
             AWGEvent(type=None, params=ev, priority=ev["position"]),
         )
+
+    # The trigger output is stateful, so we must process each event in the correct order.
+    sampled_digital_signal_change_events.sort()
 
     current_state = 0
     retval = AWGSampledEventSequence()
@@ -561,19 +504,23 @@ def analyze_trigger_events(
         time_in_samples,
         event_list,
     ) in sampled_digital_signal_change_events.sequence.items():
-        if device_type in (DeviceType.SHFQA, DeviceType.SHFSG):
+        if device_type in (DeviceType.SHFQA, DeviceType.SHFSG) or hdawg_rf_mode:
             for event in event_list:
                 if event.params["bit"] > 0:
                     raise LabOneQException(
                         f"On device {device_type.value}, only a single trigger channel is "
                         f"available (section {event.params['section_name']})."
                     )
-        for event in [e for e in event_list if e.params["change"] == "CLEAR"]:
-            mask = ~(2 ** event.params["bit"])
-            current_state = current_state & mask
-        for event in [e for e in event_list if e.params["change"] == "SET"]:
+        for event in event_list:
+            op = event.params["change"]
             mask = 2 ** event.params["bit"]
-            current_state = current_state | mask
+            if hdawg_rf_mode:
+                signal = signal_by_id[event.params["signal"]]
+                mask <<= signal.channels[0] % 2
+            if op == "CLEAR":
+                current_state = current_state & ~mask
+            else:  # op == "SET"
+                current_state = current_state | mask
         state_progression[time_in_samples] = current_state
         retval.add(
             time_in_samples,

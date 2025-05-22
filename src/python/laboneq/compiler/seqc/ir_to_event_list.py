@@ -10,7 +10,6 @@ from laboneq.compiler import ir as ir_def
 from laboneq.compiler.common import awg_info
 from laboneq.compiler.common.compiler_settings import TINYSAMPLE, CompilerSettings
 from laboneq.compiler.common.device_type import DeviceType
-from laboneq.compiler.common.play_wave_type import PlayWaveType
 from laboneq.compiler.event_list import event_list_generator as event_gen
 from laboneq.compiler.event_list.event_type import EventList, EventType
 from laboneq.compiler.seqc import ir as ir_seqc
@@ -91,11 +90,9 @@ class EventListGeneratorCodeGenerator(event_gen.EventListGenerator):
         max_events: int,
     ) -> EventList:
         assert pulse_ir.length is not None
-        if pulse_ir.pulse.pulse is not None:
-            play_wave_id = pulse_ir.pulse.pulse.uid
-        else:
-            play_wave_id = "delay"
-
+        if not pulse_ir.is_acquire or pulse_ir.pulse.pulse is None:
+            return []
+        play_wave_id = pulse_ir.pulse.pulse.uid
         start_id = next(self.id_tracker)
         d_start: dict[str, Any] = {
             "id": start_id,
@@ -108,92 +105,24 @@ class EventListGeneratorCodeGenerator(event_gen.EventListGenerator):
             "play_wave_id": play_wave_id,
             "chain_element_id": start_id,
         }
-
-        if pulse_ir.amplitude is not None:
-            d_start["amplitude"] = pulse_ir.amplitude
-
-        if pulse_ir.phase is not None:
-            d_start["phase"] = pulse_ir.phase
-
-        if pulse_ir.amp_param_name:
-            d_start["amplitude_parameter"] = pulse_ir.amp_param_name
-
-        if pulse_ir.incr_phase_param_name:
-            d_start["phase_increment_parameter"] = pulse_ir.incr_phase_param_name
-
         if pulse_ir.markers is not None and len(pulse_ir.markers) > 0:
             d_start["markers"] = [vars(m) for m in pulse_ir.markers]
         d_start["id_pulse_params"] = pulse_ir.pulse_pulse_params
-
-        if (
-            pulse_ir.pulse.signal.oscillator
-            and pulse_ir.pulse.signal.oscillator.is_hardware
-        ):
-            if pulse_ir.increment_oscillator_phase is not None:
-                d_start["increment_oscillator_phase"] = (
-                    pulse_ir.increment_oscillator_phase
-                )
-            if pulse_ir.set_oscillator_phase is not None:
-                if (
-                    pulse_ir.pulse.signal.oscillator
-                    and pulse_ir.pulse.signal.oscillator.is_hardware
-                ):
-                    d_start["set_oscillator_phase"] = pulse_ir.set_oscillator_phase
-
-        is_delay = pulse_ir.pulse.pulse is None
-
-        if is_delay:
-            return [
-                {
-                    "event_type": EventType.DELAY_START,
-                    "time": start,
-                    "play_wave_type": PlayWaveType.DELAY.value,
-                    **d_start,
-                    **d_common,
-                },
-                {
-                    "event_type": EventType.DELAY_END,
-                    "time": start + pulse_ir.length,
-                    **d_end,
-                    **d_common,
-                },
-            ]
-
-        if pulse_ir.is_acquire:
-            assert pulse_ir.integration_length is not None
-            if pulse_ir.pulse.acquire_params is not None:
-                d_start["acquisition_type"] = [
-                    pulse_ir.pulse.acquire_params.acquisition_type
-                ]
-                d_start["acquire_handle"] = pulse_ir.pulse.acquire_params.handle
-            else:
-                d_start["acquisition_type"] = []
-                d_start["acquire_handle"] = None
-            return [
-                {
-                    "event_type": EventType.ACQUIRE_START,
-                    "time": start + pulse_ir.offset,
-                    **d_start,
-                    **d_common,
-                },
-                {
-                    "event_type": EventType.ACQUIRE_END,
-                    "time": start + pulse_ir.integration_length,
-                    **d_end,
-                    **d_common,
-                },
-            ]
-
+        assert pulse_ir.integration_length is not None
+        if pulse_ir.pulse.acquire_params is not None:
+            d_start["acquire_handle"] = pulse_ir.pulse.acquire_params.handle
+        else:
+            d_start["acquire_handle"] = None
         return [
             {
-                "event_type": EventType.PLAY_START,
+                "event_type": EventType.ACQUIRE_START,
                 "time": start + pulse_ir.offset,
                 **d_start,
                 **d_common,
             },
             {
-                "event_type": EventType.PLAY_END,
-                "time": start + pulse_ir.length,
+                "event_type": EventType.ACQUIRE_END,
+                "time": start + pulse_ir.integration_length,
                 **d_end,
                 **d_common,
             },
@@ -217,11 +146,6 @@ class EventListGeneratorCodeGenerator(event_gen.EventListGenerator):
             acquire_group_ir.pulses[0].acquire_params.handle == p.acquire_params.handle
             for p in acquire_group_ir.pulses
         )
-        assert all(
-            acquire_group_ir.pulses[0].acquire_params.acquisition_type
-            == p.acquire_params.acquisition_type
-            for p in acquire_group_ir.pulses
-        )
         start_id = next(self.id_tracker)
         signal_id = acquire_group_ir.pulses[0].signal.uid
         assert all(p.signal.uid == signal_id for p in acquire_group_ir.pulses)
@@ -230,11 +154,7 @@ class EventListGeneratorCodeGenerator(event_gen.EventListGenerator):
             "section_name": acquire_group_ir.section,
             "signal": signal_id,
             "play_wave_id": [p.pulse.uid for p in acquire_group_ir.pulses],
-            "amplitude": acquire_group_ir.amplitudes,
             "chain_element_id": start_id,
-            "acquisition_type": [
-                acquire_group_ir.pulses[0].acquire_params.acquisition_type
-            ],
             "acquire_handle": acquire_group_ir.pulses[0].acquire_params.handle,
         }
         d["id_pulse_params"] = acquire_group_ir.pulse_pulse_params
@@ -254,15 +174,22 @@ class EventListGeneratorCodeGenerator(event_gen.EventListGenerator):
             },
         ]
 
+    def visit_MatchIR(
+        self,
+        match_ir: ir_def.MatchIR,
+        start: int,
+        max_events: int,
+    ) -> EventList:
+        assert match_ir.length is not None
+        return self.visit_SectionIR(match_ir, start, max_events)
+
     def visit_CaseIR(
         self,
         case_ir: ir_def.CaseIR,
         start: int,
         max_events: int,
     ) -> EventList:
-        if not case_ir.children:
-            return []
-        return super().visit_CaseIR(case_ir, start, max_events)
+        return self.visit_SectionIR(case_ir, start, max_events)
 
 
 def _apply_pulse_parameters(
@@ -271,18 +198,12 @@ def _apply_pulse_parameters(
     """Apply pulse parameters to the event list in-place."""
     # TODO: Remove once path to pulse generation from IR is ok.
     for event in event_list:
-        if event["event_type"] in [EventType.PLAY_START, EventType.ACQUIRE_START]:
+        if event["event_type"] == EventType.ACQUIRE_START:
             if event["signal"] not in osc_times.freq_keys():
                 continue
             event["oscillator_frequency"] = osc_times.freq_at(
                 event["signal"], event["time"]
             )
-        if event["event_type"] in [EventType.PLAY_START, EventType.DELAY_START]:
-            val = osc_times.phase_at(event["signal"], event["time"])
-            if val is not None:
-                if "increment_oscillator_phase" in event:
-                    del event["increment_oscillator_phase"]
-            event["oscillator_phase"] = val
 
 
 def event_list_per_awg(

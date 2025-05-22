@@ -3,15 +3,17 @@
 
 from __future__ import annotations
 
+from bisect import bisect_left
 import copy
 import logging
 import math
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from laboneq.compiler.common.compiler_settings import TINYSAMPLE
 from laboneq.compiler.feedback_router.feedback_router import (
+    FeedbackRegisterLayout,
     calculate_feedback_register_layout,
     assign_feedback_registers,
 )
@@ -19,9 +21,8 @@ from laboneq.compiler.recipe import generate_recipe_combined
 from laboneq.compiler.common import compiler_settings
 from laboneq.compiler.common.awg_info import AWGInfo, AwgKey
 from laboneq.compiler.common.awg_signal_type import AWGSignalType
-from laboneq.compiler.common.device_type import (
-    DeviceType,
-)
+from laboneq.compiler.common.resource_usage import ResourceLimitationError
+from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.common.trigger_mode import TriggerMode
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
@@ -43,6 +44,7 @@ from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.core.types.enums.acquisition_type import AcquisitionType, is_spectroscopy
 from laboneq.core.types.enums.mixer_type import MixerType
 from laboneq.data.compilation_job import (
+    ChunkingInfo,
     CompilationJob,
     DeviceInfo,
     OscillatorInfo,
@@ -77,6 +79,23 @@ def register_awg_calculation_hook(hook):
     if hook not in _registered_awg_calculation_hooks:
         _registered_awg_calculation_hooks.append(hook)
     return hook
+
+
+def _divisors(n: int) -> list[int]:
+    """Return all integer divisors of n."""
+    assert n > 0
+    return [i for i in range(1, n // 2 + 1) if n % i == 0] + [n]
+
+
+def _chunk_count_trial(requested: int, candidates: list[int]) -> int:
+    """Return valid chunk count, close to the requested one but not less than it.
+
+    Args:
+        requested: Desired chunk count.
+        candidates: Sorted list of possible chunk counts.
+    """
+    idx = bisect_left(candidates, requested)
+    return candidates[min(idx, len(candidates) - 1)]
 
 
 def _adjust_awg_signal_type(awg: AWGInfo):
@@ -200,6 +219,8 @@ def _calc_awgs(dao: ExperimentDAO):
                     signal_type=AWGSignalType(signal_type),
                     awg_id=awg_id,
                     device_type=device_type,
+                    dev_type=signal_info.device.seqc_dev_type,
+                    dev_opts=signal_info.device.seqc_dev_opts,
                     sampling_rate=None,
                     device_class=device_type.device_class,
                 )
@@ -244,7 +265,7 @@ def calc_awg_number(channel, device_type: DeviceType):
 class LeaderProperties:
     global_leader: str | None = None
     is_desktop_setup: bool = False
-    internal_followers: List[str] = field(default_factory=list)
+    internal_followers: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -374,6 +395,8 @@ class Compiler:
     def __init__(self, settings: dict | None = None):
         self._experiment_dao: ExperimentDAO = None
         self._execution: Statement = None
+        self._chunking_info: ChunkingInfo | None = None
+        self._final_chunk_count: int | None = None
         self._settings = compiler_settings.from_dict(settings)
         self._sampling_rate_tracker: SamplingRateTracker = None
         self._scheduler: Scheduler = None
@@ -387,6 +410,7 @@ class Compiler:
         self._delays_by_signal: dict[str, OnDeviceDelayCompensation] = {}
         self._precompensations: dict[str, PrecompensationInfo] | None = None
         self._signal_objects: dict[str, SignalObj] = {}
+        self._feedback_register_layout: FeedbackRegisterLayout = {}
         self._has_uhfqa: bool = False
         self._recipe = Recipe()
 
@@ -410,12 +434,13 @@ class Compiler:
         if isinstance(experiment, CompilationJob):
             self._experiment_dao = ExperimentDAO(experiment.experiment_info)
             self._execution = experiment.execution
+            self._chunking_info = experiment.experiment_info.chunking
         else:  # legacy JSON
             self._experiment_dao = ExperimentDAO(experiment)
             self._execution = legacy_execution_program()
 
     @staticmethod
-    def _get_first_instr_of(device_infos: List[DeviceInfo], type: str) -> DeviceInfo:
+    def _get_first_instr_of(device_infos: list[DeviceInfo], type: str) -> DeviceInfo:
         return next(
             (instr for instr in device_infos if instr.device_type.value == type)
         )
@@ -548,6 +573,25 @@ class Compiler:
         self._leader_properties.global_leader = leader
         self._has_uhfqa = has_uhfqa
 
+    def _compile_whole_or_with_chunks(self, chunk_count: int | None):
+        rt_compiler = RealtimeCompiler(
+            self._experiment_dao,
+            self._sampling_rate_tracker,
+            self._signal_objects,
+            self._feedback_register_layout,
+            self._settings,
+        )
+        executor = NtCompilerExecutor(rt_compiler, self._settings, chunk_count)
+        executor.run(self._execution)
+
+        combined_compiler_output = executor.combined_compiler_output()
+        if combined_compiler_output is None:
+            raise LabOneQException("Experiment has no real-time averaging loop")
+
+        executor.finalize()
+
+        return combined_compiler_output
+
     def _process_experiment(self):
         dao = self._experiment_dao
         self._sampling_rate_tracker = SamplingRateTracker(dao, self._clock_settings)
@@ -562,24 +606,63 @@ class Compiler:
         )
         self._signal_objects = self._generate_signal_objects()
 
-        feedback_register_layout = calculate_feedback_register_layout(
+        self._feedback_register_layout = calculate_feedback_register_layout(
             self._integration_unit_allocation
         )
 
-        rt_compiler = RealtimeCompiler(
-            self._experiment_dao,
-            self._sampling_rate_tracker,
-            self._signal_objects,
-            feedback_register_layout,
-            self._settings,
-        )
-        executor = NtCompilerExecutor(rt_compiler, self._settings)
-        executor.run(self._execution)
-        self._combined_compiler_output = executor.combined_compiler_output()
-        if self._combined_compiler_output is None:
-            raise LabOneQException("Experiment has no real-time averaging loop")
-
-        executor.finalize()
+        chunking = self._chunking_info
+        if chunking is None or not chunking.auto:
+            chunk_count = None if chunking is None else chunking.chunk_count
+            try:
+                self._combined_compiler_output = self._compile_whole_or_with_chunks(
+                    chunk_count=chunk_count
+                )
+                self._final_chunk_count = chunk_count
+            except ResourceLimitationError as err:
+                msg = (
+                    "Compilation error - resource limitation exceeded.\n"
+                    "To circumvent this, try one or more of the following:\n"
+                    "- Reduce the number of sweep steps\n"
+                    "- Reduce the number of variations in the pulses that are being played\n"
+                    "- Enable chunking for a sweep\n"
+                    "- If chunking is already enabled, increase the chunk count or switch to automatic chunking"
+                )
+                raise LabOneQException(msg) from err
+        else:  # auto chunking
+            divisors = _divisors(chunking.sweep_iterations)
+            chunk_count = _chunk_count_trial(
+                chunking.chunk_count, divisors
+            )  # initial guess by user
+            while True:
+                try:
+                    _logger.debug("Attempting to compile with %s chunks", chunk_count)
+                    self._combined_compiler_output = self._compile_whole_or_with_chunks(
+                        chunk_count=chunk_count
+                    )
+                    self._final_chunk_count = chunk_count
+                    _logger.info(
+                        "Auto-chunked sweep divided into %s chunks", chunk_count
+                    )
+                    break
+                except ResourceLimitationError as err:
+                    _logger.debug(
+                        "The attempt to compile with %s chunks failed with %s",
+                        chunk_count,
+                        err,
+                    )
+                    if chunk_count == chunking.sweep_iterations:
+                        msg = (
+                            "Automatic chunking was not able to find a chunk count to circumvent resource limitations.\n"
+                            "This means that one iteration of a sweep is too large and cannot be executed.\n"
+                            "To circumvent this, try one or more of the following:\n"
+                            "- Chunking another sweep\n"
+                            "- Find ways suitable for your use case to reduce the size of the program in one iteration\n"
+                        )
+                        raise LabOneQException(msg) from err
+                    chunk_count = _chunk_count_trial(
+                        requested=chunk_count * math.ceil(err.hint or 2),
+                        candidates=divisors,
+                    )
 
         assign_feedback_registers(
             combined_compiler_output=self._combined_compiler_output
@@ -636,7 +719,7 @@ class Compiler:
             port_delay_gen: float | None = None
             delay_signal_gen: float | None = None
 
-        delay_measure_acquire: Dict[AwgKey, DelayInfo] = {}
+        delay_measure_acquire: dict[AwgKey, DelayInfo] = {}
 
         awgs_by_signal_id = {
             signal_id: awg
@@ -777,6 +860,7 @@ class Compiler:
                 artifacts=self._combined_compiler_output.get_artifacts(),
                 execution=self._execution,
                 schedule=self._combined_compiler_output.schedule,
+                chunk_count=self._final_chunk_count,
             ),
         )
 

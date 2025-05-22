@@ -379,9 +379,6 @@ class InstrumentConnection:
                 type_adjusted_value = _resolve_type(node.value, node.path)
                 val: AnnotatedValue
                 if isinstance(self._impl, KernelSessionEmulator):
-                    # Don't wrap into ShfGeneratorWaveformVectorData for emulation
-                    # (see also code in "else" below)
-                    # to avoid emulator dependency on labone-python
                     val = AnnotatedValueWithExtras(
                         path=node.path,
                         value=type_adjusted_value,
@@ -389,13 +386,6 @@ class InstrumentConnection:
                         filename=node.filename,
                     )
                 else:
-                    if (
-                        np.iscomplexobj(type_adjusted_value)
-                        and "generator/waveforms" in node.path.lower()
-                    ):
-                        type_adjusted_value = ShfGeneratorWaveformVectorData(
-                            complex=type_adjusted_value
-                        )
                     val = AnnotatedValue(
                         path=node.path,
                         value=type_adjusted_value,
@@ -460,32 +450,6 @@ async def _gather_with_timeout(
     )
 
 
-def _preprocess_complex_shf_waveform_vector(
-    data: np.ndarray,
-) -> np.ndarray:
-    """Preprocess complex waveform vector data.
-
-    Complex waveform vectors are transmitted as two uint32 interleaved vectors.
-    This function converts the complex waveform vector data into the
-    corresponding uint32 vector.
-
-    Args:
-        data: The complex waveform vector data.
-
-    Returns:
-        The uint32 vector data.
-    """
-    _SHF_WAVEFORM_UNSIGNED_ENCODING_BITS = 18
-    _SHF_WAVEFORM_SIGNED_ENCODING_BITS = _SHF_WAVEFORM_UNSIGNED_ENCODING_BITS - 1
-    _SHF_WAVEFORM_SCALING = (1 << _SHF_WAVEFORM_SIGNED_ENCODING_BITS) - 1
-    real_scaled = np.round(np.real(data) * _SHF_WAVEFORM_SCALING).astype(np.uint32)
-    imag_scaled = np.round(np.imag(data) * _SHF_WAVEFORM_SCALING).astype(np.uint32)
-    decoded_data = np.empty((2 * data.size,), dtype=np.uint32)
-    decoded_data[::2] = real_scaled
-    decoded_data[1::2] = imag_scaled
-    return decoded_data
-
-
 def _resolve_type(value: Any, path: str) -> Any:
     if isinstance(value, Enum):
         return value.value
@@ -493,11 +457,11 @@ def _resolve_type(value: Any, path: str) -> Any:
         return value.astype(dtype=np.uint32)
     if isinstance(value, np.floating):
         return float(value)
-    if np.iscomplexobj(value) and "spectroscopy/envelope/wave" in path.lower():
-        # TODO(2K): This conversion address the "Vector transfer error: data have different type than expected"
-        # error. API should accept complex vector for the node instead, as per
-        # https://docs.zhinst.com/shfqa_user_manual/nodedoc.html#qachannels.
-        return _preprocess_complex_shf_waveform_vector(value)
+    if np.iscomplexobj(value) and (
+        "generator/waveforms" in path.lower()
+        or "spectroscopy/envelope/wave" in path.lower()
+    ):
+        return ShfGeneratorWaveformVectorData(complex=value)
     return value
 
 

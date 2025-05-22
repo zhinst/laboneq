@@ -60,3 +60,11 @@ def repeat_previous(
         _registered_hooks[device_class].repeat_previous(
             combined_output, previous.codegen_output[device_class]
         )
+
+
+def finalize(this: CombinedRTCompilerOutputContainer):
+    for device_class, combined_output in this.combined_output.items():
+        hook = _registered_hooks.get(device_class)
+        if hook is None:
+            continue
+        hook.finalize(combined_output)

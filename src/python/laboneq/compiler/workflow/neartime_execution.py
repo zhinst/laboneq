@@ -105,10 +105,16 @@ class NtCompilerExecutorDelegate(abc.ABC):
 class NtCompilerExecutor(ExecutorBase):
     _delegates_types: list[type[NtCompilerExecutorDelegate]] = []
 
-    def __init__(self, rt_compiler: RealtimeCompiler, settings: CompilerSettings):
+    def __init__(
+        self,
+        rt_compiler: RealtimeCompiler,
+        settings: CompilerSettings,
+        chunk_count: int | None = None,
+    ):
         super().__init__(looping_mode=LoopingMode.NEAR_TIME_ONLY)
         self._rt_compiler = rt_compiler
         self._settings = settings
+        self._chunk_count = chunk_count
         self._iteration_stack = IterationStack()
 
         self._compiler_output_by_param_values: Dict[
@@ -143,8 +149,6 @@ class NtCompilerExecutor(ExecutorBase):
 
     def for_loop_entry_handler(self, count: int, index: int, loop_flags: LoopFlags):
         self._iteration_stack.push(count, index, {})
-        if loop_flags.is_pipeline:
-            self._iteration_stack.set_parameter_value("__pipeline_index", index)
 
     def for_loop_exit_handler(self, count: int, index: int, loop_flags: LoopFlags):
         self._iteration_stack.pop()
@@ -155,6 +159,21 @@ class NtCompilerExecutor(ExecutorBase):
         uid: str,
         averaging_mode,
         acquisition_type,
+    ):
+        if self._chunk_count is None:
+            self._rt_entry_handler()
+        else:
+            for i in range(self._chunk_count):
+                self._iteration_stack.push(self._chunk_count, i, {})
+                self._iteration_stack.set_parameter_value("__chunk_index", i)
+                self._iteration_stack.set_parameter_value(
+                    "__chunk_count", self._chunk_count
+                )
+                self._rt_entry_handler()
+                self._iteration_stack.pop()
+
+    def _rt_entry_handler(
+        self,
     ):
         time_start = time.perf_counter()
         if self._required_parameters is not None:
@@ -235,3 +254,4 @@ class NtCompilerExecutor(ExecutorBase):
         if self._combined_compiler_output is not None:
             for delegate in self._delegates:
                 delegate.after_final_run(self._combined_compiler_output)
+            rt_linker.finalize(self._combined_compiler_output)

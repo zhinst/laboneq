@@ -72,7 +72,7 @@ class OpenQASMTranspiler:
     def __init__(self, qpu: quantum.QPU):
         self.qpu = qpu
         self._qubit_signals: set[str] = set(
-            chain.from_iterable([q.signals.values() for q in self.qpu.qubits])
+            chain.from_iterable([q.signals.values() for q in self.qpu.quantum_elements])
         )
 
     def section(
@@ -332,28 +332,32 @@ class OpenQASMTranspiler:
                     disabled. In a future version we hope to make an explicit `repetition_time` optional.
 
                 **batch_execution_mode**:
-                    The execution mode for the sequence of programs. Can be any of the following.
+                    The execution mode for the sequence of programs. Can be any of the following:
 
-                * `nt`: The individual programs are dispatched by software.
-                * `pipeline`: The individual programs are dispatched by the sequence pipeliner.
-                * `rt`: All the programs are combined into a single real-time program.
+                    * `nt`: The individual programs are dispatched by software.
+                    * `pipeline`: The individual programs are dispatched by the sequence pipeliner.
+                    * `rt`: All the programs are combined into a single real-time program.
 
-                `rt` offers the fastest execution, but is limited by device memory.
-                In comparison, `pipeline` introduces non-deterministic delays between
-                programs of up to a few 100 microseconds. `nt` is the slowest.
+                    `rt` offers the fastest execution, but is limited by device memory.
+                    In comparison, `pipeline` introduces non-deterministic delays between
+                    programs of up to a few 100 microseconds. `nt` is the slowest.
 
                 **add_reset**:
                     If `True`, an active reset operation is added to the beginning of each program.
 
-                Note: Requires `reset(qubit)` operation to be defined for each qubit.
+                    Note: Requires `reset(qubit)` operation to be defined for each qubit.
 
                 **add_measurement**:
                     If `True`, add measurement at the end of each program for all qubits used.
 
-                Note: Requires `measure(qubit, handle: str)` operation to be defined for each qubit, where `handle`
-                is the key specified for the qubit in the `qubit_map` parameter (e.g. `q0`) or
-                `<key>[N]` in the case of an qubit register as a list of qubits (e.g. `q[0]`, `q[1]`, ..., `q[N]`,
-                where `N` represents the qubit index in the supplied register).
+                    Note: Requires `measure(qubit, handle: str)` operation to be defined for each qubit, where `handle`
+                    is the key specified for the qubit in the `qubit_map` parameter (e.g. `q0`) or
+                    `<key>[N]` in the case of an qubit register as a list of qubits (e.g. `q[0]`, `q[1]`, ..., `q[N]`,
+                    where `N` represents the qubit index in the supplied register).
+
+                **add_measurement_handle**:
+                    A template for the handles of measurements added when `add_measurement` is true.
+                    Defaults to `{qubit.uid}/result`.
 
                 **pipeline_chunk_count**:
                     The number of pipeline chunks to divide the experiment into.
@@ -469,9 +473,12 @@ class OpenQASMTranspiler:
                     if options.add_measurement:
                         with exp.section(uid="qubit_readout") as readout_section:
                             for qubit in _flatten_qubits(qubit_map):
+                                handle = options.add_measurement_handle.format(
+                                    qubit=qubit
+                                )
                                 readout_section.add(
                                     self.qpu.quantum_operations["measure"](
-                                        qubit, handle=qubit.uid
+                                        qubit, handle=handle
                                     )
                                 )
                                 if options.add_reset:
@@ -496,7 +503,7 @@ class OpenQASMTranspiler:
             if isinstance(function_or_port, device.Port):
                 uid = function_or_port.qubit
                 signal = function_or_port.signal
-                qubit = self.qpu.qubit_by_uid(uid)
+                qubit = self.qpu.quantum_element_by_uid(uid)
                 if signal in qubit.signals:
                     # Partial path
                     # Qubit signal lookup does not work with full paths (e.g. alias drive/drive_line)
@@ -519,9 +526,9 @@ class OpenQASMTranspiler:
             if isinstance(uid_or_qubit, quantum.QuantumElement):
                 # Will raise KeyError if qubit does not exists.
                 # Use the supplied qubit if the UID exists in QPU.
-                self.qpu.qubit_by_uid(uid_or_qubit.uid)
+                self.qpu.quantum_element_by_uid(uid_or_qubit.uid)
                 return uid_or_qubit
-            return self.qpu.qubit_by_uid(uid_or_qubit)
+            return self.qpu.quantum_element_by_uid(uid_or_qubit)
         except KeyError as error:
             msg = f"Qubit {uid_or_qubit} does not exist in the QPU."
             raise ValueError(msg) from error

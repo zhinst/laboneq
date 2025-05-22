@@ -209,7 +209,7 @@ def exp_from_qasm(
 
     transpiler = OpenQASMTranspiler(
         qpu=QPU(
-            qubits=list(qubits.values()),
+            quantum_elements=list(qubits.values()),
             quantum_operations=_GateStoreQuantumOperations(gate_store, qubits),
         )
     )
@@ -248,6 +248,7 @@ def exp_from_qasm_list(
     batch_execution_mode: str = "pipeline",
     do_reset: bool = False,
     add_measurement: bool = True,
+    add_measurement_handle: str = "{qubit.uid}",
     pipeline_chunk_count: int | None = None,
 ) -> Experiment:
     """
@@ -314,6 +315,9 @@ def exp_from_qasm_list(
             If `True`,  an active reset operation is added to the beginning of each program.
         add_measurement:
             If `True`, add measurement at the end for all qubits used.
+        add_measurement_handle:
+            A template for the handles of measurements added when `add_measurement` is true.
+            Defaults to `{qubit.uid}`, i.e. just the qubit UID.
         pipeline_chunk_count:
             The number of pipeline chunks to divide the experiment into.
 
@@ -341,7 +345,7 @@ def exp_from_qasm_list(
 
     transpiler = OpenQASMTranspiler(
         qpu=QPU(
-            qubits=list(qubits.values()),
+            quantum_elements=list(qubits.values()),
             quantum_operations=_GateStoreQuantumOperations(gate_store, qubits),
         )
     )
@@ -366,6 +370,7 @@ def exp_from_qasm_list(
             batch_execution_mode=batch_execution_mode,
             add_reset=do_reset,
             add_measurement=add_measurement,
+            add_measurement_handle=add_measurement_handle,
             pipeline_chunk_count=pipeline_chunk_count,
         ),
     )

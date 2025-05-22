@@ -109,6 +109,38 @@ class DeviceInfo:
     is_qc: bool | None = None
     followers: list[FollowerInfo] = field(default_factory=list)
 
+    @property
+    def seqc_dev_type(self) -> str:
+        # TODO(2K): This is a workaround, as options string is still not
+        # enforced in the device setup.
+        if self.dev_type is not None:
+            return self.dev_type
+        if self.device_type == DeviceInfoType.UHFQA:
+            dev_type = "UHFQA"
+        elif self.device_type == DeviceInfoType.HDAWG:
+            dev_type = "HDAWG8"
+        elif self.is_qc:
+            dev_type = "SHFQC"
+        elif self.device_type == DeviceInfoType.SHFQA:
+            dev_type = "SHFQA2"
+        elif self.device_type == DeviceInfoType.SHFSG:
+            dev_type = "SHFSG8"
+        else:
+            # TODO(2K): We should never reach this point
+            raise AssertionError(
+                "Internal error: Unexpected device type for SeqC compilation."
+            )
+        # TODO(2K): Add warning for missing options in the device setup
+        return dev_type
+
+    @property
+    def seqc_dev_opts(self) -> list[str]:
+        # TODO(2K): This is a workaround, as options string is still not
+        # enforced in the device setup.
+        if self.dev_type is None and self.is_qc:
+            return ["QC6CH"]
+        return self.dev_opts
+
 
 @dataclass
 class OscillatorInfo:
@@ -196,7 +228,7 @@ class SectionInfo:
     prng_sample: str | None = None
 
     count: int | None = None  # 'None' means 'not a loop'
-    chunk_count: int = 1
+    chunked: bool = False
     execution_type: ExecutionType | None = None
     averaging_mode: AveragingMode | None = None
     repetition_mode: RepetitionMode | None = None
@@ -339,11 +371,20 @@ class Marker:
 @dataclass
 class ExperimentInfo:
     uid: str
+    device_setup_fingerprint: str
     devices: list[DeviceInfo]
     signals: list[SignalInfo]
     sections: list[SectionInfo]
     global_leader_device: DeviceInfo | None  # todo: remove
     pulse_defs: list[PulseDef]
+    chunking: ChunkingInfo | None
+
+
+@dataclass
+class ChunkingInfo:
+    auto: bool
+    chunk_count: int
+    sweep_iterations: int
 
 
 @dataclass

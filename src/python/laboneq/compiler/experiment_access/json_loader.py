@@ -339,7 +339,7 @@ class JsonLoader(LoaderBase):
                     uid=instance_id,
                     execution_type=execution_type,
                     count=count,
-                    chunk_count=1,
+                    chunked=False,
                     acquisition_type=acquisition_type,
                     alignment=align,
                     on_system_grid=on_system_grid,

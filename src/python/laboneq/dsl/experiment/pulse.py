@@ -55,9 +55,15 @@ class PulseSampled(Pulse):
         self.samples = np.array(self.samples)
 
     def __eq__(self, other):
+        if not isinstance(other, type(self)):
+            return NotImplemented
         if self is other:
             return True
-        return self.uid == other.uid and _compare_nested(self.samples, other.samples)
+        return (
+            self.uid == other.uid
+            and self.can_compress == other.can_compress
+            and _compare_nested(self.samples, other.samples)
+        )
 
 
 @classformatter

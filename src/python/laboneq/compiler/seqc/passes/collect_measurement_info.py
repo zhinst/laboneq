@@ -90,7 +90,7 @@ class CollectInfo:
 
         self.qa_signals_by_handle: dict[str, SignalObj] = {}
         self.open_acquisitions_stack: list[list[AcquisitionInfo]] = [[]]
-        self.feedback_register_allocator = FeedbackRegisterAllocator(signals)
+        self.feedback_register_allocator = FeedbackRegisterAllocator()
 
         # map from (section_uid, awg_id) to _MeasurementInfo
         self.measurement_infos: dict[tuple[str, AwgKey], _MeasurementInfo] = {}

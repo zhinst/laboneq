@@ -16,7 +16,7 @@ from collections.abc import (
 from collections.abc import KeysView as BaseKeysView
 from typing import Any, cast
 
-from laboneq.workflow.tasks.common.classformatter import classformatter
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 
 
 def find_common_prefix(keys: set[str], separator: str) -> tuple[str, str] | None:
@@ -122,12 +122,6 @@ class AttributeWrapper(Collection[str]):
         prefix_len = len(self._path)
         return key[prefix_len + 1 :].split(self._separator, 1)[0]
 
-    def _get_subkeys(self, key: str) -> str:
-        if len(self._path) == 0:
-            return key.replace(self._separator, ".")
-        prefix_len = len(self._path)
-        return key[prefix_len + 1 :].replace(self._separator, ".")
-
     def _add_path(self, key: str) -> str:
         return (self._path + self._separator + key) if self._path else key
 
@@ -165,7 +159,7 @@ class AttributeWrapper(Collection[str]):
         except KeyError as e:
             path_sep = path + self._separator
             if not any(k.startswith(path_sep) for k in self._data):
-                raise KeyError(f"Key '{self._path}' not found in the data.") from e
+                raise KeyError(path) from e
             return AttributeWrapper(self._data, path)
 
     def __contains__(self, key: object) -> bool:
@@ -206,17 +200,18 @@ class AttributeWrapper(Collection[str]):
             and self._separator == value._separator
         )
 
-    def _as_str_dict(self) -> dict[str, Any]:
-        return {
-            key: (attr._as_str_dict() if isinstance(attr, AttributeWrapper) else attr)
-            for key, attr in ((key, getattr(self, key)) for key in self._key_cache)
-        }
-
     def __dir__(self) -> Iterable[str]:
         return list(super().__dir__()) + list(self._key_cache)
 
     def __repr__(self) -> str:
         return (
-            f"AttributeWrapper(data={self._data!r}, path={self._path!r}, "
-            f"separator={self._separator!r})"
+            f"<{type(self).__qualname__}"
+            f" len(data)={len(self._data)},"
+            f" path={self._path!r}, "
+            f" separator={self._separator!r})"
+            ">"
         )
+
+    def __rich_repr__(self):
+        for key in sorted(self._key_cache):
+            yield key, getattr(self, key)

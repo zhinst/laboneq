@@ -23,15 +23,10 @@ if TYPE_CHECKING:
 class LoopFlags(Flag):
     NONE = 0
     AVERAGE = auto()
-    PIPELINE = auto()
 
     @property
     def is_average(self) -> bool:
         return bool(self & LoopFlags.AVERAGE)
-
-    @property
-    def is_pipeline(self) -> bool:
-        return bool(self & LoopFlags.PIPELINE)
 
 
 class LoopingMode(Enum):

@@ -349,6 +349,7 @@ def convert_Sweep(orig: SweepDSL):
     retval.reset_oscillator_phase = orig.reset_oscillator_phase
     retval.uid = orig.uid
     retval.chunk_count = orig.chunk_count
+    retval.auto_chunking = orig.auto_chunking
     retval.alignment = convert_dynamic(orig.alignment, converter_function_directory)
     return retval
 

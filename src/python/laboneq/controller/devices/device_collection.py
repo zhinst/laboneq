@@ -35,6 +35,7 @@ from laboneq.controller.devices.node_control import (
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.controller.versioning import SetupCaps
 from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
+from laboneq.implementation.utils.devices import target_setup_fingerprint
 
 if TYPE_CHECKING:
     from laboneq.data.execution_payload import TargetSetup
@@ -65,6 +66,7 @@ class DeviceCollection:
             ignore_version_mismatch=ignore_version_mismatch,
             setup_caps=setup_caps,
         )
+        self._device_setup_fingerprint = target_setup_fingerprint(target_setup)
         if self._ds.has_uhf and self._ds.has_qhub:
             raise LabOneQControllerException("Gen1 setup with QHub is not supported.")
         self._emulator_state: EmulatorState | None = None
@@ -72,6 +74,10 @@ class DeviceCollection:
         self._timeout_s: float = DEFAULT_TIMEOUT_S
         self._data_servers = DataServerConnections()
         self._devices: dict[str, DeviceZI] = {}
+
+    @property
+    def device_setup_fingerprint(self) -> str:
+        return self._device_setup_fingerprint
 
     @property
     def emulator_state(self) -> EmulatorState:

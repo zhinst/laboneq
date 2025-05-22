@@ -21,3 +21,8 @@ class ILinker(abc.ABC):
     @abc.abstractmethod
     def repeat_previous(this, previous):
         raise NotImplementedError
+
+    @staticmethod
+    @abc.abstractmethod
+    def finalize(this):
+        raise NotImplementedError

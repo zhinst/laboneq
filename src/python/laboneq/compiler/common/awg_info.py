@@ -33,6 +33,8 @@ class AWGInfo:
     signal_channels: list[tuple[str, int]] = field(default_factory=list)
     signals: list[SignalObj] = field(default_factory=list)
     oscs: dict[str, int] = field(default_factory=dict)
+    dev_type: str | None = None
+    dev_opts: list[str] = field(default_factory=list)
 
     @property
     def key(self) -> AwgKey:

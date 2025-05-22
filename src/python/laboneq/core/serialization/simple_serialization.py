@@ -125,13 +125,20 @@ def all_slots(cls):
     # store slots in a dictionary rather than a set to
     # preserve ordering
     slots = {}
+    if hasattr(cls, "_laboneq_exclude_from_legacy_serializer"):
+        exclude = cls._laboneq_exclude_from_legacy_serializer()
+    else:
+        exclude = {}
+
     for base in cls.__mro__:
         base_slots = getattr(base, "__slots__", [])
         if isinstance(base_slots, str):
-            slots[base_slots] = None
+            if base_slots not in exclude:
+                slots[base_slots] = None
         else:
             for attr in base_slots:
-                slots[attr] = None
+                if attr not in exclude:
+                    slots[attr] = None
     return list(slots)
 
 
@@ -382,6 +389,12 @@ def serialize_to_dict_with_entities(
         if _issubclass(cls, set):
             sub_dict["__contents"] = sorted(sub_dict["__contents"])
         return sub_dict
+
+    if _issubclass(cls, bytes):
+        return {
+            "__type": "bytes",
+            "data": base64.b64encode(to_serialize).decode("ascii"),
+        }
 
     # Optional dependency `xarray` object serialization
     if (
@@ -651,6 +664,8 @@ def deserialize_from_dict_with_ref_recursor(
             return np.complex128(data["real"] + data["imag"] * 1j)
         if type_name_short == "complex":
             return complex(data["real"] + data["imag"] * 1j)
+        if type_name_short == "bytes":
+            return base64.b64decode(data["data"].encode("ascii"))
         mapped_class = class_mapping.get(type_name_short)
         if mapped_class is None:
             raise Exception(

@@ -9,19 +9,23 @@ from collections import UserDict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+
 from laboneq._optional_deps import (
     Xarray,
     XarrayDataArray,
     XarrayDataset,
     import_optional,
 )
-from laboneq.core.validators import dicts_equal
 from laboneq.core.exceptions import LabOneQException
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
+from laboneq.core.validators import dicts_equal
 
 if TYPE_CHECKING:
     from numpy import typing as npt
 
 
+@classformatter
 @dataclass
 class AcquiredResult:
     """
@@ -31,20 +35,25 @@ class AcquiredResult:
     and one or more axes.
 
     Attributes:
-        data (ndarray): A multidimensional `numpy` array, where each dimension corresponds to a sweep loop
-            nesting level, the outermost sweep being the first dimension.
-        axis_name (list[str | list[str]]): A list of axis names.
+        data (ndarray or complex):
+            A multidimensional `numpy` array, where each dimension corresponds to a sweep loop
+            nesting level, the outermost sweep being the first dimension. Or, if there is
+            only a single measurement, a complex scalar.
+        axis_name (list[str | list[str]]):
+            A list of axis names.
             Each element may be either a string or a list of strings.
-        axis (list[ndarray | list[ndarray]]): A list of axis grids.
+        axis (list[ndarray | list[ndarray]]):
+            A list of axis grids.
             Each element may be either a 1D numpy array or a list of such arrays.
-        last_nt_step (list[int]): A list of axis indices that represent the last measured near-time point.
+        last_nt_step (list[int]):
+            A list of axis indices that represent the last measured near-time point.
             Only covers outer near-time dimensions.
         handle (str | None): Acquire handle used for capturing the results.
 
             !!! version-added "Added in version 2.16.0"
     """
 
-    data: npt.NDArray[Any]
+    data: npt.NDArray[Any] | np.complex128
     axis_name: list[str | list[str]]
     axis: list[npt.NDArray[Any] | list[npt.NDArray[Any]]]
     last_nt_step: list[int] | None = None
@@ -60,6 +69,22 @@ class AcquiredResult:
             and self.last_nt_step == other.last_nt_step
             and self.handle == other.handle
         )
+
+    def __repr__(self):
+        return (
+            f"<{type(self).__qualname__}"
+            f" handle={self.handle!r}"
+            f" axis_name={self.axis_name}"
+            f" data.shape={np.shape(self.data)}"
+            f">"
+        )
+
+    def __rich_repr__(self):
+        yield "handle", self.handle
+        yield "axis_name", self.axis_name
+        yield "axis", self.axis
+        yield "data", self.data
+        yield "last_nt_step", self.last_nt_step
 
     def to_xarray(self, copy: bool = False) -> XarrayDataArray:
         """Convert to [xarray.DataArray][].

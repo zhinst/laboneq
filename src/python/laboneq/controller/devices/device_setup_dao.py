@@ -76,9 +76,33 @@ def _make_device_qualifier(
         reference_clock_source=target_device.reference_clock_source,
     )
 
-    options.expected_dev_type, options.expected_dev_opts = parse_device_options(
+    expected_dev_type, expected_dev_opts = parse_device_options(
         target_device.device_options
     )
+    if expected_dev_type is None:
+        # TODO(2K): Remove this once all tests provide options explicitly.
+        # If no options are given, we set it to the emulator's defaults.
+        # This has a side effect that the emulator's defaults would also
+        # be used if a user omit options, however it's safe — a later check
+        # will fail if the real setup instrument options don't match.
+        expected_dev_type = (
+            "SHFQC" if target_device.is_qc else target_device.device_type.name
+        )
+        expected_dev_opts = []
+        if expected_dev_type == "HDAWG":
+            expected_dev_type = "HDAWG8"
+            expected_dev_opts = ["MF", "ME", "SKW", "PC"]
+        elif expected_dev_type == "SHFQA":
+            expected_dev_type = "SHFQA4"
+            expected_dev_opts = ["AWG", "DIG", "QA"]
+        elif expected_dev_type == "SHFSG":
+            expected_dev_type = "SHFSG8"
+        elif expected_dev_type == "SHFQC":
+            expected_dev_opts = ["QC6CH"]
+        elif expected_dev_type == "SHFPPC":
+            expected_dev_type = "SHFPPC4"
+    options.expected_dev_type = expected_dev_type
+    options.expected_dev_opts = expected_dev_opts
     if not target_device.has_signals and not target_device.internal_connections:
         # Treat devices without defined connections as non-QC
         driver = "NONQC"

@@ -275,7 +275,7 @@ class DeviceHDAWG(DeviceBase):
 
         await self.set_async(nc)
 
-    async def start_execution(self, with_pipeliner: bool):
+    async def _do_start_execution(self, with_pipeliner: bool):
         nc = NodeCollector(base=f"/{self.serial}/")
         for awg_index in self._allocated_awgs:
             if with_pipeliner:
@@ -284,23 +284,25 @@ class DeviceHDAWG(DeviceBase):
                 nc.add(f"awgs/{awg_index}/enable", 1, cache=False)
         await self.set_async(nc)
 
+    async def start_execution(self, with_pipeliner: bool):
+        # For standalone HDAWG start the execution at the emit_start_trigger stage
+        if not self.is_standalone():
+            await self._do_start_execution(with_pipeliner)
+
+    async def emit_start_trigger(self, with_pipeliner):
+        if self.is_leader() or self.is_standalone():
+            await self._do_start_execution(with_pipeliner)
+
     def conditions_for_execution_ready(
         self, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
         conditions: dict[str, tuple[Any, str]] = {}
         for awg_index in self._allocated_awgs:
-            if with_pipeliner:
+            if with_pipeliner and not self.is_standalone():
                 conditions.update(
-                    self._pipeliner[awg_index].conditions_for_execution_ready(
-                        self.is_standalone()
-                    )
+                    self._pipeliner[awg_index].conditions_for_execution_ready()
                 )
-            elif self.is_standalone():
-                conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = (
-                    [1, 0],
-                    f"AWG {awg_index} failed to transition to exec and back to stop.",
-                )
-            else:
+            elif not self.is_standalone():
                 conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = (
                     1,
                     f"AWG {awg_index} didn't start.",
@@ -315,10 +317,15 @@ class DeviceHDAWG(DeviceBase):
             if with_pipeliner:
                 conditions.update(
                     self._pipeliner[awg_index].conditions_for_execution_done(
-                        self.is_standalone()
+                        with_execution_start=self.is_standalone()
                     )
                 )
-            elif not self.is_standalone():
+            elif self.is_standalone():
+                conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = (
+                    [1, 0],
+                    f"AWG {awg_index} failed to transition to exec and back to stop.",
+                )
+            else:
                 conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = (
                     0,
                     f"AWG {awg_index} didn't stop. Missing start trigger? Check ZSync.",

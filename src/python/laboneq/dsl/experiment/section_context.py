@@ -170,8 +170,11 @@ class SweepSectionContextManager(SectionContextManagerBase):
         alignment=None,
         reset_oscillator_phase=False,
         chunk_count=1,
+        auto_chunking=False,
     ):
-        kwargs = dict(parameters=parameters, chunk_count=chunk_count)
+        kwargs = dict(
+            parameters=parameters, chunk_count=chunk_count, auto_chunking=auto_chunking
+        )
         if uid is not None:
             kwargs["uid"] = uid
         if name is not None:

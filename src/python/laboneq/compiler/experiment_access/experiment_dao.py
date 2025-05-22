@@ -56,9 +56,11 @@ class ExperimentDAO:
     def to_experiment_info(self):
         return ExperimentInfo(
             uid=self._uid,
+            device_setup_fingerprint="",  # Not used in this context
             devices=list(self._data.devices.values()),
             signals=list(self._data.signals.values()),
             sections=list(self._data.sections.values()),
+            chunking=self._data.chunking,
             global_leader_device=self._data.devices[self.global_leader_device()]
             if self.global_leader_device() is not None
             else None,
@@ -313,7 +315,7 @@ class ExperimentDAO:
         validators.check_phase_increments_support(self)
         validators.check_acquire_only_on_acquire_line(self)
         validators.check_no_play_on_acquire_line(self)
-        validators.check_arbirary_marker_is_valid(self)
+        validators.check_arbitrary_marker_is_valid(self)
         validators.check_no_sweeping_acquire_pulses(self)
 
     def acquisition_signal(self, handle: str) -> str | None:

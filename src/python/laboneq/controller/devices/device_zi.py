@@ -60,7 +60,6 @@ from laboneq.controller.util import LabOneQControllerException
 from laboneq.controller.versioning import SetupCaps
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
-from laboneq.core.utilities.seqc_compile import SeqCCompileItem, seqc_compile_async
 from laboneq.data.recipe import (
     Initialization,
     IntegratorAllocation,
@@ -459,12 +458,11 @@ class DeviceBase(DeviceZI):
             return
         actual_opts_str = "/".join([self.dev_type, *self.dev_opts])
         if self.options.expected_dev_type is None:
-            _logger.warning(
-                f"{self.dev_repr}: Include the device options '{actual_opts_str}' in the"
+            raise LabOneQControllerException(
+                f"{self.dev_repr}: Device options '{actual_opts_str}' is missing in the"
                 f" device setup ('options' field of the 'instruments' list in the device"
                 f" setup descriptor, 'device_options' argument when constructing"
                 f" instrument objects to be added to 'DeviceSetup' instances)."
-                f" This will become a strict requirement in the future."
             )
         elif self.dev_type != self.options.expected_dev_type or set(
             self.dev_opts
@@ -472,12 +470,10 @@ class DeviceBase(DeviceZI):
             expected_opts_str = "/".join(
                 [self.options.expected_dev_type, *self.options.expected_dev_opts]
             )
-            _logger.warning(
+            raise LabOneQControllerException(
                 f"{self.dev_repr}: The expected device options specified in the device"
                 f" setup '{expected_opts_str}' do not match the"
-                f" actual options '{actual_opts_str}'. Currently using the actual options,"
-                f" but please note that exact matching will become a strict"
-                f" requirement in the future."
+                f" actual options '{actual_opts_str}'."
             )
 
     def _process_dev_opts(self):
@@ -872,22 +868,11 @@ class DeviceBase(DeviceZI):
             if rt_exec_step is None:
                 continue
 
-            seqc_code = self.prepare_seqc(artifacts, rt_exec_step.program_ref)
-            if seqc_code is not None:
-                seqc_item = SeqCCompileItem(
-                    dev_type=self.dev_type,
-                    dev_opts=self.dev_opts,
-                    awg_index=awg_index,
-                    sequencer=self._get_sequencer_type(),
-                    sampling_rate=self._sampling_rate,
-                    code=seqc_code,
-                    filename=rt_exec_step.program_ref,
-                )
-                await seqc_compile_async(seqc_item)
-                assert seqc_item.elf is not None
+            seqc_elf = self.prepare_elf(artifacts, rt_exec_step.program_ref)
+            if seqc_elf is not None:
                 elf_nodes.extend(
                     self.prepare_upload_elf(
-                        seqc_item.elf, awg_index, seqc_item.filename
+                        seqc_elf, awg_index, rt_exec_step.program_ref
                     )
                 )
                 upload_ready_conditions.update(self._elf_upload_condition(awg_index))
@@ -1081,19 +1066,24 @@ class DeviceBase(DeviceZI):
 
         return self.add_command_table_header(command_table_body)
 
-    def prepare_seqc(
+    def prepare_elf(
         self,
         artifacts: ArtifactsCodegen,
         seqc_ref: str | None,
-    ) -> str | None:
+    ) -> bytes | None:
         if seqc_ref is None:
             return None
 
-        seqc = next((s for s in artifacts.src if s["filename"] == seqc_ref), None)
-        if seqc is None:
-            raise LabOneQControllerException(f"SeqC program '{seqc_ref}' not found")
+        if artifacts.src is None:
+            seqc = None
+        else:
+            seqc = next((s for s in artifacts.src if s["filename"] == seqc_ref), None)
+        if seqc is None or "elf" not in seqc or not isinstance(seqc["elf"], bytes):
+            raise LabOneQControllerException(
+                f"SeqC program '{seqc_ref}' not found or invalid"
+            )
 
-        return seqc["text"]
+        return seqc["elf"]
 
     def prepare_upload_elf(
         self, elf: bytes, awg_index: int, filename: str

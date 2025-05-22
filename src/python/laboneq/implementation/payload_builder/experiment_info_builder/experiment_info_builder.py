@@ -29,6 +29,7 @@ from laboneq.data.calibration import (
 from laboneq.data.compilation_job import (
     AcquireInfo,
     AmplifierPumpInfo,
+    ChunkingInfo,
     ExperimentInfo,
     Marker,
     MixerCalibrationInfo,
@@ -47,6 +48,7 @@ from laboneq.data.compilation_job import (
 )
 from laboneq.data.experiment_description import (
     Acquire,
+    AcquireLoopRt,
     Delay,
     ExecutionType,
     Experiment,
@@ -70,9 +72,9 @@ from laboneq.data.setup_description.setup_helper import SetupHelper
 from laboneq.implementation.payload_builder.experiment_info_builder.device_info_builder import (
     DeviceInfoBuilder,
 )
+from laboneq.implementation.utils.devices import device_setup_fingerprint
 
 _logger = logging.getLogger(__name__)
-
 
 T = TypeVar("T")
 
@@ -92,6 +94,7 @@ class ExperimentInfoBuilder:
         }
         self._params: dict[str, ParameterInfo] = {}
         self._nt_only_params: set[str] = set()
+        self._chunking_info: ChunkingInfo | None = None
         self._oscillators: dict[str, OscillatorInfo] = {}
         self._signal_infos: dict[str, SignalInfo] = {}
         self._pulse_defs: dict[str, PulseDef] = {}
@@ -110,6 +113,8 @@ class ExperimentInfoBuilder:
         self._check_physical_channel_calibration_conflict()
         for signal in self._experiment.signals:
             self._load_signal(signal)
+
+        self._validate_chunked_sweep()
 
         section_uid_map = {}
         root_sections = [
@@ -133,11 +138,13 @@ class ExperimentInfoBuilder:
 
         experiment_info = ExperimentInfo(
             uid=self._experiment.uid,
+            device_setup_fingerprint=device_setup_fingerprint(self._device_setup),
             devices=list(self._device_info.device_mapping.values()),
             signals=sorted(self._signal_infos.values(), key=lambda s: s.uid),
             sections=root_sections,
             global_leader_device=self._device_info.global_leader,
             pulse_defs=sorted(self._pulse_defs.values(), key=lambda s: s.uid),
+            chunking=self._chunking_info,
         )
         self._resolve_seq_averaging(experiment_info)
         self._resolve_oscillator_modulation_type(experiment_info)
@@ -657,8 +664,7 @@ class ExperimentInfoBuilder:
                     f" {section.uid}."
                 )
         if pulses == [None] and markers:
-            # generate a zero amplitude pulse to play the markers
-            # TODO: generate a proper constant pulse here
+            # generate a zero-amplitude pulse to play the markers
 
             if any(
                 (m.start is None or m.length is None) and m.pulse_id is None
@@ -669,7 +675,7 @@ class ExperimentInfoBuilder:
                 )
 
             pulses = [pulse] = [SimpleNamespace()]
-            pulse.uid = next(auto_pulse_id)
+            pulse.uid = f"__marker__{next(auto_pulse_id)}"
             pulse.function = "const"
             pulse.amplitude = 0.0
             lengths = [
@@ -691,6 +697,7 @@ class ExperimentInfoBuilder:
                     f"Inconsistent count of integration kernels on signal {signal_info.uid}"
                 )
         if len(pulses) == 0 and length is not None:
+            # Acquisition without specific kernel, just length
             # TODO: generate a proper constant pulse here
             pulses = [pulse] = [SimpleNamespace()]
             pulse.uid = next(auto_pulse_id)
@@ -881,7 +888,6 @@ class ExperimentInfoBuilder:
         triggers = [
             {"signal_id": k, "state": v["state"]} for k, v in section.trigger.items()
         ]
-        chunk_count = getattr(section, "chunk_count", 1)
 
         prng_setup_info = None
         if hasattr(section, "prng"):
@@ -919,6 +925,23 @@ class ExperimentInfoBuilder:
                 )
         state = getattr(section, "state", None)
 
+        _auto_chunking = getattr(section, "auto_chunking", False)
+        _chunk_count = getattr(section, "chunk_count", 1)
+        chunked = _auto_chunking or _chunk_count > 1
+        if chunked:
+            assert (
+                self._chunking_info is None
+            )  # multiple sweeps being chunked should have been caught earlier in validation
+            if _chunk_count > count:
+                _logger.warning(
+                    "Provided chunk count (%s) is larger than the sweep length (%s). Using %s instead.",
+                    _chunk_count,
+                    count,
+                    count,
+                )
+                _chunk_count = count
+            self._chunking_info = ChunkingInfo(_auto_chunking, _chunk_count, count)
+
         this_acquisition_type = None
         if any(isinstance(operation, Acquire) for operation in section.children):
             # an acquire event - add acquisition_types
@@ -935,7 +958,7 @@ class ExperimentInfoBuilder:
             length=length,
             alignment=align,
             count=count,
-            chunk_count=chunk_count,
+            chunked=chunked,
             match_handle=match_handle,
             match_user_register=match_user_register,
             match_prng_sample=match_prng_sample,
@@ -961,6 +984,34 @@ class ExperimentInfoBuilder:
         )
 
         return section_info
+
+    def _validate_chunked_sweep(self):
+        found_chunked_sweep = False
+
+        def visit(section: Section, inside_rt=False):
+            nonlocal found_chunked_sweep
+            if isinstance(section, AcquireLoopRt):
+                inside_rt = True
+            if isinstance(section, Sweep):
+                if section.chunk_count < 1:
+                    raise LabOneQException(
+                        f"Chunk count must be >= 1, but {section.chunk_count} was provided."
+                    )
+                if section.auto_chunking or section.chunk_count > 1:
+                    if found_chunked_sweep:
+                        raise LabOneQException("Found multiple chunked sweeps.")
+                    if not inside_rt:
+                        raise LabOneQException(
+                            "Sweeps that are not inside real-time execution cannot be chunked."
+                        )
+                    found_chunked_sweep = True
+            for child in section.children:
+                if isinstance(child, Section):
+                    visit(child, inside_rt)
+
+        for c in self._experiment.sections:
+            # depth-first search
+            visit(c)
 
     def _add_pulse(self, pulse) -> PulseDef:
         if pulse.uid not in self._pulse_defs:

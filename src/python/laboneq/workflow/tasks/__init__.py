@@ -10,7 +10,6 @@ __all__ = [
     "CompileExperimentOptions",
     "run_experiment",
     "RunExperimentOptions",
-    "RunExperimentResults",
     "append_result",
     "combine_results",
     "create_qasm_experiment",
@@ -20,4 +19,4 @@ __all__ = [
 from .collect_experiment_results import append_result, combine_results
 from .compile_experiment import compile_experiment, CompileExperimentOptions
 from .create_qasm_experiment import create_qasm_experiment
-from .run_experiment import RunExperimentOptions, RunExperimentResults, run_experiment
+from .run_experiment import RunExperimentOptions, run_experiment

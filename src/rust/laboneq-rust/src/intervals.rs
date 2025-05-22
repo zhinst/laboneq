@@ -1,7 +1,7 @@
 // Copyright 2024 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use interval_calculator::interval::OrderedRange;
+use interval_calculator::interval::{Interval as PulseInterval, OrderedRange};
 use interval_tree::ArrayBackedIntervalTree;
 use pyo3::PyTraverseError;
 use pyo3::create_exception;
@@ -13,6 +13,7 @@ use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
+use std::ops::Range;
 
 #[pyclass]
 pub struct Interval {
@@ -354,6 +355,17 @@ impl IntervalTree {
     }
 }
 
+fn round_to_grid(range: &Range<i64>, granularity: i64) -> Range<i64> {
+    fn floor(value: i64, grid: i64) -> i64 {
+        value - value % grid
+    }
+
+    fn ceil(value: i64, grid: i64) -> i64 {
+        value + (grid - (value % grid)) % grid
+    }
+    floor(range.start, granularity)..ceil(range.end, granularity)
+}
+
 create_exception!(module, MinimumWaveformLengthViolation, PyRuntimeError);
 
 #[pyfunction]
@@ -401,11 +413,11 @@ pub fn calculate_intervals(
         .tree
         .find(ivt.begin()?..ivt.end()?)
         .iter()
-        .map(|x| OrderedRange(x.interval().start..x.interval().end))
+        .map(|x| PulseInterval::from_range(round_to_grid(x.interval(), granularity), vec![]))
         .collect();
 
     match interval_calculator::calculate_intervals(
-        &intervals,
+        intervals,
         &cut_points,
         granularity,
         min_play_wave,
@@ -417,7 +429,7 @@ pub fn calculate_intervals(
         Ok(x) => Ok(x
             .iter()
             .map(|iv| Interval {
-                range: iv.clone(),
+                range: OrderedRange(iv.span().clone()),
                 data: py.None(),
             })
             .collect()),
@@ -434,14 +446,9 @@ pub fn create_py_module<'a>(
     parent: &Bound<'a, PyModule>,
     name: &str,
 ) -> PyResult<Bound<'a, PyModule>> {
-    let py = parent.py();
     let m = PyModule::new(parent.py(), name)?;
     m.add_class::<IntervalTree>()?;
     m.add_class::<Interval>()?;
     m.add_function(wrap_pyfunction!(calculate_intervals, &m)?)?;
-    m.add(
-        "MinimumWaveformLengthViolation",
-        py.get_type::<MinimumWaveformLengthViolation>(),
-    )?;
     Ok(m)
 }

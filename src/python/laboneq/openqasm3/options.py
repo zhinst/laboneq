@@ -98,6 +98,10 @@ class MultiProgramOptions(SingleProgramOptions):
             If `True`, an active reset operation is added to the beginning of each program.
         add_measurement:
             If `True`, add measurement at the end for all qubits used.
+        add_measurement_handle:
+            A template for the handles of measurements added when `add_measurement` is true.
+            Defaults to `{qubit.uid}/result`.
+
         pipeline_chunk_count:
             The number of pipeline chunks to divide the experiment into.
     """
@@ -114,6 +118,7 @@ class MultiProgramOptions(SingleProgramOptions):
     add_measurement: bool = attrs.field(
         default=True, validator=attrs.validators.instance_of(bool)
     )
+    add_measurement_handle: str = attrs.field(default="{qubit.uid}/result")
     pipeline_chunk_count: int | None = attrs.field(
         default=None,
         validator=attrs.validators.optional(attrs.validators.instance_of(int)),

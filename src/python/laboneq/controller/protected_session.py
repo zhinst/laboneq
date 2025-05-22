@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import typing
 from typing import Any
 
@@ -26,6 +27,10 @@ class ProtectedSession(SimpleProxy):
     @property
     def results(self) -> Results:
         return self._last_results
+
+    # Backwards compatibility after migration to the new architecture
+    def get_results(self) -> Results:
+        return copy.deepcopy(self._last_results)
 
     # Backwards compatibility after migration to the new architecture
     @property

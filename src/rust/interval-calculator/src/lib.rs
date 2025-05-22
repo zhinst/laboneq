@@ -5,7 +5,7 @@ use std::cmp;
 use std::collections::{HashSet, VecDeque};
 
 pub mod interval;
-use crate::interval::OrderedRange;
+use crate::interval::{Interval, OrderedRange};
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -18,71 +18,53 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-impl OrderedRange<i64> {
-    fn length(&self) -> i64 {
-        self.0.end - self.0.start
-    }
-}
-
-fn round_to_grid(intervals: &mut [OrderedRange<i64>], granularity: i64) {
-    fn floor(value: i64, grid: i64) -> i64 {
-        value - value % grid
-    }
-
-    fn ceil(value: i64, grid: i64) -> i64 {
-        value + (grid - (value % grid)) % grid
-    }
-
-    intervals.iter_mut().for_each(|x| {
-        x.0.start = floor(x.0.start, granularity);
-        x.0.end = ceil(x.0.end, granularity);
-    });
-}
-
 fn pass_left_to_right(
-    chunk: &mut Vec<OrderedRange<i64>>,
+    chunk: &mut Vec<Interval<i64>>,
     cut_interval: &OrderedRange<i64>,
     play_wave_size_hint: i64,
     play_zero_size_hint: i64,
     play_wave_maximum_size: i64,
 ) {
-    let mut chunk_stack: VecDeque<OrderedRange<i64>> = VecDeque::from_iter(std::mem::take(chunk));
-    let playzero = chunk_stack[0].0.start - cut_interval.0.start;
+    let mut chunk_stack: VecDeque<Interval<i64>> = VecDeque::from_iter(std::mem::take(chunk));
+    let playzero = chunk_stack[0].start() - cut_interval.0.start;
     if (0 < playzero) && (playzero < play_zero_size_hint) {
         // First playZero is too short. Extend first playWave to the left.
-        let extended_length = chunk_stack[0].0.end - cut_interval.0.start;
+        let extended_length = chunk_stack[0].end() - cut_interval.0.start;
         if extended_length <= play_wave_maximum_size {
             let chunk_0 = &mut chunk_stack[0];
-            chunk_0.0.start = cut_interval.0.start;
+            *chunk_0.start_mut() = cut_interval.0.start;
         }
     }
     while let Some(mut iv) = chunk_stack.pop_front() {
         if iv.length() < play_wave_size_hint {
-            iv.0.end = cmp::min(iv.0.start + play_wave_size_hint, cut_interval.0.end);
+            *iv.end_mut() = cmp::min(iv.start() + play_wave_size_hint, cut_interval.0.end);
         }
         if let Some(next_iv) = chunk_stack.front_mut() {
-            let gap_length = next_iv.0.start - iv.0.end;
+            let gap_length = next_iv.start() - iv.end();
             if (0 < gap_length) && (gap_length < play_zero_size_hint) {
-                let extended_iv = next_iv.0.start - iv.0.start;
+                let extended_iv = next_iv.start() - iv.start();
                 if extended_iv <= play_wave_maximum_size {
-                    iv.0.end = next_iv.0.start;
+                    *iv.end_mut() = next_iv.start();
                 }
             }
-            if iv.overlaps_range(next_iv.0.start, next_iv.0.end) {
-                let merged_length = next_iv.0.end - iv.0.start;
+            if iv.overlaps_range(next_iv.start(), next_iv.end()) {
+                let merged_length = next_iv.end() - iv.start();
                 if merged_length > play_wave_maximum_size {
-                    iv.0.end = next_iv.0.start;
+                    *iv.end_mut() = next_iv.start();
                 } else {
-                    next_iv.0.start = iv.0.start;
+                    // This happens when pulses do not overlap with each other,
+                    // but are merged e.g. from command table span
+                    next_iv.data.extend(&iv.data);
+                    *next_iv.start_mut() = iv.start();
                     continue;
                 }
             }
         } else {
-            let gap_length = cut_interval.0.end - iv.0.end;
+            let gap_length = cut_interval.0.end - iv.end();
             if (0 < gap_length) && (gap_length < play_zero_size_hint) {
-                let extended_iv = cut_interval.0.end - iv.0.start;
+                let extended_iv = cut_interval.0.end - iv.start();
                 if extended_iv <= play_wave_maximum_size {
-                    iv.0.end = cut_interval.0.end;
+                    *iv.end_mut() = cut_interval.0.end;
                 }
             }
         }
@@ -91,30 +73,33 @@ fn pass_left_to_right(
 }
 
 fn pass_right_to_left(
-    chunk: &mut Vec<OrderedRange<i64>>,
+    chunk: &mut Vec<Interval<i64>>,
     cut_interval: &OrderedRange<i64>,
     play_wave_size_hint: i64,
     play_zero_size_hint: i64,
 ) {
     chunk.reverse();
-    let mut chunk_stack: VecDeque<OrderedRange<i64>> = VecDeque::from_iter(std::mem::take(chunk));
+    let mut chunk_stack: VecDeque<Interval<i64>> = VecDeque::from_iter(std::mem::take(chunk));
     while let Some(mut iv) = chunk_stack.pop_front() {
         if iv.length() < play_wave_size_hint {
-            iv.0.start = cmp::max(iv.0.end - play_wave_size_hint, cut_interval.0.start);
+            *iv.start_mut() = cmp::max(iv.end() - play_wave_size_hint, cut_interval.0.start);
         }
         if let Some(iv_prev) = chunk_stack.front_mut() {
-            let gap_length = iv.0.start - iv_prev.0.end;
+            let gap_length = iv.start() - iv_prev.end();
             if (0 < gap_length) && (gap_length < play_zero_size_hint) {
-                iv.0.start = cmp::max(iv.0.end - play_zero_size_hint, cut_interval.0.start);
+                *iv.start_mut() = cmp::max(iv.end() - play_zero_size_hint, cut_interval.0.start);
             }
-            if iv.overlaps_range(iv_prev.0.start, iv_prev.0.end) {
-                iv_prev.0.end = iv.0.end;
+            if iv.overlaps_range(iv_prev.start(), iv_prev.end()) {
+                *iv_prev.end_mut() = iv.end();
+                // This happens when pulses do not overlap with each other,
+                // but are merged e.g. from command table span
+                iv_prev.data.extend(&iv.data);
                 continue;
             }
         } else {
-            let gap_length = iv.0.start - cut_interval.0.start;
+            let gap_length = iv.start() - cut_interval.0.start;
             if (0 < gap_length) && (gap_length < play_zero_size_hint) {
-                iv.0.start = cmp::max(iv.0.end - play_zero_size_hint, cut_interval.0.start);
+                *iv.start_mut() = cmp::max(iv.end() - play_zero_size_hint, cut_interval.0.start);
             }
         }
         chunk.push(iv);
@@ -123,22 +108,24 @@ fn pass_right_to_left(
 }
 
 /// Merge interval overlaps in-place
-fn merge_overlaps(intervals: &mut Vec<OrderedRange<i64>>) {
-    let mut intervals_deque: VecDeque<OrderedRange<i64>> =
+fn merge_overlaps(intervals: &mut Vec<Interval<i64>>) {
+    let mut intervals_deque: VecDeque<Interval<i64>> =
         VecDeque::from_iter(std::mem::take(intervals));
     if let Some(first) = intervals_deque.pop_front() {
         intervals.push(first);
         while let Some(interval) = intervals_deque.front() {
             let mut top = intervals.pop().unwrap();
-            if top.0.end <= interval.0.start {
+            if top.end() <= interval.start() {
                 let iv = intervals_deque.pop_front().unwrap();
                 intervals.push(top);
                 intervals.push(iv);
-            } else if top.0.end < interval.0.end {
-                top.0.end = interval.0.end;
+            } else if top.end() < interval.end() {
+                top.data.extend(&interval.data);
+                *top.end_mut() = interval.end();
                 intervals_deque.pop_front();
                 intervals.push(top);
             } else {
+                top.data.extend(&interval.data);
                 intervals_deque.pop_front();
                 intervals.push(top);
             }
@@ -153,7 +140,7 @@ fn merge_overlaps(intervals: &mut Vec<OrderedRange<i64>>) {
 ///
 /// # Arguments
 ///
-/// * intervals - Pulse playbacks as intervals
+/// * intervals - Pulse playbacks as intervals that are on sequencer grid matching the granularity.
 /// * cut_points - Timestamps of events that (probably) emit code. `intervals`
 ///   must not span across a cut point. The function assumes `cut_points` are
 ///   ordered. The gap between `cut_points` must be equal or larger than
@@ -200,7 +187,7 @@ fn merge_overlaps(intervals: &mut Vec<OrderedRange<i64>>) {
 /// This is returns an error.
 #[allow(clippy::too_many_arguments)]
 pub fn calculate_intervals(
-    intervals: &[OrderedRange<i64>],
+    intervals: Vec<Interval<i64>>,
     cut_points: &[i64],
     granularity: i64,
     min_play_wave: i64,
@@ -208,7 +195,7 @@ pub fn calculate_intervals(
     play_zero_size_hint: i64,
     play_wave_max_hint: Option<i64>,
     ct_intervals: Option<&HashSet<OrderedRange<i64>>>,
-) -> Result<Vec<OrderedRange<i64>>> {
+) -> Result<Vec<Interval<i64>>> {
     // TODO: Proper validation
     if intervals.is_empty() {
         return Ok(vec![]);
@@ -217,21 +204,20 @@ pub fn calculate_intervals(
     if play_wave_max_hint != 0 && play_wave_max_hint <= play_wave_size_hint {
         return Err(anyhow::anyhow!("play_wave_max_hint <= play_wave_size_hint").into());
     }
-    let mut intervals = intervals.to_owned();
-    round_to_grid(&mut intervals, granularity);
+    let mut intervals = intervals;
     intervals.sort();
     merge_overlaps(&mut intervals);
     if cut_points.is_empty() {
         return Ok(intervals.to_vec());
     }
-    if *cut_points.last().unwrap() < intervals.last().unwrap().0.end {
+    if *cut_points.last().unwrap() < intervals.last().unwrap().end() {
         return Err(
             anyhow::anyhow!("Last cut point must be equal or larger than intervals end").into(),
         );
     }
     // These intervals mark the regions delimited by the cut points. They are
     // independent, and *cannot* be merged.
-    let start_point = cmp::min(intervals[0].0.start, cut_points[0]);
+    let start_point = cmp::min(intervals[0].start(), cut_points[0]);
     let cut_point_intervals: Vec<_> = std::iter::once(&start_point)
         .chain(cut_points.iter())
         .collect();
@@ -246,11 +232,11 @@ pub fn calculate_intervals(
         if (cut_interval.length()) % granularity != 0 {
             return Err(anyhow::anyhow!("Cut point does not match granularity").into());
         }
-        let mut chunk: Vec<OrderedRange<i64>> = vec![];
+        let mut chunk = vec![];
         // Collect and drain overlapping intervals until cut point interval is exceeded
         while let Some(front) = interval_deque.front() {
-            if cut_interval.overlaps_range(front.0.start, front.0.end) {
-                if front.0.start < cut_interval.0.start || cut_interval.0.end < front.0.end {
+            if cut_interval.overlaps_range(front.start(), front.end()) {
+                if front.start() < cut_interval.0.start || cut_interval.0.end < front.end() {
                     return Err(anyhow::anyhow!("Cut points overlap intervals").into());
                 };
                 chunk.push(interval_deque.pop_front().unwrap());
@@ -293,6 +279,12 @@ pub fn calculate_intervals(
 mod tests {
     use super::*;
 
+    fn ordered_to_interval(ivs: Vec<OrderedRange<i64>>) -> Vec<Interval<i64>> {
+        ivs.into_iter()
+            .map(|x| Interval::from_range(x.0, vec![]))
+            .collect()
+    }
+
     #[test]
     fn test_one_interval() {
         let ivs = vec![OrderedRange(0..1024)];
@@ -304,7 +296,7 @@ mod tests {
         let play_wave_max_hint = None;
         let ct_intervals = None;
         let intervals = calculate_intervals(
-            &ivs,
+            ordered_to_interval(ivs),
             &cut_points,
             granularity,
             min_play_wave,
@@ -316,7 +308,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(intervals.len(), 1);
-        assert_eq!(intervals[0].0, 0..1024);
+        assert_eq!(*intervals[0].span(), 0..1024);
     }
 
     #[test]
@@ -330,7 +322,7 @@ mod tests {
         let play_wave_max_hint = None;
         let ct_intervals = None;
         let intervals = calculate_intervals(
-            &ivs,
+            ordered_to_interval(ivs),
             &cut_points,
             granularity,
             min_play_wave,
@@ -342,16 +334,16 @@ mod tests {
         .unwrap();
 
         assert_eq!(intervals.len(), 2);
-        assert_eq!(intervals[0].0, 0..16);
-        assert_eq!(intervals[1].0, 16..32);
+        assert_eq!(*intervals[0].span(), 0..16);
+        assert_eq!(*intervals[1].span(), 16..32);
     }
 
     #[test]
     fn test_intervals_merged_due_granularity() {
         let ivs = vec![
-            OrderedRange(0..16),
-            OrderedRange(16..32),
-            OrderedRange(32..64),
+            OrderedRange(0..64),
+            OrderedRange(0..64),
+            OrderedRange(0..64),
         ];
         let cut_points = vec![];
         let granularity = 64;
@@ -361,7 +353,7 @@ mod tests {
         let play_wave_max_hint = None;
         let ct_intervals = None;
         let intervals = calculate_intervals(
-            &ivs,
+            ordered_to_interval(ivs),
             &cut_points,
             granularity,
             min_play_wave,
@@ -373,7 +365,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(intervals.len(), 1);
-        assert_eq!(intervals[0].0, 0..64);
+        assert_eq!(*intervals[0].span(), 0..64);
     }
 
     #[test]
@@ -388,7 +380,7 @@ mod tests {
         let play_wave_max_hint = None;
         let ct_intervals = None;
         let intervals = calculate_intervals(
-            &ivs,
+            ordered_to_interval(ivs),
             &cut_points,
             granularity,
             min_play_wave,
@@ -400,8 +392,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(intervals.len(), 2);
-        assert_eq!(intervals[0].0, 0..32);
-        assert_eq!(intervals[1].0, 64..128);
+        assert_eq!(*intervals[0].span(), 0..32);
+        assert_eq!(*intervals[1].span(), 64..128);
     }
 
     #[test]
@@ -419,7 +411,7 @@ mod tests {
         let play_wave_max_hint = None;
         let ct_intervals = None;
         let intervals = calculate_intervals(
-            &ivs,
+            ordered_to_interval(ivs),
             &cut_points,
             granularity,
             min_play_wave,
@@ -431,7 +423,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(intervals.len(), 1);
-        assert_eq!(intervals[0].0, 0..64);
+        assert_eq!(*intervals[0].span(), 0..64);
     }
 
     #[test]
@@ -445,7 +437,7 @@ mod tests {
         let play_wave_max_hint = None;
         let ct_intervals = None;
         let intervals = calculate_intervals(
-            &ivs,
+            ordered_to_interval(ivs),
             &cut_points,
             granularity,
             min_play_wave,
@@ -457,7 +449,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(intervals.len(), 1);
-        assert_eq!(intervals[0].0, 160..400);
+        assert_eq!(*intervals[0].span(), 160..400);
     }
 
     #[test]
@@ -480,7 +472,7 @@ mod tests {
         let play_wave_max_hint = None;
         let ct_intervals = None;
         let intervals = calculate_intervals(
-            &ivs,
+            ordered_to_interval(ivs),
             &cut_points,
             granularity,
             min_play_wave,
@@ -492,9 +484,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(intervals.len(), 3);
-        assert_eq!(intervals[0].0, 192..448);
-        assert_eq!(intervals[1].0, 448..704);
-        assert_eq!(intervals[2].0, 704..960);
+        assert_eq!(*intervals[0].span(), 192..448);
+        assert_eq!(*intervals[1].span(), 448..704);
+        assert_eq!(*intervals[2].span(), 704..960);
     }
 
     #[test]
@@ -509,7 +501,7 @@ mod tests {
         let ct_intervals = None;
         assert!(
             calculate_intervals(
-                &ivs,
+                ordered_to_interval(ivs),
                 &cut_points,
                 granularity,
                 min_play_wave,
@@ -534,7 +526,7 @@ mod tests {
         let ct_intervals = None;
         assert!(
             calculate_intervals(
-                &ivs,
+                ordered_to_interval(ivs),
                 &cut_points,
                 granularity,
                 min_play_wave,
@@ -550,8 +542,8 @@ mod tests {
     #[test]
     fn test_ct_intervals() {
         let ivs = vec![
-            OrderedRange(170..700),
-            OrderedRange(50000..51000),
+            OrderedRange(170..704),
+            OrderedRange(50000..51008),
             OrderedRange(52000..53000),
         ];
         let cut_points = vec![160, 2112, 2496, 53008];
@@ -563,7 +555,7 @@ mod tests {
         let mut ct_intervals = HashSet::new();
         ct_intervals.insert(OrderedRange(2496..53008));
         let out = calculate_intervals(
-            &ivs,
+            ordered_to_interval(ivs.clone()),
             &cut_points,
             granularity,
             min_play_wave,
@@ -575,11 +567,11 @@ mod tests {
         .unwrap();
         // CT interval forces intervals to be merged
         assert_eq!(out.len(), 2);
-        assert_eq!(out[0].0, 160..704);
-        assert_eq!(out[1].0, 2496..53008);
+        assert_eq!(*out[0].span(), 160..704);
+        assert_eq!(*out[1].span(), 2496..53008);
 
         let out = calculate_intervals(
-            &ivs,
+            ordered_to_interval(ivs),
             &cut_points,
             granularity,
             min_play_wave,
@@ -590,8 +582,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out.len(), 3);
-        assert_eq!(out[0].0, 160..704);
-        assert_eq!(out[1].0, 50000..51008);
-        assert_eq!(out[2].0, 52000..53008);
+        assert_eq!(*out[0].span(), 160..704);
+        assert_eq!(*out[1].span(), 50000..51008);
+        assert_eq!(*out[2].span(), 52000..53008);
     }
 }

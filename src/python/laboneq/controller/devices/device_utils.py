@@ -156,7 +156,6 @@ def prepare_emulator_state(ds: DeviceSetupDAO) -> EmulatorState:
             emulator_state.set_option(
                 options.serial, "features/devtype", options.expected_dev_type
             )
-        if len(options.expected_dev_opts) > 0:
             emulator_state.set_option(
                 options.serial, "features/options", "\n".join(options.expected_dev_opts)
             )

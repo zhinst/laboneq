@@ -6,9 +6,9 @@ from __future__ import annotations
 from typing import Dict, Literal, Optional
 
 from laboneq.compiler.common.awg_info import AwgKey
-from laboneq.compiler.common.signal_obj import SignalObj
 
 PQSC_FEEDBACK_REGISTER_COUNT = 32
+FeedbackRegisterAllocation = Optional[int]
 
 
 class FeedbackRegisterAllocator:
@@ -21,8 +21,7 @@ class FeedbackRegisterAllocator:
 
     `PQSC_FEEDBACK_REGISTER_COUNT` registers are available in total."""
 
-    def __init__(self, signals: Dict[str, SignalObj]):
-        self.signals = signals
+    def __init__(self):
         self.feedback_path: Dict[str, bool] = {}  # handle -> is_global
         self.target_feedback_registers: Dict[
             AwgKey, int | Literal["local"]
@@ -33,11 +32,10 @@ class FeedbackRegisterAllocator:
     def set_feedback_path(self, handle: str, via_pqsc: bool) -> None:
         self.feedback_path[handle] = via_pqsc
 
-    def allocate(self, signal_id: str, handle: str) -> Optional[int | Literal["local"]]:
+    def allocate(self, awg_key: AwgKey, handle: str) -> FeedbackRegisterAllocation:
         is_global = self.feedback_path.get(handle)
         if is_global is None:
             return None
-        awg_key = self.signals[signal_id].awg.key
         if is_global:
             feedback_register = self.target_feedback_registers.get(awg_key)
             if feedback_register is None:

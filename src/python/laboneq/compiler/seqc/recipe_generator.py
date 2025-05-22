@@ -754,7 +754,9 @@ def calc_outputs(
                                 and output["marker_mode"] == "MARKER"
                             ):
                                 raise RuntimeError(
-                                    f"Trying to use marker and trigger on the same output channel {channel} with signal {signal_id} on device {signal_info.device.uid}"
+                                    f"Trying to use marker and trigger on the same"
+                                    f" output channel {channel} with signal"
+                                    f" {signal_id} on device {signal_info.device.uid}"
                                 )
                             else:
                                 output["marker_mode"] = "TRIGGER"
@@ -767,7 +769,9 @@ def calc_outputs(
                                 and output["marker_mode"] == "MARKER"
                             ):
                                 raise RuntimeError(
-                                    f"Trying to use marker and trigger on the same SG output channel {channel} with signal {signal_id} on device {signal_info.device.uid}"
+                                    f"Trying to use marker and trigger on the same SG"
+                                    f" output channel {channel} with signal"
+                                    f" {signal_id} on device {signal_info.device.uid}"
                                 )
                             else:
                                 output["marker_mode"] = "TRIGGER"

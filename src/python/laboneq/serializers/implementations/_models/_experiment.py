@@ -38,7 +38,7 @@ from laboneq.dsl.experiment.section import (
 from laboneq.dsl.experiment.set_node import SetNode
 from laboneq.dsl.parameter import LinearSweepParameter, SweepParameter
 from laboneq.dsl.prng import PRNG, PRNGSample
-from laboneq.serializers._cache import PulseSampledCache
+from laboneq.serializers._pulse_cache import PulseSampledCache
 from laboneq.serializers.implementations._models._calibration import (
     _structure_basic_or_parameter_model,
     _unstructure_basic_or_parameter_model,
@@ -117,9 +117,10 @@ class PulseSampledModel:
 
     @classmethod
     def _unstructure(cls, obj):
-        _cache = PulseSampledCache.get_pulse_cache()
-        if id(obj) not in _cache and isinstance(obj, PulseSampled):
-            ref = _cache.add(obj)
+        pulse_cache = PulseSampledCache.get_pulse_cache()
+        ref = pulse_cache.get_key(obj)
+        if ref is None:
+            ref = pulse_cache.add(obj)
             return {
                 "samples": _converter.unstructure(obj.samples, ArrayLike_Model),
                 "uid": obj.uid,
@@ -135,17 +136,16 @@ class PulseSampledModel:
         # before its references. This is already made sure by the serialization,
         # in which no reordering is done after converting the objects to dicts,
         # which is also a sequential process.
-        _cache = PulseSampledCache.get_pulse_cache()
-        if _cache.get(obj["$ref"]) is None:
-            de = cls._target_class(
+        pulse_cache = PulseSampledCache.get_pulse_cache()
+        pulse = pulse_cache.get(obj["$ref"])
+        if pulse is None:
+            pulse = cls._target_class(
                 samples=_converter.structure(obj["samples"], ArrayLike_Model),
                 uid=obj["uid"],
                 can_compress=obj["can_compress"],
             )
-            _cache.add(de)
-            return de
-        else:
-            return _cache.get(obj["$ref"])
+            pulse_cache.add(pulse, key=obj["$ref"])
+        return pulse
 
 
 @attrs.define
@@ -214,7 +214,7 @@ def _structure_pulse_parameter_model(obj):
 @attrs.define
 class PlayPulseModel:
     signal: str
-    pulse: PulseModel
+    pulse: PulseModel | None
     amplitude: Union[NumericModel, ParameterModel]
     increment_oscillator_phase: Union[float, ParameterModel]
     phase: float
@@ -227,9 +227,13 @@ class PlayPulseModel:
 
     @classmethod
     def _unstructure(cls, obj):
+        if obj.pulse is None:
+            pulse = None
+        else:
+            pulse = _converter.unstructure(obj.pulse, PulseModel)
         return {
             "signal": obj.signal,
-            "pulse": _converter.unstructure(obj.pulse, PulseModel),
+            "pulse": pulse,
             "amplitude": _unstructure_basic_or_parameter_model(
                 obj.amplitude, _converter
             ),
@@ -247,9 +251,13 @@ class PlayPulseModel:
     @classmethod
     def _structure(cls, obj, _):
         amplitude = _structure_basic_or_parameter_model(obj["amplitude"], _converter)
+        if obj["pulse"] is None:
+            pulse = None
+        else:
+            pulse = _converter.structure(obj["pulse"], PulseModel)
         return cls._target_class(
             signal=obj["signal"],
-            pulse=_converter.structure(obj["pulse"], PulseModel),
+            pulse=pulse,
             amplitude=amplitude,
             increment_oscillator_phase=_structure_basic_or_parameter_model(
                 obj["increment_oscillator_phase"], _converter

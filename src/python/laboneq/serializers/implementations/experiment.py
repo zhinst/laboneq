@@ -17,7 +17,7 @@ from laboneq.serializers.implementations._models._experiment import (
     make_converter,
     ExperimentSignalModel,
 )
-from laboneq.serializers._cache import PulseSampledCache
+from laboneq.serializers._pulse_cache import PulseSampledCache
 
 _converter = make_converter()
 

@@ -60,6 +60,17 @@ def check_triggers_and_markers(dao: ExperimentDAO):
                         f" {trigger['signal_id']} not present in experiment."
                         f" Available signal(s) are {', '.join(dao.signals())}."
                     )
+        for trigger_data in section_info.triggers:
+            signal_info = dao.signal_info(trigger_data["signal_id"])
+            if (
+                signal_info.device.device_type == DeviceType.HDAWG
+                and len(signal_info.channels) == 1
+                and trigger_data["state"] > 1
+            ):
+                raise LabOneQException(
+                    f"Invalid trigger value in section '{section_id}' on RF signal"
+                    f" {signal_info.uid}: {trigger_data['state']}"
+                )
         for signal_id in dao.section_signals(section_id):
             for section_pulse in dao.section_pulses(section_id, signal_id):
                 if section_pulse.pulse is None:
@@ -318,7 +329,7 @@ def check_no_play_on_acquire_line(dao: ExperimentDAO):
                     )
 
 
-def check_arbirary_marker_is_valid(dao: ExperimentDAO):
+def check_arbitrary_marker_is_valid(dao: ExperimentDAO):
     for section_id in dao.sections():
         for signal_id in dao.section_signals(section_id):
             for section_pulse in dao.section_pulses(section_id, signal_id):

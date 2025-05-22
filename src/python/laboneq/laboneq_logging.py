@@ -202,8 +202,7 @@ def initialize_logging(
         )
 
     _logging_initialized = True
-    if not os.path.exists(logdir):
-        os.makedirs(logdir)
+    os.makedirs(logdir, exist_ok=True)
 
     config = None
     config_source = None

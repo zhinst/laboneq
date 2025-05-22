@@ -181,11 +181,6 @@ class EventListGenerator:
             acquire_group_ir.pulses[0].acquire_params.handle == p.acquire_params.handle
             for p in acquire_group_ir.pulses
         )
-        assert all(
-            acquire_group_ir.pulses[0].acquire_params.acquisition_type
-            == p.acquire_params.acquisition_type
-            for p in acquire_group_ir.pulses
-        )
         start_id = next(self.id_tracker)
         signal_id = acquire_group_ir.pulses[0].signal.uid
         assert all(p.signal.uid == signal_id for p in acquire_group_ir.pulses)
@@ -196,11 +191,7 @@ class EventListGenerator:
             "play_wave_id": [p.pulse.uid for p in acquire_group_ir.pulses],
             "parametrized_with": [],
             "phase": acquire_group_ir.phases,
-            "amplitude": acquire_group_ir.amplitudes,
             "chain_element_id": start_id,
-            "acquisition_type": [
-                acquire_group_ir.pulses[0].acquire_params.acquisition_type
-            ],
             "acquire_handle": acquire_group_ir.pulses[0].acquire_params.handle,
         }
         d["id_pulse_params"] = acquire_group_ir.pulse_pulse_params
@@ -441,17 +432,6 @@ class EventListGenerator:
                 "position": prio_start,
                 **common,
             },
-            *[
-                {
-                    "event_type": EventType.PARAMETER_SET,
-                    "time": start,
-                    "section_name": loop_iteration_ir.section,
-                    "parameter": {"id": param.uid},
-                    "iteration": loop_iteration_ir.iteration,
-                    "value": param.values[loop_iteration_ir.iteration],
-                }
-                for param in loop_iteration_ir.sweep_parameters
-            ],
             *prng_sample_events,
             *[e for l in children_events for e in l],
             {
@@ -572,12 +552,8 @@ class EventListGenerator:
         if pulse_ir.is_acquire:
             assert pulse_ir.integration_length is not None
             if pulse_ir.pulse.acquire_params is not None:
-                d_start["acquisition_type"] = [
-                    pulse_ir.pulse.acquire_params.acquisition_type
-                ]
                 d_start["acquire_handle"] = pulse_ir.pulse.acquire_params.handle
             else:
-                d_start["acquisition_type"] = []
                 d_start["acquire_handle"] = None
             return [
                 {

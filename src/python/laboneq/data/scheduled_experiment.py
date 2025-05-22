@@ -111,8 +111,8 @@ class CodegenWaveform:
 
 @dataclass
 class ArtifactsCodegen(CompilerArtifact):
-    # The SeqC source code, per device.
-    src: list[dict[str, str]] | None = None
+    # The SeqC program, per device.
+    src: list[dict[str, str | bytes]] | None = None
 
     # The waveforms that will be uploaded to the devices.
     waves: dict[str, CodegenWaveform] = field(default_factory=dict)
@@ -144,6 +144,8 @@ class ArtifactsCodegen(CompilerArtifact):
 class ScheduledExperiment:
     uid: str | None = None
 
+    device_setup_fingerprint: str | None = None
+
     #: Instructions to the controller for running the experiment.
     recipe: Recipe | None = None
 
@@ -156,6 +158,8 @@ class ScheduledExperiment:
     #: Experiment execution model
     execution: Statement | None = None
 
+    chunk_count: int | None = None
+
     compilation_job_hash: str | None = None
     experiment_hash: str | None = None
 
@@ -164,8 +168,9 @@ class ScheduledExperiment:
 
     def __copy__(self):
         new_artifacts = copy.copy(self.artifacts)
-        new_scheduled_experiment = self.__class__(
+        new_scheduled_experiment = ScheduledExperiment(
             uid=self.uid,
+            device_setup_fingerprint=self.device_setup_fingerprint,
             artifacts=new_artifacts,
             schedule=self.schedule,
             execution=self.execution,
@@ -186,12 +191,14 @@ class ScheduledExperiment:
 
         return (
             other.uid,
+            other.device_setup_fingerprint,
             other.artifacts,
             other.compilation_job_hash,
             other.experiment_hash,
         ) == (
             self.uid,
-            other.artifacts,
+            self.device_setup_fingerprint,
+            self.artifacts,
             self.compilation_job_hash,
             self.experiment_hash,
         ) and dicts_equal(

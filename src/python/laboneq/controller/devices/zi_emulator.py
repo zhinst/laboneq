@@ -1208,37 +1208,31 @@ class DevEmuSHFSGBase(DevEmuSHFBase):
         )
         self._armed_sg_awgs: set[int] = set()
 
-        dev_type = self._dev_opts.get("features/devtype", "SHFSG8")
-        dev_opts_str = self._dev_opts.get("features/options", "")
-        assert isinstance(dev_opts_str, str)
-        dev_opts = dev_opts_str.split("\n")
-        if dev_type == "SHFSG8":
+        default_devtype, default_options = self.default_dev_opts()
+        self.devtype = self._dev_opts.get("features/devtype", default_devtype)
+        self.options = self._dev_opts.get("features/options", default_options)
+
+        if self.devtype == "SHFSG8":
             self._output_to_synth_map = [0, 0, 1, 1, 2, 2, 3, 3]
-        elif dev_type == "SHFSG4":
+        elif self.devtype == "SHFSG4":
             self._output_to_synth_map = [0, 1, 2, 3]
-        elif dev_type == "SHFQC":
+        elif self.devtype == "SHFQC":
+            assert isinstance(self.options, str)
+            options_list = self.options.split("\n")
             # Different numbering on SHFQC - index 0 are QA synths
-            if "QC2CH" in dev_opts:
+            if "QC2CH" in options_list:
                 self._output_to_synth_map = [1, 1]
-            elif "QC4CH" in dev_opts:
+            elif "QC4CH" in options_list:
                 self._output_to_synth_map = [1, 1, 2, 2]
-            elif "QC6CH" in dev_opts:
+            elif "QC6CH" in options_list:
                 self._output_to_synth_map = [1, 1, 2, 2, 3, 3]
             else:
-                _logger.warning(
-                    "%s: No valid channel option found, provided options: [%s]. "
-                    "Assuming 2ch SHFQC device.",
-                    self.serial(),
-                    ", ".join(dev_opts),
-                )
-                self._output_to_synth_map = [1, 1]
+                raise AssertionError("Invalid SHFQC options")
         else:
-            _logger.warning(
-                "%s: Unknown device type '%s', assuming SHFSG4 device.",
-                self.serial(),
-                dev_type,
-            )
-            self._output_to_synth_map = [0, 1, 2, 3]
+            raise AssertionError("Invalid device type")
+
+    @abstractmethod
+    def default_dev_opts(self) -> tuple[str, str]: ...
 
     def trigger(self):
         super().trigger()
@@ -1305,37 +1299,31 @@ class DevEmuSHFSGBase(DevEmuSHFBase):
 
 
 class DevEmuSHFSG(DevEmuSHFSGBase):
+    def default_dev_opts(self) -> tuple[str, str]:
+        return "SHFSG8", ""
+
     def _node_def(self) -> dict[str, NodeInfo]:
         nd = {
-            "features/devtype": NodeInfo(
-                type=NodeType.STR,
-                default=self._dev_opts.get("features/devtype", "SHFSG8"),
-            ),
-            "features/options": NodeInfo(
-                type=NodeType.STR,
-                default=self._dev_opts.get("features/options", ""),
-            ),
+            "features/devtype": NodeInfo(type=NodeType.STR, default=self.devtype),
+            "features/options": NodeInfo(type=NodeType.STR, default=self.options),
         }
         nd.update(self._node_def_shf())
         nd.update(self._node_def_sg())
         return nd
 
 
-class DevEmuSHFQC(DevEmuSHFQABase, DevEmuSHFSGBase):
+class DevEmuSHFQC(DevEmuSHFSGBase, DevEmuSHFQABase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._scope_memory_size = 64 * 1024
 
+    def default_dev_opts(self) -> tuple[str, str]:
+        return "SHFQC", "QC6CH"
+
     def _node_def(self) -> dict[str, NodeInfo]:
         nd = {
-            "features/devtype": NodeInfo(
-                type=NodeType.STR,
-                default=self._dev_opts.get("features/devtype", "SHFQC"),
-            ),
-            "features/options": NodeInfo(
-                type=NodeType.STR,
-                default=self._dev_opts.get("features/options", "QC6CH"),
-            ),
+            "features/devtype": NodeInfo(type=NodeType.STR, default=self.devtype),
+            "features/options": NodeInfo(type=NodeType.STR, default=self.options),
         }
         nd.update(self._node_def_shf())
         nd.update(self._node_def_qa())
@@ -1832,6 +1820,8 @@ class KernelSessionEmulator:
             else:
                 self._cache[value.path] = effective_value
 
+        # Handle ShfGeneratorWaveformVectorData type
+        effective_value = getattr(effective_value, "complex", effective_value)
         if isinstance(effective_value, (int, float, complex, str)):
             log_repr = f"{effective_value}"
         elif isinstance(effective_value, np.ndarray):

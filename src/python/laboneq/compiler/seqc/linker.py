@@ -7,6 +7,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
+from laboneq.core.utilities.seqc_compile import SeqCCompileItem, awg_compile
 import numpy as np
 
 from laboneq.compiler.common.feedback_connection import FeedbackConnection
@@ -45,7 +46,7 @@ class CombinedRTOutputSeqC(CombinedOutput):
     integration_weights: dict[str, AwgWeights] = field(default_factory=dict)
     integration_times: IntegrationTimes | None = None
     simultaneous_acquires: list[dict[str, str]] = field(default_factory=list)
-    src: list[dict[str, Any]] = field(default_factory=list)
+    src: dict[str, SeqCProgram] = field(default_factory=dict)
     waves: dict[str, CodegenWaveform] = field(default_factory=dict)
     requires_long_readout: dict[str, list[str]] = field(
         default_factory=lambda: defaultdict(list)
@@ -68,8 +69,17 @@ class CombinedRTOutputSeqC(CombinedOutput):
     max_execution_time_per_step: float = 0
 
     def get_artifacts(self) -> CompilerArtifact:
+        src: list[dict[str, str | bytes]] = []
+        for seqc in self.src.values():
+            seqc_entry: dict[str, str | bytes] = {
+                "filename": seqc.filename,
+                "text": seqc.src,
+            }
+            if isinstance(seqc.elf, bytes):
+                seqc_entry["elf"] = seqc.elf
+            src.append(seqc_entry)
         return ArtifactsCodegen(
-            src=self.src,
+            src=src,
             waves=self.waves,
             requires_long_readout=self.requires_long_readout,
             wave_indices=self.wave_indices,
@@ -81,13 +91,25 @@ class CombinedRTOutputSeqC(CombinedOutput):
 
 
 @dataclass
+class SeqCProgram:
+    src: str
+    dev_type: str | None = None
+    dev_opts: list[str] = field(default_factory=list)
+    awg_index: int = 0
+    sequencer: str = "auto"
+    sampling_rate: float | None = None
+    filename: str = ""
+    elf: bytes | None = None
+
+
+@dataclass
 class SeqCGenOutput(RTCompilerOutput):
     feedback_connections: dict[str, FeedbackConnection]
     signal_delays: SignalDelays
     integration_weights: dict[AwgKey, AwgWeights]
     integration_times: IntegrationTimes
     simultaneous_acquires: list[dict[str, str]]
-    src: dict[AwgKey, dict[str, Any]]
+    src: dict[AwgKey, SeqCProgram]
     waves: dict[str, CodegenWaveform]
     requires_long_readout: dict[str, list[str]]
     wave_indices: dict[AwgKey, dict[str, Any]]
@@ -156,14 +178,15 @@ def _extend_parameter_phase_increment_map(
 class SeqCLinker(ILinker):
     @staticmethod
     def combined_from_single_run(output: SeqCGenOutput, step_indices: list[int]):
-        src = []
+        src = {}
         command_tables = []
         wave_indices = []
         integration_weights: dict[str, AwgWeights] = {}
         parameter_phase_increment_map: dict[str, ParameterPhaseIncrementMap] = {}
-        for awg, awg_src in output.src.items():
+        for awg, seqc_program in output.src.items():
             seqc_name = _make_seqc_name(awg, step_indices)
-            src.append({"filename": seqc_name, **awg_src})
+            seqc_program.filename = seqc_name
+            src[seqc_name] = seqc_program
             ct = output.command_tables.get(awg)
             if ct is not None:
                 command_tables.append({"seqc": seqc_name, **ct})
@@ -213,10 +236,10 @@ class SeqCLinker(ILinker):
 
         merged_ids = []
 
-        for awg, awg_src in new.src.items():
+        for awg, seqc_program in new.src.items():
             seqc_name = _make_seqc_name(awg, step_indices)
 
-            previous_src = previous.src[awg]
+            previous_src = previous.src[awg].src
 
             previous_ct = previous.command_tables.get(awg)
             new_ct = new.command_tables.get(awg)
@@ -262,7 +285,7 @@ class SeqCLinker(ILinker):
                 }
 
             if (
-                previous_src == awg_src
+                previous_src == seqc_program.src
                 and previous_ct == new_ct
                 and previous_wave_indices == new_wave_indices
                 and _deep_compare(previous_waves, new_waves)
@@ -286,7 +309,8 @@ class SeqCLinker(ILinker):
                 this.parameter_phase_increment_map, new, seqc_name, awg
             )
 
-            this.src.append({"filename": seqc_name, **awg_src})
+            seqc_program.filename = seqc_name
+            this.src[seqc_name] = seqc_program
             if new_ct is not None:
                 this.command_tables.append({"seqc": seqc_name, **new_ct})
             if new_wave_indices is not None:
@@ -343,6 +367,25 @@ class SeqCLinker(ILinker):
     @staticmethod
     def repeat_previous(this: CombinedRTOutputSeqC, previous: SeqCGenOutput):
         this.total_execution_time += previous.total_execution_time
+
+    @staticmethod
+    def finalize(this: CombinedRTOutputSeqC):
+        seqc_items = [
+            SeqCCompileItem(
+                dev_type=seqc_program.dev_type,
+                dev_opts=seqc_program.dev_opts,
+                awg_index=seqc_program.awg_index,
+                sequencer=seqc_program.sequencer,
+                sampling_rate=seqc_program.sampling_rate,
+                code=seqc_program.src,
+                filename=seqc_program.filename,
+            )
+            for seqc_program in this.src.values()
+            if seqc_program.dev_type is not None
+        ]
+        awg_compile(seqc_items)
+        for seqc_item in seqc_items:
+            this.src[seqc_item.filename].elf = seqc_item.elf
 
 
 def _make_seqc_name(awg: AwgKey, step_indices: list[int]) -> str:

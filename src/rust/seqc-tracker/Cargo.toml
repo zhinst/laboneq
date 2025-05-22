@@ -1,0 +1,16 @@
+[package]
+name = "seqc-tracker"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+publish.workspace = true
+license = "MIT"
+
+[dependencies]
+codegenerator = { path = "../codegenerator" }
+
+anyhow = "1.0.98"
+indexmap = "2.9.0"
+log = "0.4.27"
+textwrap = "0.16.2"
+thiserror = "2.0.0"

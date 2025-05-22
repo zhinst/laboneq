@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 from collections.abc import ItemsView, Iterator
-import math
 from collections import defaultdict
 from dataclasses import dataclass, field
+import logging
+from packaging.version import Version, InvalidVersion
 from typing import TYPE_CHECKING, Any, KeysView, Literal, TypeVar, overload
 
 import numpy as np
@@ -32,6 +33,12 @@ if TYPE_CHECKING:
     from laboneq.core.types.numpy_support import NumPyArray
     from laboneq.controller.devices.device_collection import DeviceCollection
     from laboneq.controller.devices.device_setup_dao import DeviceUID
+
+
+_logger = logging.getLogger(__name__)
+
+
+MIN_LABONEQ_VERSION_FOR_COMPILED_EXPERIMENT = Version("2.52.0")
 
 
 @dataclass
@@ -115,7 +122,6 @@ class RtExecutionInfo:
     averaging_mode: AveragingMode
     acquisition_type: AcquisitionType
     pipeliner_job_count: int | None
-    pipeliner_repetitions: int | None
 
     # signal -> flat list of result handles
     # TODO(2K): to be replaced by event-based calculation in the compiler
@@ -272,7 +278,6 @@ class _LoopsPreprocessor(ExecutorBase):
         self.result_shapes: HandleResultShapes = {}
         self.rt_execution_infos: RtExecutionInfos = {}
         self.pipeliner_job_count: int | None = None
-        self.pipeliner_repetitions: int | None = None
         self._loop_stack: list[_LoopStackEntry] = []
         self._current_rt_uid: str | None = None
         self._current_rt_info: RtExecutionInfo | None = None
@@ -334,13 +339,6 @@ class _LoopsPreprocessor(ExecutorBase):
         self._loop_stack[-1].axis_points.append(values)
 
     def for_loop_entry_handler(self, count: int, index: int, loop_flags: LoopFlags):
-        if loop_flags.is_pipeline:
-            self.pipeliner_job_count = count
-            self.pipeliner_repetitions = math.prod(
-                len(l.axis_points) for l in self._loop_stack
-            )
-            return
-
         self._loop_stack.append(
             _LoopStackEntry(count=count, is_averaging=loop_flags.is_average)
         )
@@ -353,11 +351,6 @@ class _LoopsPreprocessor(ExecutorBase):
                 self._loop_stack[-1].axis_points.append(self._single_shot_axis())
 
     def for_loop_exit_handler(self, count: int, index: int, loop_flags: LoopFlags):
-        if loop_flags.is_pipeline:
-            self.pipeliner_job_count = None
-            self.pipeliner_repetitions = None
-            return
-
         self._loop_stack.pop()
 
     def rt_entry_handler(
@@ -375,7 +368,6 @@ class _LoopsPreprocessor(ExecutorBase):
                 averaging_mode=averaging_mode,
                 acquisition_type=acquisition_type,
                 pipeliner_job_count=self.pipeliner_job_count,
-                pipeliner_repetitions=self.pipeliner_repetitions,
             ),
         )
 
@@ -575,6 +567,31 @@ def pre_process_compiled(
     assert recipe is not None
     execution = scheduled_experiment.execution
 
+    try:
+        if (
+            Version(Version(recipe.versions.laboneq).base_version)
+            < MIN_LABONEQ_VERSION_FOR_COMPILED_EXPERIMENT
+        ):
+            raise LabOneQControllerException(
+                f"The experiment was compiled with LabOne Q version {recipe.versions.laboneq}, which is not compatible. "
+                "Please recompile using the current LabOne Q version."
+            )
+    except InvalidVersion:
+        _logger.warning(
+            "The experiment was compiled with an invalid LabOne Q version '%s'. "
+            "Passing, as this is only expected to happen in tests. Consider ensuring that the valid version is set.",
+            recipe.versions.laboneq,
+        )
+
+    if (
+        scheduled_experiment.device_setup_fingerprint
+        != devices.device_setup_fingerprint
+    ):
+        raise LabOneQControllerException(
+            "The device setup of the compiled experiment is not compatible with the current device setup. "
+            "Please recompile using the current device setup."
+        )
+
     attribute_value_tracker, oscillator_ids, osc_params_per_device = (
         _pre_process_attributes(recipe, devices)
     )
@@ -590,6 +607,7 @@ def pre_process_compiled(
     }
 
     lp = _LoopsPreprocessor()
+    lp.pipeliner_job_count = scheduled_experiment.chunk_count
     lp.run(execution)
     rt_execution_infos = lp.rt_execution_infos
 

@@ -105,18 +105,18 @@ class CompilationReportGenerator(NtCompilerExecutorDelegate):
         else:
             return
         report = []
-        for awg, awg_src in compiler_output.src.items():
-            seqc_loc = len(awg_src["text"].splitlines())
-            ct = compiler_output.command_tables.get(awg, {"ct": []})["ct"]
+        for awg_key, seqc_program in compiler_output.src.items():
+            seqc_loc = len(seqc_program.src.splitlines())
+            ct = compiler_output.command_tables.get(awg_key, {"ct": []})["ct"]
             ct_len = len(ct)
-            wave_indices = compiler_output.wave_indices[awg]["value"]
+            wave_indices = compiler_output.wave_indices[awg_key]["value"]
             wave_indices_count = len(wave_indices)
             sample_count = 0
             for wave_index in wave_indices.items():
                 sample_count += _count_samples(compiler_output.waves, wave_index)
             report.append(
                 ReportEntry(
-                    awg=awg,
+                    awg=awg_key,
                     nt_step_indices=tuple(step_indices),
                     seqc_loc=seqc_loc,
                     command_table_entries=ct_len,
@@ -130,7 +130,7 @@ class CompilationReportGenerator(NtCompilerExecutorDelegate):
         from laboneq.compiler.seqc.linker import CombinedRTOutputSeqC
 
         assert isinstance(compiler_output, CombinedRTOutputSeqC)
-        total_seqc = sum(len(s["text"].splitlines()) for s in compiler_output.src)
+        total_seqc = sum(len(s.src.splitlines()) for s in compiler_output.src.values())
         total_ct = sum(len(ct["ct"]) for ct in compiler_output.command_tables)
         total_wave_idx = sum(len(wi) for wi in compiler_output.wave_indices)
         total_samples = sum(

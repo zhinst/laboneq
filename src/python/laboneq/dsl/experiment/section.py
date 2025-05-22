@@ -487,6 +487,9 @@ class Sweep(Section):
         chunk_count (int):
             Split the sweep into N chunks.
             Default: `1`.
+        auto_chunking:
+            If True, the compiler will decide how many chunks to divide this sweep into
+            to respect resource limitations of instruments.
 
     [Sweep][laboneq.dsl.experiment.section.Sweep] inherits
     all the attributes of
@@ -501,8 +504,10 @@ class Sweep(Section):
     parameters: list[Parameter] = attrs.field(factory=list)
     # When True, reset all oscillators at the start of every step.
     reset_oscillator_phase: bool = attrs.field(default=False)
-    # When non-zero, split the sweep into N chunks.
+    # When larger than 1, split the sweep into N chunks.
     chunk_count: int = attrs.field(default=1)
+    # If True, let the compiler discover a suitable chunk count.
+    auto_chunking: bool = attrs.field(default=False)
 
     def __attrs_post_init__(self):
         super().__attrs_post_init__()

@@ -13,6 +13,7 @@ from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import AcquisitionType
 from laboneq.data.compilation_job import (
     AmplifierPumpInfo,
+    ChunkingInfo,
     DeviceInfo,
     DeviceInfoType,
     MixerCalibrationInfo,
@@ -39,6 +40,7 @@ class ExperimentData:
     pulses: dict[str, PulseDef]
     root_sections: list[str]
     sections: dict[str, SectionInfo]
+    chunking: ChunkingInfo | None
     section_parameters: dict[str, list[ParameterInfo]]
     section_signal_pulses: dict[str, dict[str, list[SectionSignalPulse]]]
     signals: dict[str, SignalInfo]
@@ -58,6 +60,7 @@ class LoaderBase:
         self._oscillators: dict[str, OscillatorInfo] = {}
         self._pulses: dict[str, PulseDef] = {}
         self._sections: dict[str, SectionInfo] = {}
+        self._chunking: ChunkingInfo | None = None
 
         # Todo (PW): This could be dropped and replaced by a look-up of
         #  `SectionInfo.parameters`. The loaders will require updating though.
@@ -86,6 +89,7 @@ class LoaderBase:
             pulses=self._pulses,
             root_sections=self._root_sections,
             sections=self._sections,
+            chunking=self._chunking,
             section_parameters=self._section_parameters,
             section_signal_pulses=self._section_signal_pulses,
             signals=self._signals,

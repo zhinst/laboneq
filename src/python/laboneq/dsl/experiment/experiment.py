@@ -58,7 +58,7 @@ class Experiment:
 
     !!! version-changed "Changed in version 2.27.0"
 
-        The `uid` attribute is not longer automatically generated and
+        The `uid` attribute is no longer automatically generated and
         will be left as `None` if unspecified.
 
         The `name` attribute was added.
@@ -601,6 +601,7 @@ class Experiment:
         alignment: SectionAlignment | None = None,
         reset_oscillator_phase: bool = False,
         chunk_count: int = 1,
+        auto_chunking: bool = False,
     ):
         """Define a sweep section.
 
@@ -635,6 +636,10 @@ class Experiment:
                 each step.
             chunk_count:
                 The number of chunks to split the sweep into. Defaults to 1.
+                If auto chunking is enabled, this will be used as an initial guess.
+            auto_chunking:
+                If True, the compiler will decide how many chunks to divide this sweep into
+                to respect resource limitations of instruments.
 
         """
         return Experiment._SweepSectionContext(
@@ -645,6 +650,7 @@ class Experiment:
             alignment=alignment,
             reset_oscillator_phase=reset_oscillator_phase,
             chunk_count=chunk_count,
+            auto_chunking=auto_chunking,
         )
 
     class _SweepSectionContext:
@@ -657,6 +663,7 @@ class Experiment:
             alignment,
             reset_oscillator_phase,
             chunk_count,
+            auto_chunking,
         ):
             self.exp = experiment
             args = {"parameters": parameters}
@@ -682,6 +689,7 @@ class Experiment:
                 args["reset_oscillator_phase"] = reset_oscillator_phase
 
             args["chunk_count"] = chunk_count
+            args["auto_chunking"] = auto_chunking
 
             self.sweep = Sweep(**args)
 

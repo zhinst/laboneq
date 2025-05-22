@@ -6,7 +6,6 @@ from contextlib import contextmanager
 import threading
 from typing import Generator
 from laboneq.dsl.experiment.pulse import PulseSampled
-import weakref
 
 
 class _ContextPulseCacheStorage(threading.local):
@@ -17,7 +16,7 @@ _contexts = _ContextPulseCacheStorage()
 
 
 class PulseSampledCache:
-    _storage: dict[str, weakref.ReferenceType[PulseSampled]]
+    _storage: dict[str, PulseSampled]
     _id_map: dict[str, int]
     _pulse_id: float
 
@@ -45,34 +44,41 @@ class PulseSampledCache:
         return _contexts._pulse_cache
 
     def get(self, key: str) -> PulseSampled | None:
-        """Retrieve an object from the cache with the given key.
-        Return None if the object is not in the cache or the weak reference is dead.
-        Remove the entry if the weak reference is dead.
-        """
+        """Retrieve the pulse from the cache with the given key.
 
-        ref = self._storage.get(key)
-        if ref is not None:
-            obj = ref()
-            if obj is not None:
-                return obj
-            else:
-                # The weak reference is dead, remove the entry from the cache
-                self._storage.pop(key, None)
-        return None
+        Arguments:
+            key: The key to look up.
 
-    def add(self, value: PulseSampled) -> str:
-        """Add the object to the cache and return the key, that
-        could be used to retrieve the object from the cache.
+        Return:
+            None if the object is not in the cache,
+            otherwise the stored pulse object.
         """
-        _id = id(value)
-        if _id in self._id_map:
-            return self._id_map[_id]
-        # Add the object to the cache
-        key = f"p{self._pulse_id}"
-        self._pulse_id += 1
-        self._storage[key] = weakref.ref(value)
-        self._id_map[key] = _id
+        return self._storage.get(key)
+
+    def get_key(self, pulse: PulseSampled) -> str | None:
+        """Retrieve the key used for the given pulse.
+
+        Arguments:
+            pulse: The pulse to look up.
+
+        Returns:
+            None if the pulse is not present, otherwise
+            the key the pulse is stored under.
+        """
+        return self._id_map.get(id(pulse))
+
+    def add(self, pulse: PulseSampled, key: str | None = None) -> tuple[str, bool]:
+        """Add the object to the cache and return the key.
+
+        Arguments:
+            pulse: The pulse to add.
+
+        Returns:
+            The key the pulse was stored under.
+        """
+        if key is None:
+            key = f"p{self._pulse_id}"
+            self._pulse_id += 1
+        self._storage[key] = pulse
+        self._id_map[id(pulse)] = key
         return key
-
-    def __contains__(self, obj: PulseSampled) -> bool:
-        return id(obj) in self._id_map.values()

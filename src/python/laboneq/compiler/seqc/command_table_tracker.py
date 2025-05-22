@@ -11,18 +11,6 @@ from laboneq.compiler.seqc.signatures import PlaybackSignature
 from laboneq.data.scheduled_experiment import COMPLEX_USAGE
 
 
-class InvalidCommandTableError(Exception):
-    """Base class for invalid command table errors."""
-
-    pass
-
-
-class EntryLimitExceededError(InvalidCommandTableError):
-    """Too many entries are being set to the command table."""
-
-    pass
-
-
 class CommandTableTracker:
     def __init__(self, device_type: DeviceType):
         self._command_table: list[Dict] = []
@@ -67,21 +55,14 @@ class CommandTableTracker:
         if not ignore_already_in_table:
             assert signature not in self._table_index_by_signature
         index = len(self._command_table)
-        if index > self._device_type.max_ct_entries:
-            raise EntryLimitExceededError(
-                f"Invalid command table index: '{index}' for device {self._device_type}."
-            )
-
         if signature.increment_phase_params:
-            [_first, *rest] = signature.increment_phase_params
-            complex_phase_increment = any(r is not None for r in rest)
+            complex_phase_increment = len(signature.increment_phase_params) > 1
             for param in signature.increment_phase_params:
                 if param is None:
                     continue
                 self._parameter_phase_increment_map.setdefault(param, []).append(
                     index if not complex_phase_increment else COMPLEX_USAGE
                 )
-
         ct_entry: dict[str, bool | int | dict] = {"index": index}
         if wave_index is None:
             if signature.waveform is not None:
@@ -170,6 +151,9 @@ class CommandTableTracker:
                 d["amplitude01"]["increment"] = True
 
         return d
+
+    def command_table_usage(self) -> float:
+        return len(self._command_table) / self._device_type.max_ct_entries
 
     def command_table(self) -> list[dict]:
         return self._command_table

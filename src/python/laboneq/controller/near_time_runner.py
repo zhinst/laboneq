@@ -32,7 +32,6 @@ class NearTimeRunner(AsyncExecutorBase):
         self.protected_session = protected_session
         self.user_set_nodes = NodeCollector()
         self.nt_loop_indices: list[int] = []
-        self.pipeliner_job: int = 0
         self.sweep_params_tracker = SweepParamsTracker()
 
     def nt_step(self) -> NtStepKey:
@@ -73,17 +72,11 @@ class NearTimeRunner(AsyncExecutorBase):
     async def for_loop_entry_handler(
         self, count: int, index: int, loop_flags: LoopFlags
     ):
-        if loop_flags.is_pipeline:
-            # Don't add the pipeliner loop index to NT indices
-            self.pipeliner_job = index
-            return
         self.nt_loop_indices.append(index)
 
     async def for_loop_exit_handler(
         self, count: int, index: int, loop_flags: LoopFlags
     ):
-        if loop_flags.is_pipeline:
-            return
         self.nt_loop_indices.pop()
 
     async def rt_entry_handler(
@@ -93,10 +86,6 @@ class NearTimeRunner(AsyncExecutorBase):
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
     ):
-        if self.pipeliner_job > 0:
-            # Skip the pipeliner loop iterations, except the first one - iterated by the pipeliner itself
-            return
-
         await self.controller._prepare_nt_step(
             sweep_params_tracker=self.sweep_params_tracker,
             user_set_nodes=self.user_set_nodes,

@@ -12,6 +12,7 @@ mod _rust {
 
     #[pymodule_init]
     fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
+        pyo3_log::init();
         let py = m.py();
         // To enable import from submodules, we must make submodules a package,
         // not only a module. To avoid having to create several Rust extensions,
@@ -24,6 +25,10 @@ mod _rust {
         modules.set_item(
             "laboneq._rust.intervals",
             intervals::create_py_module(m, "intervals")?,
+        )?;
+        modules.set_item(
+            "laboneq._rust.codegenerator",
+            codegenerator_py::create_py_module(m, "codegenerator")?,
         )?;
         Ok(())
     }
