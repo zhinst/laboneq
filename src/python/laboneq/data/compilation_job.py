@@ -94,12 +94,6 @@ class ParameterInfo:
 
 
 @dataclass
-class FollowerInfo:
-    device: DeviceInfo
-    port: int
-
-
-@dataclass
 class DeviceInfo:
     uid: str
     device_type: DeviceInfoType
@@ -107,7 +101,7 @@ class DeviceInfo:
     dev_opts: list[str] = field(default_factory=list)
     reference_clock_source: ReferenceClockSourceInfo | None = None
     is_qc: bool | None = None
-    followers: list[FollowerInfo] = field(default_factory=list)
+    followers: list[str] = field(default_factory=list)
 
     @property
     def seqc_dev_type(self) -> str:

@@ -25,9 +25,8 @@ Type hints
 
 from __future__ import annotations
 
-from typing import Union
+from typing import TypeAlias
 
-from typing_extensions import TypeAlias
 
 from laboneq.dsl.quantum import QuantumElement
 from collections.abc import Sequence
@@ -37,8 +36,5 @@ __all__ = [
     "SimpleDict",
 ]
 
-# Use of Union is to support Python 3.9.
-# Use of typing_extensions TypeAlias is to support Python 3.9.
-
-SimpleDict: TypeAlias = dict[str, Union[str, int, float, complex, bool, None]]
-QuantumElements: TypeAlias = Union[QuantumElement, Sequence[QuantumElement]]
+SimpleDict: TypeAlias = dict[str, str | int | float | complex | bool | None]
+QuantumElements: TypeAlias = QuantumElement | Sequence[QuantumElement]

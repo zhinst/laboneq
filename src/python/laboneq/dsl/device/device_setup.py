@@ -269,7 +269,7 @@ class DeviceSetup:
 
         return addressed_item.calibration
 
-    def _get_phyiscal_channel_calibration(self, rel_path_stack, orig_path):
+    def _get_physical_channel_calibration(self, rel_path_stack, orig_path):
         if len(rel_path_stack) != 2:
             raise LabOneQException(f"No calibration found at {orig_path}.")
 
@@ -301,7 +301,7 @@ class DeviceSetup:
         if root == qct_path.LogicalSignalGroups_Path:
             return self._get_logical_signal_calibration(rest, path)
         if root == qct_path.PhysicalChannelGroups_Path:
-            return self._get_phyiscal_channel_calibration(rest, path)
+            return self._get_physical_channel_calibration(rest, path)
         raise LabOneQException(f"No calibration found at {path}.")
 
     def get_calibration(self, path: str | None = None) -> Calibration:

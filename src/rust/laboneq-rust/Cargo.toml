@@ -10,8 +10,9 @@ name = "laboneq_rust"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.25.0", features = ["abi3-py39", "generate-import-lib"] }
-pyo3-log = "0.12.3"
-interval-tree = { path = "../interval-tree" }
-interval-calculator = { path = "../interval-calculator" }
+pyo3 = { workspace = true }
+pyo3-log = { workspace = true }
+
 codegenerator-py = { path = "../codegenerator-py" }
+interval-calculator = { path = "../interval-calculator" }
+interval-tree = { path = "../interval-tree" }

@@ -65,7 +65,7 @@ class TargetDevice:
     interface: str = None
     has_signals: bool | None = None
     connected_outputs: dict[str, list[int]] | None = None
-    internal_connections: list[tuple[str, str]] = field(default_factory=list)
+    internal_connections: list[str] = field(default_factory=list)
     calibrations: list[TargetChannelCalibration] | None = None
     is_qc: bool = False
     qc_with_qa: bool = False

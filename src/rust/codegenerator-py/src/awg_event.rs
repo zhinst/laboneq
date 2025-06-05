@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use crate::signature;
+use crate::signature::{self, WaveformSignaturePy};
 use codegenerator::ir::{InitAmplitudeRegister, Match, ParameterOperation, Samples};
 use pyo3::prelude::*;
 
@@ -11,7 +11,8 @@ use pyo3::prelude::*;
 #[derive(Debug, Clone)]
 pub struct PlayWaveEvent {
     pub signals: HashSet<String>,
-    pub pulses: Vec<signature::PulseSignature>,
+    #[pyo3(get)]
+    pub waveform: signature::WaveformSignaturePy,
     #[pyo3(get)]
     pub state: Option<u16>,
     #[pyo3(get)]
@@ -47,11 +48,21 @@ impl PlayWaveEvent {
     fn signals(&self) -> PyResult<&HashSet<String>> {
         Ok(&self.signals)
     }
+}
 
-    #[getter]
-    fn pulses(&self) -> PyResult<Vec<signature::PulseSignature>> {
-        Ok(self.pulses.clone())
-    }
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct AcquireEvent {
+    #[pyo3(get)]
+    pub signal_id: String,
+    #[pyo3(get)]
+    pub pulse_defs: Vec<String>,
+    #[pyo3(get)]
+    pub id_pulse_params: Vec<Option<usize>>,
+    #[pyo3(get)]
+    pub oscillator_frequency: f64,
+    #[pyo3(get)]
+    pub channels: Vec<u8>,
 }
 
 #[pyclass]
@@ -134,11 +145,32 @@ impl InitAmplitudeRegisterPy {
 
 #[pyclass]
 #[derive(Debug, Clone)]
+pub struct PpcSweepStepStart {
+    #[pyo3(get)]
+    pub pump_power: Option<f64>,
+    #[pyo3(get)]
+    pub pump_frequency: Option<f64>,
+    #[pyo3(get)]
+    pub probe_power: Option<f64>,
+    #[pyo3(get)]
+    pub probe_frequency: Option<f64>,
+    #[pyo3(get)]
+    pub cancellation_phase: Option<f64>,
+    #[pyo3(get)]
+    pub cancellation_attenuation: Option<f64>,
+}
+
+#[pyclass]
+#[derive(Debug, Clone)]
 pub enum EventType {
     PlayWave(PlayWaveEvent),
     Match(MatchEvent),
     ChangeHwOscPhase(ChangeHwOscPhase),
     InitAmplitudeRegister(InitAmplitudeRegisterPy),
+    ResetPrecompensationFilters { signature: WaveformSignaturePy },
+    AcquireEvent(AcquireEvent),
+    PpcSweepStepStart(PpcSweepStepStart),
+    PpcSweepStepEnd(),
 }
 
 #[pyclass]
@@ -161,6 +193,10 @@ impl AwgEvent {
             EventType::Match(_) => 1,
             EventType::ChangeHwOscPhase(_) => 2,
             EventType::InitAmplitudeRegister(_) => 3,
+            EventType::ResetPrecompensationFilters { .. } => 4,
+            EventType::AcquireEvent(_) => 5,
+            EventType::PpcSweepStepStart(_) => 6,
+            EventType::PpcSweepStepEnd() => 7,
         }
     }
 
@@ -170,6 +206,12 @@ impl AwgEvent {
             EventType::Match(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
             EventType::ChangeHwOscPhase(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
             EventType::InitAmplitudeRegister(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
+            EventType::ResetPrecompensationFilters { signature } => {
+                Ok(signature.clone().into_pyobject(py)?.into())
+            }
+            EventType::AcquireEvent(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
+            EventType::PpcSweepStepStart(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
+            EventType::PpcSweepStepEnd() => Ok(None::<()>.into_pyobject(py)?.into()),
         }
     }
 }

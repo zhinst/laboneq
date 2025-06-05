@@ -3,6 +3,7 @@
 
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
+use codegenerator::string_sanitize;
 use pyo3::{
     prelude::*,
     types::{PyDict, PyList, PySequence},
@@ -18,6 +19,11 @@ use seqc_tracker::{
 };
 
 pyo3::import_exception!(laboneq.core.exceptions, LabOneQException);
+
+#[pyfunction(name = "string_sanitize")]
+pub fn string_sanitize_py(input: &str) -> String {
+    string_sanitize(input)
+}
 
 #[pyclass]
 #[pyo3(name = "WaveIndexTracker")]

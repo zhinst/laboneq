@@ -4,8 +4,6 @@
 from __future__ import annotations
 
 import logging
-import math
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from engineering_notation import EngNumber
@@ -21,7 +19,7 @@ from laboneq.compiler.seqc.awg_sampled_event import (
 )
 from laboneq.compiler.seqc.utils import resample_state
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.utilities.pulse_sampler import interval_to_samples, length_to_samples
+from laboneq.core.utilities.pulse_sampler import length_to_samples
 
 if TYPE_CHECKING:
     from laboneq.compiler.common.signal_obj import SignalObj
@@ -148,53 +146,6 @@ def analyze_loop_times(
     return loop_events
 
 
-def analyze_precomp_reset_times(
-    events: list[dict[str, Any]],
-    signals: list[str],
-    sampling_rate: float,
-    delay: float,
-) -> AWGSampledEventSequence:
-    precomp_events = [
-        event
-        for event in events
-        if (
-            event["event_type"] == EventType.RESET_PRECOMPENSATION_FILTERS
-            and event.get("signal_id", None) in signals
-        )
-    ]
-    precomp_reset_events = AWGSampledEventSequence()
-
-    # We clear the precompensation filters in a dedicated command table entry.
-    # Currently, a bug (HULK-1246) prevents us from doing so in a zero-length
-    # command, so instead we allocate 32 samples (minimum waveform length) for this, and
-    # register the end of this interval as a cut point.
-
-    PRECOMP_RESET_LENGTH = 32
-
-    for event in precomp_events:
-        event_time_in_samples = length_to_samples(event["time"] + delay, sampling_rate)
-        signal_id = event.get("signal_id")
-        sampled_event = AWGEvent(
-            type=AWGEventType.RESET_PRECOMPENSATION_FILTERS,
-            start=event_time_in_samples,
-            end=event_time_in_samples + PRECOMP_RESET_LENGTH,
-            priority=event["position"],
-            params={"signal_id": signal_id},
-        )
-        precomp_reset_events.add(event_time_in_samples, sampled_event)
-
-        # Add end event to force a cut point
-        sampled_event = AWGEvent(
-            type=AWGEventType.RESET_PRECOMPENSATION_FILTERS_END,
-            start=event_time_in_samples + PRECOMP_RESET_LENGTH,
-            priority=-100,  # does not actually emit code, so irrelevant
-            params={"signal_id": signal_id},
-        )
-        precomp_reset_events.add(event_time_in_samples, sampled_event)
-
-    return precomp_reset_events
-
-
 def analyze_phase_reset_times(
     events: list[dict[str, Any]],
     device_id: str,
@@ -303,166 +254,6 @@ def analyze_set_oscillator_times(
         events.pop(i)
 
     return retval
-
-
-def analyze_ppc_sweep_events(events: list[Any], awg: AWGInfo, global_delay: float):
-    if awg.device_type != DeviceType.SHFQA:
-        return AWGSampledEventSequence()
-    ppc_sweep_start_events = [
-        event
-        for event in events
-        if event["event_type"] == EventType.PPC_SWEEP_STEP_START
-        and event.get("qa_device") == awg.device_id
-        and event.get("qa_channel") == awg.awg_id
-    ]
-    ppc_start_ids = {e["id"] for e in ppc_sweep_start_events}
-    ppc_sweep_end_events = [
-        event
-        for event in events
-        if event["event_type"] == EventType.PPC_SWEEP_STEP_END
-        and event["chain_element_id"] in ppc_start_ids
-    ]
-
-    retval = AWGSampledEventSequence()
-
-    sampling_rate = awg.sampling_rate
-
-    for event in ppc_sweep_start_events:
-        event_time_in_samples = length_to_samples(
-            event["time"] + global_delay, sampling_rate
-        )
-        fields = [
-            "ppc_device",
-            "ppc_channel",
-            # the actual data fields:
-            "pump_power",
-            "pump_frequency",
-            "probe_power",
-            "probe_frequency",
-            "cancellation_phase",
-            "cancellation_attenuation",
-        ]
-        params = {field: event[field] for field in fields if field in event}
-        ppc_sweep_start_event = AWGEvent(
-            type=AWGEventType.PPC_SWEEP_STEP_START,
-            start=event_time_in_samples,
-            priority=event["position"],
-            params=params,
-        )
-
-        retval.add(event_time_in_samples, ppc_sweep_start_event)
-
-    for event in ppc_sweep_end_events:
-        event_time_in_samples = length_to_samples(
-            event["time"] + global_delay, sampling_rate
-        )
-
-        ppc_sweep_end_event = AWGEvent(
-            type=AWGEventType.PPC_SWEEP_STEP_END,
-            start=event_time_in_samples,
-            priority=event["position"],
-            params={},
-        )
-
-        retval.add(event_time_in_samples, ppc_sweep_end_event)
-
-    return retval
-
-
-def analyze_acquire_times(
-    events: list[dict[str, Any]],
-    signal_obj: SignalObj,
-) -> AWGSampledEventSequence:
-    signal_id = signal_obj.id
-    sampling_rate = signal_obj.awg.sampling_rate
-    delay = signal_obj.total_delay
-    sample_multiple = signal_obj.awg.device_type.sample_multiple
-    channels = signal_obj.channels
-
-    _logger.debug(
-        "Calculating acquire times for signal %s with delay %s ( %s samples)",
-        signal_id,
-        str(delay),
-        str(round(delay * sampling_rate)),
-    )
-
-    @dataclass
-    class IntervalStartEvent:
-        event_type: str
-        time: float
-        play_wave_id: str
-        acquire_handle: str
-        oscillator_frequency: float
-        id_pulse_params: int | None
-        channels: list[int | list[int]]
-        priority: int
-
-    @dataclass
-    class IntervalEndEvent:
-        event_type: str
-        time: float
-        play_wave_id: str
-
-    interval_zip: list[tuple[IntervalStartEvent, IntervalEndEvent]] = list(
-        zip(
-            [
-                IntervalStartEvent(
-                    event["event_type"],
-                    event["time"] + delay,
-                    event["play_wave_id"],
-                    event["acquire_handle"],
-                    event.get("oscillator_frequency", 0.0),
-                    event.get("id_pulse_params"),
-                    event.get("channel") or channels,
-                    priority=event["position"],
-                )
-                for event in events
-                if event["event_type"] in ["ACQUIRE_START"]
-                and event["signal"] == signal_id
-            ],
-            [
-                IntervalEndEvent(
-                    event["event_type"],
-                    event["time"] + delay,
-                    event["play_wave_id"],
-                )
-                for event in events
-                if event["event_type"] in ["ACQUIRE_END"]
-                and event["signal"] == signal_id
-            ],
-        )
-    )
-
-    acquire_events = AWGSampledEventSequence()
-    for interval_start, interval_end in interval_zip:
-        start_samples, end_samples = interval_to_samples(
-            interval_start.time, interval_end.time, sampling_rate
-        )
-        if start_samples % sample_multiple != 0:
-            start_samples = (
-                math.floor(start_samples / sample_multiple) * sample_multiple
-            )
-
-        if end_samples % sample_multiple != 0:
-            end_samples = math.floor(end_samples / sample_multiple) * sample_multiple
-
-        acquire_event = AWGEvent(
-            type=AWGEventType.ACQUIRE,
-            start=start_samples,
-            end=end_samples,
-            priority=interval_start.priority,
-            params={
-                "signal_id": signal_id,
-                "play_wave_id": interval_start.play_wave_id,
-                "oscillator_frequency": interval_start.oscillator_frequency,
-                "channels": interval_start.channels,
-                "id_pulse_params": interval_start.id_pulse_params,
-            },
-        )
-
-        acquire_events.add(start_samples, acquire_event)
-
-    return acquire_events
 
 
 def analyze_trigger_events(

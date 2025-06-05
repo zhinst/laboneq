@@ -5,8 +5,9 @@ use crate::Result;
 use crate::ir;
 use crate::ir::compilation_job::{self as cjob};
 use crate::passes::{
-    amplitude_registers, handle_frame_changes, handle_match, handle_playwaves, handle_signatures,
-    lower_for_awg, osc_parameters,
+    amplitude_registers, handle_acquire, handle_frame_changes, handle_match, handle_playwaves,
+    handle_ppc_sweeps, handle_precompensation_resets, handle_signatures, lower_for_awg,
+    osc_parameters,
 };
 use crate::virtual_signal::create_virtual_signals;
 use std::collections::HashSet;
@@ -21,7 +22,9 @@ pub fn generate_code_for_awg(
     amplitude_resolution_range: u64,
     use_amplitude_increment: bool,
     phase_resolution_range: u64,
+    global_delay_samples: ir::Samples,
 ) -> Result<ir::IrNode> {
+    let mut cut_points = cut_points;
     // NOTE: Sorting should probably happen outside of this function
     // Sort the signals for deterministic ordering
     awg.signals.sort_by(|a, b| a.channels.cmp(&b.channels));
@@ -36,10 +39,23 @@ pub fn generate_code_for_awg(
         &awg.sampling_rate,
     )?;
     lower_for_awg::convert_to_samples(&mut program, awg);
+    handle_acquire::handle_acquisitions(
+        &mut program,
+        awg.device_kind.traits().sample_multiple,
+        &osc_params,
+    )?;
     let Some(virtual_signals) = create_virtual_signals(awg)? else {
         return Ok(program); // No signals that play anything, return
     };
     handle_frame_changes::handle_frame_changes(&mut program, virtual_signals.delay());
+    handle_precompensation_resets::handle_precompensation_resets(
+        &mut program,
+        global_delay_samples,
+        &mut cut_points,
+    )?;
+    if let cjob::DeviceKind::SHFQA = &awg.device_kind {
+        handle_ppc_sweeps::handle_ppc_sweep_steps(&mut program, global_delay_samples)?;
+    }
     handle_match::handle_match_nodes(&mut program, virtual_signals.delay())?;
     let amp_reg_alloc = amplitude_registers::assign_amplitude_registers(&program, awg);
     amplitude_registers::handle_amplitude_register_events(

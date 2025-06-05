@@ -65,7 +65,7 @@ class ExperimentBuilder:
             If true, `exp_func` is called inside an experiment context
             using `exp_func(*args, **kw)`.
 
-            If false, `exp_func` is passed the experiment as the first
+            If false, `exp_func` is passed to the experiment as the first
             argument instead using `exp_func(exp, *args, **kw)` and no
             experiment context is active.
 
@@ -163,7 +163,7 @@ def qubit_experiment(
             If true, the decorated function `exp_func` is called
             inside an experiment context using `exp_func(*args, **kw)`.
 
-            If false, the decorated function `exp_func` is passed the
+            If false, the decorated function `exp_func` is passed to the
             experiment as the first argument instead using
             `exp_func(exp, *args, **kw)` and no experiment context is
             active.
@@ -200,6 +200,37 @@ def qubit_experiment(
         return builder(*args, **kw)
 
     return build_qubit_experiment
+
+
+def add_quantum_elements(
+    quantum_elements: list[QuantumElement], *, experiment: Experiment | None = None
+) -> None:
+    """Add quantum elements to an experiment.
+
+    This method adds quantum elements to an experiment, by:
+
+    - adding the quantum element signals as experiment signals
+    - adding the quantum element calibration to the experiment calibration
+
+    Arguments:
+        quantum_elements: The list of quantum elements to add.
+        experiment: The experiment (if called without an experiment context).
+    """
+    # Fetch the experiment (if in an experiment context)
+    if experiment is None:
+        experiment = builtins._active_experiment()
+
+    # Determine the signals and calibration from the quantum elements
+    signals = _exp_signals_from_qubits(quantum_elements)
+    calibration = _calibration_from_qubits(quantum_elements)
+
+    # Add signals and calibration to the experiment
+    for signal in signals:
+        _ = experiment.add_signal(
+            uid=signal.uid, connect_to=signal.mapped_logical_signal_path
+        )
+    exp_calibration = experiment.get_calibration()
+    exp_calibration.calibration_items.update(calibration)
 
 
 def build(

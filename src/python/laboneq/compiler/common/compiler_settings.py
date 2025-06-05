@@ -27,6 +27,7 @@ _USER_ENABLED_SETTINGS = [
     "OUTPUT_EXTRAS",
     "FORCE_IR_ROUNDTRIP",
     "LOG_REPORT",
+    "USE_EXPERIMENTAL_ASSEMBLER",
 ]
 
 DEFAULT_HDAWG_LEAD_PQSC: float = 80e-9
@@ -81,6 +82,8 @@ class CompilerSettings:
     EMIT_TIMING_COMMENTS: bool = False
 
     LOG_REPORT: bool = True
+
+    USE_EXPERIMENTAL_ASSEMBLER: bool = True
 
     @classmethod
     def from_dict(cls, settings: dict | None = None):

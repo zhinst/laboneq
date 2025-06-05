@@ -7,7 +7,7 @@ import copy
 import hashlib
 import logging
 from collections import defaultdict, namedtuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import groupby
 import math
 from numbers import Number
@@ -18,7 +18,6 @@ from numpy import typing as npt
 from engineering_notation import EngNumber
 import scipy.signal
 from laboneq.core.types.enums import AcquisitionType
-
 from laboneq.compiler.common.compiler_settings import (
     TINYSAMPLE,
     CompilerSettings,
@@ -34,16 +33,12 @@ from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLay
 from laboneq.compiler.ir import IRTree
 from laboneq.compiler.seqc import passes, ir as ir_code
 from laboneq.compiler.seqc.linker import AwgWeights, SeqCGenOutput, SeqCProgram
-from laboneq._utils import ensure_list
 from laboneq.compiler.seqc.analyze_events import (
-    analyze_acquire_times,
     analyze_loop_times,
     analyze_phase_reset_times,
-    analyze_precomp_reset_times,
     analyze_set_oscillator_times,
     analyze_trigger_events,
     analyze_prng_times,
-    analyze_ppc_sweep_events,
 )
 from laboneq.compiler.seqc.command_table_tracker import CommandTableTracker
 from laboneq.compiler.seqc.feedback_register_allocator import (
@@ -55,19 +50,13 @@ from laboneq.compiler.common.feedback_register_config import FeedbackRegisterCon
 from laboneq.compiler.seqc import ir_to_event_list
 from laboneq.compiler.seqc.measurement_calculator import (
     IntegrationTimes,
-    MeasurementCalculator,
     SignalDelays,
 )
 from laboneq.compiler.seqc.sampled_event_handler import SampledEventHandler
 from laboneq.compiler.seqc.shfppc_sweeper_config_tracker import (
     SHFPPCSweeperConfigTracker,
 )
-from laboneq.compiler.seqc.signatures import (
-    PlaybackSignature,
-    SamplesSignature,
-    WaveformSignature,
-    FrozenWaveformSignature,
-)
+from laboneq.compiler.seqc.signatures import PlaybackSignature, SamplesSignatureID
 from laboneq.compiler.seqc.utils import normalize_phase
 from laboneq.compiler.seqc.wave_compressor import (
     PlayHold,
@@ -80,6 +69,7 @@ from laboneq._rust.codegenerator import (
     SeqCTracker,
     seqc_generator_from_device_and_signal_type as seqc_generator_from_device_and_signal_type_str,
     merge_generators,
+    WaveformSignature,
 )
 from laboneq.compiler.common.awg_info import AWGInfo, AwgKey
 from laboneq.compiler.seqc.awg_sampled_event import (
@@ -111,6 +101,123 @@ from laboneq.data.scheduled_experiment import (
 from laboneq.compiler.seqc import compat_rs
 
 _logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SamplesSignature:
+    """Samples signature.
+
+    The underlying promise is that two keys with the same values are guaranteed to resolve to the same samples
+    across a single AWG."""
+
+    samples_i: np.ndarray
+    samples_q: np.ndarray | None = None
+    samples_marker1: np.ndarray | None = None
+    samples_marker2: np.ndarray | None = None
+
+    @staticmethod
+    def _compare_maybe_arrays(one: np.ndarray | None, other: np.ndarray | None) -> bool:
+        """Compare two arrays or None."""
+        if one is None and other is None:
+            return True
+        if one is None or other is None:
+            return False
+        return np.array_equal(one, other, equal_nan=True)
+
+    def uid(self) -> int:
+        """Return a stable unique identifier for the samples."""
+        return hash(self)
+
+    def __eq__(self, other: SamplesSignature):
+        if not isinstance(other, SamplesSignature):
+            return NotImplemented
+        return (
+            np.array_equal(self.samples_i, other.samples_i)
+            and self._compare_maybe_arrays(self.samples_q, other.samples_q)
+            and self._compare_maybe_arrays(self.samples_marker1, other.samples_marker1)
+            and self._compare_maybe_arrays(self.samples_marker2, other.samples_marker2)
+        )
+
+    def __hash__(self):
+        def arr_to_bytes(arr: np.ndarray | None) -> bytes:
+            return arr.tobytes() if arr is not None else b""
+
+        h = hashlib.md5()
+        h.update(arr_to_bytes(self.samples_i))
+        h.update(arr_to_bytes(self.samples_q))
+        h.update(arr_to_bytes(self.samples_marker1))
+        h.update(arr_to_bytes(self.samples_marker2))
+        for arr in (
+            self.samples_i,
+            self.samples_q,
+            self.samples_marker1,
+            self.samples_marker2,
+        ):
+            if arr is not None:
+                h.update(str(arr.shape).encode())
+                h.update(str(arr.dtype).encode())
+        return int.from_bytes(h.digest()[:8], "big", signed=False)
+
+
+@dataclass
+class SampledWaveformSignature:
+    samples: SamplesSignature
+    # Waveform per pulse def
+    pulse_map: dict[str, PulseWaveformMap] = field(default_factory=dict)
+    # Compression parameters
+    hold_start: int | None = None
+    hold_length: int | None = None
+
+    @property
+    def samples_i(self) -> np.ndarray:
+        """Return the I samples."""
+        return self.samples.samples_i
+
+    @property
+    def samples_q(self) -> np.ndarray | None:
+        """Return the Q samples."""
+        return self.samples.samples_q
+
+    @property
+    def samples_marker1(self) -> np.ndarray | None:
+        """Return the marker1 samples."""
+        return self.samples.samples_marker1
+
+    @property
+    def samples_marker2(self) -> np.ndarray | None:
+        """Return the marker2 samples."""
+        return self.samples.samples_marker2
+
+
+@dataclass(frozen=True)
+class _SampledWaveform:
+    signals: tuple[str]
+    signature: SampledWaveformSignature
+    signature_string: str
+
+
+def generate_sampled_waveform_signature(
+    samples_i: np.ndarray,
+    samples_q: np.ndarray | None = None,
+    samples_marker1: np.ndarray | None = None,
+    samples_marker2: np.ndarray | None = None,
+) -> tuple[SamplesSignatureID, SampledWaveformSignature]:
+    """Generate a `SamplesSignatureID` and `SampledSignature` from the provided samples."""
+    label = "compr"
+    signature = SamplesSignature(
+        samples_i=samples_i,
+        samples_q=samples_q,
+        samples_marker1=samples_marker1,
+        samples_marker2=samples_marker2,
+    )
+    return SamplesSignatureID(
+        label=label,
+        uid=signature.uid(),
+        has_i=signature.samples_i is not None,
+        has_q=signature.samples_q is not None,
+        has_marker1=signature.samples_marker1 is not None,
+        has_marker2=signature.samples_marker2 is not None,
+    ), signature
 
 
 def seqc_generator_from_device_and_signal_type(
@@ -182,12 +289,9 @@ def add_wait_trigger_statements(
             init_generator.add_function_call_statement("waitDIOTrigger")
 
 
-def stable_hash(integration_weight):
+def stable_hash(samples_i: np.ndarray, samples_q: np.ndarray):
     """Stable hashing function for generating names for readout weights"""
-    return hashlib.sha1(
-        integration_weight["samples_i"].tobytes()
-        + integration_weight["samples_q"].tobytes()
-    )
+    return hashlib.sha1(samples_i.tobytes() + samples_q.tobytes())
 
 
 @dataclass
@@ -199,7 +303,7 @@ class IntegrationWeight:
 
 
 def calculate_integration_weights(
-    acquire_events: AWGSampledEventSequence,
+    event_list_acquire: list[AWGEvent],
     signal_obj: SignalObj,
     pulse_defs: dict[str, PulseDef],
     pulse_params: list[passes.PulseParams],
@@ -208,122 +312,117 @@ def calculate_integration_weights(
     signal_id = signal_obj.id
     already_handled = set()
     nr_of_weights_per_event = None
-    for event_list in acquire_events.sequence.values():
-        for event in event_list:
-            play_wave_ids: list[str] = ensure_list(event.params.get("play_wave_id"))
-            id_pulse_params: list[int] = ensure_list(event.params["id_pulse_params"])
-            oscillator_frequency: list[float] = ensure_list(
-                event.params["oscillator_frequency"]
-            )
-            key_ = (
-                tuple(play_wave_ids),
-                tuple(id_pulse_params),
-                tuple(oscillator_frequency),
-            )
-            if key_ in already_handled:
-                continue
-            assert event.params.get("signal_id", signal_id) == signal_id
-            n = len(play_wave_ids)
-            [oscillator_frequency, *rest] = oscillator_frequency
-            assert all(oscillator_frequency == f for f in rest)
+    for event in event_list_acquire:
+        play_wave_ids: list[str] = event.params.get("play_wave_id")
+        id_pulse_params: list[int] = event.params["id_pulse_params"]
+        oscillator_frequency: float = event.params["oscillator_frequency"]
+        key_ = (
+            tuple(play_wave_ids),
+            tuple(id_pulse_params),
+            oscillator_frequency,
+        )
+        if key_ in already_handled:
+            continue
+        assert event.params.get("signal_id", signal_id) == signal_id
 
-            filtered_pulses: list[tuple[str, int | None]] = [
-                (play_wave_id, param_id)
-                for play_wave_id, param_id in zip(
-                    play_wave_ids, id_pulse_params or [None] * len(play_wave_ids)
+        filtered_pulses: list[tuple[str, int | None]] = [
+            (play_wave_id, param_id)
+            for play_wave_id, param_id in zip(
+                play_wave_ids, id_pulse_params or [None] * len(play_wave_ids)
+            )
+            if play_wave_id is not None
+            and (pulse_def := pulse_defs.get(play_wave_id)) is not None
+            # Not a real pulse, just a placeholder for the length - skip
+            and (pulse_def.samples is not None or pulse_def.function is not None)
+        ]
+        nr_of_weights = len(play_wave_ids)
+        if nr_of_weights_per_event is None:
+            nr_of_weights_per_event = nr_of_weights
+        else:
+            assert nr_of_weights == nr_of_weights_per_event
+            if any(w not in integration_weights_by_pulse for w, _ in filtered_pulses):
+                # Event uses different pulse UIDs than earlier event
+                raise LabOneQException(
+                    f"Using different integration kernels on a single signal"
+                    f" ({signal_id}) is unsupported. Weights: {play_wave_ids} vs"
+                    f" {list(integration_weights_by_pulse.keys())}"
                 )
-                if play_wave_id is not None
-                and (pulse_def := pulse_defs.get(play_wave_id)) is not None
-                # Not a real pulse, just a placeholder for the length - skip
-                and (pulse_def.samples is not None or pulse_def.function is not None)
-            ]
 
-            if nr_of_weights_per_event is None:
-                nr_of_weights_per_event = n
+        for play_wave_id, pulse_param_id in filtered_pulses:
+            pulse_def = pulse_defs[play_wave_id]
+            samples = pulse_def.samples
+            amplitude: Number = pulse_def.amplitude
+            assert isinstance(amplitude, Number)
+            length = pulse_def.length
+            if length is None:
+                length = len(samples) / signal_obj.awg.sampling_rate
+            if pulse_param_id is not None:
+                params_pulse_combined = pulse_params[pulse_param_id].combined()
             else:
-                assert n == nr_of_weights_per_event
-                if any(
-                    w not in integration_weights_by_pulse for w, _ in filtered_pulses
-                ):
-                    # Event uses different pulse UIDs than earlier event
+                params_pulse_combined = None
+            iw_samples = sample_pulse(
+                signal_type="iq",
+                sampling_rate=signal_obj.awg.sampling_rate,
+                length=length,
+                amplitude=amplitude,
+                pulse_function=pulse_def.function,
+                modulation_frequency=oscillator_frequency,
+                samples=samples,
+                mixer_type=signal_obj.mixer_type,
+                pulse_parameters=params_pulse_combined,
+            )
+
+            if (
+                signal_obj.awg.device_type == DeviceType.SHFQA
+                and (weight_len := len(iw_samples["samples_i"])) > 4096
+            ):  # TODO(2K): get via device_type
+                downsampling_factor = math.ceil(weight_len / 4096)
+                if downsampling_factor > 16:  # TODO(2K): get via device_type
                     raise LabOneQException(
-                        f"Using different integration kernels on a single signal"
-                        f" ({signal_id}) is unsupported. Weights: {play_wave_ids} vs"
-                        f" {list(integration_weights_by_pulse.keys())}"
+                        "Integration weight length exceeds the maximum supported by HW"
                     )
+            else:
+                downsampling_factor = None
 
-            for play_wave_id, pulse_param_id in filtered_pulses:
-                pulse_def = pulse_defs[play_wave_id]
-                samples = pulse_def.samples
-                amplitude: Number = pulse_def.amplitude
-                assert isinstance(amplitude, Number)
-                length = pulse_def.length
-                if length is None:
-                    length = len(samples) / signal_obj.awg.sampling_rate
-                if pulse_param_id is not None:
-                    params_pulse_combined = pulse_params[pulse_param_id].combined()
-                else:
-                    params_pulse_combined = None
-                iw_samples = sample_pulse(
-                    signal_type="iq",
-                    sampling_rate=signal_obj.awg.sampling_rate,
-                    length=length,
-                    amplitude=amplitude,
-                    pulse_function=pulse_def.function,
-                    modulation_frequency=oscillator_frequency,
-                    samples=samples,
-                    mixer_type=signal_obj.mixer_type,
-                    pulse_parameters=params_pulse_combined,
-                )
+            verify_amplitude_no_clipping(
+                samples_i=iw_samples["samples_i"],
+                samples_q=iw_samples["samples_q"],
+                pulse_id=pulse_def.uid,
+                mixer_type=signal_obj.mixer_type,
+                signals=(signal_obj.id,),
+            )
 
-                if (
-                    signal_obj.awg.device_type == DeviceType.SHFQA
-                    and (weight_len := len(iw_samples["samples_i"])) > 4096
-                ):  # TODO(2K): get via device_type
-                    downsampling_factor = math.ceil(weight_len / 4096)
-                    if downsampling_factor > 16:  # TODO(2K): get via device_type
-                        raise LabOneQException(
-                            "Integration weight length exceeds the maximum supported by HW"
-                        )
-                else:
-                    downsampling_factor = None
+            # 128-bit hash as waveform name
+            digest = stable_hash(
+                samples_i=iw_samples["samples_i"], samples_q=iw_samples["samples_q"]
+            ).hexdigest()[:32]
+            integration_weight = IntegrationWeight(
+                basename=f"kernel_{digest}",
+                samples_i=iw_samples["samples_i"],
+                samples_q=iw_samples["samples_q"],
+                downsampling_factor=downsampling_factor,
+            )
 
-                verify_amplitude_no_clipping(
-                    iw_samples,
-                    pulse_def.uid,
-                    signal_obj.mixer_type,
-                    signal_obj.id,
-                )
-
-                # 128-bit hash as waveform name
-                digest = stable_hash(iw_samples).hexdigest()[:32]
-                integration_weight = IntegrationWeight(
-                    basename=f"kernel_{digest}",
-                    samples_i=iw_samples["samples_i"],
-                    samples_q=iw_samples["samples_q"],
-                    downsampling_factor=downsampling_factor,
-                )
-
-                if existing_weight := integration_weights_by_pulse.get(play_wave_id):
-                    for existing, new in zip(
-                        [existing_weight.samples_i, existing_weight.samples_q],
-                        [integration_weight.samples_i, integration_weight.samples_q],
-                    ):
-                        if np.any(existing != new):
-                            if np.any(np.isnan(new)):
-                                # this is because nan != nan is always true
-                                raise LabOneQException(
-                                    "Encountered NaN in an integration kernel."
-                                )
-                            # Kernel differs even though pulse ID is the same
-                            # (e.g. affected by pulse parameters)
+            if existing_weight := integration_weights_by_pulse.get(play_wave_id):
+                for existing, new in zip(
+                    [existing_weight.samples_i, existing_weight.samples_q],
+                    [integration_weight.samples_i, integration_weight.samples_q],
+                ):
+                    if np.any(existing != new):
+                        if np.any(np.isnan(new)):
+                            # this is because nan != nan is always true
                             raise LabOneQException(
-                                f"Using different integration kernels on a single signal"
-                                f" ({signal_id}) is unsupported."
+                                "Encountered NaN in an integration kernel."
                             )
-                # This relies on the dict remembering insertion order.
-                integration_weights_by_pulse[play_wave_id] = integration_weight
-            already_handled.add(key_)
+                        # Kernel differs even though pulse ID is the same
+                        # (e.g. affected by pulse parameters)
+                        raise LabOneQException(
+                            f"Using different integration kernels on a single signal"
+                            f" ({signal_id}) is unsupported."
+                        )
+            # This relies on the dict remembering insertion order.
+            integration_weights_by_pulse[play_wave_id] = integration_weight
+        already_handled.add(key_)
     return list(integration_weights_by_pulse.values())
 
 
@@ -340,8 +439,6 @@ class CodeGenerator(ICodeGenerator):
     # This is used as a workaround for the SHFQA requiring that for sampled pulses,  abs(s)  < 1.0 must hold
     # to be able to play pulses with an amplitude of 1.0, we scale complex pulses by this factor
     SHFQA_COMPLEX_SAMPLE_SCALING = 1 - 1e-10
-
-    _measurement_calculator = MeasurementCalculator
 
     def __init__(
         self,
@@ -372,7 +469,7 @@ class CodeGenerator(ICodeGenerator):
         self._parameter_phase_increment_map: dict[
             AwgKey, dict[str, list[int | Literal[COMPLEX_USAGE]]]
         ] = {}
-        self._sampled_signatures: dict[str, tuple[str, dict]] = {}
+        self._sampled_waveforms: dict[AwgKey, list[_SampledWaveform]] = {}
         self._integration_times: IntegrationTimes | None = None
         self._signal_delays: SignalDelays | None = None
         # awg key -> signal id -> kernel index -> kernel data
@@ -479,7 +576,7 @@ class CodeGenerator(ICodeGenerator):
         )
         assert filename not in self._waves or np.allclose(
             self._waves[filename].samples, wave.samples
-        )
+        ), filename
         self._waves[filename] = wave
         if (
             hold_start is not None
@@ -517,143 +614,115 @@ class CodeGenerator(ICodeGenerator):
                             weight.samples_q, None, weight.basename, "_q"
                         )
 
-            signals_to_process = awg.signals
-            virtual_signal_id = None
-            if awg.signal_type == AWGSignalType.MULTI:
-                iq_signal_ids = []
-                signals_to_process = []
-                for signal_obj in awg.signals:
-                    if signal_obj.signal_type != "integration":
-                        _logger.debug(
-                            "Non-integration signal in multi signal: %s", signal_obj
-                        )
-                        iq_signal_ids.append(signal_obj.id)
-                    else:
-                        signals_to_process.append(signal_obj)
-                virtual_signal_id = "_".join(iq_signal_ids)
-            elif awg.signal_type == AWGSignalType.DOUBLE:
-                virtual_signal_id = (
-                    signals_to_process[0].id + "_" + signals_to_process[1].id
-                )
-
-            if virtual_signal_id is None:
-                for signal_obj in signals_to_process:
-                    if signal_obj.id in self._sampled_signatures:
-                        for (
-                            sig_string,
-                            sampled_signature,
-                        ) in self._sampled_signatures[signal_obj.id]:
-                            if not sampled_signature:
-                                continue
-                            if signal_obj.awg.device_type.supports_binary_waves:
-                                if awg.signal_type == AWGSignalType.SINGLE:
-                                    self._save_wave_bin(
-                                        sampled_signature["samples_i"],
-                                        sampled_signature["signature_pulse_map"],
-                                        sig_string,
-                                        "",
-                                    )
-                                    if "samples_marker1" in sampled_signature:
-                                        self._save_wave_bin(
-                                            sampled_signature["samples_marker1"],
-                                            sampled_signature["signature_pulse_map"],
-                                            sig_string,
-                                            "_marker1",
-                                        )
-                                    if "samples_marker2" in sampled_signature:
-                                        self._save_wave_bin(
-                                            sampled_signature["samples_marker2"],
-                                            sampled_signature["signature_pulse_map"],
-                                            sig_string,
-                                            "_marker2",
-                                        )
-                                else:
-                                    self._save_wave_bin(
-                                        sampled_signature["samples_i"],
-                                        sampled_signature["signature_pulse_map"],
-                                        sig_string,
-                                        "_i",
-                                    )
-                                    if "samples_q" in sampled_signature:
-                                        self._save_wave_bin(
-                                            sampled_signature["samples_q"],
-                                            sampled_signature["signature_pulse_map"],
-                                            sig_string,
-                                            "_q",
-                                        )
-                                    if "samples_marker1" in sampled_signature:
-                                        self._save_wave_bin(
-                                            sampled_signature["samples_marker1"],
-                                            sampled_signature["signature_pulse_map"],
-                                            sig_string,
-                                            "_marker1",
-                                        )
-                                    if "samples_marker2" in sampled_signature:
-                                        self._save_wave_bin(
-                                            sampled_signature["samples_marker2"],
-                                            sampled_signature["signature_pulse_map"],
-                                            sig_string,
-                                            "_marker2",
-                                        )
-
-                            elif signal_obj.awg.device_type.supports_complex_waves:
+            if awg.signal_type in (AWGSignalType.IQ, AWGSignalType.SINGLE):
+                for sampled_waveform in self._sampled_waveforms.get(awg.key, []):
+                    assert len(sampled_waveform.signals) == 1
+                    signals = sampled_waveform.signals
+                    sampled_signature = sampled_waveform.signature
+                    sig_string = sampled_waveform.signature_string
+                    if awg.device_type.supports_binary_waves:
+                        if awg.signal_type == AWGSignalType.SINGLE:
+                            self._save_wave_bin(
+                                sampled_signature.samples_i,
+                                sampled_signature.pulse_map,
+                                sig_string,
+                                "",
+                            )
+                            if sampled_signature.samples_marker1 is not None:
                                 self._save_wave_bin(
-                                    CodeGenerator.SHFQA_COMPLEX_SAMPLE_SCALING
-                                    * (
-                                        sampled_signature["samples_i"]
-                                        - 1j * sampled_signature["samples_q"]
-                                    ),
-                                    sampled_signature["signature_pulse_map"],
+                                    sampled_signature.samples_marker1,
+                                    sampled_signature.pulse_map,
                                     sig_string,
-                                    "",
-                                    device_id=awg.device_id,
-                                    signal_id=signal_obj.id,
-                                    hold_start=sampled_signature.get("hold_start"),
-                                    hold_length=sampled_signature.get("hold_length"),
+                                    "_marker1",
                                 )
-                            else:
-                                raise RuntimeError(
-                                    f"Device type {signal_obj.awg.device_type} has invalid supported waves config."
+                            if sampled_signature.samples_marker2 is not None:
+                                self._save_wave_bin(
+                                    sampled_signature.samples_marker2,
+                                    sampled_signature.pulse_map,
+                                    sig_string,
+                                    "_marker2",
                                 )
-            else:
-                signal_obj = awg.signals[0]
-                for sig_string, sampled_signature in self._sampled_signatures[
-                    virtual_signal_id
-                ]:
-                    if not sampled_signature:
-                        continue
-                    if signal_obj.awg.device_type.supports_binary_waves:
+                        else:
+                            self._save_wave_bin(
+                                sampled_signature.samples_i,
+                                sampled_signature.pulse_map,
+                                sig_string,
+                                "_i",
+                            )
+                            if sampled_signature.samples_q is not None:
+                                self._save_wave_bin(
+                                    sampled_signature.samples_q,
+                                    sampled_signature.pulse_map,
+                                    sig_string,
+                                    "_q",
+                                )
+                            if sampled_signature.samples_marker1 is not None:
+                                self._save_wave_bin(
+                                    sampled_signature.samples_marker1,
+                                    sampled_signature.pulse_map,
+                                    sig_string,
+                                    "_marker1",
+                                )
+                            if sampled_signature.samples_marker2 is not None:
+                                self._save_wave_bin(
+                                    sampled_signature.samples_marker2,
+                                    sampled_signature.pulse_map,
+                                    sig_string,
+                                    "_marker2",
+                                )
+                    elif awg.device_type.supports_complex_waves:
                         self._save_wave_bin(
-                            sampled_signature["samples_i"],
-                            sampled_signature["signature_pulse_map"],
+                            CodeGenerator.SHFQA_COMPLEX_SAMPLE_SCALING
+                            * (
+                                sampled_signature.samples_i
+                                - 1j * sampled_signature.samples_q
+                            ),
+                            sampled_signature.pulse_map,
                             sig_string,
-                            "_i",
+                            "",
+                            device_id=awg.device_id,
+                            signal_id=list(signals)[0],
+                            hold_start=sampled_signature.hold_start,
+                            hold_length=sampled_signature.hold_length,
                         )
-                        if "samples_q" in sampled_signature:
-                            self._save_wave_bin(
-                                sampled_signature["samples_q"],
-                                sampled_signature["signature_pulse_map"],
-                                sig_string,
-                                "_q",
-                            )
-                        if "samples_marker1" in sampled_signature:
-                            self._save_wave_bin(
-                                sampled_signature["samples_marker1"],
-                                sampled_signature["signature_pulse_map"],
-                                sig_string,
-                                "_marker1",
-                            )
-                        if "samples_marker2" in sampled_signature:
-                            self._save_wave_bin(
-                                sampled_signature["samples_marker2"],
-                                sampled_signature["signature_pulse_map"],
-                                sig_string,
-                                "_marker2",
-                            )
-
                     else:
                         raise RuntimeError(
-                            f"Device type {signal_obj.awg.device_type} has invalid supported waves config."
+                            f"Device type {awg.device_type} has invalid supported waves config."
+                        )
+            else:
+                for waveform in self._sampled_waveforms.get(awg.key, []):
+                    if not awg.device_type.supports_binary_waves:
+                        raise RuntimeError(
+                            f"Device type {awg.device_type} has invalid supported waves config."
+                        )
+                    sampled_signature = waveform.signature
+                    sig_string = waveform.signature_string
+                    self._save_wave_bin(
+                        sampled_signature.samples_i,
+                        sampled_signature.pulse_map,
+                        sig_string,
+                        "_i",
+                    )
+                    if sampled_signature.samples_q is not None:
+                        self._save_wave_bin(
+                            sampled_signature.samples_q,
+                            sampled_signature.pulse_map,
+                            sig_string,
+                            "_q",
+                        )
+                    if sampled_signature.samples_marker1 is not None:
+                        self._save_wave_bin(
+                            sampled_signature.samples_marker1,
+                            sampled_signature.pulse_map,
+                            sig_string,
+                            "_marker1",
+                        )
+                    if sampled_signature.samples_marker2 is not None:
+                        self._save_wave_bin(
+                            sampled_signature.samples_marker2,
+                            sampled_signature.pulse_map,
+                            sig_string,
+                            "_marker2",
                         )
 
         # check that there are no duplicate filenames in the wave pool (QCSW-1079)
@@ -697,7 +766,6 @@ class CodeGenerator(ICodeGenerator):
         # The pass must happen after delay calculation as it relies on section information.
         # TODO: Fix that this pass can happen as early as possible.
         passes.inline_sections(self._ir.root)
-        osc_params = passes.calculate_oscillator_parameters(self._ir.root)
         # Detach must happen before creating the event list
         user_pulse_params = passes.detach_pulse_params(self._ir.root)
         ir_tree = passes.fanout_awgs(self._ir, self._awgs.values())
@@ -705,9 +773,7 @@ class CodeGenerator(ICodeGenerator):
         for child in ir_tree.root.children:
             awg = cast(ir_code.SingleAwgIR, child)
             ir_awgs[awg.awg.key] = awg
-        events_per_awg, _ = ir_to_event_list.event_list_per_awg(
-            ir_tree, self._settings, osc_params
-        )
+        events_per_awg, _ = ir_to_event_list.event_list_per_awg(ir_tree, self._settings)
 
         for signal_id, signal_obj in self._signals.items():
             code_generation_delay = self._signal_delays.get(signal_id)
@@ -839,10 +905,13 @@ class CodeGenerator(ICodeGenerator):
 
     @staticmethod
     def _emit_new_awg_events(
-        old_event: AWGEvent, new_events: list[Any]
-    ) -> tuple[list[AWGEvent], dict[str, str]]:
+        old_event: AWGEvent,
+        new_events: list[Any],
+        sampled_signatures: dict[
+            codegen_rs.WaveformSignature, SampledWaveformSignature
+        ],
+    ) -> list[AWGEvent]:
         new_awg_events: list[AWGEvent] = []
-        pulse_name_mapping = {}
         time = old_event.start
         for new_event in new_events:
             if isinstance(new_event, PlayHold):
@@ -859,18 +928,24 @@ class CodeGenerator(ICodeGenerator):
                 new_length = len(next(iter(new_event.samples.values())))
 
                 playback_signature: PlaybackSignature = new_params["playback_signature"]
-
-                for pulse in playback_signature.waveform.pulses:
-                    pulse_name_mapping[pulse.pulse] = (
-                        pulse.pulse + f"_compr_{new_event.label}"
+                samples_signature_id, samples_signature = (
+                    generate_sampled_waveform_signature(
+                        samples_i=new_event.samples.get("samples_i"),
+                        samples_q=new_event.samples.get("samples_q"),
+                        samples_marker1=new_event.samples.get("samples_marker1"),
+                        samples_marker2=new_event.samples.get("samples_marker2"),
                     )
-
-                playback_signature.waveform.length = new_length
-                playback_signature.waveform.pulses = None
-                playback_signature.waveform.samples = SamplesSignature(
-                    "compr", new_event.samples
                 )
-
+                waveform = codegen_rs.WaveformSignature.from_samples_id(
+                    length=new_length,
+                    uid=samples_signature_id.uid,
+                    label=samples_signature_id.label,
+                    has_i=samples_signature_id.has_i,
+                    has_q=samples_signature_id.has_q,
+                    has_marker1=samples_signature_id.has_marker1,
+                    has_marker2=samples_signature_id.has_marker2,
+                )
+                playback_signature.waveform = waveform
                 new_awg_events.append(
                     AWGEvent(
                         type=AWGEventType.PLAY_WAVE,
@@ -879,9 +954,26 @@ class CodeGenerator(ICodeGenerator):
                         params=new_params,
                     )
                 )
-
+                sampled_signature_new = copy.deepcopy(
+                    sampled_signatures[old_event.signature.waveform]
+                )
+                sampled_signature_new.samples = samples_signature
+                # update 3 things in samples signatures
+                #   - name of pulses that have been compressed
+                #   - length_samples entry in signature pulse map
+                #   - length entry in the instances stored in the signature pulse map
+                pulse_map = sampled_signature_new.pulse_map
+                for pulse_name in list(pulse_map.keys()):
+                    pulse_map[pulse_name + f"_compr_{new_event.label}"] = pulse_map.pop(
+                        pulse_name
+                    )
+                for sp_map in pulse_map.values():
+                    sp_map.length_samples = new_length
+                    for signature in sp_map.instances:
+                        signature.length = new_length
+                sampled_signatures[playback_signature.waveform] = sampled_signature_new
                 time += new_length
-        return new_awg_events, pulse_name_mapping
+        return new_awg_events
 
     @staticmethod
     def _pulses_compatible_for_compression(pulses: list[NamedTuple]) -> bool:
@@ -900,7 +992,7 @@ class CodeGenerator(ICodeGenerator):
     @staticmethod
     def _compress_waves(
         sampled_events: AWGSampledEventSequence,
-        sampled_signatures: dict[WaveformSignature, dict],
+        sampled_signatures: dict[WaveformSignature, SampledWaveformSignature],
         pulse_defs: dict[str, PulseDef],
         device_type: DeviceType,
     ):
@@ -916,7 +1008,7 @@ class CodeGenerator(ICodeGenerator):
                 if event.type == AWGEventType.ACQUIRE:
                     if any(
                         pulse_defs[id].can_compress
-                        for id in ensure_list(event.params["play_wave_id"])
+                        for id in event.params["play_wave_id"]
                     ):
                         _logger.warning(
                             "Compression for integration pulses is not supported. %s, for which compression has been requested, will not be compressed.",
@@ -944,11 +1036,11 @@ class CodeGenerator(ICodeGenerator):
                         sampled_signature = sampled_signatures.get(wave_form)
                         if sampled_signature is None:  # Non-matching channel
                             continue
-                        orig_i = sampled_signature["samples_i"]
+                        orig_i = sampled_signature.samples_i
                         if len(orig_i) <= 4096:  # TODO(2K): get via device_type
                             # Measure pulse is fitting into memory, no additional processing needed
                             continue
-                        orig_q = sampled_signature["samples_q"]
+                        orig_q = sampled_signature.samples_q
                         sample_dict = {
                             "i": orig_i,
                             "q": orig_q,
@@ -1003,15 +1095,21 @@ class CodeGenerator(ICodeGenerator):
                                 raise LabOneQException(
                                     "SHFQA measure pulse exceeds 4096 samples after compression."
                                 )
-                            sampled_signature["samples_i"] = new_i
-                            sampled_signature["samples_q"] = new_q
-                            sampled_signature["hold_start"] = len(
+                            new_samples_signature = SamplesSignature(
+                                samples_i=new_i,
+                                samples_q=new_q,
+                                # No markers for SHFQA measure pulses
+                                samples_marker1=None,
+                                samples_marker2=None,
+                            )
+                            sampled_signature.samples = new_samples_signature
+                            sampled_signature.hold_start = len(
                                 new_events[0].samples["i"]
                             )
                             assert (
                                 new_events[1].num_samples >= 12
                             )  # Ensured by previous conditions
-                            sampled_signature["hold_length"] = (
+                            sampled_signature.hold_length = (
                                 new_events[1].num_samples - 4
                             )
                             continue
@@ -1025,15 +1123,15 @@ class CodeGenerator(ICodeGenerator):
                     ):
                         continue
                     sampled_signature = sampled_signatures[wave_form]
-                    sample_dict = {
-                        k: sampled_signature[k]
+                    compressor_input_samples = {
+                        k: getattr(sampled_signature, k)
                         for k in (
                             "samples_i",
                             "samples_q",
                             "samples_marker1",
                             "samples_marker2",
                         )
-                        if k in sampled_signature
+                        if getattr(sampled_signature, k) is not None
                     }
                     pulse_compr_info = namedtuple(
                         "PulseComprInfo", ["start", "end", "can_compress"]
@@ -1060,7 +1158,9 @@ class CodeGenerator(ICodeGenerator):
                     # remove duplicates, keep order
                     compressible_segments = [*dict.fromkeys(compressible_segments)]
                     new_events = wave_compressor.compress_wave(
-                        sample_dict, device_type.min_play_wave, compressible_segments
+                        compressor_input_samples,
+                        device_type.min_play_wave,
+                        compressible_segments,
                     )
                     pulse_names = [pulse.pulse for pulse in wave_form.pulses]
                     if new_events is None:
@@ -1079,50 +1179,14 @@ class CodeGenerator(ICodeGenerator):
                         sum(1 for event in new_events if isinstance(event, PlayHold)),
                     )
             for idx, new_events in event_replacement.items():
-                new_awg_events, pulse_name_mapping = CodeGenerator._emit_new_awg_events(
-                    event_group[idx], new_events
+                new_awg_events = CodeGenerator._emit_new_awg_events(
+                    event_group[idx],
+                    new_events,
+                    sampled_signatures=sampled_signatures,
                 )
-
                 old_event = event_group[idx]
                 event_group[idx : idx + 1] = new_awg_events
-
-                old_waveform = old_event.signature.waveform
-                for new_awg_event in new_awg_events:
-                    if new_awg_event.type == AWGEventType.PLAY_WAVE:
-                        new_waveform = new_awg_event.signature.waveform
-                        new_length = len(
-                            next(iter(new_waveform.samples.samples_map.values()))
-                        )
-
-                        old_sampled_signature = sampled_signatures[old_waveform]
-                        new_sampled_signature = copy.deepcopy(old_sampled_signature)
-
-                        # save old waveform such that we can clean the sampled signatures later on
-                        compressed_waveform_signatures.add(old_waveform)
-
-                        new_sampled_signature = (
-                            new_sampled_signature | new_waveform.samples.samples_map
-                        )
-                        new_signature_pulse_map = new_sampled_signature[
-                            "signature_pulse_map"
-                        ]
-
-                        # update 3 things in samples signatures
-                        #   - name of pulses that have been compressed
-                        #   - length_samples entry in signature pulse map
-                        #   - length entry in the instances stored in the signature pulse map
-
-                        for old_name, new_name in pulse_name_mapping.items():
-                            new_signature_pulse_map[new_name] = (
-                                new_signature_pulse_map.pop(old_name)
-                            )
-
-                        for sp_map in new_signature_pulse_map.values():
-                            sp_map.length_samples = new_length
-                            for signature in sp_map.instances:
-                                signature.length = new_length
-
-                        sampled_signatures[new_waveform] = new_sampled_signature
+                compressed_waveform_signatures.add(old_event.signature.waveform)
 
         # evict waveforms that have been compressed, and thus replaced with one or more, shorter, waves
         for waveform_signature in compressed_waveform_signatures:
@@ -1133,7 +1197,7 @@ class CodeGenerator(ICodeGenerator):
         awg_ir: ir_code.SingleAwgIR,
         events: EventList,
         pulse_defs: dict[str, PulseDef],
-        user_pulse_params: passes.PulseParams,
+        user_pulse_params: list[passes.PulseParams],
         feedback_register: FeedbackRegisterAllocation,
         acquisition_type: AcquisitionType | None,
     ):
@@ -1142,6 +1206,7 @@ class CodeGenerator(ICodeGenerator):
         _logger.debug("AWG Object = \n%s", awg)
         awg_compile_info = passes.analyze_awg_ir(awg_ir)
         global_sampling_rate, global_delay = self._calc_global_awg_params(awg)
+        global_delay_samples = length_to_samples(global_delay, global_sampling_rate)
         use_command_table = awg.device_type in (DeviceType.HDAWG, DeviceType.SHFSG)
 
         _logger.debug(
@@ -1150,12 +1215,10 @@ class CodeGenerator(ICodeGenerator):
             awg.device_id,
         )
         sampled_events = AWGSampledEventSequence()
-        # Gather events sorted by time (in samples) in a dict of lists with time as key
+        # Sequencer start
+        cut_points = {global_delay_samples}
 
-        precomp_reset_events = analyze_precomp_reset_times(
-            events, [s.id for s in awg.signals], global_sampling_rate, global_delay
-        )
-        sampled_events.merge(precomp_reset_events)
+        # Gather events sorted by time (in samples) in a dict of lists with time as key
 
         phase_reset_events = analyze_phase_reset_times(
             events, awg.device_id, global_sampling_rate, global_delay
@@ -1170,9 +1233,6 @@ class CodeGenerator(ICodeGenerator):
         prng_setup = analyze_prng_times(events, global_sampling_rate, global_delay)
         sampled_events.merge(prng_setup)
 
-        ppc_sweep_events = analyze_ppc_sweep_events(events, awg, global_delay)
-        sampled_events.merge(ppc_sweep_events)
-
         trigger_events = analyze_trigger_events(events, awg.signals, loop_events)
         sampled_events.merge(trigger_events)
 
@@ -1184,28 +1244,53 @@ class CodeGenerator(ICodeGenerator):
             )
             sampled_events.merge(set_oscillator_events)
 
-            acquire_events = analyze_acquire_times(
-                events,
-                signal_obj,
+        cut_points = set(sampled_events.sequence) | {
+            length_to_samples(global_delay, global_sampling_rate)
+        }
+        play_wave_size_hint, play_zero_size_hint = self.waveform_size_hints(
+            awg.device_type
+        )
+        awg_code_output = codegen_rs.generate_code_for_awg(
+            ob=awg_ir,
+            signals=self._ir.signals,
+            cut_points=cut_points,
+            play_wave_size_hint=play_wave_size_hint,
+            play_zero_size_hint=play_zero_size_hint,
+            amplitude_resolution_range=self.amplitude_resolution_range(),
+            use_amplitude_increment=self._settings.USE_AMPLITUDE_INCREMENT,
+            phase_resolution_range=self.phase_resolution_range(),
+            global_delay_samples=global_delay_samples,
+        )
+        awg_events = compat_rs.transform_rs_events_to_awg_events(
+            awg_code_output.awg_events
+        )
+        for event in awg_events:
+            if event.type in [
+                AWGEventType.RESET_PRECOMPENSATION_FILTERS,
+                AWGEventType.PPC_SWEEP_STEP_START,
+                AWGEventType.PPC_SWEEP_STEP_END,
+            ]:
+                sampled_events.add(event.start, event)
+
+        for signal_obj in awg.signals:
+            if signal_obj.signal_type != "integration":
+                continue
+            events_acquire = [
+                e
+                for e in awg_events
+                if e.type == AWGEventType.ACQUIRE
+                and e.params["signal_id"] == signal_obj.id
+            ]
+            self._integration_weights[awg.key][signal_obj.id] = (
+                calculate_integration_weights(
+                    events_acquire,
+                    signal_obj,
+                    pulse_defs,
+                    pulse_params=user_pulse_params,
+                )
             )
-
-            if signal_obj.signal_type == "integration":
-                _logger.debug(
-                    "Calculating integration weights for signal %s. There are %d acquire events.",
-                    signal_obj.id,
-                    len(acquire_events.sequence),
-                )
-                self._integration_weights[awg.key][signal_obj.id] = (
-                    calculate_integration_weights(
-                        acquire_events,
-                        signal_obj,
-                        pulse_defs,
-                        pulse_params=user_pulse_params,
-                    )
-                )
-
-            sampled_events.merge(acquire_events)
-
+            for e in events_acquire:
+                sampled_events.add(e.start, e)
         # Perform the actual downsampling of integration weights using a common factor for the AWG
         common_downsampling_factor = max(
             (
@@ -1226,25 +1311,10 @@ class CodeGenerator(ICodeGenerator):
                     )
                     iw.downsampling_factor = common_downsampling_factor
 
-        play_wave_size_hint, play_zero_size_hint = self.waveform_size_hints(
-            awg.device_type
-        )
-        cut_points = set(sampled_events.sequence) | {
-            length_to_samples(global_delay, global_sampling_rate)
-        }
-        awg_code_output = codegen_rs.generate_code_for_awg(
-            ob=awg_ir,
-            signals=self._ir.signals,
-            cut_points=cut_points,
-            play_wave_size_hint=play_wave_size_hint,
-            play_zero_size_hint=play_zero_size_hint,
-            amplitude_resolution_range=self.amplitude_resolution_range(),
-            use_amplitude_increment=self._settings.USE_AMPLITUDE_INCREMENT,
-            phase_resolution_range=self.phase_resolution_range(),
-        )
-
         # Signatures of this AWG
-        waveform_signatures: dict[str, dict[FrozenWaveformSignature, dict]] = {}
+        waveforms: dict[
+            WaveformSignature, list[tuple[tuple[str], SampledWaveformSignature | None]]
+        ] = defaultdict(list)
         if awg.signal_type == AWGSignalType.MULTI:
             _logger.debug("Multi signal %s", awg)
             assert len(awg.signals) > 0
@@ -1256,15 +1326,26 @@ class CodeGenerator(ICodeGenerator):
                     )
 
             signals = {s.id: s for s in awg.signals if s.signal_type != "integration"}
-            virtual_signal_id = "_".join(signals.keys())
-            interval_events = AWGSampledEventSequence()
-            for e in compat_rs.transform_rs_events_to_awg_events(
-                awg_code_output, set(signals.keys())
-            ):
-                interval_events.add(e.start, e)
+            virtual_signal = tuple(signals)
+            events_play_wave = AWGSampledEventSequence()
+            # Original insertion order kept for the event types below
+            for event in awg_events:
+                if event.type == AWGEventType.PLAY_WAVE and event.params[
+                    "signal_ids"
+                ] == set(signals.keys()):
+                    events_play_wave.add(event.start, event)
+                elif event.type == AWGEventType.MATCH:
+                    events_play_wave.add(event.start, event)
+                elif event.type == AWGEventType.INIT_AMPLITUDE_REGISTER:
+                    events_play_wave.add(event.start, event)
+                elif (
+                    event.type == AWGEventType.CHANGE_OSCILLATOR_PHASE
+                    and event.params["signal_id"] in signals
+                ):
+                    events_play_wave.add(event.start, event)
             sampled_signatures = self._sample_pulses(
-                virtual_signal_id,
-                interval_events,
+                virtual_signal,
+                events_play_wave,
                 pulse_defs=pulse_defs,
                 sampling_rate=awg.sampling_rate,
                 signal_type="iq",
@@ -1274,7 +1355,7 @@ class CodeGenerator(ICodeGenerator):
                 params=user_pulse_params,
             )
 
-            sampled_events.merge(interval_events)
+            sampled_events.merge(events_play_wave)
 
             self._compress_waves(
                 sampled_events=sampled_events,
@@ -1282,20 +1363,36 @@ class CodeGenerator(ICodeGenerator):
                 pulse_defs=pulse_defs,
                 device_type=awg.device_type,
             )
-            waveform_signatures[virtual_signal_id] = {
-                k.to_frozen(): v for k, v in sampled_signatures.items()
-            }
+            for waveform, sampled_signature in sampled_signatures.items():
+                waveforms[waveform].append(
+                    (
+                        virtual_signal,
+                        sampled_signature,
+                    )
+                )
         elif awg.signal_type != AWGSignalType.DOUBLE:
             # AWGSignalType.IQ / AWGSignalType.SINGLE
             for signal_obj in awg.signals:
-                interval_events = AWGSampledEventSequence()
-                for e in compat_rs.transform_rs_events_to_awg_events(
-                    awg_code_output, {signal_obj.id}
-                ):
-                    interval_events.add(e.start, e)
+                events_play_wave = AWGSampledEventSequence()
+                # Original insertion order kept for the event types below
+                for event in awg_events:
+                    if event.type == AWGEventType.PLAY_WAVE and event.params[
+                        "signal_ids"
+                    ] == {signal_obj.id}:
+                        events_play_wave.add(event.start, event)
+                    elif event.type == AWGEventType.MATCH:
+                        events_play_wave.add(event.start, event)
+                    elif event.type == AWGEventType.INIT_AMPLITUDE_REGISTER:
+                        events_play_wave.add(event.start, event)
+                    elif (
+                        event.type == AWGEventType.CHANGE_OSCILLATOR_PHASE
+                        and event.params["signal_id"] == signal_obj.id
+                    ):
+                        events_play_wave.add(event.start, event)
+                virtual_signal = (signal_obj.id,)
                 sampled_signatures = self._sample_pulses(
-                    signal_obj.id,
-                    interval_events,
+                    virtual_signal,
+                    events_play_wave,
                     pulse_defs=pulse_defs,
                     sampling_rate=awg.sampling_rate,
                     signal_type=signal_obj.signal_type,
@@ -1303,7 +1400,7 @@ class CodeGenerator(ICodeGenerator):
                     mixer_type=signal_obj.mixer_type,
                     params=user_pulse_params,
                 )
-                sampled_events.merge(interval_events)
+                sampled_events.merge(events_play_wave)
 
                 self._compress_waves(
                     sampled_events=sampled_events,
@@ -1311,21 +1408,36 @@ class CodeGenerator(ICodeGenerator):
                     pulse_defs=pulse_defs,
                     device_type=awg.device_type,
                 )
-                waveform_signatures[signal_obj.id] = {
-                    k.to_frozen(): v for k, v in sampled_signatures.items()
-                }
+                for waveform, sampled_signature in sampled_signatures.items():
+                    waveforms[waveform].append(
+                        (
+                            virtual_signal,
+                            sampled_signature,
+                        )
+                    )
         else:  # awg.signal_type == AWGSignalType.DOUBLE
             assert len(awg.signals) == 2
             signal_a, signal_b = awg.signals
-            virtual_signal_id = signal_a.id + "_" + signal_b.id
-            interval_events = AWGSampledEventSequence()
-            for e in compat_rs.transform_rs_events_to_awg_events(
-                awg_code_output, set({signal_a.id, signal_b.id})
-            ):
-                interval_events.add(e.start, e)
+            virtual_signal = (signal_a.id, signal_b.id)
+            events_play_wave = AWGSampledEventSequence()
+            # Original insertion order kept for the event types below
+            for event in awg_events:
+                if event.type == AWGEventType.PLAY_WAVE and event.params[
+                    "signal_ids"
+                ] == {signal_a.id, signal_b.id}:
+                    events_play_wave.add(event.start, event)
+                elif event.type == AWGEventType.MATCH:
+                    events_play_wave.add(event.start, event)
+                elif event.type == AWGEventType.INIT_AMPLITUDE_REGISTER:
+                    events_play_wave.add(event.start, event)
+                elif (
+                    event.type == AWGEventType.CHANGE_OSCILLATOR_PHASE
+                    and event.params["signal_id"] in {signal_a.id, signal_b.id}
+                ):
+                    events_play_wave.add(event.start, event)
             sampled_signatures = self._sample_pulses(
-                virtual_signal_id,
-                interval_events,
+                virtual_signal,
+                events_play_wave,
                 pulse_defs=pulse_defs,
                 sampling_rate=awg.sampling_rate,
                 signal_type=signal_a.signal_type,
@@ -1334,7 +1446,7 @@ class CodeGenerator(ICodeGenerator):
                 params=user_pulse_params,
             )
 
-            sampled_events.merge(interval_events)
+            sampled_events.merge(events_play_wave)
 
             self._compress_waves(
                 sampled_events=sampled_events,
@@ -1342,11 +1454,37 @@ class CodeGenerator(ICodeGenerator):
                 pulse_defs=pulse_defs,
                 device_type=awg.device_type,
             )
-            waveform_signatures[virtual_signal_id] = {
-                k.to_frozen(): v for k, v in sampled_signatures.items()
-            }
+            for waveform, sampled_signature in sampled_signatures.items():
+                waveforms[waveform].append(
+                    (
+                        virtual_signal,
+                        sampled_signature,
+                    )
+                )
 
         self.post_process_sampled_events(awg, sampled_events)
+        # Handle sampled waveforms for output
+        signature_strings = {}
+        sampled_waveforms: list[_SampledWaveform] = []
+        signature_infos = []
+        for wf, sampled in waveforms.items():
+            for signals, sampled_signature in sampled:
+                if not sampled_signature:
+                    continue
+                sig_string = signature_strings.setdefault(wf, wf.signature_string())
+                sampled_waveforms.append(
+                    _SampledWaveform(
+                        signals=signals,
+                        signature=sampled_signature,
+                        signature_string=sig_string,
+                    )
+                )
+                has_marker1 = sampled_signature.samples_marker1 is not None
+                has_marker2 = sampled_signature.samples_marker2 is not None
+                signature_infos.append(
+                    (sig_string, wf.length, (has_marker1, has_marker2))
+                )
+        self._sampled_waveforms[awg.key] = sampled_waveforms
         _logger.debug(
             "** Start processing events for awg %d of %s",
             awg.awg_id,
@@ -1366,20 +1504,6 @@ class CodeGenerator(ICodeGenerator):
         has_readout_feedback = awg_compile_info.has_readout_feedback
         if has_readout_feedback:
             declarations_generator.add_variable_declaration("current_seq_step", 0)
-        signature_infos = []
-        for virtual_signal_id in waveform_signatures.keys():
-            for sig, sampled in waveform_signatures[virtual_signal_id].items():
-                if not sampled:
-                    continue
-                has_marker1 = False
-                has_marker2 = False
-                if "samples_marker1" in sampled:
-                    has_marker1 = True
-                if "samples_marker2" in sampled:
-                    has_marker2 = True
-                signature_infos.append(
-                    (sig.signature_string(), sig.length, (has_marker1, has_marker2))
-                )
         for siginfo in sorted(signature_infos):
             declarations_generator.add_wave_declaration(
                 siginfo[0],
@@ -1406,7 +1530,9 @@ class CodeGenerator(ICodeGenerator):
             automute_playzeros_min_duration=self._settings.SHF_OUTPUT_MUTE_MIN_DURATION,
             automute_playzeros=any([sig.automute for sig in awg.signals]),
         )
-        shfppc_sweeper_config_tracker = SHFPPCSweeperConfigTracker()
+        shfppc_sweeper_config_tracker = SHFPPCSweeperConfigTracker(
+            awg_compile_info.ppc_device, awg_compile_info.ppc_channel
+        )
         handler = SampledEventHandler(
             seqc_tracker=seqc_tracker,
             command_table_tracker=command_table_tracker,
@@ -1428,32 +1554,6 @@ class CodeGenerator(ICodeGenerator):
             acquisition_type=acquisition_type,
         )
 
-        self._sampled_signatures.update(
-            {
-                sig: [
-                    (wf_sig.signature_string(), sampled_pulse_obj)
-                    for wf_sig, sampled_pulse_obj in wf.items()
-                ]
-                for sig, wf in waveform_signatures.items()
-            }
-        )
-        # Modify signatures in place to replace Signature waveforms with frozen waveforms.
-        # The frozen waveforms have precalculated signatures strings, which
-        # is costly to compute for each pulse.
-        frozen_wf_signatures = {
-            signature: signature
-            for wf in waveform_signatures.values()
-            for signature in wf.keys()
-        }
-        for awg_events in sampled_events.sequence.values():
-            for awg_event in awg_events:
-                if maybe_signature := awg_event.maybe_signature:
-                    if maybe_signature.waveform is None:
-                        continue
-                    maybe_signature.waveform = frozen_wf_signatures[
-                        maybe_signature.waveform
-                    ]
-        sampled_events.sort()
         handler.handle_sampled_events(sampled_events)
         for res_usage in handler.resource_usage():
             if (
@@ -1535,7 +1635,7 @@ class CodeGenerator(ICodeGenerator):
 
     def _sample_pulses(
         self,
-        signal_id: str,
+        signals: tuple[str],
         interval_events: AWGSampledEventSequence,
         pulse_defs: dict[str, PulseDef],
         sampling_rate: float,
@@ -1546,7 +1646,9 @@ class CodeGenerator(ICodeGenerator):
         multi_iq_signal=False,
     ):
         params = params or {}
-        sampled_signatures: dict[WaveformSignature, dict] = {}
+        sampled_signatures: dict[
+            WaveformSignature, SampledWaveformSignature | None
+        ] = {}
         # To produce deterministic SeqC, we use a dict for signatures
         # as an easy insertion-ordered set.
         signatures: dict[PlaybackSignature, type[None]] = {}
@@ -1604,11 +1706,6 @@ class CodeGenerator(ICodeGenerator):
                 if pulse_part.amplitude is not None:
                     amplitude *= pulse_part.amplitude
 
-                assert not pulse_part.oscillator_phase, (
-                    "oscillator phase should have been baked into pulse phase"
-                )
-
-                baseband_phase = pulse_part.increment_oscillator_phase
                 used_oscillator_frequency = pulse_part.oscillator_frequency
 
                 _logger.debug(
@@ -1622,10 +1719,6 @@ class CodeGenerator(ICodeGenerator):
                 if pulse_part.phase is not None:
                     # According to "LabOne Q Software: Signal, channel and oscillator concept" REQ 1.3
                     iq_phase += pulse_part.phase
-
-                # In case oscillator phase can't be set at runtime (e.g. HW oscillator without
-                # phase control from a sequencer), apply oscillator phase on a baseband (iq) signal
-                iq_phase += baseband_phase or 0.0
 
                 iq_phase = normalize_phase(iq_phase)
 
@@ -1650,23 +1743,34 @@ class CodeGenerator(ICodeGenerator):
                     samples=samples,
                     mixer_type=mixer_type,
                     pulse_parameters=params_pulse_combined,
-                    markers=[{k: v for k, v in m} for m in pulse_part.markers]
+                    markers=[m for m in pulse_part.markers]
                     if pulse_part.markers
                     else None,
                     pulse_defs=pulse_defs,
                 )
-
+                sampled_pulse = SampledWaveformSignature(
+                    samples=SamplesSignature(
+                        samples_i=sampled_pulse["samples_i"],
+                        samples_q=sampled_pulse["samples_q"],
+                        samples_marker1=sampled_pulse.get("samples_marker1"),
+                        samples_marker2=sampled_pulse.get("samples_marker2"),
+                    )
+                )
                 verify_amplitude_no_clipping(
-                    sampled_pulse, pulse_def.uid, mixer_type, signal_id
+                    samples_i=sampled_pulse.samples_i,
+                    samples_q=sampled_pulse.samples_q,
+                    pulse_id=pulse_def.uid,
+                    mixer_type=mixer_type,
+                    signals=signals,
                 )
 
-                if "samples_q" in sampled_pulse and len(
-                    sampled_pulse["samples_i"]
-                ) != len(sampled_pulse["samples_q"]):
+                if sampled_pulse.samples_q is not None and len(
+                    sampled_pulse.samples_i
+                ) != len(sampled_pulse.samples_q):
                     _logger.warning(
                         "Expected samples_q and samples_i to be of equal length"
                     )
-                len_i = len(sampled_pulse["samples_i"])
+                len_i = len(sampled_pulse.samples_i)
                 if not len_i == pulse_part.length and samples is None:
                     num_samples = length_to_samples(pulse_def.length, sampling_rate)
                     _logger.warning(
@@ -1686,7 +1790,7 @@ class CodeGenerator(ICodeGenerator):
                     and not device_type == DeviceType.SHFQA
                 ):
                     self.stencil_samples(
-                        pulse_part.start, sampled_pulse["samples_i"], samples_i
+                        pulse_part.start, sampled_pulse.samples_i, samples_i
                     )
                     has_q = True
                 elif (
@@ -1695,57 +1799,66 @@ class CodeGenerator(ICodeGenerator):
                     and not device_type == DeviceType.SHFQA
                 ):
                     self.stencil_samples(
-                        pulse_part.start, sampled_pulse["samples_i"], samples_q
+                        pulse_part.start, sampled_pulse.samples_i, samples_q
                     )
                     has_q = True
                 else:
                     self.stencil_samples(
-                        pulse_part.start, sampled_pulse["samples_i"], samples_i
+                        pulse_part.start, sampled_pulse.samples_i, samples_i
                     )
-                    if "samples_q" in sampled_pulse:
+                    if sampled_pulse.samples_q is not None:
                         self.stencil_samples(
                             pulse_part.start,
-                            sampled_pulse["samples_q"],
+                            sampled_pulse.samples_q,
                             samples_q,
                         )
                         has_q = True
 
                 # RF case
                 if pulse_part.channel is not None and device_type == DeviceType.HDAWG:
-                    if "samples_marker1" in sampled_pulse and pulse_part.channel == 0:
+                    if (
+                        sampled_pulse.samples_marker1 is not None
+                        and pulse_part.channel == 0
+                    ):
                         self.stencil_samples(
                             pulse_part.start,
-                            sampled_pulse["samples_marker1"],
+                            sampled_pulse.samples_marker1,
                             samples_marker1,
                         )
                         has_marker1 = True
 
                     # map user facing marker1 to "internal" marker 2
-                    if "samples_marker1" in sampled_pulse and pulse_part.channel == 1:
+                    if (
+                        sampled_pulse.samples_marker1 is not None
+                        and pulse_part.channel == 1
+                    ):
                         self.stencil_samples(
                             pulse_part.start,
-                            sampled_pulse["samples_marker1"],
+                            sampled_pulse.samples_marker1,
                             samples_marker2,
                         )
                         has_marker2 = True
 
-                    if "samples_marker2" in sampled_pulse and pulse_part.channel == 1:
+                    if (
+                        sampled_pulse.samples_marker2 is not None
+                        and pulse_part.channel == 1
+                    ):
                         raise LabOneQException(
-                            f"Marker 2 not supported on channel 1 of multiplexed RF signal {signal_id}. Please use marker 1"
+                            f"Marker 2 not supported on channel 1 of multiplexed RF signal {signals}. Please use marker 1"
                         )
                 else:
-                    if "samples_marker1" in sampled_pulse:
+                    if sampled_pulse.samples_marker1 is not None:
                         self.stencil_samples(
                             pulse_part.start,
-                            sampled_pulse["samples_marker1"],
+                            sampled_pulse.samples_marker1,
                             samples_marker1,
                         )
                         has_marker1 = True
 
-                    if "samples_marker2" in sampled_pulse:
+                    if sampled_pulse.samples_marker2 is not None:
                         self.stencil_samples(
                             pulse_part.start,
-                            sampled_pulse["samples_marker2"],
+                            sampled_pulse.samples_marker2,
                             samples_marker2,
                         )
                         has_marker2 = True
@@ -1783,11 +1896,6 @@ class CodeGenerator(ICodeGenerator):
                         can_compress=pulse_def.can_compress,
                     )
                 )
-
-            sampled_pulse_obj = {
-                "signature_pulse_map": signature_pulse_map,
-                "samples_i": samples_i,
-            }
             if len(samples_i) != length:
                 _logger.warning(
                     "Num samples does not match. Expected %d but got %d",
@@ -1797,20 +1905,23 @@ class CodeGenerator(ICodeGenerator):
             if has_q:
                 if needs_conjugate:
                     samples_q = -samples_q
-                sampled_pulse_obj["samples_q"] = samples_q
-
-            if has_marker1:
-                sampled_pulse_obj["samples_marker1"] = samples_marker1
-            if has_marker2:
-                sampled_pulse_obj["samples_marker2"] = samples_marker2
-
-            sampled_signatures[signature.waveform] = sampled_pulse_obj
-
+                samples_q = samples_q
+            sampled_signature = SampledWaveformSignature(
+                samples=SamplesSignature(
+                    samples_i=samples_i,
+                    samples_q=samples_q,
+                    samples_marker1=samples_marker1 if has_marker1 else None,
+                    samples_marker2=samples_marker2 if has_marker2 else None,
+                ),
+                pulse_map=signature_pulse_map,
+            )
+            sampled_signatures[signature.waveform] = sampled_signature
             verify_amplitude_no_clipping(
-                sampled_pulse_obj,
-                None,
-                mixer_type,
-                signal_id,
+                samples_i=sampled_signature.samples_i,
+                samples_q=sampled_signature.samples_q,
+                pulse_id=None,
+                mixer_type=mixer_type,
+                signals=signals,
             )
 
         return sampled_signatures

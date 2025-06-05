@@ -398,8 +398,7 @@ class InstrumentConnection:
         if len(futures) > 0:
             await _gather(*futures)
 
-    async def get_raw(self, path: str) -> dict[str, Any]:
-        paths = path.split(",")
+    async def get_raw(self, paths: list[str]) -> dict[str, Any]:
         results = await _gather(*[self.impl.get(p) for p in paths])
         return {r.path: _from_annotated_value(r) for r in results}
 
@@ -448,6 +447,10 @@ async def _gather_with_timeout(
         *(asyncio.wait_for(arg, timeout=timeout_s) for arg in args),
         return_exceptions=True,
     )
+
+
+async def _sleep(timeout_s: float):
+    await asyncio.sleep(timeout_s)
 
 
 def _resolve_type(value: Any, path: str) -> Any:

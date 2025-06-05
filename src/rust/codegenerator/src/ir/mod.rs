@@ -5,6 +5,7 @@ pub mod compilation_job;
 pub mod experiment;
 
 pub use experiment::{
-    Case, FrameChange, InitAmplitudeRegister, IrNode, Loop, LoopIteration, Match, NodeKind,
-    ParameterOperation, PhaseReset, PlayPulse, PlayWave, Samples, SetOscillatorFrequency,
+    AcquirePulse, Case, FrameChange, InitAmplitudeRegister, IrNode, Loop, LoopIteration, Match,
+    NodeKind, ParameterOperation, PhaseReset, PlayAcquire, PlayPulse, PlayWave, PpcSweepStep,
+    ResetPrecompensationFilters, Samples, SetOscillatorFrequency,
 };

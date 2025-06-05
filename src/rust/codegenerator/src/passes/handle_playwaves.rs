@@ -7,7 +7,9 @@ use crate::ir::compilation_job::{self as cjob};
 use crate::passes::amplitude_registers;
 use crate::passes::handle_frame_changes::insert_frame_changes;
 use crate::passes::osc_parameters::SoftwareOscillatorParameters;
-use crate::signature;
+use crate::signature::{
+    PulseSignature, WaveformSignature, sort_pulses, split_complex_pulse_amplitude,
+};
 use crate::tinysample::{self, ceil_to_grid};
 use crate::utils;
 use crate::virtual_signal::{VirtualSignal, VirtualSignals};
@@ -58,6 +60,9 @@ fn calculate_cut_points(node: &ir::IrNode, cut_pts: &mut CutPoints) {
             for child in node.iter_children() {
                 calculate_cut_points(child, cut_pts);
             }
+        }
+        ir::NodeKind::Acquire(_) => {
+            cut_pts.general.insert(*node.offset());
         }
         _ => {
             for child in node.iter_children() {
@@ -248,7 +253,7 @@ fn create_pulse_signature(
     virtual_signal: &VirtualSignal,
     amp_reg_alloc: &amplitude_registers::AmplitudeRegisterAllocation,
     osc_parameters: &SoftwareOscillatorParameters,
-) -> signature::PulseSignature {
+) -> PulseSignature {
     let length = node.node.data().length();
     let channel = if !virtual_signal.is_multiplexed() {
         None
@@ -272,12 +277,19 @@ fn create_pulse_signature(
             } else {
                 (None, vec![])
             };
-            signature::PulseSignature {
+            let (amplitude, phase) = if let Some(amp) = ob.amplitude {
+                let (amplitude, phase) =
+                    split_complex_pulse_amplitude(amp, utils::normalize_phase(ob.phase));
+                (Some(amplitude), phase)
+            } else {
+                (None, utils::normalize_phase(ob.phase))
+            };
+            PulseSignature {
                 start: node.node.offset() + virtual_signal.delay(),
                 length: ob.length,
                 pulse: ob.pulse_def,
-                amplitude: ob.amplitude,
-                phase: utils::normalize_phase(ob.phase),
+                amplitude,
+                phase,
                 oscillator_frequency: osc_parameters.freq_at(&ob.signal, *node.node.offset()),
                 oscillator_phase: osc_phase,
                 increment_oscillator_phase,
@@ -291,7 +303,7 @@ fn create_pulse_signature(
                 incr_phase_params,
             }
         }
-        _ => signature::PulseSignature {
+        _ => PulseSignature {
             start: node.node.offset() + virtual_signal.delay(),
             length,
             pulse: None,
@@ -493,7 +505,7 @@ pub fn handle_plays(
                 } else {
                     None
                 };
-                let pulse_signatures = merged_pulses
+                let mut pulse_signatures: Vec<PulseSignature> = merged_pulses
                     .iter()
                     .map(|slot| {
                         let mut signature = create_pulse_signature(
@@ -507,11 +519,11 @@ pub fn handle_plays(
                         signature
                     })
                     .collect();
-                let mut waveform = signature::Waveform {
+                sort_pulses(&mut pulse_signatures);
+                let waveform = WaveformSignature::Pulses {
                     length: waveform_length,
                     pulses: pulse_signatures,
                 };
-                waveform.sort_pulses();
                 let playwave = ir::PlayWave {
                     waveform,
                     signals: signal.signals().cloned().collect(),

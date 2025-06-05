@@ -101,7 +101,6 @@ def classes_by_short_name() -> OrderedDict[str, type]:
             "MixerCalibrationInfo",
             "PrecompensationInfo",
             "PulseDef",
-            "FollowerInfo",
             "AcquireInfo",
             "SignalRange",
             "Marker",

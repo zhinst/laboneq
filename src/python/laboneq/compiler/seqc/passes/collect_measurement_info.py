@@ -16,11 +16,11 @@ from laboneq.compiler.common.integration_times import (
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.seqc.feedback_register_allocator import FeedbackRegisterAllocator
 from laboneq.compiler.seqc.measurement_calculator import (
-    MeasurementCalculator,
+    IntermediateSignalIntegrationInfo,
     SignalDelays,
-    _IntermediateSignalIntegrationInfo,
     _MeasurementInfo,
     calculate_integration_times_from_intermediate_infos,
+    calculate_signal_delays,
 )
 
 
@@ -94,9 +94,9 @@ class CollectInfo:
 
         # map from (section_uid, awg_id) to _MeasurementInfo
         self.measurement_infos: dict[tuple[str, AwgKey], _MeasurementInfo] = {}
-        # map from (section_uid, signal_id) tuples to _IntermediateSignalIntegrationInfo
+        # map from (section_uid, signal_id) tuples to IntermediateSignalIntegrationInfo
         self.intermediate_signal_infos: dict[
-            tuple[str, str], _IntermediateSignalIntegrationInfo
+            tuple[str, str], IntermediateSignalIntegrationInfo
         ] = {}
         self.first_event_on_signal_in_section = True
 
@@ -221,7 +221,7 @@ class CollectInfo:
         if awg_id not in self.awgs_with_acquires:
             return
         if (section, signal_id) not in self.intermediate_signal_infos:
-            inter_info = _IntermediateSignalIntegrationInfo()
+            inter_info = IntermediateSignalIntegrationInfo()
             self.intermediate_signal_infos[(section, signal_id)] = inter_info
             self.first_event_on_signal_in_section = True
         else:
@@ -319,9 +319,7 @@ def collect_measurement_info(
     integration_times = calculate_integration_times_from_intermediate_infos(
         signals, intermediate_signal_infos
     )
-    signal_delays = MeasurementCalculator.calculate_signal_delays(
-        measurement_infos, signals
-    )
+    signal_delays = calculate_signal_delays(measurement_infos, signals)
 
     # generate_acquire_map
     simultaneous_acquires: dict[int, dict[str, str | None]] = {}

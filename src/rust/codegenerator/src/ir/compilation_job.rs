@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::device_traits;
+use crate::utils::normalize_f64;
 use anyhow::anyhow;
 use numeric_array::NumericArray;
+use std::hash::Hash;
 use std::{collections::HashMap, rc::Rc};
 
 /// Represents different kinds of pulse definitions.
@@ -150,13 +152,52 @@ impl std::str::FromStr for DeviceKind {
         }
     }
 }
-#[derive(Debug, Clone)]
+
+/// Pulse marker
+#[derive(Debug, Clone, PartialEq)]
 pub struct Marker {
+    /// ID of the marker
     pub marker_selector: String,
-    pub enable: Option<bool>,
+    pub enable: bool,
+    /// Start of the marker relative to the beginning of the pulse
     pub start: Option<f64>,
+    // TODO: Marker can actually only have either `length` or `pulse_id`!
+    /// Length of the pulse
     pub length: Option<f64>,
+    /// Marker pulse ID
     pub pulse_id: Option<String>,
+}
+
+impl Marker {
+    pub fn new(
+        marker_selector: String,
+        enable: bool,
+        start: Option<f64>,
+        length: Option<f64>,
+        pulse_id: Option<String>,
+    ) -> Self {
+        Marker {
+            marker_selector,
+            enable,
+            start,
+            length,
+            pulse_id,
+        }
+    }
+}
+
+impl Hash for Marker {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.marker_selector.hash(state);
+        self.enable.hash(state);
+        if let Some(start) = self.start {
+            normalize_f64(start).hash(state);
+        }
+        if let Some(length) = self.length {
+            normalize_f64(length).hash(state);
+        }
+        self.pulse_id.hash(state);
+    }
 }
 
 /// Parameter that is swept over.

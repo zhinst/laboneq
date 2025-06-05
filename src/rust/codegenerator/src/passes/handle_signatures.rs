@@ -7,7 +7,6 @@ use crate::ir::compilation_job::{AwgCore, OscillatorKind, PulseDefKind};
 use crate::ir::{InitAmplitudeRegister, IrNode, NodeKind, ParameterOperation};
 use crate::signature::{PulseSignature, quantize_amplitude_ct, quantize_amplitude_pulse};
 use crate::signature::{quantize_phase_ct, quantize_phase_pulse};
-use crate::utils::normalize_phase;
 
 fn reduce_signature_phase(
     pulses: &mut [PulseSignature],
@@ -117,17 +116,6 @@ fn determine_amplitude_register(pulses: &mut Vec<PulseSignature>) -> u16 {
     0
 }
 
-fn split_complex_amplitude(pulse: &mut PulseSignature) {
-    if let Some(amp_complex) = &mut pulse.amplitude {
-        let theta = amp_complex.arg();
-        let phase = normalize_phase(pulse.phase - theta);
-        pulse.phase = phase;
-
-        amp_complex.re = amp_complex.norm().abs();
-        amp_complex.im = 0.0;
-    }
-}
-
 /// Aggregates pulse amplitudes for command table.
 ///
 /// Whenever possible, the waveforms will be sampled at unit
@@ -160,7 +148,6 @@ fn aggregate_ct_amplitude(pulses: &mut [PulseSignature]) -> Option<f64> {
             pulse
                 .amplitude
                 .expect("Expected pulse to have an amplitude")
-                .re
                 .abs()
         })
         .collect::<Vec<f64>>()
@@ -171,7 +158,7 @@ fn aggregate_ct_amplitude(pulses: &mut [PulseSignature]) -> Option<f64> {
     if ct_amplitude != 0.0 {
         for pulse in pulses_filtered {
             if let Some(amp) = &mut pulse.amplitude {
-                amp.re /= ct_amplitude;
+                *amp /= ct_amplitude;
             }
         }
     }
@@ -249,10 +236,6 @@ fn evaluate_signature_amplitude(
     amplitude_register_values: &mut AmplitudeRegisterValues,
 ) -> (u16, Option<ParameterOperation<f64>>) {
     let amplitude_register = determine_amplitude_register(pulses);
-    // Reduce signature amplitudes
-    for pulse in pulses.iter_mut() {
-        split_complex_amplitude(pulse);
-    }
     let mut ct_amplitude = use_command_table.then(|| {
         let mut ct_amp = ParameterOperation::SET(aggregate_ct_amplitude(pulses).unwrap_or(1.0));
         if use_amplitude_increment {
@@ -271,7 +254,7 @@ fn evaluate_signature_amplitude(
         }
         for pulse in pulses {
             if let Some(amp) = &mut pulse.amplitude {
-                amp.re = quantize_amplitude_pulse(amp.re, amplitude_resolution_range);
+                *amp = quantize_amplitude_pulse(*amp, amplitude_resolution_range);
             }
         }
     }
@@ -335,8 +318,12 @@ fn transform_waveforms(node: &mut IrNode, ctx: &mut PassContext) {
     let use_amplitude_increment = ctx.use_amplitude_increment && !ctx.in_branch;
     match node.data_mut() {
         NodeKind::PlayWave(ob) => {
+            let pulses = ob
+                .waveform
+                .pulses_mut()
+                .expect("Internal error: Waveform pulses must be present");
             let (amplitude_register, ct_amp) = evaluate_signature_amplitude(
-                &mut ob.waveform.pulses,
+                pulses,
                 ctx.use_command_table,
                 use_amplitude_increment,
                 ctx.amplitude_resolution_range,
@@ -345,11 +332,8 @@ fn transform_waveforms(node: &mut IrNode, ctx: &mut PassContext) {
             ob.amplitude_register = amplitude_register;
             ob.amplitude = ct_amp;
 
-            let (increment_phase, params) = handle_signature_phases(
-                &mut ob.waveform.pulses,
-                ctx.use_ct_phase,
-                ctx.phase_resolution_range,
-            );
+            let (increment_phase, params) =
+                handle_signature_phases(pulses, ctx.use_ct_phase, ctx.phase_resolution_range);
             ob.increment_phase = increment_phase;
             ob.increment_phase_params = params;
             // After a conditional playback, we do not know for sure what value
@@ -480,75 +464,7 @@ mod tests {
         assert_eq!(reg, 0);
     }
 
-    mod test_split_complex_amplitude {
-        use std::f64::consts::PI;
-
-        use super::*;
-        use crate::signature::PulseSignature;
-        use num_complex::Complex64;
-
-        fn make_pulse_signature(amplitude: Complex64, phase: f64) -> PulseSignature {
-            PulseSignature {
-                start: 0,
-                pulse: None,
-                length: 0,
-                phase,
-                amplitude: Some(amplitude),
-                oscillator_frequency: None,
-                incr_phase_params: vec![],
-                oscillator_phase: None,
-                increment_oscillator_phase: None,
-                channel: None,
-                sub_channel: None,
-                id_pulse_params: None,
-                markers: vec![],
-                preferred_amplitude_register: None,
-            }
-        }
-
-        #[test]
-        fn test_positive_amplitude() {
-            let mut pulse_signature = make_pulse_signature(Complex64::new(0.5, 0.0), 0.0);
-            split_complex_amplitude(&mut pulse_signature);
-            assert_eq!(pulse_signature.amplitude.unwrap().re, 0.5);
-            assert_eq!(pulse_signature.amplitude.unwrap().im, 0.0);
-            assert_eq!(pulse_signature.phase, 0.0);
-        }
-
-        #[test]
-        fn test_negative_amplitude() {
-            let mut pulse_signature = make_pulse_signature(Complex64::new(-0.5, 0.0), 0.0);
-            split_complex_amplitude(&mut pulse_signature);
-            assert_eq!(pulse_signature.amplitude.unwrap().re, 0.5);
-            assert_eq!(pulse_signature.amplitude.unwrap().im, 0.0);
-            assert_eq!(pulse_signature.phase, PI);
-        }
-
-        #[test]
-        fn test_negative_im() {
-            let mut pulse_signature = make_pulse_signature(Complex64::new(0.5, -0.5), 0.0);
-            split_complex_amplitude(&mut pulse_signature);
-            assert_eq!(pulse_signature.amplitude.unwrap().re, 0.5_f64.sqrt());
-            assert_eq!(pulse_signature.amplitude.unwrap().im, 0.0);
-            // By convention, we consider a positive frequency to correspond to e^( - jwt).
-            // Hence, when multiplying the samples by a number with a negative phase, the
-            // actual phase in LabOneQ lingo is positive.
-            assert_eq!(pulse_signature.phase, PI / 4.0);
-        }
-
-        #[test]
-        fn test_negative_re_im() {
-            let mut pulse_signature = make_pulse_signature(Complex64::new(-0.5, -0.5), 0.0);
-            split_complex_amplitude(&mut pulse_signature);
-            assert_eq!(pulse_signature.amplitude.unwrap().re, 0.5_f64.sqrt());
-            assert_eq!(pulse_signature.amplitude.unwrap().im, 0.0);
-            assert_eq!(pulse_signature.phase, PI - PI / 4.0);
-        }
-    }
-
     mod test_aggregate_ct_amplitude {
-        use num_complex::Complex64;
-
         use super::*;
         use crate::ir::compilation_job::{PulseDef, PulseDefKind};
         use crate::signature;
@@ -567,7 +483,7 @@ mod tests {
                 pulse: Some(Arc::new(pulse)),
                 length: 0,
                 phase: 0.0,
-                amplitude: amplitude.map(|amp| Complex64::new(amp, 0.0)),
+                amplitude,
                 oscillator_frequency: None,
                 incr_phase_params: vec![],
                 oscillator_phase: None,
@@ -594,8 +510,8 @@ mod tests {
             ];
             let ct_amp = aggregate_ct_amplitude(&mut pulses).unwrap();
             assert_eq!(ct_amp, 0.7);
-            assert_eq!(pulses[0].amplitude.unwrap().re, 0.5 / 0.7);
-            assert_eq!(pulses[1].amplitude.unwrap().re, 1.0);
+            assert_eq!(pulses[0].amplitude.unwrap(), 0.5 / 0.7);
+            assert_eq!(pulses[1].amplitude.unwrap(), 1.0);
         }
 
         /// Test any of the pulses have no amplitude definition => no command table amplitude
@@ -632,8 +548,6 @@ mod tests {
     }
 
     mod test_evaluate_signature_amplitude {
-        use num_complex::Complex64;
-
         use super::*;
         use crate::ir::compilation_job::{PulseDef, PulseDefKind};
         use crate::signature;
@@ -652,7 +566,7 @@ mod tests {
                 pulse: Some(Arc::new(pulse)),
                 length: 0,
                 phase: 0.0,
-                amplitude: Some(Complex64::new(amplitude, 0.0)),
+                amplitude: Some(amplitude),
                 oscillator_frequency: None,
                 incr_phase_params: vec![],
                 oscillator_phase: None,
@@ -829,7 +743,7 @@ mod tests {
                 phase,
                 amplitude: None,
                 oscillator_frequency: None,
-                incr_phase_params: incr_phase_params,
+                incr_phase_params,
                 oscillator_phase,
                 increment_oscillator_phase,
                 channel: None,

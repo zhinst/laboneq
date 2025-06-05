@@ -67,12 +67,10 @@ def dump(experiment_dao: ExperimentDAO):
     pqscs = []
 
     for pqsc in experiment_dao.pqscs():
-        pqsc_entry = {"device": {"$ref": pqsc}, "ports": []}
+        pqsc_entry = {"device": {"$ref": pqsc}, "followers": []}
 
-        for port_info in experiment_dao.pqsc_ports(pqsc):
-            pqsc_entry["ports"].append(
-                {"device": {"$ref": port_info["device"]}, "port": port_info["port"]}
-            )
+        for follower_uid in experiment_dao.pqsc_followers(pqsc):
+            pqsc_entry["followers"].append({"$ref": follower_uid})
         pqscs.append(pqsc_entry)
     if len(pqscs) > 0:
         connectivity_object["pqscs"] = pqscs

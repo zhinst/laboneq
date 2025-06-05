@@ -236,12 +236,14 @@ class LegacyConnectionFinder:
 
     def connections_from_port_to_another_device(
         self,
-    ) -> Iterator[tuple[str, legacy_device.Port]]:
+    ) -> Iterator[tuple[str, legacy_device.Port | None]]:
         """Connections that go into the another device port."""
         for conn in self.connections:
             remote_logical_signal = self._legacy_ls_lookup.get(conn.remote_path)
             if not remote_logical_signal:
-                from_port = self._ports[conn.local_port]
+                from_port = (
+                    None if conn.local_port is None else self._ports[conn.local_port]
+                )
                 if conn.signal_type in {
                     legacy_enums.IOSignalType.ZSYNC,
                     legacy_enums.IOSignalType.DIO,
@@ -377,7 +379,7 @@ class _InstrumentsLookup:
 
 def _make_internal_connection_to_same_type_input_port(
     from_instrument: Instrument,
-    from_port: Port,
+    from_port: Port | None,
     to_instrument: Instrument,
     to_port_type: PortType,
 ) -> SetupInternalConnection:
@@ -387,8 +389,9 @@ def _make_internal_connection_to_same_type_input_port(
             to_port = to_instrument_port
             break
     if not to_port:
+        from_port_str = "" if from_port is None else f" '{from_port}'"
         raise LabOneQException(
-            f"Instrument '{from_instrument.uid}' '{from_port}' has a connection to an"
+            f"Instrument '{from_instrument.uid}'{from_port_str} has a connection to an"
             f" instrument '{to_instrument.uid}' without '{to_port_type}' ports."
         )
     return SetupInternalConnection(
@@ -428,13 +431,17 @@ def make_device_to_device_connections(
             device_uid,
             port,
         ) in converter.connection_converter.connections_from_port_to_another_device():
-            from_port = converter.port_converter.ports_by_legacy_uid(port.uid)[0]
+            from_port = (
+                None
+                if port is None
+                else converter.port_converter.ports_by_legacy_uid(port.uid)[0]
+            )
             to_instrument = instrument_lookup.get_instrument(device_uid)
             connection = _make_internal_connection_to_same_type_input_port(
                 from_instrument=converter.instrument,
                 from_port=from_port,
                 to_instrument=to_instrument,
-                to_port_type=from_port.type,
+                to_port_type=PortType.ZSYNC if from_port is None else from_port.type,
             )
             conns.append(connection)
     return conns

@@ -159,9 +159,8 @@ class DeviceSetupDAO:
         self._used_outputs: dict[str, dict[str, list[int]]] = {
             device.uid: device.connected_outputs for device in target_setup.devices
         }
-        self._downlinks: dict[str, list[tuple[str, str]]] = {
-            device.uid: [i for i in device.internal_connections]
-            for device in target_setup.devices
+        self._downlinks: dict[str, list[str]] = {
+            device.uid: device.internal_connections for device in target_setup.devices
         }
         self._calibrations: dict[str, list[TargetChannelCalibration]] = {
             device.uid: copy.deepcopy(device.calibrations)
@@ -196,7 +195,7 @@ class DeviceSetupDAO:
     def has_qhub(self) -> bool:
         return self._has_qhub
 
-    def downlinks_by_device_uid(self, device_uid: str) -> list[tuple[str, str]]:
+    def downlinks_by_device_uid(self, device_uid: str) -> list[str]:
         return self._downlinks[device_uid]
 
     def resolve_ls_path_outputs(self, ls_path: str) -> tuple[str | None, set[int]]:

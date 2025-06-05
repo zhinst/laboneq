@@ -11,6 +11,7 @@ class DeviceQHUB(DeviceLeaderBase):
         super().__init__(*args, **kwargs)
         self.dev_type = "QHUB"
         self.dev_opts = []
+        self._zsyncs = 56
 
     async def qhub_reset_zsync_phy(self):
         async def _set_debug_sequential(values: list[int]):

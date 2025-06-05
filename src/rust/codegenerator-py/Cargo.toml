@@ -7,9 +7,9 @@ publish.workspace = true
 license = "MIT"
 
 [dependencies]
-pyo3 = { version = "0.25.0", features = ["num-complex"] }
-num-complex = "0.4"
+pyo3 = { workspace = true }
+num-complex = { workspace = true }
 
 codegenerator = { path = "../codegenerator" }
+numeric-array = { path = "../numeric-array", features = ["pyo3"] }
 seqc-tracker = { path = "../seqc-tracker" }
-numeric-array = { path = "../numeric-array", features = ["pyo3"]}

@@ -215,7 +215,9 @@ pub fn insert_frame_changes(mut nodes: Vec<(Option<u16>, &mut ir::IrNode)>) -> R
                     ob.length(),
                     *state,
                     ob.oscillator.as_deref(),
-                    &mut ob.waveform.pulses,
+                    ob.waveform
+                        .pulses_mut()
+                        .expect("Internal error: Waveform pulses must be present"),
                 );
             }
             _ => {}
@@ -278,7 +280,7 @@ mod tests {
         let inserted0 = tracker
             .try_insert_frame_change(&None, &signal, 0, 1.0, &mut None)
             .unwrap();
-        assert_eq!(inserted0, true);
+        assert!(inserted0);
         // Frame change that overlaps waveform, but not any of the pulses. Must be applied to last.
         tracker
             .try_insert_frame_change(&None, &signal, 99, 0.5, &mut None)
@@ -330,7 +332,7 @@ mod tests {
         let inserted_before_overlap = tracker
             .try_insert_frame_change(&None, &signal, 15, 1.0, &mut Some("param1".to_string()))
             .unwrap();
-        assert_eq!(inserted_before_overlap, false);
+        assert!(!inserted_before_overlap);
 
         tracker.set_active_waveform(10, 100, None, None, &mut signatures);
 
@@ -339,7 +341,7 @@ mod tests {
             .try_insert_frame_change(&None, &signal, 0, 1.0, &mut Some("param1".to_string()))
             .unwrap();
 
-        assert_eq!(inserted, false);
+        assert!(!inserted);
         assert_eq!(signatures[0].increment_oscillator_phase, None);
         assert_eq!(signatures[0].incr_phase_params, vec!["param0".to_string()]);
     }
@@ -368,10 +370,10 @@ mod tests {
 
         // Test frame change at waveform start point: No error, not consumed
         let result = tracker.try_insert_frame_change(&None, &signal_fc, 0, 1.0, &mut None);
-        assert_eq!(result.unwrap(), false);
+        assert!(!result.unwrap());
 
         // Test frame change at waveform end point: No error, not consumed
         let result = tracker.try_insert_frame_change(&None, &signal_fc, 10, 1.0, &mut None);
-        assert_eq!(result.unwrap(), false);
+        assert!(!result.unwrap());
     }
 }

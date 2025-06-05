@@ -10,7 +10,6 @@ from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
 from laboneq.data.compilation_job import (
     DeviceInfo,
     DeviceInfoType,
-    FollowerInfo,
     ReferenceClockSourceInfo,
 )
 from laboneq.data.execution_payload import VIRTUAL_SHFSG_UID_SUFFIX
@@ -133,20 +132,12 @@ class DeviceInfoBuilder:
                     ]
 
         for conn in setup_internal_connections:
-            if conn.from_port.type == PortType.RF:
+            if conn.from_port is not None and conn.from_port.type == PortType.RF:
                 continue
             leader = self._device_mapping[conn.from_instrument.uid]
-            follower = FollowerInfo(
-                device=self._device_mapping[conn.to_instrument.uid],
-                port=conn.from_port.channel,
-            )
-            leader.followers.append(follower)
+            leader.followers.append(conn.to_instrument.uid)
             if conn.to_instrument.device_type == DeviceType.SHFQC:
                 sg_uid_candidate = conn.to_instrument.uid + VIRTUAL_SHFSG_UID_SUFFIX
                 if sg_uid_candidate not in self._device_mapping:
                     continue
-                follower = FollowerInfo(
-                    device=self._device_mapping[f"{conn.to_instrument.uid}_sg"],
-                    port=conn.from_port.channel,
-                )
-                leader.followers.append(follower)
+                leader.followers.append(sg_uid_candidate)

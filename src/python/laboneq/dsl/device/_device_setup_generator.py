@@ -106,7 +106,6 @@ InstrumentsType = dict[str, list[dict[str, str]]]
 #         - acquire_signal: q0/acquire_line
 #       device_pqsc:
 #         - to: device_hdawg
-#           port: ZSYNCS/0
 ConnectionsType = dict[str, list[dict[str, Union[str, list[str]]]]]
 
 # Models 'dataservers' part of the descriptor:

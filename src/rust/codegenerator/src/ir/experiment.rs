@@ -5,9 +5,11 @@ use num_complex::Complex;
 
 use crate::ir::compilation_job as cjob;
 use crate::node;
-use crate::signature;
+use crate::signature::WaveformSignature;
 use std::rc::Rc;
 use std::sync::Arc;
+
+use super::compilation_job::{PulseDef, Signal};
 pub type Samples = i64;
 pub type IrNode = node::Node<Samples, NodeKind>;
 
@@ -63,8 +65,21 @@ pub struct PlayPulse {
     pub increment_oscillator_phase: Option<f64>,
     pub incr_phase_param_name: Option<String>,
     pub id_pulse_params: Option<usize>,
+    // TODO: Consider replacing this with an ID of markers
     pub markers: Vec<cjob::Marker>,
     pub pulse_def: Option<Arc<cjob::PulseDef>>,
+}
+#[derive(Debug, Clone)]
+pub struct AcquirePulse {
+    // TODO: Should this just be handle?
+    // Currently we restrict kernel per signal, so lets keep it for now
+    pub signal: Rc<Signal>,
+    /// Integration length
+    pub length: Samples,
+    /// Single acquire can consist of multiple individual pulses
+    /// Length of pulse defs must match pulse params ID
+    pub pulse_defs: Vec<Arc<PulseDef>>,
+    pub id_pulse_params: Vec<Option<usize>>,
 }
 
 #[derive(Debug, Clone)]
@@ -99,7 +114,7 @@ pub struct LoopIteration {
 #[derive(Debug, Clone)]
 pub struct PlayWave {
     pub signals: Vec<Rc<cjob::Signal>>,
-    pub waveform: signature::Waveform,
+    pub waveform: WaveformSignature,
     pub oscillator: Option<String>,
     pub amplitude_register: u16,
     pub amplitude: Option<ParameterOperation<f64>>,
@@ -111,11 +126,7 @@ pub struct PlayWave {
 
 impl PlayWave {
     pub fn length(&self) -> Samples {
-        self.waveform.length
-    }
-
-    pub fn waveform(&self) -> &signature::Waveform {
-        &self.waveform
+        self.waveform.length()
     }
 }
 
@@ -133,6 +144,74 @@ pub struct InitAmplitudeRegister {
     pub value: ParameterOperation<f64>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ResetPrecompensationFilters {
+    pub length: Samples,
+}
+
+#[derive(Debug, Clone)]
+pub struct PlayAcquire {
+    signal: Rc<Signal>,
+    length: Samples,
+    // Acquire pulse definitions
+    pulse_defs: Vec<Arc<PulseDef>>,
+    id_pulse_params: Vec<Option<usize>>,
+    oscillator_frequency: f64,
+}
+
+impl PlayAcquire {
+    pub(crate) fn new(
+        signal: Rc<Signal>,
+        length: Samples,
+        pulse_defs: Vec<Arc<PulseDef>>,
+        oscillator_frequency: f64,
+        id_pulse_params: Vec<Option<usize>>,
+    ) -> Self {
+        PlayAcquire {
+            signal,
+            length,
+            pulse_defs,
+            oscillator_frequency,
+            id_pulse_params,
+        }
+    }
+
+    pub fn signal(&self) -> &Signal {
+        &self.signal
+    }
+
+    pub fn length(&self) -> Samples {
+        self.length
+    }
+
+    pub fn pulse_defs(&self) -> &[Arc<PulseDef>] {
+        &self.pulse_defs
+    }
+    pub fn id_pulse_params(&self) -> &[Option<usize>] {
+        &self.id_pulse_params
+    }
+
+    pub fn oscillator_frequency(&self) -> f64 {
+        self.oscillator_frequency
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SweepCommand {
+    pub pump_power: Option<f64>,
+    pub pump_frequency: Option<f64>,
+    pub probe_power: Option<f64>,
+    pub probe_frequency: Option<f64>,
+    pub cancellation_phase: Option<f64>,
+    pub cancellation_attenuation: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PpcSweepStep {
+    pub length: Samples,
+    pub sweep_command: SweepCommand,
+}
+
 // TODO: Think of separating AWG specific nodes and public nodes, which
 // are used to build the experiment.
 
@@ -142,17 +221,23 @@ pub enum NodeKind {
     // IR Nodes
     // IR nodes are consumed by the code generator.
     PlayPulse(PlayPulse),
+    AcquirePulse(AcquirePulse),
     Case(Case),
     SetOscillatorFrequency(SetOscillatorFrequency),
     PhaseReset(PhaseReset),
+    PrecompensationFilterReset(),
+    PpcSweepStep(PpcSweepStep),
     Match(Match),
     Loop(Loop),
     LoopIteration(LoopIteration),
     // AWG nodes
     // AWG nodes are produced by the code generator.
     PlayWave(PlayWave),
+    Acquire(PlayAcquire),
     FrameChange(FrameChange),
     InitAmplitudeRegister(InitAmplitudeRegister),
+    ResetPrecompensationFilters(ResetPrecompensationFilters),
+    PpcStep(PpcSweepStep),
     // No-op node.
     // Should be treated as such, except it's length must be
     // taken into account.
@@ -167,9 +252,12 @@ impl NodeKind {
     pub fn set_length(&mut self, value: Samples) {
         match self {
             NodeKind::PlayPulse(x) => x.length = value,
+            NodeKind::AcquirePulse(x) => x.length = value,
             NodeKind::Case(x) => x.length = value,
             NodeKind::SetOscillatorFrequency(_) => {}
             NodeKind::PhaseReset(_) => {}
+            NodeKind::PrecompensationFilterReset() => {}
+            NodeKind::PpcSweepStep(x) => x.length = value,
             NodeKind::Match(x) => x.length = value,
             NodeKind::Loop(x) => x.length = value,
             NodeKind::LoopIteration(x) => x.length = value,
@@ -182,16 +270,22 @@ impl NodeKind {
     pub fn length(&self) -> Samples {
         match self {
             NodeKind::PlayPulse(x) => x.length,
+            NodeKind::AcquirePulse(x) => x.length,
             NodeKind::Case(x) => x.length,
             NodeKind::SetOscillatorFrequency(_) => 0,
             NodeKind::PhaseReset(_) => 0,
+            NodeKind::PrecompensationFilterReset() => 0,
+            NodeKind::PpcSweepStep(x) => x.length,
             NodeKind::Match(x) => x.length,
             NodeKind::Loop(x) => x.length,
             NodeKind::LoopIteration(x) => x.length,
             NodeKind::Nop { length } => *length,
             NodeKind::FrameChange(x) => x.length,
+            NodeKind::Acquire(x) => x.length,
             NodeKind::PlayWave(x) => x.length(),
             NodeKind::InitAmplitudeRegister(_) => 0,
+            NodeKind::ResetPrecompensationFilters(x) => x.length,
+            NodeKind::PpcStep(x) => x.length,
         }
     }
 }

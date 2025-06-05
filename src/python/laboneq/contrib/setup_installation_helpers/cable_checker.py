@@ -284,9 +284,7 @@ def create_device_setup(
             if device.zsync_port is not None:
                 device_type = device.type.upper()
                 name = f"device_{device_type}_{uid}"
-                connections[pqsc_name].append(
-                    {"to": name, "port": f"ZSYNCS/{device.zsync_port}"}
-                )
+                connections[pqsc_name].append({"to": name})
 
     device_setup = DeviceSetup.from_dicts(
         instruments=instruments, connections=connections, dataservers=dataservers

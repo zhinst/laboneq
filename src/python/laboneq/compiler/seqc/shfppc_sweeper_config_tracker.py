@@ -18,11 +18,11 @@ class SweepStackFrame:
 
 
 class SHFPPCSweeperConfigTracker:
-    def __init__(self):
+    def __init__(self, ppc_device: str | None, ppc_channel: int | None):
         self._command_tree: SweepStackFrame = SweepStackFrame(count=1)
         self._stack: list[SweepStackFrame] = [self._command_tree]
-        self._ppc_device: str | None = None
-        self._ppc_channel: int | None = None
+        self._ppc_device: str | None = ppc_device
+        self._ppc_channel: int | None = ppc_channel
 
     def has_sweep_commands(self) -> bool:
         return self._ppc_device is not None and self._ppc_channel is not None
@@ -31,10 +31,10 @@ class SHFPPCSweeperConfigTracker:
     def _current_frame(self) -> SweepStackFrame:
         return self._stack[-1]
 
-    def add_step(self, ppc_device: str, ppc_channel: int, **kwargs):
+    def add_step(self, **kwargs):
         self._current_frame.items.append(SweepCommand(**kwargs))
-        self._ppc_device = ppc_device
-        self._ppc_channel = ppc_channel
+        assert self._ppc_device is not None
+        assert self._ppc_channel is not None
 
     def enter_loop(self, count: int):
         new_frame = SweepStackFrame(count=count)

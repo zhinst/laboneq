@@ -3,7 +3,4 @@
 
 from laboneq._rust.codegenerator import SeqCGenerator, WaveIndexTracker
 from laboneq.compiler.seqc.code_generator import CodeGenerator, sample_pulse
-from laboneq.compiler.seqc.measurement_calculator import (
-    IntegrationTimes,
-    MeasurementCalculator,
-)
+from laboneq.compiler.seqc.measurement_calculator import IntegrationTimes

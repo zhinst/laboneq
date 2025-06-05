@@ -16,6 +16,7 @@ import abc
 import copy
 import itertools
 from typing import TYPE_CHECKING
+import warnings
 
 import laboneq.core.path as qct_path
 from laboneq.core.exceptions import LabOneQException
@@ -573,6 +574,17 @@ class _SHFQCGenerator(_InstrumentGenerator):
             return _SHFSGGenerator.make_logical_signal(connection, pc)
 
 
+def _warn_for_explicit_zsync_ports(from_port: str | None):
+    if from_port is not None:
+        warnings.warn(
+            "Explicit ZSYNCS ports are deprecated and currently ignored. "
+            "Remove them from the device setup descriptor. This will be a hard "
+            "error in a future version.",
+            FutureWarning,
+            stacklevel=4,
+        )
+
+
 class _PQSCGenerator(_InstrumentGenerator):
     @staticmethod
     def make_connections(
@@ -582,6 +594,7 @@ class _PQSCGenerator(_InstrumentGenerator):
             raise DeviceSetupInternalException(
                 "Only to device connections are supported on PQSC."
             )
+        _warn_for_explicit_zsync_ports(connection.from_port)
         return [
             Connection(
                 local_port=connection.from_port,
@@ -601,6 +614,7 @@ class _QHUBGenerator(_InstrumentGenerator):
             raise DeviceSetupInternalException(
                 "Only to device connections are supported on QHUB."
             )
+        _warn_for_explicit_zsync_ports(connection.from_port)
         return [
             Connection(
                 local_port=connection.from_port,

@@ -510,7 +510,7 @@ mod tests {
                 play_wave_max_hint,
                 ct_intervals,
             )
-            .is_err_and(|e| e.to_string() == "Cut points overlap intervals".to_string())
+            .is_err_and(|e| e.to_string() == *"Cut points overlap intervals")
         );
     }
 
@@ -535,7 +535,7 @@ mod tests {
                 play_wave_max_hint,
                 ct_intervals,
             )
-            .is_err_and(|e| e.to_string() == "Cut point does not match granularity".to_string())
+            .is_err_and(|e| e.to_string() == *"Cut point does not match granularity")
         );
     }
 

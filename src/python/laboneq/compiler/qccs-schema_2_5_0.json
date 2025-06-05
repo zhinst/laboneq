@@ -333,30 +333,15 @@
         "$ref": "#/definitions/server-def"
       }
     },
-    "port-map-def": {
-      "properties": {
-        "device": {
-          "$ref": "#/definitions/reference-def"
-        },
-        "port": {
-          "type": "integer"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "device",
-        "port"
-      ]
-    },
     "pqsc-def": {
       "properties": {
         "device": {
           "$ref": "#/definitions/reference-def"
         },
-        "ports": {
+        "followers": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/port-map-def"
+            "$ref": "#/definitions/reference-def"
           }
         }
       },

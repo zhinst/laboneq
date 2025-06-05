@@ -111,7 +111,13 @@ def _replace_pulse_in_wave(
             mixer_type=pwm.mixer_type,
             pulse_parameters=combined_pulse_parameters,
         )
-        verify_amplitude_no_clipping(samples, pulse_id, pwm.mixer_type, None)
+        verify_amplitude_no_clipping(
+            samples_i=samples["samples_i"],
+            samples_q=samples["samples_q"],
+            pulse_id=pulse_id,
+            mixer_type=pwm.mixer_type,
+            signals=None,
+        )
 
         if "samples_q" in samples and instance.needs_conjugate:
             samples["samples_q"] = -samples["samples_q"]

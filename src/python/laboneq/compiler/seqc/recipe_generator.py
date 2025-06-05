@@ -248,8 +248,8 @@ class RecipeGenerator:
                 initialization.config.triggering_mode = TriggeringMode.DIO_FOLLOWER
 
         for pqsc_device_id in experiment_dao.pqscs():
-            for port in experiment_dao.pqsc_ports(pqsc_device_id):
-                follower_device_init = self._find_initialization(port["device"])
+            for follower_uid in experiment_dao.pqsc_followers(pqsc_device_id):
+                follower_device_init = self._find_initialization(follower_uid)
                 follower_device_init.config.triggering_mode = (
                     TriggeringMode.ZSYNC_FOLLOWER
                 )

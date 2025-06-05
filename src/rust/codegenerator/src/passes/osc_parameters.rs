@@ -171,6 +171,11 @@ fn collect_osc_parameters(
             }
             Ok(())
         }
+        ir::NodeKind::AcquirePulse(ob) => {
+            let offset = tinysample::tinysample_to_samples(node_offset, *sampling_rate);
+            state.timestamp_osc_freq(&ob.signal, offset);
+            Ok(())
+        }
         ir::NodeKind::PhaseReset(ob) => {
             if ob.reset_sw_oscillators {
                 if let Some(tracker) = phase_tracker {
@@ -298,7 +303,7 @@ mod tests {
 
         let params = handle_oscillator_parameters(
             &mut root,
-            &vec![signal.clone()],
+            &[signal.clone()],
             &cjob::DeviceKind::SHFSG,
             &sampling_rate,
         )
@@ -346,7 +351,7 @@ mod tests {
 
         let params = handle_oscillator_parameters(
             &mut root,
-            &vec![signal.clone()],
+            &[signal.clone()],
             &cjob::DeviceKind::SHFSG,
             &sampling_rate,
         )
@@ -381,7 +386,7 @@ mod tests {
 
         let params = handle_oscillator_parameters(
             &mut root,
-            &vec![signal.clone()],
+            &[signal.clone()],
             &cjob::DeviceKind::SHFSG,
             &sampling_rate,
         )
@@ -419,7 +424,7 @@ mod tests {
 
         let params = handle_oscillator_parameters(
             &mut root,
-            &vec![signal.clone()],
+            &[signal.clone()],
             &cjob::DeviceKind::SHFSG,
             &sampling_rate,
         )
@@ -473,7 +478,7 @@ mod tests {
 
         let params = handle_oscillator_parameters(
             &mut root,
-            &vec![signal.clone()],
+            &[signal.clone()],
             &cjob::DeviceKind::SHFSG,
             &sampling_rate,
         )

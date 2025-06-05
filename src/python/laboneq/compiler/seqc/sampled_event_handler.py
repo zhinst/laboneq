@@ -25,13 +25,13 @@ from laboneq._rust.codegenerator import (
     SeqCGenerator,
     seqc_generator_from_device_and_signal_type as seqc_generator_from_device_and_signal_type_str,
     merge_generators,
+    string_sanitize,
 )
 from laboneq.compiler.seqc.shfppc_sweeper_config_tracker import (
     SHFPPCSweeperConfigTracker,
 )
 from laboneq.compiler.seqc.signatures import (
     PlaybackSignature,
-    WaveformSignature,
 )
 from laboneq.compiler.seqc.awg_sampled_event import (
     AWGEvent,
@@ -41,7 +41,6 @@ from laboneq.compiler.seqc.awg_sampled_event import (
 from laboneq.compiler.common.compiler_settings import EXECUTETABLEENTRY_LATENCY
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.utilities.string_sanitize import string_sanitize
 
 if TYPE_CHECKING:
     from laboneq.compiler.seqc.command_table_tracker import (
@@ -257,18 +256,19 @@ class SampledEventHandler:
             self.handle_playwave_on_prng(sampled_event, signature, wave_index)
             return True
 
-    def get_wave_index(self, signature, sig_string, play_wave_channel):
+    def get_wave_index(
+        self,
+        signature: PlaybackSignature,
+        sig_string: str,
+        play_wave_channel: int | None,
+    ) -> int | None:
         signal_type_for_wave_index = (
             self.awg.signal_type.value
             if self.device_type.supports_binary_waves
             else "csv"
             # Include CSV waves into the index to keep track of waves-AWG mapping
         )
-        if (
-            not signature.waveform.samples
-            and all(p.pulse is None for p in signature.waveform.pulses)
-            and self.use_command_table
-        ):
+        if signature.waveform.is_playzero() and self.use_command_table:
             # all-zero pulse is played via play-zero command table entry
             wave_index = None
         else:
@@ -286,34 +286,26 @@ class SampledEventHandler:
 
         return wave_index
 
-    def precomp_reset_ct_index(self) -> int:
-        length = 32
-        sig_string = "precomp_reset"
-        wave_index = self.wave_indices.lookup_index_by_wave_id(sig_string)
-
-        signature = PlaybackSignature(
-            waveform=WaveformSignature(
-                length=length,
-                pulses=None,
-                samples=None,  # not relevant for command table entry creation
-            ),
-            clear_precompensation=True,
-            hw_oscillator=None,
-        )
-
+    def precomp_reset_ct_index(
+        self, signature: PlaybackSignature, signature_string: str
+    ) -> int:
+        length = signature.waveform.length
+        wave_index = self.wave_indices.lookup_index_by_wave_id(signature_string)
         if wave_index is None:
             assert self.device_type.supports_binary_waves
             signal_type_for_wave_index = self.awg.signal_type.value
 
-            self.declarations_generator.add_zero_wave_declaration(sig_string, length)
+            self.declarations_generator.add_zero_wave_declaration(
+                signature_string, length
+            )
             wave_index = self.wave_indices.create_index_for_wave(
-                sig_string, signal_type_for_wave_index
+                signature_string, signal_type_for_wave_index
             )
             play_wave_channel = None
             if len(self.channels) > 0:
                 play_wave_channel = self.channels[0] % 2
             self.declarations_generator.add_assign_wave_index_statement(
-                sig_string,
+                signature_string,
                 wave_index,
                 play_wave_channel,
             )
@@ -321,7 +313,6 @@ class SampledEventHandler:
             ct_index = self.command_table_tracker.create_entry(signature, wave_index)
         else:
             ct_index = self.command_table_tracker.lookup_index_by_signature(signature)
-
         return ct_index
 
     def handle_regular_playwave(
@@ -534,8 +525,10 @@ class SampledEventHandler:
         play_event: AWGEvent
         for play_event in sampled_event.params["play_events"]:
             waveform_signature = play_event.signature.waveform
-            signal_id = play_event.params.get("signal_id")
-            if signal_id is not None and waveform_signature:
+            # TODO: Could we somehow add channels to events immediately?
+            signal_ids = play_event.params.get("signal_ids")
+            if signal_ids and waveform_signature:
+                [signal_id] = signal_ids
                 current_signal_obj = next(
                     signal_obj
                     for signal_obj in self.awg.signals
@@ -614,16 +607,17 @@ class SampledEventHandler:
             self.seqc_tracker.flush_deferred_function_calls()
 
     def handle_reset_precompensation_filters(self, sampled_event: AWGEvent):
-        if sampled_event.params["signal_id"] not in (s.id for s in self.awg.signals):
-            return
-
         assert sampled_event.start is not None
         self.seqc_tracker.add_required_playzeros(sampled_event.start)
 
         if self.use_command_table:
-            ct_index = self.precomp_reset_ct_index()
+            signature_string = "precomp_reset"
+            ct_index = self.precomp_reset_ct_index(
+                signature=sampled_event.maybe_signature,
+                signature_string=signature_string,
+            )
             self.seqc_tracker.add_command_table_execution(
-                ct_index, comment="precomp_reset"
+                ct_index, comment=signature_string
             )
             self.seqc_tracker.flush_deferred_function_calls()
             self.seqc_tracker.current_time = sampled_event.end
@@ -1263,6 +1257,7 @@ class SampledEventHandler:
 
     def handle_sampled_events(self, sampled_events: AWGSampledEventSequence):
         # Handle events grouped by start point
+        sampled_events.sort()
         for sampled_event_list in sampled_events.sequence.values():
             _logger.debug("EventListBeforeSort: %s", sampled_event_list)
             self.sampled_event_list = sort_events(sampled_event_list)

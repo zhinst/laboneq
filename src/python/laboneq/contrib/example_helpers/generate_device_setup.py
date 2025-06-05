@@ -5,11 +5,11 @@
 
 from __future__ import annotations
 
+import warnings
+
 from laboneq.contrib.example_helpers.device_setup_helper import (
-    connect_zsync,
     create_TKSession,
     return_instrument_options,
-    return_instrument_zsync_ports,
 )
 from laboneq.contrib.example_helpers.example_notebook_helper import (
     create_dummy_transmon,
@@ -56,17 +56,17 @@ def generate_device_setup(
             (e.g. `[{"serial": "DEV10XX0", "external_clock": False, "usb": False}]`).
             Note: only one PQSC or QHUB is possible per set-up.
         hdawg: The device id(s) and additional properties  of your HDAWG instruments as a list of dictionaries
-            (e.g.`[{"serial": "DEV8XXX", "usb": False, "zsync": 2, "dio": None, "options": None, "number_of_channels": 8}]`).
+            (e.g.`[{"serial": "DEV8XXX", "usb": False, "dio": None, "options": None, "number_of_channels": 8}]`).
         uhfqa: The device id(s) and additional properties of your UHFQA instruments as a list of dictionaries
             (e.g. `[{"serial": "DEV2XXX", "usb": False, "readout_multiplex": 6}]`).
             Note: UHFQA instruments cannot be used in combination with SHF instruments.
         shfsg: The device id(s) and additional properties of your SHFSG instruments as a list of dictionaries
-            (e.g. `[{"serial": "DEV12XXX", "usb": False, "number_of_channels": 8, "options": None, "zsync": 3}]`).
+            (e.g. `[{"serial": "DEV12XXX", "usb": False, "number_of_channels": 8, "options": None}]`).
         shfqc: The device id(s) and additional properties of your SHFQC instruments as a list of dictionaries
-            (e.g. `[{"serial": "DEV12XXX", "usb": False, "number_of_channels": 6, "readout_multiplex": 6, "options": None, "zsync": 4}]`).
+            (e.g. `[{"serial": "DEV12XXX", "usb": False, "number_of_channels": 6, "readout_multiplex": 6, "options": None}]`).
         shfqa: The device id(s) and additional properties of your SHFQA instruments as a list of dictionaries
-            (e.g. `[{"serial": "DEV12XXX", "usb": False, "number_of_channels": 4, "readout_multiplex": 6, "options": None, "zsync": 5}]`).
-        multiplex_drive_lines: Whether to add logical signals that are mutliplexed t othe drive lines,
+            (e.g. `[{"serial": "DEV12XXX", "usb": False, "number_of_channels": 4, "readout_multiplex": 6, "options": None}]`).
+        multiplex_drive_lines: Whether to add logical signals that are multiplexed to the drive lines,
             e.g. for cross-resonance or e-f driving.
             Defaults to False.
         include_flux_lines: Whether to include flux lines in the setup.
@@ -81,7 +81,8 @@ def generate_device_setup(
             Defaults to the LabOne default setting "8004".
         setup_name: The name of your setup.
             Defaults to "my_QCCS"
-        query_zsync: Whether to query the PQSC or QHUB for the zsync ports of all connected instruments.
+        query_zsync: Deprecated - Whether to query the PQSC or QHUB for the zsync ports of all connected instruments.
+            No longer functional since version 2.53, since ZSync information is queried from the instruments by default.
             Defaults to False.
         query_options: Whether to query all connected instruments for their options.
             Defaults to False.
@@ -156,9 +157,16 @@ def generate_device_setup(
             "Device Setup generation failed: Setups can only contain either a single PQSC or a single QHUB, not both."
         )
 
+    if query_zsync:
+        warnings.warn(
+            "Deprecated option `query_zsync` provided, which is no longer functional - ZSync information is queried from instruments by default.",
+            FutureWarning,
+            stacklevel=2,
+        )
+
     # query instruments for options / zsync connections
     # TODO: what about UHFQA?
-    if query_options or query_zsync:
+    if query_options:
         all_instruments = [hdawg, shfsg, shfqa, shfqc]
         # generate lists of instrument ids
         device_ids = [instrument["serial"] for instrument in hdawg]
@@ -184,18 +192,6 @@ def generate_device_setup(
                         if instrument["serial"] == serial:
                             instrument["options"] = option
                             break
-        # query and update zsync port connections
-        if query_zsync:
-            connect_zsync(session=tk_session, device_ids=device_ids, waiting_time=2)
-            zsync_dict = return_instrument_zsync_ports(
-                session=tk_session, hub_id=hub_id, device_ids=device_ids
-            )
-            for serial, port in zsync_dict.items():
-                for instrument_list in all_instruments:
-                    for instrument in instrument_list:
-                        if instrument["serial"] == serial:
-                            instrument["zsync"] = port
-                            break
 
     # generate device setup including dataserver configuration
     device_setup = DeviceSetup(uid=setup_name)
@@ -209,7 +205,7 @@ def generate_device_setup(
     number_flux_lines = 0
     readout_acquire_lines = []
     number_readout_acquire_lines = 0
-    zsync = {}
+    zsync = []
     dio = {}
 
     # UHFQA
@@ -253,8 +249,12 @@ def generate_device_setup(
             instrument["usb"] = False
         if "options" not in instrument:
             instrument["options"] = None
-        if "zsync" not in instrument:
-            instrument["zsync"] = None
+        if "zsync" in instrument:
+            warnings.warn(
+                f"Deprecated option `zsync` provided for instrument {instrument['serial']} - ZSync information is queried from instruments by default.",
+                FutureWarning,
+                stacklevel=2,
+            )
         if "dio" not in instrument:
             instrument["dio"] = None
         if "number_of_channels" not in instrument:
@@ -290,8 +290,8 @@ def generate_device_setup(
             )
             number_flux_lines += instrument["number_of_channels"]
         instrument_list[instrument["serial"]] = f"hdawg_{id}"
-        if instrument["zsync"] is not None:
-            zsync[instrument["serial"]] = instrument["zsync"]
+        if pqsc or qhub:
+            zsync.append(instrument["serial"])
         if instrument["dio"] is not None:
             dio[instrument["serial"]] = instrument["dio"]
 
@@ -319,8 +319,12 @@ def generate_device_setup(
             instrument["usb"] = False
         if "options" not in instrument:
             instrument["options"] = None
-        if "zsync" not in instrument:
-            instrument["zsync"] = None
+        if "zsync" in instrument:
+            warnings.warn(
+                f"Deprecated option `zsync` provided for instrument {instrument['serial']} - ZSync information is queried from instruments by default.",
+                FutureWarning,
+                stacklevel=2,
+            )
         if "number_of_channels" not in instrument:
             instrument["number_of_channels"] = 8
         device_setup.add_instruments(
@@ -339,8 +343,8 @@ def generate_device_setup(
         )
         number_drive_lines += instrument["number_of_channels"]
         instrument_list[instrument["serial"]] = f"shfsg_{id}"
-        if instrument["zsync"] is not None:
-            zsync[instrument["serial"]] = instrument["zsync"]
+        if pqsc or qhub:
+            zsync.append(instrument["serial"])
 
     # SHFQA
     for id, instrument in enumerate(shfqa):
@@ -352,8 +356,12 @@ def generate_device_setup(
             instrument["usb"] = False
         if "options" not in instrument:
             instrument["options"] = None
-        if "zsync" not in instrument:
-            instrument["zsync"] = None
+        if "zsync" in instrument:
+            warnings.warn(
+                f"Deprecated option `zsync` provided for instrument {instrument['serial']} - ZSync information is queried from instruments by default.",
+                FutureWarning,
+                stacklevel=2,
+            )
         if "readout_multiplex" not in instrument:
             instrument["readout_multiplex"] = 6
         if "number_of_channels" not in instrument:
@@ -382,8 +390,8 @@ def generate_device_setup(
             instrument["number_of_channels"] * actual_multiplex
         )
         instrument_list[instrument["serial"]] = f"shfqa_{id}"
-        if instrument["zsync"] is not None:
-            zsync[instrument["serial"]] = instrument["zsync"]
+        if pqsc or qhub:
+            zsync.append(instrument["serial"])
 
     # SHFQC
     for id, instrument in enumerate(shfqc):
@@ -395,8 +403,12 @@ def generate_device_setup(
             instrument["usb"] = False
         if "options" not in instrument:
             instrument["options"] = None
-        if "zsync" not in instrument:
-            instrument["zsync"] = None
+        if "zsync" in instrument:
+            warnings.warn(
+                f"Deprecated option `zsync` provided for instrument {instrument['serial']} - ZSync information is queried from instruments by default.",
+                FutureWarning,
+                stacklevel=2,
+            )
         if "readout_multiplex" not in instrument:
             instrument["readout_multiplex"] = 6
         if "number_of_channels" not in instrument:
@@ -430,8 +442,8 @@ def generate_device_setup(
         )
         number_readout_acquire_lines += actual_multiplex
         instrument_list[instrument["serial"]] = f"shfqc_{id}"
-        if instrument["zsync"] is not None:
-            zsync[instrument["serial"]] = instrument["zsync"]
+        if pqsc or qhub:
+            zsync.append(instrument["serial"])
 
     # PQSC
     for id, instrument in enumerate(pqsc):
@@ -571,29 +583,23 @@ def generate_device_setup(
                 raise LabOneQException(
                     f"Device Setup generation failed: UHFQA {dio_out} is not part of device setup "
                 )
-    # add ZSync connections
+    # add internal ZSync connections
     if zsync:
         if pqsc:
-            for zsync_in, zsync_id in zsync.items():
+            for zsync_in in zsync:
                 # ensure that the instrument is already added to the device setup
                 if zsync_in in instrument_list.keys():
                     device_setup.add_connections(
                         "pqsc_0",
-                        create_connection(
-                            to_instrument=instrument_list[zsync_in],
-                            ports=f"ZSYNCS/{zsync_id}",
-                        ),
+                        create_connection(to_instrument=instrument_list[zsync_in]),
                     )
         elif qhub:
-            for zsync_in, zsync_id in zsync.items():
+            for zsync_in in zsync:
                 # ensure that the instrument is already added to the device setup
                 if zsync_in in instrument_list.keys():
                     device_setup.add_connections(
                         "qhub_0",
-                        create_connection(
-                            to_instrument=instrument_list[zsync_in],
-                            ports=f"ZSYNCS/{zsync_id}",
-                        ),
+                        create_connection(to_instrument=instrument_list[zsync_in]),
                     )
 
     return device_setup
@@ -636,16 +642,16 @@ def generate_device_setup_qubits(
             (e.g. `[{"serial": "DEV10XX0", "external_clock": False, "usb": False}]`).
             Note: only one PQSC or QHUB is possible per set-up.
         hdawg: The device id(s) and additional properties  of your HDAWG instruments as a list of dictionaries
-            (e.g.`[{"serial": "DEV8XXX", "usb": False, "zsync": 2, "dio": None, "options": None, "number_of_channels": 8}]`).
+            (e.g.`[{"serial": "DEV8XXX", "usb": False, "dio": None, "options": None, "number_of_channels": 8}]`).
         uhfqa: The device id(s) and additional properties of your UHFQA instruments as a list of dictionaries
             (e.g. `[{"serial": "DEV2XXX", "usb": False, "readout_multiplex": 6}]`).
             Note: UHFQA instruments cannot be used in combination with SHF instruments.
         shfsg: The device id(s) and additional properties of your SHFSG instruments as a list of dictionaries
-            (e.g. `[{"serial": "DEV12XXX", "usb": False, "number_of_channels": 8, "options": None, "zsync": 3}]`).
+            (e.g. `[{"serial": "DEV12XXX", "usb": False, "number_of_channels": 8, "options": None}]`).
         shfqc: The device id(s) and additional properties of your SHFQC instruments as a list of dictionaries
-            (e.g. `[{"serial": "DEV12XXX", "usb": False, "number_of_channels": 6, "readout_multiplex": 6, "options": None, "zsync": 4}]`).
+            (e.g. `[{"serial": "DEV12XXX", "usb": False, "number_of_channels": 6, "readout_multiplex": 6, "options": None}]`).
         shfqa: The device id(s) and additional properties of your SHFQA instruments as a list of dictionaries
-            (e.g. `[{"serial": "DEV12XXX", "usb": False, "number_of_channels": 4, "readout_multiplex": 6, "options": None, "zsync": 5}]`).
+            (e.g. `[{"serial": "DEV12XXX", "usb": False, "number_of_channels": 4, "readout_multiplex": 6, "options": None}]`).
         multiplex_drive_lines: Whether to add logical signals that are mutliplexed t othe drive lines,
             e.g. for cross-resonance or e-f driving.
             Defaults to False.
@@ -665,7 +671,8 @@ def generate_device_setup_qubits(
             Defaults to True.
         calibrate_setup: Whether to use the qubit properties to calibrate the device setup.
             Defaults to True.
-        query_zsync: Whether to query the PQSC or QHUB for the zsync ports of all connected instruments.
+        query_zsync: Deprecated - Whether to query the PQSC or QHUB for the zsync ports of all connected instruments.
+            No longer functional since version 2.53, since ZSync information is queried from the instruments by default.
             Defaults to False.
         query_options: Whether to query all connected instruments for their options.
             Defaults to False.

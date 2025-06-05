@@ -15,6 +15,7 @@ class DevicePQSC(DeviceLeaderBase):
         super().__init__(*args, **kwargs)
         self.dev_type = "PQSC"
         self.dev_opts = []
+        self._zsyncs = 18
 
     def load_factory_preset_control_nodes(self) -> list[NodeControlBase]:
         return [

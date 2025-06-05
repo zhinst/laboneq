@@ -7,10 +7,9 @@ publish.workspace = true
 license = "MIT"
 
 [dependencies]
-codegenerator = { path = "../codegenerator" }
+anyhow = { workspace = true }
+indexmap = { workspace = true }
+log = { workspace = true }
+thiserror = { workspace = true }
 
-anyhow = "1.0.98"
-indexmap = "2.9.0"
-log = "0.4.27"
-textwrap = "0.16.2"
-thiserror = "2.0.0"
+codegenerator = { path = "../codegenerator" }

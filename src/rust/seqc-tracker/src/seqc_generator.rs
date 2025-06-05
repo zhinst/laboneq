@@ -23,6 +23,12 @@ fn format_comment(comment: &Option<String>) -> String {
     String::new()
 }
 
+fn indent(s: &str, prefix: &str) -> String {
+    s.lines()
+        .flat_map(|line| [prefix, line, "\n"].into_iter())
+        .collect()
+}
+
 fn gen_wave_declaration_placeholder(
     dual_channel: bool,
     wave_id: &WaveId,
@@ -646,13 +652,13 @@ impl SeqCGenerator {
             SeqCStatement::Repeat {
                 num_repeats, body, ..
             } => {
-                let body = textwrap::indent(&body.generate_seq_c(), "  ");
+                let body = indent(&body.generate_seq_c(), "  ");
                 format!("repeat ({}) {{\n{}}}\n", num_repeats, body)
             }
             SeqCStatement::DoWhile {
                 condition, body, ..
             } => {
-                let body = textwrap::indent(&body.generate_seq_c(), "  ");
+                let body = indent(&body.generate_seq_c(), "  ");
                 format!("do {{\n{}}}\nwhile({});\n", body, condition)
             }
             SeqCStatement::DoIf {
@@ -663,7 +669,7 @@ impl SeqCGenerator {
             } => {
                 let mut text = String::new();
                 for (i, condition) in conditions.iter().enumerate() {
-                    let body = textwrap::indent(&bodies[i].generate_seq_c(), "  ");
+                    let body = indent(&bodies[i].generate_seq_c(), "  ");
                     if i == 0 {
                         text += &format!("if ({}) {{\n{}}}\n", condition, body);
                     } else {
@@ -671,7 +677,7 @@ impl SeqCGenerator {
                     }
                 }
                 if let Some(else_body) = else_body {
-                    let body = textwrap::indent(&else_body.generate_seq_c(), "  ");
+                    let body = indent(&else_body.generate_seq_c(), "  ");
                     text += &format!("else {{\n{}}}\n", body);
                 }
                 text

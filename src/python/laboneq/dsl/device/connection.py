@@ -66,20 +66,20 @@ class InternalConnection:
     """
 
     to: str
-    from_port: str
+    from_port: str | None
 
     def __init__(self, to: str, from_port: str | list[str]):
         self.to = to
         if isinstance(from_port, list):
-            if len(from_port) != 1:
-                raise ValueError("To instrument connection takes only one port.")
-            self.from_port = from_port[0]
+            if len(from_port) > 1:
+                raise ValueError("To instrument connection takes zero or one port.")
+            self.from_port = None if len(from_port) == 0 else from_port[0]
         else:
             self.from_port = from_port
 
     @property
     def ports(self) -> list[str]:
-        return [self.from_port]
+        return [] if self.from_port is None else [self.from_port]
 
 
 def create_connection(

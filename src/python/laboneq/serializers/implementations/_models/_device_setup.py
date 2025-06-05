@@ -13,7 +13,6 @@ import attrs
 from laboneq.core.types.enums.io_direction import IODirection
 from laboneq.core.types.enums.io_signal_type import IOSignalType
 from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
-from laboneq.dsl.calibration.signal_calibration import SignalCalibration
 from laboneq.dsl.device.connection import Connection
 from laboneq.dsl.device.instruments.hdawg import HDAWG
 from laboneq.dsl.device.instruments.pqsc import PQSC
@@ -86,24 +85,6 @@ class DataServerModel:
     api_level: int
     _target_class: ClassVar[Type] = DataServer
 
-    @classmethod
-    def _unstructure(cls, obj):
-        return {
-            "uid": obj.uid,
-            "host": obj.host,
-            "port": obj.port,
-            "api_level": obj.api_level,
-        }
-
-    @classmethod
-    def _structure(cls, obj, _):
-        return cls._target_class(
-            uid=obj["uid"],
-            host=obj["host"],
-            port=obj["port"],
-            api_level=obj["api_level"],
-        )
-
 
 @attrs.define
 class ConnectionModel:
@@ -114,36 +95,6 @@ class ConnectionModel:
     remote_port: str | None
     signal_type: IOSignalTypeModel | None
     _target_class: ClassVar[Type] = Connection
-
-    @classmethod
-    def _unstructure(cls, obj):
-        return {
-            "direction": _converter.unstructure(
-                obj.direction, Union[IODirectionModel, None]
-            ),
-            "local_path": obj.local_path,
-            "local_port": obj.local_port,
-            "remote_path": obj.remote_path,
-            "remote_port": obj.remote_port,
-            "signal_type": _converter.unstructure(
-                obj.signal_type, Union[IOSignalTypeModel, None]
-            ),
-        }
-
-    @classmethod
-    def _structure(cls, obj, _):
-        return cls._target_class(
-            direction=None
-            if obj["direction"] is None
-            else IODirectionModel._target_class.value(obj["direction"]),
-            local_path=obj["local_path"],
-            local_port=obj["local_port"],
-            remote_path=obj["remote_path"],
-            remote_port=obj["remote_port"],
-            signal_type=None
-            if obj["signal_type"] is None
-            else IOSignalTypeModel._target_class.value(obj["signal_type"]),
-        )
 
 
 @attrs.define
@@ -227,32 +178,6 @@ class PhysicalChannelModel:
     calibration: SignalCalibrationModel | None
     _target_class: ClassVar[Type] = PhysicalChannel
 
-    @classmethod
-    def _unstructure(cls, obj):
-        return {
-            "uid": obj.uid,
-            "name": obj.name,
-            "type": _converter.unstructure(obj.type, Union[PhysicalChannelType, None]),
-            "path": obj.path,
-            "calibration": _converter.unstructure(
-                obj.calibration, Union[SignalCalibrationModel, None]
-            ),
-        }
-
-    @classmethod
-    def _structure(cls, obj, _):
-        return cls._target_class(
-            uid=obj["uid"],
-            name=obj["name"],
-            type=None
-            if obj["type"] is None
-            else PhysicalChannelTypeModel._target_class.value(obj["type"]),
-            path=obj["path"],
-            calibration=None
-            if obj["calibration"] is None
-            else _converter.structure(obj["calibration"], SignalCalibrationModel),
-        )
-
 
 @attrs.define
 class PhysicalChannelGroupModel:
@@ -260,61 +185,16 @@ class PhysicalChannelGroupModel:
     channels: dict[str, PhysicalChannelModel]
     _target_class: ClassVar[Type] = PhysicalChannelGroup
 
-    @classmethod
-    def _unstructure(cls, obj):
-        return {
-            "uid": obj.uid,
-            "channels": {
-                k: _converter.unstructure(v, PhysicalChannelModel)
-                for k, v in obj.channels.items()
-            },
-        }
-
-    @classmethod
-    def _structure(cls, obj, _):
-        return cls._target_class(
-            uid=obj["uid"],
-            channels={
-                k: _converter.structure(v, PhysicalChannelModel)
-                for k, v in obj["channels"].items()
-            },
-        )
-
 
 @attrs.define
 class LogicalSignalModel:
     uid: str
     name: str | None
-    calibration: SignalCalibration | None
-    physical_channel: PhysicalChannelModel | None
+    calibration: SignalCalibrationModel | None
+    _physical_channel: PhysicalChannelModel | None
     path: str | None
     direction: IODirectionModel | None
     _target_class: ClassVar[Type] = LogicalSignal
-
-    @classmethod
-    def _unstructure(cls, obj):
-        if obj.calibration:
-            calibration = _converter.unstructure(
-                obj.calibration, SignalCalibrationModel
-            )
-        else:
-            calibration = None
-        if obj.physical_channel:
-            physical_channel = _converter.unstructure(
-                obj.physical_channel, PhysicalChannelModel
-            )
-        else:
-            physical_channel = None
-        return {
-            "uid": obj.uid,
-            "name": obj.name,
-            "calibration": calibration,
-            "physical_channel": physical_channel,
-            "path": obj.path,
-            "direction": _converter.unstructure(obj.direction, IODirectionModel)
-            if obj.direction
-            else None,
-        }
 
     @classmethod
     def _structure(cls, obj, _):
@@ -324,12 +204,14 @@ class LogicalSignalModel:
             )
         else:
             calibration = None
-        if obj["physical_channel"]:
+        # LogicalSignal was updated in 2.51.0 to
+        # have _physical_channel as a private attribute.
+        # This is a workaround to keep backward compatibility
+        physical_channel = obj.get("_physical_channel") or obj.get("physical_channel")
+        if physical_channel is not None:
             physical_channel = _converter.structure(
-                obj["physical_channel"], PhysicalChannelModel
+                physical_channel, PhysicalChannelModel
             )
-        else:
-            physical_channel = None
         return cls._target_class(
             uid=obj["uid"],
             name=obj["name"],
@@ -347,26 +229,6 @@ class LogicalSignalGroupModel:
     uid: str | None
     logical_signals: dict[str, LogicalSignalModel]
     _target_class: ClassVar[Type] = LogicalSignalGroup
-
-    @classmethod
-    def _unstructure(cls, obj):
-        return {
-            "uid": obj.uid,
-            "logical_signals": {
-                k: _converter.unstructure(v, LogicalSignalModel)
-                for k, v in obj.logical_signals.items()
-            },
-        }
-
-    @classmethod
-    def _structure(cls, obj, _):
-        return cls._target_class(
-            uid=obj["uid"],
-            logical_signals={
-                k: _converter.structure(v, LogicalSignalModel)
-                for k, v in obj["logical_signals"].items()
-            },
-        )
 
 
 def make_converter():

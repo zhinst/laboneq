@@ -1,18 +1,20 @@
 # Copyright 2025 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from enum import Enum
 import inspect
 from collections.abc import Iterable
-from typing import Type, Union
+from typing import Type
 
 import attrs
 import numpy
 from cattrs import Converter
-from cattrs.gen import make_dict_structure_fn, make_dict_unstructure_fn
+from cattrs.gen import make_dict_unstructure_fn
 from cattrs.preconf.orjson import make_converter
 
 from laboneq.serializers.core import from_dict
 from laboneq.serializers.implementations.numpy_array import NumpyArraySerializer
+from cattrs.strategies import use_class_methods
 
 # Common types
 
@@ -31,10 +33,7 @@ from laboneq.serializers.implementations.numpy_array import NumpyArraySerializer
 #     bytes,
 # ]
 # But we will be more practical and use the following:
-ArrayLike_Model = Union[
-    numpy.ndarray,
-    list[Union[bool, int, float, str, bytes]],
-]
+ArrayLike_Model = numpy.ndarray | list[bool | int | float | str | bytes]
 
 
 def _structure_arraylike(obj, _):
@@ -51,29 +50,16 @@ def _unstructure_arraylike(obj):
     return obj
 
 
-@attrs.define
-class NumericModel:
-    """
-    A model representing numeric values: int, float, complex
-    and numpy numbers.
+def _unstructure_complex_or_np_numbers(obj):
+    if isinstance(obj, (numpy.complexfloating, complex)):
+        return [obj.real, obj.imag]
+    return obj
 
-    Defines an attrs-based model to enable `cattrs` to **automatically**
-    serialize and deserialize the following types:
-    - Unions of Python numeric types and NumPy number types
-    - Unions of numeric types and other attrs-based models
-    """
 
-    @classmethod
-    def _unstructure(cls, obj):
-        if isinstance(obj, (numpy.complexfloating, complex)):
-            return [obj.real, obj.imag]
-        return obj
-
-    @classmethod
-    def _structure(cls, obj, _):
-        if isinstance(obj, list) and len(obj) == 2:
-            return numpy.complex128(obj[0], obj[1])
-        return obj
+def _structure_complex_or_np_numbers(obj, _):
+    if isinstance(obj, list) and len(obj) == 2:
+        return numpy.complex128(obj[0], obj[1])
+    return obj
 
 
 # Supporting functions for serialization
@@ -115,39 +101,57 @@ def structure_union_generic_type(
             return converter.structure(d, t)
 
 
-def register_models(converter, models: Iterable) -> None:
-    # Use predicate hooks to avoid type evaluation problems
-    # for complicate types in Python 3.9.
-    # TODO: When dropping support for Python 3.9,
-    # Remove registering predicate hooks (register_(un)structure_hook_func)
-    # and use dispatcher hooks instead (register_(un)structure_hook)
-    # See the docstring of this module for more details.
-    def _predicate(cls):
-        return lambda obj: obj is cls
+def structure(data: dict, cls: type, converter: Converter):
+    """
+    Structure a dictionary into an instance of the given class.
+    Especially used for attrs-based models that have their attributes
+    required to be converted to an instance with type specified in `_target_class` attribute.
+    """
+    attributes = attrs.fields_dict(cls)
+    se = {}
+    for k, v in data.items():
+        if k == "_type":
+            # _type field was used to manually structure the union type.
+            # It is no longer needed when we let cattrs structure the object automatically.
+            continue
+        if k not in attributes:
+            raise ValueError(f"Invalid attribute {k} for class {cls}")
+        # to handle private attributes in attrs models
+        key_name = k[1:] if k.startswith("_") else k
+        se[key_name] = converter.structure(v, attributes[k].type)
+    de = cls._target_class(**se)
+    return de
 
+
+def register_models(converter: Converter, models: Iterable) -> None:
     for model in models:
-        if hasattr(model, "_unstructure"):
-            converter.register_unstructure_hook_func(
-                _predicate(model), model._unstructure
+        if issubclass(model, Enum):
+            # Register the enum models
+            converter.register_structure_hook(
+                model, lambda d, cls: cls._target_class.value(d)
             )
+            continue
+        if "_unstructure" in model.__dict__:
+            use_class_methods(converter, unstructure_method_name="_unstructure")
         else:
             converter.register_unstructure_hook(
                 model, make_dict_unstructure_fn(model, converter)
             )
-        if hasattr(model, "_structure"):
-            converter.register_structure_hook_func(_predicate(model), model._structure)
+
+        if "_structure" in model.__dict__:
+            use_class_methods(converter, structure_method_name="_structure")
         else:
             converter.register_structure_hook(
-                model, make_dict_structure_fn(model, converter)
+                model,
+                lambda d, cls: structure(d, cls, converter),
             )
 
 
 def collect_models(module_models) -> frozenset:
-    """Collect all attrs models for serialization. Enum models are
-    already registered in the pre-configured converter."""
+    """Collect all attrs models for serialization."""
     subclasses = []
     for _, cls in inspect.getmembers(module_models):
-        if attrs.has(cls) and hasattr(cls, "_target_class"):
+        if hasattr(cls, "_target_class"):
             subclasses.append(cls)
 
     return frozenset(subclasses)
@@ -156,13 +160,31 @@ def collect_models(module_models) -> frozenset:
 def make_laboneq_converter() -> Converter:
     converter = make_converter()
 
+    # TODO: Remove the hooks for ArrayLike_Model and only
+    # register the hooks for numpy.ndarray and let the list of numbers to
+    # be passed as is.
     converter.register_structure_hook(ArrayLike_Model, _structure_arraylike)
     converter.register_unstructure_hook(
         ArrayLike_Model,
         _unstructure_arraylike,
     )
+    converter.register_structure_hook(numpy.ndarray, _structure_arraylike)
+    converter.register_unstructure_hook(
+        numpy.ndarray,
+        _unstructure_arraylike,
+    )
 
-    converter.register_unstructure_hook(NumericModel, NumericModel._unstructure)
-    converter.register_structure_hook(NumericModel, NumericModel._structure)
+    converter.register_unstructure_hook(complex, _unstructure_complex_or_np_numbers)
+    converter.register_structure_hook(complex, _structure_complex_or_np_numbers)
+    converter.register_unstructure_hook(
+        numpy.number, _unstructure_complex_or_np_numbers
+    )
+    converter.register_structure_hook(numpy.number, _structure_complex_or_np_numbers)
+    converter.register_unstructure_hook(
+        complex | numpy.number, _unstructure_complex_or_np_numbers
+    )
+    converter.register_structure_hook(
+        complex | numpy.number, _structure_complex_or_np_numbers
+    )
 
     return converter

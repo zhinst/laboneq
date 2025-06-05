@@ -201,16 +201,16 @@ class ExperimentDAO:
             if d.device_type in [DeviceInfoType.PQSC, DeviceInfoType.QHUB]
         ]
 
-    def pqsc_ports(self, pqsc_device_uid: str):
+    def pqsc_followers(self, pqsc_device_uid: str) -> list[str]:
         assert pqsc_device_uid in self.pqscs()
         leader = self.device_info(pqsc_device_uid)
-        return [{"device": p.device.uid, "port": p.port} for p in leader.followers]
+        return leader.followers
 
     def dio_followers(self) -> list[str]:
         return [
-            follower.device.uid
+            follower_uid
             for leader in self.device_infos()
-            for follower in leader.followers
+            for follower_uid in leader.followers
             if leader.device_type not in [DeviceInfoType.PQSC, DeviceInfoType.QHUB]
         ]
 
@@ -218,17 +218,16 @@ class ExperimentDAO:
         for d in self.device_infos():
             if d.device_type in [DeviceInfoType.PQSC, DeviceInfoType.QHUB]:
                 continue
-            for f in d.followers:
-                if f.device.uid == device_id:
-                    return d.uid
+            if device_id in d.followers:
+                return d.uid
 
         return None
 
     def dio_connections(self) -> list[tuple[str, str]]:
         return [
-            (leader.uid, follower.device.uid)
+            (leader.uid, follower_uid)
             for leader in self.device_infos()
-            for follower in leader.followers
+            for follower_uid in leader.followers
             if leader.device_type not in [DeviceInfoType.PQSC, DeviceInfoType.QHUB]
         ]
 

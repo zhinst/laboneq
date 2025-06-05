@@ -992,16 +992,11 @@ for how to set them up without a PQSC.
 
     # PQSC connections
     if pqsc is not None and not get_zsync:
-        for i, k in enumerate(devid_uid):
+        for k in devid_uid:
             sig_dict = signal_and_port_dict.setdefault(f"PQSC_{pqsc[0]}", [])
             if devid_uid[k].split("_")[0] == "UHFQA":
                 continue
-            sig_dict.append(
-                {
-                    "to": f"{devid_uid[k]}",
-                    "port": f"ZSYNCS/{i}",
-                }
-            )
+            sig_dict.append({"to": f"{devid_uid[k]}"})
         if internal_clock is True:
             sig_dict.append("internal_clock_signal")
 
@@ -1032,12 +1027,7 @@ for how to set them up without a PQSC.
                         if v[f"{v_item}"] == short_id:
                             v["options"] = my_options
                 sig_dict = signal_and_port_dict.setdefault(f"PQSC_{pqsc[0]}", [])
-                sig_dict.append(
-                    {
-                        "to": f"{devid_uid[k]}",
-                        "port": f"ZSYNCS/{PQSC.find_zsync_worker_port(self=device_pqsc, device=session_device)}",
-                    }
-                )
+                sig_dict.append({"to": f"{devid_uid[k]}"})
                 print(devid_uid[k].split("_")[1])
                 print("Options: " + f"{my_options}")
                 print(

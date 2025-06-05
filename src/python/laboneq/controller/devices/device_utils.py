@@ -161,24 +161,24 @@ def prepare_emulator_state(ds: DeviceSetupDAO) -> EmulatorState:
             )
 
         if dev_type in ["PQSC", "QHUB"]:
-            enabled_zsyncs: dict[str, str] = {}
-            for from_port, to_dev_uid in ds.downlinks_by_device_uid(
-                device_qualifier.uid
-            ):
+            assigned_zsyncs: set[str] = set()
+            from_port = 0
+            for to_dev_uid in ds.downlinks_by_device_uid(device_qualifier.uid):
                 to_dev_qualifier = next(
                     (i for i in ds.devices if i.uid == to_dev_uid), None
                 )
                 if to_dev_qualifier is None:
                     continue
                 to_dev_serial = to_dev_qualifier.options.serial.lower()
-                if enabled_zsyncs.get(from_port.lower()) == to_dev_serial:
+                if to_dev_serial in assigned_zsyncs:
                     continue
-                enabled_zsyncs[from_port.lower()] = to_dev_serial
+                assigned_zsyncs.add(to_dev_serial)
                 emulator_state.set_option(
                     options.serial,
-                    option=f"{from_port.lower()}/connection/serial",
+                    option=f"zsyncs/{from_port}/connection/serial",
                     value=to_dev_serial[3:],
                 )
+                from_port += 1
 
     return emulator_state
 

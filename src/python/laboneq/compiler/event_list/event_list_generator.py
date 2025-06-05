@@ -585,23 +585,6 @@ class EventListGenerator:
             },
         ]
 
-    def visit_PrecompClearIR(
-        self,
-        ir: ir_mod.PrecompClearIR,
-        start: int,
-        max_events: int,
-    ) -> EventList:
-        assert ir.length is not None
-        return [
-            {
-                "event_type": EventType.RESET_PRECOMPENSATION_FILTERS,
-                "time": start,
-                "signal_id": next(iter(ir.signals)),
-                "id": next(self.id_tracker),
-                "position": self.ir_id_map[id(ir)].start,
-            }
-        ]
-
     def visit_PhaseResetIR(
         self,
         ir: ir_mod.PhaseResetIR,
@@ -621,47 +604,6 @@ class EventListGenerator:
             for device in ir.hw_osc_devices
         ]
         return events
-
-    def visit_PPCStepIR(
-        self,
-        ir: ir_mod.PPCStepIR,
-        start: int,
-        max_events: int,
-    ) -> EventList:
-        if max_events < 2:
-            return []
-
-        start_id = next(self.id_tracker)
-        start_event = {
-            "event_type": EventType.PPC_SWEEP_STEP_START,
-            "time": start,
-            "section_name": ir.section,
-            "id": start_id,
-            "qa_device": ir.qa_device,
-            "qa_channel": ir.qa_channel,
-            "ppc_device": ir.ppc_device,
-            "ppc_channel": ir.ppc_channel,
-            "position": self.ir_id_map[id(ir)].start,
-        }
-        end_event = {
-            "event_type": EventType.PPC_SWEEP_STEP_END,
-            "time": start + ir.trigger_duration,
-            "id": start_id,
-            "chain_element_id": start_id,
-            "position": self.ir_id_map[id(ir)].end,
-        }
-
-        for field in [
-            "pump_power",
-            "pump_frequency",
-            "probe_power",
-            "probe_frequency",
-            "cancellation_phase",
-            "cancellation_attenuation",
-        ]:
-            if (value := getattr(ir, field)) is not None:
-                start_event[field] = value
-        return [start_event, end_event]
 
     def generate_children_events(
         self,

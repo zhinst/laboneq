@@ -7,6 +7,7 @@ from laboneq.compiler.common.awg_signal_type import AWGSignalType
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.seqc.ir import SingleAwgIR
 from laboneq.compiler.ir import SignalIR
+from laboneq.data.compilation_job import Marker
 
 class WaveIndexTracker:
     def __init__(self) -> None: ...
@@ -78,13 +79,6 @@ class SeqCGenerator:
 def merge_generators(
     generators: Sequence[SeqCGenerator], compress: bool = True
 ) -> SeqCGenerator: ...
-def generate_code_for_awg(
-    ob: SingleAwgIR,
-    signals: list[SignalIR],
-    cut_points: set[int],
-    play_wave_size_hint: int,
-    play_zero_size_hint: int,
-) -> list: ...
 
 class SeqCTracker:
     def __init__(
@@ -179,3 +173,56 @@ class PRNGTracker:
     def active_sample(self, value: str) -> None: ...
     def drop_sample(self) -> None: ...
     def is_committed(self) -> bool: ...
+
+class PulseSignature:
+    start: int
+    length: int
+    pulse: str | None
+    amplitude: float | None
+    phase: float | None
+    oscillator_frequency: float | None
+    channel: int | None
+    sub_channel: int | None
+    id_pulse_params: int | None
+    markers: list[Marker]
+
+class WaveformSignature:
+    length: int
+    pulses: list[PulseSignature]
+
+    @classmethod
+    def from_samples_id(
+        _cls,
+        length: int,
+        uid: int,
+        label: str,
+        has_i: bool,
+        has_q: bool | None = None,
+        has_marker1: bool | None = None,
+        has_marker2: bool | None = None,
+    ) -> WaveformSignature:
+        """Create a WaveformSignature from samples ID and other parameters."""
+
+    def is_playzero(self) -> bool:
+        """Check if the waveform signature represents a play zero waveform."""
+
+    def signature_string(self) -> str:
+        """Generate a string representation of the waveform signature."""
+
+def string_sanitize(input: str) -> str:
+    """Sanitize a string for use in SeqC code."""
+
+class AwgCodeGenerationResult:
+    awg_events: list[object]
+
+def generate_code_for_awg(
+    ob: SingleAwgIR,
+    signals: list[SignalIR],
+    cut_points: set[int],
+    play_wave_size_hint: int,
+    play_zero_size_hint: int,
+    amplitude_resolution_range: int,
+    use_amplitude_increment: bool,
+    phase_resolution_range: int,
+    global_delay_samples: int,
+) -> AwgCodeGenerationResult: ...

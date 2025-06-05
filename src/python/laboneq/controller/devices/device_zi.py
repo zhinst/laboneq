@@ -179,7 +179,7 @@ class DeviceZI(DeviceAbstract):
     ):
         self._server_qualifier = server_qualifier
         self._device_qualifier = device_qualifier
-        self._downlinks: dict[str, list[tuple[str, ReferenceType[DeviceZI]]]] = {}
+        self._downlinks: list[ReferenceType[DeviceZI]] = []
         self._uplinks: list[ReferenceType[DeviceZI]] = []
 
     def _dummy(self):
@@ -209,45 +209,20 @@ class DeviceZI(DeviceAbstract):
     def is_secondary(self) -> bool:
         return False
 
-    def load_factory_preset_control_nodes(self) -> list[NodeControlBase]:
-        return []
-
-    def runtime_check_control_nodes(self) -> list[NodeControlBase]:
-        return []
-
-    def clock_source_control_nodes(self) -> list[NodeControlBase]:
-        return []
-
-    def system_freq_control_nodes(self) -> list[NodeControlBase]:
-        return []
-
-    def rf_offset_control_nodes(self) -> list[NodeControlBase]:
-        return []
-
-    def zsync_link_control_nodes(self) -> list[NodeControlBase]:
-        return []
-
     ### Device linking by trigger chain
     def remove_all_links(self):
         self._downlinks.clear()
         self._uplinks.clear()
 
-    def add_downlink(self, port: str, linked_device_uid: str, linked_device: DeviceZI):
-        self._downlinks.setdefault(port, []).append(
-            (linked_device_uid, ref(linked_device))
-        )
+    def add_downlink(self, linked_device: DeviceZI):
+        dev_ref = ref(linked_device)
+        if dev_ref not in self._downlinks:
+            self._downlinks.append(dev_ref)
 
     def add_uplink(self, linked_device: DeviceZI):
         dev_ref = ref(linked_device)
         if dev_ref not in self._uplinks:
             self._uplinks.append(dev_ref)
-
-    def downlinks(self) -> Iterator[tuple[str, str, DeviceZI]]:
-        for port, downstream_devices in self._downlinks.items():
-            for uid, dev_ref in downstream_devices:
-                downstream_device = dev_ref()
-                assert downstream_device is not None
-                yield port, uid, downstream_device
 
     def is_leader(self) -> bool:
         # Check also downlinks, to exclude standalone devices
@@ -366,11 +341,6 @@ class DeviceZI(DeviceAbstract):
         nt_step: NtStepKey,
         rt_section_uid: str,
         results: ExperimentResults,
-    ):
-        pass
-
-    async def exec_config_step(
-        self, control_nodes: list[NodeControlBase], config_name: str, timeout_s: float
     ):
         pass
 
@@ -592,7 +562,7 @@ class DeviceBase(DeviceZI):
 
         dev_type_path = f"/{self.serial}/features/devtype"
         dev_opts_path = f"/{self.serial}/features/options"
-        dev_traits = await self._api.get_raw(f"{dev_type_path},{dev_opts_path}")
+        dev_traits = await self._api.get_raw([dev_type_path, dev_opts_path])
         dev_type = dev_traits.get(dev_type_path)
         dev_opts = dev_traits.get(dev_opts_path)
         if isinstance(dev_type, str):
@@ -698,7 +668,7 @@ class DeviceBase(DeviceZI):
         nodes = [node for node, _ in self._collect_warning_nodes()]
         if len(nodes) == 0:
             return
-        init_vals = await self._api.get_raw(",".join(nodes))
+        init_vals = await self._api.get_raw(nodes)
         self._warning_nodes.update(init_vals)
 
     async def update_warning_nodes(self):
@@ -1220,13 +1190,31 @@ class DeviceBase(DeviceZI):
 
     async def fetch_errors(self) -> str | list[str]:
         error_node = f"/{self.serial}/raw/error/json/errors"
-        all_errors = await self._api.get_raw(error_node)
+        all_errors = await self._api.get_raw([error_node])
         return all_errors[error_node]
 
     async def reset_to_idle(self):
         nc = NodeCollector(base=f"/{self.serial}/")
         nc.add("raw/error/clear", 1, cache=False)
         await self.set_async(nc)
+
+    def load_factory_preset_control_nodes(self) -> list[NodeControlBase]:
+        return []
+
+    def runtime_check_control_nodes(self) -> list[NodeControlBase]:
+        return []
+
+    def clock_source_control_nodes(self) -> list[NodeControlBase]:
+        return []
+
+    def system_freq_control_nodes(self) -> list[NodeControlBase]:
+        return []
+
+    def rf_offset_control_nodes(self) -> list[NodeControlBase]:
+        return []
+
+    async def wait_for_zsync_link(self, timeout_s: float):
+        pass
 
     async def exec_config_step(
         self, control_nodes: list[NodeControlBase], config_name: str, timeout_s: float

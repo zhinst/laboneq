@@ -81,35 +81,35 @@ mod tests {
     #[test]
     fn test_empty_arr() {
         let cstring = c_str!(r#"arr = []"#);
-        assert_eq!(build_arr(&cstring).unwrap(), NumericArray::Float64(vec![]));
+        assert_eq!(build_arr(cstring).unwrap(), NumericArray::Float64(vec![]));
 
         let cstring = c_str!(r#"import numpy as np; arr = np.array([])"#);
-        assert_eq!(build_arr(&cstring).unwrap(), NumericArray::Float64(vec![]));
+        assert_eq!(build_arr(cstring).unwrap(), NumericArray::Float64(vec![]));
     }
 
     #[test]
     fn test_py_list_real() {
         let cstring = c_str!(r#"arr = [1, 2]"#);
         assert_eq!(
-            build_arr(&cstring).unwrap(),
+            build_arr(cstring).unwrap(),
             NumericArray::Integer64(vec![1, 2])
         );
 
         let cstring = c_str!(r#"arr = [-1, 2]"#);
         assert_eq!(
-            build_arr(&cstring).unwrap(),
+            build_arr(cstring).unwrap(),
             NumericArray::Integer64(vec![-1, 2])
         );
 
         let cstring = c_str!(r#"arr = [-1.2, 2]"#);
         assert_eq!(
-            build_arr(&cstring).unwrap(),
+            build_arr(cstring).unwrap(),
             NumericArray::Float64(vec![-1.2, 2.0])
         );
 
         let cstring = c_str!(r#"arr = [2, 2.1]"#);
         assert_eq!(
-            build_arr(&cstring).unwrap(),
+            build_arr(cstring).unwrap(),
             NumericArray::Float64(vec![2.0, 2.1])
         );
     }
@@ -118,25 +118,25 @@ mod tests {
     fn test_py_list_real_complex() {
         let cstring = c_str!(r#"arr = [complex(1)]"#);
         assert_eq!(
-            build_arr(&cstring).unwrap(),
+            build_arr(cstring).unwrap(),
             NumericArray::Complex64(vec![Complex::new(1.0, 0.0)])
         );
 
         let cstring = c_str!(r#"arr = [complex(1, 0.2)]"#);
         assert_eq!(
-            build_arr(&cstring).unwrap(),
+            build_arr(cstring).unwrap(),
             NumericArray::Complex64(vec![Complex::new(1.0, 0.2)])
         );
 
         let cstring = c_str!(r#"arr = [complex(-1, 0.2)]"#);
         assert_eq!(
-            build_arr(&cstring).unwrap(),
+            build_arr(cstring).unwrap(),
             NumericArray::Complex64(vec![Complex::new(-1.0, 0.2)])
         );
 
         let cstring = c_str!(r#"arr = [complex(1, -0.2)]"#);
         assert_eq!(
-            build_arr(&cstring).unwrap(),
+            build_arr(cstring).unwrap(),
             NumericArray::Complex64(vec![Complex::new(1.0, -0.2)])
         );
     }
@@ -145,13 +145,13 @@ mod tests {
     fn test_numpy_arr() {
         let cstring = c_str!(r#"import numpy as np; arr = np.array([1, 2])"#);
         assert_eq!(
-            build_arr(&cstring).unwrap(),
+            build_arr(cstring).unwrap(),
             NumericArray::Integer64(vec![1, 2])
         );
 
         let cstring = c_str!(r#"import numpy as np; arr = np.array([complex(1, 0.1)])"#);
         assert_eq!(
-            build_arr(&cstring).unwrap(),
+            build_arr(cstring).unwrap(),
             NumericArray::Complex64(vec![Complex::new(1.0, 0.1)])
         );
     }
@@ -160,7 +160,7 @@ mod tests {
     fn test_numpy_type_in_list() {
         let cstring = c_str!(r#"import numpy as np; arr = [np.int64(1), np.float64(1.2)]"#);
         assert_eq!(
-            build_arr(&cstring).unwrap(),
+            build_arr(cstring).unwrap(),
             NumericArray::Float64(vec![1.0, 1.2])
         );
     }
@@ -170,19 +170,19 @@ mod tests {
         let expected_error_message = "ValueError: Expected a 1-dimensional array that can be downcast to either 'float64', 'int64' or 'complex128'";
         let cstring = c_str!(r#"arr = [None]"#);
         assert_eq!(
-            build_arr(&cstring).unwrap_err().to_string(),
+            build_arr(cstring).unwrap_err().to_string(),
             expected_error_message.to_string()
         );
 
         let cstring = c_str!(r#"arr = ["test"]"#);
         assert_eq!(
-            build_arr(&cstring).unwrap_err().to_string(),
+            build_arr(cstring).unwrap_err().to_string(),
             expected_error_message.to_string()
         );
 
         let cstring = c_str!(r#"arr = None"#);
         assert_eq!(
-            build_arr(&cstring).unwrap_err().to_string(),
+            build_arr(cstring).unwrap_err().to_string(),
             expected_error_message.to_string()
         );
     }

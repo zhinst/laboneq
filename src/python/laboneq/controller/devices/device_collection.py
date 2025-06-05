@@ -142,7 +142,7 @@ class DeviceCollection:
     async def _configure_async(
         self,
         devices: list[DeviceZI],
-        control_nodes_getter: Callable[[DeviceZI], list[NodeControlBase]],
+        control_nodes_getter: Callable[[DeviceBase], list[NodeControlBase]],
         config_name: str,
     ):
         await _gather(
@@ -153,6 +153,7 @@ class DeviceCollection:
                     timeout_s=self._timeout_s,
                 )
                 for device in devices
+                if isinstance(device, DeviceBase)
             )
         )
 
@@ -162,16 +163,16 @@ class DeviceCollection:
         def _followers_of(parents: list[DeviceZI]) -> list[DeviceZI]:
             children = []
             for parent_dev in parents:
-                for down_stream_devices in parent_dev._downlinks.values():
-                    for _, dev_ref in down_stream_devices:
-                        if (dev := dev_ref()) is not None:
-                            children.append(dev)
+                for dev_ref in parent_dev._downlinks:
+                    dev = dev_ref()
+                    if dev is not None:
+                        children.append(dev)
             return children
 
         if reset_devices:
             await self._configure_async(
                 [device for _, device in self.all if not device.is_secondary],
-                lambda d: cast(DeviceZI, d).load_factory_preset_control_nodes(),
+                lambda d: cast(DeviceBase, d).load_factory_preset_control_nodes(),
                 "Reset to factory defaults",
             )
             # TODO(2K): Error check
@@ -184,31 +185,21 @@ class DeviceCollection:
             # Switch QHUB to the external clock as usual
             await self._configure_async(
                 leaders,
-                lambda d: cast(DeviceZI, d).clock_source_control_nodes(),
+                lambda d: cast(DeviceBase, d).clock_source_control_nodes(),
                 "QHUB: Reference clock switching",
             )
             # Check if zsync link is already established
-            async_checkers: list[ConditionsCheckerAsync] = []
-            for dev in followers:
-                if isinstance(dev, DeviceBase):
-                    async_checker = ConditionsCheckerAsync(
-                        dev._api,
-                        {
-                            n.path: n.value
-                            for n in filter_states(dev.clock_source_control_nodes())
-                        },
-                    )
-                async_checkers.append(async_checker)
-            for dev in leaders:
-                if isinstance(dev, DeviceBase):
-                    async_checker = ConditionsCheckerAsync(
-                        dev._api,
-                        {
-                            n.path: n.value
-                            for n in filter_states(dev.zsync_link_control_nodes())
-                        },
-                    )
-                async_checkers.append(async_checker)
+            async_checkers: list[ConditionsCheckerAsync] = [
+                ConditionsCheckerAsync(
+                    dev._api,
+                    {
+                        n.path: n.value
+                        for n in filter_states(dev.clock_source_control_nodes())
+                    },
+                )
+                for dev in followers
+                if isinstance(dev, DeviceBase)
+            ]
             dev_results = await _gather(
                 *(async_checker.check() for async_checker in async_checkers)
             )
@@ -216,6 +207,8 @@ class DeviceCollection:
             if len(failed) > 0:
                 # Switch followers to ZSync, but don't wait for completion yet
                 for dev in followers:
+                    if not isinstance(dev, DeviceBase):
+                        continue
                     ref_set = next(
                         (
                             c
@@ -246,20 +239,17 @@ class DeviceCollection:
 
         configs = {
             "Configure runtime checks": lambda d: cast(
-                DeviceZI, d
+                DeviceBase, d
             ).runtime_check_control_nodes(),
             "Reference clock switching": lambda d: cast(
-                DeviceZI, d
+                DeviceBase, d
             ).clock_source_control_nodes(),
             "System frequency switching": lambda d: cast(
-                DeviceZI, d
+                DeviceBase, d
             ).system_freq_control_nodes(),
             "Setting RF channel offsets": lambda d: cast(
-                DeviceZI, d
+                DeviceBase, d
             ).rf_offset_control_nodes(),
-            "Establishing ZSync link": lambda d: cast(
-                DeviceZI, d
-            ).zsync_link_control_nodes(),
         }
 
         leaders = [
@@ -278,6 +268,10 @@ class DeviceCollection:
             while len(targets) > 0:
                 await self._configure_async(targets, control_nodes_getter, config_name)
                 targets = _followers_of(targets)
+
+        # Check if the ZSync link is established with port autodetection
+        await self.for_each(DeviceBase.wait_for_zsync_link, timeout_s=self._timeout_s)
+
         _logger.info("The device setup is configured")
 
     async def disconnect(self):
@@ -408,16 +402,13 @@ class DeviceCollection:
         # Update device links and leader/follower status
         for device_qualifier in self._ds.devices:
             from_dev = self._devices[device_qualifier.uid]
-            for from_port, to_dev_uid in self._ds.downlinks_by_device_uid(
-                device_qualifier.uid
-            ):
+            for to_dev_uid in self._ds.downlinks_by_device_uid(device_qualifier.uid):
                 to_dev = self._devices.get(to_dev_uid)
                 if to_dev is None:
                     raise LabOneQControllerException(
-                        f"Could not find destination device '{to_dev_uid}' for "
-                        f"the port '{from_port}' of the device '{device_qualifier.uid}'"
+                        f"Device '{to_dev_uid}' referenced by '{device_qualifier.uid}' was not found."
                     )
-                from_dev.add_downlink(from_port, to_dev_uid, to_dev)
+                from_dev.add_downlink(to_dev)
                 to_dev.add_uplink(from_dev)
 
         # Move various device settings from device setup

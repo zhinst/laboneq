@@ -11,47 +11,15 @@ from laboneq.compiler.seqc.awg_sampled_event import (
 from laboneq.compiler.seqc import signatures
 
 
-def handle_playwave(event, signals: set[str], signal_id: str) -> AWGEvent | None:
+def handle_playwave(event) -> AWGEvent | None:
     event_play = event.data()
-    if event_play.signals != signals:
-        return None
     start = event.start
     end = event.end
-    signature_pulses = []
-    for pulse in event_play.pulses:
-        markers = (
-            tuple(frozenset(m.items()) for m in pulse.markers)
-            if pulse.markers
-            else None
-        )
-        # We replace Python `PulseSignature` once some kind of hashing
-        # is implemented for Rust part.
-        signature_pulses.append(
-            signatures.PulseSignature(
-                start=pulse.start,
-                length=pulse.length,
-                pulse=pulse.pulse,
-                channel=pulse.channel,
-                id_pulse_params=pulse.id_pulse_params,
-                sub_channel=pulse.sub_channel,
-                amplitude=pulse.amplitude,
-                preferred_amplitude_register=None,
-                phase=pulse.phase,
-                markers=markers,
-                oscillator_frequency=pulse.oscillator_frequency,
-                oscillator_phase=None,
-                incr_phase_params=(),
-                increment_oscillator_phase=None,
-            )
-        )
-    waveform_signature = signatures.WaveformSignature(
-        length=end - start, pulses=tuple(signature_pulses)
-    )
     hw_osc = event_play.hw_oscillator
     if hw_osc:
         hw_osc = signatures.HWOscillator.make(osc_id=hw_osc.uid, osc_index=hw_osc.index)
     signature = signatures.PlaybackSignature(
-        waveform=waveform_signature,
+        waveform=event_play.waveform,
         hw_oscillator=hw_osc,
         state=event_play.state,
         clear_precompensation=False,
@@ -65,10 +33,7 @@ def handle_playwave(event, signals: set[str], signal_id: str) -> AWGEvent | None
         type=AWGEventType.PLAY_WAVE,
         start=start,
         end=end,
-        params={
-            "playback_signature": signature,
-            "signal_id": signal_id,
-        },
+        params={"playback_signature": signature, "signal_ids": event_play.signals},
     )
     return interval_event
 
@@ -89,10 +54,8 @@ def handle_match(event) -> AWGEvent:
     )
 
 
-def handle_change_oscillator_phase(event, signals: set[str]) -> AWGEvent | None:
+def handle_change_oscillator_phase(event) -> AWGEvent | None:
     obj = event.data()
-    if obj.signal not in signals:
-        return None
     hw_osc = obj.hw_oscillator
     if hw_osc:
         hw_osc = signatures.HWOscillator.make(osc_id=hw_osc.uid, osc_index=hw_osc.index)
@@ -107,6 +70,7 @@ def handle_change_oscillator_phase(event, signals: set[str]) -> AWGEvent | None:
             "phase": obj.phase,
             "parameter": obj.parameter,
             "hw_oscillator": hw_osc,
+            "signal_id": obj.signal,
         },
     )
 
@@ -129,25 +93,85 @@ def handle_init_amplitude_register(event) -> AWGEvent:
     )
 
 
-def transform_rs_events_to_awg_events(
-    output: list, signals: set[str]
-) -> list[AWGEvent]:
+def handle_reset_precompensation_filters(event) -> AWGEvent:
+    signature = signatures.PlaybackSignature(
+        waveform=event.data(), clear_precompensation=True, hw_oscillator=None
+    )
+    return AWGEvent(
+        type=AWGEventType.RESET_PRECOMPENSATION_FILTERS,
+        start=event.start,
+        end=event.end,
+        params={"playback_signature": signature},
+    )
+
+
+def handle_acquire(event) -> AWGEvent | None:
+    obj = event.data()
+    return AWGEvent(
+        type=AWGEventType.ACQUIRE,
+        start=event.start,
+        end=event.end,
+        priority=event.position,
+        params={
+            "signal_id": obj.signal_id,
+            "play_wave_id": obj.pulse_defs,
+            "oscillator_frequency": obj.oscillator_frequency,
+            "id_pulse_params": obj.id_pulse_params,
+            "channels": [int(ch) for ch in obj.channels],
+        },
+    )
+
+
+def handle_ppc_sweep_step_start(event) -> AWGEvent:
+    params: dict[str, float | None] = {
+        "pump_power": event.data().pump_power,
+        "pump_frequency": event.data().pump_frequency,
+        "probe_power": event.data().probe_power,
+        "probe_frequency": event.data().probe_frequency,
+        "cancellation_phase": event.data().cancellation_phase,
+        "cancellation_attenuation": event.data().cancellation_attenuation,
+    }
+    return AWGEvent(
+        type=AWGEventType.PPC_SWEEP_STEP_START,
+        start=event.start,
+        end=event.start,
+        params={k: v for k, v in params.items() if v is not None},
+    )
+
+
+def handle_ppc_sweep_step_end(event) -> AWGEvent:
+    return AWGEvent(
+        type=AWGEventType.PPC_SWEEP_STEP_END,
+        start=event.start,
+        end=event.start,
+        params={},
+    )
+
+
+def transform_rs_events_to_awg_events(output: list) -> list[AWGEvent]:
     """Adapter from Rust generated AWG events to Python AWG events."""
     if not output:
         return []
     awg_events = []
-    signal_id = "_".join(signals)
     for event in output:
         awg_event = None
-        event_type = event.event_type()
+        event_type: int = event.event_type()
         if event_type == 0:
-            awg_event = handle_playwave(event, signals, signal_id)
+            awg_event = handle_playwave(event)
         elif event_type == 1:
             awg_event = handle_match(event)
         elif event_type == 2:
-            awg_event = handle_change_oscillator_phase(event, signals)
+            awg_event = handle_change_oscillator_phase(event)
         elif event_type == 3:
             awg_event = handle_init_amplitude_register(event)
+        elif event_type == 4:
+            awg_event = handle_reset_precompensation_filters(event)
+        elif event_type == 5:
+            awg_event = handle_acquire(event)
+        elif event_type == 6:
+            awg_event = handle_ppc_sweep_step_start(event)
+        elif event_type == 7:
+            awg_event = handle_ppc_sweep_step_end(event)
         if awg_event:
             awg_events.append(awg_event)
     return awg_events

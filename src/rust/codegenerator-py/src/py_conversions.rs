@@ -11,16 +11,17 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::exceptions::PyValueError;
 use pyo3::intern;
 use pyo3::prelude::*;
+use pyo3::types::PyList;
 use pyo3::types::{PyComplex, PyString};
 
 use num_complex::Complex;
 
+use crate::ir::experiment::SweepCommand;
 use codegenerator::ir;
 use codegenerator::ir::compilation_job as cjob;
 use codegenerator::node::Node;
 use codegenerator::tinysample::length_to_samples;
 use numeric_array::NumericArray;
-
 struct Deduplicator<'a> {
     // Signals have an unique UID
     signal_dedup: HashMap<&'a str, &'a Rc<cjob::Signal>>,
@@ -54,11 +55,15 @@ fn py_to_nodekind(ob: &Bound<PyAny>, dedup: &mut Deduplicator) -> Result<ir::Nod
         "PulseIR" => {
             let is_acquire = ob.getattr(intern!(py, "is_acquire"))?.extract::<bool>()?;
             if is_acquire {
-                let length = ob.getattr(intern!(py, "length"))?.extract::<i64>()?;
-                return Ok(ir::NodeKind::Nop { length });
+                if let Some(acquire_pulse) = extract_acquire_pulse(ob, dedup)? {
+                    return Ok(ir::NodeKind::AcquirePulse(acquire_pulse));
+                }
             }
             Ok(ir::NodeKind::PlayPulse(extract_pulse(ob, dedup)?))
         }
+        "AcquireGroupIR" => Ok(ir::NodeKind::AcquirePulse(
+            extract_acquire_pulse_group(ob, dedup)?.expect("Expected acquire pulse"),
+        )),
         "MatchIR" => Ok(ir::NodeKind::Match(extract_match(ob)?)),
         "CaseIR" => Ok(ir::NodeKind::Case(extract_case(ob, dedup)?)),
         "SetOscillatorFrequencyIR" | "InitialOscillatorFrequencyIR" => Ok(
@@ -67,6 +72,8 @@ fn py_to_nodekind(ob: &Bound<PyAny>, dedup: &mut Deduplicator) -> Result<ir::Nod
         "PhaseResetIR" => Ok(ir::NodeKind::PhaseReset(extract_reset_oscillator_phase(
             ob,
         )?)),
+        "PrecompClearIR" => Ok(ir::NodeKind::PrecompensationFilterReset()),
+        "PPCStepIR" => Ok(ir::NodeKind::PpcSweepStep(extract_ppc_step(ob)?)),
         "LoopIR" => Ok(ir::NodeKind::Loop(extract_loop(ob)?)),
         "LoopIterationIR" => Ok(ir::NodeKind::LoopIteration(extract_loop_iteration(
             ob, dedup,
@@ -138,7 +145,7 @@ fn extract_pulse_def(ob: &Bound<'_, PyAny>) -> Result<Option<cjob::PulseDef>, Py
     Ok(Some(pdef))
 }
 
-fn extract_markers(ob: &Bound<'_, PyAny>) -> Result<Vec<cjob::Marker>, PyErr> {
+pub fn extract_markers(ob: &Bound<'_, PyAny>) -> Result<Vec<cjob::Marker>, PyErr> {
     // compilation_job.Marker
     if ob.is_none() {
         return Ok(vec![]);
@@ -151,9 +158,12 @@ fn extract_markers(ob: &Bound<'_, PyAny>) -> Result<Vec<cjob::Marker>, PyErr> {
                 marker_selector: elem
                     .getattr(intern!(py, "marker_selector"))?
                     .extract::<String>()?,
+                // NOTE: Currently in Python IR `enable` can be `None`, which is same as `False`,
+                // So we default to `False`, this should probably be fixed upstream.
                 enable: elem
                     .getattr(intern!(py, "enable"))?
-                    .extract::<Option<bool>>()?,
+                    .extract::<Option<bool>>()?
+                    .unwrap_or(false),
                 start: elem
                     .getattr(intern!(py, "start"))?
                     .extract::<Option<f64>>()?,
@@ -184,7 +194,7 @@ fn extract_set_oscillator_frequency(
             let signal_uid = sig?.extract::<String>()?;
             let signal = dedup
                 .get_signal(&signal_uid)
-                .unwrap_or_else(|| panic!("Missing signal: {}", &signal_uid));
+                .unwrap_or_else(|| panic!("Internal error: Missing signal: {}", &signal_uid));
             osc_values.push((signal.clone(), value));
         }
     }
@@ -213,7 +223,7 @@ fn extract_pulse(ob: &Bound<'_, PyAny>, dedup: &mut Deduplicator) -> Result<ir::
     let signal_uid = py_signal.getattr(intern!(py, "uid"))?;
     let signal = dedup
         .get_signal(signal_uid.downcast::<PyString>()?.to_cow()?.as_ref())
-        .unwrap_or_else(|| panic!("Missing signal: {}", &signal_uid));
+        .unwrap_or_else(|| panic!("Internal error: Missing signal: {}", &signal_uid));
     // TODO: PulseDef should be taken via deduplicator
     let py_pulse_def =
         extract_pulse_def(&py_section_signal_pulse.getattr(intern!(py, "pulse"))?)?.map(Arc::new);
@@ -248,6 +258,90 @@ fn extract_pulse(ob: &Bound<'_, PyAny>, dedup: &mut Deduplicator) -> Result<ir::
         id_pulse_params,
         markers: extract_markers(&ob.getattr(intern!(py, "markers"))?)?,
     })
+}
+
+fn extract_acquire_pulse(
+    ob: &Bound<'_, PyAny>,
+    dedup: &mut Deduplicator,
+) -> Result<Option<ir::AcquirePulse>, PyErr> {
+    // ir.PulseIR(is_acquire=True)
+    let py = ob.py();
+    let py_section_signal_pulse = ob.getattr(intern!(py, "pulse"))?;
+    let py_signal = py_section_signal_pulse.getattr(intern!(py, "signal"))?;
+    let maybe_pulse_def = &py_section_signal_pulse.getattr(intern!(py, "pulse"))?;
+    let pulse_def = extract_pulse_def(maybe_pulse_def)?.map(Arc::new);
+    // Acquires without pulse are not yet needed. Used for measurement calculator!
+    // If PulseDef = None: No `integration_length`
+    if pulse_def.is_none() {
+        return Ok(None);
+    }
+    let length = ob
+        .getattr(intern!(py, "integration_length"))?
+        .extract::<i64>()?;
+    let signal_uid = py_signal.getattr(intern!(py, "uid"))?;
+    let signal = dedup
+        .get_signal(signal_uid.downcast::<PyString>()?.to_cow()?.as_ref())
+        .unwrap_or_else(|| panic!("Internal error: Missing signal: {}", &signal_uid));
+
+    let pulse_def = if let Some(pulse_def_py) =
+        extract_pulse_def(&py_section_signal_pulse.getattr(intern!(py, "pulse"))?)?.map(Arc::new)
+    {
+        vec![pulse_def_py]
+    } else {
+        vec![]
+    };
+    // NOTE: This works only after pulse parameters are indexes!
+    let id_pulse_params = ob
+        .getattr(intern!(py, "play_pulse_params"))?
+        .extract::<Option<usize>>()?;
+
+    let acquire_pulse = ir::AcquirePulse {
+        length,
+        signal,
+        pulse_defs: pulse_def,
+        id_pulse_params: vec![id_pulse_params],
+    };
+    Ok(Some(acquire_pulse))
+}
+
+fn extract_acquire_pulse_group(
+    ob: &Bound<'_, PyAny>,
+    dedup: &mut Deduplicator,
+) -> Result<Option<ir::AcquirePulse>, PyErr> {
+    // ir.AcquireGroupIR
+    let py = ob.py();
+    let mut pulse_defs = vec![];
+    // Acquire group can have multiple pulses, which share identical parameters,
+    // except for pulse parameters ID.
+    let pulses_bound = ob.getattr(intern!(py, "pulses"))?;
+    let pulses_py = pulses_bound.downcast::<PyList>()?;
+    let py_section_signal_pulse_base = pulses_py.get_item(0)?;
+    let py_signal = py_section_signal_pulse_base.getattr(intern!(py, "signal"))?;
+    let signal_uid = py_signal.getattr(intern!(py, "uid"))?;
+    let signal = dedup
+        .get_signal(signal_uid.downcast::<PyString>()?.to_cow()?.as_ref())
+        .unwrap_or_else(|| panic!("Internal error: Missing signal: {}", &signal_uid));
+
+    // Single acquire group can consist of multiple individual pulses
+    // Length of pulse defs must match pulse params ID
+    for py_section_signal_pulse in pulses_py.try_iter()? {
+        let maybe_pulse_def = &py_section_signal_pulse?.getattr(intern!(py, "pulse"))?;
+        let pulse_def = extract_pulse_def(maybe_pulse_def)?
+            .expect("Internal error: Acquire group pulse def is None");
+        pulse_defs.push(Arc::new(pulse_def));
+    }
+    let length = ob.getattr(intern!(py, "length"))?.extract::<i64>()?;
+    // NOTE: This works only after pulse parameters are indexes!
+    let id_pulse_params = ob
+        .getattr(intern!(py, "play_pulse_params"))?
+        .extract::<Vec<Option<usize>>>()?;
+    let acquire_pulse = ir::AcquirePulse {
+        length,
+        signal,
+        pulse_defs,
+        id_pulse_params,
+    };
+    Ok(Some(acquire_pulse))
 }
 
 fn extract_maybe_complex(ob: &Bound<'_, PyAny>) -> Result<Option<Complex<f64>>, PyErr> {
@@ -311,7 +405,7 @@ fn extract_case(ob: &Bound<'_, PyAny>, dedup: &mut Deduplicator) -> Result<ir::C
             let sig_ref: Cow<'_, str> = item.downcast::<PyString>()?.to_cow()?;
             let out = dedup
                 .get_signal(sig_ref.as_ref())
-                .unwrap_or_else(|| panic!("Missing signal: {}", sig_ref.as_ref()));
+                .unwrap_or_else(|| panic!("Internal error: Missing signal: {}", sig_ref.as_ref()));
             signals_out.push(out);
             Ok(())
         })?;
@@ -356,6 +450,44 @@ fn extract_loop_iteration(
         length,
         iteration,
         parameters: params_out,
+    })
+}
+
+/// Extract PPC Sweep Step
+fn extract_ppc_step(ob: &Bound<'_, PyAny>) -> Result<ir::PpcSweepStep, PyErr> {
+    // ir.PPCStepIR
+    let py = ob.py();
+    let trigger_duration = ob
+        .getattr(intern!(py, "trigger_duration"))?
+        .extract::<ir::Samples>()?;
+    let pump_power = ob
+        .getattr(intern!(py, "pump_power"))?
+        .extract::<Option<f64>>()?;
+    let pump_frequency = ob
+        .getattr(intern!(py, "pump_frequency"))?
+        .extract::<Option<f64>>()?;
+    let probe_power = ob
+        .getattr(intern!(py, "probe_power"))?
+        .extract::<Option<f64>>()?;
+    let probe_frequency = ob
+        .getattr(intern!(py, "probe_frequency"))?
+        .extract::<Option<f64>>()?;
+    let cancellation_phase = ob
+        .getattr(intern!(py, "cancellation_phase"))?
+        .extract::<Option<f64>>()?;
+    let cancellation_attenuation = ob
+        .getattr(intern!(py, "cancellation_attenuation"))?
+        .extract::<Option<f64>>()?;
+    Ok(ir::PpcSweepStep {
+        length: trigger_duration,
+        sweep_command: SweepCommand {
+            pump_power,
+            pump_frequency,
+            probe_power,
+            probe_frequency,
+            cancellation_phase,
+            cancellation_attenuation,
+        },
     })
 }
 
@@ -496,9 +628,12 @@ pub fn extract_awg<'py>(
         .try_iter()?
         .map(|x| {
             let mut sig = extract_awg_signal(&x?, sampling_rate)?;
-            sig.oscillator = osc_map
-                .remove(&sig.uid)
-                .unwrap_or_else(|| panic!("No oscillator found for signal: '{}'", &sig.uid));
+            sig.oscillator = osc_map.remove(&sig.uid).unwrap_or_else(|| {
+                panic!(
+                    "Internal error: No oscillator found for signal: '{}'",
+                    &sig.uid
+                )
+            });
             Ok(Rc::new(sig))
         })
         .collect();
@@ -538,6 +673,11 @@ fn extract_parameter(
     Ok(obj)
 }
 
+/// Transform Python IR to code IR
+///
+/// While the main purpose of this function is to translate Python IR
+/// structs into Rust, it also lowers the source IR into code IR as we
+/// do not (yet) have Rust models for the original IR.
 pub fn transform_py_ir(
     ob: &Bound<'_, PyAny>,
     signals: &[Rc<cjob::Signal>],

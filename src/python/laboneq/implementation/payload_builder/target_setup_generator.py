@@ -241,10 +241,11 @@ class TargetSetupGenerator:
             if d.device_type not in (TargetDeviceType.PQSC, TargetDeviceType.QHUB):
                 continue
 
-            extra_connections = []
-            for path, instr_uid in d.internal_connections:
-                if instr_uid in split_qcs:
-                    extra_connections.append((path, f"{instr_uid}_sg"))
+            extra_connections = [
+                f"{instr_uid}_sg"
+                for instr_uid in d.internal_connections
+                if instr_uid in split_qcs
+            ]
 
             d.internal_connections.extend(extra_connections)
 
@@ -271,11 +272,9 @@ class TargetSetupGenerator:
         return ls_ports
 
     @classmethod
-    def _internal_connections(
-        cls, instrument: Instrument, setup: Setup
-    ) -> list[tuple[str, str]]:
+    def _internal_connections(cls, instrument: Instrument, setup: Setup) -> list[str]:
         return [
-            (c.from_port.path, c.to_instrument.uid)
+            c.to_instrument.uid
             for c in setup.setup_internal_connections
             if c.from_instrument.uid == instrument.uid
         ]

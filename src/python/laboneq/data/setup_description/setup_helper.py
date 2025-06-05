@@ -96,6 +96,7 @@ class SetupHelper:
         for conn in self._setup.setup_internal_connections:
             if (ppc := conn.from_instrument).device_type != DeviceType.SHFPPC:
                 continue
+            assert conn.from_port is not None
             channel = conn.from_port.channel
             target_instrument = conn.to_instrument
             target_port = conn.to_port

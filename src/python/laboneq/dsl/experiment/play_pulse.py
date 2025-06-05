@@ -31,7 +31,7 @@ class PlayPulse(Operation):
     #: Increment the phase angle of the modulating oscillator at the start of playing this pulse by this angle (in rad).
     increment_oscillator_phase: float | Parameter | None = attrs.field(default=None)
     #: Phase of the pulse (in rad).
-    phase: float | None = attrs.field(default=None)
+    phase: float | np.number | Parameter | None = attrs.field(default=None)
     #: Set the phase of the modulating oscillator at the start of playing this pulse to this angle (in rad).
     set_oscillator_phase: float | None = attrs.field(default=None)
     #: Modify the length of the pulse to the given value

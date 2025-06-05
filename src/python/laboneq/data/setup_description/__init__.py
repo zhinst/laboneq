@@ -134,7 +134,7 @@ class SetupInternalConnection:
     """
 
     from_instrument: Instrument
-    from_port: Port
+    from_port: Port | None
     to_instrument: Instrument
     to_port: Port
 

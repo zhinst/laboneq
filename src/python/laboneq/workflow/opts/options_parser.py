@@ -8,12 +8,10 @@ from __future__ import annotations
 import inspect
 import sys
 import typing
+import types
 
-_PY_V39 = sys.version_info < (3, 10)
 _PY_LT_V313 = sys.version_info < (3, 13)
 
-if not _PY_V39:
-    import types
 
 _typing_eval_type = typing._eval_type
 if _PY_LT_V313:
@@ -42,8 +40,7 @@ def _get_argument_types(
     globals_ = getattr(fn, "__globals__", {})
     locals_ = globals_
 
-    # typing.get_type_hints does not work on 3.9 with A | None = None.
-    # It is also overkill for retrieving type of a single parameter of
+    # typing.get_type_hints is overkill for retrieving type of a single parameter of
     # only function-like objects, and will cause problems
     # when other parameters have no type hint or type hint imported
     # conditioned on type_checking.
@@ -51,8 +48,15 @@ def _get_argument_types(
     param = inspect.signature(fn).parameters.get(arg_name, None)
     if param is None or param.annotation is inspect.Parameter.empty:
         return set()
+    type_hint = param.annotation
+    if isinstance(type_hint, str):
+        opt_type = _convert_str_type(type_hint, globals_, locals_)
+    else:
+        opt_type = type_hint
 
-    return _parse_types(param.annotation, globals_, locals_, is_py_39=_PY_V39)
+    if typing.get_origin(opt_type) in (types.UnionType, typing.Union):
+        return set(typing.get_args(opt_type))
+    return {opt_type}
 
 
 def _get_default_argument(
@@ -92,34 +96,6 @@ def _convert_str_type(
     except (TypeError, SyntaxError, NameError) as e:
         raise TypeConvertError(f"Could not resolve type {t}.") from e
     return typing.Union[tuple(type_args)]
-
-
-def _parse_types(
-    type_hint: str | type,
-    globals_: dict,
-    locals_: dict,
-    *,
-    is_py_39: bool,
-) -> set[type]:
-    if isinstance(type_hint, str):
-        opt_type = _convert_str_type(type_hint, globals_, locals_)
-    else:
-        opt_type = type_hint
-
-    if _is_union_type(opt_type, is_py_39):
-        return set(typing.get_args(opt_type))
-    return {opt_type}
-
-
-def _is_union_type(opt_type: type, is_py_39: bool) -> bool:  # noqa: FBT001
-    return (
-        is_py_39
-        and typing.get_origin(opt_type) == typing.Union
-        or (
-            not is_py_39
-            and typing.get_origin(opt_type) in (types.UnionType, typing.Union)
-        )
-    )
 
 
 def _unwrap_wrapped_func(func: typing.Callable) -> typing.Callable:
@@ -215,14 +191,7 @@ def check_type(
     origin = typing.get_origin(t)
     if origin is None:
         return isinstance(value, t)
-    _check_union = False
-    if origin is typing.Union:
-        _check_union = True
-    if not _PY_V39:
-        # Python 3.10+ a | b is of types.UnionType
-        if origin is types.UnionType:
-            _check_union = True
-    if _check_union:
+    if origin in (typing.Union, types.UnionType):
         return any(
             isinstance(value, arg)
             if typing.get_origin(arg) is None

@@ -9,6 +9,7 @@ from functools import partial
 from typing import Callable, ClassVar, Optional, Type, Union
 
 import attrs
+import numpy
 from cattrs import Converter
 
 from laboneq._utils import UIDReference
@@ -39,21 +40,18 @@ from laboneq.dsl.experiment.set_node import SetNode
 from laboneq.dsl.parameter import LinearSweepParameter, SweepParameter
 from laboneq.dsl.prng import PRNG, PRNGSample
 from laboneq.serializers._pulse_cache import PulseSampledCache
-from laboneq.serializers.implementations._models._calibration import (
-    _structure_basic_or_parameter_model,
-    _unstructure_basic_or_parameter_model,
-)
-
+from typing import NewType
 from ._calibration import (
     ParameterModel,
     SignalCalibrationModel,
+    structure_basic_or_parameter_model,
+    unstructure_basic_or_parameter_model,
 )
 from ._calibration import (
     make_converter as make_converter_calibration,
 )
 from ._common import (
     ArrayLike_Model,
-    NumericModel,
     collect_models,
     register_models,
     structure_union_generic_type,
@@ -152,26 +150,14 @@ class PulseSampledModel:
 class PulseFunctionalModel:
     function: str
     uid: str
-    amplitude: Optional[NumericModel]
-    length: float
+    amplitude: float | complex | numpy.number | None
+    length: float | None
     can_compress: bool
-    pulse_parameters: Optional[PulseParameterModel]
+    pulse_parameters: PulseParameterModel | None
     _target_class: ClassVar[Type] = PulseFunctional
 
-    # simple enough to not require customized unstructure
-    @classmethod
-    def _structure(cls, obj, _):
-        return cls._target_class(
-            function=obj["function"],
-            uid=obj["uid"],
-            amplitude=_converter.structure(obj["amplitude"], Optional[NumericModel]),
-            length=obj["length"],
-            can_compress=obj["can_compress"],
-            pulse_parameters=obj["pulse_parameters"],
-        )
 
-
-PulseModel = Union[PulseSampledModel, PulseFunctionalModel]
+PulseModel = PulseSampledModel | PulseFunctionalModel
 
 
 def _unstructure_pulse_model(obj, _converter):
@@ -193,9 +179,9 @@ PulseParameterModel = dict[str, Union[float, int, str, bool, complex, ParameterM
 
 def _unstructure_pulse_parameter_model(obj):
     return {
-        k: _unstructure_basic_or_parameter_model(v, _converter)
-        if isinstance(v, (SweepParameter, LinearSweepParameter))
-        else v
+        k: _converter.unstructure(
+            v, Union[float, int, str, bool, complex, ParameterModel]
+        )
         for k, v in obj.items()
     }
 
@@ -203,7 +189,7 @@ def _unstructure_pulse_parameter_model(obj):
 def _structure_pulse_parameter_model(obj):
     ret = {}
     for k, v in obj.items():
-        if isinstance(v, dict) and v.get("_type") is not None:
+        if isinstance(v, dict):
             ret[k] = _converter.structure(v, ParameterModel)
         else:
             ret[k] = v
@@ -213,13 +199,13 @@ def _structure_pulse_parameter_model(obj):
 # Operation-related models
 @attrs.define
 class PlayPulseModel:
-    signal: str
+    signal: str | None
     pulse: PulseModel | None
-    amplitude: Union[NumericModel, ParameterModel]
-    increment_oscillator_phase: Union[float, ParameterModel]
-    phase: float
-    set_oscillator_phase: float
-    length: Union[float, ParameterModel]
+    amplitude: float | numpy.number | ParameterModel | None
+    increment_oscillator_phase: float | ParameterModel | None
+    phase: float | ParameterModel | None
+    set_oscillator_phase: float | None
+    length: float | ParameterModel | None
     pulse_parameters: PulseParameterModel | None
     precompensation_clear: bool | None
     marker: dict | None
@@ -234,15 +220,15 @@ class PlayPulseModel:
         return {
             "signal": obj.signal,
             "pulse": pulse,
-            "amplitude": _unstructure_basic_or_parameter_model(
+            "amplitude": unstructure_basic_or_parameter_model(
                 obj.amplitude, _converter
             ),
-            "increment_oscillator_phase": _unstructure_basic_or_parameter_model(
+            "increment_oscillator_phase": unstructure_basic_or_parameter_model(
                 obj.increment_oscillator_phase, _converter
             ),
-            "phase": obj.phase,
+            "phase": unstructure_basic_or_parameter_model(obj.phase, _converter),
             "set_oscillator_phase": obj.set_oscillator_phase,
-            "length": _unstructure_basic_or_parameter_model(obj.length, _converter),
+            "length": unstructure_basic_or_parameter_model(obj.length, _converter),
             "pulse_parameters": obj.pulse_parameters,
             "precompensation_clear": obj.precompensation_clear,
             "marker": obj.marker,
@@ -250,7 +236,8 @@ class PlayPulseModel:
 
     @classmethod
     def _structure(cls, obj, _):
-        amplitude = _structure_basic_or_parameter_model(obj["amplitude"], _converter)
+        # cattrs refuses to guess when structuring complex | numpy.number | ArbitraryModel
+        # so we have to do it manually.
         if obj["pulse"] is None:
             pulse = None
         else:
@@ -258,13 +245,13 @@ class PlayPulseModel:
         return cls._target_class(
             signal=obj["signal"],
             pulse=pulse,
-            amplitude=amplitude,
-            increment_oscillator_phase=_structure_basic_or_parameter_model(
+            amplitude=structure_basic_or_parameter_model(obj["amplitude"], _converter),
+            increment_oscillator_phase=structure_basic_or_parameter_model(
                 obj["increment_oscillator_phase"], _converter
             ),
-            phase=obj["phase"],
+            phase=structure_basic_or_parameter_model(obj["phase"], _converter),
             set_oscillator_phase=obj["set_oscillator_phase"],
-            length=_structure_basic_or_parameter_model(obj["length"], _converter),
+            length=structure_basic_or_parameter_model(obj["length"], _converter),
             pulse_parameters=obj["pulse_parameters"],
             precompensation_clear=obj["precompensation_clear"],
             marker=obj["marker"],
@@ -276,11 +263,6 @@ class ReserveModel:
     signal: str
     _target_class: ClassVar[Type] = Reserve
 
-    # simple enough to not require customized unstructure
-    @classmethod
-    def _structure(cls, obj, _):
-        return cls._target_class(signal=obj["signal"])
-
 
 @attrs.define
 class SetNodeModel:
@@ -289,12 +271,6 @@ class SetNodeModel:
     value: Optional[Union[str, int, float, complex, bool]]
     _target_class: ClassVar[Type] = SetNode
 
-    # simple enough to not require customized unstructure
-
-    @classmethod
-    def _structure(cls, obj, _):
-        return cls._target_class(path=obj["path"], value=obj["value"])
-
 
 @attrs.define
 class DelayModel:
@@ -302,22 +278,6 @@ class DelayModel:
     time: float | ParameterModel | None
     precompensation_clear: bool | None
     _target_class: ClassVar[Type] = Delay
-
-    @classmethod
-    def _unstructure(cls, obj):
-        return {
-            "signal": obj.signal,
-            "time": _unstructure_basic_or_parameter_model(obj.time, _converter),
-            "precompensation_clear": obj.precompensation_clear,
-        }
-
-    @classmethod
-    def _structure(cls, obj, _):
-        return cls._target_class(
-            signal=obj["signal"],
-            time=_structure_basic_or_parameter_model(obj["time"], _converter),
-            precompensation_clear=obj["precompensation_clear"],
-        )
 
 
 @attrs.define
@@ -397,10 +357,6 @@ class UIDReferenceModel:
     uid: str
     _target_class: ClassVar[Type] = UIDReference
 
-    @classmethod
-    def _structure(cls, obj, _):
-        return cls._target_class(uid=obj["uid"])
-
 
 @attrs.define
 class CallModel:
@@ -473,9 +429,6 @@ OperationModel = Union[
     SetNodeModel,
 ]
 
-# When dropping support for Python 3.9, remove the following lines
-# and use configure_tagged_union(OperationModel, _converter) instead
-
 
 def _unstructure_operation_model(obj, _converter: Converter):
     return unstructure_union_generic_type(obj, _operation_types, _converter)
@@ -486,6 +439,32 @@ def _structure_operation_model(d, _, _converter: Converter):
     return structure_union_generic_type(d, _operation_types, _converter)
 
 
+PlayAfterModel = NewType("PlayAfterModel", str | Section | list[str | Section] | None)
+
+
+def _unstructure_play_after_model(obj):
+    if isinstance(obj, list):
+        play_after = [p.uid for p in obj]
+    elif obj is None or isinstance(obj, str):
+        play_after = obj
+    else:
+        play_after = obj.uid
+    return play_after
+
+
+def _structure_play_after_model(obj, _):
+    if isinstance(obj, list):
+        play_after = [
+            p if isinstance(p, str) else _converter.structure(p, SectionModel)
+            for p in obj
+        ]
+    elif obj is None or isinstance(obj, str):
+        play_after = obj
+    else:
+        play_after = _converter.structure(obj, SectionModel) if obj else None
+    return play_after
+
+
 @attrs.define
 class SectionModel:
     uid: str | None
@@ -493,95 +472,16 @@ class SectionModel:
     alignment: SectionAlignment
     execution_type: ExecutionType | None
     length: float | None
-    play_after: str | SectionModel | list[str | SectionModel] | None
+    play_after: PlayAfterModel
     children: list[AllSectionModel | OperationModel]
     trigger: dict[str, dict[str, int]]
 
     on_system_grid: bool | None
     _target_class: ClassVar[Type] = Section
 
-    @classmethod
-    def _unstructure(cls, obj):
-        if isinstance(obj.play_after, list):
-            play_after = [p.uid for p in obj.play_after]
-        elif obj.play_after is None or isinstance(obj.play_after, str):
-            play_after = obj.play_after
-        else:
-            play_after = obj.play_after.uid
-
-        children = []
-        for c in obj.children:
-            if isinstance(c, Section):
-                children.append(_converter.unstructure(c, AllSectionModel))
-            else:
-                children.append(_converter.unstructure(c, OperationModel))
-
-        return {
-            "uid": obj.uid,
-            "name": obj.name,
-            "alignment": _converter.unstructure(obj.alignment, SectionAlignmentModel),
-            "execution_type": _converter.unstructure(
-                obj.execution_type, Optional[ExecutionTypeModel]
-            ),
-            "length": obj.length,
-            "play_after": play_after,
-            "children": children,
-            "trigger": obj.trigger,
-            "on_system_grid": obj.on_system_grid,
-        }
-
-    # TODO: Better name for this method
-    # TODO: Use instead cattrs.strategies.include_subclasses() when
-    # dropping support for Python 3.9
-    @classmethod
-    def _process_dict(cls, obj) -> dict:
-        """Process the dictionary to make it suitable for the structure method.
-        Will be used for structuring of subclasses of Section."""
-        if isinstance(obj["play_after"], list):
-            play_after = [
-                p if isinstance(p, str) else _converter.structure(p, SectionModel)
-                for p in obj["play_after"]
-            ]
-        elif obj["play_after"] is None or isinstance(obj["play_after"], str):
-            play_after = obj["play_after"]
-        else:
-            play_after = (
-                _converter.structure(obj["play_after"], SectionModel)
-                if obj["play_after"]
-                else None
-            )
-
-        # a bit hacky here to determine the type of the children
-        # TODO: let cattrs automatically handle this when dropping support for 3.9
-        children = []
-        for c in obj["children"]:
-            if c.get("_type") in _operation_types_target_class:
-                children.append(_converter.structure(c, OperationModel))
-            else:
-                children.append(_converter.structure(c, AllSectionModel))
-
-        return {
-            "uid": obj["uid"],
-            "name": obj["name"],
-            "alignment": SectionAlignmentModel._target_class.value(obj["alignment"]),
-            "execution_type": None
-            if obj["execution_type"] is None
-            else ExecutionTypeModel._target_class.value(obj["execution_type"]),
-            "length": obj["length"],
-            "play_after": play_after,
-            "children": children,
-            "trigger": obj["trigger"],
-            "on_system_grid": obj["on_system_grid"],
-        }
-
-    @classmethod
-    def _structure(cls, obj, _):
-        d = cls._process_dict(obj)
-        return cls._target_class(**d)
-
 
 @attrs.define
-class MatchModel:
+class MatchModel(SectionModel):
     handle: str | None
     user_register: int | None
     prng_sample: PRNGSampleModel | None
@@ -589,235 +489,51 @@ class MatchModel:
     local: bool | None
     _target_class: ClassVar[Type] = Match
 
-    @classmethod
-    def _unstructure(cls, obj):
-        ret = SectionModel._unstructure(obj)
-        ret.update(
-            {
-                "handle": obj.handle,
-                "user_register": obj.user_register,
-                "prng_sample": _converter.unstructure(
-                    obj.prng_sample, Optional[PRNGSampleModel]
-                ),
-                "sweep_parameter": _converter.unstructure(
-                    obj.sweep_parameter,
-                    ParameterModel,
-                )
-                if obj.sweep_parameter is not None
-                else None,
-                "local": obj.local,
-            }
-        )
-        return ret
-
-    @classmethod
-    def _structure(cls, obj, _):
-        ret = SectionModel._process_dict(obj)
-        return cls._target_class(
-            **ret,
-            handle=obj["handle"],
-            user_register=obj["user_register"],
-            prng_sample=_converter.structure(
-                obj["prng_sample"], Optional[PRNGSampleModel]
-            ),
-            sweep_parameter=_converter.structure(
-                obj["sweep_parameter"],
-                Optional[ParameterModel],
-            )
-            if obj["sweep_parameter"] is not None
-            else None,
-            local=obj["local"],
-        )
-
 
 @attrs.define
-class AcquireLoopNtModel:
+class AcquireLoopNtModel(SectionModel):
     averaging_mode: AveragingModeModel
     count: int
     execution_type: ExecutionTypeModel
     _target_class: ClassVar[Type] = AcquireLoopNt
 
-    @classmethod
-    def _unstructure(cls, obj):
-        ret = SectionModel._unstructure(obj)
-        ret.update(
-            {
-                "averaging_mode": obj.averaging_mode.value,
-                "count": obj.count,
-                "execution_type": obj.execution_type.value,
-            }
-        )
-        return ret
-
-    @classmethod
-    def _structure(cls, obj, _):
-        ret = SectionModel._process_dict(obj)
-        ret.update(
-            averaging_mode=AveragingModeModel._target_class.value(
-                obj["averaging_mode"]
-            ),
-            count=obj["count"],
-            execution_type=ExecutionTypeModel._target_class.value(
-                obj["execution_type"]
-            ),
-        )
-        return cls._target_class(**ret)
-
 
 @attrs.define
-class AcquireLoopRtModel:
+class AcquireLoopRtModel(SectionModel):
     acquisition_type: AcquisitionTypeModel
     averaging_mode: AveragingModeModel
-    count: int
+    count: int | None
     execution_type: ExecutionTypeModel
     repetition_mode: RepetitionModeModel
-    repetition_time: float
+    repetition_time: float | None
     reset_oscillator_phase: bool
     _target_class: ClassVar[Type] = AcquireLoopRt
 
-    @classmethod
-    def _unstructure(cls, obj):
-        ret = _converter.unstructure(obj, SectionModel)
-        ret.update(
-            {
-                "acquisition_type": _converter.unstructure(
-                    obj.acquisition_type, AcquisitionTypeModel
-                ),
-                "averaging_mode": _converter.unstructure(
-                    obj.averaging_mode, AveragingModeModel
-                ),
-                "count": obj.count,
-                "execution_type": _converter.unstructure(
-                    obj.execution_type, ExecutionTypeModel
-                ),
-                "repetition_mode": _converter.unstructure(
-                    obj.repetition_mode, RepetitionModeModel
-                ),
-                "repetition_time": obj.repetition_time,
-                "reset_oscillator_phase": obj.reset_oscillator_phase,
-            }
-        )
-        return ret
-
-    @classmethod
-    def _structure(cls, obj, _):
-        ret = SectionModel._process_dict(obj)
-        ret.update(
-            acquisition_type=AcquisitionTypeModel._target_class.value(
-                obj["acquisition_type"]
-            ),
-            averaging_mode=AveragingModeModel._target_class.value(
-                obj["averaging_mode"]
-            ),
-            count=obj["count"],
-            execution_type=ExecutionTypeModel._target_class.value(
-                obj["execution_type"]
-            ),
-            repetition_mode=RepetitionModeModel._target_class.value(
-                obj["repetition_mode"]
-            ),
-            repetition_time=obj["repetition_time"],
-            reset_oscillator_phase=obj["reset_oscillator_phase"],
-        )
-        return cls._target_class(
-            **ret,
-        )
-
 
 @attrs.define
-class SweepModel:
+class SweepModel(SectionModel):
     parameters: list[ParameterModel]
     reset_oscillator_phase: bool
     chunk_count: int
     _target_class: ClassVar[Type] = Sweep
 
-    @classmethod
-    def _unstructure(cls, obj):
-        ret = _converter.unstructure(obj, SectionModel)
-        ret.update(
-            {
-                "parameters": [
-                    _converter.unstructure(p, ParameterModel) for p in obj.parameters
-                ],
-                "reset_oscillator_phase": obj.reset_oscillator_phase,
-                "chunk_count": obj.chunk_count,
-            }
-        )
-        return ret
-
-    @classmethod
-    def _structure(cls, obj, _):
-        ret = SectionModel._process_dict(obj)
-        ret.update(
-            parameters=[
-                _converter.structure(p, ParameterModel) for p in obj["parameters"]
-            ],
-            reset_oscillator_phase=obj["reset_oscillator_phase"],
-            chunk_count=obj["chunk_count"],
-        )
-        return cls._target_class(**ret)
-
 
 @attrs.define
-class CaseModel:
+class CaseModel(SectionModel):
     state: int
     _target_class: ClassVar[Type] = Case
 
-    @classmethod
-    def _unstructure(cls, obj):
-        ret = _converter.unstructure(obj, SectionModel)
-        ret.update({"state": obj.state})
-        return ret
-
-    @classmethod
-    def _structure(cls, obj, _):
-        d = SectionModel._process_dict(obj)
-        d.update(state=obj["state"])
-        return cls._target_class(**d)
-
 
 @attrs.define
-class PRNGSetupModel:
+class PRNGSetupModel(SectionModel):
     prng: PRNGModel | None
     _target_class: ClassVar[Type] = PRNGSetup
 
-    @classmethod
-    def _unstructure(cls, obj):
-        ret = _converter.unstructure(obj, SectionModel)
-        ret.update({"prng": _converter.unstructure(obj.prng, Optional[PRNGModel])})
-        return ret
-
-    @classmethod
-    def _structure(cls, obj, _):
-        d = SectionModel._process_dict(obj)
-        d.update(prng=_converter.structure(obj["prng"], Optional[PRNGModel]))
-        return cls._target_class(**d)
-
 
 @attrs.define
-class PRNGLoopModel:
+class PRNGLoopModel(SectionModel):
     prng_sample: PRNGSample | None
     _target_class: ClassVar[Type] = PRNGLoop
-
-    @classmethod
-    def _unstructure(cls, obj):
-        ret = _converter.unstructure(obj, SectionModel)
-        ret.update(
-            {
-                "prng_sample": _converter.unstructure(
-                    obj.prng_sample, Optional[PRNGSample]
-                )
-            }
-        )
-        return ret
-
-    @classmethod
-    def _structure(cls, obj, _):
-        d = SectionModel._process_dict(obj)
-        d.update(
-            prng_sample=_converter.structure(obj["prng_sample"], Optional[PRNGSample])
-        )
-        return cls._target_class(**d)
 
 
 _section_types = [
@@ -860,10 +576,6 @@ class PRNGModel:
     seed: int
     _target_class: ClassVar[Type] = PRNG
 
-    @classmethod
-    def _structure(cls, obj, _):
-        return cls._target_class(range=obj["range"], seed=obj["seed"])
-
 
 @attrs.define
 class PRNGSampleModel:
@@ -871,14 +583,6 @@ class PRNGSampleModel:
     prng: PRNGModel
     count: int
     _target_class: ClassVar[Type] = PRNGSample
-
-    @classmethod
-    def _structure(cls, obj, _):
-        return cls._target_class(
-            uid=obj["uid"],
-            prng=_converter.structure(obj["prng"], PRNGModel),
-            count=obj["count"],
-        )
 
 
 @attrs.define
@@ -888,26 +592,19 @@ class ExperimentSignalModel:
     mapped_logical_signal_path: str | None
     _target_class: ClassVar[Type] = ExperimentSignal
 
-    @classmethod
-    def _unstructure(cls, obj):
-        return {
-            "uid": obj.uid,
-            "calibration": _converter.unstructure(
-                obj.calibration,
-                Optional[SignalCalibrationModel],
-            ),
-            "mapped_logical_signal_path": obj.mapped_logical_signal_path,
-        }
 
-    @classmethod
-    def _structure(cls, obj, _):
-        return cls._target_class(
-            uid=obj["uid"],
-            calibration=_converter.structure(
-                obj["calibration"], Optional[SignalCalibrationModel]
-            ),
-            mapped_logical_signal_path=obj["mapped_logical_signal_path"],
-        )
+def _unstructure_allsection_model_operation_model(obj):
+    if isinstance(obj, Section):
+        return _converter.unstructure(obj, AllSectionModel)
+    else:
+        return _converter.unstructure(obj, OperationModel)
+
+
+def _structure_allsection_model_operation_model(d, _):
+    if d.get("_type") in _operation_types_target_class:
+        return _converter.structure(d, OperationModel)
+    else:
+        return _converter.structure(d, AllSectionModel)
 
 
 def make_converter():
@@ -929,12 +626,23 @@ def make_converter():
         partial(_structure_operation_model, _converter=_converter),
     )
 
+    _converter.register_unstructure_hook(PlayAfterModel, _unstructure_play_after_model)
+    _converter.register_structure_hook(PlayAfterModel, _structure_play_after_model)
+
     _converter.register_unstructure_hook(
         AllSectionModel, partial(_unstructure_section_model, _converter=_converter)
     )
 
     _converter.register_structure_hook(
         AllSectionModel, partial(_structure_section_model, _converter=_converter)
+    )
+
+    _converter.register_unstructure_hook(
+        AllSectionModel | OperationModel, _unstructure_allsection_model_operation_model
+    )
+
+    _converter.register_structure_hook(
+        AllSectionModel | OperationModel, _structure_allsection_model_operation_model
     )
 
     register_models(_converter, collect_models(sys.modules[__name__]))

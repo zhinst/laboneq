@@ -16,7 +16,6 @@ class AWGEventType(Enum):
     PUSH_LOOP = auto()
     ITERATE = auto()
     RESET_PRECOMPENSATION_FILTERS = auto()
-    RESET_PRECOMPENSATION_FILTERS_END = auto()
     INITIAL_RESET_PHASE = auto()
     RESET_PHASE = auto()
     SET_OSCILLATOR_FREQUENCY = auto()

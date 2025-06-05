@@ -31,6 +31,8 @@ __all__ = [
     "uid",
     # pulse_library:
     "pulse_library",
+    # build experiments
+    "add_quantum_elements",
     "qubit_experiment",
     # formatter:
     "handles",
@@ -64,7 +66,10 @@ from laboneq.dsl.experiment.builtins import (
 )
 from laboneq.dsl.experiment import pulse_library
 from laboneq.workflow import handles
-from laboneq.dsl.experiment.build_experiment import qubit_experiment
+from laboneq.dsl.experiment.build_experiment import (
+    add_quantum_elements,
+    qubit_experiment,
+)
 from laboneq.dsl.quantum.quantum_operations import (
     QuantumOperations,
     create_pulse,

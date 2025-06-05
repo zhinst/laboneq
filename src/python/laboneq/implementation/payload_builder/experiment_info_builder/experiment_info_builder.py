@@ -53,7 +53,6 @@ from laboneq.data.experiment_description import (
     ExecutionType,
     Experiment,
     ExperimentSignal,
-    PlayPulse,
     Reserve,
     Section,
     SignalOperation,
@@ -642,7 +641,6 @@ class ExperimentInfoBuilder:
                 section.signals.append(signal_info)
             return
 
-        assert isinstance(operation, (PlayPulse, Acquire))
         pulses = []
         markers = self._load_markers(operation)
         if signal_info.automute:
