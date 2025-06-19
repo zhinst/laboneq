@@ -28,6 +28,7 @@ from laboneq.data.setup_description import (
 from laboneq.dsl import device as legacy_device
 from laboneq.dsl.device import instruments as legacy_instruments
 from laboneq.dsl.device import io_units as legacy_io_units
+from laboneq.dsl.device.instruments.zi_standard_instrument import ZIStandardInstrument
 from laboneq.implementation.legacy_adapters import calibration_converter, utils
 from laboneq.implementation.legacy_adapters.utils import (
     LogicalSignalPhysicalChannelUID,
@@ -38,9 +39,6 @@ from laboneq.implementation.utils import devices
 if TYPE_CHECKING:
     from laboneq.dsl.device import logical_signal_group as legacy_lsg
     from laboneq.dsl.device import servers as legacy_servers
-    from laboneq.dsl.device.instruments.zi_standard_instrument import (
-        ZIStandardInstrument,
-    )
 
 
 def convert_io_direction(obj: legacy_enums.io_direction.IODirection) -> IODirection:
@@ -116,7 +114,7 @@ def convert_device_type(target: ZIStandardInstrument) -> DeviceType:
 
 def convert_physical_channel_type(
     target: legacy_io_units.PhysicalChannelType | None,
-) -> PhysicalChannelType | None:
+) -> PhysicalChannelType:
     if target == legacy_io_units.PhysicalChannelType.IQ_CHANNEL:
         return PhysicalChannelType.IQ_CHANNEL
     if target == legacy_io_units.PhysicalChannelType.RF_CHANNEL:
@@ -126,7 +124,7 @@ def convert_physical_channel_type(
 
 def convert_physical_channel(
     target: legacy_io_units.PhysicalChannel,
-    direction: legacy_enums.io_direction.IODirection,
+    direction: IODirection,
 ) -> PhysicalChannel:
     pc_helper = utils.LogicalSignalPhysicalChannelUID(target.uid)
 
@@ -170,7 +168,9 @@ class PortConverter:
         elif isinstance(target, legacy_instruments.QHUB):
             return devices.qhub_ports()
         elif isinstance(target, legacy_instruments.PRETTYPRINTERDEVICE):
-            return devices.test_device_ports([port.uid for port in target.ports])
+            return devices.test_device_ports(
+                [port.uid for port in target.ports if port.uid is not None]
+            )
         elif isinstance(target, legacy_instruments.NonQC):
             return devices.nonqc_ports()
         else:
@@ -267,7 +267,7 @@ class InstrumentConverter:
         self._legacy_ls_to_new_map = legacy_ls_to_new_map
         self.port_converter = PortConverter(src)
         self.connection_converter = LegacyConnectionFinder(
-            self._src, legacy_ls_to_new_map.keys()
+            src, legacy_ls_to_new_map.keys()
         )
         self._server = server
 
@@ -519,6 +519,7 @@ def convert_device_setup_to_setup(
             servers[instr.server_uid],
         )
         for instr in device_setup.instruments
+        if isinstance(instr, ZIStandardInstrument) and instr.server_uid is not None
     ]
 
     instruments = [converter.instrument for converter in converters]

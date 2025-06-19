@@ -208,10 +208,13 @@ def analyze_set_oscillator_times(
             "Real-time frequency sweep only supported on SHF and HDAWG devices"
         )
 
-    iterations = [event["iteration"] for _, event in set_oscillator_events]
-
+    n_iterations = len([event["iteration"] for _, event in set_oscillator_events])
+    if device_type == DeviceType.HDAWG and n_iterations > 512:
+        raise LabOneQException(
+            "HDAWG can only handle RT frequency sweeps up to 512 steps."
+        )
     start_frequency = set_oscillator_events[0][1]["value"]
-    if len(iterations) > 1:
+    if n_iterations > 1:
         step_frequency = set_oscillator_events[1][1]["value"] - start_frequency
     else:
         step_frequency = 0
@@ -226,9 +229,7 @@ def analyze_set_oscillator_times(
         ):
             raise LabOneQException("Realtime oscillator sweeps must be linear")
 
-        oscillator_id: str = event["oscillator_id"]
-        osc_index = signal_obj.awg.oscs.get(oscillator_id)
-        osc_index_param = {} if osc_index is None else {"osc_index": osc_index}
+        osc_index = signal_obj.awg.oscs[signal_obj.hw_oscillator]
         event_time_in_samples = length_to_samples(
             event["time"] + global_delay, sampling_rate
         )
@@ -239,11 +240,9 @@ def analyze_set_oscillator_times(
             params={
                 "start_frequency": start_frequency,
                 "step_frequency": step_frequency,
-                "parameter_name": event["parameter"]["id"],
                 "iteration": iteration,
-                "iterations": len(iterations),
-                "oscillator_id": oscillator_id,
-                **osc_index_param,
+                "iterations": n_iterations,
+                "osc_index": osc_index,
             },
         )
 

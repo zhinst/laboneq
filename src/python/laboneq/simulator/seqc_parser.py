@@ -239,6 +239,16 @@ def parse_set_func(param_name: str, stmt: Node, runtime: SimpleRuntime):
 
 
 def parse_statement(item: Node, runtime: SimpleRuntime):
+    if (
+        runtime.max_time is not None
+        and runtime._last_play_start_samples()[0] / runtime.descriptor.sampling_rate
+        > runtime.max_time
+    ):
+        # Stop, once a time-span event encountered, that is entirely outside the simulation region.
+        # This is important, as any point-in-time events before must be captured. This last time-span
+        # event, however, must be dropped.
+        runtime.seqc_simulation.events.pop(-1)
+        raise StopSimulation
     try:
         return parse_expression(item, runtime)
     except TreeWalkException:
@@ -294,16 +304,6 @@ def parse_statement(item: Node, runtime: SimpleRuntime):
         for _i in range(n):
             for subitem in item.stmt.children():
                 parse_statement(subitem[1], runtime)
-    if (
-        runtime.max_time is not None
-        and runtime._last_play_start_samples()[0] / runtime.descriptor.sampling_rate
-        > runtime.max_time
-    ):
-        # Stop, once a time-span event encountered, that is entirely outside the simulation region.
-        # This is important, as any point-in-time events before must be captured. This last time-span
-        # event, however, must be dropped.
-        runtime.seqc_simulation.events.pop(-1)
-        raise StopSimulation
 
 
 @dataclass
@@ -1145,7 +1145,8 @@ def analyze_recipe(
     seqc_descriptors = []
     for name, seqc_descriptor in seqc_descriptors_from_recipe.items():
         command_table = next(
-            (table["ct"] for table in command_tables if table["seqc"] == name), {}
+            (table["ct"]["table"] for table in command_tables if table["seqc"] == name),
+            {},
         )
         seqc_descriptor = seqc_descriptors_from_recipe[name]
         seqc_descriptor.source = src_fname_to_text[name]

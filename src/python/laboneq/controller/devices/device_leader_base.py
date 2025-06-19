@@ -200,7 +200,7 @@ class DeviceLeaderBase(DeviceBase):
         await self.set_async(nc)
 
     async def configure_trigger(self, recipe_data: RecipeData):
-        initialization = recipe_data.get_initialization(self.device_qualifier.uid)
+        initialization = recipe_data.get_initialization(self.uid)
         nc = NodeCollector(base=f"/{self.serial}/")
         nc.add("system/clocks/referenceclock/out/enable", 1)
         nc.add("execution/repetitions", initialization.config.repetitions)

@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Mapping, Tuple
 
 from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
@@ -99,7 +98,6 @@ class DeviceInfoBuilder:
 
     def _build_devices_and_connections(self):
         """Build devices and assign leader - follower relationships."""
-        setup_internal_connections = deepcopy(self._setup.setup_internal_connections)
         for device in self._setup.instruments:
             if device.device_type == DeviceType.UNMANAGED:
                 continue
@@ -131,13 +129,13 @@ class DeviceInfoBuilder:
                         device.uid
                     ]
 
-        for conn in setup_internal_connections:
-            if conn.from_port is not None and conn.from_port.type == PortType.RF:
+        for iconn in self._setup.setup_internal_connections:
+            if iconn.from_port is not None and iconn.from_port.type == PortType.RF:
                 continue
-            leader = self._device_mapping[conn.from_instrument.uid]
-            leader.followers.append(conn.to_instrument.uid)
-            if conn.to_instrument.device_type == DeviceType.SHFQC:
-                sg_uid_candidate = conn.to_instrument.uid + VIRTUAL_SHFSG_UID_SUFFIX
+            leader = self._device_mapping[iconn.from_instrument.uid]
+            leader.followers.append(iconn.to_instrument.uid)
+            if iconn.to_instrument.device_type == DeviceType.SHFQC:
+                sg_uid_candidate = iconn.to_instrument.uid + VIRTUAL_SHFSG_UID_SUFFIX
                 if sg_uid_candidate not in self._device_mapping:
                     continue
                 leader.followers.append(sg_uid_candidate)

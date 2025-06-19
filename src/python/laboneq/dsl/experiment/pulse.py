@@ -23,16 +23,6 @@ def pulse_id_generator():
     return retval
 
 
-def _compare_nested(a, b):
-    if isinstance(a, list) or isinstance(a, np.ndarray):
-        if not (isinstance(b, list) or isinstance(b, np.ndarray)):
-            return False
-        if not len(a) == len(b):
-            return False
-        return all(map(lambda x: _compare_nested(x[0], x[1]), zip(a, b)))
-    return a == b
-
-
 class Pulse:
     """A pulse for playing during an experiment."""
 
@@ -62,7 +52,7 @@ class PulseSampled(Pulse):
         return (
             self.uid == other.uid
             and self.can_compress == other.can_compress
-            and _compare_nested(self.samples, other.samples)
+            and np.array_equal(self.samples, other.samples, equal_nan=True)
         )
 
 

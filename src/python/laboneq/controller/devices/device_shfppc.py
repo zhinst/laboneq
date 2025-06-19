@@ -96,7 +96,7 @@ class DeviceSHFPPC(DeviceBase):
 
     async def apply_initialization(self, recipe_data: RecipeData):
         nc = NodeCollector()
-        initialization = recipe_data.get_initialization(self.device_qualifier.uid)
+        initialization = recipe_data.get_initialization(self.uid)
         ppchannels = {
             settings["channel"]: settings
             for settings in initialization.ppchannels or []

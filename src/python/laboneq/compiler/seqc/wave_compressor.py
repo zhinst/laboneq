@@ -16,14 +16,24 @@ class PlayHold:
 
 @dataclass
 class PlaySamples:
-    samples: Dict[str, np.array]
-    label: int
+    samples: dict[str, np.ndarray]
 
 
-class WaveCompressor:
-    def __init__(self):
-        self.wave_number = 0
+def compress_wave(
+    samples: dict[str, np.ndarray],
+    sample_multiple: int,
+    compressible_segments: List[Tuple[int, int]] | None = None,
+    threshold: int = 32,
+) -> List[Union[PlayHold, PlaySamples]] | None:
+    return _WaveCompressor().compress_wave(
+        samples,
+        sample_multiple,
+        compressible_segments=compressible_segments,
+        threshold=threshold,
+    )
 
+
+class _WaveCompressor:
     def _samples_constant(self, samples: np.ndarray) -> bool:
         return np.all(samples[0] == samples)
 
@@ -123,10 +133,8 @@ class WaveCompressor:
         events.append(
             PlaySamples(
                 samples={k: v[0:start_run_on_grid] for k, v in samples.items()},
-                label=self.wave_number,
             )
         )
-        self.wave_number += 1
         if end_run == ref_length - 1:
             events.append(PlayHold(num_samples=int(ref_length - start_run_on_grid)))
             return events
@@ -139,10 +147,8 @@ class WaveCompressor:
                     samples={
                         k: v[end_run_on_grid:ref_length] for k, v in samples.items()
                     },
-                    label=self.wave_number,
                 )
             )
-            self.wave_number += 1
             return events
 
     def _compress_wave_general(
@@ -204,10 +210,8 @@ class WaveCompressor:
                 events.append(
                     PlaySamples(
                         samples=self._merge_samples(samples=play_samples),
-                        label=self.wave_number,
                     )
                 )
-                self.wave_number += 1
 
         return events
 

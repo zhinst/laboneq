@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from numpy.typing import ArrayLike
-
+import numpy as np
 from laboneq.core.types.enums import (
     AveragingMode,
     ExecutionType,
@@ -19,15 +19,6 @@ from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.data.calibration import Calibration
 from laboneq.data.parameter import Parameter
 from laboneq.data.prng import PRNGSample, PRNG
-
-
-#
-# Enums
-#
-
-#
-# Data Classes
-#
 
 
 @dataclass
@@ -155,9 +146,20 @@ class PulseFunctional(Pulse):
     pulse_parameters: dict | None = None
 
 
-@dataclass
+@dataclass(eq=False)
 class PulseSampled(Pulse):
     samples: ArrayLike = None
+
+    def __eq__(self, other):
+        if not isinstance(other, type(self)):
+            return NotImplemented
+        if self is other:
+            return True
+        return (
+            self.uid == other.uid
+            and self.can_compress == other.can_compress
+            and np.array_equal(self.samples, other.samples, equal_nan=True)
+        )
 
 
 @dataclass

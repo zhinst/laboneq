@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-import warnings
 
 import attrs
 from collections import deque
@@ -27,6 +26,26 @@ from .section import AcquireLoopNt, AcquireLoopRt, Case, Match, Section, Sweep
 
 if TYPE_CHECKING:
     from .. import Parameter
+
+
+def _convert_signals(
+    signals: dict[str, ExperimentSignal]
+    | list[ExperimentSignal]
+    | list[str]
+    | list[ExperimentSignal | str]
+    | None,
+) -> dict[str, ExperimentSignal]:
+    if signals is None:
+        return {}
+    if isinstance(signals, list):
+        signals_dict = {}
+        for s in signals:
+            if isinstance(s, str):
+                signals_dict[s] = ExperimentSignal(uid=s)
+            else:
+                signals_dict[s.uid] = s
+        return signals_dict
+    return signals
 
 
 @final
@@ -56,6 +75,16 @@ class Experiment:
             Sections defined in the experiment.
             Default: `[]`.
 
+    !!! version-changed "Changed in version 2.54.0"
+
+        The following deprecated methods for saving and loading were removed:
+            - `load`
+            - `save`
+            - `load_signal_map`
+            - `save_signal_map`
+
+        Use the `load` and `save` functions from the `laboneq.simple` module instead.
+
     !!! version-changed "Changed in version 2.27.0"
 
         The `uid` attribute is no longer automatically generated and
@@ -66,8 +95,8 @@ class Experiment:
 
     uid: str | None = attrs.field(default=None)
     name: str = attrs.field(default="unnamed")
-    signals: dict[str, ExperimentSignal] | list[ExperimentSignal | str] = attrs.field(
-        factory=dict
+    signals: dict[str, ExperimentSignal] = attrs.field(
+        factory=dict, converter=_convert_signals
     )
     version: DSLVersion = attrs.field(default=DSLVersion.V3_0_0)
     epsilon: float = attrs.field(default=0.0)
@@ -76,21 +105,6 @@ class Experiment:
     _section_stack: deque[Section] = attrs.field(
         factory=deque, repr=False, order=False, init=False
     )
-
-    def __attrs_post_init__(self):
-        if self.signals is not None and isinstance(self.signals, list):
-            signals_dict = {}
-            for s in self.signals:
-                if isinstance(s, str):
-                    signals_dict[s] = ExperimentSignal(uid=s)
-                else:
-                    signals_dict[s.uid] = s
-            self.signals = signals_dict
-
-    @property
-    def _signals_dict(self) -> dict[str, ExperimentSignal]:
-        assert isinstance(self.signals, dict)
-        return self.signals
 
     def add_signal(
         self, uid: str | None = None, connect_to: LogicalSignalRef | None = None
@@ -110,10 +124,10 @@ class Experiment:
 
         See also [map_signal][laboneq.dsl.experiment.experiment.Experiment.map_signal].
         """
-        if uid is not None and uid in self._signals_dict.keys():
+        if uid is not None and uid in self.signals.keys():
             raise LabOneQException(f"Signal with id {uid} already exists.")
         signal = ExperimentSignal(uid=uid, map_to=connect_to)
-        self._signals_dict[signal.uid] = signal
+        self.signals[signal.uid] = signal
         return signal
 
     def add(self, section: Section):
@@ -132,7 +146,7 @@ class Experiment:
                 A list of the UIDs for the signals defined in this
                 experiment.
         """
-        return list(self._signals_dict.keys())
+        return list(self.signals.keys())
 
     def list_experiment_signals(self) -> list[ExperimentSignal]:
         """A list of experiment signals defined in this experiment.
@@ -140,7 +154,7 @@ class Experiment:
         Returns:
             signals: List of defined experiment signals.
         """
-        return list(self._signals_dict.values())
+        return list(self.signals.values())
 
     def is_experiment_signal(self, uid: str) -> bool:
         """Check if an experiment signal is defined for this experiment.
@@ -154,7 +168,7 @@ class Experiment:
                 `True` if the experiment signal is defined in this
                 experiment, `False` otherwise.
         """
-        return uid in self._signals_dict.keys()
+        return uid in self.signals.keys()
 
     def map_signal(self, experiment_signal_uid: str, logical_signal: LogicalSignalRef):
         """Connect an experiment signal to a logical signal.
@@ -178,7 +192,7 @@ class Experiment:
                 f"prior to connect id to a LogicalSignal. "
             )
 
-        self._signals_dict[experiment_signal_uid].map(logical_signal)
+        self.signals[experiment_signal_uid].map(logical_signal)
 
     def reset_signal_map(self, signal_map: dict[str, LogicalSignalRef] | None = None):
         """Reset, i.e. disconnect, all defined signal connections and
@@ -188,7 +202,7 @@ class Experiment:
             signal_map: The new signal map to apply.
         """
 
-        for signal in self._signals_dict.values():
+        for signal in self.signals.values():
             signal.disconnect()
         if signal_map:
             self.set_signal_map(signal_map)
@@ -215,7 +229,7 @@ class Experiment:
         mapped_signals = list()
         not_mapped_signals = list()
 
-        for signal in self._signals_dict.values():
+        for signal in self.signals.values():
             if signal.is_mapped():
                 mapped_signals.append(signal.uid)
             else:
@@ -242,7 +256,7 @@ class Experiment:
         """
         return {
             signal.uid: signal.mapped_logical_signal_path
-            for signal in self._signals_dict.values()
+            for signal in self.signals.values()
             if signal.mapped_logical_signal_path is not None
         }
 
@@ -256,7 +270,7 @@ class Experiment:
                 logical signal references to map them to.
         """
         for signal_uid, logical_signal_ref in signal_map.items():
-            signal = self._signals_dict.get(signal_uid)
+            signal = self.signals.get(signal_uid)
             if signal is None:
                 self._signal_not_found_error(signal_uid, "Cannot apply signal map.")
             signal.map(to=logical_signal_ref)
@@ -284,7 +298,7 @@ class Experiment:
         """
         for signal_uid, calib_item in calibration.items():
             if calib_item is not None:
-                signal = self._signals_dict.get(signal_uid)
+                signal = self.signals.get(signal_uid)
                 if signal is None:
                     self._signal_not_found_error(
                         signal_uid, "Cannot apply experiment signal calibration."
@@ -305,7 +319,7 @@ class Experiment:
 
         experiment_signals_calibration = {
             sig.uid: sig.calibration
-            for sig in self._signals_dict.values()
+            for sig in self.signals.values()
             if sig.calibration is not None
         }
 
@@ -323,7 +337,7 @@ class Experiment:
                 experiment calibration.
                 Default: `None`.
         """
-        for sig in self._signals_dict.values():
+        for sig in self.signals.values():
             sig.reset_calibration()
         if calibration:
             self.set_calibration(calibration)
@@ -350,7 +364,7 @@ class Experiment:
         from ..calibration import Calibratable
 
         calibratables = dict()
-        for signal in self._signals_dict.values():
+        for signal in self.signals.values():
             if isinstance(signal, Calibratable):
                 calibratables[signal.uid] = signal.create_info()
         return calibratables
@@ -1242,80 +1256,6 @@ class Experiment:
 
         def __exit__(self, exc_type, exc_val, exc_tb):
             self.exp._pop_and_add_section()
-
-    @staticmethod
-    def load(filename: str) -> Experiment:
-        """Load an experiment from a JSON file.
-
-        !!! version-changed "Deprecated in version 2.50.0"
-            Use `laboneq.simple.load` instead.
-
-        Arguments:
-            filename:
-                The name of the file to load the experiment from.
-
-        Returns:
-            experiment:
-                The experiment loaded.
-        """
-        from ..serialization import Serializer
-
-        warnings.warn(
-            "The `Experiment.load` method is deprecated and will be removed in future releases. "
-            "Please use the `load` function from the `laboneq.simple` module instead. ",
-            FutureWarning,
-            stacklevel=2,
-        )
-
-        # TODO ErC: Error handling
-        return Serializer.from_json_file(filename, Experiment)
-
-    def save(self, filename: str):
-        """Save this experiment to a file.
-
-        !!! version-changed "Deprecated in version 2.50.0"
-            Use `laboneq.simple.save` instead.
-
-        Arguments:
-            filename:
-                The name of the file to save the experiment to.
-        """
-        from ..serialization import Serializer
-
-        warnings.warn(
-            "The `Experiment.save` method is deprecated and will be removed in future releases. "
-            "Please use the `save` function from the `laboneq.simple` module instead. ",
-            FutureWarning,
-            stacklevel=2,
-        )
-        # TODO ErC: Error handling
-        Serializer.to_json_file(self, filename)
-
-    def load_signal_map(self, filename: str):
-        """Load a signal map from a file and apply it to this experiment.
-
-        Arguments:
-            filename:
-                The name of the file to load the signal map from.
-        """
-        from ..serialization import Serializer
-
-        # TODO ErC: Error handling
-        signal_map = Serializer.from_json_file(filename, dict)
-        self.set_signal_map(signal_map)
-
-    def save_signal_map(self, filename: str):
-        """Save this experiments current signal map to a file.
-
-        Arguments:
-            filename:
-                The name of the file to save the current signal map
-                to.
-        """
-        from ..serialization import Serializer
-
-        # TODO ErC: Error handling
-        Serializer.to_json_file(self.get_signal_map(), filename)
 
     @staticmethod
     def _all_subsections(section: Section):

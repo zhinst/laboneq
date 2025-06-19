@@ -1,8 +1,6 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
-
 from __future__ import annotations
-import warnings
 
 import attrs
 from collections import defaultdict
@@ -22,7 +20,6 @@ from laboneq.dsl.device.instruments.qhub import QHUB
 from laboneq.dsl.device.logical_signal_group import LogicalSignalGroup
 from laboneq.dsl.device.physical_channel_group import PhysicalChannelGroup
 from laboneq.dsl.device.servers import DataServer
-from laboneq.dsl.serialization import Serializer
 
 from ...core.types.enums import IOSignalType
 from ._device_setup_generator import _DeviceSetupGenerator
@@ -53,6 +50,14 @@ class DeviceSetup:
         logical_signal_groups (Optional[dict[str, LogicalSignalGroup]]): Logical signal groups of this device setup, by name of the group.
         qubits (Optional[dict[str, quantum.QuantumElement]]): Experimental: Qubits of this device setup, by the name of the qubit.
             Qubits are generated from the descriptor `qubits` section.
+
+    !!! version-changed "Changed in version 2.54.0"
+        The following deprecated methods for saving and loading were removed:
+            - `save`
+            - `load`
+            - `dumps`
+        Use the `load` and `save` methods from the `laboneq.serializers` module instead.
+
 
     !!! version-changed "Changed in version 2.19.0"
         `DeviceSetup` can now be created by using the following methods:
@@ -365,50 +370,6 @@ class DeviceSetup:
         }
         return calibratables
 
-    @staticmethod
-    def load(filename: str) -> DeviceSetup:
-        """Load the device setup from a specified file.
-
-        !!! version-changed "Deprecated in version 2.50.0"
-            Use `laboneq.simple.load` instead.
-
-        Args:
-            filename (str): Filename.
-        """
-        warnings.warn(
-            "The `DeviceSetup.load` method is deprecated and will be removed in future releases. "
-            "Please use the `load` function from the `laboneq.simple` module instead. ",
-            FutureWarning,
-            stacklevel=2,
-        )
-        # TODO ErC: Error handling
-        ds = Serializer.from_json_file(filename, DeviceSetup)
-        ds.check_no_rf_multiplexing()
-        return ds
-
-    def save(self, filename: str):
-        """Save the device setup to a specified file.
-
-        !!! version-changed "Deprecated in version 2.50.0"
-            Use `laboneq.simple.save` instead.
-
-        Args:
-            filename (str): Filename.
-        """
-        warnings.warn(
-            "The `DeviceSetup.save` method is deprecated and will be removed in future releases. "
-            "Please use the `save` function from the `laboneq.simple` module instead. ",
-            FutureWarning,
-            stacklevel=2,
-        )
-        # TODO ErC: Error handling
-        Serializer.to_json_file(self, filename)
-
-    def dumps(self) -> str:
-        """Serialize object into a JSON string."""
-        # TODO ErC: Error handling
-        return Serializer.to_json(self, omit_none_fields=True)
-
     @classmethod
     def from_descriptor(
         cls,
@@ -532,9 +493,15 @@ class DeviceSetup:
                     return dev.uid
 
     def check_no_rf_multiplexing(self):
-        """
-        Checks each instrument in DeviceSetup for RF signal multiplexing.
-        Raises RFMultiplexingError if multiplexing is detected.
+        """Check each instrument in DeviceSetup for RF signal multiplexing.
+
+        This function verifies that no RF signal multiplexing occurs in the device setup.
+        RF multiplexing happens when multiple logical RF signals are connected to the same local port
+        of an instrument, which is currently not supported with LabOne Q.
+
+        Raises:
+            LabOneQException: If RF multiplexing is detected, with details about the affected
+                instrument, ports, and the signals causing the multiplexing.
         """
         # Iterate over all instruments
         for instrument in self.instruments:

@@ -90,23 +90,18 @@ class NearTimeRunner(AsyncExecutorBase):
             sweep_params_tracker=self.sweep_params_tracker,
             user_set_nodes=self.user_set_nodes,
             nt_step=self.nt_step(),
-            rt_section_uid=uid,
         )
         self.sweep_params_tracker.clear_for_next_step()
         self.user_set_nodes = NodeCollector()
 
         try:
-            await self.controller._execute_one_step(
-                acquisition_type=acquisition_type, rt_section_uid=uid
-            )
-            await self.controller._read_one_step_results(
-                nt_step=self.nt_step(), rt_section_uid=uid
-            )
+            await self.controller._execute_one_step()
+            await self.controller._read_one_step_results(nt_step=self.nt_step())
         except LabOneQControllerException:
             # TODO(2K): introduce "hard" controller exceptions
             self.controller._report_step_error(
                 nt_step=self.nt_step(),
-                rt_section_uid=uid,
+                uid=uid,
                 message=traceback.format_exc(),
             )
 

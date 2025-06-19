@@ -38,6 +38,7 @@ class DeviceTraits:
     lo_frequency_granularity: Optional[float] = None
     min_lo_frequency: Optional[float] = None
     max_lo_frequency: Optional[float] = None
+    ct_schema_version: str = "Undefined"
     max_ct_entries: Optional[int] = None
     integration_dsp_latency: Optional[float] = None
     spectroscopy_dsp_latency: Optional[float] = None
@@ -86,7 +87,7 @@ class DeviceType(DeviceTraits, Enum):
         # Verified by PW (2022-10-13) on dev8047, proc. FPGA 68603. Observed ~77 ns.
         reset_osc_duration=80e-9,
         supports_oscillator_switching=False,
-        # Schema v.1.1.0
+        ct_schema_version="hd_1.1.0",
         max_ct_entries=1024,
         is_qa_device=False,
         has_prng=True,
@@ -167,7 +168,7 @@ class DeviceType(DeviceTraits, Enum):
         supports_oscillator_switching=True,
         min_lo_frequency=1e9,
         max_lo_frequency=8.5e9,
-        # Schema v.1.2.0
+        ct_schema_version="sg_1.2.0",
         max_ct_entries=4096,
         is_qa_device=False,
         has_prng=True,

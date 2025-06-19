@@ -686,7 +686,11 @@ def experiment(
     *,
     uid: str | None = None,
     name: str | None = None,
-    signals: dict[str, ExperimentSignal] | list[ExperimentSignal | str] = None,
+    signals: dict[str, ExperimentSignal]
+    | list[ExperimentSignal]
+    | list[str]
+    | list[ExperimentSignal | str]
+    | None = None,
 ) -> ExperimentContextManager:
     """Returns an experiment context manager.
 

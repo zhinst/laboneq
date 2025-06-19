@@ -38,6 +38,14 @@ def handle_playwave(event) -> AWGEvent | None:
     return interval_event
 
 
+def handle_play_hold(event) -> AWGEvent:
+    return AWGEvent(
+        type=AWGEventType.PLAY_HOLD,
+        start=event.start,
+        end=event.end,
+    )
+
+
 def handle_match(event) -> AWGEvent:
     obj = event.data()
     return AWGEvent(
@@ -172,6 +180,8 @@ def transform_rs_events_to_awg_events(output: list) -> list[AWGEvent]:
             awg_event = handle_ppc_sweep_step_start(event)
         elif event_type == 7:
             awg_event = handle_ppc_sweep_step_end(event)
+        elif event_type == 8:
+            awg_event = handle_play_hold(event)
         if awg_event:
             awg_events.append(awg_event)
     return awg_events

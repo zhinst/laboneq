@@ -134,7 +134,9 @@ def plot_simulation(
     Returns:
         None.
     """
-    simulation = OutputSimulator(compiled_experiment)
+    simulation = OutputSimulator(
+        compiled_experiment, max_simulation_length=start_time + length
+    )
 
     if signals is None:
         mapped_signals = compiled_experiment.experiment.signal_mapping_status[
@@ -243,7 +245,7 @@ def plot_simulation(
         elif (
             "input" in channel.name or "qas_0_1" in channel.name
         ) and not compiled_experiment.recipe.is_spectroscopy:
-            if my_snippet.time is not None:
+            if (my_snippet.time is not None) and (signal in kernel_samples):
                 this_kernel_samples = kernel_samples[signal]
                 trigger_indices = np.argwhere(my_snippet.wave).flatten()
                 # known issue: the simulator does not extend the QA trigger

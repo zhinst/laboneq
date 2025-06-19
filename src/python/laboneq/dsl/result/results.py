@@ -14,7 +14,6 @@ from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.core.utilities.attribute_wrapper import AttributeWrapper
 
 from ..calibration import Calibration
-from ..serialization import Serializer
 from .acquired_result import AcquiredResult, AcquiredResults
 
 if TYPE_CHECKING:
@@ -79,6 +78,12 @@ class Results:
                 * the error message
         pipeline_jobs_timestamps:
             The timestamps of all pipeline jobs, in seconds. Organized by signal, then pipeline job id.
+
+    !!! version-added "Changed in version 2.54.0"
+        The following deprecated methods for saving and loading were removed:
+        - `load`
+        - `save`
+        Use the `load` and `save` functions from the `laboneq.simple` module instead.
 
     !!! version-changed "Deprecated in version 2.52.0."
         The `experiment`, `device_setup` and `compiled_experiment` attributes
@@ -402,36 +407,3 @@ class Results:
         if self.experiment is None:
             return None
         return self.experiment.get_signal_map()
-
-    @staticmethod
-    @deprecated(
-        "The `.load` method is deprecated. Use `q = laboneq.serializers.load(filename)`"
-        " instead.",
-        category=FutureWarning,
-    )
-    def load(filename: str) -> Results:
-        """Load the result from a specified file.
-
-        Args:
-            filename: The file to load the result from.
-
-        !!! version-changed "Deprecated in version 2.50.0"
-            Use `laboneq.simple.load` instead.
-        """
-        return Serializer.from_json_file(filename, Results)
-
-    @deprecated(
-        "The `.save` method is deprecated. Use"
-        " `laboneq.serializers.save(results, filename)` instead.",
-        category=FutureWarning,
-    )
-    def save(self, filename: str) -> None:
-        """Save the result to a specified file.
-
-        Args:
-            filename (str): The name of the file to save the result to.
-
-        !!! version-changed "Deprecated in version 2.50.0"
-            Use `laboneq.simple.save` instead.
-        """
-        Serializer.to_json_file(self, filename)

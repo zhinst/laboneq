@@ -8,9 +8,11 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 import logging
 from packaging.version import Version, InvalidVersion
-from typing import TYPE_CHECKING, Any, KeysView, Literal, TypeVar, overload
+from typing import TYPE_CHECKING, Any, KeysView, Literal, TypeVar, cast, overload
 
 import numpy as np
+
+import zhinst.utils  # type: ignore[import-untyped]
 
 from laboneq.controller.attribute_value_tracker import (
     AttributeName,
@@ -21,12 +23,16 @@ from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.data.recipe import IO, Initialization, OscillatorParam, Recipe, SignalType
-from laboneq.data.scheduled_experiment import CodegenWaveform, ScheduledExperiment
+from laboneq.data.scheduled_experiment import (
+    ArtifactsCodegen,
+    CodegenWaveform,
+    ScheduledExperiment,
+)
 from laboneq.executor.executor import (
     ExecutorBase,
     LoopFlags,
     LoopingMode,
-    Sequence,
+    Statement,
 )
 
 if TYPE_CHECKING:
@@ -118,6 +124,7 @@ class DeviceRecipeData:
 
 @dataclass
 class RtExecutionInfo:
+    uid: str
     averages: int
     averaging_mode: AveragingMode
     acquisition_type: AcquisitionType
@@ -135,57 +142,77 @@ class RtExecutionInfo:
     def pipeliner_jobs(self) -> int:
         return self.pipeliner_job_count or 1
 
-    @staticmethod
-    def get_acquisition_type(rt_execution_infos: RtExecutionInfos) -> AcquisitionType:
-        # Currently only single RT execution per experiment supported
-        rt_execution_info = next(iter(rt_execution_infos.values()), None)
-        return RtExecutionInfo.get_acquisition_type_def(rt_execution_info)
+    @property
+    def is_raw_acquisition(self) -> bool:
+        return self.acquisition_type == AcquisitionType.RAW
 
-    @staticmethod
-    def get_acquisition_type_def(
-        rt_execution_info: RtExecutionInfo | None,
-    ) -> AcquisitionType:
+    @property
+    def effective_averages(self) -> int:
+        return 1 if self.averaging_mode == AveragingMode.SINGLE_SHOT else self.averages
+
+    @property
+    def mapping_repeats(self) -> int:
+        return self.averages if self.averaging_mode == AveragingMode.SINGLE_SHOT else 1
+
+    @property
+    def effective_averaging_mode(self) -> AveragingMode:
+        # TODO(2K): handle sequential
         return (
-            AcquisitionType.INTEGRATION
-            if rt_execution_info is None
-            else rt_execution_info.acquisition_type
+            AveragingMode.CYCLIC
+            if self.averaging_mode == AveragingMode.SINGLE_SHOT
+            else self.averaging_mode
         )
 
-
-RtSectionId = str
-RtExecutionInfos = dict[RtSectionId, RtExecutionInfo]
 
 T = TypeVar("T")
 
 
-def get_artifacts(artifacts: Any, device_class: int, artifacts_class: type[T]) -> T:
+def get_artifacts(artifacts: Any, artifacts_class: type[T]) -> T:
     if isinstance(artifacts, artifacts_class):
         return artifacts
     if isinstance(artifacts, dict):
-        dev_class_artifacts = artifacts[device_class]
-        if isinstance(dev_class_artifacts, artifacts_class):
-            return dev_class_artifacts
+        for artifacts_data in artifacts.values():
+            if isinstance(artifacts_data, artifacts_class):
+                return artifacts_data
     raise LabOneQControllerException(
         "Internal error: Unexpected artifacts structure in compiled experiment."
     )
 
 
 def get_initialization_by_device_uid(
-    recipe: Recipe, device_uid: str
+    recipe: Recipe | None, device_uid: str
 ) -> Initialization | None:
+    if recipe is None:
+        return None
     for initialization in recipe.initializations:
         if initialization.device_uid == device_uid:
             return initialization
     return None
 
 
+def get_elf(artifacts: ArtifactsCodegen, seqc_ref: str | None) -> bytes | None:
+    if seqc_ref is None:
+        return None
+
+    if artifacts.src is None:
+        seqc = None
+    else:
+        seqc = next((s for s in artifacts.src if s["filename"] == seqc_ref), None)
+    if seqc is None or "elf" not in seqc or not isinstance(seqc["elf"], bytes):
+        raise LabOneQControllerException(
+            f"SeqC program '{seqc_ref}' not found or invalid"
+        )
+
+    return seqc["elf"]
+
+
 @dataclass
 class RecipeData:
     scheduled_experiment: ScheduledExperiment
     recipe: Recipe
-    execution: Sequence
+    execution: Statement
     result_shapes: HandleResultShapes
-    rt_execution_infos: RtExecutionInfos
+    rt_execution_info: RtExecutionInfo
     device_settings: dict[DeviceUID, DeviceRecipeData]
     awg_configs: AwgConfigs
     attribute_value_tracker: AttributeValueTracker
@@ -197,10 +224,8 @@ class RecipeData:
                 return initialization
         return Initialization(device_uid=device_uid)
 
-    def get_artifacts(self, device_class: int, artifacts_class: type[T]) -> T:
-        return get_artifacts(
-            self.scheduled_experiment.artifacts, device_class, artifacts_class
-        )
+    def get_artifacts(self, artifacts_class: type[T]) -> T:
+        return get_artifacts(self.scheduled_experiment.artifacts, artifacts_class)
 
     def awgs_producing_results(self) -> Iterator[tuple[AwgKey, AwgConfig]]:
         for awg_key, awg_config in self.awg_configs.items():
@@ -276,16 +301,18 @@ class _LoopsPreprocessor(ExecutorBase):
         super().__init__(looping_mode=LoopingMode.ONCE)
 
         self.result_shapes: HandleResultShapes = {}
-        self.rt_execution_infos: RtExecutionInfos = {}
+        self._rt_execution_info: RtExecutionInfo | None = None
         self.pipeliner_job_count: int | None = None
         self._loop_stack: list[_LoopStackEntry] = []
-        self._current_rt_uid: str | None = None
         self._current_rt_info: RtExecutionInfo | None = None
 
     @property
-    def current_rt_uid(self) -> str:
-        assert self._current_rt_uid is not None
-        return self._current_rt_uid
+    def rt_execution_info(self) -> RtExecutionInfo:
+        if self._rt_execution_info is None:
+            raise LabOneQControllerException(
+                "No 'acquire_loop_rt' section found in the experiment."
+            )
+        return self._rt_execution_info
 
     @property
     def current_rt_info(self) -> RtExecutionInfo:
@@ -347,7 +374,7 @@ class _LoopsPreprocessor(ExecutorBase):
                 self.current_rt_info.averaging_mode == AveragingMode.SINGLE_SHOT
             )
             if single_shot_cyclic:
-                self._loop_stack[-1].axis_names.append(self.current_rt_uid)
+                self._loop_stack[-1].axis_names.append(self.current_rt_info.uid)
                 self._loop_stack[-1].axis_points.append(self._single_shot_axis())
 
     def for_loop_exit_handler(self, count: int, index: int, loop_flags: LoopFlags):
@@ -360,15 +387,16 @@ class _LoopsPreprocessor(ExecutorBase):
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
     ):
-        self._current_rt_uid = uid
-        self._current_rt_info = self.rt_execution_infos.setdefault(
-            uid,
-            RtExecutionInfo(
-                averages=count,
-                averaging_mode=averaging_mode,
-                acquisition_type=acquisition_type,
-                pipeliner_job_count=self.pipeliner_job_count,
-            ),
+        if self._rt_execution_info is not None and self._rt_execution_info.uid != uid:
+            raise LabOneQControllerException(
+                "Multiple 'acquire_loop_rt' sections per experiment is not supported."
+            )
+        self._current_rt_info = RtExecutionInfo(
+            uid=uid,
+            averages=count,
+            averaging_mode=averaging_mode,
+            acquisition_type=acquisition_type,
+            pipeliner_job_count=self.pipeliner_job_count,
         )
 
     def rt_exit_handler(
@@ -382,12 +410,12 @@ class _LoopsPreprocessor(ExecutorBase):
             raise LabOneQControllerException(
                 "Nested 'acquire_loop_rt' are not allowed."
             )
-        self._current_rt_uid = None
+        self._rt_execution_info = self._current_rt_info
         self._current_rt_info = None
 
 
 def _calculate_awg_configs(
-    rt_execution_infos: RtExecutionInfos,
+    rt_execution_info: RtExecutionInfo,
     recipe: Recipe,
     devices: DeviceCollection,
 ) -> AwgConfigs:
@@ -422,92 +450,83 @@ def _calculate_awg_configs(
 
     acquire_lengths = {al.signal_id: al.acquire_length for al in recipe.acquire_lengths}
     acquire_signals = set(acquire_lengths.keys())
-    # As currently just a single RT execution per experiment is supported,
-    # AWG configs are not cloned per RT execution. May need to be changed in the future.
-    for rt_execution_info in rt_execution_infos.values():
-        # Determine the raw acquisition lengths across various acquire events.
-        # Will use the maximum length, as scope / monitor can only be configured for one.
-        # device_uid + awg_index -> raw acquisition lengths
-        raw_acquire_lengths: dict[str, dict[str, int]] = defaultdict(dict)
-        raw_acquire_channels: dict[str, set[int]] = defaultdict(set)
-        if rt_execution_info.acquisition_type == AcquisitionType.RAW:
-            for signal in acquire_signals:
-                ac_awg_key, _ = awg_configs.by_signal(signal)
-                raw_acquire_lengths[ac_awg_key.device_uid][signal] = (
-                    acquire_lengths.get(signal, 0)
-                )
-                assert isinstance(ac_awg_key.awg_index, int)
-                raw_acquire_channels[ac_awg_key.device_uid].add(ac_awg_key.awg_index)
-        for awg_key, awg_config in awg_configs.items():
-            dev_raw_acquire_lengths = raw_acquire_lengths.get(awg_key.device_uid, {})
-            # Use dummy raw_acquire_length 4096 if there's no acquire statements in experiment
-            raw_acquire_length = max(dev_raw_acquire_lengths.values(), default=4096)
-            awg_config.raw_acquire_length = raw_acquire_length
-            awg_config.signal_raw_acquire_lengths = dev_raw_acquire_lengths
 
-            # signal_id -> sequence of handle/None for each result vector entry.
-            # Important! Length must be equal for all acquire signals / integrators of one AWG.
-            # All integrators occupy an entry in the respective result vectors per startQA event,
-            # regardless of the given integrators mask. Masked-out integrators just leave the
-            # value at NaN (corresponds to None in the map).
-            awg_result_map: dict[str, list[str | None]] = defaultdict(list)
-            for acquires in recipe.simultaneous_acquires:
-                if any(signal in acquires for signal in awg_config.acquire_signals):
-                    for signal in awg_config.acquire_signals:
-                        awg_result_map[signal].append(acquires.get(signal))
-            if len(awg_result_map) > 0:
-                rt_execution_info.signal_result_map.update(awg_result_map)
-                # All lengths are the same, see comment above.
-                any_awg_signal_result_map = next(iter(awg_result_map.values()))
-                mapping_repeats = (
-                    rt_execution_info.averages
-                    if rt_execution_info.averaging_mode == AveragingMode.SINGLE_SHOT
-                    else 1
-                )
-                result_length = len(any_awg_signal_result_map) * mapping_repeats
-                is_raw_acquisition = awg_key.device_uid in raw_acquire_lengths
-                if is_raw_acquisition:
-                    if (
-                        rt_execution_info.averaging_mode == AveragingMode.SEQUENTIAL
-                        and rt_execution_info.averages > 1
-                    ):
-                        raise LabOneQControllerException(
-                            "Sequential averaging is not supported for raw acquisitions."
-                        )
-                    device_type = awg_config.device_type
-                    if device_type is None:
-                        device_type = ""
-                    if device_type.startswith("SHFQA"):  # SHFQA or SHFQC/QA
-                        if devices.find_by_uid(awg_key.device_uid).options.is_qc:
-                            SCOPE_MEMORY_SIZE = 64 * 1024
-                        else:
-                            SCOPE_MEMORY_SIZE = 256 * 1024
-                        enabled_channels = raw_acquire_channels.get(
-                            awg_key.device_uid, {0}
-                        )
-                        if len(enabled_channels) < 2:
-                            ch_split = 1
-                        elif len(enabled_channels) == 2:
-                            ch_split = 2
-                        else:
-                            ch_split = 4
-                        max_length = (
-                            SCOPE_MEMORY_SIZE // ch_split // result_length
-                        ) & ~0xF
-                        max_segments = 1024
+    # Determine the raw acquisition lengths across various acquire events.
+    # Will use the maximum length, as scope / monitor can only be configured for one.
+    # device_uid + awg_index -> raw acquisition lengths
+    raw_acquire_lengths: dict[str, dict[str, int]] = defaultdict(dict)
+    raw_acquire_channels: dict[str, set[int]] = defaultdict(set)
+    if rt_execution_info.acquisition_type == AcquisitionType.RAW:
+        for signal in acquire_signals:
+            ac_awg_key, _ = awg_configs.by_signal(signal)
+            raw_acquire_lengths[ac_awg_key.device_uid][signal] = acquire_lengths.get(
+                signal, 0
+            )
+            assert isinstance(ac_awg_key.awg_index, int)
+            raw_acquire_channels[ac_awg_key.device_uid].add(ac_awg_key.awg_index)
+    for awg_key, awg_config in awg_configs.items():
+        dev_raw_acquire_lengths = raw_acquire_lengths.get(awg_key.device_uid, {})
+        # Use dummy raw_acquire_length 4096 if there's no acquire statements in experiment
+        raw_acquire_length = max(dev_raw_acquire_lengths.values(), default=4096)
+        awg_config.raw_acquire_length = raw_acquire_length
+        awg_config.signal_raw_acquire_lengths = dev_raw_acquire_lengths
+
+        # signal_id -> sequence of handle/None for each result vector entry.
+        # Important! Length must be equal for all acquire signals / integrators of one AWG.
+        # All integrators occupy an entry in the respective result vectors per startQA event,
+        # regardless of the given integrators mask. Masked-out integrators just leave the
+        # value at NaN (corresponds to None in the map).
+        awg_result_map: dict[str, list[str | None]] = defaultdict(list)
+        for acquires in recipe.simultaneous_acquires:
+            if any(signal in acquires for signal in awg_config.acquire_signals):
+                for signal in awg_config.acquire_signals:
+                    awg_result_map[signal].append(acquires.get(signal))
+        if len(awg_result_map) > 0:
+            rt_execution_info.signal_result_map.update(awg_result_map)
+            # All lengths are the same, see comment above.
+            any_awg_signal_result_map = next(iter(awg_result_map.values()))
+            result_length = (
+                len(any_awg_signal_result_map) * rt_execution_info.mapping_repeats
+            )
+            is_raw_acquisition = awg_key.device_uid in raw_acquire_lengths
+            if is_raw_acquisition:
+                if (
+                    rt_execution_info.averaging_mode == AveragingMode.SEQUENTIAL
+                    and rt_execution_info.averages > 1
+                ):
+                    raise LabOneQControllerException(
+                        "Sequential averaging is not supported for raw acquisitions."
+                    )
+                device_type = awg_config.device_type
+                if device_type is None:
+                    device_type = ""
+                if device_type.startswith("SHFQA"):  # SHFQA or SHFQC/QA
+                    if devices.find_by_uid(awg_key.device_uid).options.is_qc:
+                        SCOPE_MEMORY_SIZE = 64 * 1024
                     else:
-                        max_length = 4096
-                        max_segments = 1
-                    if result_length > max_segments:
-                        raise LabOneQControllerException(
-                            f"A maximum of {max_segments} raw result(s) is supported per real-time execution."
-                        )
-                    if raw_acquire_length > max_length:
-                        raise LabOneQControllerException(
-                            "The total size of the requested raw traces exceeds the instrument's memory capacity."
-                        )
+                        SCOPE_MEMORY_SIZE = 256 * 1024
+                    enabled_channels = raw_acquire_channels.get(awg_key.device_uid, {0})
+                    if len(enabled_channels) < 2:
+                        ch_split = 1
+                    elif len(enabled_channels) == 2:
+                        ch_split = 2
+                    else:
+                        ch_split = 4
+                    max_length = (SCOPE_MEMORY_SIZE // ch_split // result_length) & ~0xF
+                    max_segments = 1024
+                else:
+                    max_length = 4096
+                    max_segments = 1
+                if result_length > max_segments:
+                    raise LabOneQControllerException(
+                        f"A maximum of {max_segments} raw result(s) is supported per real-time execution."
+                    )
+                if raw_acquire_length > max_length:
+                    raise LabOneQControllerException(
+                        "The total size of the requested raw traces exceeds the instrument's memory capacity."
+                    )
 
-                awg_config.result_length = result_length
+            awg_config.result_length = result_length
 
     return awg_configs
 
@@ -560,12 +579,13 @@ def pre_process_compiled(
     scheduled_experiment: ScheduledExperiment,
     devices: DeviceCollection,
 ) -> RecipeData:
-    for device_uid, device in devices.all:
-        device.validate_scheduled_experiment(device_uid, scheduled_experiment)
+    for _, device in devices.all:
+        device.validate_scheduled_experiment(scheduled_experiment)
 
     recipe = scheduled_experiment.recipe
     assert recipe is not None
     execution = scheduled_experiment.execution
+    assert execution is not None
 
     try:
         if (
@@ -609,37 +629,40 @@ def pre_process_compiled(
     lp = _LoopsPreprocessor()
     lp.pipeliner_job_count = scheduled_experiment.chunk_count
     lp.run(execution)
-    rt_execution_infos = lp.rt_execution_infos
+    rt_execution_info = lp.rt_execution_info
 
-    awg_configs = _calculate_awg_configs(rt_execution_infos, recipe, devices)
+    awg_configs = _calculate_awg_configs(rt_execution_info, recipe, devices)
 
     recipe_data = RecipeData(
         scheduled_experiment=scheduled_experiment,
         recipe=recipe,
         execution=execution,
         result_shapes=lp.result_shapes,
-        rt_execution_infos=rt_execution_infos,
+        rt_execution_info=rt_execution_info,
         device_settings=device_settings,
         awg_configs=awg_configs,
         attribute_value_tracker=attribute_value_tracker,
         oscillator_ids=oscillator_ids,
     )
 
+    for _, device in devices.all:
+        device.validate_recipe_data(recipe_data)
+
     return recipe_data
 
 
 @overload
-def get_wave(wave_name, waves: dict[str, CodegenWaveform]) -> CodegenWaveform: ...
+def get_wave(wave_name: str, waves: dict[str, CodegenWaveform]) -> CodegenWaveform: ...
 
 
 @overload
 def get_wave(
-    wave_name, waves: dict[str, CodegenWaveform], optional: bool = True
+    wave_name: str, waves: dict[str, CodegenWaveform], optional: bool = True
 ) -> CodegenWaveform | None: ...
 
 
 def get_wave(
-    wave_name, waves: dict[str, CodegenWaveform], optional: bool = False
+    wave_name: str, waves: dict[str, CodegenWaveform], optional: bool = False
 ) -> CodegenWaveform | None:
     wave = waves.get(wave_name)
     if wave is None:
@@ -649,3 +672,141 @@ def get_wave(
             f"Wave '{wave_name}' is not found in the compiled waves collection."
         )
     return wave
+
+
+def get_marker_samples(
+    wave_name: str, waves: dict[str, CodegenWaveform]
+) -> NumPyArray | None:
+    marker_wave = get_wave(wave_name, waves, optional=True)
+    if marker_wave is None:
+        return None
+    samples = marker_wave.samples
+    if samples is not None and np.any(samples * (1 - samples)):
+        raise LabOneQControllerException(
+            "Marker samples must only contain ones and zeros"
+        )
+    return np.array(samples, order="C")
+
+
+def get_iq_marker_samples(
+    sig: str, waves: dict[str, CodegenWaveform]
+) -> NumPyArray | None:
+    marker_samples = get_marker_samples(f"{sig}_marker1.wave", waves)
+    marker2_samples = get_marker_samples(f"{sig}_marker2.wave", waves)
+    if marker2_samples is not None:
+        marker2_len = len(marker2_samples)
+        if marker_samples is None:
+            marker_samples = np.zeros(marker2_len, dtype=np.int32)
+        elif len(marker_samples) != marker2_len:
+            raise LabOneQControllerException(
+                "Samples for marker1 and marker2 must have the same length"
+            )
+        # we want marker 2 to be played on output 2, marker 1
+        # bits 0/1 = marker 1/2 of output 1, bit 2/4 = marker 1/2 output 2
+        # bit 2 is factor 4
+        factor = 4
+        marker_samples += factor * marker2_samples
+    return marker_samples
+
+
+@dataclass
+class WaveformItem:
+    index: int
+    name: str
+    samples: NumPyArray
+    hold_start: int | None = None
+    hold_length: int | None = None
+
+
+Waveforms = list[WaveformItem]
+
+
+def _prepare_wave_iq(
+    waves: dict[str, CodegenWaveform], sig: str, index: int
+) -> WaveformItem:
+    wave_i = get_wave(f"{sig}_i.wave", waves)
+    wave_q = get_wave(f"{sig}_q.wave", waves)
+    marker_samples = get_iq_marker_samples(sig, waves)
+    return WaveformItem(
+        index=index,
+        name=sig,
+        samples=zhinst.utils.convert_awg_waveform(
+            np.clip(np.ascontiguousarray(wave_i.samples), -1, 1),
+            np.clip(np.ascontiguousarray(wave_q.samples), -1, 1),
+            markers=marker_samples,
+        ),
+    )
+
+
+def _prepare_wave_single(
+    waves: dict[str, CodegenWaveform], sig: str, index: int
+) -> WaveformItem:
+    wave = get_wave(f"{sig}.wave", waves)
+    marker_samples = get_marker_samples(f"{sig}_marker1.wave", waves)
+    return WaveformItem(
+        index=index,
+        name=sig,
+        samples=zhinst.utils.convert_awg_waveform(
+            np.clip(np.ascontiguousarray(wave.samples), -1, 1),
+            markers=marker_samples,
+        ),
+    )
+
+
+def _prepare_wave_complex(
+    waves: dict[str, CodegenWaveform], sig: str, index: int
+) -> WaveformItem:
+    wave = get_wave(f"{sig}.wave", waves)
+    return WaveformItem(
+        index=index,
+        name=sig,
+        samples=np.ascontiguousarray(wave.samples, dtype=np.complex128),
+        hold_start=wave.hold_start,
+        hold_length=wave.hold_length,
+    )
+
+
+def prepare_waves(
+    artifacts: ArtifactsCodegen,
+    wave_indices_ref: str | None,
+) -> Waveforms | None:
+    if wave_indices_ref is None:
+        return None
+    if artifacts.wave_indices is None:
+        return None
+    wave_indices: dict[str, list[int | str]] = next(
+        (i for i in artifacts.wave_indices if i["filename"] == wave_indices_ref),
+        {"value": {}},
+    )["value"]
+
+    waves: Waveforms = []
+    for sig, [_index, _sig_type] in wave_indices.items():
+        index = cast(int, _index)
+        sig_type = cast(str, _sig_type)
+        if sig.startswith("precomp_reset"):
+            continue  # precomp reset waveform is bundled with ELF
+        if sig_type in ("iq", "double", "multi"):
+            wave = _prepare_wave_iq(artifacts.waves, sig, index)
+        elif sig_type == "single":
+            wave = _prepare_wave_single(artifacts.waves, sig, index)
+        elif sig_type == "complex":
+            wave = _prepare_wave_complex(artifacts.waves, sig, index)
+        else:
+            raise LabOneQControllerException(
+                f"Unexpected signal type for binary wave for '{sig}' in '{wave_indices_ref}' - "
+                f"'{sig_type}', should be one of [iq, double, multi, single, complex]"
+            )
+        waves.append(wave)
+
+    return waves
+
+
+def prepare_command_table(
+    artifacts: ArtifactsCodegen, ct_ref: str | None
+) -> dict | None:
+    if ct_ref is None:
+        return None
+    return next(
+        (ct["ct"] for ct in artifacts.command_tables if ct["seqc"] == ct_ref),
+        None,
+    )

@@ -49,6 +49,7 @@ pub struct Signal {
     pub channels: Vec<u8>,
     pub delay: i64,
     pub oscillator: Option<Oscillator>,
+    pub mixer_type: Option<MixerType>,
 }
 
 impl Signal {
@@ -207,4 +208,12 @@ pub struct SweepParameter {
     pub uid: String,
     /// Values of the parameter
     pub values: NumericArray,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MixerType {
+    /// Mixer performs full complex modulation
+    IQ,
+    /// Mixer only performs envelope modulation (UHFQA-style)
+    UhfqaEnvelope,
 }

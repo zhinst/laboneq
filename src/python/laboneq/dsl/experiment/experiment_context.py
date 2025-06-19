@@ -59,10 +59,7 @@ class ExperimentContextManager:
 
     def __enter__(self):
         """Use as a context manager to define experiment context"""
-        extra_kwargs = {}
-        if "name" not in self.kwargs:
-            extra_kwargs["name"] = "unnamed"
-        experiment = Experiment(**self.kwargs, **extra_kwargs)
+        experiment = Experiment(**self.kwargs)
         experiment_ctx = ExperimentContext(experiment, calibration=None)
         push_context(experiment_ctx)
         return experiment
@@ -96,3 +93,4 @@ def current_experiment_context() -> ExperimentContext | None:
     for c in reversed_iter_contexts():
         if isinstance(c, ExperimentContext):
             return c
+    return None

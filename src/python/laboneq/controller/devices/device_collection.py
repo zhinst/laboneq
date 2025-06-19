@@ -33,8 +33,8 @@ from laboneq.controller.devices.node_control import (
     filter_states,
 )
 from laboneq.controller.util import LabOneQControllerException
+from laboneq.controller.utilities.for_each import for_each
 from laboneq.controller.versioning import SetupCaps
-from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
 from laboneq.implementation.utils.devices import target_setup_fingerprint
 
 if TYPE_CHECKING:
@@ -320,24 +320,6 @@ class DeviceCollection:
             )
         )
 
-    def for_each_sync(
-        self,
-        device_method: Callable[..., Any],
-        *args,
-        **kwargs,
-    ) -> list[Any]:
-        """Call a method on all devices of a given class."""
-        [class_name, method_name] = device_method.__qualname__.split(".", 1)
-        device_class = device_method.__globals__[class_name]
-        return [
-            # To keep polymorph behavior, we use getattr on the object instance
-            # to retrieve the actual method to call, using passed method only as
-            # a reference to the method name.
-            getattr(device, method_name)(*args, **kwargs)
-            for device in self._devices.values()
-            if isinstance(device, device_class)
-        ]
-
     async def for_each(
         self,
         device_method: Callable[..., Coroutine[Any, Any, None]],
@@ -345,7 +327,7 @@ class DeviceCollection:
         **kwargs,
     ):
         """Call an async method on all devices of a given class in parallel."""
-        await _gather(*self.for_each_sync(device_method, *args, **kwargs))
+        await for_each(self._devices.values(), device_method, *args, **kwargs)
 
     async def _prepare_data_servers(self, do_emulation: bool):
         updated_data_servers = DataServerConnections()
@@ -414,19 +396,9 @@ class DeviceCollection:
         # Move various device settings from device setup
         for device_qualifier in self._ds.devices:
             dev = self._devices[device_qualifier.uid]
-
-            # Set the clock source (external by default)
-            # TODO(2K): Simplify the logic in this code snippet and the one in 'update_clock_source'.
-            # Currently, it adheres to the previously existing logic in the compiler, but it appears
-            # unnecessarily convoluted.
-            force_internal: bool | None = None
-            if device_qualifier.options.reference_clock_source is not None:
-                force_internal = (
-                    device_qualifier.options.reference_clock_source
-                    == ReferenceClockSource.INTERNAL
-                )
-            dev.update_clock_source(force_internal)
-
+            dev.update_clock_source(
+                device_qualifier.options.force_internal_clock_source
+            )
             dev.update_from_device_setup(self._ds)
 
     async def fetch_device_errors(self) -> str | None:

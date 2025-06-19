@@ -25,7 +25,6 @@ from laboneq._rust.codegenerator import (
     SeqCGenerator,
     seqc_generator_from_device_and_signal_type as seqc_generator_from_device_and_signal_type_str,
     merge_generators,
-    string_sanitize,
 )
 from laboneq.compiler.seqc.shfppc_sweeper_config_tracker import (
     SHFPPCSweeperConfigTracker,
@@ -692,27 +691,22 @@ class SampledEventHandler:
             self._handle_set_oscillator_frequency_shf(sampled_event)
 
     def _handle_set_oscillator_frequency_hdawg(self, sampled_event: AWGEvent):
-        iteration = sampled_event.params["iteration"]
-        parameter_name = sampled_event.params["parameter_name"]
-        param_stem = string_sanitize(parameter_name)
         osc_index: int = sampled_event.params["osc_index"]
-        counter_variable_name = string_sanitize(f"index_{parameter_name}")
+        osc_id_symbol = f"freq_osc_{osc_index}"
+        counter_variable_name = f"c_freq_osc_{osc_index}"
+        iteration = sampled_event.params["iteration"]
         if iteration == 0:
             iterations = sampled_event.params["iterations"]
-            if iterations > 512:
-                raise LabOneQException(
-                    "HDAWG can only handle RT frequency sweeps up to 512 steps."
-                )
             steps = "\n  ".join(
                 generate_if_else_tree(
                     iterations=iterations,
-                    variable=f"arg_{param_stem}",
-                    step_factory=lambda i: f"setDouble(osc_node_{param_stem}, {sampled_event.params['start_frequency'] + sampled_event.params['step_frequency'] * i});",
+                    variable=f"arg_{osc_id_symbol}",
+                    step_factory=lambda i: f"setDouble(osc_node_{osc_id_symbol}, {sampled_event.params['start_frequency'] + sampled_event.params['step_frequency'] * i});",
                 )
             )
             self.function_defs_generator.add_function_def(
-                f"void set_{param_stem}(var arg_{param_stem}) {{\n"
-                f'  string osc_node_{param_stem} = "oscs/{osc_index}/freq";\n'
+                f"void set_{osc_id_symbol}(var arg_{osc_id_symbol}) {{\n"
+                f'  string osc_node_{osc_id_symbol} = "oscs/{osc_index}/freq";\n'
                 f"  {steps}\n"
                 f"}}\n"
             )
@@ -723,17 +717,16 @@ class SampledEventHandler:
         assert sampled_event.start is not None
         self.seqc_tracker.add_required_playzeros(sampled_event.start)
         self.seqc_tracker.add_function_call_statement(
-            f"set_{param_stem}",
+            f"set_{osc_id_symbol}",
             args=[f"{counter_variable_name}++"],
             deferred=True,
         )
 
     def _handle_set_oscillator_frequency_shf(self, sampled_event: AWGEvent):
         iteration = sampled_event.params["iteration"]
-        parameter_name = sampled_event.params["parameter_name"]
-        counter_variable_name = string_sanitize(f"index_{parameter_name}")
-        osc_id_symbol = string_sanitize(sampled_event.params["oscillator_id"])
         osc_index: int = sampled_event.params["osc_index"]
+        osc_id_symbol = f"freq_osc_{osc_index}"
+        counter_variable_name = f"c_freq_osc_{osc_index}"
 
         if not self.declarations_generator.is_variable_declared(counter_variable_name):
             self.declarations_generator.add_variable_declaration(
@@ -749,12 +742,6 @@ class SampledEventHandler:
                     sampled_event.params["start_frequency"],
                     sampled_event.params["step_frequency"],
                 ),
-            )
-
-        if counter_variable_name != f"index_{parameter_name}":
-            _logger.warning(
-                "Parameter name '%s' has been sanitized in generated code.",
-                parameter_name,
             )
 
         if iteration == 0:

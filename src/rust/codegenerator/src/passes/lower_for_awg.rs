@@ -3,10 +3,9 @@
 
 use crate::ir;
 use crate::ir::compilation_job as cjob;
-use crate::node;
 use crate::tinysample;
 
-/// Convert tiny samples to unit samples on target AWG
+/// Transformation pass to convert tiny samples to unit samples on target AWG.
 pub fn convert_to_samples(node: &mut ir::IrNode, awg: &cjob::AwgCore) {
     *node.offset_mut() = tinysample::tinysample_to_samples(*node.offset(), awg.sampling_rate);
     let len_ts = node.data().length();
@@ -17,12 +16,11 @@ pub fn convert_to_samples(node: &mut ir::IrNode, awg: &cjob::AwgCore) {
     }
 }
 
-/// Convert relative node offsets to absolute values starting from the root
-pub fn offset_to_absolute(node: &ir::IrNode, start: ir::Samples) -> ir::IrNode {
-    let mut code_node = node::Node::new(node.data().clone(), start);
-    for child in node.iter_children() {
-        let code_child = offset_to_absolute(child, start + child.offset());
-        code_node.add_child_node(code_child);
+/// Transformation pass to convert relative node offsets to absolute values starting from the root.
+pub fn offset_to_absolute(node: &mut ir::IrNode, offset: ir::Samples) {
+    *node.offset_mut() += offset;
+    let parent_offset = *node.offset();
+    for child in node.iter_children_mut() {
+        offset_to_absolute(child, parent_offset);
     }
-    code_node
 }

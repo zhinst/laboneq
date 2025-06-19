@@ -12,32 +12,6 @@ from laboneq.compiler.seqc.utils import normalize_phase
 from laboneq._rust.codegenerator import WaveformSignature
 
 
-@dataclass(frozen=True, unsafe_hash=True)
-class SamplesSignatureID:
-    """An identifier for collection of compressed `WaveformSignature` samples.
-
-    See also docstring of `WaveformSignature`.
-    This class is used to uniquely identify a set of samples that can be used in a waveform.
-    It is used to avoid uploading the same samples multiple times to the device.
-    It is created from the samples themselves, so it is guaranteed to be unique for a given set of samples `per AWG`.
-
-    Attributes:
-        uid: Unique identifier of the samples.
-        label: Sample label.
-        samples_i: Flag whether the samples has I-component.
-        samples_q: Flag whether the samples has Q-component.
-        samples_marker1: Flag whether the samples has marker 1.
-        samples_marker2: Flag whether the samples has marker 2.
-    """
-
-    uid: int
-    label: str
-    has_i: bool
-    has_q: bool = False
-    has_marker1: bool = False
-    has_marker2: bool = False
-
-
 @dataclass(frozen=True)
 class HWOscillator:
     osc_id: str

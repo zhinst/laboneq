@@ -13,7 +13,7 @@ from yaml import load
 try:
     from yaml import CLoader as Loader
 except ImportError:
-    from yaml import Loader
+    from yaml import Loader  # type: ignore[assignment]
 
 import laboneq.core.path as qct_path
 from laboneq.core.exceptions import LabOneQException
@@ -104,8 +104,6 @@ InstrumentsType = dict[str, list[dict[str, str]]]
 #         - iq_signal: q0/measure_line
 #           ports: [SIGOUTS/0, SIGOUTS/1]
 #         - acquire_signal: q0/acquire_line
-#       device_pqsc:
-#         - to: device_hdawg
 ConnectionsType = dict[str, list[dict[str, Union[str, list[str]]]]]
 
 # Models 'dataservers' part of the descriptor:

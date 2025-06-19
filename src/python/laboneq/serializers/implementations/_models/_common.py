@@ -4,10 +4,12 @@
 from enum import Enum
 import inspect
 from collections.abc import Iterable
+import types
 from typing import Type
 
 import attrs
 import numpy
+import typing
 from cattrs import Converter
 from cattrs.gen import make_dict_unstructure_fn
 from cattrs.preconf.orjson import make_converter
@@ -118,6 +120,20 @@ def structure(data: dict, cls: type, converter: Converter):
             raise ValueError(f"Invalid attribute {k} for class {cls}")
         # to handle private attributes in attrs models
         key_name = k[1:] if k.startswith("_") else k
+
+        # cattrs issue: https://github.com/python-attrs/cattrs/issues/656
+        # Specifically handle the case of when value is a float or int and
+        # the type is float or Union with float.
+        if typing.get_origin(attributes[k].type) in (
+            typing.Union,
+            types.UnionType,
+            typing.Optional,
+        ):
+            if float in typing.get_args(attributes[k].type) and isinstance(
+                v, (int, float)
+            ):
+                se[key_name] = v
+                continue
         se[key_name] = converter.structure(v, attributes[k].type)
     de = cls._target_class(**se)
     return de

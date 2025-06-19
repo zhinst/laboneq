@@ -11,6 +11,12 @@ from laboneq.compiler.seqc.signatures import PlaybackSignature
 from laboneq.data.scheduled_experiment import COMPLEX_USAGE
 
 
+CT_SCHEMAS = {
+    "hd_1.1.0": "https://docs.zhinst.com/hdawg/commandtable/v1_1/schema",
+    "sg_1.2.0": "https://docs.zhinst.com/shfsg/commandtable/v1_2/schema",
+}
+
+
 class CommandTableTracker:
     def __init__(self, device_type: DeviceType):
         self._command_table: list[Dict] = []
@@ -155,8 +161,18 @@ class CommandTableTracker:
     def command_table_usage(self) -> float:
         return len(self._command_table) / self._device_type.max_ct_entries
 
-    def command_table(self) -> list[dict]:
-        return self._command_table
+    def command_table(self) -> dict:
+        ct_schema = CT_SCHEMAS.get(self._device_type.ct_schema_version)
+        if ct_schema is None:
+            raise AssertionError(
+                f"Unknown command table schema version: {self._device_type.ct_schema_version}"
+            )
+        version = self._device_type.ct_schema_version.split("_", 1)[-1]
+        return {
+            "$schema": ct_schema,
+            "header": {"version": version},
+            "table": self._command_table,
+        }
 
     def get_or_create_entry(
         self,

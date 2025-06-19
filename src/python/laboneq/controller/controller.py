@@ -10,6 +10,7 @@ from collections import defaultdict
 from copy import deepcopy
 from typing import TYPE_CHECKING, Callable
 
+from laboneq.controller.utilities.for_each import for_each_sync
 import numpy as np
 import zhinst.utils
 from numpy import typing as npt
@@ -24,6 +25,7 @@ from laboneq.controller.protected_session import ProtectedSession
 from laboneq.controller.recipe_processor import (
     RecipeData,
     RtExecutionInfo,
+    WaveformItem,
     pre_process_compiled,
 )
 from laboneq.controller.results import make_acquired_result
@@ -43,7 +45,6 @@ from laboneq.data.execution_payload import TargetSetup
 from laboneq.data.experiment_results import ExperimentResults
 from laboneq.data.recipe import NtStepKey
 from laboneq.data.scheduled_experiment import (
-    ArtifactsCodegen,
     CodegenWaveform,
     ScheduledExperiment,
 )
@@ -112,8 +113,8 @@ class Controller(EventLoopMixIn):
     def devices(self) -> dict[str, DeviceZI]:
         return self._devices.devices
 
-    async def _replace_artifacts(self, rt_section_uid: str):
-        rt_execution_info = self._recipe_data.rt_execution_infos[rt_section_uid]
+    async def _replace_artifacts(self):
+        rt_execution_info = self._recipe_data.rt_execution_info
         with_pipeliner = rt_execution_info.with_pipeliner
         if with_pipeliner and self._nodes_from_artifact_replacement:
             raise LabOneQControllerException(
@@ -129,7 +130,6 @@ class Controller(EventLoopMixIn):
         sweep_params_tracker: SweepParamsTracker,
         user_set_nodes: NodeCollector,
         nt_step: NtStepKey,
-        rt_section_uid: str,
     ):
         # Trigger
         await self._devices.for_each(DeviceBase.configure_trigger, self._recipe_data)
@@ -152,10 +152,9 @@ class Controller(EventLoopMixIn):
         await self._devices.for_each(
             DeviceZI.prepare_artifacts,
             recipe_data=self._recipe_data,
-            rt_section_uid=rt_section_uid,
             nt_step=nt_step,
         )
-        await self._replace_artifacts(rt_section_uid=rt_section_uid)
+        await self._replace_artifacts()
         await self._devices.for_each(DeviceBase.set_after_awg_upload, self._recipe_data)
 
     async def _after_nt_step(self):
@@ -212,10 +211,8 @@ class Controller(EventLoopMixIn):
         )
 
     # TODO(2K): use timeout passed to connect
-    async def _execute_one_step(
-        self, *, acquisition_type: AcquisitionType, rt_section_uid: str, timeout_s=5.0
-    ):
-        rt_execution_info = self._recipe_data.rt_execution_infos[rt_section_uid]
+    async def _execute_one_step(self, *, timeout_s=5.0):
+        rt_execution_info = self._recipe_data.rt_execution_info
 
         try:
             await self._devices.for_each(
@@ -234,7 +231,7 @@ class Controller(EventLoopMixIn):
                 timeout_s=timeout_s,
             )
             await self._wait_execution_to_stop(
-                acquisition_type, rt_execution_info=rt_execution_info
+                rt_execution_info.acquisition_type, rt_execution_info=rt_execution_info
             )
             await self._devices.for_each(
                 DeviceBase.teardown_one_step_execution,
@@ -330,8 +327,10 @@ class Controller(EventLoopMixIn):
         async with self._devices.capture_logs():
             try:
                 await self._devices.for_each(DeviceBase.reset_to_idle)
-                self._devices.for_each_sync(
-                    DeviceBase.allocate_resources, self._recipe_data
+                for_each_sync(
+                    self._devices.devices.values(),
+                    DeviceBase.allocate_resources,
+                    self._recipe_data,
                 )
                 await self._devices.for_each(DeviceBase.on_experiment_begin)
                 await self._devices.for_each(DeviceBase.init_warning_nodes)
@@ -407,9 +406,7 @@ class Controller(EventLoopMixIn):
                 f"Pulse {pulse_uid.uid}"  # type: ignore
             )
 
-        acquisition_type = RtExecutionInfo.get_acquisition_type(
-            self._recipe_data.rt_execution_infos
-        )
+        acquisition_type = self._recipe_data.rt_execution_info.acquisition_type
         wave_replacements = calc_wave_replacements(
             self._recipe_data.scheduled_experiment,
             pulse_uid,
@@ -436,10 +433,12 @@ class Controller(EventLoopMixIn):
                 bin_wave = zhinst.utils.convert_awg_waveform(*clipped)
                 self._nodes_from_artifact_replacement[device].extend(
                     device.prepare_upload_binary_wave(
-                        filename=repl.sig_string + " (repl)",
-                        waveform=bin_wave,
                         awg_index=awg[1],
-                        wave_index=target_wave_index,
+                        wave=WaveformItem(
+                            index=target_wave_index,
+                            name=repl.sig_string + " (repl)",
+                            samples=bin_wave,
+                        ),
                         acquisition_type=acquisition_type,
                     )
                 )
@@ -449,10 +448,12 @@ class Controller(EventLoopMixIn):
                 np.clip(repl.samples.imag, -1.0, 1.0, out=repl.samples.imag)
                 self._nodes_from_artifact_replacement[device].extend(
                     device.prepare_upload_binary_wave(
-                        filename=repl.sig_string + " (repl)",
-                        waveform=repl.samples,
                         awg_index=awg[1],
-                        wave_index=target_wave_index,
+                        wave=WaveformItem(
+                            index=target_wave_index,
+                            name=repl.sig_string + " (repl)",
+                            samples=repl.samples,
+                        ),
                         acquisition_type=acquisition_type,
                     )
                 )
@@ -461,27 +462,16 @@ class Controller(EventLoopMixIn):
         ct_replacements = calc_ct_replacement(
             self._recipe_data.scheduled_experiment, parameter_uid, new_value
         )
-        dummy_artifact = ArtifactsCodegen(command_tables=ct_replacements)
         for repl in ct_replacements:
             seqc_name = repl["seqc"]
             device_id, awg_index = self._find_awg(seqc_name)
             assert device_id is not None and awg_index is not None
             device = self._devices.find_by_uid(device_id)
-
-            command_table = device.prepare_command_table(dummy_artifact, seqc_name)
-            nodes = device.prepare_upload_command_table(awg_index, command_table)
+            nodes = device.prepare_upload_command_table(awg_index, repl["ct"])
             self._nodes_from_artifact_replacement[device].extend(nodes)
 
     def _prepare_result_shapes(self):
         self._results = ExperimentResults()
-        if len(self._recipe_data.rt_execution_infos) == 0:
-            return
-        if len(self._recipe_data.rt_execution_infos) > 1:
-            raise LabOneQControllerException(
-                "Multiple 'acquire_loop_rt' sections per experiment is not supported."
-            )
-
-        rt_info = next(iter(self._recipe_data.rt_execution_infos.values()))
         for handle, shape_info in self._recipe_data.result_shapes.items():
             axis_name = deepcopy(shape_info.base_axis_name)
             axis = deepcopy(shape_info.base_axis)
@@ -496,7 +486,7 @@ class Controller(EventLoopMixIn):
                 shape.append(shape_info.handle_acquire_count)
 
             # Append extra dimension for samples of the raw acquisition
-            if rt_info.acquisition_type == AcquisitionType.RAW:
+            if self._recipe_data.rt_execution_info.is_raw_acquisition:
                 signal_id = shape_info.signal
                 awg_key, awg_config = self._recipe_data.awg_configs.by_signal(signal_id)
                 raw_acquire_length = self._devices.find_by_uid(
@@ -518,16 +508,13 @@ class Controller(EventLoopMixIn):
             )
             self._results.acquired_results[handle] = empty_result
 
-    async def _read_one_step_results(self, nt_step: NtStepKey, rt_section_uid: str):
+    async def _read_one_step_results(self, nt_step: NtStepKey):
         await self._devices.for_each(
             DeviceZI.read_results,
             recipe_data=self._recipe_data,
             nt_step=nt_step,
-            rt_section_uid=rt_section_uid,
             results=self._results,
         )
 
-    def _report_step_error(self, nt_step: NtStepKey, rt_section_uid: str, message: str):
-        self._results.execution_errors.append(
-            (list(nt_step.indices), rt_section_uid, message)
-        )
+    def _report_step_error(self, nt_step: NtStepKey, uid: str, message: str):
+        self._results.execution_errors.append((list(nt_step.indices), uid, message))

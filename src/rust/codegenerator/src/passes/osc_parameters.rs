@@ -239,6 +239,7 @@ mod tests {
                 kind,
             }),
             delay: 0,
+            mixer_type: None,
         };
         Rc::new(sig)
     }
@@ -459,6 +460,7 @@ mod tests {
             channels: vec![],
             oscillator: None,
             delay: 0,
+            mixer_type: None,
         };
         let signal = Rc::new(sig);
         let mut root = ir::IrNode::new(ir::NodeKind::Nop { length: 0 }, 0);

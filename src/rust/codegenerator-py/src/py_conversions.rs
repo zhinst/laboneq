@@ -517,6 +517,26 @@ fn extract_oscillator(ob: &Bound<'_, PyAny>) -> Result<Option<cjob::Oscillator>,
     Ok(osc)
 }
 
+pub fn extract_mixer_type(ob: &Bound<'_, PyAny>) -> Result<Option<cjob::MixerType>, PyErr> {
+    // schedued_experiment.MixerType
+    if ob.is_none() {
+        return Ok(None);
+    }
+    let py = ob.py();
+    let py_name = ob.getattr(intern!(py, "name"))?;
+    let kind = match py_name.downcast::<PyString>()?.to_cow()?.as_ref() {
+        "IQ" => cjob::MixerType::IQ,
+        "UHFQA_ENVELOPE" => cjob::MixerType::UhfqaEnvelope,
+        _ => {
+            return Err(PyRuntimeError::new_err(format!(
+                "Unknown mixer type: {}",
+                ob
+            )));
+        }
+    };
+    Ok(Some(kind))
+}
+
 fn extract_awg_signal(ob: &Bound<'_, PyAny>, sampling_rate: f64) -> Result<cjob::Signal, PyErr> {
     // compilation_job.SignalObj
     let py = ob.py();
@@ -547,6 +567,7 @@ fn extract_awg_signal(ob: &Bound<'_, PyAny>, sampling_rate: f64) -> Result<cjob:
         delay: length_to_samples(delay, sampling_rate),
         // AWG SignalObj does not have full oscillator info, we take it from elsewhere
         oscillator: None,
+        mixer_type: extract_mixer_type(&ob.getattr(intern!(py, "mixer_type"))?)?,
     };
     Ok(signal)
 }

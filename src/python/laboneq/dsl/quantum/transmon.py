@@ -43,13 +43,13 @@ class TransmonParameters(QuantumParameters):
     #: integration delay between readout pulse and data acquisition, defaults to 20 ns.
     readout_integration_delay: Optional[float] = 20e-9
     #: drive power setting, defaults to 10 dBm.
-    drive_range: Optional[float] = 10
+    drive_range: Optional[float] = 10.0
     #: readout output power setting, defaults to 5 dBm.
-    readout_range_out: Optional[float] = 5
+    readout_range_out: Optional[float] = 5.0
     #: readout input power setting, defaults to 10 dBm.
-    readout_range_in: Optional[float] = 10
+    readout_range_in: Optional[float] = 10.0
     #: offset voltage for flux control line - defaults to 0.
-    flux_offset_voltage: Optional[float] = 0
+    flux_offset_voltage: Optional[float] = 0.0
     #: free form dictionary of user defined parameters.
     user_defined: dict | None = attrs.field(factory=dict)
 

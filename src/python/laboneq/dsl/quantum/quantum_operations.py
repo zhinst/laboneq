@@ -216,8 +216,8 @@ class QuantumOperations:
     """Quantum operations for a given qubit type.
 
     Arguments:
-    qpu:
-        The quantum processing unit (QPU).
+        qpu:
+            The quantum processing unit (QPU).
 
     Attributes:
         QUBIT_TYPES:

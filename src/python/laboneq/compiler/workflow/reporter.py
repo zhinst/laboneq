@@ -107,7 +107,9 @@ class CompilationReportGenerator(NtCompilerExecutorDelegate):
         report = []
         for awg_key, seqc_program in compiler_output.src.items():
             seqc_loc = len(seqc_program.src.splitlines())
-            ct = compiler_output.command_tables.get(awg_key, {"ct": []})["ct"]
+            ct = compiler_output.command_tables.get(awg_key, {"ct": {"table": []}})[
+                "ct"
+            ]["table"]
             ct_len = len(ct)
             wave_indices = compiler_output.wave_indices[awg_key]["value"]
             wave_indices_count = len(wave_indices)
@@ -131,7 +133,7 @@ class CompilationReportGenerator(NtCompilerExecutorDelegate):
 
         assert isinstance(compiler_output, CombinedRTOutputSeqC)
         total_seqc = sum(len(s.src.splitlines()) for s in compiler_output.src.values())
-        total_ct = sum(len(ct["ct"]) for ct in compiler_output.command_tables)
+        total_ct = sum(len(ct["ct"]["table"]) for ct in compiler_output.command_tables)
         total_wave_idx = sum(len(wi) for wi in compiler_output.wave_indices)
         total_samples = sum(
             _count_samples(compiler_output.waves, wi)

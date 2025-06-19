@@ -10,7 +10,7 @@ from yaml import load
 try:
     from yaml import CLoader as Loader
 except ImportError:
-    from yaml import Loader
+    from yaml import Loader  # type: ignore[assignment]
 
 if TYPE_CHECKING:
     from laboneq.data.setup_description import Setup

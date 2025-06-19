@@ -106,6 +106,7 @@ mod tests {
                 delay: 0,
                 channels: vec![0],
                 oscillator: None,
+                mixer_type: None,
             }
             .into(),
             pulse_defs: vec![],

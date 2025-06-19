@@ -186,12 +186,6 @@ pub struct SamplesSignatureID {
     pub has_marker2: bool,
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct SampledWaveform {
-    pub length: Samples,
-    pub samples_id: SamplesSignatureID,
-}
-
 pub fn sort_pulses(pulses: &mut [PulseSignature]) {
     pulses.sort_by(|a, b| (a.start, a.channel).cmp(&(b.start, b.channel)));
 }
@@ -228,6 +222,15 @@ pub enum WaveformSignature {
 }
 
 impl WaveformSignature {
+    /// UID of the waveform signature.
+    ///
+    /// NOTE: Currently calling `.uid()` hashes the signature, therefore it is not a cheap operation.
+    pub fn uid(&self) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.hash(&mut hasher);
+        hasher.finish()
+    }
+
     pub fn length(&self) -> Samples {
         match self {
             WaveformSignature::Samples { length, .. } => *length,

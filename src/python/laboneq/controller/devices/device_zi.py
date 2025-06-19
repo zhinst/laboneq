@@ -15,10 +15,10 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Iterator, cast
 from weakref import ReferenceType, ref
 
+from laboneq.controller.devices.channel_base import ChannelBase
 from laboneq.controller.results import build_partial_result, build_raw_partial_result
+from laboneq.controller.utilities.for_each import for_each, for_each_sync
 from laboneq.data.experiment_results import ExperimentResults
-import numpy as np
-import zhinst.utils
 
 from laboneq.controller.attribute_value_tracker import (  # pylint: disable=E0401
     AttributeName,
@@ -54,12 +54,15 @@ from laboneq.controller.recipe_processor import (
     AwgKey,
     RecipeData,
     RtExecutionInfo,
-    get_wave,
+    WaveformItem,
+    Waveforms,
+    get_elf,
+    prepare_command_table,
+    prepare_waves,
 )
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.controller.versioning import SetupCaps
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
-from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.data.recipe import (
     Initialization,
     IntegratorAllocation,
@@ -68,7 +71,6 @@ from laboneq.data.recipe import (
 )
 from laboneq.data.scheduled_experiment import (
     ArtifactsCodegen,
-    CodegenWaveform,
     ScheduledExperiment,
 )
 
@@ -106,23 +108,11 @@ class SequencerPaths:
 
 
 @dataclass
-class WaveformItem:
-    index: int
-    name: str
-    samples: NumPyArray
-    hold_start: int | None = None
-    hold_length: int | None = None
-
-
-@dataclass
 class RawReadoutData:
     vector: NumPyArray
 
     # metadata by job_id
     metadata: dict[int, dict[str, Any]] = field(default_factory=dict)
-
-
-Waveforms = list[WaveformItem]
 
 
 def delay_to_rounded_samples(
@@ -194,8 +184,12 @@ class DeviceZI(DeviceAbstract):
         return self._device_qualifier
 
     @property
+    def uid(self) -> str:
+        return self.device_qualifier.uid
+
+    @property
     def options(self) -> DeviceOptions:
-        return self._device_qualifier.options
+        return self.device_qualifier.options
 
     @property
     def serial(self):
@@ -203,7 +197,7 @@ class DeviceZI(DeviceAbstract):
 
     @property
     def dev_repr(self) -> str:
-        return f"{self._device_qualifier.driver.upper()}:{self.serial}"
+        return f"{self.device_qualifier.driver.upper()}:{self.serial}"
 
     @property
     def is_secondary(self) -> bool:
@@ -277,9 +271,10 @@ class DeviceZI(DeviceAbstract):
     async def set_async(self, nodes: NodeCollector):
         pass
 
-    def validate_scheduled_experiment(
-        self, device_uid: str, scheduled_experiment: ScheduledExperiment
-    ):
+    def validate_scheduled_experiment(self, scheduled_experiment: ScheduledExperiment):
+        pass
+
+    def validate_recipe_data(self, recipe_data: RecipeData):
         pass
 
     def pre_process_attributes(
@@ -301,27 +296,17 @@ class DeviceZI(DeviceAbstract):
     async def prepare_artifacts(
         self,
         recipe_data: RecipeData,
-        rt_section_uid: str,
         nt_step: NtStepKey,
     ):
         pass
 
     def prepare_upload_binary_wave(
         self,
-        filename: str,
-        waveform: NumPyArray,
         awg_index: int,
-        wave_index: int,
+        wave: WaveformItem,
         acquisition_type: AcquisitionType,
     ) -> NodeCollector:
         return NodeCollector()
-
-    def prepare_command_table(
-        self,
-        artifacts: ArtifactsCodegen,
-        ct_ref: str | None,
-    ) -> dict | None:
-        return None
 
     def prepare_upload_command_table(
         self, awg_index, command_table: dict
@@ -339,7 +324,6 @@ class DeviceZI(DeviceAbstract):
         self,
         recipe_data: RecipeData,
         nt_step: NtStepKey,
-        rt_section_uid: str,
         results: ExperimentResults,
     ):
         pass
@@ -367,7 +351,6 @@ class DeviceBase(DeviceZI):
             PipelinerReloadTracker
         )
         self._sampling_rate: float | None = None
-        self._device_class = 0x0
         self._enable_runtime_checks = True
         self._warning_nodes: dict[str, int] = {}
 
@@ -390,21 +373,20 @@ class DeviceBase(DeviceZI):
         return self.options.interface.lower()
 
     def _has_awg_in_use(self, recipe_data: RecipeData):
-        initialization = recipe_data.get_initialization(self.device_qualifier.uid)
+        initialization = recipe_data.get_initialization(self.uid)
         return len(initialization.awgs) > 0
 
     async def set_async(self, nodes: NodeCollector | Iterable[NodeCollector]):
         await self._api.set_parallel(NodeCollector.all(nodes))
 
+    def all_channels(self) -> Iterator[ChannelBase]:
+        """Iterable over all channels of the device."""
+        return iter([])
+
     def clear_cache(self):
         # TODO(2K): the code below is only needed to keep async API behavior
         # in emulation mode matching that of legacy API with LabOne Q cache.
         self._api.clear_cache()
-
-    def add_command_table_header(self, body: dict) -> dict:
-        # Stub, implement in sub-class
-        _logger.debug("Command table unavailable on device %s", self.dev_repr)
-        return {}
 
     def command_table_path(self, awg_index: int) -> str:
         # Stub, implement in sub-class
@@ -460,16 +442,6 @@ class DeviceBase(DeviceZI):
             ready=f"/{self.serial}/awgs/{index}/ready",
         )
 
-    def is_standalone(self):
-        def is_ppc(dev):
-            return (
-                getattr(getattr(dev, "device_qualifier", None), "driver", None)
-                == "SHFPPC"
-            )
-
-        no_ppc_uplinks = [u for u in self._uplinks if u() and not is_ppc(u())]
-        return len(no_ppc_uplinks) == 0 and len(self._downlinks) == 0
-
     def pre_process_attributes(
         self,
         initialization: Initialization,
@@ -522,7 +494,7 @@ class DeviceBase(DeviceZI):
                     "Ambiguous 'voltage_offset' for the output %s of device %s: %s != %s, "
                     "will use %s",
                     sigout,
-                    self.device_qualifier.uid,
+                    self.uid,
                     self._voltage_offsets[sigout],
                     voltage_offset,
                     self._voltage_offsets[sigout],
@@ -531,7 +503,7 @@ class DeviceBase(DeviceZI):
             self._voltage_offsets[sigout] = voltage_offset
 
     def update_from_device_setup(self, ds: DeviceSetupDAO):
-        for calib in ds.calibrations(self.device_qualifier.uid):
+        for calib in ds.calibrations(self.uid):
             if DeviceSetupDAO.is_rf(calib) and calib.voltage_offset is not None:
                 sigout = self._sigout_from_port(calib.ports)
                 if sigout is not None:
@@ -548,8 +520,8 @@ class DeviceBase(DeviceZI):
         _logger.debug("%s: Connecting to %s interface.", self.dev_repr, self.interface)
         try:
             self._api = await InstrumentConnection.connect(
-                device_qualifier=self._device_qualifier,
-                server_qualifier=self._server_qualifier,
+                device_qualifier=self.device_qualifier,
+                server_qualifier=self.server_qualifier,
                 emulator_state=emulator_state,
                 timeout_s=timeout_s,
             )
@@ -610,13 +582,14 @@ class DeviceBase(DeviceZI):
         self._allocated_oscs.clear()
         self._allocated_awgs.clear()
         self._pipeliner_reload_tracker.clear()
+        for_each_sync(self.all_channels(), ChannelBase.allocate_resources)
 
-        device_recipe_data = recipe_data.device_settings[self.device_qualifier.uid]
+        device_recipe_data = recipe_data.device_settings[self.uid]
         for osc_param in device_recipe_data.osc_params:
             self._allocate_osc_impl(osc_param, recipe_data)
 
         for awg_key in recipe_data.awg_configs.keys():
-            if awg_key.device_uid == self.device_qualifier.uid:
+            if awg_key.device_uid == self.uid:
                 assert isinstance(awg_key.awg_index, int)
                 self._allocated_awgs.add(awg_key.awg_index)
 
@@ -685,14 +658,9 @@ class DeviceBase(DeviceZI):
 
     def configure_acquisition(
         self,
-        awg_key: AwgKey,
-        awg_config: AwgConfig,
-        integrator_allocations: list[IntegratorAllocation],
-        averages: int,
-        averaging_mode: AveragingMode,
-        acquisition_type: AcquisitionType,
-        pipeliner_job: int | None,
         recipe_data: RecipeData,
+        awg_index: int,
+        pipeliner_job: int,
     ) -> NodeCollector:
         return NodeCollector()
 
@@ -711,9 +679,7 @@ class DeviceBase(DeviceZI):
                     if serial == self.serial:
                         nc.add_node_action(node_action)
 
-        attributes = recipe_data.attribute_value_tracker.device_view(
-            self.device_qualifier.uid
-        )
+        attributes = recipe_data.attribute_value_tracker.device_view(self.uid)
         nc.extend(self._collect_prepare_nt_step_nodes(attributes, recipe_data))
 
         await self.set_async(nc)
@@ -757,35 +723,38 @@ class DeviceBase(DeviceZI):
     async def prepare_artifacts(
         self,
         recipe_data: RecipeData,
-        rt_section_uid: str,
         nt_step: NtStepKey,
     ):
-        initialization = recipe_data.get_initialization(self.device_qualifier.uid)
-        if not initialization.awgs:
-            return
-
+        await for_each(self.all_channels(), ChannelBase.load_awg_program)
         await _gather(
             *(
                 self._prepare_artifacts_impl(
                     recipe_data=recipe_data,
-                    rt_section_uid=rt_section_uid,
-                    awg_index=awg.awg,
                     nt_step=nt_step,
+                    target_awg_index=awg_index,
                 )
-                for awg in initialization.awgs
+                for awg_index in self._allocated_awgs
             )
         )
 
     async def _prepare_artifacts_impl(
         self,
         recipe_data: RecipeData,
-        rt_section_uid: str,
-        awg_index: int | str,
         nt_step: NtStepKey,
+        target_awg_index: int,
     ):
-        assert isinstance(awg_index, int)
-        artifacts = recipe_data.get_artifacts(self._device_class, ArtifactsCodegen)
-        rt_execution_info = recipe_data.rt_execution_infos[rt_section_uid]
+        initialization = recipe_data.get_initialization(self.uid)
+        init_awgs = [] if initialization.awgs is None else initialization.awgs
+        awg_index: int | None = None
+        for awg in init_awgs:
+            if isinstance(awg.awg, int) and awg.awg == target_awg_index:
+                awg_index = target_awg_index
+                break
+        if awg_index is None:
+            return
+
+        artifacts = recipe_data.get_artifacts(ArtifactsCodegen)
+        rt_execution_info = recipe_data.rt_execution_info
 
         if rt_execution_info.with_pipeliner and not self.has_pipeliner:
             raise LabOneQControllerException(
@@ -811,7 +780,7 @@ class DeviceBase(DeviceZI):
                 (
                     r
                     for r in recipe_data.recipe.realtime_execution_init
-                    if r.device_id == self.device_qualifier.uid
+                    if r.device_id == self.uid
                     and r.awg_id == awg_index
                     and r.nt_step == effective_nt_step
                 ),
@@ -827,18 +796,13 @@ class DeviceBase(DeviceZI):
             #  NT step. The acquisition parameters really are constant across NT steps,
             #  we only care about re-enabling the result logger.
             wf_eff.extend(
-                self.prepare_readout_config_nodes(
-                    recipe_data,
-                    rt_section_uid,
-                    AwgKey(self.device_qualifier.uid, awg_index),
-                    pipeliner_job if rt_execution_info.with_pipeliner else None,
-                )
+                self.configure_acquisition(recipe_data, awg_index, pipeliner_job)
             )
 
             if rt_exec_step is None:
                 continue
 
-            seqc_elf = self.prepare_elf(artifacts, rt_exec_step.program_ref)
+            seqc_elf = get_elf(artifacts, rt_exec_step.program_ref)
             if seqc_elf is not None:
                 elf_nodes.extend(
                     self.prepare_upload_elf(
@@ -847,18 +811,16 @@ class DeviceBase(DeviceZI):
                 )
                 upload_ready_conditions.update(self._elf_upload_condition(awg_index))
 
-            waves = self.prepare_waves(artifacts, rt_exec_step.wave_indices_ref)
+            waves = prepare_waves(artifacts, rt_exec_step.wave_indices_ref)
             if waves is not None:
-                acquisition_type = RtExecutionInfo.get_acquisition_type_def(
-                    rt_execution_info
-                )
+                acquisition_type = rt_execution_info.acquisition_type
                 wf_eff.extend(
                     self.prepare_upload_all_binary_waves(
                         awg_index, waves, acquisition_type
                     )
                 )
 
-            command_table = self.prepare_command_table(
+            command_table = prepare_command_table(
                 artifacts, rt_exec_step.wave_indices_ref
             )
             if command_table is not None:
@@ -870,7 +832,7 @@ class DeviceBase(DeviceZI):
                 # TODO(2K): Cleanup arguments to prepare_upload_all_integration_weights
                 self.prepare_upload_all_integration_weights(
                     recipe_data,
-                    self.device_qualifier.uid,
+                    self.uid,
                     awg_index,
                     artifacts,
                     recipe_data.recipe.integrator_allocations,
@@ -892,169 +854,6 @@ class DeviceBase(DeviceZI):
         await rw.wait()
         await self.set_async(wf_nodes)
 
-    @staticmethod
-    def _contains_only_zero_or_one(a):
-        if a is None:
-            return True
-        return not np.any(a * (1 - a))
-
-    def _prepare_markers_iq(
-        self, waves: dict[str, CodegenWaveform], sig: str
-    ) -> NumPyArray | None:
-        marker1_wave = get_wave(f"{sig}_marker1.wave", waves, optional=True)
-        marker2_wave = get_wave(f"{sig}_marker2.wave", waves, optional=True)
-
-        marker_samples = None
-        if marker1_wave is not None:
-            if not self._contains_only_zero_or_one(marker1_wave.samples):
-                raise LabOneQControllerException(
-                    "Marker samples must only contain ones and zeros"
-                )
-            marker_samples = np.array(marker1_wave.samples, order="C")
-        if marker2_wave is not None:
-            marker2_len = len(marker2_wave.samples)
-            if marker_samples is None:
-                marker_samples = np.zeros(marker2_len, dtype=np.int32)
-            elif len(marker_samples) != marker2_len:
-                raise LabOneQControllerException(
-                    "Samples for marker1 and marker2 must have the same length"
-                )
-            if not self._contains_only_zero_or_one(marker2_wave.samples):
-                raise LabOneQControllerException(
-                    "Marker samples must only contain ones and zeros"
-                )
-            # we want marker 2 to be played on output 2, marker 1
-            # bits 0/1 = marker 1/2 of output 1, bit 2/4 = marker 1/2 output 2
-            # bit 2 is factor 4
-            factor = 4
-            marker_samples += factor * np.asarray(marker2_wave.samples, order="C")
-        return marker_samples
-
-    def _prepare_markers_single(
-        self, waves: dict[str, CodegenWaveform], sig: str
-    ) -> NumPyArray | None:
-        marker_wave = get_wave(f"{sig}_marker1.wave", waves, optional=True)
-
-        if marker_wave is None:
-            return None
-        if not self._contains_only_zero_or_one(marker_wave.samples):
-            raise LabOneQControllerException(
-                "Marker samples must only contain ones and zeros"
-            )
-        return np.array(marker_wave.samples, order="C")
-
-    def _prepare_wave_iq(
-        self, waves: dict[str, CodegenWaveform], sig: str, index: int
-    ) -> WaveformItem:
-        wave_i = get_wave(f"{sig}_i.wave", waves)
-        wave_q = get_wave(f"{sig}_q.wave", waves)
-        marker_samples = self._prepare_markers_iq(waves, sig)
-        return WaveformItem(
-            index=index,
-            name=sig,
-            samples=zhinst.utils.convert_awg_waveform(
-                np.clip(np.ascontiguousarray(wave_i.samples), -1, 1),
-                np.clip(np.ascontiguousarray(wave_q.samples), -1, 1),
-                markers=marker_samples,
-            ),
-        )
-
-    def _prepare_wave_single(
-        self, waves: dict[str, CodegenWaveform], sig: str, index: int
-    ) -> WaveformItem:
-        wave = get_wave(f"{sig}.wave", waves)
-        marker_samples = self._prepare_markers_single(waves, sig)
-        return WaveformItem(
-            index=index,
-            name=sig,
-            samples=zhinst.utils.convert_awg_waveform(
-                np.clip(np.ascontiguousarray(wave.samples), -1, 1),
-                markers=marker_samples,
-            ),
-        )
-
-    def _prepare_wave_complex(
-        self, waves: dict[str, CodegenWaveform], sig: str, index: int
-    ) -> WaveformItem:
-        wave = get_wave(f"{sig}.wave", waves)
-        return WaveformItem(
-            index=index,
-            name=sig,
-            samples=np.ascontiguousarray(wave.samples, dtype=np.complex128),
-            hold_start=wave.hold_start,
-            hold_length=wave.hold_length,
-        )
-
-    def prepare_waves(
-        self,
-        artifacts: ArtifactsCodegen,
-        wave_indices_ref: str | None,
-    ) -> Waveforms | None:
-        if wave_indices_ref is None:
-            return None
-        wave_indices: dict[str, list[int | str]] = next(
-            (i for i in artifacts.wave_indices if i["filename"] == wave_indices_ref),
-            {"value": {}},
-        )["value"]
-
-        waves: Waveforms = []
-        index: int
-        sig_type: str
-        for sig, [index, sig_type] in wave_indices.items():
-            if sig.startswith("precomp_reset"):
-                continue  # precomp reset waveform is bundled with ELF
-            if sig_type in ("iq", "double", "multi"):
-                wave = self._prepare_wave_iq(artifacts.waves, sig, index)
-            elif sig_type == "single":
-                wave = self._prepare_wave_single(artifacts.waves, sig, index)
-            elif sig_type == "complex":
-                wave = self._prepare_wave_complex(artifacts.waves, sig, index)
-            else:
-                raise LabOneQControllerException(
-                    f"Unexpected signal type for binary wave for '{sig}' in '{wave_indices_ref}' - "
-                    f"'{sig_type}', should be one of [iq, double, multi, single, complex]"
-                )
-            waves.append(wave)
-
-        return waves
-
-    def prepare_command_table(
-        self,
-        artifacts: ArtifactsCodegen,
-        ct_ref: str | None,
-    ) -> dict | None:
-        if ct_ref is None:
-            return None
-
-        command_table_body = next(
-            (ct["ct"] for ct in artifacts.command_tables if ct["seqc"] == ct_ref),
-            None,
-        )
-
-        if command_table_body is None:
-            return None
-
-        return self.add_command_table_header(command_table_body)
-
-    def prepare_elf(
-        self,
-        artifacts: ArtifactsCodegen,
-        seqc_ref: str | None,
-    ) -> bytes | None:
-        if seqc_ref is None:
-            return None
-
-        if artifacts.src is None:
-            seqc = None
-        else:
-            seqc = next((s for s in artifacts.src if s["filename"] == seqc_ref), None)
-        if seqc is None or "elf" not in seqc or not isinstance(seqc["elf"], bytes):
-            raise LabOneQControllerException(
-                f"SeqC program '{seqc_ref}' not found or invalid"
-            )
-
-        return seqc["elf"]
-
     def prepare_upload_elf(
         self, elf: bytes, awg_index: int, filename: str
     ) -> NodeCollector:
@@ -1070,24 +869,20 @@ class DeviceBase(DeviceZI):
 
     def prepare_upload_binary_wave(
         self,
-        filename: str,
-        waveform: NumPyArray,
         awg_index: int,
-        wave_index: int,
+        wave: WaveformItem,
         acquisition_type: AcquisitionType,
     ) -> NodeCollector:
-        nc = NodeCollector()
-        nc.add(
-            f"/{self.serial}/awgs/{awg_index}/waveform/waves/{wave_index}",
-            waveform,
+        return NodeCollector.one(
+            path=f"/{self.serial}/awgs/{awg_index}/waveform/waves/{wave.index}",
+            value=wave.samples,
             cache=False,
-            filename=filename,
+            filename=wave.name,
         )
-        return nc
 
     def prepare_upload_all_binary_waves(
         self,
-        awg_index,
+        awg_index: int,
         waves: Waveforms,
         acquisition_type: AcquisitionType,
     ) -> NodeCollector:
@@ -1096,10 +891,8 @@ class DeviceBase(DeviceZI):
         for wave in waves:
             nc.extend(
                 self.prepare_upload_binary_wave(
-                    filename=wave.name,
-                    waveform=wave.samples,
                     awg_index=awg_index,
-                    wave_index=wave.index,
+                    wave=wave,
                     acquisition_type=acquisition_type,
                 )
             )
@@ -1127,40 +920,6 @@ class DeviceBase(DeviceZI):
         kernel_ref: str,
     ) -> NodeCollector:
         return NodeCollector()
-
-    def prepare_readout_config_nodes(
-        self,
-        recipe_data: RecipeData,
-        rt_section_uid: str,
-        awg_key: AwgKey,
-        pipeliner_job: int | None,
-    ) -> NodeCollector:
-        nc = NodeCollector()
-        rt_execution_info = recipe_data.rt_execution_infos[rt_section_uid]
-        awg_config = recipe_data.awg_configs[awg_key]
-
-        if rt_execution_info.averaging_mode == AveragingMode.SINGLE_SHOT:
-            effective_averages = 1
-            effective_averaging_mode = AveragingMode.CYCLIC
-            # TODO(2K): handle sequential
-        else:
-            effective_averages = rt_execution_info.averages
-            effective_averaging_mode = rt_execution_info.averaging_mode
-
-        nc.extend(
-            self.configure_acquisition(
-                awg_key,
-                awg_config,
-                recipe_data.recipe.integrator_allocations,
-                effective_averages,
-                effective_averaging_mode,
-                rt_execution_info.acquisition_type,
-                pipeliner_job,
-                recipe_data,
-            )
-        )
-
-        return nc
 
     def pipeliner_prepare_for_upload(self, index: int) -> NodeCollector:
         return NodeCollector()
@@ -1373,10 +1132,9 @@ class DeviceBase(DeviceZI):
         self,
         recipe_data: RecipeData,
         nt_step: NtStepKey,
-        rt_section_uid: str,
         results: ExperimentResults,
     ):
-        rt_execution_info = recipe_data.rt_execution_infos[rt_section_uid]
+        rt_execution_info = recipe_data.rt_execution_info
         await _gather(
             *(
                 self._read_one_awg_results(
@@ -1388,7 +1146,7 @@ class DeviceBase(DeviceZI):
                     awg_config,
                 )
                 for awg_key, awg_config in recipe_data.awgs_producing_results()
-                if awg_key.device_uid == self.device_qualifier.uid
+                if awg_key.device_uid == self.uid
             )
         )
 
@@ -1430,10 +1188,6 @@ class DeviceBase(DeviceZI):
                         handle=handle,
                     )
         else:
-            if rt_execution_info.averaging_mode == AveragingMode.SINGLE_SHOT:
-                effective_averages = 1
-            else:
-                effective_averages = rt_execution_info.averages
             await _gather(
                 *(
                     self._read_one_signal_result(
@@ -1444,7 +1198,7 @@ class DeviceBase(DeviceZI):
                         awg_key,
                         awg_config,
                         signal,
-                        effective_averages,
+                        rt_execution_info.effective_averages,
                     )
                     for signal in awg_config.acquire_signals
                 )

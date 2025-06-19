@@ -10,27 +10,41 @@ use pyo3::types::PySet;
 use pyo3::wrap_pyfunction;
 use signature::{PulseSignaturePy, WaveformSignaturePy};
 use std::collections::HashSet;
+use waveform_sampler::PlayHoldPy;
+use waveform_sampler::PlaySamplesPy;
 mod code_generator;
 mod py_conversions;
-use codegenerator::generate_code;
+mod waveform_sampler;
 use codegenerator::ir::{self, NodeKind};
+use codegenerator::{AwgWaveforms, collect_and_finalize_waveforms, transform_ir_to_awg_events};
 mod awg_event;
 mod result;
 mod signature;
 
 use codegenerator::Error as CodeError;
-use result::AwgCodeGenerationResultPy;
+use result::{AwgCodeGenerationResultPy, SampledWaveformPy};
+mod common_types;
 
 use crate::code_generator::{
     SeqCGeneratorPy, SeqCTrackerPy, WaveIndexTrackerPy, merge_generators_py,
     seqc_generator_from_device_and_signal_type_py, string_sanitize_py,
 };
+use crate::waveform_sampler::WaveformSamplerPy;
 
 import_exception!(laboneq.core.exceptions, LabOneQException);
 
-fn translate_error(err: CodeError) -> PyErr {
+fn translate_error(py: Python, err: CodeError) -> PyErr {
     match err {
         CodeError::Anyhow(x) => LabOneQException::new_err(x.to_string()),
+        CodeError::External(py_err) => {
+            let original_cause = *py_err.downcast::<PyErr>().expect("Expected PyErr");
+            if original_cause.is_instance_of::<LabOneQException>(py) {
+                return original_cause;
+            }
+            let error = LabOneQException::new_err("Error when calling external code.");
+            error.set_cause(py, Some(original_cause));
+            error
+        }
     }
 }
 
@@ -65,6 +79,17 @@ fn generate_output(
                     amplitude: ob.amplitude,
                     increment_phase: ob.increment_phase,
                     increment_phase_params: ob.increment_phase_params,
+                }),
+                position: None,
+            }]
+        }
+        ir::NodeKind::PlayHold(ob) => {
+            let end = node.offset() + ob.length;
+            vec![awg_event::AwgEvent {
+                start: *node.offset(),
+                end,
+                kind: awg_event::EventType::PlayHold(awg_event::PlayHoldEvent {
+                    length: ob.length,
                 }),
                 position: None,
             }]
@@ -212,6 +237,7 @@ fn generate_code_for_awg(
     use_amplitude_increment: bool,
     phase_resolution_range: u64,
     global_delay_samples: ir::Samples,
+    waveform_sampler: Py<PyAny>,
 ) -> PyResult<AwgCodeGenerationResultPy> {
     let mut awg = py_conversions::extract_awg(&ob.bind(py).getattr("awg")?, signals.bind(py))?;
     if awg.signals.is_empty() {
@@ -222,9 +248,11 @@ fn generate_code_for_awg(
     if !root.has_children() {
         return Ok(AwgCodeGenerationResultPy::default());
     }
-    let awg_node = generate_code::generate_code_for_awg(
-        &root,
-        &mut awg,
+    // Sort the signals for deterministic ordering
+    awg.signals.sort_by(|a, b| a.channels.cmp(&b.channels));
+    let mut awg_node = transform_ir_to_awg_events(
+        root,
+        &awg,
         cut_points.extract::<HashSet<ir::Samples>>()?,
         play_wave_size_hint,
         play_zero_size_hint,
@@ -233,10 +261,21 @@ fn generate_code_for_awg(
         phase_resolution_range,
         global_delay_samples,
     )
-    .map_err(translate_error)?;
+    .map_err(|err| translate_error(py, err))?;
+    let waveforms = if WaveformSamplerPy::supports_waveform_sampling(&awg) {
+        collect_and_finalize_waveforms(
+            &mut awg_node,
+            WaveformSamplerPy::new(waveform_sampler, &awg),
+        )
+    } else {
+        Ok(AwgWaveforms::default())
+    }
+    .map_err(|err| translate_error(py, err))?;
     let mut awg_events = generate_output(awg_node, &awg, &mut None, &mut 0);
     awg_event::sort_events(&mut awg_events);
-    let output = AwgCodeGenerationResultPy::create(awg_events)?;
+    let (sampled_waveforms, wave_declarations) = waveforms.into_inner();
+    let output =
+        AwgCodeGenerationResultPy::create(awg_events, sampled_waveforms, wave_declarations)?;
     Ok(output)
 }
 
@@ -245,9 +284,19 @@ pub fn create_py_module<'a>(
     name: &str,
 ) -> PyResult<Bound<'a, PyModule>> {
     let m = PyModule::new(parent.py(), name)?;
+    // Common types
+    // Move up the compiler stack as we need the common types
+    m.add_class::<common_types::SignalTypePy>()?;
+    m.add_class::<common_types::DeviceTypePy>()?;
+    m.add_class::<common_types::MixerTypePy>()?;
+    // AWG Code generation
     m.add_function(wrap_pyfunction!(generate_code_for_awg, &m)?)?;
     m.add_class::<PulseSignaturePy>()?;
     m.add_class::<WaveformSignaturePy>()?;
+    // Waveform sampling
+    m.add_class::<PlaySamplesPy>()?;
+    m.add_class::<PlayHoldPy>()?;
+    m.add_class::<SampledWaveformPy>()?;
     // Sampled event handler
     m.add_class::<WaveIndexTrackerPy>()?;
     m.add_class::<SeqCGeneratorPy>()?;

@@ -68,12 +68,13 @@ class InternalConnection:
     to: str
     from_port: str | None
 
-    def __init__(self, to: str, from_port: str | list[str]):
+    def __init__(self, to: str, from_port: str | Iterable[str] | None = None):
         self.to = to
-        if isinstance(from_port, list):
-            if len(from_port) > 1:
+        if isinstance(from_port, Iterable) and not isinstance(from_port, str):
+            from_port_iter = iter(from_port)
+            self.from_port = next(from_port_iter, None)
+            if next(from_port_iter, None) is not None:
                 raise ValueError("To instrument connection takes zero or one port.")
-            self.from_port = None if len(from_port) == 0 else from_port[0]
         else:
             self.from_port = from_port
 
@@ -128,5 +129,5 @@ def create_connection(
             signal_type = kwargs["signal_type"]
         else:
             signal_type = None
-        return SignalConnection(uid=to, ports=ports, type=signal_type)
+        return SignalConnection(uid=to, ports=list(ports), type=signal_type)
     raise ValueError("Either 'to_instrument' or 'to_signal' must be defined.")

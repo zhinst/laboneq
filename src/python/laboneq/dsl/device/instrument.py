@@ -4,8 +4,6 @@
 from __future__ import annotations
 
 import attrs
-import typing
-from typing import List
 
 from laboneq.core.types.enums.io_direction import IODirection
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
@@ -26,7 +24,7 @@ class Instrument:
     interface: str = attrs.field(default="1GbE")
 
     #: Connections of this instrument.
-    connections: typing.List[Connection] = attrs.field(factory=list)
+    connections: list[Connection] = attrs.field(factory=list)
 
     def output_by_uid(self, uid) -> Port | None:
         for o in self.ports:
@@ -47,6 +45,6 @@ class Instrument:
         return self.__class__.__name__
 
     @property
-    def ports(self) -> List[Port]:
+    def ports(self) -> list[Port]:
         """Input and output ports that are part of this instrument."""
         return []

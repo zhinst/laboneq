@@ -6,6 +6,6 @@ pub mod experiment;
 
 pub use experiment::{
     AcquirePulse, Case, FrameChange, InitAmplitudeRegister, IrNode, Loop, LoopIteration, Match,
-    NodeKind, ParameterOperation, PhaseReset, PlayAcquire, PlayPulse, PlayWave, PpcSweepStep,
-    ResetPrecompensationFilters, Samples, SetOscillatorFrequency,
+    NodeKind, ParameterOperation, PhaseReset, PlayAcquire, PlayHold, PlayPulse, PlayWave,
+    PpcSweepStep, ResetPrecompensationFilters, Samples, SetOscillatorFrequency,
 };

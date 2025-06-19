@@ -52,6 +52,13 @@ impl PlayWaveEvent {
 
 #[pyclass]
 #[derive(Debug, Clone)]
+pub struct PlayHoldEvent {
+    #[pyo3(get)]
+    pub length: i64,
+}
+
+#[pyclass]
+#[derive(Debug, Clone)]
 pub struct AcquireEvent {
     #[pyo3(get)]
     pub signal_id: String,
@@ -164,6 +171,7 @@ pub struct PpcSweepStepStart {
 #[derive(Debug, Clone)]
 pub enum EventType {
     PlayWave(PlayWaveEvent),
+    PlayHold(PlayHoldEvent),
     Match(MatchEvent),
     ChangeHwOscPhase(ChangeHwOscPhase),
     InitAmplitudeRegister(InitAmplitudeRegisterPy),
@@ -197,6 +205,7 @@ impl AwgEvent {
             EventType::AcquireEvent(_) => 5,
             EventType::PpcSweepStepStart(_) => 6,
             EventType::PpcSweepStepEnd() => 7,
+            EventType::PlayHold(_) => 8,
         }
     }
 
@@ -212,6 +221,7 @@ impl AwgEvent {
             EventType::AcquireEvent(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
             EventType::PpcSweepStepStart(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
             EventType::PpcSweepStepEnd() => Ok(None::<()>.into_pyobject(py)?.into()),
+            EventType::PlayHold(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
         }
     }
 }

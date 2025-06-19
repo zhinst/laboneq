@@ -259,7 +259,7 @@ class DeviceHDAWG(DeviceBase):
     async def set_after_awg_upload(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")
 
-        initialization = recipe_data.get_initialization(self.device_qualifier.uid)
+        initialization = recipe_data.get_initialization(self.uid)
         for awg in initialization.awgs or []:
             _logger.debug(
                 "%s: Configure modulation phase depending on IQ enabling on awg %d.",
@@ -370,8 +370,8 @@ class DeviceHDAWG(DeviceBase):
         _logger.debug("%s: Initializing device...", self.dev_repr)
         nc = NodeCollector(base=f"/{self.serial}/")
 
-        device_recipe_data = recipe_data.device_settings[self.device_qualifier.uid]
-        initialization = recipe_data.get_initialization(self.device_qualifier.uid)
+        device_recipe_data = recipe_data.device_settings[self.uid]
+        initialization = recipe_data.get_initialization(self.uid)
         outputs = initialization.outputs or []
         for output in outputs:
             awg_idx = output.channel // 2
@@ -524,7 +524,7 @@ class DeviceHDAWG(DeviceBase):
         nc = NodeCollector(base=f"/{self.serial}/")
         nc.extend(super()._collect_prepare_nt_step_nodes(attributes, recipe_data))
 
-        device_recipe_data = recipe_data.device_settings[self.device_qualifier.uid]
+        device_recipe_data = recipe_data.device_settings[self.uid]
         awg_iq_pair_set: set[int] = set()
         for ch in range(self._channels):
             [scheduler_port_delay, port_delay], updated = attributes.resolve(
@@ -644,13 +644,6 @@ class DeviceHDAWG(DeviceBase):
         nc.add("system/awg/oscillatorcontrol", 1)
         await self.set_async(nc)
 
-    def add_command_table_header(self, body: dict) -> dict:
-        return {
-            "$schema": "https://docs.zhinst.com/hdawg/commandtable/v1_0/schema",
-            "header": {"version": "1.0.0"},
-            "table": body,
-        }
-
     def command_table_path(self, awg_index: int) -> str:
         return f"/{self.serial}/awgs/{awg_index}/commandtable/"
 
@@ -659,7 +652,7 @@ class DeviceHDAWG(DeviceBase):
 
         for awg_key, awg_config in recipe_data.awg_configs.items():
             has_no_feedback = awg_config.source_feedback_register is None
-            if (awg_key.device_uid != self.device_qualifier.uid) or has_no_feedback:
+            if (awg_key.device_uid != self.uid) or has_no_feedback:
                 continue
 
             # HACK: HBAR-1427 and HBAR-2165 show that runtime checks generate

@@ -65,7 +65,9 @@ def calc_ct_replacement(
         table = get_or_copy(entry.ct_ref)
 
         ct_entry = next(
-            ct_entry for ct_entry in table["ct"] if ct_entry["index"] == entry.ct_index
+            ct_entry
+            for ct_entry in table["ct"]["table"]
+            if ct_entry["index"] == entry.ct_index
         )
 
         # depending on whether the instrument is HDAWG or SHFSG, the table is slightly different

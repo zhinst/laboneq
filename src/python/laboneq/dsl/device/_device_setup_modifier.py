@@ -574,15 +574,14 @@ class _SHFQCGenerator(_InstrumentGenerator):
             return _SHFSGGenerator.make_logical_signal(connection, pc)
 
 
-def _warn_for_explicit_zsync_ports(from_port: str | None):
-    if from_port is not None:
-        warnings.warn(
-            "Explicit ZSYNCS ports are deprecated and currently ignored. "
-            "Remove them from the device setup descriptor. This will be a hard "
-            "error in a future version.",
-            FutureWarning,
-            stacklevel=4,
-        )
+def _warn_for_explicit_zsync_ports():
+    warnings.warn(
+        "Explicit ZSYNCS connections are deprecated and currently ignored. "
+        "Remove them from the device setup descriptor. This will be a hard "
+        "error in a future version.",
+        FutureWarning,
+        stacklevel=4,
+    )
 
 
 class _PQSCGenerator(_InstrumentGenerator):
@@ -594,7 +593,7 @@ class _PQSCGenerator(_InstrumentGenerator):
             raise DeviceSetupInternalException(
                 "Only to device connections are supported on PQSC."
             )
-        _warn_for_explicit_zsync_ports(connection.from_port)
+        _warn_for_explicit_zsync_ports()
         return [
             Connection(
                 local_port=connection.from_port,
@@ -614,7 +613,7 @@ class _QHUBGenerator(_InstrumentGenerator):
             raise DeviceSetupInternalException(
                 "Only to device connections are supported on QHUB."
             )
-        _warn_for_explicit_zsync_ports(connection.from_port)
+        _warn_for_explicit_zsync_ports()
         return [
             Connection(
                 local_port=connection.from_port,

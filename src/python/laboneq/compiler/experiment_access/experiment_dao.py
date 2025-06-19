@@ -203,8 +203,12 @@ class ExperimentDAO:
 
     def pqsc_followers(self, pqsc_device_uid: str) -> list[str]:
         assert pqsc_device_uid in self.pqscs()
-        leader = self.device_info(pqsc_device_uid)
-        return leader.followers
+        return [
+            d.uid
+            for d in self.device_infos()
+            if d.device_type
+            in [DeviceInfoType.HDAWG, DeviceInfoType.SHFQA, DeviceInfoType.SHFSG]
+        ]
 
     def dio_followers(self) -> list[str]:
         return [

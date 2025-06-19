@@ -40,6 +40,7 @@ dependencies = [
     "jsonschema >= 4.21.1",
     "lagom >= 2.6.0",
     "matplotlib >= 3.8.3",
+    "networkx >= 3.4.2",
     "numpy >= 1.26",
     "openpulse ~= 1.0.1",
     "openqasm3 ~= 1.0.0",
@@ -106,10 +107,11 @@ tools = [
     "rust-just >= 1.40",
     "maturin >= 1.6, < 2.0",
     "mypy >= 1.14.1",
+    "types-PyYAML >= 6.0.12",
     "mypy-gitlab-code-quality >= 1.3.0",
     "pip >= 25.0.1", # used by PyCharm for scanning the venv
     "pre-commit >= 4.1.0",
-    "ruff ==0.11.11",
+    "ruff ==0.11.13",
 ]
 
 [tool.uv]

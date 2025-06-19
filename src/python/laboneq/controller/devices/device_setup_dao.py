@@ -10,6 +10,7 @@ import logging
 from typing import TYPE_CHECKING, ItemsView, Iterator
 
 from laboneq.controller.versioning import SetupCaps
+from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
 from laboneq.data.execution_payload import (
     TargetChannelCalibration,
     TargetChannelType,
@@ -31,7 +32,7 @@ class DeviceOptions:
     is_qc: bool | None = False
     qc_with_qa: bool = False
     gen2: bool = False
-    reference_clock_source: str | None = None
+    force_internal_clock_source: bool | None = None
     expected_dev_type: str | None = None
     expected_dev_opts: list[str] = field(default_factory=list)
 
@@ -66,6 +67,15 @@ def _make_device_qualifier(
     target_device: TargetDevice, has_shf: bool
 ) -> DeviceQualifier:
     driver = target_device.device_type.name
+    # Set the clock source (external by default)
+    # TODO(2K): Simplify the logic in this code snippet and the one in 'update_clock_source'.
+    # Currently, it adheres to the previously existing logic in the compiler, but it appears
+    # unnecessarily convoluted.
+    force_internal: bool | None = None
+    if target_device.reference_clock_source is not None:
+        force_internal = (
+            target_device.reference_clock_source == ReferenceClockSource.INTERNAL
+        )
     options = DeviceOptions(
         serial=target_device.device_serial,
         interface=target_device.interface,
@@ -73,7 +83,7 @@ def _make_device_qualifier(
         is_qc=target_device.is_qc,
         qc_with_qa=target_device.qc_with_qa,
         gen2=has_shf,
-        reference_clock_source=target_device.reference_clock_source,
+        force_internal_clock_source=force_internal,
     )
 
     expected_dev_type, expected_dev_opts = parse_device_options(
@@ -103,11 +113,17 @@ def _make_device_qualifier(
             expected_dev_type = "SHFPPC4"
     options.expected_dev_type = expected_dev_type
     options.expected_dev_opts = expected_dev_opts
-    if not target_device.has_signals and not target_device.internal_connections:
-        # Treat devices without defined connections as non-QC
+    if (
+        not target_device.has_signals
+        and not target_device.internal_connections
+        and target_device.device_type
+        not in (TargetDeviceType.PQSC, TargetDeviceType.QHUB)
+    ):
+        # Treat devices without defined connections as non-QC,
+        # except for PQSC and QHUB which are always known leaders.
         driver = "NONQC"
-        if options.is_qc is None:
-            options.is_qc = False
+    if options.is_qc is None:
+        options.is_qc = False
 
     return DeviceQualifier(
         uid=target_device.uid,
@@ -115,6 +131,23 @@ def _make_device_qualifier(
         driver=driver,
         options=options,
     )
+
+
+def _effective_downlinks(device: TargetDevice, target_setup: TargetSetup) -> list[str]:
+    """Return the effective downlinks for a device, excluding SHFPPC and adding implicit PQSC/QHUB links."""
+    if device.device_type == TargetDeviceType.SHFPPC:
+        return []
+    if (
+        device.device_type in (TargetDeviceType.PQSC, TargetDeviceType.QHUB)
+        and len(device.internal_connections) == 0
+    ):
+        return [
+            dev.uid
+            for dev in target_setup.devices
+            if dev.device_type
+            in (TargetDeviceType.HDAWG, TargetDeviceType.SHFQA, TargetDeviceType.SHFSG)
+        ]
+    return device.internal_connections
 
 
 class DeviceSetupDAO:
@@ -160,7 +193,8 @@ class DeviceSetupDAO:
             device.uid: device.connected_outputs for device in target_setup.devices
         }
         self._downlinks: dict[str, list[str]] = {
-            device.uid: device.internal_connections for device in target_setup.devices
+            device.uid: _effective_downlinks(device, target_setup)
+            for device in target_setup.devices
         }
         self._calibrations: dict[str, list[TargetChannelCalibration]] = {
             device.uid: copy.deepcopy(device.calibrations)

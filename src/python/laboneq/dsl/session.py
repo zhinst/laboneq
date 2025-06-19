@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import warnings
 from copy import deepcopy
@@ -18,7 +17,6 @@ from laboneq.core.exceptions import AbortExecution, LabOneQException
 from laboneq.core.types import CompiledExperiment
 from laboneq.core.utilities.environment import is_testing
 from laboneq.core.utilities.laboneq_compile import laboneq_compile
-from laboneq.dsl.calibration import Calibration
 from laboneq.dsl.device import DeviceSetup
 from laboneq.dsl.device.io_units.logical_signal import (
     LogicalSignalRef,
@@ -26,7 +24,6 @@ from laboneq.dsl.device.io_units.logical_signal import (
 )
 from laboneq.dsl.experiment import Experiment
 from laboneq.dsl.result import Results
-from laboneq.dsl.serialization import Serializer
 from laboneq.implementation.legacy_adapters.converters_target_setup import (
     convert_dsl_to_target_setup,
 )
@@ -88,13 +85,14 @@ class Session:
     def __init__(
         self,
         device_setup: DeviceSetup | None = None,
-        log_level: int = None,
+        log_level: int | str | None = None,
         performance_log: bool = False,
         configure_logging: bool = True,
         _last_results=None,
         compiled_experiment: CompiledExperiment | None = None,
         experiment: Experiment | None = None,
         include_results_metadata: bool = True,
+        server_log: bool = False,
     ):
         """Constructor of the session.
 
@@ -115,9 +113,31 @@ class Session:
             experiment:
                 If specified, set the current experiment.
             include_results_metadata:
-                If true, `Session.run` will return a `Results` object with the deprecated `.experiment`,
+                If True, `Session.run` will return a `Results` object with the deprecated `.experiment`,
                 `.compiled_experiment` and `.device_setup` attributes populated. Otherwise, it will
                 return a `Results` object with these attributes not populated.
+            server_log:
+                If `True`, the data server log - including device firmware logs - will be forwarded to the LabOneQ
+                log under the logger named `server.log.<server_uid>`. Additionally, it will be written to the file
+                `server.log` alongside the regular LabOneQ log, assuming the standard logging configuration is used.
+        !!! version-changed "Changed in version 2.54.0"
+            The following deprecated methods for saving and loading were removed:
+                - `load`
+                - `save`
+                - `save_signal_map`
+                - `load_signal_map`
+                - `save_results`
+                - `save_experiment`
+                - `load_experiment`
+                - `save_device_setup`
+                - `load_device_setup`
+                - `save_device_calibration`
+                - `load_device_calibration`
+                - `save_compiled_experiment`
+                - `load_compiled_experiment`
+                - `save_experiment_calibration`
+                - `load_experiment_calibration`
+            Use the `load` and `save` functions from the `laboneq.simple` module instead.
 
         !!! version-added "Added in version 2.52.0"
             Added the `include_results_metadata` argument.
@@ -137,7 +157,11 @@ class Session:
             if not is_testing():
                 # Only initialize logging outside pytest
                 # pytest initializes the logging itself
-                initialize_logging(log_level=log_level, performance_log=performance_log)
+                initialize_logging(
+                    log_level=log_level,
+                    performance_log=performance_log,
+                    server_log=server_log,
+                )
             self._logger = logging.getLogger("laboneq")
         else:
             self._logger = logging.getLogger("null")
@@ -463,7 +487,7 @@ class Session:
             )
         finally:
             results = controller.results()
-            results_kwargs = {}
+            results_kwargs: dict[str, Any] = {}
             if include_results_metadata:
                 results_kwargs["experiment"] = self.compiled_experiment.experiment
                 results_kwargs["device_setup"] = self.device_setup
@@ -675,322 +699,6 @@ class Session:
             "experiment": Experiment,
             "_last_results": Results,
         }
-
-    @staticmethod
-    @deprecated(
-        "The .load method is deprecated and will be removed in a future version."
-        " The new serialization framework does not support loading sessions."
-        " Recreate the session using a saved device setup instead.",
-        category=FutureWarning,
-    )
-    def load(filename: str) -> Session:
-        """Loads the session from a serialized file.
-        A restored session from a loaded file will end up in the same state of the session that saved the file in the first place.
-
-        Args:
-            filename: Filename (full path) of the file that should be loaded into the session.
-
-        Returns:
-            session:
-                A new session loaded from the file.
-
-        !!! version-changed "Deprecated in version 2.50.0"
-            The `load` method is deprecated and will be removed in a future version.
-            The new serialization framework does not support loading sessions.
-            Recreate the session using a saved device setup instead.
-        """
-        with open(filename, mode="r") as file:
-            session_dict = json.load(file)
-        constructor_args = {}
-
-        for field, field_type in Session._session_fields().items():
-            _logger.info("Loading %s of type %s", field, field_type)
-            constructor_args[field] = Serializer.load(session_dict[field], field_type)
-
-        return Session(**constructor_args)
-
-    @deprecated(
-        "The .save method is deprecated and will be removed in a future version."
-        " The new serialization framework does not support saving sessions."
-        " Recreate the session using a saved device setup instead.",
-        category=FutureWarning,
-    )
-    def save(self, filename: str):
-        """Stores the session from a serialized file.
-        A restored session from a loaded file will end up in the same state of the session that saved the file in the first place.
-
-        Args:
-            filename: Filename (full path) of the file where the session should be stored in.
-
-        !!! version-changed "Deprecated in version 2.50.0"
-            The `save` method is deprecated and will be removed in a future version.
-            The new serialization framework does not support saving sessions.
-            Recreate the session using a saved device setup instead.
-        """
-        serialized_dict = {}
-        for field in Session._session_fields().keys():
-            serialized_dict[field] = Serializer.to_dict(getattr(self, field))
-
-        json_string = json.dumps(serialized_dict)
-        try:
-            with open(filename, mode="w") as file:
-                file.write(json_string)
-        except IOError as e:
-            raise LabOneQException() from e
-
-    @deprecated(
-        "The .load_device_setup method is deprecated. Use"
-        " `laboneq.serializers.load(device_setup, filename)`"
-        " to load the device setup instead.",
-        category=FutureWarning,
-    )
-    def load_device_setup(self, filename: str):
-        """Loads a device setup from a given file into the session.
-
-        Args:
-            filename: Filename (full path) of the setup should be loaded into the session.
-
-        !!! version-changed "Deprecated in version 2.52.0"
-            Use `laboneq.simple.load` to load the device setup instead.
-        """
-        self._device_setup = DeviceSetup.load(filename)
-
-    @deprecated(
-        "The .save_device_setup method is deprecated. Use"
-        " `laboneq.serializers.save(device_setup, filename)` to save"
-        " the device setup instead.",
-        category=FutureWarning,
-    )
-    def save_device_setup(self, filename: str):
-        """Saves the device setup from the session into a given file.
-
-        Args:
-            filename: Filename (full path) of the file where the setup should be stored in.
-
-        !!! version-changed "Deprecated in version 2.52.0"
-            Use `laboneq.simple.save` to save the device setup instead.
-        """
-        if self._device_setup is None:
-            self.logger.info("No device setup set in this session.")
-        else:
-            self._device_setup.save(filename)
-
-    @deprecated(
-        "The .load_device_calibration method is deprecated. Use"
-        " `laboneq.serializers.load(calibration, filename)`"
-        " to load the calibration instead.",
-        category=FutureWarning,
-    )
-    def load_device_calibration(self, filename: str):
-        """Loads a device calibration from a given file into the session.
-
-        Args:
-            filename: Filename (full path) of the calibration should be loaded into the session.
-
-        !!! version-changed "Deprecated in version 2.52.0"
-            Use `laboneq.simple.load` to load the calibration instead.
-        """
-        calibration = Calibration.load(filename)
-        self._device_setup.set_calibration(calibration)
-
-    @deprecated(
-        "The .save_device_calibration method is deprecated. Use"
-        " `laboneq.serializers.save(calibration, filename)` to save"
-        " the calibration instead.",
-        category=FutureWarning,
-    )
-    def save_device_calibration(self, filename: str):
-        """Saves the device calibration from the session into a given file.
-
-        Args:
-            filename: Filename (full path) of the file where the calibration should be stored in.
-
-        !!! version-changed "Deprecated in version 2.52.0"
-            Use `laboneq.simple.save` to save the calibration instead.
-        """
-        if self._device_setup is None:
-            self.logger.info("No device setup set in this session.")
-        else:
-            calibration = self._device_setup.get_calibration()
-            calibration.save(filename)
-
-    @deprecated(
-        "The .load_experiment method is deprecated. Use"
-        " `laboneq.serializers.load(experiment, filename)`"
-        " to load the experiment instead.",
-        category=FutureWarning,
-    )
-    def load_experiment(self, filename: str):
-        """Loads an experiment from a given file into the session.
-
-        Args:
-            filename: Filename (full path) of the experiment should be loaded into the session.
-
-        !!! version-changed "Deprecated in version 2.52.0"
-            Use `laboneq.simple.load` to load the experiment instead.
-        """
-        self._experiment_definition = Experiment.load(filename)
-
-    @deprecated(
-        "The .save_experiment method is deprecated. Use"
-        " `laboneq.serializers.save(experiment, filename)` to save"
-        " the experiment instead.",
-        category=FutureWarning,
-    )
-    def save_experiment(self, filename: str):
-        """Saves the experiment from the session into a given file.
-
-        Args:
-            filename: Filename (full path) of the file where the experiment should be stored in.
-
-        !!! version-changed "Deprecated in version 2.52.0"
-            Use `laboneq.simple.save` to save the experiment instead.
-        """
-        if self._experiment_definition is None:
-            self.logger.info(
-                "No experiment set in this session. Execute run() or compile() in order to set an experiment in this session."
-            )
-        else:
-            self._experiment_definition.save(filename)
-
-    @deprecated(
-        "The .load_compiled_experiment method is deprecated. Use"
-        " `laboneq.serializers.load(compiled_experiment, filename)`"
-        " to load the compiled experiment instead.",
-        category=FutureWarning,
-    )
-    def load_compiled_experiment(self, filename: str):
-        """Loads a compiled experiment from a given file into the session.
-
-        Args:
-            filename:
-                Filename (full path) of the experiment should be loaded
-                into the session.
-
-        !!! version-changed "Deprecated in version 2.52.0"
-            Use `laboneq.simple.load` to load the compiled experiment instead.
-        """
-
-        self._compiled_experiment = CompiledExperiment.load(filename)
-
-    @deprecated(
-        "The .save_compiled_experiment method is deprecated. Use"
-        " `laboneq.serializers.save(compiled_experiment, filename)` to save"
-        " the compiled experiment instead.",
-        category=FutureWarning,
-    )
-    def save_compiled_experiment(self, filename: str):
-        """Saves the compiled experiment from the session into a given file.
-
-        Args:
-            filename:
-                Filename (full path) of the file where the experiment
-                should be stored in.
-
-        !!! version-changed "Deprecated in version 2.52.0"
-            Use `laboneq.simple.save` to save the compiled experiment instead.
-        """
-        if self._compiled_experiment is None:
-            self.logger.info(
-                "No compiled experiment set in this session. Execute run() or compile() "
-                "in order to compile an experiment."
-            )
-        else:
-            self._compiled_experiment.save(filename)
-
-    @deprecated(
-        "The .load_experiment_calibration method is deprecated. Use"
-        " `laboneq.serializers.load(experiment, filename)` to load the experiment instead.",
-        category=FutureWarning,
-    )
-    def load_experiment_calibration(self, filename: str):
-        """Loads a experiment calibration from a given file into the session.
-
-        Args:
-            filename: Filename (full path) of the calibration should be loaded into the session.
-
-        !!! version-changed "Deprecated in version 2.52.0"
-            Use `laboneq.simple.load` to load the experiment instead.
-        """
-        calibration = Calibration.load(filename)
-        self._experiment_definition.set_calibration(calibration)
-
-    @deprecated(
-        "The .save_experiment_calibration method is deprecated. Use"
-        " `laboneq.serializers.save(experiment, filename)` to save the experiment instead.",
-        category=FutureWarning,
-    )
-    def save_experiment_calibration(self, filename: str):
-        """Saves the experiment calibration from the session into a given file.
-
-        Args:
-            filename: Filename (full path) of the file where the calibration should be stored in.
-
-        !!! version-changed "Deprecated in version 2.52.0"
-            Use `laboneq.simple.save` to save the experiment instead.
-        """
-        if self._experiment_definition is None:
-            self.logger.info("No experiment set in this session.")
-        else:
-            calibration = self._experiment_definition.get_calibration()
-            calibration.save(filename)
-
-    @deprecated(
-        "The .load_signal_map method is deprecated. Use `laboneq.serializers.load(experiment, filename)`"
-        " to load the experiment instead.",
-        category=FutureWarning,
-    )
-    def load_signal_map(self, filename: str):
-        """Loads a signal map from a given file and sets it to the experiment in the session.
-
-        Args:
-            filename: Filename (full path) of the mapping that should be loaded into the session.
-
-        !!! version-changed "Deprecated in version 2.52.0"
-            Use `laboneq.simple.load` to load the experiment instead.
-        """
-        self._experiment_definition.load_signal_map(filename)
-
-    @deprecated(
-        "The .save_signal_map method is deprecated. Use `laboneq.serializers.save(experiment, filename)`"
-        " to save the experiment instead.",
-        category=FutureWarning,
-    )
-    def save_signal_map(self, filename: str):
-        """Saves the signal mapping from experiment in the session into a given file.
-
-        Args:
-            filename: Filename (full path) of the file where the mapping should be stored in.
-
-        !!! version-changed "Deprecated in version 2.52.0"
-            Use `laboneq.simple.save` to save the experiment instead.
-        """
-        if self._experiment_definition is None:
-            self.logger.info("No experiment set in this session.")
-        else:
-            signal_map = self._experiment_definition.get_signal_map()
-            Serializer.to_json_file(signal_map, filename)
-
-    @deprecated(
-        "The .save_results method is deprecated. Use `laboneq.serializers.save(results, filename)`"
-        " to save the results instead.",
-        category=FutureWarning,
-    )
-    def save_results(self, filename: str):
-        """Saves the result from the session into a given file.
-
-        Args:
-            filename: Filename (full path) of the file where the result should be stored in.
-
-        !!! version-changed "Deprecated in version 2.52.0"
-            Use `laboneq.simple.save` to save the results instead.
-        """
-        if self._last_results is None:
-            self.logger.info(
-                "No results available in this session. Execute run() or simulate_outputs() in order to generate an experiment's result."
-            )
-        else:
-            self._last_results.save(filename)
 
     def abort_execution(self):
         """Abort the execution of an experiment.

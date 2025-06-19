@@ -30,20 +30,18 @@ def get_log_dir():
     return _log_dir
 
 
-_module_by_filename_cache = {}
+_module_by_filename_cache: dict[str, str] = {}
 
 
-def _module_by_filename(filename: str):
-    try:
-        return _module_by_filename_cache[filename]
-    except KeyError:
-        for modname, module in list(sys.modules.items()):
-            path = getattr(module, "__file__", None)
-            if path is not None and filename == os.path.abspath(path):
-                _module_by_filename_cache[filename] = (modname, module)
-                return modname, module
-        else:
-            raise KeyError(f"No module corresponding to filename {filename}")
+def _module_by_filename(filename: str) -> str:
+    if (modname := _module_by_filename_cache.get(filename)) is not None:
+        return modname
+    for modname, module in sys.modules.items():
+        path = getattr(module, "__file__", None)
+        if path is not None and filename == os.path.abspath(path):
+            _module_by_filename_cache[filename] = modname
+            return modname
+    raise KeyError(f"No module corresponding to filename {filename}")
 
 
 def _showwarning(message, category, filename, lineno, file=None, line=None):
@@ -58,7 +56,7 @@ def _showwarning(message, category, filename, lineno, file=None, line=None):
         return None
 
     try:
-        modname, _ = _module_by_filename(filename)
+        modname = _module_by_filename(filename)
     except KeyError:
         # No module matching the file name was found. Fall back to original implementation.
         if _laboneq_showwarning is not None:
@@ -158,6 +156,7 @@ def initialize_logging(
     logging_config_dict: dict | None = None,
     log_level: int | str | None = None,
     warnings: bool = True,
+    server_log: bool = False,
 ):
     """Configure logging.
 
@@ -234,7 +233,7 @@ def initialize_logging(
     performance_log_file = None
     if performance_log:
         performance_log_file = os.path.abspath(
-            os.path.join(get_log_dir(), "controller_perf.log")
+            os.path.join(logdir, "controller_perf.log")
         )
         performance_handler = logging.FileHandler(
             performance_log_file, mode="a", encoding="utf-8"
@@ -247,6 +246,21 @@ def initialize_logging(
         performance_handler.setFormatter(formatter)
         root_logger = logging.getLogger()
         root_logger.addHandler(performance_handler)
+
+    server_log_file = None
+    if server_log:
+        server_log_file = os.path.abspath(os.path.join(logdir, "server.log"))
+        server_log_handler = logging.FileHandler(
+            server_log_file, mode="a", encoding="utf-8"
+        )
+        server_log_handler.setLevel(logging.DEBUG)
+        formatter = logging.Formatter(
+            fmt="%(asctime)s.%(msecs)03d\t%(levelname)s\t%(name)-30s\t%(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+        server_log_handler.setFormatter(formatter)
+        server_logger = logging.getLogger("server.log")
+        server_logger.addHandler(server_log_handler)
 
     if log_level is not None:
         logging.getLogger("laboneq").setLevel(log_level)
@@ -261,6 +275,9 @@ def initialize_logging(
 
     if performance_log:
         _logger.info("Performance logging into %s", performance_log_file)
+
+    if server_log:
+        _logger.info("Forwarding server and firmware logs into %s", server_log_file)
 
 
 def set_level(log_level: int | str = logging.INFO):

@@ -12,6 +12,7 @@ import zhinst.core
 from zhinst.core.errors import CoreError as LabOneCoreError
 
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
+from laboneq.compiler.common.resource_usage import ResourceLimitationError
 
 _logger = logging.getLogger(__name__)
 
@@ -73,5 +74,7 @@ def awg_compile(awg_data: list[SeqCCompileItem]):
         ]
         if len(exceptions) > 0:
             errors = "\n".join([str(e) for e in exceptions])
+            if "not fitting" in errors:
+                raise ResourceLimitationError(f"Compilation failed.\n{errors}")
             raise LabOneQException(f"Compilation failed.\n{errors}")
     _logger.debug("Finished compilation.")

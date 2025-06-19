@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Sequence
 from typing_extensions import deprecated
 
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
+from laboneq.dsl.quantum.qpu_topology import QPUTopology
 from laboneq.dsl.quantum.quantum_element import QuantumElement
 from laboneq.dsl.session import Session
 from laboneq.dsl.quantum.quantum_operations import QuantumOperations
@@ -118,6 +119,10 @@ class QPU:
             The quantum elements to run the experiments on.
         quantum_operations:
             The quantum operations to use when building the experiment.
+
+    Attributes:
+        topology:
+            The topology information for the QPU.
     """
 
     def __init__(
@@ -145,6 +150,7 @@ class QPU:
             )
 
         self.quantum_operations = quantum_operations
+        self.topology = QPUTopology(self.quantum_elements)
 
     def __repr__(self) -> str:
         quantum_elements = ", ".join(q.uid for q in self.quantum_elements)
@@ -152,12 +158,14 @@ class QPU:
             f"<{type(self).__qualname__}"
             f" quantum_elements=[{quantum_elements}]"
             f" quantum_operations={type(self.quantum_operations).__qualname__}"
+            f" topology={self.topology}"
             f">"
         )
 
     def __rich_repr__(self):
         yield "quantum_elements", [q.uid for q in self.quantum_elements]
         yield "quantum_operations", type(self.quantum_operations).__qualname__
+        yield "topology", self.topology
 
     def copy_quantum_elements(self) -> QuantumElements:
         """Return new quantum elements that are a copy of the original quantum elements."""

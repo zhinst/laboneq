@@ -131,6 +131,11 @@ impl PlayWave {
 }
 
 #[derive(Debug, Clone)]
+pub struct PlayHold {
+    pub length: Samples,
+}
+
+#[derive(Debug, Clone)]
 pub struct FrameChange {
     pub length: Samples,
     pub phase: f64,
@@ -233,6 +238,7 @@ pub enum NodeKind {
     // AWG nodes
     // AWG nodes are produced by the code generator.
     PlayWave(PlayWave),
+    PlayHold(PlayHold),
     Acquire(PlayAcquire),
     FrameChange(FrameChange),
     InitAmplitudeRegister(InitAmplitudeRegister),
@@ -283,6 +289,7 @@ impl NodeKind {
             NodeKind::FrameChange(x) => x.length,
             NodeKind::Acquire(x) => x.length,
             NodeKind::PlayWave(x) => x.length(),
+            NodeKind::PlayHold(x) => x.length,
             NodeKind::InitAmplitudeRegister(_) => 0,
             NodeKind::ResetPrecompensationFilters(x) => x.length,
             NodeKind::PpcStep(x) => x.length,

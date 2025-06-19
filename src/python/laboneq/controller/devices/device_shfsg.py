@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import Any, Iterator
 
 import numpy as np
 from laboneq.controller.attribute_value_tracker import (
@@ -27,7 +27,7 @@ from laboneq.controller.devices.node_control import (
     NodeControlBase,
     Setting,
 )
-from laboneq.controller.recipe_processor import RecipeData
+from laboneq.controller.recipe_processor import RecipeData, WaveformItem
 from laboneq.controller.util import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.data.recipe import (
@@ -37,9 +37,6 @@ from laboneq.data.recipe import (
     TriggeringMode,
     ParameterUID,
 )
-
-if TYPE_CHECKING:
-    from laboneq.core.types.numpy_support import NumPyArray
 
 
 _logger = logging.getLogger(__name__)
@@ -485,7 +482,7 @@ class DeviceSHFSG(DeviceSHFBase):
 
         nc = NodeCollector()
 
-        initialization = recipe_data.get_initialization(self.device_qualifier.uid)
+        initialization = recipe_data.get_initialization(self.uid)
         outputs = initialization.outputs or []
         for output in outputs:
             self._warn_for_unsupported_param(
@@ -652,24 +649,20 @@ class DeviceSHFSG(DeviceSHFBase):
 
     def prepare_upload_binary_wave(
         self,
-        filename: str,
-        waveform: NumPyArray,
         awg_index: int,
-        wave_index: int,
+        wave: WaveformItem,
         acquisition_type: AcquisitionType,
     ) -> NodeCollector:
-        nc = NodeCollector()
-        nc.add(
-            f"/{self.serial}/sgchannels/{awg_index}/awg/waveform/waves/{wave_index}",
-            waveform,
+        return NodeCollector.one(
+            path=f"/{self.serial}/sgchannels/{awg_index}/awg/waveform/waves/{wave.index}",
+            value=wave.samples,
             cache=False,
-            filename=filename,
+            filename=wave.name,
         )
-        return nc
 
     async def configure_trigger(self, recipe_data: RecipeData):
         _logger.debug("Configuring triggers...")
-        initialization = recipe_data.get_initialization(self.device_qualifier.uid)
+        initialization = recipe_data.get_initialization(self.uid)
         if initialization.device_type is None:  # dummy initialization
             # Happens for SHFQC/SG when only QA part is configured
             return
@@ -680,7 +673,7 @@ class DeviceSHFSG(DeviceSHFBase):
         nc = NodeCollector(base=f"/{self.serial}/")
 
         for awg_key, awg_config in recipe_data.awg_configs.items():
-            if awg_key.device_uid != self.device_qualifier.uid:
+            if awg_key.device_uid != self.uid:
                 continue
 
             if awg_config.source_feedback_register is None:
@@ -729,13 +722,6 @@ class DeviceSHFSG(DeviceSHFBase):
             )
 
         await self.set_async(nc)
-
-    def add_command_table_header(self, body: dict) -> dict:
-        return {
-            "$schema": "https://docs.zhinst.com/shfsg/commandtable/v1_1/schema",
-            "header": {"version": "1.1.0"},
-            "table": body,
-        }
 
     def command_table_path(self, awg_index: int) -> str:
         return f"/{self.serial}/sgchannels/{awg_index}/awg/commandtable/"

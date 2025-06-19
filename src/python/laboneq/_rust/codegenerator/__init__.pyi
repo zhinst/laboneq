@@ -3,11 +3,28 @@
 
 from __future__ import annotations
 from typing import Sequence
+from enum import Enum
 from laboneq.compiler.common.awg_signal_type import AWGSignalType
-from laboneq.compiler.common.device_type import DeviceType
+from laboneq.compiler.common.device_type import DeviceType as DeviceTypePy
 from laboneq.compiler.seqc.ir import SingleAwgIR
 from laboneq.compiler.ir import SignalIR
 from laboneq.data.compilation_job import Marker
+from laboneq.compiler.seqc.waveform_sampler import SampledWaveformSignature
+
+class DeviceType(Enum):
+    HDAWG = 0
+    SHFQA = 1
+    SHFSG = 2
+    UHFQA = 3
+
+class SignalType(Enum):
+    IQ = 0
+    SINGLE = 1
+    INTEGRATION = 2
+
+class MixerType(Enum):
+    IQ = 0
+    UhfqaEnvelope = 1
 
 class WaveIndexTracker:
     def __init__(self) -> None: ...
@@ -87,7 +104,7 @@ class SeqCTracker:
         deferred_function_calls: SeqCGenerator,
         sampling_rate: float,
         delay: float,
-        device_type: DeviceType,
+        device_type: DeviceTypePy,
         signal_type: AWGSignalType,
         emit_timing_comments: bool,
         automute_playzeros_min_duration: float,
@@ -186,6 +203,23 @@ class PulseSignature:
     id_pulse_params: int | None
     markers: list[Marker]
 
+class PlaySamples:
+    def __init__(
+        self,
+        offset: int,
+        length: int,
+        uid: int,
+        label: str,
+        has_i: bool,
+        has_q: bool | None,
+        has_marker1: bool | None,
+        has_marker2: bool | None,
+        signature: SampledWaveformSignature,
+    ) -> None: ...
+
+class PlayHold:
+    def __init__(self, offset: int, length: int) -> None: ...
+
 class WaveformSignature:
     length: int
     pulses: list[PulseSignature]
@@ -208,6 +242,11 @@ class WaveformSignature:
 
     def signature_string(self) -> str:
         """Generate a string representation of the waveform signature."""
+
+class SampledWaveform:
+    signals: set[str]
+    signature: SampledWaveformSignature
+    signature_string: str
 
 def string_sanitize(input: str) -> str:
     """Sanitize a string for use in SeqC code."""

@@ -205,7 +205,6 @@ def generate_device_setup(
     number_flux_lines = 0
     readout_acquire_lines = []
     number_readout_acquire_lines = 0
-    zsync = []
     dio = {}
 
     # UHFQA
@@ -290,8 +289,6 @@ def generate_device_setup(
             )
             number_flux_lines += instrument["number_of_channels"]
         instrument_list[instrument["serial"]] = f"hdawg_{id}"
-        if pqsc or qhub:
-            zsync.append(instrument["serial"])
         if instrument["dio"] is not None:
             dio[instrument["serial"]] = instrument["dio"]
 
@@ -343,8 +340,6 @@ def generate_device_setup(
         )
         number_drive_lines += instrument["number_of_channels"]
         instrument_list[instrument["serial"]] = f"shfsg_{id}"
-        if pqsc or qhub:
-            zsync.append(instrument["serial"])
 
     # SHFQA
     for id, instrument in enumerate(shfqa):
@@ -390,8 +385,6 @@ def generate_device_setup(
             instrument["number_of_channels"] * actual_multiplex
         )
         instrument_list[instrument["serial"]] = f"shfqa_{id}"
-        if pqsc or qhub:
-            zsync.append(instrument["serial"])
 
     # SHFQC
     for id, instrument in enumerate(shfqc):
@@ -442,8 +435,6 @@ def generate_device_setup(
         )
         number_readout_acquire_lines += actual_multiplex
         instrument_list[instrument["serial"]] = f"shfqc_{id}"
-        if pqsc or qhub:
-            zsync.append(instrument["serial"])
 
     # PQSC
     for id, instrument in enumerate(pqsc):
@@ -583,24 +574,6 @@ def generate_device_setup(
                 raise LabOneQException(
                     f"Device Setup generation failed: UHFQA {dio_out} is not part of device setup "
                 )
-    # add internal ZSync connections
-    if zsync:
-        if pqsc:
-            for zsync_in in zsync:
-                # ensure that the instrument is already added to the device setup
-                if zsync_in in instrument_list.keys():
-                    device_setup.add_connections(
-                        "pqsc_0",
-                        create_connection(to_instrument=instrument_list[zsync_in]),
-                    )
-        elif qhub:
-            for zsync_in in zsync:
-                # ensure that the instrument is already added to the device setup
-                if zsync_in in instrument_list.keys():
-                    device_setup.add_connections(
-                        "qhub_0",
-                        create_connection(to_instrument=instrument_list[zsync_in]),
-                    )
 
     return device_setup
 
@@ -716,7 +689,7 @@ def generate_device_setup_qubits(
         for it in range(number_qubits)
     ]
     if include_qubits:
-        device_setup.qubits = qubits
+        device_setup.qubits = {f"{qubit.uid}": qubit for qubit in qubits}
     if calibrate_setup:
         for qubit in qubits:
             device_setup.set_calibration(qubit.calibration())

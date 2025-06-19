@@ -12,10 +12,14 @@ use crate::passes::{
 use crate::virtual_signal::create_virtual_signals;
 use std::collections::HashSet;
 
+/// Transform the IR program into a AWG events for the target AWG.
+///
+/// This function processes the IR program, applying various transformations and optimizations
+/// to generate a set of AWG events that can be executed on the device.
 #[allow(clippy::too_many_arguments)]
-pub fn generate_code_for_awg(
-    program: &ir::IrNode,
-    awg: &mut cjob::AwgCore,
+pub fn transform_ir_to_awg_events(
+    program: ir::IrNode,
+    awg: &cjob::AwgCore,
     cut_points: HashSet<ir::Samples>,
     play_wave_size_hint: u16,
     play_zero_size_hint: u16,
@@ -24,13 +28,11 @@ pub fn generate_code_for_awg(
     phase_resolution_range: u64,
     global_delay_samples: ir::Samples,
 ) -> Result<ir::IrNode> {
+    let mut program = program;
     let mut cut_points = cut_points;
-    // NOTE: Sorting should probably happen outside of this function
-    // Sort the signals for deterministic ordering
-    awg.signals.sort_by(|a, b| a.channels.cmp(&b.channels));
     // Source IR children offsets are relative to parent, change them to absolute from the start (0)
     // so that they are easier to work with.
-    let mut program = lower_for_awg::offset_to_absolute(program, 0);
+    lower_for_awg::offset_to_absolute(&mut program, 0);
     // Calculate oscillator parameters before applying sample conversion to avoid timing rounding errors
     let osc_params = osc_parameters::handle_oscillator_parameters(
         &mut program,

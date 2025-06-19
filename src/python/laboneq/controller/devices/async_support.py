@@ -283,9 +283,11 @@ class DataServerConnection:
     def dump_logs(self, server_uid: str):
         logger = logging.getLogger("node.log")
         logger.debug(f"Node log from the data server with id '{server_uid}':")
+        server_logger = logging.getLogger(f"server.log.{server_uid}")
         for log_record in self._log_records:
             if not isinstance(log_record.value, str):
                 continue
+            server_logger.debug(log_record.value)
             log_fields = parse_logfmt(log_record.value)
             tracer = log_fields.get("tracer")
             if tracer != "blocks_out":

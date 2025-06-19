@@ -72,4 +72,12 @@ impl<S, T> Node<S, T> {
     pub fn insert_child(&mut self, index: usize, offset: S, data: T) {
         self.children.insert(index, Node::new(data, offset));
     }
+
+    pub fn insert_child_node(&mut self, index: usize, node: Node<S, T>) {
+        self.children.insert(index, node);
+    }
+
+    pub fn remove_child(&mut self, index: usize) -> Node<S, T> {
+        self.children.remove(index)
+    }
 }

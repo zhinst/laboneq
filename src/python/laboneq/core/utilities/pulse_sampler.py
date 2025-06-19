@@ -271,11 +271,13 @@ pulse_function_library = _pulse_samplers
 
 def verify_amplitude_no_clipping(
     samples_i: np.ndarray,
-    samples_q: np.ndarray,
+    samples_q: np.ndarray | None,
     pulse_id: str | None,
     mixer_type: MixerType | None,
     signals: tuple[str] | None,
 ):
+    if samples_q is None:
+        samples_q = 0
     max_amplitude = np.max(np.abs(samples_i + 1j * samples_q))
     if mixer_type == MixerType.UHFQA_ENVELOPE:
         max_amplitude /= np.sqrt(2)
