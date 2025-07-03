@@ -86,12 +86,13 @@ impl SeqCTracker {
     }
 
     pub fn current_loop_stack_generator(&self) -> Arc<RwLock<SeqCGenerator>> {
-        self.loop_stack_generators
-            .last()
-            .expect("Loop stack should not be empty")
-            .last()
-            .expect("Inner loop stack should not be empty")
-            .clone()
+        Arc::clone(
+            self.loop_stack_generators
+                .last()
+                .expect("Loop stack should not be empty")
+                .last()
+                .expect("Inner loop stack should not be empty"),
+        )
     }
 
     /// If `current_time` precedes the scheduled start of the event, emit playZero to catch up.
@@ -466,7 +467,7 @@ impl SeqCTracker {
             "PRNG not committed"
         );
         let index_str = if offset != 0 {
-            format!("prng_value + {}", offset)
+            format!("prng_value + {offset}")
         } else {
             String::from("prng_value")
         };
@@ -533,7 +534,7 @@ impl SeqCTracker {
         let mut final_trigger_val = 0; // Default trigger value
 
         if let Some(mon) = monitor {
-            assert!(mon == 0 || mon == 1);
+            assert!(mon == 0 || mon == 1, "either of the 2 LSBs must be set");
             args.push(SeqCVariant::Integer(mon as i64));
         }
         if let Some(reg) = feedback_register {

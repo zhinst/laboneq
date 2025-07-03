@@ -3,14 +3,11 @@
 
 from __future__ import annotations
 
-
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar, Union
 
-
 from numpy import integer
 from typing_extensions import TypeAlias, runtime_checkable
-
 
 if TYPE_CHECKING:
     from laboneq.serializers.serializer_registry import SerializerRegistry

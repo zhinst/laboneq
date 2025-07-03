@@ -4,12 +4,14 @@
 """Base classes and utilities for LabOne Q serialization and deserialization."""
 
 from __future__ import annotations
+
 import importlib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 import orjson
+
 from laboneq._version import get_version
 from laboneq.serializers.serializer_registry import (
     serializer_registry,

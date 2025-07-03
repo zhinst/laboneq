@@ -55,7 +55,7 @@ class Section:
     length: float | None = None
     play_after: list[str | Section] = field(default_factory=list)
     children: list[Operation | Section] = field(default_factory=list)
-    trigger: dict = field(default_factory=dict)
+    trigger: dict[str, dict[str, int]] = field(default_factory=dict)
     on_system_grid: bool | None = None
 
 

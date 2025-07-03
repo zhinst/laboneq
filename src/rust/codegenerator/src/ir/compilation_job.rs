@@ -91,6 +91,19 @@ pub struct AwgCore {
 }
 
 impl AwgCore {
+    /// A mapping from signal UID to the index of the oscillator in the `osc_allocation` map.
+    pub fn oscillator_index_by_signal_uid(&self) -> HashMap<&str, u16> {
+        let mut index_map = HashMap::new();
+        for signal in self.signals.iter() {
+            if let Some(osc) = &signal.oscillator {
+                if let Some(osc_index) = self.osc_allocation.get(&osc.uid) {
+                    index_map.insert(signal.uid.as_str(), *osc_index);
+                }
+            }
+        }
+        index_map
+    }
+
     /// Use command table for pulses
     pub(crate) fn use_command_table(&self) -> bool {
         matches!(self.device_kind, DeviceKind::SHFSG | DeviceKind::HDAWG)
@@ -191,12 +204,8 @@ impl Hash for Marker {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.marker_selector.hash(state);
         self.enable.hash(state);
-        if let Some(start) = self.start {
-            normalize_f64(start).hash(state);
-        }
-        if let Some(length) = self.length {
-            normalize_f64(length).hash(state);
-        }
+        self.start.map(normalize_f64).hash(state);
+        self.length.map(normalize_f64).hash(state);
         self.pulse_id.hash(state);
     }
 }

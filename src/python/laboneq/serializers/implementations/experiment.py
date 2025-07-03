@@ -5,19 +5,19 @@ from __future__ import annotations
 
 from laboneq.core.types.enums.dsl_version import DSLVersion
 from laboneq.dsl.experiment.experiment import Experiment
+from laboneq.serializers._cache import create_caches
 from laboneq.serializers.base import LabOneQClassicSerializer, VersionedClassSerializer
+from laboneq.serializers.implementations._models._experiment import (
+    AllSectionModel,
+    ExperimentSignalModel,
+    make_converter,
+)
 from laboneq.serializers.serializer_registry import serializer
 from laboneq.serializers.types import (
     DeserializationOptions,
     JsonSerializableType,
     SerializationOptions,
 )
-from laboneq.serializers.implementations._models._experiment import (
-    AllSectionModel,
-    make_converter,
-    ExperimentSignalModel,
-)
-from laboneq.serializers._pulse_cache import PulseSampledCache
 
 _converter = make_converter()
 
@@ -31,7 +31,7 @@ class ExperimentSerializer(VersionedClassSerializer[Experiment]):
     def to_dict(
         cls, obj: Experiment, options: SerializationOptions | None = None
     ) -> JsonSerializableType:
-        with PulseSampledCache.create_pulse_cache():
+        with create_caches():
             sections = [
                 _converter.unstructure(section, AllSectionModel)
                 for section in obj.sections
@@ -59,7 +59,7 @@ class ExperimentSerializer(VersionedClassSerializer[Experiment]):
         options: DeserializationOptions | None = None,
     ) -> Experiment:
         serialized_data = serialized_data["__data__"]
-        with PulseSampledCache.create_pulse_cache():
+        with create_caches():
             sections = [
                 _converter.structure(section, AllSectionModel)
                 for section in serialized_data["sections"]

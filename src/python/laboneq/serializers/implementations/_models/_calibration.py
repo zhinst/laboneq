@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import sys
 from enum import Enum
+from functools import partial
 from typing import ClassVar, Type, Union
 
 import attrs
@@ -106,6 +107,19 @@ class LinearSweepParameterModel:
 
 
 ParameterModel = Union[SweepParameterModel, LinearSweepParameterModel]
+
+
+def _structure_list_parameter_model(
+    v: ParameterModel | list[ParameterModel], _, _converter: Converter
+):
+    if isinstance(v, list):
+        return [_converter.structure(item, ParameterModel) for item in v]
+    elif isinstance(v, ParameterModel):
+        return _converter.structure(v, ParameterModel)
+    else:
+        raise TypeError(
+            f"Expected ParameterModel or list of ParameterModel, got {type(v)}"
+        )
 
 
 def unstructure_basic_or_parameter_model(obj, _converter: Converter):
@@ -245,5 +259,9 @@ class CalibrationModel:
 
 def make_converter():
     _converter = make_laboneq_converter()
+    _converter.register_structure_hook(
+        ParameterModel | list[ParameterModel],
+        partial(_structure_list_parameter_model, _converter=_converter),
+    )
     register_models(_converter, collect_models(sys.modules[__name__]))
     return _converter

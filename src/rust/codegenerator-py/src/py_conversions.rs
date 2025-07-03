@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use codegenerator::ir::SignalFrequency;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::exceptions::PyValueError;
 use pyo3::intern;
@@ -66,9 +67,12 @@ fn py_to_nodekind(ob: &Bound<PyAny>, dedup: &mut Deduplicator) -> Result<ir::Nod
         )),
         "MatchIR" => Ok(ir::NodeKind::Match(extract_match(ob)?)),
         "CaseIR" => Ok(ir::NodeKind::Case(extract_case(ob, dedup)?)),
-        "SetOscillatorFrequencyIR" | "InitialOscillatorFrequencyIR" => Ok(
-            ir::NodeKind::SetOscillatorFrequency(extract_set_oscillator_frequency(ob, dedup)?),
-        ),
+        "SetOscillatorFrequencyIR" => Ok(ir::NodeKind::SetOscillatorFrequency(
+            extract_set_oscillator_frequency(ob, dedup)?,
+        )),
+        "InitialOscillatorFrequencyIR" => Ok(ir::NodeKind::InitialOscillatorFrequency(
+            extract_initial_oscillator_frequency(ob, dedup)?,
+        )),
         "PhaseResetIR" => Ok(ir::NodeKind::PhaseReset(extract_reset_oscillator_phase(
             ob,
         )?)),
@@ -185,9 +189,10 @@ fn extract_set_oscillator_frequency(
 ) -> Result<ir::SetOscillatorFrequency, PyErr> {
     // ir.SetOscillatorFrequency
     let py = ob.py();
+    let iteration = ob.getattr(intern!(py, "iteration"))?.extract::<usize>()?;
     let values = ob.getattr(intern!(py, "values"))?.try_iter()?;
     let oscillators = ob.getattr(intern!(py, "oscillators"))?.try_iter()?;
-    let mut osc_values: Vec<(Rc<cjob::Signal>, f64)> = vec![];
+    let mut osc_values = vec![];
     for (osc, value) in oscillators.into_iter().zip(values) {
         let value = value?.extract::<f64>()?;
         for sig in osc?.getattr(intern!(py, "signals"))?.try_iter()? {
@@ -195,10 +200,39 @@ fn extract_set_oscillator_frequency(
             let signal = dedup
                 .get_signal(&signal_uid)
                 .unwrap_or_else(|| panic!("Internal error: Missing signal: {}", &signal_uid));
-            osc_values.push((signal.clone(), value));
+            osc_values.push(SignalFrequency {
+                signal,
+                frequency: value,
+            });
         }
     }
-    let out = ir::SetOscillatorFrequency { values: osc_values };
+    let out = ir::SetOscillatorFrequency::new(osc_values, iteration);
+    Ok(out)
+}
+
+fn extract_initial_oscillator_frequency(
+    ob: &Bound<'_, PyAny>,
+    dedup: &Deduplicator,
+) -> Result<ir::InitialOscillatorFrequency, PyErr> {
+    // ir.InitialOscillatorFrequency
+    let py = ob.py();
+    let values = ob.getattr(intern!(py, "values"))?.try_iter()?;
+    let oscillators = ob.getattr(intern!(py, "oscillators"))?.try_iter()?;
+    let mut osc_values = vec![];
+    for (osc, value) in oscillators.into_iter().zip(values) {
+        let value = value?.extract::<f64>()?;
+        for sig in osc?.getattr(intern!(py, "signals"))?.try_iter()? {
+            let signal_uid = sig?.extract::<String>()?;
+            let signal = dedup
+                .get_signal(&signal_uid)
+                .unwrap_or_else(|| panic!("Internal error: Missing signal: {}", &signal_uid));
+            osc_values.push(SignalFrequency {
+                signal,
+                frequency: value,
+            });
+        }
+    }
+    let out = ir::InitialOscillatorFrequency::new(osc_values);
     Ok(out)
 }
 
@@ -528,10 +562,7 @@ pub fn extract_mixer_type(ob: &Bound<'_, PyAny>) -> Result<Option<cjob::MixerTyp
         "IQ" => cjob::MixerType::IQ,
         "UHFQA_ENVELOPE" => cjob::MixerType::UhfqaEnvelope,
         _ => {
-            return Err(PyRuntimeError::new_err(format!(
-                "Unknown mixer type: {}",
-                ob
-            )));
+            return Err(PyRuntimeError::new_err(format!("Unknown mixer type: {ob}")));
         }
     };
     Ok(Some(kind))
@@ -551,8 +582,7 @@ fn extract_awg_signal(ob: &Bound<'_, PyAny>, sampling_rate: f64) -> Result<cjob:
         "single" => cjob::SignalKind::SINGLE,
         _ => {
             return Err(PyRuntimeError::new_err(format!(
-                "Unknown signal type: {}",
-                ob
+                "Unknown signal type: {ob}"
             )));
         }
     };
@@ -583,8 +613,7 @@ pub fn extract_device_kind(ob: &Bound<'_, PyAny>) -> Result<cjob::DeviceKind, Py
         "UHFQA" => cjob::DeviceKind::UHFQA,
         _ => {
             return Err(PyRuntimeError::new_err(format!(
-                "Unknown device type: {}",
-                ob
+                "Unknown device type: {ob}"
             )));
         }
     };
@@ -621,8 +650,7 @@ fn extract_awg_kind(ob: &Bound<'_, PyAny>) -> Result<cjob::AwgKind, PyErr> {
         "DOUBLE" => cjob::AwgKind::DOUBLE,
         _ => {
             return Err(PyRuntimeError::new_err(format!(
-                "Unknown awg signal type: {}",
-                ob
+                "Unknown awg signal type: {ob}"
             )));
         }
     };
@@ -682,7 +710,7 @@ fn extract_parameter(
     let numeric_array = match NumericArray::from_py(&ob.getattr(intern!(py, "values"))?) {
         Ok(arr) => arr,
         Err(e) => {
-            let msg = format!("Invalid array type on sweep parameter '{}'. {}", uid, e);
+            let msg = format!("Invalid array type on sweep parameter '{uid}'. {e}");
             return Err(PyValueError::new_err(msg));
         }
     };
@@ -690,7 +718,7 @@ fn extract_parameter(
         uid,
         values: numeric_array,
     });
-    dedup.set_parameter(obj.clone());
+    dedup.set_parameter(Arc::clone(&obj));
     Ok(obj)
 }
 

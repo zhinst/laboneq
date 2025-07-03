@@ -91,7 +91,7 @@ class Session:
         _last_results=None,
         compiled_experiment: CompiledExperiment | None = None,
         experiment: Experiment | None = None,
-        include_results_metadata: bool = True,
+        include_results_metadata: bool = False,
         server_log: bool = False,
     ):
         """Constructor of the session.
@@ -114,12 +114,18 @@ class Session:
                 If specified, set the current experiment.
             include_results_metadata:
                 If True, `Session.run` will return a `Results` object with the deprecated `.experiment`,
-                `.compiled_experiment` and `.device_setup` attributes populated. Otherwise, it will
+                and `.device_setup` attributes populated. Otherwise, it will
                 return a `Results` object with these attributes not populated.
             server_log:
                 If `True`, the data server log - including device firmware logs - will be forwarded to the LabOneQ
                 log under the logger named `server.log.<server_uid>`. Additionally, it will be written to the file
                 `server.log` alongside the regular LabOneQ log, assuming the standard logging configuration is used.
+
+        !!! version-changed "Changed in version 2.55.0"
+            The deprecated `.compiled_experiment` attribute was removed from `Results`. The
+            `include_results_metadata` argument thus no longer populates this attribute on `Results`.
+            Track the compiled experiment separately instead.
+
         !!! version-changed "Changed in version 2.54.0"
             The following deprecated methods for saving and loading were removed:
                 - `load`
@@ -402,7 +408,7 @@ class Session:
         !!! version-changed "Changed in version 2.4"
             Raises error if `Session` is not connected.
 
-        !!! version-changed "Changed in version 2.0"
+        !!! version-removed "Removed in version 2.0"
             Removed `do_simulation` argument.
             Use [OutputSimulator][laboneq.simulator.output_simulator.OutputSimulator] instead.
         """
@@ -449,7 +455,7 @@ class Session:
                 is used.
             include_results_metadata:
                 If true, return a `Results` object with the deprecated `.experiment`,
-                `.compiled_experiment` and `.device_setup` attributes populated.
+                and `.device_setup` attributes populated.
                 If false, return a `Results` object with these attributes not populated.
                 If None, the setting falls back to that passed to `include_results_metadata`
                 when this session was created.
@@ -458,10 +464,15 @@ class Session:
             results:
                 A `Results` object.
 
+        !!! version-changed "Changed in version 2.55.0"
+            The deprecated `.compiled_experiment` attribute was removed from `Results`. The
+            `include_results_metadata` argument thus no longer populates this attribute on `Results`.
+            Track the compiled experiment separately instead.
+
         !!! version-changed "Changed in version 2.52.0"
             Replaced the `include_metadata` argument with `include_results_metadata`.
 
-        !!! version-changed "Changed in version 2.51.0"
+        !!! version-added "Added in version 2.51.0"
             Added the `include_metadata` argument to control whether to include experiment and
             device setup in the results.
 
@@ -491,7 +502,6 @@ class Session:
             if include_results_metadata:
                 results_kwargs["experiment"] = self.compiled_experiment.experiment
                 results_kwargs["device_setup"] = self.device_setup
-                results_kwargs["compiled_experiment"] = self.compiled_experiment
             self._last_results = Results(
                 acquired_results=results.acquired_results,
                 neartime_callback_results=results.neartime_callback_results,

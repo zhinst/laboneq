@@ -94,6 +94,7 @@ from laboneq.data.compilation_job import (
     SectionSignalPulse,
     SignalInfo,
     SignalInfoType,
+    DeviceInfoType,
 )
 
 if TYPE_CHECKING:
@@ -1068,18 +1069,26 @@ class Scheduler:
             )
 
         # replace length with longest acquire on the current awg
-        if is_acquire and pulse.acquire_params is not None and not length == 0:
+        if is_acquire and not length == 0 and pulse.acquire_params is not None:
             integration_length = length_int
-            length_int = round_to_grid(
-                (
-                    self._max_acquisition_time_per_awg[
-                        self._schedule_data.signal_objects[signal_info.uid].awg.key
-                    ]
-                    + offset
+            if (
+                pulse.acquire_params.acquisition_type != "RAW"
+                or pulse.signal.device.device_type
+                in [
+                    DeviceInfoType.UHFQA,
+                    DeviceInfoType.SHFQA,
+                ]
+            ):
+                length_int = round_to_grid(
+                    (
+                        self._max_acquisition_time_per_awg[
+                            self._schedule_data.signal_objects[signal_info.uid].awg.key
+                        ]
+                        + offset
+                    )
+                    / TINYSAMPLE,
+                    grid,
                 )
-                / TINYSAMPLE,
-                grid,
-            )
         else:
             integration_length = None
 

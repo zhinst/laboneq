@@ -8,7 +8,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, TypeVar, overload
 
-
 from laboneq.serializers.types import (
     ClassSerializer,
 )

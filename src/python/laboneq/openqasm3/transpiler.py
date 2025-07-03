@@ -503,7 +503,7 @@ class OpenQASMTranspiler:
             if isinstance(function_or_port, device.Port):
                 uid = function_or_port.qubit
                 signal = function_or_port.signal
-                qubit = self.qpu.quantum_element_by_uid(uid)
+                qubit = self.qpu[uid]
                 if signal in qubit.signals:
                     # Partial path
                     # Qubit signal lookup does not work with full paths (e.g. alias drive/drive_line)
@@ -526,9 +526,9 @@ class OpenQASMTranspiler:
             if isinstance(uid_or_qubit, quantum.QuantumElement):
                 # Will raise KeyError if qubit does not exists.
                 # Use the supplied qubit if the UID exists in QPU.
-                self.qpu.quantum_element_by_uid(uid_or_qubit.uid)
+                self.qpu[uid_or_qubit.uid]
                 return uid_or_qubit
-            return self.qpu.quantum_element_by_uid(uid_or_qubit)
+            return self.qpu[uid_or_qubit]
         except KeyError as error:
             msg = f"Qubit {uid_or_qubit} does not exist in the QPU."
             raise ValueError(msg) from error

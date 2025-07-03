@@ -3,11 +3,11 @@
 
 use crate::Result;
 use crate::ir;
-use crate::ir::compilation_job::{self as cjob};
+use crate::ir::compilation_job::{AwgCore, DeviceKind};
 use crate::passes::{
-    amplitude_registers, handle_acquire, handle_frame_changes, handle_match, handle_playwaves,
-    handle_ppc_sweeps, handle_precompensation_resets, handle_signatures, lower_for_awg,
-    osc_parameters,
+    amplitude_registers, handle_acquire, handle_frame_changes, handle_match, handle_oscillators,
+    handle_playwaves, handle_ppc_sweeps, handle_precompensation_resets, handle_signatures,
+    lower_for_awg,
 };
 use crate::virtual_signal::create_virtual_signals;
 use std::collections::HashSet;
@@ -19,13 +19,9 @@ use std::collections::HashSet;
 #[allow(clippy::too_many_arguments)]
 pub fn transform_ir_to_awg_events(
     program: ir::IrNode,
-    awg: &cjob::AwgCore,
+    awg: &AwgCore,
     cut_points: HashSet<ir::Samples>,
-    play_wave_size_hint: u16,
-    play_zero_size_hint: u16,
-    amplitude_resolution_range: u64,
-    use_amplitude_increment: bool,
-    phase_resolution_range: u64,
+    settings: &crate::CodeGeneratorSettings,
     global_delay_samples: ir::Samples,
 ) -> Result<ir::IrNode> {
     let mut program = program;
@@ -34,13 +30,19 @@ pub fn transform_ir_to_awg_events(
     // so that they are easier to work with.
     lower_for_awg::offset_to_absolute(&mut program, 0);
     // Calculate oscillator parameters before applying sample conversion to avoid timing rounding errors
-    let osc_params = osc_parameters::handle_oscillator_parameters(
+    let osc_params = handle_oscillators::handle_oscillator_parameters(
         &mut program,
         &awg.signals,
         &awg.device_kind,
         &awg.sampling_rate,
     )?;
     lower_for_awg::convert_to_samples(&mut program, awg);
+    handle_oscillators::handle_oscillator_sweeps(
+        &mut program,
+        awg,
+        global_delay_samples,
+        &mut cut_points,
+    )?;
     handle_acquire::handle_acquisitions(
         &mut program,
         awg.device_kind.traits().sample_multiple,
@@ -55,7 +57,7 @@ pub fn transform_ir_to_awg_events(
         global_delay_samples,
         &mut cut_points,
     )?;
-    if let cjob::DeviceKind::SHFQA = &awg.device_kind {
+    if let DeviceKind::SHFQA = &awg.device_kind {
         handle_ppc_sweeps::handle_ppc_sweep_steps(&mut program, global_delay_samples)?;
     }
     handle_match::handle_match_nodes(&mut program, virtual_signals.delay())?;
@@ -66,6 +68,7 @@ pub fn transform_ir_to_awg_events(
         &awg.device_kind,
         *virtual_signals.delay(),
     );
+    let (play_wave_size_hint, play_zero_size_hint) = settings.waveform_size_hints(&awg.device_kind);
     handle_playwaves::handle_plays(
         &mut program,
         awg,
@@ -79,10 +82,10 @@ pub fn transform_ir_to_awg_events(
     handle_signatures::optimize_signatures(
         &mut program,
         awg,
-        use_amplitude_increment,
+        settings.use_amplitude_increment(),
         amp_reg_alloc.available_register_count(),
-        amplitude_resolution_range,
-        phase_resolution_range,
+        settings.amplitude_resolution_range(),
+        settings.phase_resolution_range(),
     );
     Ok(program)
 }

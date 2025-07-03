@@ -15,15 +15,15 @@ from laboneq.core.types.enums.io_signal_type import IOSignalType
 from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
 from laboneq.dsl.device.connection import Connection
 from laboneq.dsl.device.instruments.hdawg import HDAWG
+from laboneq.dsl.device.instruments.nonqc import NonQC
 from laboneq.dsl.device.instruments.pqsc import PQSC
 from laboneq.dsl.device.instruments.pretty_printer_device import PRETTYPRINTERDEVICE
+from laboneq.dsl.device.instruments.qhub import QHUB
 from laboneq.dsl.device.instruments.shfppc import SHFPPC
 from laboneq.dsl.device.instruments.shfqa import SHFQA
 from laboneq.dsl.device.instruments.shfqc import SHFQC
 from laboneq.dsl.device.instruments.shfsg import SHFSG
 from laboneq.dsl.device.instruments.uhfqa import UHFQA
-from laboneq.dsl.device.instruments.qhub import QHUB
-from laboneq.dsl.device.instruments.nonqc import NonQC
 from laboneq.dsl.device.instruments.zi_standard_instrument import ZIStandardInstrument
 from laboneq.dsl.device.io_units.logical_signal import LogicalSignal
 from laboneq.dsl.device.io_units.physical_channel import (

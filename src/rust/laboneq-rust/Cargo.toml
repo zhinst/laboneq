@@ -5,6 +5,9 @@ authors.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+[lints]
+workspace = true
+
 [lib]
 name = "laboneq_rust"
 crate-type = ["cdylib"]
@@ -14,5 +17,3 @@ pyo3 = { workspace = true }
 pyo3-log = { workspace = true }
 
 codegenerator-py = { path = "../codegenerator-py" }
-interval-calculator = { path = "../interval-calculator" }
-interval-tree = { path = "../interval-tree" }

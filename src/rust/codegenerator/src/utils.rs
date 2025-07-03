@@ -3,6 +3,10 @@
 
 use core::f64;
 
+fn normalize_zero(value: f64) -> f64 {
+    if value == 0.0 { 0.0 } else { value }
+}
+
 /// Utility function to normalize f64 value to bits, normalizing NaN and -0.0 to 0.0
 pub fn normalize_f64(value: f64) -> u64 {
     if value.is_nan() {
@@ -15,7 +19,7 @@ pub fn normalize_f64(value: f64) -> u64 {
 }
 
 pub fn normalize_phase(value: f64) -> f64 {
-    if value.is_nan() {
+    if value.is_nan() || value == 0.0 {
         return 0.0;
     }
     let out = match value < 0.0 {
@@ -24,7 +28,8 @@ pub fn normalize_phase(value: f64) -> f64 {
         }
         false => value,
     };
-    out % (2.0 * f64::consts::PI)
+    let value = out % (2.0 * f64::consts::PI);
+    normalize_zero(value)
 }
 
 /// Sanitize a string for use as a variable name for SeqC code.
@@ -67,6 +72,7 @@ mod tests {
     #[test]
     fn test_normalize_phase() {
         assert_eq!(normalize_phase(0.0), 0.0);
+        assert_eq!(normalize_phase(-0.0).to_bits(), 0.0_f64.to_bits());
         assert_eq!(normalize_phase(f64::consts::PI), f64::consts::PI);
         assert_eq!(normalize_phase(f64::NAN), 0.0);
     }

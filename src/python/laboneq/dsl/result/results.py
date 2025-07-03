@@ -20,7 +20,6 @@ if TYPE_CHECKING:
     import numpy as np
     from numpy import typing as npt
 
-    from laboneq.core.types import CompiledExperiment
     from laboneq.dsl.device.device_setup import DeviceSetup
     from laboneq.dsl.experiment import Experiment
 
@@ -61,8 +60,6 @@ class Results:
             The source experiment. Deprecated.
         device_setup:
             The device setup on which the experiment was run. Deprecated.
-        compiled_experiment:
-            The compiled experiment that was executed. Deprecated.
         acquired_results:
             The acquired results, organized by handle.
         neartime_callback_results:
@@ -79,7 +76,11 @@ class Results:
         pipeline_jobs_timestamps:
             The timestamps of all pipeline jobs, in seconds. Organized by signal, then pipeline job id.
 
-    !!! version-added "Changed in version 2.54.0"
+    !!! version-removed "Removed in version 2.55.0"
+        The deprecated `.compiled_experiment` attribute was removed.
+        Track the compiled experiment separately instead.
+
+    !!! version-removed "Removed in version 2.54.0"
         The following deprecated methods for saving and loading were removed:
         - `load`
         - `save`
@@ -97,7 +98,6 @@ class Results:
 
     experiment: Experiment = attrs.field(default=None)
     device_setup: DeviceSetup = attrs.field(default=None)
-    compiled_experiment: CompiledExperiment = attrs.field(default=None)
     acquired_results: AcquiredResults = attrs.field(factory=AcquiredResults)
     neartime_callback_results: dict[str, list[Any]] = attrs.field(default=None)
     execution_errors: list[tuple[list[int], str, str]] = attrs.field(factory=list)
@@ -180,7 +180,6 @@ class Results:
         return self.__class__(
             experiment=copy.deepcopy(self.experiment),
             device_setup=copy.deepcopy(self.device_setup),
-            compiled_experiment=copy.deepcopy(self.compiled_experiment),
             acquired_results=copy.deepcopy(self.acquired_results),
             neartime_callback_results=copy.deepcopy(self.neartime_callback_results),
             execution_errors=copy.deepcopy(self.execution_errors),

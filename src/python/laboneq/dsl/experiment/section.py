@@ -501,7 +501,7 @@ class Sweep(Section):
     """
 
     # Parameters that should be swept.
-    parameters: list[Parameter] = attrs.field(factory=list)
+    parameters: Parameter | list[Parameter] = attrs.field(factory=list)
     # When True, reset all oscillators at the start of every step.
     reset_oscillator_phase: bool = attrs.field(default=False)
     # When larger than 1, split the sweep into N chunks.

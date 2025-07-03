@@ -115,14 +115,12 @@ class QPU:
         The argument `qubits` was deprecated and replaced with the argument `quantum_elements`.
 
     Arguments:
-        quantum_elements:
-            The quantum elements to run the experiments on.
-        quantum_operations:
-            The quantum operations to use when building the experiment.
-
+        quantum_elements: The quantum elements to run the experiments on.
+        quantum_operations: The quantum operations to use when building the experiment.
     Attributes:
-        topology:
-            The topology information for the QPU.
+        topology: The topology information for the QPU.
+    Raises:
+        TypeError: If `quantum_operations` has an invalid type.
     """
 
     def __init__(
@@ -160,6 +158,61 @@ class QPU:
             f" quantum_operations={type(self.quantum_operations).__qualname__}"
             f" topology={self.topology}"
             f">"
+        )
+
+    def __getitem__(
+        self, key: str | list[str] | slice | type[QuantumElement]
+    ) -> QuantumElement | list[QuantumElement]:
+        """Return quantum element(s) in the QPU.
+
+        The QPU item lookup retrieves quantum elements from the QPU. The returned value
+        depends on the type of key supplied.
+
+        If the key is a string, a single quantum element is returned:
+
+        ```python
+        qpu["q0"]  # returns the quantum element with UID "q0"
+        ```
+
+        If the key is a list, a list of quantum elements is returned:
+
+        ```python
+        qpu[["q0", "q1", "q2"]]  # returns the list of quantum elements with given UIDs
+        ```
+
+        If the key is a slice, a list of quantum elements is returned, indexed by the
+        order in which they were added:
+
+        ```python
+        qpu[:3]  # returns the first three quantum elements
+        qpu[:]  # returns all the quantum elements
+        ```
+
+        If the key is a class, a list of quantum elements of a given type is returned:
+
+        ```python
+        qpu[Transmon]  # returns the quantum elements that are a subclass of Transmon
+        ```
+
+        Arguments:
+            key: The key determining the quantum element(s) to retrieve.
+        Returns:
+            The selected quantum element(s).
+        Raises:
+            KeyError: If the quantum element is not found in the QPU.
+            TypeError: If `key` has an invalid type.
+        """
+        if isinstance(key, str):
+            return self._quantum_element_map[key]
+        if isinstance(key, list):
+            return [self._quantum_element_map[uid] for uid in key]
+        if isinstance(key, slice):
+            return self.quantum_elements[key]
+        if inspect.isclass(key) and issubclass(key, QuantumElement):
+            return [q for q in self.quantum_elements if isinstance(q, key)]
+        raise TypeError(
+            f"The quantum element key has an invalid type: {type(key)}. "
+            f"Expected type: str | list[str] | slice | type[QuantumElement]."
         )
 
     def __rich_repr__(self):
@@ -231,6 +284,7 @@ class QPU:
         """
         self.quantum_operations.detach_qpu()
         new_qpu = QPU(self.copy_quantum_elements(), self.quantum_operations)
+        new_qpu.topology = self.topology.copy()
         new_qpu.update_quantum_elements(quantum_element_parameters)
         return new_qpu
 
@@ -301,6 +355,7 @@ class QPU:
 
         for qid, params_dict in quantum_element_parameters.items():
             self._quantum_element_map[qid].update(**params_dict)
+            self.topology._node_lookup[qid].update(**params_dict)
 
     @deprecated(
         "The .update_qubits method is deprecated. Use `.update_quantum_elements` instead.",
@@ -349,8 +404,15 @@ class QPU:
             [q.readout_integration_parameters()[1]["length"] for q in quantum_elements]
         )
 
+    @deprecated(
+        "The .quantum_element_by_uid method is deprecated. Use `.__getitem__` instead.",
+        category=FutureWarning,
+    )
     def quantum_element_by_uid(self, uid: str) -> QuantumElement:
         """Returns quantum element by UID.
+
+        !!! version-changed "Deprecated in version 2.55.0."
+            The method `quantum_element_by_uid` was deprecated. Use `.__getitem__` instead.
 
         Arguments:
             uid: Unique identifier of the quantum element within the QPU.

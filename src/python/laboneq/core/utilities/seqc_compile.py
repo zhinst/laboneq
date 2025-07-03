@@ -7,12 +7,17 @@ import concurrent.futures
 from dataclasses import dataclass
 import logging
 import os
+import re
 
 import zhinst.core
 from zhinst.core.errors import CoreError as LabOneCoreError
 
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
-from laboneq.compiler.common.resource_usage import ResourceLimitationError
+from laboneq.compiler.common.resource_usage import (
+    ResourceUsage,
+    ResourceUsageCollector,
+    UsageClassification,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -61,6 +66,29 @@ async def seqc_compile_async(item: SeqCCompileItem):
     await loop.run_in_executor(None, seqc_compile_one, item)
 
 
+def _process_errors(messages: list[str]):
+    if len(messages) == 0:
+        return
+    collector = ResourceUsageCollector()
+    for msg in messages:
+        msg_lower = msg.lower()
+        if any(m in msg_lower for m in ["not fitting", "out of memory", "too large"]):
+            if (
+                match := re.search(
+                    r"program is too large to fit into memory - has (\d+) instructions, maximum is (\d+)",
+                    msg_lower,
+                )
+            ) is not None:
+                collector.add(
+                    ResourceUsage(msg, int(match.group(1)) / int(match.group(2)))
+                )
+            else:
+                collector.add(ResourceUsage(msg, UsageClassification.BEYOND_LIMIT))
+    collector.raise_or_pass()
+    all_errors = "\n".join([e for e in messages])
+    raise LabOneQException(f"Compilation failed.\n{all_errors}")
+
+
 def awg_compile(awg_data: list[SeqCCompileItem]):
     # Compile in parallel:
     _logger.debug("Started compilation of AWG programs...")
@@ -69,12 +97,10 @@ def awg_compile(awg_data: list[SeqCCompileItem]):
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(seqc_compile_one, item) for item in awg_data]
         concurrent.futures.wait(futures)
-        exceptions = [
-            future.exception() for future in futures if future.exception() is not None
+        error_msgs = [
+            str(future.exception())
+            for future in futures
+            if future.exception() is not None
         ]
-        if len(exceptions) > 0:
-            errors = "\n".join([str(e) for e in exceptions])
-            if "not fitting" in errors:
-                raise ResourceLimitationError(f"Compilation failed.\n{errors}")
-            raise LabOneQException(f"Compilation failed.\n{errors}")
+        _process_errors(error_msgs)
     _logger.debug("Finished compilation.")

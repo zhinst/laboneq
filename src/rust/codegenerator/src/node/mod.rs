@@ -46,7 +46,7 @@ impl<S, T> Node<S, T> {
     }
 
     pub fn take_children(&mut self) -> Vec<Node<S, T>> {
-        std::mem::take(&mut self.children)
+        mem::take(&mut self.children)
     }
 
     pub fn has_children(&self) -> bool {

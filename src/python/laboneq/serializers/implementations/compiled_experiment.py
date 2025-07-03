@@ -2,21 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
 import warnings
 
 from laboneq._version import get_version
 from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.serializers.base import LabOneQClassicSerializer, VersionedClassSerializer
 from laboneq.serializers.core import from_dict, to_dict
+from laboneq.serializers.implementations._models._compiled_experiment import (
+    ScheduledExperimentModel,
+    make_converter,
+)
 from laboneq.serializers.serializer_registry import serializer
 from laboneq.serializers.types import (
     DeserializationOptions,
     JsonSerializableType,
     SerializationOptions,
-)
-from laboneq.serializers.implementations._models._compiled_experiment import (
-    make_converter,
-    ScheduledExperimentModel,
 )
 
 _converter = make_converter()

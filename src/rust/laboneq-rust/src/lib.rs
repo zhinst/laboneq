@@ -3,8 +3,6 @@
 
 use pyo3::prelude::*;
 
-mod intervals;
-
 #[pymodule]
 mod _rust {
 
@@ -22,10 +20,6 @@ mod _rust {
         // - https://github.com/PyO3/pyo3/issues/759
         // - https://docs.python.org/3/tutorial/modules.html#packages
         let modules = py.import("sys")?.getattr("modules")?;
-        modules.set_item(
-            "laboneq._rust.intervals",
-            intervals::create_py_module(m, "intervals")?,
-        )?;
         modules.set_item(
             "laboneq._rust.codegenerator",
             codegenerator_py::create_py_module(m, "codegenerator")?,

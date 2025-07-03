@@ -156,6 +156,22 @@ def handle_ppc_sweep_step_end(event) -> AWGEvent:
     )
 
 
+def handle_set_oscillator_frequency(event) -> AWGEvent:
+    obj = event.data()
+    return AWGEvent(
+        type=AWGEventType.SET_OSCILLATOR_FREQUENCY,
+        start=event.start,
+        end=event.start,
+        params={
+            "start_frequency": obj.start_frequency,
+            "step_frequency": obj.step_frequency,
+            "iteration": obj.iteration,
+            "iterations": obj.iterations,
+            "osc_index": obj.osc_index,
+        },
+    )
+
+
 def transform_rs_events_to_awg_events(output: list) -> list[AWGEvent]:
     """Adapter from Rust generated AWG events to Python AWG events."""
     if not output:
@@ -182,6 +198,8 @@ def transform_rs_events_to_awg_events(output: list) -> list[AWGEvent]:
             awg_event = handle_ppc_sweep_step_end(event)
         elif event_type == 8:
             awg_event = handle_play_hold(event)
+        elif event_type == 9:
+            awg_event = handle_set_oscillator_frequency(event)
         if awg_event:
             awg_events.append(awg_event)
     return awg_events

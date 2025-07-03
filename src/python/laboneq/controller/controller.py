@@ -492,7 +492,7 @@ class Controller(EventLoopMixIn):
                 raw_acquire_length = self._devices.find_by_uid(
                     awg_key.device_uid
                 ).calc_raw_acquire_length(
-                    self._recipe_data, awg_key, awg_config, signal_id
+                    self._recipe_data, awg_key, awg_config, signal_id, handle
                 )
                 axis_name.append("samples")
                 axis.append(np.arange(raw_acquire_length, dtype=np.float64))

@@ -242,7 +242,7 @@ pub fn compress_generator(generator: SeqCGenerator) -> SeqCGenerator {
     );
     match compressed_statesments {
         Err(e) => {
-            warn!("{}", e);
+            warn!("{e}");
             return generator;
         }
         Ok(compressed_statesments) => {

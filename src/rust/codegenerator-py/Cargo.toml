@@ -6,9 +6,13 @@ edition.workspace = true
 publish.workspace = true
 license = "MIT"
 
+[lints]
+workspace = true
+
 [dependencies]
 pyo3 = { workspace = true }
 num-complex = { workspace = true }
+log = { workspace = true }
 
 codegenerator = { path = "../codegenerator" }
 numeric-array = { path = "../numeric-array", features = ["pyo3"] }

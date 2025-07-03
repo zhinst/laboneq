@@ -12,7 +12,7 @@ use pyo3::prelude::*;
 pub struct PlayWaveEvent {
     pub signals: HashSet<String>,
     #[pyo3(get)]
-    pub waveform: signature::WaveformSignaturePy,
+    pub waveform: WaveformSignaturePy,
     #[pyo3(get)]
     pub state: Option<u16>,
     #[pyo3(get)]
@@ -169,6 +169,46 @@ pub struct PpcSweepStepStart {
 
 #[pyclass]
 #[derive(Debug, Clone)]
+pub struct SetOscillatorFrequencyPy {
+    obj: codegenerator::ir::OscillatorFrequencySweepStep,
+}
+
+impl SetOscillatorFrequencyPy {
+    pub fn new(obj: codegenerator::ir::OscillatorFrequencySweepStep) -> Self {
+        SetOscillatorFrequencyPy { obj }
+    }
+}
+
+#[pymethods]
+impl SetOscillatorFrequencyPy {
+    #[getter]
+    pub fn osc_index(&self) -> u16 {
+        self.obj.osc_index
+    }
+
+    #[getter]
+    pub fn iteration(&self) -> usize {
+        self.obj.iteration
+    }
+
+    #[getter]
+    pub fn start_frequency(&self) -> f64 {
+        self.obj.parameter.start
+    }
+
+    #[getter]
+    pub fn step_frequency(&self) -> f64 {
+        self.obj.parameter.step
+    }
+
+    #[getter]
+    pub fn iterations(&self) -> usize {
+        self.obj.parameter.count
+    }
+}
+
+#[pyclass]
+#[derive(Debug, Clone)]
 pub enum EventType {
     PlayWave(PlayWaveEvent),
     PlayHold(PlayHoldEvent),
@@ -179,6 +219,7 @@ pub enum EventType {
     AcquireEvent(AcquireEvent),
     PpcSweepStepStart(PpcSweepStepStart),
     PpcSweepStepEnd(),
+    SetOscillatorFrequency(SetOscillatorFrequencyPy),
 }
 
 #[pyclass]
@@ -206,6 +247,7 @@ impl AwgEvent {
             EventType::PpcSweepStepStart(_) => 6,
             EventType::PpcSweepStepEnd() => 7,
             EventType::PlayHold(_) => 8,
+            EventType::SetOscillatorFrequency(_) => 9,
         }
     }
 
@@ -222,6 +264,7 @@ impl AwgEvent {
             EventType::PpcSweepStepStart(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
             EventType::PpcSweepStepEnd() => Ok(None::<()>.into_pyobject(py)?.into()),
             EventType::PlayHold(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
+            EventType::SetOscillatorFrequency(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
         }
     }
 }

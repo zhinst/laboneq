@@ -4,9 +4,9 @@ version = "0.1.0"
 description = "LabOne Q Documentation"
 requires-python = ">=3.10"
 dependencies = [
-    "mkdocs-drawio>=1.8.0",
-    "mkdocs-include-markdown-plugin>=7.1.2",
-    "mkdocs-zhinst>=0.0.26",
+  "mkdocs-drawio>=1.8.0",
+  "mkdocs-include-markdown-plugin>=7.1.2",
+  "mkdocs-zhinst>=0.0.26",
 ]
 
 [tool.uv.sources]

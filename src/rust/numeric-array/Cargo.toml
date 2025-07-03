@@ -6,6 +6,9 @@ edition.workspace = true
 publish.workspace = true
 license = "MIT"
 
+[lints]
+workspace = true
+
 [features]
 pyo3 = ["dep:pyo3", "dep:numpy"]
 

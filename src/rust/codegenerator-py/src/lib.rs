@@ -6,6 +6,7 @@ use codegenerator::ir::compilation_job::AwgCore;
 use codegenerator::signature::WaveformSignature;
 use pyo3::import_exception;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use pyo3::types::PySet;
 use pyo3::wrap_pyfunction;
 use signature::{PulseSignaturePy, WaveformSignaturePy};
@@ -20,11 +21,13 @@ use codegenerator::{AwgWaveforms, collect_and_finalize_waveforms, transform_ir_t
 mod awg_event;
 mod result;
 mod signature;
-
 use codegenerator::Error as CodeError;
+mod settings;
+use crate::settings::code_generator_settings_from_dict;
 use result::{AwgCodeGenerationResultPy, SampledWaveformPy};
 mod common_types;
 
+use crate::awg_event::SetOscillatorFrequencyPy;
 use crate::code_generator::{
     SeqCGeneratorPy, SeqCTrackerPy, WaveIndexTrackerPy, merge_generators_py,
     seqc_generator_from_device_and_signal_type_py, string_sanitize_py,
@@ -54,10 +57,10 @@ fn generate_output(
     awg: &AwgCore,
     state: &mut Option<u16>,
     pos: &mut u64,
-) -> Vec<awg_event::AwgEvent> {
+) -> Vec<AwgEvent> {
     *pos += 1;
-    match node.swap_data(ir::NodeKind::Nop { length: 0 }) {
-        ir::NodeKind::PlayWave(ob) => {
+    match node.swap_data(NodeKind::Nop { length: 0 }) {
+        NodeKind::PlayWave(ob) => {
             let end = node.offset() + ob.length();
             let hw_osc = match ob.oscillator {
                 Some(uid) => {
@@ -67,12 +70,12 @@ fn generate_output(
                 }
                 None => None,
             };
-            vec![awg_event::AwgEvent {
+            vec![AwgEvent {
                 start: *node.offset(),
                 end,
-                kind: awg_event::EventType::PlayWave(awg_event::PlayWaveEvent {
+                kind: EventType::PlayWave(awg_event::PlayWaveEvent {
                     signals: ob.signals.iter().map(|sig| sig.uid.clone()).collect(),
-                    waveform: signature::WaveformSignaturePy::new(ob.waveform),
+                    waveform: WaveformSignaturePy::new(ob.waveform),
                     state: *state,
                     hw_oscillator: hw_osc,
                     amplitude_register: ob.amplitude_register,
@@ -83,24 +86,22 @@ fn generate_output(
                 position: None,
             }]
         }
-        ir::NodeKind::PlayHold(ob) => {
+        NodeKind::PlayHold(ob) => {
             let end = node.offset() + ob.length;
-            vec![awg_event::AwgEvent {
+            vec![AwgEvent {
                 start: *node.offset(),
                 end,
-                kind: awg_event::EventType::PlayHold(awg_event::PlayHoldEvent {
-                    length: ob.length,
-                }),
+                kind: EventType::PlayHold(awg_event::PlayHoldEvent { length: ob.length }),
                 position: None,
             }]
         }
-        ir::NodeKind::Match(ob) => {
+        NodeKind::Match(ob) => {
             let end = node.offset() + ob.length;
             let obj = awg_event::MatchEvent::from_ir(ob);
-            let event = awg_event::AwgEvent {
+            let event = AwgEvent {
                 start: *node.offset(),
                 end,
-                kind: awg_event::EventType::Match(obj),
+                kind: EventType::Match(obj),
                 position: None,
             };
             let mut out = vec![event];
@@ -111,7 +112,7 @@ fn generate_output(
             );
             out
         }
-        ir::NodeKind::FrameChange(ob) => {
+        NodeKind::FrameChange(ob) => {
             let mut hw_osc = None;
             if awg.device_kind.traits().supports_oscillator_switching {
                 if let Some(osc) = &ob.signal.oscillator {
@@ -122,11 +123,11 @@ fn generate_output(
                     hw_osc = Some(out);
                 }
             }
-            vec![awg_event::AwgEvent {
+            vec![AwgEvent {
                 start: *node.offset(),
                 end: node.offset() + ob.length,
                 position: Some(*pos),
-                kind: awg_event::EventType::ChangeHwOscPhase(awg_event::ChangeHwOscPhase {
+                kind: EventType::ChangeHwOscPhase(awg_event::ChangeHwOscPhase {
                     signal: ob.signal.uid.clone(),
                     phase: ob.phase,
                     hw_oscillator: hw_osc,
@@ -134,7 +135,7 @@ fn generate_output(
                 }),
             }]
         }
-        ir::NodeKind::Case(ob) => {
+        NodeKind::Case(ob) => {
             *state = Some(ob.state);
             let out = node
                 .take_children()
@@ -213,6 +214,21 @@ fn generate_output(
             };
             vec![event]
         }
+        NodeKind::SetOscillatorFrequencySweep(ob) => {
+            let start = *node.offset();
+            let end = *node.offset() + ob.length;
+            let mut awg_events = vec![];
+            for osc in ob.oscillators.into_iter() {
+                let event = AwgEvent {
+                    start,
+                    end,
+                    position: None,
+                    kind: EventType::SetOscillatorFrequency(SetOscillatorFrequencyPy::new(osc)),
+                };
+                awg_events.push(event);
+            }
+            awg_events
+        }
         _ => node
             .take_children()
             .into_iter()
@@ -230,15 +246,25 @@ fn generate_code_for_awg(
     ob: Py<PyAny>,
     // SignalIR
     signals: Py<PyAny>,
+    // Compiler settings as Python dictionary
+    settings: Py<PyDict>,
     cut_points: &Bound<PySet>,
-    play_wave_size_hint: u16,
-    play_zero_size_hint: u16,
-    amplitude_resolution_range: u64,
-    use_amplitude_increment: bool,
-    phase_resolution_range: u64,
     global_delay_samples: ir::Samples,
     waveform_sampler: Py<PyAny>,
 ) -> PyResult<AwgCodeGenerationResultPy> {
+    let mut settings = code_generator_settings_from_dict(settings.bind(py))?;
+    for msg in settings
+        .sanitize()
+        .map_err(|err| translate_error(py, err))?
+    {
+        log::warn!(
+            "Compiler setting `{}` is sanitized from {} to {}. Reason: {}",
+            msg.field.to_uppercase(),
+            msg.original,
+            msg.sanitized,
+            msg.reason
+        );
+    }
     let mut awg = py_conversions::extract_awg(&ob.bind(py).getattr("awg")?, signals.bind(py))?;
     if awg.signals.is_empty() {
         return Ok(AwgCodeGenerationResultPy::default());
@@ -254,11 +280,7 @@ fn generate_code_for_awg(
         root,
         &awg,
         cut_points.extract::<HashSet<ir::Samples>>()?,
-        play_wave_size_hint,
-        play_zero_size_hint,
-        amplitude_resolution_range,
-        use_amplitude_increment,
-        phase_resolution_range,
+        &settings,
         global_delay_samples,
     )
     .map_err(|err| translate_error(py, err))?;

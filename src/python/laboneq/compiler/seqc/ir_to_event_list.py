@@ -110,6 +110,14 @@ class EventListGeneratorCodeGenerator(event_gen.EventListGenerator):
     ) -> EventList:
         return self.visit_SectionIR(case_ir, start, max_events)
 
+    def visit_SetOscillatorFrequencyIR(
+        self,
+        ir: ir_def.SetOscillatorFrequencyIR,
+        start: int,
+        max_events: int,
+    ) -> EventList:
+        return []
+
 
 def event_list_per_awg(
     tree: ir_def.IRTree,

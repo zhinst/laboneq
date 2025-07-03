@@ -23,7 +23,7 @@ _S = TypeVar("_S", PhysicalChannelCalibration, SignalCalibration, None)
 @attrs.frozen
 class CalibrationMediator:
     physical_channel: PhysicalChannel
-    logical_signals: list[LogicalSignal] = attrs.field(init=False, factory=list)
+    logical_signals: set[LogicalSignal] = attrs.field(init=False, factory=set)
 
     def __attrs_post_init__(self):
         self._register_physical_channel_callbacks(self.physical_channel)
@@ -43,7 +43,7 @@ class CalibrationMediator:
         self._register_calibration_attribute_change_callbacks(
             logical_signal.calibration
         )
-        self.logical_signals.append(logical_signal)
+        self.logical_signals.add(logical_signal)
 
     def _register_physical_channel_callbacks(
         self, value: PhysicalChannel

@@ -1,5 +1,5 @@
 [workspace.package]
-version = "2.54.0"
+version = "2.55.0"
 authors = ["Zurich Instruments AG <info@zhinst.com>"]
 edition = "2024"
 publish = false
@@ -10,17 +10,21 @@ resolver = "2"
 
 [workspace.dependencies]
 anyhow = "1.0"
+askama = "0.14.0"
 bitvec = "1.0"
 clap = "4.5.38"
 criterion = "0.6"
 indexmap = "2.9"
 log = "0.4.27"
-md5 = "0.7.0"
+md5 = "0.8.0"
 num-complex = "0.4.6"
 numpy = "0.25.0"
-proptest = "1.6"
 pyo3 = { version = "0.25.0", features = [
-    "abi3-py39", "generate-import-lib", "num-complex", "auto-initialize", "anyhow"
+  "abi3-py39",
+  "generate-import-lib",
+  "num-complex",
+  "auto-initialize",
+  "anyhow",
 ] }
 pyo3-ffi = "0.25.0"
 pyo3-log = "0.12.4"
@@ -29,3 +33,22 @@ serde_json = "1.0"
 thiserror = "2.0"
 uuid = "1.16"
 sha1 = "0.10.6"
+
+
+[workspace.lints.rust]
+ambiguous_negative_literals = "warn"
+unused_qualifications = "warn"
+explicit-outlives-requirements = "warn"
+redundant_lifetimes = "warn"
+single-use-lifetimes = "warn"
+
+[workspace.lints.clippy]
+cargo = { level = "deny", priority = -1 }
+complexity = { level = "deny", priority = -1 }
+perf = { level = "deny", priority = -1 }
+style = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+clone_on_ref_ptr = "warn"
+missing_assert_message = "allow"               # todo: warn
+todo = "deny"
+verbose_file_reads = "warn"

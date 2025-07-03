@@ -290,6 +290,7 @@ class DeviceZI(DeviceAbstract):
         awg_key: AwgKey,
         awg_config: AwgConfig,
         signal_id: str,
+        handle: str,
     ) -> int: ...
 
     @abstractmethod
@@ -478,6 +479,7 @@ class DeviceBase(DeviceZI):
         awg_key: AwgKey,
         awg_config: AwgConfig,
         signal_id: str,
+        handle: str,  # unused; all scope acquisitions must share the same length regardless of handle
     ) -> int:
         if signal_id not in awg_config.signal_raw_acquire_lengths:
             # Use default length 4096, in case AWG config is not available

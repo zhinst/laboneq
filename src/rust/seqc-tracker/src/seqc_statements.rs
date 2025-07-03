@@ -40,11 +40,11 @@ impl Hash for SeqCVariant {
 impl fmt::Display for SeqCVariant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SeqCVariant::Bool(b) => write!(f, "{}", b),
-            SeqCVariant::String(s) => write!(f, "{}", s),
-            SeqCVariant::LiteralString(s) => write!(f, "\"{}\"", s),
-            SeqCVariant::Integer(i) => write!(f, "{}", i),
-            SeqCVariant::Float(flt) => write!(f, "{:.1}", flt),
+            SeqCVariant::Bool(b) => write!(f, "{b}"),
+            SeqCVariant::String(s) => write!(f, "{s}"),
+            SeqCVariant::LiteralString(s) => write!(f, "\"{s}\""),
+            SeqCVariant::Integer(i) => write!(f, "{i}"),
+            SeqCVariant::Float(flt) => write!(f, "{flt:.1}"),
             SeqCVariant::None() => write!(f, ""),
         }
     }

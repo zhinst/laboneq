@@ -306,13 +306,13 @@ fn collect_waveform_info<T: SampledWaveformSignature>(node: &IrNode, ctx: &mut P
 
                 let wave_declaration = WaveDeclaration {
                     length: ob.waveform.length(),
-                    signature_string: signature_string.clone(),
+                    signature_string: Arc::clone(&signature_string),
                     has_marker1: sampled_waveform.has_marker1(),
                     has_marker2: sampled_waveform.has_marker2(),
                 };
                 let sampled_waveform_data = SampledWaveform {
                     signals: signals.clone(),
-                    signature_string: signature_string.clone(),
+                    signature_string: Arc::clone(&signature_string),
                     signature: sampled_waveform,
                 };
                 ctx.sampled_waveforms.push(sampled_waveform_data);

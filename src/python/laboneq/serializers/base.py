@@ -6,7 +6,6 @@ from __future__ import annotations
 import warnings
 from typing import Generic, TypeVar, cast
 
-
 from laboneq._version import get_version
 from laboneq.core.serialization.simple_serialization import (
     deserialize_from_dict_with_ref,

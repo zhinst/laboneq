@@ -6,6 +6,9 @@ edition.workspace = true
 publish.workspace = true
 license = "MIT"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = { workspace = true }
 indexmap = { workspace = true }

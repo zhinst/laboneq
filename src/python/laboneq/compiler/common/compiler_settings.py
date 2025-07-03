@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import math
 import warnings
 from dataclasses import dataclass, fields
 from typing import Dict, TypeVar
@@ -42,10 +41,6 @@ DEFAULT_SHFSG_LEAD_PQSC: float = 80e-9
 DEFAULT_TESTDEVICE_LEAD: float = 80e-9
 
 TINYSAMPLE: float = 1 / 3600000e6
-
-
-def round_min_playwave_hint(n: int, multiple: int) -> int:
-    return math.ceil(n / multiple) * multiple
 
 
 @dataclass(frozen=True)

@@ -84,8 +84,7 @@ class QPUTopology:
     edges, e.g. couplers. Connections between nodes are directed.
 
     Arguments:
-        quantum_elements:
-            The quantum elements that make up the QPU.
+        quantum_elements: The quantum elements that make up the QPU.
 
     Each node of the graph contains a single quantum element.
     Edges are identified by an edge tag and a source and target node.
@@ -102,7 +101,7 @@ class QPUTopology:
         self,
         quantum_elements: list[QuantumElement],
     ) -> None:
-        """Initializes the QPU topology graph.
+        """Initialize the QPU topology graph.
 
         Constructs the QPU topology graph from the list of quantum elements at the
         nodes.
@@ -112,6 +111,136 @@ class QPUTopology:
 
         for q in quantum_elements:
             self._add_node(q)
+
+    def __getitem__(
+        self,
+        key: slice
+        | tuple[
+            str | slice, str | QuantumElement | slice, str | QuantumElement | slice
+        ],
+    ) -> TopologyEdge | list[TopologyEdge]:
+        """Return edge(s) in the QPU topology graph.
+
+        The QPU topology edge lookup retrieves edges from the QPU topology graph. The
+        returned value depends on the type of key supplied.
+
+        If the key is a null slice, all the topology edges are returned:
+
+        ```python
+        qpu_topology[:]  # returns all the edges
+        ```
+
+        If the key is a `(tag, source_node, target_node)` tuple, a single topology edge
+        is returned:
+
+        ```python
+        qpu_topology["coupler", "q0", "q1"]  # returns the edge ("coupler", "q0", "q1")
+        ```
+
+        If the key is a `(tag, source_node, target_node)` tuple with null slice
+        elements, a list of matching topology edges is returned:
+
+        ```python
+        qpu_topology[
+            "coupler", "q0", :
+        ]  # returns all outgoing edges from "q0" with tag "coupler"
+        qpu_topology[
+            "coupler", :, "q0"
+        ]  # returns all incoming edges to "q0" with tag "coupler"
+        qpu_topology["coupler", :, :]  # returns all edges with tag "coupler"
+        qpu_topology[:, "q0", "q1"]  # returns all edges from "q0" to "q1"
+        qpu_topology[:, "q0", :]  # returns all outgoing edges from "q0"
+        qpu_topology[:, :, "q0"]  # returns all incoming edges to "q0"
+        qpu_topology[:, :, :]  # returns all the edges
+        ```
+
+        Arguments:
+            key: The key determining the topology edge(s) to retrieve.
+        Returns:
+            The selected topology edge(s).
+        Raises:
+            TypeError: If `key` has an invalid type.
+            KeyError: If non-null slices are passed.
+        """
+
+        if isinstance(key, slice):
+            if key == slice(None):
+                return [edge for edge in self.edges()]
+            else:
+                err = KeyError(key)
+                add_note(err, "Non-null slices are not supported.")
+                raise err
+
+        if isinstance(key, tuple) and len(key) == 3:
+            for element in key:
+                if isinstance(element, slice) and element != slice(None):
+                    err = KeyError(element)
+                    add_note(err, "Non-null slices are not supported.")
+                    raise err
+
+            tag, source_node, target_node = key
+
+            if not isinstance(source_node, str | QuantumElement | slice):
+                raise TypeError(
+                    f"The source node has unexpected type: {type(source_node)}. "
+                    f"Expected type: str | QuantumElement | slice."
+                )
+            if not isinstance(target_node, str | QuantumElement | slice):
+                raise TypeError(
+                    f"The target node has unexpected type: {type(target_node)}. "
+                    f"Expected type: str | QuantumElement | slice."
+                )
+
+            if isinstance(source_node, QuantumElement):
+                source_node = source_node.uid
+            if isinstance(target_node, QuantumElement):
+                target_node = target_node.uid
+
+            if isinstance(tag, str):
+                if isinstance(source_node, str) and isinstance(target_node, str):
+                    return self.get_edge(tag, source_node, target_node)
+                if isinstance(source_node, str) and isinstance(target_node, slice):
+                    return self.get_edges(source_node, tag, outgoing=True)
+                if isinstance(source_node, slice) and isinstance(target_node, str):
+                    return self.get_edges(target_node, tag, incoming=True)
+                if isinstance(source_node, slice) and isinstance(target_node, slice):
+                    return [edge for edge in self.edges() if edge.tag == tag]
+
+            if isinstance(tag, slice):
+                if isinstance(source_node, str) and isinstance(target_node, str):
+                    return [
+                        edge
+                        for edge in self.edges()
+                        if (edge.source_node.uid, edge.target_node.uid) == ("q0", "q1")
+                    ]
+                if isinstance(source_node, str) and isinstance(target_node, slice):
+                    return self.get_edges(source_node, outgoing=True)
+                if isinstance(source_node, slice) and isinstance(target_node, str):
+                    return self.get_edges(target_node, incoming=True)
+                if isinstance(source_node, slice) and isinstance(target_node, slice):
+                    return [edge for edge in self.edges()]
+
+            raise TypeError(
+                f"The tag has unexpected type: {type(tag)}. Expected type: str | slice."
+            )
+
+        raise TypeError(
+            f"The edge key has unexpected type: {type(key)}. "
+            f"Expected type: slice | tuple[..., ..., ...]."
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, QPUTopology):
+            return NotImplemented
+        return (
+            nx.algorithms.is_isomorphic(
+                self._graph,
+                other._graph,
+                node_match=lambda node1, node2: node1 == node2,
+                edge_match=lambda edge1, edge2: edge1 == edge2,
+            )
+            and self._node_lookup == other._node_lookup
+        )
 
     def __repr__(self) -> str:
         edge_tags = [t[0] for t in list(self.edge_keys())]
@@ -130,6 +259,24 @@ class QPUTopology:
         """Add a node to the QPU topology graph."""
         self._graph.add_node(quantum_element.uid)
         self._node_lookup[quantum_element.uid] = quantum_element
+
+    def copy(self) -> QPUTopology:
+        """Return a copy of the QPU topology."""
+        quantum_elements = [qe.copy() for qe in self._node_lookup.values()]
+        topology = type(self)(quantum_elements)
+        for edge in self.edges():
+            topology.add_edge(
+                edge.tag,
+                edge.source_node,
+                edge.target_node,
+                parameters=edge.parameters.copy()
+                if edge.parameters is not None
+                else None,
+                quantum_element=edge.quantum_element.uid
+                if edge.quantum_element is not None
+                else None,
+            )
+        return topology
 
     def nodes(self) -> Generator[QuantumElement]:
         """An iterator over the quantum elements (nodes) of the topology graph."""
@@ -162,9 +309,10 @@ class QPUTopology:
 
         Arguments:
             node: The node UID.
-
         Returns:
             The quantum element at the node.
+        Raises:
+            KeyError: If the node UID is not in the topology graph.
         """
         try:
             self._graph.nodes[node]
@@ -197,15 +345,13 @@ class QPUTopology:
             outgoing:
                 If false, exclude outgoing edges from `node`. If true, include
                 outgoing edges.
+        Returns:
+            The list of neighbouring nodes.
 
         !!! note
-
             If `incoming` and `outgoing` are both `None`, all neighbours are returned.
             If only one is `None`, the other takes the sensible default of
             `not` the other.
-
-        Returns:
-            The list of neighbouring nodes.
         """
         if isinstance(node, QuantumElement):
             node = node.uid
@@ -266,6 +412,8 @@ class QPUTopology:
                 or the quantum element object may be provided.
             parameters: The quantum parameters for the edge.
             quantum_element: The quantum element associated to the edge.
+        Raises:
+            TypeError: If `quantum_element` has an invalid type.
 
         !!! warning
             Multiple edges between two quantum elements in a given direction with the
@@ -283,7 +431,7 @@ class QPUTopology:
 
         # check type of quantum_elements
         if quantum_element is not None and not isinstance(quantum_element, str):
-            raise ValueError(
+            raise TypeError(
                 f"The quantum_element argument has an invalid type "
                 f"{type(quantum_element)}. Expected type: "
                 f"QuantumElement | str | None."
@@ -315,9 +463,11 @@ class QPUTopology:
                 the quantum element object may be provided.
             target_node: The quantum element at the target node. Either the quantum element UID
                 or the quantum element object may be provided.
-
         Returns:
             The edge.
+        Raises:
+            KeyError: If the edge key `(tag, source_node, target_node)` does not exist
+                in the QPU.
         """
         if isinstance(source_node, QuantumElement):
             source_node = source_node.uid
@@ -376,15 +526,13 @@ class QPUTopology:
             outgoing:
                 If false, exclude outgoing edges from `node`. If true, include
                 outgoing edges.
+        Returns:
+            The list of edges.
 
         !!! note
-
             If `incoming` and `outgoing` are both `None`, all edges are returned.
             If only one is `None`, the other takes the sensible default of
             `not` the other.
-
-        Returns:
-            The list of edges.
         """
         if isinstance(node, QuantumElement):
             node = node.uid
@@ -448,6 +596,9 @@ class QPUTopology:
                 the quantum element object may be provided.
             target_node: The quantum element at the target node. Either the quantum element UID
                 or the quantum element object may be provided.
+        Raises:
+            KeyError: If the edge key `(tag, source_node, target_node)` does not exist
+                in the QPU.
         """
         if isinstance(source_node, QuantumElement):
             source_node = source_node.uid

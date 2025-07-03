@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from laboneq.dsl.result.results import Results, AcquiredResult
+from laboneq.dsl.result.results import AcquiredResult, Results
 from laboneq.serializers.base import LabOneQClassicSerializer, VersionedClassSerializer
 from laboneq.serializers.core import from_dict, to_dict
 from laboneq.serializers.serializer_registry import serializer

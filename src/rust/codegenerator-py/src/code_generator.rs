@@ -86,7 +86,7 @@ pub(crate) fn seqc_generator_from_device_and_signal_type_py(
     }
 }
 
-fn union_to_variant(obj: Bound<'_, PyAny>) -> Result<SeqCVariant, pyo3::PyErr> {
+fn union_to_variant(obj: Bound<'_, PyAny>) -> Result<SeqCVariant, PyErr> {
     if obj.is_instance_of::<pyo3::types::PyInt>() {
         let int_value = obj.extract::<i64>()?;
         return Ok(SeqCVariant::Integer(int_value));
@@ -109,7 +109,7 @@ fn union_to_variant(obj: Bound<'_, PyAny>) -> Result<SeqCVariant, pyo3::PyErr> {
     ))
 }
 
-fn sequence_to_variants(seq: Bound<'_, PySequence>) -> Result<Vec<SeqCVariant>, pyo3::PyErr> {
+fn sequence_to_variants(seq: Bound<'_, PySequence>) -> Result<Vec<SeqCVariant>, PyErr> {
     let mut result = Vec::new();
     for item in seq.try_iter()? {
         let item = item?;
@@ -163,7 +163,7 @@ impl SeqCGeneratorPy {
     pub fn add_function_call_statement(
         &mut self,
         name: String,
-        args: Option<pyo3::Bound<'_, PySequence>>,
+        args: Option<Bound<'_, PySequence>>,
         assign_to: Option<String>,
     ) -> PyResult<()> {
         let args = match args {
@@ -204,7 +204,7 @@ impl SeqCGeneratorPy {
     pub fn add_constant_definition(
         &mut self,
         name: String,
-        value: pyo3::Bound<'_, PyAny>,
+        value: Bound<'_, PyAny>,
         comment: Option<String>,
     ) -> PyResult<()> {
         let value = union_to_variant(value)?;
@@ -297,7 +297,7 @@ impl SeqCGeneratorPy {
     pub fn add_variable_declaration(
         &mut self,
         variable_name: String,
-        initial_value: Option<pyo3::Bound<'_, PyAny>>,
+        initial_value: Option<Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         let initial_value = match initial_value {
             Some(value) => Some(union_to_variant(value)?),
@@ -314,7 +314,7 @@ impl SeqCGeneratorPy {
     pub fn add_variable_assignment(
         &mut self,
         variable_name: String,
-        value: pyo3::Bound<'_, PyAny>,
+        value: Bound<'_, PyAny>,
     ) -> PyResult<()> {
         let value = union_to_variant(value)?;
         self.seq_c_generator
@@ -328,7 +328,7 @@ impl SeqCGeneratorPy {
     pub fn add_variable_increment(
         &mut self,
         variable_name: String,
-        value: pyo3::Bound<'_, PyAny>,
+        value: Bound<'_, PyAny>,
     ) -> PyResult<()> {
         let value = union_to_variant(value)?;
         self.seq_c_generator
@@ -361,8 +361,8 @@ impl SeqCGeneratorPy {
     #[pyo3(signature = (ct_index, latency = None, comment = ""))]
     pub fn add_command_table_execution(
         &mut self,
-        ct_index: pyo3::Bound<'_, PyAny>,
-        latency: Option<pyo3::Bound<'_, PyAny>>,
+        ct_index: Bound<'_, PyAny>,
+        latency: Option<Bound<'_, PyAny>>,
         comment: Option<&str>,
     ) -> PyResult<()> {
         let latency = match latency {
@@ -421,7 +421,7 @@ impl SeqCGeneratorPy {
     }
 
     // def __eq__(self, other: object) -> bool: ...
-    pub fn __eq__(&self, other: &pyo3::Bound<'_, SeqCGeneratorPy>) -> bool {
+    pub fn __eq__(&self, other: &Bound<'_, SeqCGeneratorPy>) -> bool {
         self.seq_c_generator
             == other
                 .extract::<Py<SeqCGeneratorPy>>()
@@ -449,7 +449,7 @@ impl SeqCGeneratorPy {
 #[pyfunction]
 #[pyo3(name = "merge_generators")]
 pub(crate) fn merge_generators_py(
-    seq_c_generators: pyo3::Bound<'_, PyList>,
+    seq_c_generators: Bound<'_, PyList>,
     compress: bool,
 ) -> SeqCGeneratorPy {
     let py = seq_c_generators.py();
@@ -663,7 +663,7 @@ impl SeqCTrackerPy {
     fn add_function_call_statement(
         &mut self,
         name: String,
-        args: Option<pyo3::Bound<'_, PySequence>>,
+        args: Option<Bound<'_, PySequence>>,
         assign_to: Option<String>,
         deferred: bool,
     ) -> PyResult<()> {
@@ -708,8 +708,8 @@ impl SeqCTrackerPy {
     #[pyo3(signature = (ct_index, latency = None, comment = ""))]
     fn add_command_table_execution(
         &mut self,
-        ct_index: pyo3::Bound<'_, PyAny>,
-        latency: Option<pyo3::Bound<'_, PyAny>>,
+        ct_index: Bound<'_, PyAny>,
+        latency: Option<Bound<'_, PyAny>>,
         comment: Option<&str>,
     ) -> PyResult<()> {
         let latency = match latency {
@@ -734,7 +734,7 @@ impl SeqCTrackerPy {
     fn add_variable_assignment(
         &mut self,
         variable_name: String,
-        value: pyo3::Bound<'_, PyAny>,
+        value: Bound<'_, PyAny>,
     ) -> PyResult<()> {
         let value = union_to_variant(value)?;
         self.get_seq_c_tracker_mut()
@@ -747,7 +747,7 @@ impl SeqCTrackerPy {
     fn add_variable_increment(
         &mut self,
         variable_name: String,
-        value: pyo3::Bound<'_, PyAny>,
+        value: Bound<'_, PyAny>,
     ) -> PyResult<()> {
         let value = union_to_variant(value)?;
         self.get_seq_c_tracker_mut()
@@ -836,9 +836,7 @@ impl SeqCTrackerPy {
     fn prng_tracker(&self) -> Option<PRNGTrackerPy> {
         self.get_seq_c_tracker()
             .prng_tracker()
-            .map(|prng_tracker| PRNGTrackerPy {
-                prng_tracker: prng_tracker.clone(),
-            })
+            .map(|prng_tracker| PRNGTrackerPy { prng_tracker })
     }
 
     //     def add_set_trigger_statement(self, value: int, deferred: bool = True) -> None: ...

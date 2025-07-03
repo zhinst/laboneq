@@ -1,14 +1,14 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::anyhow;
-use std::collections::HashMap;
-use std::ops::Range;
-
 use crate::Result;
 use crate::ir;
 use crate::ir::compilation_job::{self as cjob};
 use crate::signature::PulseSignature;
+use anyhow::anyhow;
+use std::collections::HashMap;
+use std::ops::Range;
+use std::rc::Rc;
 
 fn try_convert_pulse_to_frame_change(pulse: &ir::PlayPulse) -> Option<ir::FrameChange> {
     // TODO: Prune `Delay` nodes from  the IR
@@ -20,7 +20,7 @@ fn try_convert_pulse_to_frame_change(pulse: &ir::PlayPulse) -> Option<ir::FrameC
             length: pulse.length,
             phase: incr_phase,
             parameter: pulse.incr_phase_param_name.clone(),
-            signal: pulse.signal.clone(),
+            signal: Rc::clone(&pulse.signal),
         };
         return Some(frame);
     }

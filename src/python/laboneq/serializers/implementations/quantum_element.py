@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import attrs
 
-from laboneq.dsl.quantum import QuantumParameters, QuantumElement
+from laboneq.dsl.quantum import QuantumElement, QuantumParameters
 from laboneq.serializers.base import VersionedClassSerializer
 from laboneq.serializers.core import from_dict, import_cls, to_dict
 from laboneq.serializers.serializer_registry import serializer

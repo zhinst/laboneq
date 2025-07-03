@@ -23,13 +23,13 @@ from laboneq.dsl.device.instruments import HDAWG, PQSC, QHUB, SHFQA, SHFQC, SHFS
 # generate a device setup from a list of Instrument objects
 def generate_device_setup(
     number_qubits: int = 6,
-    qhub: list[dict[str]] | None = None,
-    pqsc: list[dict[str]] | None = None,
-    hdawg: list[dict[str]] | None = None,
-    shfsg: list[dict[str]] | None = None,
-    shfqc: list[dict[str]] | None = None,
-    shfqa: list[dict[str]] | None = None,
-    uhfqa: list[dict[str]] | None = None,
+    qhub: list | None = None,
+    pqsc: list | None = None,
+    hdawg: list | None = None,
+    shfsg: list | None = None,
+    shfqc: list | None = None,
+    shfqa: list | None = None,
+    uhfqa: list | None = None,
     multiplex_drive_lines: bool = False,
     include_flux_lines: bool = False,
     drive_only: bool = False,
@@ -41,7 +41,7 @@ def generate_device_setup(
     query_options: bool = False,
     debug: bool = False,
 ) -> DeviceSetup:
-    """A function to generate a DeviceSetup given a list of devices, based on standardised wiring assumptions.
+    """A function to generate a DeviceSetup given a list of devices, based on standardized wiring assumptions.
 
     With this function, you can auto-generate a device setup based on a list of input parameters,
     making some standard assumptions about wiring configuration.
@@ -292,7 +292,7 @@ def generate_device_setup(
         if instrument["dio"] is not None:
             dio[instrument["serial"]] = instrument["dio"]
 
-    # check if combination and wiring of HDAWG and UFQA instruments works
+    # check if combination and wiring of HDAWG and UHFQA instruments works
     # TODO: ensure that for each UHFQA there is exactly one HDAWG connected to it via DIO
     if uhfqa:
         if hdawg:
@@ -483,15 +483,15 @@ def generate_device_setup(
     # check that instruments supplied are sufficient for specified needs
     if number_readout_acquire_lines < number_qubits and not drive_only:
         raise LabOneQException(
-            f"Device Setup generation failed: not enought readout / acquire lines configurable ({number_readout_acquire_lines}) for the specified number of qubits ({number_qubits})"
+            f"Device Setup generation failed: not enough readout / acquire lines configurable ({number_readout_acquire_lines}) for the specified number of qubits ({number_qubits})"
         )
     if number_drive_lines < number_qubits:
         raise LabOneQException(
-            f"Device Setup generation failed: not enought drive lines configurable ({number_drive_lines}) for the specified number of qubits ({number_qubits})"
+            f"Device Setup generation failed: not enough drive lines configurable ({number_drive_lines}) for the specified number of qubits ({number_qubits})"
         )
     if include_flux_lines and (number_flux_lines < number_qubits):
         raise LabOneQException(
-            f"Device Setup generation failed: not enought flux lines configurable ({number_flux_lines}) for the specified number of qubits ({number_qubits})"
+            f"Device Setup generation failed: not enough flux lines configurable ({number_flux_lines}) for the specified number of qubits ({number_qubits})"
         )
 
     # add logical signal lines for the specified number of qubits
@@ -580,13 +580,13 @@ def generate_device_setup(
 
 def generate_device_setup_qubits(
     number_qubits: int = 6,
-    qhub: list[dict[str]] | None = None,
-    pqsc: list[dict[str]] | None = None,
-    hdawg: list[dict[str]] | None = None,
-    shfsg: list[dict[str]] | None = None,
-    shfqc: list[dict[str]] | None = None,
-    shfqa: list[dict[str]] | None = None,
-    uhfqa: list[dict[str]] | None = None,
+    qhub: list | None = None,
+    pqsc: list | None = None,
+    hdawg: list | None = None,
+    shfsg: list | None = None,
+    shfqc: list | None = None,
+    shfqa: list | None = None,
+    uhfqa: list | None = None,
     multiplex_drive_lines: bool = False,
     include_flux_lines: bool = False,
     drive_only: bool = False,
@@ -601,7 +601,7 @@ def generate_device_setup_qubits(
     debug: bool = False,
 ):
     """A function to generate a DeviceSetup and a list of Transmon qubits
-    given a list of devices, based on standardised wiring assumptions.
+    given a list of devices, based on standardized wiring assumptions.
 
     With this function, you can auto-generate a device setup and a list of Transmon qubits
     based on a list of input parameters, making some standard assumptions about wiring configuration.
@@ -625,7 +625,7 @@ def generate_device_setup_qubits(
             (e.g. `[{"serial": "DEV12XXX", "usb": False, "number_of_channels": 6, "readout_multiplex": 6, "options": None}]`).
         shfqa: The device id(s) and additional properties of your SHFQA instruments as a list of dictionaries
             (e.g. `[{"serial": "DEV12XXX", "usb": False, "number_of_channels": 4, "readout_multiplex": 6, "options": None}]`).
-        multiplex_drive_lines: Whether to add logical signals that are mutliplexed t othe drive lines,
+        multiplex_drive_lines: Whether to add logical signals that are multiplexed onto the drive lines,
             e.g. for cross-resonance or e-f driving.
             Defaults to False.
         include_flux_lines: Whether to include flux lines in the setup.
@@ -639,7 +639,7 @@ def generate_device_setup_qubits(
         server_port: The port number of the LabOne dataserver used to connect to the instruments.
             Defaults to the LabOne default setting "8004".
         setup_name: The name of your setup. Defaults to "my_QCCS".
-        include_qubits: Whether to include the qbits in the device setup itself, under the `DeviceSetup.qubits` property,
+        include_qubits: Whether to include the qubits in the device setup itself, under the `DeviceSetup.qubits` property,
             in addition to returning them.
             Defaults to True.
         calibrate_setup: Whether to use the qubit properties to calibrate the device setup.

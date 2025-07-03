@@ -831,6 +831,17 @@ class ExperimentInfoBuilder:
                 acquisition_type,
                 section_info,
             )
+        for trigger_signal in section.trigger:
+            try:
+                signal_info = self._signal_infos[trigger_signal]
+            except KeyError as e:
+                raise LabOneQException(
+                    f"Trigger on section {section.uid} played on signal"
+                    f" {trigger_signal} not present in experiment."
+                    f" Available signal(s) are {', '.join(self._signal_infos)}."
+                ) from e
+            if signal_info not in section_info.signals:
+                section_info.signals.append(signal_info)
 
     def _load_section(
         self,

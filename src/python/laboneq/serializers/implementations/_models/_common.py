@@ -1,22 +1,21 @@
 # Copyright 2025 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from enum import Enum
 import inspect
-from collections.abc import Iterable
 import types
+import typing
+from collections.abc import Iterable
+from enum import Enum
 from typing import Type
 
 import attrs
 import numpy
-import typing
 from cattrs import Converter
 from cattrs.gen import make_dict_unstructure_fn
 from cattrs.preconf.orjson import make_converter
 
 from laboneq.serializers.core import from_dict
 from laboneq.serializers.implementations.numpy_array import NumpyArraySerializer
-from cattrs.strategies import use_class_methods
 
 # Common types
 
@@ -112,9 +111,10 @@ def structure(data: dict, cls: type, converter: Converter):
     attributes = attrs.fields_dict(cls)
     se = {}
     for k, v in data.items():
-        if k == "_type":
+        if k == "_type" or k == "$ref":
             # _type field was used to manually structure the union type.
             # It is no longer needed when we let cattrs structure the object automatically.
+            # ref field is used for caching and is already processed by the cache methods in ObjectCache.
             continue
         if k not in attributes:
             raise ValueError(f"Invalid attribute {k} for class {cls}")
@@ -139,6 +139,10 @@ def structure(data: dict, cls: type, converter: Converter):
     return de
 
 
+def _predicate(cls):
+    return lambda obj: obj is cls
+
+
 def register_models(converter: Converter, models: Iterable) -> None:
     for model in models:
         if issubclass(model, Enum):
@@ -148,19 +152,49 @@ def register_models(converter: Converter, models: Iterable) -> None:
             )
             continue
         if "_unstructure" in model.__dict__:
-            use_class_methods(converter, unstructure_method_name="_unstructure")
+            if hasattr(model, "__cache_serializer__"):
+                converter.register_unstructure_hook_func(
+                    _predicate(model),
+                    model.__cache_serializer__.cache_unstructure(model._unstructure),
+                )
+            else:
+                converter.register_unstructure_hook_func(
+                    _predicate(model), model._unstructure
+                )
         else:
-            converter.register_unstructure_hook(
-                model, make_dict_unstructure_fn(model, converter)
-            )
+            if hasattr(model, "__cache_serializer__"):
+                converter.register_unstructure_hook(
+                    model,
+                    model.__cache_serializer__.cache_unstructure(
+                        make_dict_unstructure_fn(model, converter)
+                    ),
+                )
+            else:
+                converter.register_unstructure_hook(
+                    model, make_dict_unstructure_fn(model, converter)
+                )
 
         if "_structure" in model.__dict__:
-            use_class_methods(converter, structure_method_name="_structure")
+            if hasattr(model, "__cache_serializer__"):
+                converter.register_structure_hook_func(
+                    _predicate(model),
+                    model.__cache_serializer__.cache_structure(model._structure),
+                )
+            else:
+                converter.register_structure_hook_func(
+                    _predicate(model), model._structure
+                )
         else:
-            converter.register_structure_hook(
-                model,
-                lambda d, cls: structure(d, cls, converter),
-            )
+            if hasattr(model, "__cache_serializer__"):
+                cache_func = model.__cache_serializer__.cache_structure(structure)
+                converter.register_structure_hook(
+                    model,
+                    lambda d, cls, cache_func=cache_func: cache_func(d, cls, converter),
+                )
+            else:
+                converter.register_structure_hook(
+                    model, lambda d, cls: structure(d, cls, converter)
+                )
 
 
 def collect_models(module_models) -> frozenset:

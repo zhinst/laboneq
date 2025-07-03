@@ -135,7 +135,7 @@ impl<'a> WaveformSamplerPy<'a> {
         let signal_map = awg
             .signals
             .iter()
-            .map(|s| (s.uid.as_str(), s.clone()))
+            .map(|s| (s.uid.as_str(), Rc::clone(s)))
             .collect();
         // Filter out integration signals, as they are not supported for waveform sampling
         // and also ensure that all signals are of the same kind and mixer type.
@@ -153,8 +153,7 @@ impl<'a> WaveformSamplerPy<'a> {
             supported_signals.iter().all(|s| s.kind == ref_signal.kind),
             "{}",
             format!(
-                "Internal error: Signal type not unique across waveform playing AWG signals ({:?})",
-                supported_signals
+                "Internal error: Signal type not unique across waveform playing AWG signals ({supported_signals:?})"
             )
         );
         assert!(
@@ -163,8 +162,7 @@ impl<'a> WaveformSamplerPy<'a> {
                 .all(|s| s.mixer_type == ref_signal.mixer_type),
             "{}",
             format!(
-                "Internal error: Mixer type not unique across waveform playing AWG signals {:?}",
-                supported_signals
+                "Internal error: Mixer type not unique across waveform playing AWG signals {supported_signals:?}"
             )
         );
         let mixer_type = ref_signal.mixer_type.as_ref();

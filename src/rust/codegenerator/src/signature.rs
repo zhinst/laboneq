@@ -98,26 +98,18 @@ impl Hash for PulseSignature {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.start.hash(state);
         self.length.hash(state);
-        if let Some(pulse) = self.pulse.as_ref() {
-            pulse.uid.hash(state);
-        }
-        if let Some(amplitude) = self.amplitude {
-            normalize_f64(amplitude).hash(state);
-        }
+        self.pulse.as_ref().map(|p| &p.uid).hash(state);
+        self.amplitude.map(normalize_f64).hash(state);
         normalize_f64(self.phase).hash(state);
-        if let Some(oscillator_frequency) = self.oscillator_frequency {
-            normalize_f64(oscillator_frequency).hash(state);
-        }
+        self.oscillator_frequency.map(normalize_f64).hash(state);
         self.channel.hash(state);
         self.sub_channel.hash(state);
         self.id_pulse_params.hash(state);
         self.markers.hash(state);
-        if let Some(oscillator_phase) = self.oscillator_phase {
-            normalize_f64(oscillator_phase).hash(state);
-        }
-        if let Some(increment_oscillator_phase) = self.increment_oscillator_phase {
-            normalize_f64(increment_oscillator_phase).hash(state);
-        }
+        self.oscillator_phase.map(normalize_f64).hash(state);
+        self.increment_oscillator_phase
+            .map(normalize_f64)
+            .hash(state);
         self.preferred_amplitude_register.hash(state);
         self.incr_phase_params.hash(state);
     }
@@ -133,9 +125,12 @@ impl Serialize for PulseSignature {
         state.serialize_field("length", &self.length)?;
         // Only serialize the UID of the pulse, not the full PulseDef
         state.serialize_field("pulse_uid", &self.pulse.as_ref().map(|p| &p.uid))?;
-        state.serialize_field("amplitude", &self.amplitude)?;
-        state.serialize_field("phase", &self.phase)?;
-        state.serialize_field("oscillator_frequency", &self.oscillator_frequency)?;
+        state.serialize_field("amplitude", &self.amplitude.map(normalize_f64))?;
+        state.serialize_field("phase", &normalize_f64(self.phase))?;
+        state.serialize_field(
+            "oscillator_frequency",
+            &self.oscillator_frequency.map(normalize_f64),
+        )?;
         state.serialize_field("channel", &self.channel)?;
         state.serialize_field("sub_channel", &self.sub_channel)?;
         state.serialize_field("id_pulse_params", &self.id_pulse_params)?;
@@ -148,17 +143,20 @@ impl Serialize for PulseSignature {
                     (
                         &m.marker_selector,
                         &m.enable,
-                        &m.start,
-                        &m.length,
+                        m.start.map(normalize_f64),
+                        m.length.map(normalize_f64),
                         &m.pulse_id,
                     )
                 })
                 .collect::<Vec<_>>(),
         )?;
-        state.serialize_field("oscillator_phase", &self.oscillator_phase)?;
+        state.serialize_field(
+            "oscillator_phase",
+            &self.oscillator_phase.map(normalize_f64),
+        )?;
         state.serialize_field(
             "increment_oscillator_phase",
-            &self.increment_oscillator_phase,
+            &self.increment_oscillator_phase.map(normalize_f64),
         )?;
         state.serialize_field(
             "preferred_amplitude_register",
@@ -332,7 +330,7 @@ impl WaveformSignature {
                     ("length", "_l", 1.0, 3),
                     ("channel", "_c", 1.0, 0),
                     ("sub_channel", "_sc", 1.0, 0),
-                    ("phase", "_ap", 1e3 / 2.0 / std::f64::consts::PI, 4),
+                    ("phase", "_ap", 1e3 / 2.0 / PI, 4),
                 ];
                 for (key, sep, scale, fill) in fields.iter() {
                     let value_opt = match *key {
@@ -357,7 +355,7 @@ impl WaveformSignature {
                             }
                         } else if !WaveformSignature::try_write_limited(
                             &mut retval,
-                            format_args!("{}{}{}", sep, sign, rounded),
+                            format_args!("{sep}{sign}{rounded}"),
                         ) {
                             break 'pulse_loop;
                         }
@@ -402,7 +400,7 @@ impl WaveformSignature {
         format!(
             "{}_{}",
             retval,
-            &format!("{:x}", hash)[..WaveformSignature::MAX_LEN_HASH_PARTS - 1]
+            &format!("{hash:x}")[..WaveformSignature::MAX_LEN_HASH_PARTS - 1]
         )
     }
 }
@@ -649,9 +647,40 @@ mod tests {
             assert_ne!(
                 waveform0.signature_string(),
                 waveform1.signature_string(),
-                "Signature string sensitivity failed on field: {}",
-                desc
+                "Signature string sensitivity failed on field: {desc}"
             );
+            assert_ne!(
+                create_hash(&waveform0),
+                create_hash(&waveform1),
+                "Hash sensitivity failed on field: {desc}",
+            );
+        }
+    }
+
+    #[test]
+    fn test_pulse_signature_f64_comparison() {
+        for (value, value_other) in [
+            (0.0f64, -0.0f64),
+            (
+                -0.0000000000000017763568394002505,
+                -0.0000000000000017763568394002505,
+            ),
+        ] {
+            let mut p = create_pulse_signature();
+            p.phase = value;
+            let mut p_other = p.clone();
+            p_other.phase = value_other;
+            let wf0 = WaveformSignature::Pulses {
+                length: 100,
+                pulses: vec![p],
+            };
+            let wf1 = WaveformSignature::Pulses {
+                length: 100,
+                pulses: vec![p_other],
+            };
+            assert_eq!(wf0, wf1);
+            assert_eq!(create_hash(&wf0), create_hash(&wf1));
+            assert_eq!(wf0.signature_string(), wf1.signature_string());
         }
     }
 

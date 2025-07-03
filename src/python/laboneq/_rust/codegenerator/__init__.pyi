@@ -258,10 +258,15 @@ def generate_code_for_awg(
     ob: SingleAwgIR,
     signals: list[SignalIR],
     cut_points: set[int],
-    play_wave_size_hint: int,
-    play_zero_size_hint: int,
-    amplitude_resolution_range: int,
-    use_amplitude_increment: bool,
-    phase_resolution_range: int,
+    settings: dict[str, object],
     global_delay_samples: int,
-) -> AwgCodeGenerationResult: ...
+) -> AwgCodeGenerationResult:
+    """Generate SeqC code for a single AWG.
+
+    Arguments:
+        ob: The `SingleAwgIR` object containing the IR for the AWG.
+        signals: A list of `SignalIR` objects representing the signals.
+        cut_points: A set of cut points in the waveform.
+        settings: Compiler settings as dictionary.
+        global_delay_samples: The global delay in samples to apply.
+    """

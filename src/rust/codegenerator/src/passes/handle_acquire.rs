@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::ir::{AcquirePulse, IrNode, NodeKind, PlayAcquire, Samples};
-use crate::passes::osc_parameters::SoftwareOscillatorParameters;
+use crate::passes::handle_oscillators::SoftwareOscillatorParameters;
 use crate::tinysample::floor_to_grid;
 use crate::{Error, Result};
+use std::rc::Rc;
 
 fn validate(pulse: &AcquirePulse) -> Result<()> {
     assert_ne!(pulse.length, 0, "Acquire length must be non-zero");
@@ -31,7 +32,7 @@ fn lower_acquire_pulse(
     let start = floor_to_grid(offset_adjusted, sample_multiple.into());
     let end = floor_to_grid(end_unsampled, sample_multiple.into());
     let acquire = PlayAcquire::new(
-        pulse.signal.clone(),
+        Rc::clone(&pulse.signal),
         end - start,
         pulse.pulse_defs.clone(),
         oscillator_frequency,

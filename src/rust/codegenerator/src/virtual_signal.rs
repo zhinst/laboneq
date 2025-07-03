@@ -13,7 +13,7 @@ use std::rc::Rc;
 #[derive(Debug)]
 struct Channel {
     pub id: Option<u16>,
-    pub signal: Rc<cjob::Signal>,
+    pub signal: Rc<Signal>,
 }
 
 #[derive(Debug)]
@@ -139,7 +139,7 @@ pub fn create_virtual_signals(awg: &cjob::AwgCore) -> Result<Option<VirtualSigna
                 };
                 let channel = Channel {
                     id: Some(0),
-                    signal: signal_obj.clone(),
+                    signal: Rc::clone(signal_obj),
                 };
                 let v_sig = VirtualSignal::new(vec![channel], sub_channel, signal_obj.delay);
                 signals.push(v_sig);
@@ -153,7 +153,7 @@ pub fn create_virtual_signals(awg: &cjob::AwgCore) -> Result<Option<VirtualSigna
                 if signal_obj.kind != cjob::SignalKind::INTEGRATION {
                     delay = max(delay, signal_obj.delay);
                     let channel = Channel {
-                        signal: signal_obj.clone(),
+                        signal: Rc::clone(signal_obj),
                         id: Some(channels.len() as u16),
                     };
                     channels.push(channel);
@@ -162,14 +162,14 @@ pub fn create_virtual_signals(awg: &cjob::AwgCore) -> Result<Option<VirtualSigna
             vec![VirtualSignal::new(channels, None, delay)]
         }
         cjob::AwgKind::DOUBLE => {
-            assert_eq!(awg.signals.len(), 2);
+            assert_eq!(awg.signals.len(), 2, "DOUBLE signal must have 2 signals");
             let channels = vec![
                 Channel {
-                    signal: awg.signals[0].clone(),
+                    signal: Rc::clone(&awg.signals[0]),
                     id: Some(0),
                 },
                 Channel {
-                    signal: awg.signals[1].clone(),
+                    signal: Rc::clone(&awg.signals[1]),
                     id: Some(1),
                 },
             ];

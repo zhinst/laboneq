@@ -17,7 +17,7 @@ static MIN_PLAY_ZERO_HOLD: Samples = 512 + 128;
 fn format_comment(comment: &Option<String>) -> String {
     if let Some(comment) = comment {
         if !comment.is_empty() {
-            return format!("  // {}", comment);
+            return format!("  // {comment}");
         }
     }
     String::new()
@@ -40,13 +40,11 @@ fn gen_wave_declaration_placeholder(
     let markers_declaration2 = if has_marker2 { ",true" } else { "" };
     if dual_channel {
         format!(
-            "wave w{}_i = placeholder({}{});\nwave w{}_q = placeholder({}{});\n",
-            wave_id, length, markers_declaration1, wave_id, length, markers_declaration2
+            "wave w{wave_id}_i = placeholder({length}{markers_declaration1});\nwave w{wave_id}_q = placeholder({length}{markers_declaration2});\n"
         )
     } else {
         format!(
-            "wave w{} = placeholder({}{}{});\n",
-            wave_id, length, markers_declaration1, markers_declaration2
+            "wave w{wave_id} = placeholder({length}{markers_declaration1}{markers_declaration2});\n"
         )
     }
 }
@@ -57,12 +55,9 @@ fn gen_zero_wave_declaration_placeholder(
     length: Samples,
 ) -> String {
     if dual_channel {
-        format!(
-            "wave w{}_i = zeros({});\nwave w{}_q = w{}_i;\n",
-            wave_id, length, wave_id, wave_id
-        )
+        format!("wave w{wave_id}_i = zeros({length});\nwave w{wave_id}_q = w{wave_id}_i;\n")
     } else {
-        format!("wave w{} = zeros({});\n", wave_id, length)
+        format!("wave w{wave_id} = zeros({length});\n")
     }
 }
 
@@ -73,13 +68,13 @@ fn build_wave_channel_assignment(
     supports_digital_iq_modulation: bool,
 ) -> String {
     if dual_channel && supports_digital_iq_modulation {
-        format!("1,2,w{}_i,1,2,w{}_q", wave_id, wave_id)
+        format!("1,2,w{wave_id}_i,1,2,w{wave_id}_q")
     } else if dual_channel {
-        format!("w{}_i,w{}_q", wave_id, wave_id)
+        format!("w{wave_id}_i,w{wave_id}_q")
     } else if channel.is_some() && channel.unwrap() == 1 {
-        format!("1,\"\",2,w{}", wave_id)
+        format!("1,\"\",2,w{wave_id}")
     } else {
-        format!("w{}", wave_id)
+        format!("w{wave_id}")
     }
 }
 
@@ -552,7 +547,7 @@ impl SeqCGenerator {
 
     fn emit_statement(&self, statement: &SeqCStatement) -> String {
         match statement {
-            SeqCStatement::Comment { text } => format!("/* {} */\n", text),
+            SeqCStatement::Comment { text } => format!("/* {text} */\n"),
             SeqCStatement::FunctionCall {
                 name,
                 args,
@@ -560,7 +555,7 @@ impl SeqCGenerator {
             } => {
                 let assign_to = assign_to
                     .as_ref()
-                    .map(|s| format!("{} = ", s))
+                    .map(|s| format!("{s} = "))
                     .unwrap_or_default();
                 let args = args
                     .iter()
@@ -568,7 +563,7 @@ impl SeqCGenerator {
                     .collect::<Vec<String>>()
                     .join(",");
 
-                format!("{}{}({});\n", assign_to, name, args)
+                format!("{assign_to}{name}({args});\n")
             }
             SeqCStatement::WaveDeclaration {
                 wave_id,
@@ -595,18 +590,18 @@ impl SeqCGenerator {
             } => {
                 let initial_value = initial_value
                     .as_ref()
-                    .map(|s| format!(" = {}", s))
+                    .map(|s| format!(" = {s}"))
                     .unwrap_or_default();
-                format!("var {}{};\n", variable_name, initial_value)
+                format!("var {variable_name}{initial_value};\n")
             }
             SeqCStatement::VariableAssignment {
                 variable_name,
                 value,
-            } => format!("{} = {};\n", variable_name, value),
+            } => format!("{variable_name} = {value};\n"),
             SeqCStatement::VariableIncrement {
                 variable_name,
                 value,
-            } => format!("{} += {};\n", variable_name, value),
+            } => format!("{variable_name} += {value};\n"),
             SeqCStatement::AssignWaveIndex {
                 wave_id,
                 wave_index,
@@ -618,7 +613,7 @@ impl SeqCGenerator {
                     *channel,
                     self.device_traits.supports_digital_iq_modulation,
                 );
-                format!("assignWaveIndex({},{});\n", wave_channels, wave_index)
+                format!("assignWaveIndex({wave_channels},{wave_index});\n")
             }
             SeqCStatement::PlayWave { wave_id, channel } => {
                 let wave_channels = build_wave_channel_assignment(
@@ -627,7 +622,7 @@ impl SeqCGenerator {
                     *channel,
                     self.device_traits.supports_digital_iq_modulation,
                 );
-                format!("playWave({});\n", wave_channels)
+                format!("playWave({wave_channels});\n")
             }
             SeqCStatement::CommandTableExecution {
                 table_index,
@@ -636,7 +631,7 @@ impl SeqCGenerator {
             } => {
                 let latency = latency
                     .as_ref()
-                    .map(|s| format!(", {}", s))
+                    .map(|s| format!(", {s}"))
                     .unwrap_or_default();
                 format!(
                     "executeTableEntry({}{});{}\n",
@@ -647,19 +642,19 @@ impl SeqCGenerator {
             }
             SeqCStatement::PlayZeroOrHold { num_samples, hold } => {
                 let fname = if *hold { "playHold" } else { "playZero" };
-                format!("{}({});\n", fname, num_samples)
+                format!("{fname}({num_samples});\n")
             }
             SeqCStatement::Repeat {
                 num_repeats, body, ..
             } => {
                 let body = indent(&body.generate_seq_c(), "  ");
-                format!("repeat ({}) {{\n{}}}\n", num_repeats, body)
+                format!("repeat ({num_repeats}) {{\n{body}}}\n")
             }
             SeqCStatement::DoWhile {
                 condition, body, ..
             } => {
                 let body = indent(&body.generate_seq_c(), "  ");
-                format!("do {{\n{}}}\nwhile({});\n", body, condition)
+                format!("do {{\n{body}}}\nwhile({condition});\n")
             }
             SeqCStatement::DoIf {
                 conditions,
@@ -671,14 +666,14 @@ impl SeqCGenerator {
                 for (i, condition) in conditions.iter().enumerate() {
                     let body = indent(&bodies[i].generate_seq_c(), "  ");
                     if i == 0 {
-                        text += &format!("if ({}) {{\n{}}}\n", condition, body);
+                        text += &format!("if ({condition}) {{\n{body}}}\n");
                     } else {
-                        text += &format!("else if ({}) {{\n{}}}\n", condition, body);
+                        text += &format!("else if ({condition}) {{\n{body}}}\n");
                     }
                 }
                 if let Some(else_body) = else_body {
                     let body = indent(&else_body.generate_seq_c(), "  ");
-                    text += &format!("else {{\n{}}}\n", body);
+                    text += &format!("else {{\n{body}}}\n");
                 }
                 text
             }

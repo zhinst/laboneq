@@ -20,13 +20,9 @@ from laboneq.core.types.enums import AcquisitionType
 from laboneq.compiler.common.compiler_settings import (
     TINYSAMPLE,
     CompilerSettings,
-    round_min_playwave_hint,
 )
 from laboneq.compiler.common.feedback_connection import FeedbackConnection
-from laboneq.compiler.common.resource_usage import (
-    ResourceLimitationError,
-    ResourceUsage,
-)
+from laboneq.compiler.common.resource_usage import ResourceUsageCollector
 from laboneq.compiler.common.shfppc_sweeper_config import SHFPPCSweeperConfig
 from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
 from laboneq.compiler.ir import IRTree
@@ -35,7 +31,6 @@ from laboneq.compiler.seqc.linker import AwgWeights, SeqCGenOutput, SeqCProgram
 from laboneq.compiler.seqc.analyze_events import (
     analyze_loop_times,
     analyze_phase_reset_times,
-    analyze_set_oscillator_times,
     analyze_trigger_events,
     analyze_prng_times,
 )
@@ -357,7 +352,7 @@ class CodeGenerator(ICodeGenerator):
         self._qa_signals_by_handle: dict[str, SignalObj] = {}
         self._shfppc_sweep_configs: dict[AwgKey, SHFPPCSweeperConfig] = {}
         self._total_execution_time: float | None = None
-        self._max_resource_usage: ResourceUsage | None = None
+        self._res_usage_collector: ResourceUsageCollector = ResourceUsageCollector()
 
     def generate_code(self):
         passes.inline_sections_in_branch(self._ir)
@@ -682,13 +677,7 @@ class CodeGenerator(ICodeGenerator):
                 feedback_register=feedback_register_alloc.get(awg.key),
                 acquisition_type=self._ir.root.acquisition_type,
             )
-        if (
-            self._max_resource_usage is not None
-            and self._max_resource_usage.usage > 1.0
-        ):
-            raise ResourceLimitationError(
-                f"Exceeded resource limitation: {self._max_resource_usage}.\n"
-            )
+        self._res_usage_collector.raise_or_pass()
 
         for awg_key, seqc_program in self._src.items():
             awg_info = self._awgs[awg_key]
@@ -818,30 +807,28 @@ class CodeGenerator(ICodeGenerator):
 
         trigger_events = analyze_trigger_events(events, awg.signals, loop_events)
         sampled_events.merge(trigger_events)
-
-        for signal_obj in awg.signals:
-            set_oscillator_events = analyze_set_oscillator_times(
-                events=events,
-                signal_obj=signal_obj,
-                global_delay=global_delay,
-            )
-            sampled_events.merge(set_oscillator_events)
-
         cut_points = set(sampled_events.sequence) | {
             length_to_samples(global_delay, global_sampling_rate)
         }
-        play_wave_size_hint, play_zero_size_hint = self.waveform_size_hints(
-            awg.device_type
-        )
         awg_code_output = codegen_rs.generate_code_for_awg(
             ob=awg_ir,
             signals=self._ir.signals,
             cut_points=cut_points,
-            play_wave_size_hint=play_wave_size_hint,
-            play_zero_size_hint=play_zero_size_hint,
-            amplitude_resolution_range=self.amplitude_resolution_range(),
-            use_amplitude_increment=self._settings.USE_AMPLITUDE_INCREMENT,
-            phase_resolution_range=self.phase_resolution_range(),
+            settings={
+                "HDAWG_MIN_PLAYWAVE_HINT": self._settings.HDAWG_MIN_PLAYWAVE_HINT,
+                "HDAWG_MIN_PLAYZERO_HINT": self._settings.HDAWG_MIN_PLAYZERO_HINT,
+                "UHFQA_MIN_PLAYWAVE_HINT": self._settings.UHFQA_MIN_PLAYWAVE_HINT,
+                "UHFQA_MIN_PLAYZERO_HINT": self._settings.UHFQA_MIN_PLAYZERO_HINT,
+                "SHFQA_MIN_PLAYWAVE_HINT": self._settings.SHFQA_MIN_PLAYWAVE_HINT,
+                "SHFQA_MIN_PLAYZERO_HINT": self._settings.SHFQA_MIN_PLAYZERO_HINT,
+                "SHFSG_MIN_PLAYWAVE_HINT": self._settings.SHFSG_MIN_PLAYWAVE_HINT,
+                "SHFSG_MIN_PLAYZERO_HINT": self._settings.SHFSG_MIN_PLAYZERO_HINT,
+                "AMPLITUDE_RESOLUTION_BITS": max(
+                    self._settings.AMPLITUDE_RESOLUTION_BITS, 0
+                ),
+                "PHASE_RESOLUTION_BITS": max(self._settings.PHASE_RESOLUTION_BITS, 0),
+                "USE_AMPLITUDE_INCREMENT": self._settings.USE_AMPLITUDE_INCREMENT,
+            },
             global_delay_samples=global_delay_samples,
             waveform_sampler=WaveformSampler(
                 pulse_defs=pulse_defs, pulse_def_params=user_pulse_params
@@ -855,6 +842,7 @@ class CodeGenerator(ICodeGenerator):
                 AWGEventType.RESET_PRECOMPENSATION_FILTERS,
                 AWGEventType.PPC_SWEEP_STEP_START,
                 AWGEventType.PPC_SWEEP_STEP_END,
+                AWGEventType.SET_OSCILLATOR_FREQUENCY,
             ]:
                 sampled_events.add(event.start, event)
         # NOTE: Add playwave related events after the rest to mimic the original event insertion order
@@ -987,12 +975,7 @@ class CodeGenerator(ICodeGenerator):
         )
 
         handler.handle_sampled_events(sampled_events)
-        for res_usage in handler.resource_usage():
-            if (
-                self._max_resource_usage is None
-                or res_usage.usage > self._max_resource_usage.usage
-            ):
-                self._max_resource_usage = res_usage
+        self._res_usage_collector.add(*handler.resource_usage())
 
         seq_c_generators: list[SeqCGenerator] = []
         while (part := seqc_tracker.pop_loop_stack_generators()) is not None:
@@ -1033,38 +1016,6 @@ class CodeGenerator(ICodeGenerator):
             shfppc_config = shfppc_sweeper_config_tracker.finish()
             self._shfppc_sweep_configs[awg_key] = shfppc_config
 
-    def waveform_size_hints(self, device: DeviceType):
-        settings = self._settings
-
-        def sanitize_min_playwave_hint(n: int, multiple: int) -> int:
-            if n % multiple != 0:
-                n2 = round_min_playwave_hint(n, multiple)
-                _logger.warning(
-                    f"Compiler setting `MIN_PLAYWAVE_HINT`={n} for device {device.name} is not multiple of {multiple} and is rounded to {n2}."
-                )
-                return n2
-            return n
-
-        min_pw_hint = None
-        min_pz_hint = None
-        if device == DeviceType.HDAWG:
-            min_pw_hint = settings.HDAWG_MIN_PLAYWAVE_HINT
-            min_pz_hint = settings.HDAWG_MIN_PLAYZERO_HINT
-        elif device == DeviceType.UHFQA:
-            min_pw_hint = settings.UHFQA_MIN_PLAYWAVE_HINT
-            min_pz_hint = settings.UHFQA_MIN_PLAYZERO_HINT
-        elif device == DeviceType.SHFQA:
-            min_pw_hint = settings.SHFQA_MIN_PLAYWAVE_HINT
-            min_pz_hint = settings.SHFQA_MIN_PLAYZERO_HINT
-        elif device == DeviceType.SHFSG:
-            min_pw_hint = settings.SHFSG_MIN_PLAYWAVE_HINT
-            min_pz_hint = settings.SHFSG_MIN_PLAYZERO_HINT
-        if min_pw_hint is not None and min_pz_hint is not None:
-            return (
-                sanitize_min_playwave_hint(min_pw_hint, device.sample_multiple),
-                min_pz_hint,
-            )
-
     def waves(self) -> dict[str, CodegenWaveform]:
         return self._waves
 
@@ -1103,18 +1054,6 @@ class CodeGenerator(ICodeGenerator):
 
     def shfppc_sweep_configs(self) -> dict[AwgKey, SHFPPCSweeperConfig]:
         return self._shfppc_sweep_configs
-
-    def phase_resolution_range(self) -> int:
-        if self._settings.PHASE_RESOLUTION_BITS < 0:
-            # disable quantization
-            return 0
-        return 1 << self._settings.PHASE_RESOLUTION_BITS
-
-    def amplitude_resolution_range(self) -> int:
-        if self._settings.AMPLITUDE_RESOLUTION_BITS < 0:
-            # disable quantization
-            return 0
-        return 1 << self._settings.AMPLITUDE_RESOLUTION_BITS
 
     @staticmethod
     def post_process_sampled_events(

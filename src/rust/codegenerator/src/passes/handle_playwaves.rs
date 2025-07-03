@@ -4,9 +4,8 @@
 use crate::Result;
 use crate::ir;
 use crate::ir::compilation_job::{self as cjob};
-use crate::passes::amplitude_registers;
 use crate::passes::handle_frame_changes::insert_frame_changes;
-use crate::passes::osc_parameters::SoftwareOscillatorParameters;
+use crate::passes::handle_oscillators::SoftwareOscillatorParameters;
 use crate::signature::{
     PulseSignature, WaveformSignature, sort_pulses, split_complex_pulse_amplitude,
 };
@@ -112,7 +111,7 @@ impl PlayPulseSlot<'_> {
 fn assign_pulse_slots(node: &mut ir::IrNode, state: Option<u16>) -> Vec<PlayPulseSlot<'_>> {
     match node.data() {
         ir::NodeKind::FrameChange(ob) => {
-            let signal = ob.signal.clone();
+            let signal = Rc::clone(&ob.signal);
             let slot = PlayPulseSlot {
                 node,
                 state,
@@ -125,7 +124,7 @@ fn assign_pulse_slots(node: &mut ir::IrNode, state: Option<u16>) -> Vec<PlayPuls
             if ob.pulse_def.is_none() || ob.length == 0 {
                 return vec![];
             }
-            let signal = ob.signal.clone();
+            let signal = Rc::clone(&ob.signal);
             let slot = PlayPulseSlot {
                 node,
                 state,
@@ -154,7 +153,7 @@ fn assign_pulse_slots(node: &mut ir::IrNode, state: Option<u16>) -> Vec<PlayPuls
                 out.push(PlayPulseSlot {
                     node: ch,
                     state,
-                    signal: signals[idx].clone(),
+                    signal: Rc::clone(&signals[idx]),
                 })
             }
             out
@@ -251,7 +250,7 @@ where
 fn create_pulse_signature(
     node: &mut PlayPulseSlot,
     virtual_signal: &VirtualSignal,
-    amp_reg_alloc: &amplitude_registers::AmplitudeRegisterAllocation,
+    amp_reg_alloc: &AmplitudeRegisterAllocation,
     osc_parameters: &SoftwareOscillatorParameters,
 ) -> PulseSignature {
     let length = node.node.data().length();
@@ -352,7 +351,7 @@ fn create_waveform_slots(
                     node: node_id,
                     start: start_adjusted,
                     end,
-                    signal: pulse_slot.signal.clone(),
+                    signal: Rc::clone(&pulse_slot.signal),
                 };
                 waveform_slots.push(wf);
             }
@@ -375,7 +374,7 @@ where
 }
 
 /// Transform play wave nodes into waveforms.
-#[allow(clippy::too_many_arguments)] // TODO: Fix
+#[allow(clippy::too_many_arguments)]
 pub fn handle_plays(
     program: &mut ir::IrNode,
     awg: &cjob::AwgCore,
@@ -431,7 +430,7 @@ pub fn handle_plays(
         // Round waveform slots to sequencer grid
         signatures.iter_mut().for_each(|x| {
             x.start = tinysample::floor_to_grid(x.start, traits.sample_multiple.into());
-            x.end = tinysample::ceil_to_grid(x.end, traits.sample_multiple.into());
+            x.end = ceil_to_grid(x.end, traits.sample_multiple.into());
         });
         if awg.kind != cjob::AwgKind::DOUBLE && signal.is_multiplexed() {
             // Skip for now. In double mode, 2 oscillators may (?) be active.

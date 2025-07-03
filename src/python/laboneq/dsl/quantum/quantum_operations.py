@@ -305,6 +305,22 @@ class QuantumOperations:
                 "Cannot attach QPU. There is an existing QPU attached to the quantum operations. You can detach the QPU using the `detach_qpu` method."
             )
 
+    def copy(self) -> QuantumOperations:
+        """Return a copy of the quantum operations instance.
+
+        !!! note
+            This does not copy the attached QPU, so that the quantum operations may be
+            directly attached to a different QPU.
+
+        Returns:
+            A copy of the quantum operations instance.
+        """
+        qops = type(self)()
+        for op_key, op_value in self._ops.items():
+            if op_key not in self.BASE_OPS.keys():
+                qops.register(op_value, name=op_key)
+        return qops
+
     def detach_qpu(self) -> None:
         """Detach a QPU from the set of quantum operations."""
         self.qpu = None

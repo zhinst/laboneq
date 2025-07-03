@@ -279,7 +279,7 @@ mod tests {
                 ir::NodeKind::LoopIteration(ir::LoopIteration {
                     length: 0,
                     iteration,
-                    parameters: vec![parameter.clone()],
+                    parameters: vec![Arc::clone(&parameter)],
                 }),
                 0,
             );
@@ -363,7 +363,7 @@ mod tests {
             ir::NodeKind::LoopIteration(ir::LoopIteration {
                 length: 0,
                 iteration: 0,
-                parameters: vec![parameter.clone()],
+                parameters: vec![Arc::clone(&parameter)],
             }),
             0,
         );

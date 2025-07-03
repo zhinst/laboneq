@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from laboneq.dsl.result import Results, AcquiredResult
+from laboneq.dsl.result import AcquiredResult, Results
 from laboneq.serializers.base import VersionedClassSerializer
 from laboneq.serializers.implementations.results import _acquired_axis_to_ndarrays
 from laboneq.serializers.serializer_registry import serializer

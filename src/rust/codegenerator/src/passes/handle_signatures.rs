@@ -467,18 +467,15 @@ mod tests {
     mod test_aggregate_ct_amplitude {
         use super::*;
         use crate::ir::compilation_job::{PulseDef, PulseDefKind};
-        use crate::signature;
+
         use std::sync::Arc;
 
-        fn make_signature(
-            amplitude: Option<f64>,
-            pulse_def_kind: PulseDefKind,
-        ) -> signature::PulseSignature {
+        fn make_signature(amplitude: Option<f64>, pulse_def_kind: PulseDefKind) -> PulseSignature {
             let pulse = PulseDef {
                 uid: "".to_string(),
                 kind: pulse_def_kind,
             };
-            signature::PulseSignature {
+            PulseSignature {
                 start: 0,
                 pulse: Some(Arc::new(pulse)),
                 length: 0,
@@ -550,18 +547,18 @@ mod tests {
     mod test_evaluate_signature_amplitude {
         use super::*;
         use crate::ir::compilation_job::{PulseDef, PulseDefKind};
-        use crate::signature;
+
         use std::sync::Arc;
 
         fn make_signature(
             amplitude: f64,
             preferred_amplitude_register: Option<u16>,
-        ) -> signature::PulseSignature {
+        ) -> PulseSignature {
             let pulse = PulseDef {
                 uid: "".to_string(),
                 kind: PulseDefKind::Pulse,
             };
-            signature::PulseSignature {
+            PulseSignature {
                 start: 0,
                 pulse: Some(Arc::new(pulse)),
                 length: 0,
@@ -807,23 +804,33 @@ mod tests {
 
         #[test]
         fn test_reduce_phase_with_quantization() {
-            let amplitude_resolution_range = 1 << 24;
+            let phase_resolution_range = 1 << 24;
             let mut pulses = [
                 make_signature(2.0, Some(0.0), Some(4.0), vec![]),
                 make_signature(0.0, Some(3.0), Some(3.0), vec![]),
             ];
             let (increment_phase, increment_phase_params) =
-                handle_signature_phases(&mut pulses, true, amplitude_resolution_range);
+                handle_signature_phases(&mut pulses, true, phase_resolution_range);
             assert_eq!(increment_phase, Some(quantize_phase_ct(7.0)));
             assert_eq!(
                 pulses[0].phase,
-                quantize_phase_pulse(3.0 - 4.0, amplitude_resolution_range)
+                quantize_phase_pulse(3.0 - 4.0, phase_resolution_range)
             );
             assert_eq!(
                 pulses[1].phase,
-                quantize_phase_pulse(3.0 - 0.0, amplitude_resolution_range)
+                quantize_phase_pulse(3.0 - 0.0, phase_resolution_range)
             );
             assert_eq!(increment_phase_params, vec![None]);
+
+            // Test that the phase is normalized to 0.0
+            let mut pulses1 = [make_signature(
+                -0.0000000000000017763568394002505,
+                None,
+                None,
+                vec![],
+            )];
+            let _ = handle_signature_phases(&mut pulses1, true, phase_resolution_range);
+            assert_eq!(pulses1[0].phase.to_bits(), 0.0f64.to_bits());
         }
     }
 }

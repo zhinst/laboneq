@@ -3,11 +3,25 @@
 
 from __future__ import annotations
 
-from laboneq._rust.intervals import IntervalTree
 from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
 from laboneq.compiler.scheduler.loop_iteration_schedule import LoopIterationSchedule
 from laboneq.compiler.scheduler.loop_schedule import LoopSchedule
 from laboneq.compiler.scheduler.section_schedule import SectionSchedule
+
+
+class _Interval:
+    def __init__(self, start: int, end: int):
+        assert start <= end, "Start must be less than end"
+        self.start = start
+        self.end = end
+
+    def overlaps_range(self, start: int, end: int) -> bool:
+        return self.start < end and self.end > start
+
+    def merge(self, other: _Interval) -> _Interval:
+        return _Interval(
+            start=min(self.start, other.start), end=max(self.end, other.end)
+        )
 
 
 def calculate_preorder_map(
@@ -23,6 +37,7 @@ def calculate_preorder_map(
         # Normally we only need to look at the first loop iteration to find all the
         # sections. When there are statically resolved branches however, not every
         # iteration may contain all the subsections.
+
         for child in schedule.children:
             assert isinstance(child, LoopIterationSchedule)
             # In the PSV, we do not consider the loop and the loop iteration separately, so
@@ -42,20 +57,25 @@ def calculate_preorder_map(
             pass
         return max_depth
 
-    intervals: IntervalTree[str] = IntervalTree()
     if isinstance(schedule, SectionSchedule):
         # Draw the section on this row
         preorder_map[schedule.section] = current_depth
         current_depth += 1
 
+        # We need to sort the children by their start time, so that we can place them
+        # in the correct order in the preorder map.
+        children = sorted(
+            zip(schedule.children, schedule.children_start, strict=True),
+            key=lambda x: x[1],
+        )
         # Recurse on the children
-        for i, c in enumerate(schedule.children):
+        section_range: _Interval | None = None
+        for i, (c, _) in enumerate(children):
             if not isinstance(c, SectionSchedule):
                 continue
             c_start = schedule.children_start[i]
             c_end = c_start + c.length
-
-            if not intervals.overlaps_range(c_start, c_end):
+            if not section_range or not section_range.overlaps_range(c_start, c_end):
                 # Place child in this row
                 max_depth = max(
                     max_depth,
@@ -63,6 +83,7 @@ def calculate_preorder_map(
                         c, preorder_map, section_children, current_depth
                     ),
                 )
+                section_range = _Interval(c_start, c_end)
             else:
                 # Place child in next free row
                 max_depth = max(
@@ -71,7 +92,5 @@ def calculate_preorder_map(
                         c, preorder_map, section_children, max_depth + 1
                     ),
                 )
-            if c_start != c_end:
-                intervals.addi(c_start, c_end, data=c.section)
-
+                section_range = section_range.merge(_Interval(c_start, c_end))
     return max_depth

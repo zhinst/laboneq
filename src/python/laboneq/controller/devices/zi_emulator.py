@@ -870,7 +870,7 @@ class DevEmuSHFQABase(DevEmuSHFBase):
         self._qa_pipeliner = PipelinerEmu(
             parent=self,
             pipeliner_base="qachannels",
-            pipeliner_stop_hook=self._pipeliner_done,
+            pipeliner_stop_hook=self._pipeliner_done_qa,
         )
         self._armed_qa_awgs: set[int] = set()
         self._scope_max_segments: int = 1024
@@ -934,7 +934,7 @@ class DevEmuSHFQABase(DevEmuSHFBase):
             ),
         )
 
-    def _pipeliner_done(self, channel: int):
+    def _pipeliner_done_qa(self, channel: int):
         self._side_effects_qa(channel)
         pipelined_nodes: dict[str, Any] = {}
         for job_id, slot in enumerate(self._qa_pipeliner._pipelined[channel]):
@@ -1204,7 +1204,7 @@ class DevEmuSHFSGBase(DevEmuSHFBase):
         self._sg_pipeliner = PipelinerEmu(
             parent=self,
             pipeliner_base="sgchannels",
-            pipeliner_stop_hook=self._pipeliner_done,
+            pipeliner_stop_hook=self._pipeliner_done_sg,
         )
         self._armed_sg_awgs: set[int] = set()
 
@@ -1255,7 +1255,7 @@ class DevEmuSHFSGBase(DevEmuSHFBase):
             out_ovr_count = self._get_node(out_ovr_node).value
             self._set_val(out_ovr_node, out_ovr_count + 1)
 
-    def _pipeliner_done(self, channel: int):
+    def _pipeliner_done_sg(self, channel: int):
         self._side_effects_sg(channel)
 
     def _awg_stop_sg(self, channel: int):

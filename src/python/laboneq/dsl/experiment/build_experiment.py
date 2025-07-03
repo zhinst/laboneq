@@ -66,7 +66,7 @@ class ExperimentBuilder:
             If true, `exp_func` is called inside an experiment context
             using `exp_func(*args, **kw)`.
 
-            If false, `exp_func` is passed to the experiment as the first
+            If false, `exp_func` is passed the experiment as the first
             argument instead using `exp_func(exp, *args, **kw)` and no
             experiment context is active.
 
@@ -164,7 +164,7 @@ def qubit_experiment(
             If true, the decorated function `exp_func` is called
             inside an experiment context using `exp_func(*args, **kw)`.
 
-            If false, the decorated function `exp_func` is passed to the
+            If false, the decorated function `exp_func` is passed the
             experiment as the first argument instead using
             `exp_func(exp, *args, **kw)` and no experiment context is
             active.

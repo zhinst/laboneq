@@ -7,13 +7,16 @@ pub mod ir;
 pub mod node;
 pub(crate) mod passes;
 mod sample_waveforms;
+mod settings;
 pub mod signature;
 pub mod tinysample;
 pub(crate) mod utils;
 pub(crate) mod virtual_signal;
 
 pub use generate_awg_events::transform_ir_to_awg_events;
+pub use settings::CodeGeneratorSettings;
 pub use utils::string_sanitize;
+
 pub type Samples = u64;
 
 pub use sample_waveforms::{

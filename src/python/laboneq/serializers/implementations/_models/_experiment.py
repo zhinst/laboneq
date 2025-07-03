@@ -6,7 +6,7 @@ from __future__ import annotations
 import sys
 from enum import Enum
 from functools import partial
-from typing import Callable, ClassVar, Optional, Type, Union
+from typing import Callable, ClassVar, NewType, Optional, Type, Union
 
 import attrs
 import numpy
@@ -39,8 +39,8 @@ from laboneq.dsl.experiment.section import (
 from laboneq.dsl.experiment.set_node import SetNode
 from laboneq.dsl.parameter import LinearSweepParameter, SweepParameter
 from laboneq.dsl.prng import PRNG, PRNGSample
-from laboneq.serializers._pulse_cache import PulseSampledCache
-from typing import NewType
+from laboneq.serializers._cache import PulseCache, SectionCache
+
 from ._calibration import (
     ParameterModel,
     SignalCalibrationModel,
@@ -106,6 +106,7 @@ class DSLVersionModel(Enum):
     _target_class = DSLVersion
 
 
+@PulseCache.cache
 @attrs.define
 class PulseSampledModel:
     samples: ArrayLike_Model
@@ -115,37 +116,23 @@ class PulseSampledModel:
 
     @classmethod
     def _unstructure(cls, obj):
-        pulse_cache = PulseSampledCache.get_pulse_cache()
-        ref = pulse_cache.get_key(obj)
-        if ref is None:
-            ref = pulse_cache.add(obj)
-            return {
-                "samples": _converter.unstructure(obj.samples, ArrayLike_Model),
-                "uid": obj.uid,
-                "can_compress": obj.can_compress,
-                "$ref": ref,
-            }
-        else:
-            return {"$ref": ref}
+        return {
+            "samples": _converter.unstructure(obj.samples, ArrayLike_Model),
+            "uid": obj.uid,
+            "can_compress": obj.can_compress,
+        }
 
     @classmethod
     def _structure(cls, obj, _):
-        # Here it's assumed that the original object was always serialized
-        # before its references. This is already made sure by the serialization,
-        # in which no reordering is done after converting the objects to dicts,
-        # which is also a sequential process.
-        pulse_cache = PulseSampledCache.get_pulse_cache()
-        pulse = pulse_cache.get(obj["$ref"])
-        if pulse is None:
-            pulse = cls._target_class(
-                samples=_converter.structure(obj["samples"], ArrayLike_Model),
-                uid=obj["uid"],
-                can_compress=obj["can_compress"],
-            )
-            pulse_cache.add(pulse, key=obj["$ref"])
+        pulse = cls._target_class(
+            samples=_converter.structure(obj["samples"], ArrayLike_Model),
+            uid=obj["uid"],
+            can_compress=obj["can_compress"],
+        )
         return pulse
 
 
+@PulseCache.cache
 @attrs.define
 class PulseFunctionalModel:
     function: str
@@ -174,13 +161,16 @@ def _structure_pulse_model(d, _, _converter):
 
 
 # assume to be a dict with simple types
-PulseParameterModel = dict[str, Union[float, int, str, bool, complex, ParameterModel]]
+PulseParameterModel = dict[
+    str, Union[float, int, str, bool, complex, ParameterModel, list[ParameterModel]]
+]
 
 
 def _unstructure_pulse_parameter_model(obj):
     return {
         k: _converter.unstructure(
-            v, Union[float, int, str, bool, complex, ParameterModel]
+            v,
+            Union[float, int, str, bool, complex, ParameterModel, list[ParameterModel]],
         )
         for k, v in obj.items()
     }
@@ -191,6 +181,8 @@ def _structure_pulse_parameter_model(obj):
     for k, v in obj.items():
         if isinstance(v, dict):
             ret[k] = _converter.structure(v, ParameterModel)
+        elif isinstance(v, list):
+            ret[k] = [_converter.structure(item, ParameterModel) for item in v]
         else:
             ret[k] = v
     return ret
@@ -229,7 +221,9 @@ class PlayPulseModel:
             "phase": unstructure_basic_or_parameter_model(obj.phase, _converter),
             "set_oscillator_phase": obj.set_oscillator_phase,
             "length": unstructure_basic_or_parameter_model(obj.length, _converter),
-            "pulse_parameters": obj.pulse_parameters,
+            "pulse_parameters": None
+            if obj.pulse_parameters is None
+            else _unstructure_pulse_parameter_model(obj.pulse_parameters),
             "precompensation_clear": obj.precompensation_clear,
             "marker": obj.marker,
         }
@@ -252,7 +246,9 @@ class PlayPulseModel:
             phase=structure_basic_or_parameter_model(obj["phase"], _converter),
             set_oscillator_phase=obj["set_oscillator_phase"],
             length=structure_basic_or_parameter_model(obj["length"], _converter),
-            pulse_parameters=obj["pulse_parameters"],
+            pulse_parameters=None
+            if obj["pulse_parameters"] is None
+            else _structure_pulse_parameter_model(obj["pulse_parameters"]),
             precompensation_clear=obj["precompensation_clear"],
             marker=obj["marker"],
         )
@@ -465,6 +461,7 @@ def _structure_play_after_model(obj, _):
     return play_after
 
 
+@SectionCache.cache
 @attrs.define
 class SectionModel:
     uid: str | None
@@ -512,7 +509,7 @@ class AcquireLoopRtModel(SectionModel):
 
 @attrs.define
 class SweepModel(SectionModel):
-    parameters: list[ParameterModel]
+    parameters: ParameterModel | list[ParameterModel]
     reset_oscillator_phase: bool
     chunk_count: int
     _target_class: ClassVar[Type] = Sweep

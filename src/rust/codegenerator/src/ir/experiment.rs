@@ -38,15 +38,50 @@ impl<T: Clone> ParameterOperation<T> {
 
 #[derive(Debug, Clone)]
 pub struct Case {
-    pub signals: Vec<Rc<cjob::Signal>>,
+    pub signals: Vec<Rc<Signal>>,
     pub length: Samples,
     pub state: u16,
 }
 
 #[derive(Debug, Clone)]
+pub struct SignalFrequency {
+    pub signal: Rc<Signal>,
+    pub frequency: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct InitialOscillatorFrequency {
+    values: Vec<SignalFrequency>,
+}
+
+impl InitialOscillatorFrequency {
+    pub fn new(values: Vec<SignalFrequency>) -> Self {
+        InitialOscillatorFrequency { values }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &SignalFrequency> {
+        self.values.iter()
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct SetOscillatorFrequency {
-    // NOTE: Also initial oscillator frequency from Python IR
-    pub values: Vec<(Rc<cjob::Signal>, f64)>,
+    values: Vec<SignalFrequency>,
+    iteration: usize,
+}
+
+impl SetOscillatorFrequency {
+    pub fn new(values: Vec<SignalFrequency>, iteration: usize) -> Self {
+        SetOscillatorFrequency { values, iteration }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &SignalFrequency> {
+        self.values.iter()
+    }
+
+    pub fn iteration(&self) -> usize {
+        self.iteration
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -56,7 +91,7 @@ pub struct PhaseReset {
 
 #[derive(Debug, Clone)]
 pub struct PlayPulse {
-    pub signal: Rc<cjob::Signal>,
+    pub signal: Rc<Signal>,
     pub length: Samples,
     pub amplitude: Option<Complex<f64>>,
     pub amp_param_name: Option<String>,
@@ -67,7 +102,7 @@ pub struct PlayPulse {
     pub id_pulse_params: Option<usize>,
     // TODO: Consider replacing this with an ID of markers
     pub markers: Vec<cjob::Marker>,
-    pub pulse_def: Option<Arc<cjob::PulseDef>>,
+    pub pulse_def: Option<Arc<PulseDef>>,
 }
 #[derive(Debug, Clone)]
 pub struct AcquirePulse {
@@ -113,7 +148,7 @@ pub struct LoopIteration {
 
 #[derive(Debug, Clone)]
 pub struct PlayWave {
-    pub signals: Vec<Rc<cjob::Signal>>,
+    pub signals: Vec<Rc<Signal>>,
     pub waveform: WaveformSignature,
     pub oscillator: Option<String>,
     pub amplitude_register: u16,
@@ -140,7 +175,7 @@ pub struct FrameChange {
     pub length: Samples,
     pub phase: f64,
     pub parameter: Option<String>,
-    pub signal: Rc<cjob::Signal>,
+    pub signal: Rc<Signal>,
 }
 
 #[derive(Debug, Clone)]
@@ -217,6 +252,34 @@ pub struct PpcSweepStep {
     pub sweep_command: SweepCommand,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinearParameterInfo {
+    pub start: f64,
+    pub step: f64,
+    pub count: usize,
+}
+
+/// Represents a single step in the oscillator frequency sweep.
+/// This is used to sweep the frequency of an oscillator over multiple iterations.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OscillatorFrequencySweepStep {
+    /// Iteration number in the sweep. 0 means the first iteration.
+    pub iteration: usize,
+    /// Oscillator index in the sweep.
+    pub osc_index: u16,
+    /// Information about the parameter that is being swept.
+    pub parameter: Arc<LinearParameterInfo>,
+}
+
+/// Represents a set of oscillator frequency sweep steps at a given time.
+/// This is used to set the frequency of one or multiple oscillators in parallel at a specific time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SetOscillatorFrequencySweep {
+    pub length: Samples,
+    /// List of parallel oscillator frequency steps in this event.
+    pub oscillators: Vec<OscillatorFrequencySweepStep>,
+}
+
 // TODO: Think of separating AWG specific nodes and public nodes, which
 // are used to build the experiment.
 
@@ -228,6 +291,7 @@ pub enum NodeKind {
     PlayPulse(PlayPulse),
     AcquirePulse(AcquirePulse),
     Case(Case),
+    InitialOscillatorFrequency(InitialOscillatorFrequency),
     SetOscillatorFrequency(SetOscillatorFrequency),
     PhaseReset(PhaseReset),
     PrecompensationFilterReset(),
@@ -244,6 +308,7 @@ pub enum NodeKind {
     InitAmplitudeRegister(InitAmplitudeRegister),
     ResetPrecompensationFilters(ResetPrecompensationFilters),
     PpcStep(PpcSweepStep),
+    SetOscillatorFrequencySweep(SetOscillatorFrequencySweep),
     // No-op node.
     // Should be treated as such, except it's length must be
     // taken into account.
@@ -260,6 +325,7 @@ impl NodeKind {
             NodeKind::PlayPulse(x) => x.length = value,
             NodeKind::AcquirePulse(x) => x.length = value,
             NodeKind::Case(x) => x.length = value,
+            NodeKind::InitialOscillatorFrequency(_) => {}
             NodeKind::SetOscillatorFrequency(_) => {}
             NodeKind::PhaseReset(_) => {}
             NodeKind::PrecompensationFilterReset() => {}
@@ -278,6 +344,7 @@ impl NodeKind {
             NodeKind::PlayPulse(x) => x.length,
             NodeKind::AcquirePulse(x) => x.length,
             NodeKind::Case(x) => x.length,
+            NodeKind::InitialOscillatorFrequency(_) => 0,
             NodeKind::SetOscillatorFrequency(_) => 0,
             NodeKind::PhaseReset(_) => 0,
             NodeKind::PrecompensationFilterReset() => 0,
@@ -293,6 +360,7 @@ impl NodeKind {
             NodeKind::InitAmplitudeRegister(_) => 0,
             NodeKind::ResetPrecompensationFilters(x) => x.length,
             NodeKind::PpcStep(x) => x.length,
+            NodeKind::SetOscillatorFrequencySweep(x) => x.length,
         }
     }
 }
