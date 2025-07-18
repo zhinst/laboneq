@@ -155,18 +155,16 @@ class CollectInfo:
 
             # generate_acquire_map
             if node.is_acquire:
-                start_time = start + node.offset
                 self.open_acquisitions_stack[-1].append(
-                    AcquisitionInfo(start_time, signal, handle)
+                    AcquisitionInfo(start, signal, handle)
                 )
 
             if self.shadow_levels == 0:
-                pulse_start = start + node.offset
                 length = node.integration_length if node.is_acquire else node.length
                 assert length is not None
                 end = start + length
                 self._extract_measurement_infos(
-                    signal, node.is_acquire, pulse_start, end, node.section, handle
+                    signal, node.is_acquire, start, end, node.section, handle
                 )
 
     def visit_AcquireGroupIR(self, node: ir.AcquireGroupIR, start: int):
@@ -178,14 +176,13 @@ class CollectInfo:
             handle = params.handle if params else None
 
             # generate_acquire_map
-            start_time = start + node.offset
             self.open_acquisitions_stack[-1].append(
-                AcquisitionInfo(start_time, signal, handle)
+                AcquisitionInfo(start, signal, handle)
             )
 
             # MeasurementCalculator
             if self.shadow_levels == 0:
-                pulse_start = start + node.offset
+                pulse_start = start
                 assert node.length is not None
                 end = start + node.length
                 self._extract_measurement_infos(

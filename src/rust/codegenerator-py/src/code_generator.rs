@@ -503,30 +503,6 @@ impl PRNGTrackerPy {
             .set_offset(value);
     }
 
-    #[getter]
-    pub fn get_active_sample(&self) -> Option<String> {
-        self.prng_tracker
-            .read()
-            .expect("PRNGTracker is already locked")
-            .active_sample()
-            .cloned()
-    }
-
-    #[setter]
-    pub fn set_active_sample(&mut self, value: String) {
-        self.prng_tracker
-            .write()
-            .expect("PRNGTracker is already locked")
-            .set_active_sample(value.to_string());
-    }
-
-    pub fn drop_sample(&mut self) {
-        self.prng_tracker
-            .write()
-            .expect("PRNGTracker is already locked")
-            .drop_sample();
-    }
-
     pub fn is_committed(&self) -> bool {
         self.prng_tracker
             .read()
@@ -804,13 +780,6 @@ impl SeqCTrackerPy {
             .setup_prng(seed, prng_range)
             .map_err(|err| LabOneQException::new_err(err.to_string()))?;
         Ok(())
-    }
-
-    //     def drop_prng(self) -> None: ...
-    fn drop_prng(&mut self) -> PyResult<()> {
-        self.get_seq_c_tracker_mut()
-            .drop_prng()
-            .map_err(|err| LabOneQException::new_err(err.to_string()))
     }
 
     //     def commit_prng(self) -> None: ...

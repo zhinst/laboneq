@@ -17,7 +17,6 @@ class PulseSchedule(IntervalSchedule):
     amplitude: float
     amp_param_name: str | None = None
     phase: float
-    offset: int
     set_oscillator_phase: Optional[float] = None
     increment_oscillator_phase: Optional[float] = None
     incr_phase_param_name: str | None = None

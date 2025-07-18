@@ -17,7 +17,6 @@ from laboneq.compiler.feedback_router.feedback_router import (
     calculate_feedback_register_layout,
     assign_feedback_registers,
 )
-from laboneq.compiler.recipe import generate_recipe_combined
 from laboneq.compiler.common import compiler_settings
 from laboneq.compiler.common.awg_info import AWGInfo, AwgKey
 from laboneq.compiler.common.awg_signal_type import AWGSignalType
@@ -28,6 +27,11 @@ from laboneq.compiler.common.trigger_mode import TriggerMode
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.scheduler.scheduler import Scheduler
+from laboneq.compiler.workflow.compiler_hooks import (
+    GenerateRecipeArgs,
+    all_compiler_hooks,
+    get_compiler_hooks,
+)
 from laboneq.compiler.workflow.neartime_execution import (
     NtCompilerExecutor,
     legacy_execution_program,
@@ -64,21 +68,12 @@ import laboneq.compiler.workflow.reporter  # noqa: F401
 import numpy as np
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
     from laboneq.compiler.workflow.on_device_delays import OnDeviceDelayCompensation
 
 
 AWGMapping = dict[AwgKey, AWGInfo]
 
 _logger = logging.getLogger(__name__)
-
-_registered_awg_calculation_hooks: list[Callable[[ExperimentDAO], AWGMapping]] = []
-
-
-def register_awg_calculation_hook(hook):
-    if hook not in _registered_awg_calculation_hooks:
-        _registered_awg_calculation_hooks.append(hook)
-    return hook
 
 
 def _divisors(n: int) -> list[int]:
@@ -193,8 +188,7 @@ def _allocate_oscillators(awg: AWGInfo, dao: ExperimentDAO):
     awg.oscs = {k: v[0] for k, v in awg_osc_map.items()}
 
 
-@register_awg_calculation_hook
-def _calc_awgs(dao: ExperimentDAO):
+def calc_awgs(dao: ExperimentDAO) -> AWGMapping:
     awgs: AWGMapping = {}
     signals_by_channel_and_awg: dict[
         tuple[str, int, int], dict[str, set[str] | AWGInfo]
@@ -408,7 +402,7 @@ class Compiler:
         self._integration_unit_allocation: dict[str, IntegrationUnitAllocation] = {}
         self._awgs: AWGMapping = {}
         self._delays_by_signal: dict[str, OnDeviceDelayCompensation] = {}
-        self._precompensations: dict[str, PrecompensationInfo] | None = None
+        self._precompensations: dict[str, PrecompensationInfo] = {}
         self._signal_objects: dict[str, SignalObj] = {}
         self._feedback_register_layout: FeedbackRegisterLayout = {}
         self._has_uhfqa: bool = False
@@ -672,8 +666,8 @@ class Compiler:
     @staticmethod
     def _calc_awgs(dao: ExperimentDAO):
         d = {}
-        for hook in _registered_awg_calculation_hooks:
-            d.update(hook(dao))
+        for compiler_hooks in all_compiler_hooks():
+            d.update(compiler_hooks.calc_awgs(dao))
         return d
 
     def _adjust_signals_for_on_device_delays(
@@ -890,17 +884,26 @@ class Compiler:
 
         awgs: list[AWGInfo] = sorted(self._awgs.values(), key=lambda awg: awg.key)
 
-        self._recipe = generate_recipe_combined(
-            awgs,
-            self._experiment_dao,
-            self._leader_properties,
-            self._clock_settings,
-            self._sampling_rate_tracker,
-            self._integration_unit_allocation,
-            self._delays_by_signal,
-            self._precompensations,
-            self._combined_compiler_output,
+        device_class, combined_output = (
+            self._combined_compiler_output.get_first_combined_output()
         )
+        if combined_output is None:
+            self._recipe = Recipe()
+        else:
+            generate_recipe_args = GenerateRecipeArgs(
+                awgs=awgs,
+                experiment_dao=self._experiment_dao,
+                leader_properties=self._leader_properties,
+                clock_settings=self._clock_settings,
+                sampling_rate_tracker=self._sampling_rate_tracker,
+                integration_unit_allocation=self._integration_unit_allocation,
+                delays_by_signal=self._delays_by_signal,
+                precompensations=self._precompensations,
+                combined_compiler_output=combined_output,
+            )
+            self._recipe = get_compiler_hooks(device_class).generate_recipe(
+                generate_recipe_args
+            )
 
         retval = self.compiler_output()
 

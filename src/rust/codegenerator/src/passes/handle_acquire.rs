@@ -27,10 +27,8 @@ fn lower_acquire_pulse(
     // Timing adjustment for grid
     // TODO: The adjustment should not be necessary, the scheduler should
     // handle this. The current functionality matches the old implementation for now.
-    let offset_adjusted = offset + pulse.signal.delay;
-    let end_unsampled = offset + pulse.length + pulse.signal.delay;
-    let start = floor_to_grid(offset_adjusted, sample_multiple.into());
-    let end = floor_to_grid(end_unsampled, sample_multiple.into());
+    let start = floor_to_grid(offset, sample_multiple.into());
+    let end = floor_to_grid(offset + pulse.length, sample_multiple.into());
     let acquire = PlayAcquire::new(
         Rc::clone(&pulse.signal),
         end - start,
@@ -104,7 +102,8 @@ mod tests {
             signal: Signal {
                 uid: "".to_string(),
                 kind: SignalKind::INTEGRATION,
-                delay: 0,
+                signal_delay: 0.0,
+                start_delay: 0.0,
                 channels: vec![0],
                 oscillator: None,
                 mixer_type: None,

@@ -13,7 +13,7 @@ use crate::ir::{
     IrNode, LinearParameterInfo, NodeKind, OscillatorFrequencySweepStep, Samples,
     SetOscillatorFrequencySweep,
 };
-use crate::tinysample;
+use crate::tinysample::TINYSAMPLE;
 use crate::{Error, Result};
 
 struct SignalPhaseTracker {
@@ -72,7 +72,7 @@ impl PhaseTracker {
 
     pub fn calculate_phase_at(&self, signal: &cjob::Signal, freq: f64, ts: Samples) -> f64 {
         let (ref_time, phase_now) = self.phase_now(signal);
-        let t = (ts as f64 - ref_time as f64) * tinysample::TINYSAMPLE;
+        let t = (ts as f64 - ref_time as f64) * TINYSAMPLE;
         t * 2.0 * std::f64::consts::PI * freq + phase_now
     }
 }
@@ -119,7 +119,7 @@ fn collect_osc_parameters(
     node: &mut IrNode,
     state: &mut SoftwareOscillatorParameters,
     phase_tracker: &mut Option<PhaseTracker>,
-    sampling_rate: &f64,
+    func: &impl Fn(&str, Samples) -> Samples,
 ) -> Result<()> {
     let node_offset = *node.offset();
     match node.data_mut() {
@@ -149,8 +149,8 @@ fn collect_osc_parameters(
                     return Ok(());
                 }
             }
-            // TODO: More elegant way to map to the node
-            let offset = tinysample::tinysample_to_samples(node_offset, *sampling_rate);
+            // TODO: More elegant way to map to the node than a timestamp
+            let offset = func(&ob.signal.uid, node_offset);
             state.timestamp_osc_freq(&ob.signal, offset);
             if let Some(tracker) = phase_tracker {
                 // Set oscillator phase priority over incrementing
@@ -183,7 +183,8 @@ fn collect_osc_parameters(
             Ok(())
         }
         NodeKind::AcquirePulse(ob) => {
-            let offset = tinysample::tinysample_to_samples(node_offset, *sampling_rate);
+            // TODO: More elegant way to map to the node than a timestamp
+            let offset = func(&ob.signal.uid, node_offset);
             state.timestamp_osc_freq(&ob.signal, offset);
             Ok(())
         }
@@ -193,30 +194,31 @@ fn collect_osc_parameters(
                     tracker.global_reset(node_offset);
                 }
             }
-            node.replace_data(NodeKind::Nop {
-                length: node.data().length(),
-            });
             Ok(())
         }
         _ => {
             for child in node.iter_children_mut() {
-                collect_osc_parameters(child, state, phase_tracker, sampling_rate)?;
+                collect_osc_parameters(child, state, phase_tracker, func)?;
             }
             Ok(())
         }
     }
 }
 
-/// Pass to handle software oscillator parameters
+/// Pass to handle  and calculate software oscillator parameters.
 ///
-/// Consumes oscillator frequency and phase nodes from the tree
-/// and returns calculated oscillator frequency and phase values for each pulse at given time in target device unit samples.
+/// Consumes [`NodeKind::PlayPulse`] which the are used only for phase increments.
 /// Tiny sample is used to avoid potential rounding errors when calculating phase increments.
+///
+/// # Returns
+///
+/// Calculated oscillator frequency and phase values for each signal and pulse at given time in target device unit samples,
+/// which is calculated by the `timestamp_shifting_function`.
 pub fn handle_oscillator_parameters(
     node: &mut IrNode,
     signals: &[Rc<cjob::Signal>],
     device_kind: &DeviceKind,
-    sampling_rate: &f64,
+    timestamp_shifting_function: impl Fn(&str, Samples) -> Samples,
 ) -> Result<SoftwareOscillatorParameters> {
     let mut state = SoftwareOscillatorParameters {
         active_osc_freq: HashMap::new(),
@@ -228,7 +230,12 @@ pub fn handle_oscillator_parameters(
         true => None,
         false => Some(PhaseTracker::new(signals)),
     };
-    collect_osc_parameters(node, &mut state, &mut phase_tracker, sampling_rate)?;
+    collect_osc_parameters(
+        node,
+        &mut state,
+        &mut phase_tracker,
+        &timestamp_shifting_function,
+    )?;
     Ok(state)
 }
 
@@ -341,7 +348,6 @@ fn evaluate_sweep_properties(
 /// Replace the gathered oscillator sweep step nodes with [`SetOscillatorFrequencySweep`] nodes.
 fn replace_hw_oscillator_sweep_nodes(
     mut nodes: Vec<&mut IrNode>,
-    global_delay: Samples,
     sweep_info: &SweepInfo,
     cut_points: &mut HashSet<Samples>,
 ) {
@@ -385,7 +391,6 @@ fn replace_hw_oscillator_sweep_nodes(
             oscillators: osc_setups,
         });
         node.replace_data(node_info);
-        *node.offset_mut() += global_delay;
         cut_points.insert(*node.offset());
     }
 }
@@ -428,7 +433,6 @@ fn check_device_compatibility(device: &DeviceKind, sweep_info: &SweepInfo) -> Re
 pub fn handle_oscillator_sweeps(
     node: &mut IrNode,
     awg: &AwgCore,
-    global_delay: Samples,
     cut_points: &mut HashSet<Samples>,
 ) -> Result<()> {
     let signal_osc_index_allocation = &awg.oscillator_index_by_signal_uid();
@@ -442,7 +446,7 @@ pub fn handle_oscillator_sweeps(
     }
     let sweep_info = evaluate_sweep_properties(&nodes, signal_osc_index_allocation)?;
     check_device_compatibility(&awg.device_kind, &sweep_info)?;
-    replace_hw_oscillator_sweep_nodes(nodes, global_delay, &sweep_info, cut_points);
+    replace_hw_oscillator_sweep_nodes(nodes, &sweep_info, cut_points);
     Ok(())
 }
 
@@ -450,10 +454,7 @@ pub fn handle_oscillator_sweeps(
 mod tests {
     use std::sync::Arc;
 
-    use crate::{
-        ir::{PhaseReset, PlayPulse},
-        tinysample::length_to_samples,
-    };
+    use crate::ir::{PhaseReset, PlayPulse};
 
     use super::*;
 
@@ -466,7 +467,8 @@ mod tests {
                 uid: "osc".to_string(),
                 kind,
             }),
-            delay: 0,
+            signal_delay: 0.0,
+            start_delay: 0.0,
             mixer_type: None,
         };
         Rc::new(sig)
@@ -475,6 +477,7 @@ mod tests {
     fn make_reset(reset_sw_oscillators: bool) -> NodeKind {
         NodeKind::PhaseReset(PhaseReset {
             reset_sw_oscillators,
+            signals: vec![],
         })
     }
 
@@ -493,245 +496,128 @@ mod tests {
             amplitude: None,
             incr_phase_param_name: None,
             markers: vec![],
-            pulse_def: Some(Arc::new(cjob::PulseDef {
-                uid: "param".to_string(),
-                kind: cjob::PulseDefKind::Pulse,
-            })),
+            pulse_def: Some(Arc::new(cjob::PulseDef::test(
+                "param".to_string(),
+                cjob::PulseDefKind::Pulse,
+            ))),
             phase: 0.0,
         })
     }
 
     #[test]
     fn test_phase_increment() {
-        let sampling_rate = 2.4e9;
         let signal = make_signal("test", cjob::OscillatorKind::SOFTWARE);
         let mut root = IrNode::new(NodeKind::Nop { length: 0 }, 0);
         root.add_child(0, make_reset(true));
-        root.add_child(
-            tinysample::samples_to_tinysample(1),
-            make_pulse(Rc::clone(&signal), None, Some(0.5)),
-        );
-        root.add_child(
-            tinysample::samples_to_tinysample(3),
-            make_pulse(Rc::clone(&signal), None, Some(0.5)),
-        );
-        let mut nested_section = IrNode::new(
-            NodeKind::Nop { length: 0 },
-            tinysample::samples_to_tinysample(5),
-        );
-        nested_section.add_child(tinysample::samples_to_tinysample(5), make_reset(true));
-        nested_section.add_child(
-            tinysample::samples_to_tinysample(7),
-            make_pulse(Rc::clone(&signal), None, Some(0.5)),
-        );
+        root.add_child(1, make_pulse(Rc::clone(&signal), None, Some(0.5)));
+        root.add_child(3, make_pulse(Rc::clone(&signal), None, Some(0.5)));
+        let mut nested_section = IrNode::new(NodeKind::Nop { length: 0 }, 5);
+        nested_section.add_child(5, make_reset(true));
+        nested_section.add_child(7, make_pulse(Rc::clone(&signal), None, Some(0.5)));
         root.add_child_node(nested_section);
-        root.add_child(
-            tinysample::samples_to_tinysample(11),
-            make_pulse(Rc::clone(&signal), None, Some(0.5)),
-        );
+        root.add_child(11, make_pulse(Rc::clone(&signal), None, Some(0.5)));
 
         let params = handle_oscillator_parameters(
             &mut root,
             &[Rc::clone(&signal)],
             &DeviceKind::SHFSG,
-            &sampling_rate,
+            |_, ts| ts,
         )
         .unwrap();
-        assert_eq!(
-            params
-                .phase_at(&signal, length_to_samples(1.0, sampling_rate))
-                .unwrap(),
-            0.5
-        );
-        assert_eq!(
-            params
-                .phase_at(&signal, length_to_samples(3.0, sampling_rate))
-                .unwrap(),
-            1.0
-        );
-        assert_eq!(
-            params
-                .phase_at(&signal, length_to_samples(7.0, sampling_rate))
-                .unwrap(),
-            0.5
-        );
-        assert_eq!(
-            params
-                .phase_at(&signal, length_to_samples(11.0, sampling_rate))
-                .unwrap(),
-            1.0
-        );
+        assert_eq!(params.phase_at(&signal, 1).unwrap(), 0.5);
+        assert_eq!(params.phase_at(&signal, 3).unwrap(), 1.0);
+        assert_eq!(params.phase_at(&signal, 7).unwrap(), 0.5);
+        assert_eq!(params.phase_at(&signal, 11).unwrap(), 1.0);
     }
 
     #[test]
     fn test_phase_increment_no_sw_reset() {
-        let sampling_rate = 2.4e9;
         let signal = make_signal("test", cjob::OscillatorKind::SOFTWARE);
         let mut root = IrNode::new(NodeKind::Nop { length: 0 }, 0);
-        root.add_child(
-            tinysample::samples_to_tinysample(0),
-            make_pulse(Rc::clone(&signal), None, Some(0.5)),
-        );
-        root.add_child(tinysample::samples_to_tinysample(1), make_reset(false));
-        root.add_child(
-            tinysample::samples_to_tinysample(3),
-            make_pulse(Rc::clone(&signal), None, Some(0.5)),
-        );
+        root.add_child(0, make_pulse(Rc::clone(&signal), None, Some(0.5)));
+        root.add_child(1, make_reset(false));
+        root.add_child(3, make_pulse(Rc::clone(&signal), None, Some(0.5)));
 
         let params = handle_oscillator_parameters(
             &mut root,
             &[Rc::clone(&signal)],
             &DeviceKind::SHFSG,
-            &sampling_rate,
+            |_, ts| ts,
         )
         .unwrap();
-        assert_eq!(
-            params
-                .phase_at(&signal, length_to_samples(0.0, sampling_rate))
-                .unwrap(),
-            0.5
-        );
-        assert_eq!(
-            params
-                .phase_at(&signal, length_to_samples(3.0, sampling_rate))
-                .unwrap(),
-            1.0
-        );
+        assert_eq!(params.phase_at(&signal, 0).unwrap(), 0.5);
+        assert_eq!(params.phase_at(&signal, 3).unwrap(), 1.0);
     }
 
     #[test]
     fn test_phase_increment_hw_osc() {
-        let sampling_rate = 2.4e9;
         let signal = make_signal("test", cjob::OscillatorKind::HARDWARE);
         let mut root = IrNode::new(NodeKind::Nop { length: 0 }, 0);
-        root.add_child(
-            tinysample::samples_to_tinysample(0),
-            make_pulse(Rc::clone(&signal), None, Some(0.5)),
-        );
-        root.add_child(
-            tinysample::samples_to_tinysample(1),
-            make_pulse(Rc::clone(&signal), None, Some(0.5)),
-        );
+        root.add_child(0, make_pulse(Rc::clone(&signal), None, Some(0.5)));
+        root.add_child(1, make_pulse(Rc::clone(&signal), None, Some(0.5)));
 
         let params = handle_oscillator_parameters(
             &mut root,
             &[Rc::clone(&signal)],
             &DeviceKind::SHFSG,
-            &sampling_rate,
+            |_, ts| ts,
         )
         .unwrap();
-        assert!(
-            params
-                .phase_at(&signal, length_to_samples(0.0, sampling_rate))
-                .is_none()
-        );
-        assert!(
-            params
-                .phase_at(&signal, length_to_samples(1.0, sampling_rate))
-                .is_none()
-        );
+        assert!(params.phase_at(&signal, 0).is_none());
+        assert!(params.phase_at(&signal, 1).is_none());
     }
 
     #[test]
     fn test_set_phase() {
-        let sampling_rate = 2.4e9;
         let signal = make_signal("test", cjob::OscillatorKind::SOFTWARE);
         let mut root = IrNode::new(NodeKind::Nop { length: 0 }, 0);
-        root.add_child(
-            tinysample::samples_to_tinysample(0),
-            make_pulse(Rc::clone(&signal), Some(1.0), Some(0.5)),
-        );
-        root.add_child(
-            tinysample::samples_to_tinysample(1),
-            make_pulse(Rc::clone(&signal), None, Some(0.5)),
-        );
-        root.add_child(tinysample::samples_to_tinysample(3), make_reset(true));
-        root.add_child(
-            tinysample::samples_to_tinysample(5),
-            make_pulse(Rc::clone(&signal), Some(1.0), None),
-        );
+        root.add_child(0, make_pulse(Rc::clone(&signal), Some(1.0), Some(0.5)));
+        root.add_child(1, make_pulse(Rc::clone(&signal), None, Some(0.5)));
+        root.add_child(3, make_reset(true));
+        root.add_child(5, make_pulse(Rc::clone(&signal), Some(1.0), None));
 
         let params = handle_oscillator_parameters(
             &mut root,
             &[Rc::clone(&signal)],
             &DeviceKind::SHFSG,
-            &sampling_rate,
+            |_, ts| ts,
         )
         .unwrap();
         // Set phase wins over phase increments
-        assert_eq!(
-            params
-                .phase_at(&signal, length_to_samples(0.0, sampling_rate))
-                .unwrap(),
-            1.0
-        );
-        assert_eq!(
-            params
-                .phase_at(&signal, length_to_samples(1.0, sampling_rate))
-                .unwrap(),
-            1.5
-        );
-        assert_eq!(
-            params
-                .phase_at(&signal, length_to_samples(5.0, sampling_rate))
-                .unwrap(),
-            1.0
-        );
+        assert_eq!(params.phase_at(&signal, 0).unwrap(), 1.0);
+        assert_eq!(params.phase_at(&signal, 1).unwrap(), 1.5);
+        assert_eq!(params.phase_at(&signal, 5).unwrap(), 1.0);
     }
 
     #[test]
     fn test_set_phase_no_osc() {
-        let sampling_rate = 2.4e9;
         let sig = cjob::Signal {
             uid: "test".to_string(),
             kind: cjob::SignalKind::IQ,
             channels: vec![],
             oscillator: None,
-            delay: 0,
+            signal_delay: 0.0,
+            start_delay: 0.0,
             mixer_type: None,
         };
         let signal = Rc::new(sig);
         let mut root = IrNode::new(NodeKind::Nop { length: 0 }, 0);
-        root.add_child(
-            tinysample::samples_to_tinysample(0),
-            make_pulse(Rc::clone(&signal), Some(1.0), Some(0.5)),
-        );
-        root.add_child(
-            tinysample::samples_to_tinysample(1),
-            make_pulse(Rc::clone(&signal), None, Some(0.5)),
-        );
-        root.add_child(tinysample::samples_to_tinysample(3), make_reset(true));
-        root.add_child(
-            tinysample::samples_to_tinysample(5),
-            make_pulse(Rc::clone(&signal), Some(1.0), None),
-        );
+        root.add_child(0, make_pulse(Rc::clone(&signal), Some(1.0), Some(0.5)));
+        root.add_child(1, make_pulse(Rc::clone(&signal), None, Some(0.5)));
+        root.add_child(3, make_reset(true));
+        root.add_child(5, make_pulse(Rc::clone(&signal), Some(1.0), None));
 
         let params = handle_oscillator_parameters(
             &mut root,
             &[Rc::clone(&signal)],
             &DeviceKind::SHFSG,
-            &sampling_rate,
+            |_, ts| ts,
         )
         .unwrap();
         // Set phase wins over phase increments
-        assert_eq!(
-            params
-                .phase_at(&signal, length_to_samples(0.0, sampling_rate))
-                .unwrap(),
-            1.0
-        );
-        assert_eq!(
-            params
-                .phase_at(&signal, length_to_samples(1.0, sampling_rate))
-                .unwrap(),
-            1.5
-        );
-        assert_eq!(
-            params
-                .phase_at(&signal, length_to_samples(5.0, sampling_rate))
-                .unwrap(),
-            1.0
-        );
+        assert_eq!(params.phase_at(&signal, 0).unwrap(), 1.0);
+        assert_eq!(params.phase_at(&signal, 1).unwrap(), 1.5);
+        assert_eq!(params.phase_at(&signal, 5).unwrap(), 1.0);
     }
 
     mod handle_oscillator_sweeps {
@@ -769,7 +655,8 @@ mod tests {
                             uid: "osc".to_string(),
                             kind: OscillatorKind::HARDWARE,
                         }),
-                        delay: 0,
+                        signal_delay: 0.0,
+                        start_delay: 0.0,
                         mixer_type: None,
                     }),
                     frequency,
@@ -791,7 +678,8 @@ mod tests {
                         uid: "osc".to_string(),
                         kind: OscillatorKind::HARDWARE,
                     }),
-                    delay: 0,
+                    signal_delay: 0.0,
+                    start_delay: 0.0,
                     mixer_type: None,
                 })],
                 device_kind: DeviceKind::SHFSG,
@@ -815,12 +703,11 @@ mod tests {
                     ),
                 );
             }
-            handle_oscillator_sweeps(&mut root, &awg, 160, &mut HashSet::default()).unwrap();
+            handle_oscillator_sweeps(&mut root, &awg, &mut HashSet::default()).unwrap();
 
             let children = root.iter_children().collect::<Vec<_>>();
             // Check that the target nodes has been replaced with a SetOscillatorFrequencySweep node
             let target_first = children.first().unwrap();
-            assert_eq!(target_first.offset(), &160);
             let expected_first = SetOscillatorFrequencySweep {
                 length: 0,
                 oscillators: vec![OscillatorFrequencySweepStep {

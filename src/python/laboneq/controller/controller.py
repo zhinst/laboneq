@@ -6,13 +6,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections import defaultdict
 from copy import deepcopy
 from typing import TYPE_CHECKING, Callable
 
+from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.utilities.for_each import for_each_sync
+from laboneq.controller.utilities.sweep_params_tracker import SweepParamsTracker
 import numpy as np
-import zhinst.utils
+import zhinst.utils  # type: ignore
 from numpy import typing as npt
 
 from laboneq import __version__
@@ -29,7 +30,6 @@ from laboneq.controller.recipe_processor import (
     pre_process_compiled,
 )
 from laboneq.controller.results import make_acquired_result
-from laboneq.controller.util import LabOneQControllerException, SweepParamsTracker
 from laboneq.controller.versioning import (
     MINIMUM_SUPPORTED_LABONE_VERSION,
     RECOMMENDED_LABONE_VERSION,
@@ -89,9 +89,6 @@ class Controller(EventLoopMixIn):
         self._neartime_callbacks: dict[str, Callable] = (
             {} if neartime_callbacks is None else neartime_callbacks
         )
-        self._nodes_from_artifact_replacement: dict[DeviceZI, NodeCollector] = (
-            defaultdict(NodeCollector)
-        )
         self._recipe_data: RecipeData = None
         self._results = ExperimentResults()
 
@@ -112,18 +109,6 @@ class Controller(EventLoopMixIn):
     @property
     def devices(self) -> dict[str, DeviceZI]:
         return self._devices.devices
-
-    async def _replace_artifacts(self):
-        rt_execution_info = self._recipe_data.rt_execution_info
-        with_pipeliner = rt_execution_info.with_pipeliner
-        if with_pipeliner and self._nodes_from_artifact_replacement:
-            raise LabOneQControllerException(
-                "Cannot replace waveforms in combination with the pipeliner"
-            )
-
-        for device, nc in self._nodes_from_artifact_replacement.items():
-            await device.set_async(nc)
-        self._nodes_from_artifact_replacement.clear()
 
     async def _prepare_nt_step(
         self,
@@ -154,7 +139,6 @@ class Controller(EventLoopMixIn):
             recipe_data=self._recipe_data,
             nt_step=nt_step,
         )
-        await self._replace_artifacts()
         await self._devices.for_each(DeviceBase.set_after_awg_upload, self._recipe_data)
 
     async def _after_nt_step(self):
@@ -337,11 +321,12 @@ class Controller(EventLoopMixIn):
                 await self._devices.for_each(
                     DeviceBase.apply_initialization, self._recipe_data
                 )
-                await self._devices.for_each(DeviceBase.initialize_oscillators)
+                await self._devices.for_each(
+                    DeviceBase.initialize_oscillators, self._recipe_data
+                )
 
                 # Ensure no side effects from the previous execution in the same session
                 self._current_waves.clear()
-                self._nodes_from_artifact_replacement.clear()
 
                 _logger.info("Starting near-time execution...")
                 try:
@@ -431,31 +416,27 @@ class Controller(EventLoopMixIn):
                 assert isinstance(repl.samples, list)
                 clipped = np.clip(repl.samples, -1.0, 1.0)
                 bin_wave = zhinst.utils.convert_awg_waveform(*clipped)
-                self._nodes_from_artifact_replacement[device].extend(
-                    device.prepare_upload_binary_wave(
-                        awg_index=awg[1],
-                        wave=WaveformItem(
-                            index=target_wave_index,
-                            name=repl.sig_string + " (repl)",
-                            samples=bin_wave,
-                        ),
-                        acquisition_type=acquisition_type,
-                    )
+                device.add_waveform_replacement(
+                    awg_index=awg[1],
+                    wave=WaveformItem(
+                        index=target_wave_index,
+                        name=repl.sig_string + " (repl)",
+                        samples=bin_wave,
+                    ),
+                    acquisition_type=acquisition_type,
                 )
             elif repl.replacement_type == ReplacementType.COMPLEX:
                 assert isinstance(repl.samples, np.ndarray)
                 np.clip(repl.samples.real, -1.0, 1.0, out=repl.samples.real)
                 np.clip(repl.samples.imag, -1.0, 1.0, out=repl.samples.imag)
-                self._nodes_from_artifact_replacement[device].extend(
-                    device.prepare_upload_binary_wave(
-                        awg_index=awg[1],
-                        wave=WaveformItem(
-                            index=target_wave_index,
-                            name=repl.sig_string + " (repl)",
-                            samples=repl.samples,
-                        ),
-                        acquisition_type=acquisition_type,
-                    )
+                device.add_waveform_replacement(
+                    awg_index=awg[1],
+                    wave=WaveformItem(
+                        index=target_wave_index,
+                        name=repl.sig_string + " (repl)",
+                        samples=repl.samples,
+                    ),
+                    acquisition_type=acquisition_type,
                 )
 
     def replace_phase_increment(self, parameter_uid: str, new_value: int | float):
@@ -467,8 +448,7 @@ class Controller(EventLoopMixIn):
             device_id, awg_index = self._find_awg(seqc_name)
             assert device_id is not None and awg_index is not None
             device = self._devices.find_by_uid(device_id)
-            nodes = device.prepare_upload_command_table(awg_index, repl["ct"])
-            self._nodes_from_artifact_replacement[device].extend(nodes)
+            device.add_command_table_replacement(awg_index, repl["ct"])
 
     def _prepare_result_shapes(self):
         self._results = ExperimentResults()

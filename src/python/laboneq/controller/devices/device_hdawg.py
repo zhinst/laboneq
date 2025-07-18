@@ -16,7 +16,6 @@ from laboneq.controller.attribute_value_tracker import (
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
 from laboneq.controller.devices.device_utils import FloatWithTolerance, NodeCollector
 from laboneq.controller.devices.device_zi import (
-    AllocatedOscillator,
     DeviceBase,
     delay_to_rounded_samples,
 )
@@ -31,11 +30,10 @@ from laboneq.controller.devices.node_control import (
     WaitCondition,
 )
 from laboneq.controller.recipe_processor import RecipeData
-from laboneq.controller.util import LabOneQControllerException
+from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.data.recipe import (
     Initialization,
-    OscillatorParam,
     SignalType,
     TriggeringMode,
 )
@@ -127,27 +125,6 @@ class DeviceHDAWG(DeviceBase):
             self._channels = 4
 
         self._multi_freq = "MF" in self.dev_opts
-
-    def _osc_group_by_channel(self, channel: int) -> int:
-        # For LabOne Q SW, the AWG oscillator control is always on, in which
-        # case every pair of output channels share the same set of oscillators
-        return channel // 2
-
-    def _get_next_osc_index(
-        self,
-        osc_group_oscs: list[AllocatedOscillator],
-        osc_param: OscillatorParam,
-        recipe_data: RecipeData,
-    ) -> int | None:
-        osc_group = self._osc_group_by_channel(osc_param.channel)
-        previously_allocated = len(osc_group_oscs)
-        # With MF option 4 oscillators per channel pair are available,
-        # and only 1 oscillator per channel pair without MF option.
-        max_per_group = 4 if self._multi_freq else 1
-        if previously_allocated >= max_per_group:
-            return None
-        osc_index_base = osc_group * max_per_group
-        return osc_index_base + previously_allocated
 
     def _busy_nodes(self) -> list[str]:
         busy_nodes = []
@@ -243,7 +220,7 @@ class DeviceHDAWG(DeviceBase):
         return nodes
 
     def rf_offset_control_nodes(self) -> list[NodeControlBase]:
-        nodes = []
+        nodes: list[NodeControlBase] = []
         for channel, offset in self._voltage_offsets.items():
             nodes.extend(
                 [
@@ -483,7 +460,9 @@ class DeviceHDAWG(DeviceBase):
                 nc.add(f"triggers/out/{output.channel}/delay", 0.0)
 
         osc_selects = {
-            ch: osc.index for osc in self._allocated_oscs for ch in osc.channels
+            ch: osc.index
+            for osc in device_recipe_data.allocated_oscs
+            for ch in osc.channels
         }
         for ch, osc_idx in osc_selects.items():
             nc.add(f"sines/{ch}/oscselect", osc_idx)
@@ -518,11 +497,10 @@ class DeviceHDAWG(DeviceBase):
                 value_or_param=io.gains.off_diagonal,
             )
 
-    def _collect_prepare_nt_step_nodes(
-        self, attributes: DeviceAttributesView, recipe_data: RecipeData
-    ) -> NodeCollector:
+    async def _set_nt_step_nodes(
+        self, recipe_data: RecipeData, attributes: DeviceAttributesView
+    ):
         nc = NodeCollector(base=f"/{self.serial}/")
-        nc.extend(super()._collect_prepare_nt_step_nodes(attributes, recipe_data))
 
         device_recipe_data = recipe_data.device_settings[self.uid]
         awg_iq_pair_set: set[int] = set()
@@ -537,8 +515,7 @@ class DeviceHDAWG(DeviceBase):
                 output_delay = scheduler_port_delay + (port_delay or 0.0)
                 output_delay_rounded = (
                     delay_to_rounded_samples(
-                        channel=ch,
-                        dev_repr=self.dev_repr,
+                        ch_repr=f"{self.dev_repr}:ch{ch}",
                         delay=output_delay,
                         sample_frequency_hz=self.sampling_rate,
                         granularity_samples=DELAY_NODE_GRANULARITY_SAMPLES,
@@ -637,7 +614,7 @@ class DeviceHDAWG(DeviceBase):
                         iq_mixer_calib_normalized[1][output_q],
                     )
                 awg_iq_pair_set.add(awg_idx)
-        return nc
+        await self.set_async(nc)
 
     async def set_before_awg_upload(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")

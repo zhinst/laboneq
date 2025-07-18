@@ -127,6 +127,7 @@ class OscillatorParam:
     device_id: str
     channel: int
     signal_id: str
+    allocated_index: int
     frequency: float | None = None
     param: str | None = None
 

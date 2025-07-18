@@ -204,21 +204,17 @@ class QPUTopology:
                 if isinstance(source_node, slice) and isinstance(target_node, str):
                     return self.get_edges(target_node, tag, incoming=True)
                 if isinstance(source_node, slice) and isinstance(target_node, slice):
-                    return [edge for edge in self.edges() if edge.tag == tag]
+                    return self.get_edges(tag=tag)
 
             if isinstance(tag, slice):
                 if isinstance(source_node, str) and isinstance(target_node, str):
-                    return [
-                        edge
-                        for edge in self.edges()
-                        if (edge.source_node.uid, edge.target_node.uid) == ("q0", "q1")
-                    ]
+                    return self.get_edges(source_node, other_node="q1", outgoing=True)
                 if isinstance(source_node, str) and isinstance(target_node, slice):
                     return self.get_edges(source_node, outgoing=True)
                 if isinstance(source_node, slice) and isinstance(target_node, str):
                     return self.get_edges(target_node, incoming=True)
                 if isinstance(source_node, slice) and isinstance(target_node, slice):
-                    return [edge for edge in self.edges()]
+                    return self.get_edges()
 
             raise TypeError(
                 f"The tag has unexpected type: {type(tag)}. Expected type: str | slice."
@@ -502,38 +498,50 @@ class QPUTopology:
 
     def get_edges(
         self,
-        node: str | QuantumElement,
+        node: str | QuantumElement | None = None,
         tag: str | None = None,
         *,
         other_node: str | QuantumElement | None = None,
         incoming: bool | None = None,
         outgoing: bool | None = None,
     ) -> list[TopologyEdge]:
-        """Return a list of edges attached to a quantum element node.
+        """Return a list of edges.
 
         Arguments:
             node:
-                The quantum element whose edges to return. May be passed as
+                If specified, filter the edges by `node`. May be passed as
                 either the UID or the `QuantumElement` object.
             tag:
-                If specified, filter the list of edges by tag.
+                If specified, filter the list of edges by `tag`.
             other_node:
                 If specified, filter the list of edges to contain only
-                those connecting `node` and `other_node`.
+                those connecting `node` and `other_node`. Only applicable if `node` is
+                not None.
             incoming:
                 If false, exclude incoming edges to `node`. If true, include
-                incoming edges.
+                incoming edges. Only applicable if `node` is not None.
             outgoing:
                 If false, exclude outgoing edges from `node`. If true, include
-                outgoing edges.
+                outgoing edges. Only applicable if `node` is not None.
         Returns:
             The list of edges.
+        Raises:
+            ValueError: If `node` is None and any of `other_node`, `incoming`, or
+                `outgoing` are not None.
 
         !!! note
             If `incoming` and `outgoing` are both `None`, all edges are returned.
             If only one is `None`, the other takes the sensible default of
             `not` the other.
         """
+        if node is None and any(
+            arg is not None for arg in [other_node, incoming, outgoing]
+        ):
+            raise ValueError(
+                "The keyword arguments `other_node`, `incoming`, and "
+                "`outgoing` are not allowed if `node` is None."
+            )
+
         if isinstance(node, QuantumElement):
             node = node.uid
         if isinstance(other_node, QuantumElement):
@@ -547,11 +555,14 @@ class QPUTopology:
         elif outgoing is None:
             outgoing = not incoming
 
-        edge_queries = []
-        if outgoing:
-            edge_queries.append(self._graph.out_edges(node, keys=True, data=True))
-        if incoming:
-            edge_queries.append(self._graph.in_edges(node, keys=True, data=True))
+        if node is None:
+            edge_queries = [self._graph.edges(keys=True, data=True)]
+        else:
+            edge_queries = []
+            if outgoing:
+                edge_queries.append(self._graph.out_edges(node, keys=True, data=True))
+            if incoming:
+                edge_queries.append(self._graph.in_edges(node, keys=True, data=True))
 
         desired_edges = []
         for edge_source, edge_target, k, d in itertools.chain(*edge_queries):

@@ -23,7 +23,6 @@ class DeviceTraits:
     sample_multiple: int
     port_delay_granularity: int  # Granularity of the port delay in samples
     supports_zsync: bool
-    supports_reset_osc_phase: bool
     supports_binary_waves: bool
     supports_complex_waves: bool
     supports_precompensation: bool
@@ -72,7 +71,6 @@ class DeviceType(DeviceTraits, Enum):
         port_delay_granularity=1,
         amplitude_register_count=4,
         supports_zsync=True,
-        supports_reset_osc_phase=True,
         supports_binary_waves=True,
         supports_complex_waves=False,
         supports_precompensation=True,
@@ -101,7 +99,6 @@ class DeviceType(DeviceTraits, Enum):
         sample_multiple=8,
         port_delay_granularity=4,
         supports_zsync=False,
-        supports_reset_osc_phase=True,
         supports_binary_waves=True,  # Todo (Pol): useful or not?
         supports_complex_waves=False,
         supports_precompensation=False,
@@ -129,7 +126,6 @@ class DeviceType(DeviceTraits, Enum):
         sample_multiple=16,
         port_delay_granularity=4,
         supports_zsync=True,
-        supports_reset_osc_phase=True,  # Todo (Pol): useful or not?
         supports_binary_waves=False,
         supports_complex_waves=True,
         supports_precompensation=False,
@@ -155,7 +151,6 @@ class DeviceType(DeviceTraits, Enum):
         sample_multiple=16,
         port_delay_granularity=1,
         supports_zsync=True,
-        supports_reset_osc_phase=True,
         supports_binary_waves=True,
         supports_complex_waves=False,
         supports_precompensation=False,
@@ -182,7 +177,6 @@ class DeviceType(DeviceTraits, Enum):
         sample_multiple=4,
         port_delay_granularity=-(1 << 32),  # FIXME: Unknown or NA
         supports_zsync=False,
-        supports_reset_osc_phase=True,
         supports_binary_waves=False,
         supports_complex_waves=False,
         supports_precompensation=False,

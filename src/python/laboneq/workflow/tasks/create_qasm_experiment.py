@@ -147,11 +147,13 @@ def create_qasm_batch_experiment(
                 acquisition loop iteration.
 
             **repetition_time**:
-                The length that any single program is padded to.
-                The duration between the reset and the final readout is fixed and must be specified as
-                `repetition_time`. It must be chosen large enough to accommodate the longest of the
-                programs. The `repetition_time` parameter is also required if the resets are
-                disabled. In a future version we hope to make an explicit `repetition_time` optional.
+                The minimum duration of any single program.
+                If `None`, the default, each program runs for its own duration.
+                If not `None`, any program shorter than `repetition_time` is padded
+                to reach the given length. Programs longer than `repetition_time`
+                will keep their longer length.
+                The length of each program excludes the length of any resets or
+                measurements added using `add_reset` or `add_measurement`.
 
             **batch_execution_mode**:
                 The execution mode for the sequence of programs. Can be any of the following.

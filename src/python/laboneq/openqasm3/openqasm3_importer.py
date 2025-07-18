@@ -244,7 +244,7 @@ def exp_from_qasm_list(
     averaging_mode: AveragingMode = AveragingMode.CYCLIC,
     acquisition_type: AcquisitionType = AcquisitionType.INTEGRATION,
     reset_oscillator_phase: bool = False,
-    repetition_time: float = 1e-3,
+    repetition_time: float | None = None,
     batch_execution_mode: str = "pipeline",
     do_reset: bool = False,
     add_measurement: bool = True,
@@ -300,7 +300,13 @@ def exp_from_qasm_list(
             When true, reset all oscillators at the start of every
             acquisition loop iteration.
         repetition_time:
-            The length that any single program is padded to.
+            The minimum duration of any single program.
+            If `None`, the default, each program runs for its own duration.
+            If not `None`, any program shorter than `repetition_time` is padded
+            to reach the given length. Programs longer than `repetition_time`
+            will keep their longer length.
+            The length of each program excludes the length of any resets or
+            measurements added using `do_reset` or `add_measurement`.
         batch_execution_mode:
             The execution mode for the sequence of programs. Can be any of the following:
 
@@ -334,6 +340,10 @@ def exp_from_qasm_list(
 
     Returns:
         The experiment generated from the OpenQASM programs.
+
+    !!! version-changed "Changed in version 2.56.0"
+        The default value of `repetition_time` was changed from `1e-3` to `None`
+        and `None` was added as an allowed value.
     """
     warnings.warn(
         "`exp_from_qasm_list()` is deprecated. Use `OpenQASMTranspiler.batch_experiment()` instead.",

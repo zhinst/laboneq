@@ -266,8 +266,14 @@ def dump(experiment_dao: ExperimentDAO):
         for signal_id in sorted(experiment_dao.section_signals(section_id)):
             section_signal_object = {"signal": {"$ref": signal_id}}
             section_signal_pulses = []
+            offset_from_delay = None
             for section_pulse in experiment_dao.section_pulses(section_id, signal_id):
                 section_signal_pulse_object = {}
+                # NOTE: Extra delay is always before pulse and we consume it back
+                # to pulse for JSON output.
+                if section_pulse.pulse is None and section_pulse.length is not None:
+                    offset_from_delay = section_pulse.length
+                    continue
                 if section_pulse.pulse is not None:
                     section_signal_pulse_object["pulse"] = {
                         "$ref": section_pulse.pulse.uid
@@ -284,7 +290,16 @@ def dump(experiment_dao: ExperimentDAO):
                     "set_oscillator_phase",
                     "length",
                 ]:
-                    if (val := getattr(section_pulse, key)) is not None:
+                    val = None
+                    # NOTE: DAO has different internal representation of legacy offset
+                    # compared to the JSON schema, so we need to handle it here
+                    # specifically.
+                    if key == "offset" and offset_from_delay is not None:
+                        val = offset_from_delay
+                        offset_from_delay = None
+                    else:
+                        val = getattr(section_pulse, key)
+                    if val is not None:
                         if isinstance(val, ParameterInfo):
                             section_signal_pulse_object[key] = {"$ref": val.uid}
                         else:
@@ -321,7 +336,9 @@ def dump(experiment_dao: ExperimentDAO):
                         section_signal_pulse_object["markers"] = markers_object
 
                 section_signal_pulses.append(section_signal_pulse_object)
-
+            # Ensure last dangling offset is added as the last pulse
+            if offset_from_delay is not None:
+                section_signal_pulses.append({"offset": offset_from_delay})
             if len(section_signal_pulses) > 0:
                 section_signal_object["pulses_list"] = section_signal_pulses
             signals_list.append(section_signal_object)

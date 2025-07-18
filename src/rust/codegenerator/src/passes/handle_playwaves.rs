@@ -9,7 +9,8 @@ use crate::passes::handle_oscillators::SoftwareOscillatorParameters;
 use crate::signature::{
     PulseSignature, WaveformSignature, sort_pulses, split_complex_pulse_amplitude,
 };
-use crate::tinysample::{self, ceil_to_grid};
+use crate::tinysample::ceil_to_grid;
+use crate::tinysample::floor_to_grid;
 use crate::utils;
 use crate::virtual_signal::{VirtualSignal, VirtualSignals};
 use anyhow::anyhow;
@@ -19,19 +20,6 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use super::amplitude_registers::AmplitudeRegisterAllocation;
-
-fn adjust_sequence_end_point(
-    end: ir::Samples,
-    sample_multiple: u16,
-    delay: ir::Samples,
-    play_wave_size_hint: u16,
-    play_zero_size_hint: u16,
-) -> ir::Samples {
-    let mut end = end + delay;
-    end += play_wave_size_hint as ir::Samples + play_zero_size_hint as ir::Samples;
-    end += (-end) % sample_multiple as ir::Samples;
-    end
-}
 
 struct CutPoints {
     general: HashSet<ir::Samples>,
@@ -71,20 +59,8 @@ fn calculate_cut_points(node: &ir::IrNode, cut_pts: &mut CutPoints) {
     }
 }
 
-fn evaluate_cut_points(
-    node: &ir::IrNode,
-    sample_multiple: u16,
-    delay: ir::Samples,
-    play_wave_size_hint: u16,
-    play_zero_size_hint: u16,
-) -> CutPoints {
-    let end_time = adjust_sequence_end_point(
-        node.data().length(),
-        sample_multiple,
-        delay,
-        play_wave_size_hint,
-        play_zero_size_hint,
-    );
+fn evaluate_cut_points(node: &ir::IrNode) -> CutPoints {
+    let end_time = node.data().length();
     let mut cut_pts = CutPoints::new();
     cut_pts.general.insert(end_time);
     calculate_cut_points(node, &mut cut_pts);
@@ -284,7 +260,7 @@ fn create_pulse_signature(
                 (None, utils::normalize_phase(ob.phase))
             };
             PulseSignature {
-                start: node.node.offset() + virtual_signal.delay(),
+                start: *node.node.offset(),
                 length: ob.length,
                 pulse: ob.pulse_def,
                 amplitude,
@@ -303,7 +279,7 @@ fn create_pulse_signature(
             }
         }
         _ => PulseSignature {
-            start: node.node.offset() + virtual_signal.delay(),
+            start: *node.node.offset(),
             length,
             pulse: None,
             amplitude: None,
@@ -342,14 +318,14 @@ fn create_waveform_slots(
                 }
             }
             _ => {
-                let start_adjusted = pulse_slot.node.offset() + signal.delay();
-                let end = start_adjusted + pulse_slot.node.data().length();
+                let start = *pulse_slot.node.offset();
+                let end = start + pulse_slot.node.data().length();
                 if frame_change_cut_point.is_some_and(|x| x < &end) {
                     frame_change_cut_point = None;
                 }
                 let wf = WaveformSlot {
                     node: node_id,
-                    start: start_adjusted,
+                    start,
                     end,
                     signal: Rc::clone(&pulse_slot.signal),
                 };
@@ -386,13 +362,7 @@ pub fn handle_plays(
     amp_reg_alloc: &AmplitudeRegisterAllocation,
 ) -> Result<()> {
     let traits = &awg.device_kind.traits();
-    let mut local_cut_pts = evaluate_cut_points(
-        program,
-        traits.sample_multiple,
-        *virtual_signals.delay(),
-        play_wave_size_hint,
-        play_zero_size_hint,
-    );
+    let mut local_cut_pts = evaluate_cut_points(program);
     local_cut_pts.general.extend(cut_points);
     let ct_intervals: HashSet<OrderedRange<i64>> = local_cut_pts
         .command_table
@@ -429,7 +399,7 @@ pub fn handle_plays(
         }
         // Round waveform slots to sequencer grid
         signatures.iter_mut().for_each(|x| {
-            x.start = tinysample::floor_to_grid(x.start, traits.sample_multiple.into());
+            x.start = floor_to_grid(x.start, traits.sample_multiple.into());
             x.end = ceil_to_grid(x.end, traits.sample_multiple.into());
         });
         if awg.kind != cjob::AwgKind::DOUBLE && signal.is_multiplexed() {
@@ -466,6 +436,7 @@ pub fn handle_plays(
             Some(traits.playwave_max_hint.unwrap_or(i64::MAX as u64) as i64),
             Some(&ct_intervals),
         );
+
         let compacted_intervals = match compacted_intervals {
             Err(e) => match e {
                 interval_calculator::Error::MinimumWaveformLengthViolation(_) => {

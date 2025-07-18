@@ -3,37 +3,25 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from collections import defaultdict
-from dataclasses import dataclass
 from itertools import groupby
-import math
-from numbers import Number
-from typing import Any, Literal, cast
+from typing import Any, Literal
 from laboneq._rust import codegenerator as codegen_rs
 import numpy as np
-from numpy import typing as npt
 from engineering_notation import EngNumber
-import scipy.signal
 from laboneq.core.types.enums import AcquisitionType
 from laboneq.compiler.common.compiler_settings import (
     TINYSAMPLE,
     CompilerSettings,
 )
 from laboneq.compiler.common.feedback_connection import FeedbackConnection
-from laboneq.compiler.common.resource_usage import ResourceUsageCollector
+from laboneq.compiler.common.resource_usage import ResourceUsage, ResourceUsageCollector
 from laboneq.compiler.common.shfppc_sweeper_config import SHFPPCSweeperConfig
 from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
 from laboneq.compiler.ir import IRTree
-from laboneq.compiler.seqc import passes, ir as ir_code
+from laboneq.compiler.seqc import passes
 from laboneq.compiler.seqc.linker import AwgWeights, SeqCGenOutput, SeqCProgram
-from laboneq.compiler.seqc.analyze_events import (
-    analyze_loop_times,
-    analyze_phase_reset_times,
-    analyze_trigger_events,
-    analyze_prng_times,
-)
 from laboneq.compiler.seqc.command_table_tracker import CommandTableTracker
 from laboneq.compiler.seqc.feedback_register_allocator import (
     FeedbackRegisterAllocator,
@@ -41,7 +29,6 @@ from laboneq.compiler.seqc.feedback_register_allocator import (
 )
 from laboneq.compiler.common.iface_code_generator import ICodeGenerator
 from laboneq.compiler.common.feedback_register_config import FeedbackRegisterConfig
-from laboneq.compiler.seqc import ir_to_event_list
 from laboneq.compiler.seqc.measurement_calculator import (
     IntegrationTimes,
     SignalDelays,
@@ -59,22 +46,10 @@ from laboneq._rust.codegenerator import (
     SampledWaveform,
 )
 from laboneq.compiler.common.awg_info import AWGInfo, AwgKey
-from laboneq.compiler.seqc.awg_sampled_event import (
-    AWGEvent,
-    AWGEventType,
-    AWGSampledEventSequence,
-)
 from laboneq.compiler.common.awg_signal_type import AWGSignalType
 from laboneq.compiler.common.device_type import DeviceType
-from laboneq.compiler.event_list.event_type import EventList
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.common.trigger_mode import TriggerMode
-from laboneq.core.exceptions import LabOneQException
-from laboneq.core.utilities.pulse_sampler import (
-    length_to_samples,
-    sample_pulse,
-    verify_amplitude_no_clipping,
-)
 from laboneq.data.compilation_job import PulseDef
 from laboneq.data.scheduled_experiment import (
     CodegenWaveform,
@@ -157,142 +132,6 @@ def add_wait_trigger_statements(
             init_generator.add_function_call_statement("waitDIOTrigger")
 
 
-def stable_hash(samples_i: np.ndarray, samples_q: np.ndarray):
-    """Stable hashing function for generating names for readout weights"""
-    return hashlib.sha1(samples_i.tobytes() + samples_q.tobytes())
-
-
-@dataclass
-class IntegrationWeight:
-    basename: str
-    samples_i: npt.ArrayLike
-    samples_q: npt.ArrayLike
-    downsampling_factor: int | None
-
-
-def calculate_integration_weights(
-    event_list_acquire: list[AWGEvent],
-    signal_obj: SignalObj,
-    pulse_defs: dict[str, PulseDef],
-    pulse_params: list[passes.PulseParams],
-) -> list[IntegrationWeight]:
-    integration_weights_by_pulse: dict[str, IntegrationWeight] = {}
-    signal_id = signal_obj.id
-    already_handled = set()
-    nr_of_weights_per_event = None
-    for event in event_list_acquire:
-        play_wave_ids: list[str] = event.params.get("play_wave_id", [])
-        id_pulse_params: list[int] = event.params["id_pulse_params"]
-        oscillator_frequency: float = event.params["oscillator_frequency"]
-        key_ = (
-            tuple(play_wave_ids),
-            tuple(id_pulse_params),
-            oscillator_frequency,
-        )
-        if key_ in already_handled:
-            continue
-        assert event.params.get("signal_id", signal_id) == signal_id
-
-        filtered_pulses: list[tuple[str, int | None]] = [
-            (play_wave_id, param_id)
-            for play_wave_id, param_id in zip(
-                play_wave_ids, id_pulse_params or [None] * len(play_wave_ids)
-            )
-            if play_wave_id is not None
-            and (pulse_def := pulse_defs.get(play_wave_id)) is not None
-            # Not a real pulse, just a placeholder for the length - skip
-            and (pulse_def.samples is not None or pulse_def.function is not None)
-        ]
-        nr_of_weights = len(play_wave_ids)
-        if nr_of_weights_per_event is None:
-            nr_of_weights_per_event = nr_of_weights
-        else:
-            assert nr_of_weights == nr_of_weights_per_event
-            if any(w not in integration_weights_by_pulse for w, _ in filtered_pulses):
-                # Event uses different pulse UIDs than earlier event
-                raise LabOneQException(
-                    f"Using different integration kernels on a single signal"
-                    f" ({signal_id}) is unsupported. Weights: {play_wave_ids} vs"
-                    f" {list(integration_weights_by_pulse.keys())}"
-                )
-        for play_wave_id, pulse_param_id in filtered_pulses:
-            pulse_def = pulse_defs[play_wave_id]
-            samples = pulse_def.samples
-            amplitude: Number = pulse_def.amplitude
-            assert isinstance(amplitude, Number)
-            length = pulse_def.length
-            if length is None:
-                length = len(samples) / signal_obj.awg.sampling_rate
-            if pulse_param_id is not None:
-                params_pulse_combined = pulse_params[pulse_param_id].combined()
-            else:
-                params_pulse_combined = None
-            iw_samples = sample_pulse(
-                signal_type="iq",
-                sampling_rate=signal_obj.awg.sampling_rate,
-                length=length,
-                amplitude=amplitude,
-                pulse_function=pulse_def.function,
-                modulation_frequency=oscillator_frequency,
-                samples=samples,
-                mixer_type=signal_obj.mixer_type,
-                pulse_parameters=params_pulse_combined,
-            )
-
-            if (
-                signal_obj.awg.device_type == DeviceType.SHFQA
-                and (weight_len := len(iw_samples["samples_i"])) > 4096
-            ):  # TODO(2K): get via device_type
-                downsampling_factor = math.ceil(weight_len / 4096)
-                if downsampling_factor > 16:  # TODO(2K): get via device_type
-                    raise LabOneQException(
-                        "Integration weight length exceeds the maximum supported by HW"
-                    )
-            else:
-                downsampling_factor = None
-
-            verify_amplitude_no_clipping(
-                samples_i=iw_samples["samples_i"],
-                samples_q=iw_samples["samples_q"],
-                pulse_id=pulse_def.uid,
-                mixer_type=signal_obj.mixer_type,
-                signals=(signal_obj.id,),
-            )
-
-            # 128-bit hash as waveform name
-            digest = stable_hash(
-                samples_i=iw_samples["samples_i"], samples_q=iw_samples["samples_q"]
-            ).hexdigest()[:32]
-            integration_weight = IntegrationWeight(
-                basename=f"kernel_{digest}",
-                samples_i=iw_samples["samples_i"],
-                samples_q=iw_samples["samples_q"],
-                downsampling_factor=downsampling_factor,
-            )
-
-            if existing_weight := integration_weights_by_pulse.get(play_wave_id):
-                for existing, new in zip(
-                    [existing_weight.samples_i, existing_weight.samples_q],
-                    [integration_weight.samples_i, integration_weight.samples_q],
-                ):
-                    if np.any(existing != new):
-                        if np.any(np.isnan(new)):
-                            # this is because nan != nan is always true
-                            raise LabOneQException(
-                                "Encountered NaN in an integration kernel."
-                            )
-                        # Kernel differs even though pulse ID is the same
-                        # (e.g. affected by pulse parameters)
-                        raise LabOneQException(
-                            f"Using different integration kernels on a single signal"
-                            f" ({signal_id}) is unsupported."
-                        )
-            # This relies on the dict remembering insertion order.
-            integration_weights_by_pulse[play_wave_id] = integration_weight
-        already_handled.add(key_)
-    return list(integration_weights_by_pulse.values())
-
-
 _SEQUENCER_TYPES = {DeviceType.SHFQA: "qa", DeviceType.SHFSG: "sg"}
 
 
@@ -340,7 +179,7 @@ class CodeGenerator(ICodeGenerator):
         self._integration_times: IntegrationTimes | None = None
         self._signal_delays: SignalDelays | None = None
         # awg key -> signal id -> kernel index -> kernel data
-        self._integration_weights: dict[AwgKey, dict[str, list[IntegrationWeight]]] = (
+        self._integration_weights: dict[AwgKey, list[codegen_rs.IntegrationWeight]] = (
             defaultdict(dict)
         )
         self._simultaneous_acquires: list[dict[str, str]] = []
@@ -352,7 +191,6 @@ class CodeGenerator(ICodeGenerator):
         self._qa_signals_by_handle: dict[str, SignalObj] = {}
         self._shfppc_sweep_configs: dict[AwgKey, SHFPPCSweeperConfig] = {}
         self._total_execution_time: float | None = None
-        self._res_usage_collector: ResourceUsageCollector = ResourceUsageCollector()
 
     def generate_code(self):
         passes.inline_sections_in_branch(self._ir)
@@ -386,16 +224,41 @@ class CodeGenerator(ICodeGenerator):
             shfppc_sweep_configurations=self.shfppc_sweep_configs(),
         )
 
-    def integration_weights(self) -> dict[AwgKey, AwgWeights]:
-        return {
-            awg: {
-                signal: [
-                    WeightInfo(iw.basename, iw.downsampling_factor or 1) for iw in l
-                ]
-                for signal, l in d.items()
+    @staticmethod
+    def _sort_integration_weights_for_output(
+        awgs: list[AWGInfo],
+        integration_weights: dict[AwgKey, list[codegen_rs.IntegrationWeight]],
+    ) -> dict[AwgKey, dict[str, list[codegen_rs.IntegrationWeight]]]:
+        """Sort the integration weights for output to ensure determinism."""
+        integration_weights_grouped = {}
+        for awg in awgs:
+            iw_aw = {}
+            for integration_weight in integration_weights.get(awg.key, []):
+                for signal_id in integration_weight.signals:
+                    iw_aw.setdefault(signal_id, [])
+                    iw_aw[signal_id].append(integration_weight)
+            iw_aw = {
+                signal.id: iw_aw[signal.id]
+                for signal in awg.signals
+                if signal.id in iw_aw
             }
-            for awg, d in self._integration_weights.items()
-        }
+            integration_weights_grouped[awg.key] = iw_aw
+        return integration_weights_grouped
+
+    def integration_weights(self) -> dict[AwgKey, AwgWeights]:
+        integration_weights_sorted = self._sort_integration_weights_for_output(
+            self._awgs.values(), self._integration_weights
+        )
+        iws_awgs = {}
+        for awg_key, integration_weights in integration_weights_sorted.items():
+            awg_weights = AwgWeights()
+            for signal_id, weights in integration_weights.items():
+                awg_weights[signal_id] = [
+                    WeightInfo(iw.basename, iw.downsampling_factor or 1)
+                    for iw in weights
+                ]
+            iws_awgs[awg_key] = awg_weights
+        return iws_awgs
 
     def simultaneous_acquires(self) -> list[dict[str, str]]:
         return self._simultaneous_acquires
@@ -458,10 +321,14 @@ class CodeGenerator(ICodeGenerator):
         self._append_to_pulse_map(signature_pulse_map, sig_string)
 
     def _gen_waves(self):
+        integration_weights_sorted = self._sort_integration_weights_for_output(
+            self._awgs.values(), self._integration_weights
+        )
         for awg in self._awgs.values():
             # Handle integration weights separately
+            integration_weights = integration_weights_sorted.get(awg.key, {})
             for signal_obj in awg.signals:
-                for weight in self._integration_weights[awg.key].get(signal_obj.id, []):
+                for weight in integration_weights.get(signal_obj.id, []):
                     if awg.device_type.supports_complex_waves:
                         self._save_wave_bin(
                             CodeGenerator.SHFQA_COMPLEX_SAMPLE_SCALING
@@ -630,54 +497,57 @@ class CodeGenerator(ICodeGenerator):
             },
             feedback_register_allocator=feedback_register_allocator,
         )
-        # The pass must happen after delay calculation as it relies on section information.
-        # TODO: Fix that this pass can happen as early as possible.
-        passes.inline_sections(self._ir.root)
-        # Detach must happen before creating the event list
+        # Detach must happen before Rust conversion
         user_pulse_params = passes.detach_pulse_params(self._ir.root)
-        ir_tree = passes.fanout_awgs(self._ir, self._awgs.values())
-        ir_awgs: dict[AwgKey, ir_code.SingleAwgIR] = {}
-        for child in ir_tree.root.children:
-            awg = cast(ir_code.SingleAwgIR, child)
-            ir_awgs[awg.awg.key] = awg
-        events_per_awg, _ = ir_to_event_list.event_list_per_awg(ir_tree, self._settings)
-
-        for signal_id, signal_obj in self._signals.items():
-            code_generation_delay = self._signal_delays.get(signal_id)
-            if code_generation_delay is not None:
-                signal_obj.total_delay = (
-                    signal_obj.start_delay
-                    + signal_obj.delay_signal
-                    + code_generation_delay.code_generation
-                )
-                signal_obj.on_device_delay = code_generation_delay.on_device
-            else:
-                signal_obj.total_delay = (
-                    signal_obj.start_delay + signal_obj.delay_signal
-                )
-
-            _logger.debug(
-                "Processed signal obj %s signal_obj.start_delay=%s  signal_obj.delay_signal=%s signal_obj.total_delay=%s  signal_obj.on_device_delay=%s",
-                signal_id,
-                EngNumber(signal_obj.start_delay),
-                EngNumber(signal_obj.delay_signal),
-                EngNumber(signal_obj.total_delay),
-                EngNumber(signal_obj.on_device_delay),
-            )
-
-        self._integration_weights.clear()
+        signal_delays = {}
         for awg in awgs_sorted:
-            if awg.key not in ir_awgs:
-                continue
+            for sig in awg.signals:
+                if sig.id in self._signal_delays:
+                    signal_delays[sig.id] = self._signal_delays[sig.id].code_generation
+                else:
+                    signal_delays[sig.id] = 0.0
+        settings = {
+            "HDAWG_MIN_PLAYWAVE_HINT": self._settings.HDAWG_MIN_PLAYWAVE_HINT,
+            "HDAWG_MIN_PLAYZERO_HINT": self._settings.HDAWG_MIN_PLAYZERO_HINT,
+            "UHFQA_MIN_PLAYWAVE_HINT": self._settings.UHFQA_MIN_PLAYWAVE_HINT,
+            "UHFQA_MIN_PLAYZERO_HINT": self._settings.UHFQA_MIN_PLAYZERO_HINT,
+            "SHFQA_MIN_PLAYWAVE_HINT": self._settings.SHFQA_MIN_PLAYWAVE_HINT,
+            "SHFQA_MIN_PLAYZERO_HINT": self._settings.SHFQA_MIN_PLAYZERO_HINT,
+            "SHFSG_MIN_PLAYWAVE_HINT": self._settings.SHFSG_MIN_PLAYWAVE_HINT,
+            "SHFSG_MIN_PLAYZERO_HINT": self._settings.SHFSG_MIN_PLAYZERO_HINT,
+            "AMPLITUDE_RESOLUTION_BITS": max(
+                self._settings.AMPLITUDE_RESOLUTION_BITS, 0
+            ),
+            "PHASE_RESOLUTION_BITS": max(self._settings.PHASE_RESOLUTION_BITS, 0),
+            "USE_AMPLITUDE_INCREMENT": self._settings.USE_AMPLITUDE_INCREMENT,
+        }
+
+        codegen_result = codegen_rs.generate_code(
+            ir=self._ir,
+            awgs=awgs_sorted,
+            waveform_sampler=WaveformSampler(
+                pulse_defs=pulse_defs, pulse_def_params=user_pulse_params
+            ),
+            delays=signal_delays,
+            settings=settings,
+        )
+        res_usage_collector: ResourceUsageCollector = ResourceUsageCollector()
+        for idx, awg in enumerate(awgs_sorted):
             self._gen_seq_c_per_awg(
-                awg_ir=ir_awgs[awg.key],
-                events=events_per_awg.get(awg.key, []),
-                pulse_defs=pulse_defs,
-                user_pulse_params=user_pulse_params,
+                awg=awg,
+                result=codegen_result.awg_results[idx],
                 feedback_register=feedback_register_alloc.get(awg.key),
                 acquisition_type=self._ir.root.acquisition_type,
             )
-        self._res_usage_collector.raise_or_pass()
+            command_table = self._command_tables.get(awg.key, {}).get("ct")
+            if command_table is not None and awg.device_type.max_ct_entries:
+                res_usage_collector.add(
+                    ResourceUsage(
+                        f"Command table of device '{awg.device_id}', AWG({awg.awg_id})",
+                        len(command_table["table"]) / awg.device_type.max_ct_entries,
+                    )
+                )
+        res_usage_collector.raise_or_pass()
 
         for awg_key, seqc_program in self._src.items():
             awg_info = self._awgs[awg_key]
@@ -698,203 +568,18 @@ class CodeGenerator(ICodeGenerator):
             feedback_reg_config.target_feedback_register = target_fb_register
         self._gen_waves()
 
-    @staticmethod
-    def _calc_global_awg_params(awg: AWGInfo) -> tuple[float, float]:
-        global_sampling_rate = None
-        global_delay = None
-        signals_so_far = set()
-        all_relevant_delays = {}
-        for signal_obj in awg.signals:
-            _logger.debug(f"considering signal {signal_obj.id}")
-            if awg.device_type == DeviceType.UHFQA:
-                # on the UHFQA, we allow an individual delay_signal on the measure (play) line, even though we can't
-                # shift the play time with a node on the device
-                # for this to work, we need to ignore the play delay when generating code for loop events
-                # and we use the start delay (lead time) to calculate the global delay
-                relevant_delay = signal_obj.start_delay
-            else:
-                relevant_delay = signal_obj.total_delay
-
-            if (
-                round(relevant_delay * signal_obj.awg.sampling_rate)
-                % signal_obj.awg.device_type.sample_multiple
-                != 0
-            ):
-                raise RuntimeError(
-                    f"Delay {relevant_delay} s = {round(relevant_delay * signal_obj.awg.sampling_rate)} samples on signal {signal_obj.id} is not compatible with the sample multiple of {signal_obj.awg.device_type.sample_multiple} on {signal_obj.awg.device_type}"
-                )
-            all_relevant_delays[signal_obj.id] = relevant_delay
-
-            if signal_obj.signal_type != "integration":
-                if awg.signal_type != AWGSignalType.IQ and global_delay is not None:
-                    if global_delay != relevant_delay:
-                        raise RuntimeError(
-                            f"Delay {relevant_delay * 1e9:.2f} ns on signal "
-                            f"{signal_obj.id} is different from other delays "
-                            f"({global_delay * 1e9:.2f} ns) on the same AWG, on signals {signals_so_far}"
-                        )
-                if global_delay is not None:
-                    if relevant_delay < global_delay:
-                        # use minimum delay as global delay
-                        # this makes sure that loop start events happen first and are not shifted beyond loop body events
-                        global_delay = relevant_delay
-                else:
-                    global_delay = relevant_delay
-
-            global_sampling_rate = signal_obj.awg.sampling_rate
-            signals_so_far.add(signal_obj.id)
-
-        if global_delay is None:
-            global_delay = 0
-
-        if (
-            0
-            < global_delay
-            < awg.device_type.min_play_wave / awg.device_type.sampling_rate
-        ):
-            global_delay = 0
-
-        _logger.debug(
-            "Global delay for %s awg %s: %ss, calculated from all_relevant_delays %s",
-            awg.device_id,
-            awg.awg_id,
-            EngNumber(global_delay or 0),
-            [(s, EngNumber(d)) for s, d in all_relevant_delays.items()],
-        )
-
-        return global_sampling_rate, global_delay
-
     def _gen_seq_c_per_awg(
         self,
-        awg_ir: ir_code.SingleAwgIR,
-        events: EventList,
-        pulse_defs: dict[str, PulseDef],
-        user_pulse_params: list[passes.PulseParams],
+        awg: AWGInfo,
+        result: codegen_rs.SingleAwgCodegenResult,
         feedback_register: FeedbackRegisterAllocation,
         acquisition_type: AcquisitionType | None,
     ):
-        awg = awg_ir.awg
-        _logger.debug("Generating seqc for awg %d of %s", awg.awg_id, awg.device_id)
-        _logger.debug("AWG Object = \n%s", awg)
-        awg_compile_info = passes.analyze_awg_ir(awg_ir)
-        global_sampling_rate, global_delay = self._calc_global_awg_params(awg)
-        global_delay_samples = length_to_samples(global_delay, global_sampling_rate)
-        use_command_table = awg.device_type in (DeviceType.HDAWG, DeviceType.SHFSG)
-
-        _logger.debug(
-            "Analyzing initialization events for awg %d of %s",
-            awg.awg_id,
-            awg.device_id,
-        )
-        sampled_events = AWGSampledEventSequence()
-        # Sequencer start
-        cut_points = {global_delay_samples}
-
-        # Gather events sorted by time (in samples) in a dict of lists with time as key
-
-        phase_reset_events = analyze_phase_reset_times(
-            events, awg.device_id, global_sampling_rate, global_delay
-        )
-        sampled_events.merge(phase_reset_events)
-
-        loop_events = analyze_loop_times(
-            awg, events, global_sampling_rate, global_delay
-        )
-        loop_events.sort()
-        sampled_events.merge(loop_events)
-        prng_setup = analyze_prng_times(events, global_sampling_rate, global_delay)
-        sampled_events.merge(prng_setup)
-
-        trigger_events = analyze_trigger_events(events, awg.signals, loop_events)
-        sampled_events.merge(trigger_events)
-        cut_points = set(sampled_events.sequence) | {
-            length_to_samples(global_delay, global_sampling_rate)
-        }
-        awg_code_output = codegen_rs.generate_code_for_awg(
-            ob=awg_ir,
-            signals=self._ir.signals,
-            cut_points=cut_points,
-            settings={
-                "HDAWG_MIN_PLAYWAVE_HINT": self._settings.HDAWG_MIN_PLAYWAVE_HINT,
-                "HDAWG_MIN_PLAYZERO_HINT": self._settings.HDAWG_MIN_PLAYZERO_HINT,
-                "UHFQA_MIN_PLAYWAVE_HINT": self._settings.UHFQA_MIN_PLAYWAVE_HINT,
-                "UHFQA_MIN_PLAYZERO_HINT": self._settings.UHFQA_MIN_PLAYZERO_HINT,
-                "SHFQA_MIN_PLAYWAVE_HINT": self._settings.SHFQA_MIN_PLAYWAVE_HINT,
-                "SHFQA_MIN_PLAYZERO_HINT": self._settings.SHFQA_MIN_PLAYZERO_HINT,
-                "SHFSG_MIN_PLAYWAVE_HINT": self._settings.SHFSG_MIN_PLAYWAVE_HINT,
-                "SHFSG_MIN_PLAYZERO_HINT": self._settings.SHFSG_MIN_PLAYZERO_HINT,
-                "AMPLITUDE_RESOLUTION_BITS": max(
-                    self._settings.AMPLITUDE_RESOLUTION_BITS, 0
-                ),
-                "PHASE_RESOLUTION_BITS": max(self._settings.PHASE_RESOLUTION_BITS, 0),
-                "USE_AMPLITUDE_INCREMENT": self._settings.USE_AMPLITUDE_INCREMENT,
-            },
-            global_delay_samples=global_delay_samples,
-            waveform_sampler=WaveformSampler(
-                pulse_defs=pulse_defs, pulse_def_params=user_pulse_params
-            ),
-        )
-        awg_events = compat_rs.transform_rs_events_to_awg_events(
+        awg_code_output = result
+        self._integration_weights[awg.key] = awg_code_output.integration_weights
+        sampled_events = compat_rs.transform_rs_events_to_awg_events(
             awg_code_output.awg_events
         )
-        for event in awg_events:
-            if event.type in [
-                AWGEventType.RESET_PRECOMPENSATION_FILTERS,
-                AWGEventType.PPC_SWEEP_STEP_START,
-                AWGEventType.PPC_SWEEP_STEP_END,
-                AWGEventType.SET_OSCILLATOR_FREQUENCY,
-            ]:
-                sampled_events.add(event.start, event)
-        # NOTE: Add playwave related events after the rest to mimic the original event insertion order
-        # Can be removed once the event insertion order is not important anymore (all events generated in Rust)
-        for event in awg_events:
-            if event.type in [
-                AWGEventType.PLAY_WAVE,
-                AWGEventType.MATCH,
-                AWGEventType.INIT_AMPLITUDE_REGISTER,
-                AWGEventType.CHANGE_OSCILLATOR_PHASE,
-                AWGEventType.PLAY_HOLD,
-            ]:
-                sampled_events.add(event.start, event)
-        for signal_obj in awg.signals:
-            if signal_obj.signal_type != "integration":
-                continue
-            events_acquire = [
-                e
-                for e in awg_events
-                if e.type == AWGEventType.ACQUIRE
-                and e.params["signal_id"] == signal_obj.id
-            ]
-            self._integration_weights[awg.key][signal_obj.id] = (
-                calculate_integration_weights(
-                    events_acquire,
-                    signal_obj,
-                    pulse_defs,
-                    pulse_params=user_pulse_params,
-                )
-            )
-            for e in events_acquire:
-                sampled_events.add(e.start, e)
-        # Perform the actual downsampling of integration weights using a common factor for the AWG
-        common_downsampling_factor = max(
-            (
-                iw.downsampling_factor or 1
-                for iws in self._integration_weights[awg.key].values()
-                for iw in iws
-            ),
-            default=1,
-        )
-        if common_downsampling_factor > 1:
-            for iws in self._integration_weights[awg.key].values():
-                for iw in iws:
-                    iw.samples_i = scipy.signal.resample(
-                        iw.samples_i, len(iw.samples_i) // common_downsampling_factor
-                    )
-                    iw.samples_q = scipy.signal.resample(
-                        iw.samples_q, len(iw.samples_q) // common_downsampling_factor
-                    )
-                    iw.downsampling_factor = common_downsampling_factor
-        self.post_process_sampled_events(awg, sampled_events)
         signature_infos = [
             (
                 wave_declaration.signature_string,
@@ -910,6 +595,12 @@ class CodeGenerator(ICodeGenerator):
             awg.device_id,
         )
         emit_timing_comments = self._settings.EMIT_TIMING_COMMENTS
+        has_readout_feedback = awg_code_output.has_readout_feedback
+        ppc_device = awg_code_output.ppc_device
+        ppc_channel = awg_code_output.ppc_channel
+        global_delay = awg_code_output.global_delay
+        global_sampling_rate = awg.sampling_rate
+        use_command_table = awg.device_type in (DeviceType.HDAWG, DeviceType.SHFSG)
         function_defs_generator = seqc_generator_from_device_and_signal_type(
             awg.device_type, awg.signal_type
         )
@@ -920,7 +611,6 @@ class CodeGenerator(ICodeGenerator):
             declarations_generator.add_comment(
                 f"{awg.device_type}/{awg.awg_id} global delay {EngNumber(global_delay)} sampling_rate: {EngNumber(global_sampling_rate)}Sa/s "
             )
-        has_readout_feedback = awg_compile_info.has_readout_feedback
         if has_readout_feedback:
             declarations_generator.add_variable_declaration("current_seq_step", 0)
 
@@ -951,7 +641,7 @@ class CodeGenerator(ICodeGenerator):
             automute_playzeros=any([sig.automute for sig in awg.signals]),
         )
         shfppc_sweeper_config_tracker = SHFPPCSweeperConfigTracker(
-            awg_compile_info.ppc_device, awg_compile_info.ppc_channel
+            ppc_device, ppc_channel
         )
         handler = SampledEventHandler(
             seqc_tracker=seqc_tracker,
@@ -975,7 +665,6 @@ class CodeGenerator(ICodeGenerator):
         )
 
         handler.handle_sampled_events(sampled_events)
-        self._res_usage_collector.add(*handler.resource_usage())
 
         seq_c_generators: list[SeqCGenerator] = []
         while (part := seqc_tracker.pop_loop_stack_generators()) is not None:
@@ -1054,48 +743,3 @@ class CodeGenerator(ICodeGenerator):
 
     def shfppc_sweep_configs(self) -> dict[AwgKey, SHFPPCSweeperConfig]:
         return self._shfppc_sweep_configs
-
-    @staticmethod
-    def post_process_sampled_events(
-        awg: AWGInfo, sampled_events: AWGSampledEventSequence
-    ):
-        if awg.device_type == DeviceType.SHFQA:
-            has_acquire = sampled_events.has_matching_event(
-                lambda ev: ev.type == AWGEventType.ACQUIRE
-            )
-
-            for sampled_event_list in sampled_events.sequence.values():
-                start = None
-                end = None
-                play: list[AWGEvent] = []
-                acquire: list[AWGEvent] = []
-                for x in sampled_event_list:
-                    if x.type == AWGEventType.PLAY_WAVE:
-                        play.append(x)
-                        start = x.start
-                        end = x.end if end is None else max(end, x.end)
-                    elif x.type == AWGEventType.ACQUIRE:
-                        start = x.start
-                        acquire.append(x)
-                        end = x.end if end is None else max(end, x.end)
-                if len(play) > 0 and len(acquire) == 0 and has_acquire:
-                    raise Exception("Play and acquire must happen at the same time")
-                if len(play) > 0 or len(acquire) > 0:
-                    assert end is not None
-                    end = (
-                        round(end / DeviceType.SHFQA.sample_multiple)
-                        * DeviceType.SHFQA.sample_multiple
-                    )
-                    qa_event = AWGEvent(
-                        type=AWGEventType.QA_EVENT,
-                        start=start,
-                        end=end,
-                        params={
-                            "acquire_events": acquire,
-                            "play_events": play,
-                        },
-                    )
-
-                    for to_delete in play + acquire:
-                        sampled_event_list.remove(to_delete)
-                    sampled_event_list.append(qa_event)

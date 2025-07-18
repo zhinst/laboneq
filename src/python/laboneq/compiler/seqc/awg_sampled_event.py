@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Callable
+from typing import Any
 
 from laboneq.compiler.seqc.signatures import PlaybackSignature
 
@@ -28,7 +28,6 @@ class AWGEventType(Enum):
     INIT_AMPLITUDE_REGISTER = auto()
     CHANGE_OSCILLATOR_PHASE = auto()
     SETUP_PRNG = auto()
-    DROP_PRNG_SETUP = auto()
     PRNG_SAMPLE = auto()
     DROP_PRNG_SAMPLE = auto()
     PPC_SWEEP_STEP_START = auto()
@@ -78,17 +77,6 @@ class AWGSampledEventSequence:
                 self.sequence[ts].extend(other_events)
             else:
                 self.sequence[ts] = other_events
-
-    def has_matching_event(self, predicate: Callable[[AWGEvent], bool]) -> bool:
-        return next(
-            (
-                True
-                for sampled_event_list in self.sequence.values()
-                for x in sampled_event_list
-                if predicate(x)
-            ),
-            False,
-        )
 
     def sort(self):
         self.sequence = {ts: self.sequence[ts] for ts in sorted(self.sequence)}

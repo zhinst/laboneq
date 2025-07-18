@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 import hashlib
 from laboneq._rust import codegenerator as codegen_rs
 import numpy as np
+import numpy.typing as npt
 from laboneq.compiler.seqc.utils import normalize_phase
 from laboneq.compiler.seqc.wave_compressor import (
     PlayHold,
@@ -240,6 +241,48 @@ class WaveformSampler:
         if compressed_events is None:
             return sampled_signature
         return compressed_events
+
+    def sample_integration_weight(
+        self,
+        pulse_id: str,
+        pulse_parameters_id: str | None,
+        oscillator_frequency: float,
+        signals: set[str],
+        sampling_rate: float,
+        mixer_type: MixerType | None,
+    ) -> tuple[npt.ArrayLike, npt.ArrayLike]:
+        pulse_def = self._pulse_defs.get(pulse_id)
+        mixer_type = convert_mixer_type(mixer_type)
+        samples = pulse_def.samples
+        amplitude: float = pulse_def.amplitude
+        length = pulse_def.length
+        if length is None:
+            length = len(samples) / sampling_rate
+        if pulse_parameters_id is not None:
+            params_pulse_combined = self._pulse_def_params[
+                pulse_parameters_id
+            ].combined()
+        else:
+            params_pulse_combined = None
+        iw_samples = sample_pulse(
+            signal_type="iq",
+            sampling_rate=sampling_rate,
+            length=length,
+            amplitude=amplitude,
+            pulse_function=pulse_def.function,
+            modulation_frequency=oscillator_frequency,
+            samples=samples,
+            mixer_type=mixer_type,
+            pulse_parameters=params_pulse_combined,
+        )
+        verify_amplitude_no_clipping(
+            samples_i=iw_samples["samples_i"],
+            samples_q=iw_samples["samples_q"],
+            pulse_id=pulse_def.uid,
+            mixer_type=mixer_type,
+            signals=tuple(signals),
+        )
+        return (iw_samples["samples_i"], iw_samples["samples_q"])
 
     def _sample_waveform(
         self,

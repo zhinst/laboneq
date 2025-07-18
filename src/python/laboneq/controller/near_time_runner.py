@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING, Any
 
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.protected_session import ProtectedSession
-from laboneq.controller.util import LabOneQControllerException, SweepParamsTracker
+from laboneq.controller.utilities.exception import LabOneQControllerException
+from laboneq.controller.utilities.sweep_params_tracker import SweepParamsTracker
 from laboneq.core.exceptions import AbortExecution
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode

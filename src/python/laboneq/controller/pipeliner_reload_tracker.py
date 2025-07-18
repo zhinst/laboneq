@@ -4,7 +4,7 @@
 from __future__ import annotations
 import copy
 
-from laboneq.controller.util import LabOneQControllerException
+from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.data.recipe import RealtimeExecutionInit
 
 

@@ -166,6 +166,7 @@ class OscillatorParamModel:
     device_id: str
     channel: int
     signal_id: str
+    allocated_index: int
     frequency: Optional[float]
     param: Optional[str]
     _target_class: ClassVar[Type] = OscillatorParam

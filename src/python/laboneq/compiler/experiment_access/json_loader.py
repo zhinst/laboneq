@@ -464,21 +464,38 @@ class JsonLoader(LoaderBase):
                                     )
                                 )
                                 self.add_signal_marker(signal_id, k)
-
+                            # Separate 'offset' into a delay
+                            if pulse_offset is not None:
+                                b = SectionSignalPulse(
+                                    signal=self._signals[signal_id],
+                                    pulse=None,
+                                    length=pulse_offset,
+                                    precompensation_clear=precompensation_clear,
+                                    play_pulse_parameters={},
+                                    pulse_pulse_parameters={},
+                                )
+                                self.add_section_signal_pulse(instance_id, signal_id, b)
+                            if (
+                                pulse_id is None
+                                and resulting_pulse_instance_length is None
+                                # Pulse increment has no length nor pulse
+                                and pulse_increment is None
+                            ):
+                                continue
                             new_ssp = SectionSignalPulse(
                                 pulse=self._pulses[pulse_id]
                                 if pulse_id is not None
                                 else None,
                                 signal=self._signals[signal_id],
-                                offset=pulse_offset,
+                                offset=None,
                                 amplitude=pulse_amplitude,
                                 length=resulting_pulse_instance_length,
                                 acquire_params=acquire_params,
                                 phase=pulse_phase,
                                 increment_oscillator_phase=pulse_increment,
                                 set_oscillator_phase=pulse_set_oscillator_phase,
-                                play_pulse_parameters=operation_pulse_parameters,
-                                pulse_pulse_parameters=pulse_parameters,
+                                play_pulse_parameters=operation_pulse_parameters or {},
+                                pulse_pulse_parameters=pulse_parameters or {},
                                 precompensation_clear=precompensation_clear,
                                 markers=markers,
                                 pulse_group=pulse_group,

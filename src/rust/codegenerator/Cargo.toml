@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 indexmap = { workspace = true }
+log = { workspace = true }
 num-complex = { workspace = true }
 thiserror = { workspace = true }
 sha1 = { workspace = true }

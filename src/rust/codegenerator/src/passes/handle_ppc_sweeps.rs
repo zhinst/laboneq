@@ -5,16 +5,15 @@ use crate::Result;
 use crate::ir;
 
 /// Transform ppc sweep step nodes from IR to AWG commands
-pub fn handle_ppc_sweep_steps(node: &mut ir::IrNode, delay: ir::Samples) -> Result<()> {
+pub fn handle_ppc_sweep_steps(node: &mut ir::IrNode) -> Result<()> {
     match node.data_mut() {
         ir::NodeKind::PpcSweepStep(ir_mod) => {
-            let ir_mod = ir_mod.clone();
-            *node.offset_mut() += delay;
-            node.replace_data(ir::NodeKind::PpcStep(ir_mod));
+            let new_node = ir::NodeKind::PpcStep(ir_mod.clone());
+            node.replace_data(new_node);
         }
         _ => {
             for child in node.iter_children_mut() {
-                handle_ppc_sweep_steps(child, delay)?;
+                handle_ppc_sweep_steps(child)?;
             }
         }
     }

@@ -9,7 +9,7 @@ use std::hash::Hash;
 use std::{collections::HashMap, rc::Rc};
 
 /// Represents different kinds of pulse definitions.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PulseDefKind {
     /// Analog waveform
     Pulse,
@@ -17,39 +17,67 @@ pub enum PulseDefKind {
     Marker,
 }
 
-#[derive(Debug, Clone)]
+/// Represents the type of an pulse.
+///
+/// If [`PulseType::Function`] is used, the pulse is defined by a function
+/// that generates the waveform.
+/// If [`PulseType::Samples`] is used, the pulse is defined by a set of samples
+/// that represent the waveform.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum PulseType {
+    Function,
+    Samples,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PulseDef {
     pub uid: String,
     pub kind: PulseDefKind,
+    pub pulse_type: Option<PulseType>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[cfg(test)]
+impl PulseDef {
+    pub fn test(uid: String, kind: PulseDefKind) -> Self {
+        PulseDef {
+            uid,
+            kind,
+            pulse_type: Some(PulseType::Function),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum OscillatorKind {
     SOFTWARE,
     HARDWARE,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Oscillator {
     pub uid: String,
     pub kind: OscillatorKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SignalKind {
     IQ,
     SINGLE,
     INTEGRATION,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Signal {
     pub uid: String,
     pub kind: SignalKind,
     pub channels: Vec<u8>,
-    pub delay: i64,
     pub oscillator: Option<Oscillator>,
     pub mixer_type: Option<MixerType>,
+    /// The delay in seconds from the trigger to the start of the sequence (lead time).
+    /// Includes lead time and precompensation
+    pub start_delay: f64,
+    // Additional delay in seconds on the signal
+    pub signal_delay: f64,
 }
 
 impl Signal {
@@ -63,6 +91,10 @@ impl Signal {
         self.oscillator
             .as_ref()
             .is_some_and(|x| matches!(x.kind, OscillatorKind::SOFTWARE))
+    }
+
+    pub fn delay(&self) -> f64 {
+        self.start_delay + self.signal_delay
     }
 }
 
@@ -211,7 +243,7 @@ impl Hash for Marker {
 }
 
 /// Parameter that is swept over.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SweepParameter {
     /// UID of the parameter
     pub uid: String,
@@ -219,7 +251,7 @@ pub struct SweepParameter {
     pub values: NumericArray,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum MixerType {
     /// Mixer performs full complex modulation
     IQ,

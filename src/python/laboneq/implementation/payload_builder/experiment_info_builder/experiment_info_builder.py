@@ -15,8 +15,7 @@ from laboneq.core.path import LogicalSignalGroups_Path, insert_logical_signal_pr
 from laboneq._utils import UIDReference, ensure_list, id_generator
 from laboneq.compiler import DeviceType
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types.enums import AveragingMode, PortMode
-from laboneq.core.types.enums import acquisition_type as acq_type
+from laboneq.core.types.enums import acquisition_type as acq_type, AveragingMode
 from laboneq.core.types.units import Quantity
 from laboneq.data.calibration import (
     AmplifierPump,
@@ -25,6 +24,7 @@ from laboneq.data.calibration import (
     Oscillator,
     Precompensation,
     SignalCalibration,
+    PortMode,
 )
 from laboneq.data.compilation_job import (
     AcquireInfo,

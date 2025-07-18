@@ -158,9 +158,6 @@ class CommandTableTracker:
 
         return d
 
-    def command_table_usage(self) -> float:
-        return len(self._command_table) / self._device_type.max_ct_entries
-
     def command_table(self) -> dict:
         ct_schema = CT_SCHEMAS.get(self._device_type.ct_schema_version)
         if ct_schema is None:

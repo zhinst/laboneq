@@ -7,7 +7,8 @@ pub mod experiment;
 pub use experiment::{
     AcquirePulse, Case, FrameChange, InitAmplitudeRegister, InitialOscillatorFrequency, IrNode,
     LinearParameterInfo, Loop, LoopIteration, Match, NodeKind, OscillatorFrequencySweepStep,
-    ParameterOperation, PhaseReset, PlayAcquire, PlayHold, PlayPulse, PlayWave, PpcSweepStep,
-    ResetPrecompensationFilters, Samples, SetOscillatorFrequency, SetOscillatorFrequencySweep,
-    SignalFrequency,
+    ParameterOperation, PhaseReset, PlayAcquire, PlayHold, PlayPulse, PlayWave, PpcDevice,
+    PpcSweepStep, PrngSample, PrngSetup, QaEvent, ResetPrecompensationFilters, Samples, Section,
+    SectionId, SectionInfo, SetOscillatorFrequency, SetOscillatorFrequencySweep, SignalFrequency,
+    TriggerBitData,
 };

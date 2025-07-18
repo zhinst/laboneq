@@ -6,44 +6,39 @@ from __future__ import annotations
 import logging
 from typing import Any, Iterator
 
+from laboneq.controller.devices.channel_base import ChannelBase
+from laboneq.controller.devices.sgchannel import SGChannel
+from laboneq.controller.utilities.for_each import for_each
+from laboneq.data.scheduled_experiment import ScheduledExperiment
 import numpy as np
 from laboneq.controller.attribute_value_tracker import (
     AttributeName,
     DeviceAttribute,
     DeviceAttributesView,
 )
-from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
 from laboneq.controller.devices.device_shf_base import (
     DeviceSHFBase,
     check_synth_frequency,
 )
 from laboneq.controller.devices.device_utils import NodeCollector
-from laboneq.controller.devices.device_zi import (
-    AllocatedOscillator,
-    SequencerPaths,
-    delay_to_rounded_samples,
+from laboneq.controller.devices.device_zi import SequencerPaths
+from laboneq.controller.devices.node_control import NodeControlBase, Setting
+from laboneq.controller.recipe_processor import (
+    RecipeData,
+    WaveformItem,
+    get_initialization_by_device_uid,
 )
-from laboneq.controller.devices.node_control import (
-    NodeControlBase,
-    Setting,
-)
-from laboneq.controller.recipe_processor import RecipeData, WaveformItem
-from laboneq.controller.util import LabOneQControllerException
+from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.data.recipe import (
     IO,
     Initialization,
-    OscillatorParam,
     TriggeringMode,
-    ParameterUID,
 )
 
 
 _logger = logging.getLogger(__name__)
 
-SAMPLE_FREQUENCY_HZ = 2.0e9
-DELAY_NODE_GRANULARITY_SAMPLES = 1
-DELAY_NODE_MAX_SAMPLES = round(124e-9 * SAMPLE_FREQUENCY_HZ)
 OPT_OUTPUT_ROUTER_ADDER = "RTR"
 
 
@@ -52,10 +47,7 @@ class DeviceSHFSG(DeviceSHFBase):
         super().__init__(*args, **kwargs)
         self.dev_type = "SHFSG8"
         self.dev_opts = []
-        self._pipeliner = [
-            AwgPipeliner(f"/{self.serial}/sgchannels/{ch}", f"SG{ch}")
-            for ch in range(8)
-        ]
+        self._sgchannels: list[SGChannel] = []
         # Available number of full output channels (Front panel outputs).
         self._outputs = 8
         # Available number of output channels (RTR option can extend these with internal channels on certain devices)
@@ -69,14 +61,26 @@ class DeviceSHFSG(DeviceSHFBase):
     def has_pipeliner(self) -> bool:
         return True
 
+    def all_channels(self) -> Iterator[ChannelBase]:
+        return iter(self._sgchannels)
+
+    def allocated_channels(self) -> Iterator[ChannelBase]:
+        for ch in self._allocated_awgs:
+            yield self._sgchannels[ch]
+
+    def full_channels(self) -> Iterator[ChannelBase]:
+        for sgchannel in self._sgchannels:
+            if sgchannel.is_full:
+                yield sgchannel
+
     def pipeliner_prepare_for_upload(self, index: int) -> NodeCollector:
-        return self._pipeliner[index].prepare_for_upload()
+        return self._sgchannels[index].pipeliner.prepare_for_upload()
 
     def pipeliner_commit(self, index: int) -> NodeCollector:
-        return self._pipeliner[index].commit()
+        return self._sgchannels[index].pipeliner.commit()
 
     def pipeliner_ready_conditions(self, index: int) -> dict[str, Any]:
-        return self._pipeliner[index].ready_conditions()
+        return self._sgchannels[index].pipeliner.ready_conditions()
 
     @property
     def dev_repr(self) -> str:
@@ -140,6 +144,20 @@ class DeviceSHFSG(DeviceSHFBase):
             if self._has_opt_rtr:
                 self._channels = 8
             self._output_to_synth_map = [0, 1, 2, 3]
+        self._sgchannels = [
+            SGChannel(
+                api=self._api,
+                subscriber=self._subscriber,
+                device_uid=self.uid,
+                serial=self.serial,
+                channel=ch,
+                repr_base=self.dev_repr,
+                is_plus=self._is_plus,
+                has_opt_rtr=self._has_opt_rtr,
+                is_full=ch < self._outputs,
+            )
+            for ch in range(self._channels)
+        ]
 
     def _is_full_channel(self, channel: int) -> bool:
         return channel < self._outputs
@@ -151,11 +169,12 @@ class DeviceSHFSG(DeviceSHFBase):
         return "sg"
 
     def get_sequencer_paths(self, index: int) -> SequencerPaths:
+        sgchannel = self._sgchannels[index]
         return SequencerPaths(
-            elf=f"/{self.serial}/sgchannels/{index}/awg/elf/data",
-            progress=f"/{self.serial}/sgchannels/{index}/awg/elf/progress",
-            enable=f"/{self.serial}/sgchannels/{index}/awg/enable",
-            ready=f"/{self.serial}/sgchannels/{index}/awg/ready",
+            elf=sgchannel.nodes.awg_elf_data,
+            progress=sgchannel.nodes.awg_elf_progress,
+            enable=sgchannel.nodes.awg_enable,
+            ready=sgchannel.nodes.awg_ready,
         )
 
     def _validate_range(self, io: IO):
@@ -180,31 +199,54 @@ class DeviceSHFSG(DeviceSHFBase):
                 range_list,
             )
 
-    def _get_next_osc_index(
-        self,
-        osc_group_oscs: list[AllocatedOscillator],
-        osc_param: OscillatorParam,
-        recipe_data: RecipeData,
-    ) -> int | None:
-        previously_allocated = len(osc_group_oscs)
-        if previously_allocated >= 8:
-            return None
-        return previously_allocated
+    def validate_scheduled_experiment(self, scheduled_experiment: ScheduledExperiment):
+        initialization = get_initialization_by_device_uid(
+            scheduled_experiment.recipe, self.uid
+        )
+        if initialization is None:
+            return
+        for output in initialization.outputs:
+            self._validate_range(output)
+            self._warn_for_unsupported_param(
+                output.offset is None or output.offset == 0,
+                "voltage_offsets",
+                output.channel,
+            )
+            self._warn_for_unsupported_param(
+                output.gains is None, "correction_matrix", output.channel
+            )
+            if output.marker_mode not in (None, "TRIGGER", "MARKER"):
+                raise LabOneQControllerException(
+                    f"{self.dev_repr}: Marker mode must be either 'MARKER' or 'TRIGGER', but got {output.marker_mode} for output {output.channel}"
+                )
+            if output.enable_output_mute and not self._is_plus:
+                _logger.warning(
+                    f"{self.dev_repr}: Device output muting is enabled, but the device is not"
+                    " SHF+ and therefore no muting will happen. It is suggested to disable it."
+                )
+            if len(output.routed_outputs) > 0:
+                if not self._has_opt_rtr:
+                    msg = f"{self.dev_repr}: Output router and adder requires '{OPT_OUTPUT_ROUTER_ADDER}' option on SHFSG / SHFQC devices."
+                    raise LabOneQControllerException(msg)
+                if not self._is_full_channel(output.channel):
+                    msg = f"{self.dev_repr}: Outputs can only be routed to device front panel outputs. Invalid channel: {output.channel}"
+                    raise LabOneQControllerException(msg)
 
     def _make_osc_path(self, channel: int, index: int) -> str:
-        return f"/{self.serial}/sgchannels/{channel}/oscs/{index}/freq"
+        return self._sgchannels[channel].nodes.osc_freq[index]
 
     def _busy_nodes(self) -> list[str]:
         if not self._setup_caps.supports_shf_busy:
             return []
-        return [f"/{self.serial}/sgchannels/{ch}/busy" for ch in self._allocated_awgs]
+        return [self._sgchannels[ch].nodes.busy for ch in self._allocated_awgs]
 
     async def disable_outputs(self, outputs: set[int], invert: bool):
-        nc = NodeCollector(base=f"/{self.serial}/")
-        for ch in range(self._outputs):
-            if (ch in outputs) != invert:
-                nc.add(f"sgchannels/{ch}/output/on", 0, cache=False)
-        await self.set_async(nc)
+        await for_each(
+            self.all_channels(),
+            ChannelBase.disable_output,
+            outputs=outputs,
+            invert=invert,
+        )
 
     def clock_source_control_nodes(self) -> list[NodeControlBase]:
         if self.is_secondary:
@@ -228,13 +270,11 @@ class DeviceSHFSG(DeviceSHFBase):
         await self.set_async(nc)
 
     async def start_execution(self, with_pipeliner: bool):
-        nc = NodeCollector(base=f"/{self.serial}/")
-        for awg_index in self._allocated_awgs:
-            if with_pipeliner:
-                nc.extend(self._pipeliner[awg_index].collect_execution_nodes())
-            else:
-                nc.add(f"sgchannels/{awg_index}/awg/enable", 1, cache=False)
-        await self.set_async(nc)
+        await for_each(
+            self.allocated_channels(),
+            ChannelBase.start_execution,
+            with_pipeliner=with_pipeliner,
+        )
 
     def conditions_for_execution_ready(
         self, with_pipeliner: bool
@@ -246,7 +286,9 @@ class DeviceSHFSG(DeviceSHFBase):
         for awg_index in self._allocated_awgs:
             if with_pipeliner:
                 conditions.update(
-                    self._pipeliner[awg_index].conditions_for_execution_ready()
+                    self._sgchannels[
+                        awg_index
+                    ].pipeliner.conditions_for_execution_ready()
                 )
             else:
                 conditions[self.get_sequencer_paths(awg_index).enable] = (
@@ -268,7 +310,9 @@ class DeviceSHFSG(DeviceSHFBase):
         for awg_index in self._allocated_awgs:
             if with_pipeliner:
                 conditions.update(
-                    self._pipeliner[awg_index].conditions_for_execution_done()
+                    self._sgchannels[
+                        awg_index
+                    ].pipeliner.conditions_for_execution_done()
                 )
             else:
                 conditions[self.get_sequencer_paths(awg_index).enable] = (
@@ -286,7 +330,7 @@ class DeviceSHFSG(DeviceSHFBase):
 
         if with_pipeliner:
             for awg_index in self._allocated_awgs:
-                nc.extend(self._pipeliner[awg_index].reset_nodes())
+                nc.extend(self._sgchannels[awg_index].pipeliner.reset_nodes())
 
         # HACK: HBAR-1427 and HBAR-2165 show that runtime checks generate
         # wrongly detected gaps when enabled during experiments with feedback.
@@ -343,11 +387,6 @@ class DeviceSHFSG(DeviceSHFBase):
                     index=io.channel,
                     value_or_param=io.lo_frequency,
                 )
-            route_attrs = [
-                AttributeName.OUTPUT_ROUTE_1,
-                AttributeName.OUTPUT_ROUTE_2,
-                AttributeName.OUTPUT_ROUTE_3,
-            ]
             route_ampl_attrs = [
                 AttributeName.OUTPUT_ROUTE_1_AMPLITUDE,
                 AttributeName.OUTPUT_ROUTE_2_AMPLITUDE,
@@ -360,11 +399,6 @@ class DeviceSHFSG(DeviceSHFBase):
             ]
             for idx, router in enumerate(io.routed_outputs):
                 yield DeviceAttribute(
-                    name=route_attrs[idx],
-                    index=io.channel,
-                    value_or_param=router,
-                )
-                yield DeviceAttribute(
                     name=route_ampl_attrs[idx],
                     index=io.channel,
                     value_or_param=router.amplitude,
@@ -375,204 +409,34 @@ class DeviceSHFSG(DeviceSHFBase):
                     value_or_param=router.phase,
                 )
 
-    def _collect_output_router_nodes(
-        self,
-        target: int,
-        source: int,
-        router_idx: int,
-        amplitude: float | None = None,
-        phase: float | None = None,
-    ) -> NodeCollector:
-        nc = NodeCollector(base=f"/{self.serial}/")
-        nc.add(f"sgchannels/{target}/outputrouter/enable", 1)
-        nc.add(f"sgchannels/{target}/outputrouter/routes/{router_idx}/enable", 1)
-        nc.add(f"sgchannels/{target}/outputrouter/routes/{router_idx}/source", source)
-        if amplitude is not None:
-            nc.add(
-                f"sgchannels/{target}/outputrouter/routes/{router_idx}/amplitude",
-                amplitude,
-            )
-        if phase is not None:
-            nc.add(
-                f"sgchannels/{target}/outputrouter/routes/{router_idx}/phase",
-                phase * 180 / np.pi,
-            )
-        # Turn output router on source channel, device will make sync them internally.
-        if self._is_full_channel(source):
-            nc.add(f"sgchannels/{source}/outputrouter/enable", 1)
-        return nc
-
-    def _collect_output_router_initialization_nodes(
-        self, outputs: list[IO]
-    ) -> NodeCollector:
-        nc = NodeCollector()
-        active_output_routers: set[int] = set()
-        for output in outputs:
-            if output.routed_outputs and self._has_opt_rtr is False:
-                msg = f"{self.dev_repr}: Output router and adder requires '{OPT_OUTPUT_ROUTER_ADDER}' option on SHFSG / SHFQC devices."
-                raise LabOneQControllerException(msg)
-            for idx, route in enumerate(output.routed_outputs):
-                if not self._is_full_channel(output.channel):
-                    msg = f"{self.dev_repr}: Outputs can only be routed to device front panel outputs. Invalid channel: {output.channel}"
-                    raise LabOneQControllerException(msg)
-                # We enable the router on both the source and destination channels, so that the delay matches between them.
-                active_output_routers.add(output.channel)
-                active_output_routers.add(route.from_channel)
-                nc.extend(
-                    self._collect_output_router_nodes(
-                        target=output.channel,
-                        source=route.from_channel,
-                        router_idx=idx,
-                        amplitude=(
-                            route.amplitude
-                            if not isinstance(route.amplitude, ParameterUID)
-                            else None
-                        ),
-                        phase=(
-                            route.phase
-                            if not isinstance(route.phase, ParameterUID)
-                            else None
-                        ),
-                    )
-                )
-            # Disable routes which are not used.
-            if output.routed_outputs:
-                routes_to_disable = [1, 2]
-                [
-                    nc.add(
-                        f"/{self.serial}/sgchannels/{output.channel}/outputrouter/routes/{route_disable}/enable",
-                        0,
-                        cache=False,
-                    )
-                    for route_disable in routes_to_disable[
-                        len(output.routed_outputs) - 1 :
-                    ]
-                ]
-        # Disable existing, but unconfigured output routers to make sure they
-        # do not have signal delay introduces by the setting.
-        if self._has_opt_rtr:
-            for output in outputs:
-                if (
-                    output.channel not in active_output_routers
-                    and self._is_full_channel(output.channel)
-                ):
-                    nc.add(
-                        f"/{self.serial}/sgchannels/{output.channel}/outputrouter/enable",
-                        0,
-                        cache=False,
-                    )
-                    nc.add(
-                        f"/{self.serial}/sgchannels/{output.channel}/outputrouter/routes/*/enable",
-                        0,
-                        cache=False,
-                    )
-        return nc
-
-    def _collect_configure_oscillator_nodes(
-        self, channel: int, oscillator_idx: int
-    ) -> NodeCollector:
-        nc = NodeCollector(base=f"/{self.serial}/sgchannels/{channel}/sines/0/")
-        nc.add("oscselect", oscillator_idx)
-        nc.add("harmonic", 1)
-        nc.add("phaseshift", 0)
-        return nc
-
     async def apply_initialization(self, recipe_data: RecipeData):
-        _logger.debug("%s: Initializing device...", self.dev_repr)
+        device_recipe_data = recipe_data.device_settings.get(self.uid)
+        if device_recipe_data is None:
+            return
 
-        nc = NodeCollector()
+        await for_each(
+            self.all_channels(),
+            SGChannel.apply_initialization,
+            device_recipe_data=device_recipe_data,
+        )
 
-        initialization = recipe_data.get_initialization(self.uid)
-        outputs = initialization.outputs or []
-        for output in outputs:
-            self._warn_for_unsupported_param(
-                output.offset is None or output.offset == 0,
-                "voltage_offsets",
-                output.channel,
-            )
-            self._warn_for_unsupported_param(
-                output.gains is None, "correction_matrix", output.channel
-            )
-
-            if self._is_full_channel(output.channel):
-                nc.add(
-                    f"/{self.serial}/sgchannels/{output.channel}/output/on",
-                    1 if output.enable else 0,
-                )
-                if output.range is not None:
-                    self._validate_range(output)
-                    nc.add(
-                        f"/{self.serial}/sgchannels/{output.channel}/output/range",
-                        output.range,
-                    )
-            nc.add(f"/{self.serial}/sgchannels/{output.channel}/awg/single", 1)
-
-            nc.add(
-                f"/{self.serial}/sgchannels/{output.channel}/awg/modulation/enable", 1
-            )
-
-            if not output.modulation:
-                # We still use the output modulation (`awg/modulation/enable`), but we
-                # set the oscillator to 0 Hz.
-                nc.extend(self._collect_configure_oscillator_nodes(output.channel, 0))
-                osc_freq_path = self._make_osc_path(output.channel, 0)
-                nc.add(osc_freq_path, 0.0)
-
-            if self._is_full_channel(output.channel):
-                if output.marker_mode is None or output.marker_mode == "TRIGGER":
-                    nc.add(
-                        f"/{self.serial}/sgchannels/{output.channel}/marker/source", 0
-                    )
-                elif output.marker_mode == "MARKER":
-                    nc.add(
-                        f"/{self.serial}/sgchannels/{output.channel}/marker/source", 4
-                    )
-                else:
-                    raise ValueError(
-                        f"Marker mode must be either 'MARKER' or 'TRIGGER', but got {output.marker_mode} for output {output.channel} on SHFSG {self.serial}"
-                    )
-
-                # set trigger delay to 0
-                nc.add(f"/{self.serial}/sgchannels/{output.channel}/trigger/delay", 0.0)
-
-                nc.add(
-                    f"/{self.serial}/sgchannels/{output.channel}/output/rflfpath",
-                    (
-                        1  # RF
-                        if output.port_mode is None or output.port_mode == "rf"
-                        else 0
-                    ),  # LF
-                )
-                if self._is_plus:
-                    nc.add(
-                        f"/{self.serial}/sgchannels/{output.channel}/output/muting/enable",
-                        int(output.enable_output_mute),
-                    )
-                else:
-                    if output.enable_output_mute:
-                        _logger.warning(
-                            f"{self.dev_repr}: Device output muting is enabled, but the device is not"
-                            " SHF+ and therefore no mutting will happen. It is suggested to disable it."
-                        )
-        nc.extend(self._collect_output_router_initialization_nodes(outputs))
-        osc_selects = {
-            ch: osc.index for osc in self._allocated_oscs for ch in osc.channels
-        }
-        # SHFSG has only one "sine" per channel, therefore "sines" index is hard-coded to 0.
         # If multiple oscillators are assigned to a channel, it indicates oscillator switching
         # via the command table, and the oscselect node is ignored. Therefore it can be set to
         # any oscillator.
+        nc = NodeCollector(base=f"/{self.serial}/")
+        osc_selects = {
+            ch: osc.index
+            for osc in device_recipe_data.allocated_oscs
+            for ch in osc.channels
+        }
         for ch, osc_idx in osc_selects.items():
-            nc.extend(self._collect_configure_oscillator_nodes(ch, osc_idx))
-
+            nc.extend(self._sgchannels[ch]._collect_configure_oscillator_nodes(osc_idx))
         await self.set_async(nc)
 
-    def _collect_prepare_nt_step_nodes(
-        self, attributes: DeviceAttributesView, recipe_data: RecipeData
-    ) -> NodeCollector:
+    async def _set_nt_step_nodes(
+        self, recipe_data: RecipeData, attributes: DeviceAttributesView
+    ):
         nc = NodeCollector(base=f"/{self.serial}/")
-        nc.extend(super()._collect_prepare_nt_step_nodes(attributes, recipe_data))
-
         for synth_idx in set(self._output_to_synth_map):
             [synth_cf], synth_cf_updated = attributes.resolve(
                 keys=[(AttributeName.SG_SYNTH_CENTER_FREQ, synth_idx)]
@@ -580,72 +444,14 @@ class DeviceSHFSG(DeviceSHFBase):
             if synth_cf_updated:
                 check_synth_frequency(synth_cf, self.dev_repr, synth_idx)
                 nc.add(f"synthesizers/{synth_idx}/centerfreq", synth_cf)
+        await self._api.set_parallel(nc)
 
-        for ch in range(self._outputs):
-            [dig_mixer_cf], dig_mixer_cf_updated = attributes.resolve(
-                keys=[(AttributeName.SG_DIG_MIXER_CENTER_FREQ, ch)]
-            )
-            if dig_mixer_cf_updated:
-                nc.add(f"sgchannels/{ch}/digitalmixer/centerfreq", dig_mixer_cf)
-            [scheduler_port_delay, port_delay], updated = attributes.resolve(
-                keys=[
-                    (AttributeName.OUTPUT_SCHEDULER_PORT_DELAY, ch),
-                    (AttributeName.OUTPUT_PORT_DELAY, ch),
-                ]
-            )
-            if updated and scheduler_port_delay is not None:
-                output_delay = scheduler_port_delay + (port_delay or 0.0)
-                output_delay_rounded = (
-                    delay_to_rounded_samples(
-                        channel=ch,
-                        dev_repr=self.dev_repr,
-                        delay=output_delay,
-                        sample_frequency_hz=SAMPLE_FREQUENCY_HZ,
-                        granularity_samples=DELAY_NODE_GRANULARITY_SAMPLES,
-                        max_node_delay_samples=DELAY_NODE_MAX_SAMPLES,
-                    )
-                    / SAMPLE_FREQUENCY_HZ
-                )
-
-                nc.add(f"sgchannels/{ch}/output/delay", output_delay_rounded)
-            for route_idx, (route, ampl, phase) in enumerate(
-                (
-                    [
-                        (AttributeName.OUTPUT_ROUTE_1, ch),
-                        (AttributeName.OUTPUT_ROUTE_1_AMPLITUDE, ch),
-                        (AttributeName.OUTPUT_ROUTE_1_PHASE, ch),
-                    ],
-                    [
-                        (AttributeName.OUTPUT_ROUTE_2, ch),
-                        (AttributeName.OUTPUT_ROUTE_2_AMPLITUDE, ch),
-                        (AttributeName.OUTPUT_ROUTE_2_PHASE, ch),
-                    ],
-                    [
-                        (AttributeName.OUTPUT_ROUTE_3, ch),
-                        (AttributeName.OUTPUT_ROUTE_3_AMPLITUDE, ch),
-                        (AttributeName.OUTPUT_ROUTE_3_PHASE, ch),
-                    ],
-                )
-            ):
-                (
-                    [output_router, route_amplitude, route_phase],
-                    output_route_updated,
-                ) = attributes.resolve(keys=[route, ampl, phase])
-                if (
-                    output_route_updated
-                    and route_amplitude is not None
-                    or route_phase is not None
-                ):
-                    nc.extend(
-                        self._collect_output_router_nodes(
-                            target=ch,
-                            source=output_router.from_channel,
-                            router_idx=route_idx,
-                            amplitude=route_amplitude,
-                            phase=route_phase,
-                        )
-                    )
-        return nc
+        await for_each(
+            self.full_channels(),
+            ChannelBase.set_nt_step_nodes,
+            recipe_data=recipe_data,
+            attributes=attributes,
+        )
 
     def prepare_upload_binary_wave(
         self,
@@ -744,24 +550,17 @@ class DeviceSHFSG(DeviceSHFBase):
             )
             if self.options.is_qc:
                 nc.add("system/internaltrigger/synchronization/enable", 0, cache=False)
+        if self._has_opt_rtr:
+            # Disable any previously configured output routers to make sure they
+            # do not introduce signal delay or unexpected signal paths.
+            nc.add("sgchannels/*/outputrouter/enable", 0, cache=False)
+            nc.add("sgchannels/*/outputrouter/routes/*/enable", 0, cache=False)
         await self.set_async(nc)
 
     def _collect_warning_nodes(self) -> list[tuple[str, str]]:
         warning_nodes = []
-        for ch in range(self._outputs):
-            if self._has_opt_rtr:
-                warning_nodes.append(
-                    (
-                        f"/{self.serial}/sgchannels/{ch}/outputrouter/overflowcount",
-                        f"Channel {ch} Output Router overflow count",
-                    )
-                )
-            warning_nodes.append(
-                (
-                    f"/{self.serial}/sgchannels/{ch}/output/overrangecount",
-                    f"Channel {ch} Output overrange count",
-                )
-            )
+        for channel in self.full_channels():
+            warning_nodes.extend(channel.collect_warning_nodes())
         return warning_nodes
 
     def runtime_check_control_nodes(self) -> list[NodeControlBase]:

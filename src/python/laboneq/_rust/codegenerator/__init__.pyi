@@ -4,10 +4,11 @@
 from __future__ import annotations
 from typing import Sequence
 from enum import Enum
+import numpy.typing as npt
 from laboneq.compiler.common.awg_signal_type import AWGSignalType
+from laboneq.compiler.common.awg_info import AWGInfo
 from laboneq.compiler.common.device_type import DeviceType as DeviceTypePy
-from laboneq.compiler.seqc.ir import SingleAwgIR
-from laboneq.compiler.ir import SignalIR
+from laboneq.compiler.ir import IRTree
 from laboneq.data.compilation_job import Marker
 from laboneq.compiler.seqc.waveform_sampler import SampledWaveformSignature
 
@@ -251,22 +252,38 @@ class SampledWaveform:
 def string_sanitize(input: str) -> str:
     """Sanitize a string for use in SeqC code."""
 
+class IntegrationWeight:
+    basename: str
+    samples_i: npt.ArrayLike
+    samples_q: npt.ArrayLike
+    downsampling_factor: int | None
+    signals: set[str]
+
 class AwgCodeGenerationResult:
     awg_events: list[object]
+    integration_weights: list[IntegrationWeight]
+    has_readout_feedback: bool
+    ppc_device: str | None
+    ppc_channel: int | None
+    global_delay: int = 0
 
-def generate_code_for_awg(
-    ob: SingleAwgIR,
-    signals: list[SignalIR],
-    cut_points: set[int],
+class SeqCGenOutput:
+    awg_results: list[AwgCodeGenerationResult]
+
+def generate_code(
+    ir: IRTree,
+    awgs: list[AWGInfo],
     settings: dict[str, object],
-    global_delay_samples: int,
-) -> AwgCodeGenerationResult:
-    """Generate SeqC code for a single AWG.
+    waveform_sampler: object,
+    delays: dict[str, float],
+) -> list[SeqCGenOutput]:
+    """Generate SeqC code for given AWGs.
 
     Arguments:
-        ob: The `SingleAwgIR` object containing the IR for the AWG.
-        signals: A list of `SignalIR` objects representing the signals.
-        cut_points: A set of cut points in the waveform.
+        ir: The IR tree containing the data to be processed.
+        awgs: List of target awgs.
         settings: Compiler settings as dictionary.
-        global_delay_samples: The global delay in samples to apply.
+        waveform_sampler: Python object for waveform sampling.
+        delays: Additional delays per signal in seconds. This value is on top of what is already
+            defined in the signals.
     """

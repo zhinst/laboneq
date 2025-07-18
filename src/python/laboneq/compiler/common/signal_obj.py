@@ -23,14 +23,6 @@ class SignalObj:
       playZeros; rounded to the sequencer grid (sample_multiple)
     - base_delay_signal: in case of an acquisition pulse, the delay_signal of the
       corresponding measure pulse on the same AWG
-    - total_delay: the sum of the above two fields, plus delays generated during code
-      generation, e.g., relative delay between a play and acquire pulse
-    - on_device_delay: delay on the device, realized by delay nodes and independent
-      from the sequencer, generated during code generation, e.g., relative delay between
-      a play and acquire pulse; in addition to potential port delays specified via the
-      calibration; a list which can contain multiple values due to the way we handle
-      acquisition delays (the delay of the measure pulse channel is added to the delay
-      of the acquire pulse channel)
     - port_delay: port delay specified via the calibration; realized via the device node
       in addition to potential on-device delays.
     - base_port_delay: in case of an acquisition pulse, the port_delay of the
@@ -49,8 +41,6 @@ class SignalObj:
     channels: list[int] = field(default_factory=list)
     channel_to_port: dict[int, str] = field(default_factory=dict)
     awg: AWGInfo = None
-    total_delay: float = None
-    on_device_delay: float = 0
     port_delay: float = 0
     base_port_delay: float | None = None
     mixer_type: MixerType | None = None

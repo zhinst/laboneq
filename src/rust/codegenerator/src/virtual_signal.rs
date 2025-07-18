@@ -1,14 +1,13 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use std::rc::Rc;
+
 use crate::Result;
-use crate::ir;
 use crate::ir::compilation_job::Signal;
 use crate::ir::compilation_job::{self as cjob};
 use anyhow::anyhow;
 use indexmap::IndexMap;
-use std::cmp::max;
-use std::rc::Rc;
 
 #[derive(Debug)]
 struct Channel {
@@ -20,16 +19,14 @@ struct Channel {
 pub struct VirtualSignal {
     signals: IndexMap<String, Channel>,
     subchannel: Option<u8>,
-    delay: ir::Samples,
 }
 
 impl VirtualSignal {
-    fn new(channels: Vec<Channel>, subchannel: Option<u8>, delay: ir::Samples) -> Self {
+    fn new(channels: Vec<Channel>, subchannel: Option<u8>) -> Self {
         let signals = channels.into_iter().map(|x| (x.signal.uid.clone(), x));
         VirtualSignal {
             signals: signals.collect(),
             subchannel,
-            delay,
         }
     }
 
@@ -39,10 +36,6 @@ impl VirtualSignal {
 
     pub fn subchannel(&self) -> Option<u8> {
         self.subchannel
-    }
-
-    pub fn delay(&self) -> ir::Samples {
-        self.delay
     }
 
     pub fn contains_signal(&self, uid: &str) -> bool {
@@ -63,14 +56,6 @@ pub struct VirtualSignals(Vec<VirtualSignal>);
 impl VirtualSignals {
     pub fn iter(&self) -> impl Iterator<Item = &VirtualSignal> {
         self.0.iter()
-    }
-
-    /// Common delay across the contained signals
-    ///
-    /// Panics if there are no signals
-    pub fn delay(&self) -> &ir::Samples {
-        // NOTE: All the non-integration signals on a single AWG must have the same delay
-        &self.0.first().expect("Virtual signals are empty").delay
     }
 }
 
@@ -122,7 +107,6 @@ fn validate_signal_oscillators(signal: &VirtualSignal, awg: &cjob::AwgCore) -> R
 ///
 /// Virtual signals do not include integration signals.
 pub fn create_virtual_signals(awg: &cjob::AwgCore) -> Result<Option<VirtualSignals>> {
-    // TODO: Delays on each virtual signal must be equal
     let virtual_signals = match awg.kind {
         cjob::AwgKind::SINGLE | cjob::AwgKind::IQ => {
             let mut signals = vec![];
@@ -141,17 +125,15 @@ pub fn create_virtual_signals(awg: &cjob::AwgCore) -> Result<Option<VirtualSigna
                     id: Some(0),
                     signal: Rc::clone(signal_obj),
                 };
-                let v_sig = VirtualSignal::new(vec![channel], sub_channel, signal_obj.delay);
+                let v_sig = VirtualSignal::new(vec![channel], sub_channel);
                 signals.push(v_sig);
             }
             signals
         }
         cjob::AwgKind::MULTI => {
-            let mut delay = 0;
             let mut channels = vec![];
             for signal_obj in awg.signals.iter() {
                 if signal_obj.kind != cjob::SignalKind::INTEGRATION {
-                    delay = max(delay, signal_obj.delay);
                     let channel = Channel {
                         signal: Rc::clone(signal_obj),
                         id: Some(channels.len() as u16),
@@ -159,7 +141,7 @@ pub fn create_virtual_signals(awg: &cjob::AwgCore) -> Result<Option<VirtualSigna
                     channels.push(channel);
                 }
             }
-            vec![VirtualSignal::new(channels, None, delay)]
+            vec![VirtualSignal::new(channels, None)]
         }
         cjob::AwgKind::DOUBLE => {
             assert_eq!(awg.signals.len(), 2, "DOUBLE signal must have 2 signals");
@@ -173,14 +155,12 @@ pub fn create_virtual_signals(awg: &cjob::AwgCore) -> Result<Option<VirtualSigna
                     id: Some(1),
                 },
             ];
-            let delay = awg.signals[0].delay;
-            vec![VirtualSignal::new(channels, None, delay)]
+            vec![VirtualSignal::new(channels, None)]
         }
     };
     if virtual_signals.is_empty() {
         return Ok(None);
     }
-    // TODO: Validate that each signal has the same delay
     for vsig in virtual_signals.iter() {
         validate_signal_oscillators(vsig, awg)?
     }

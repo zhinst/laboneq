@@ -85,6 +85,10 @@ class NodeCollector:
         self._base = base
         self._nodes: list[NodeAction] = []
 
+    @property
+    def is_empty(self) -> bool:
+        return len(self._nodes) == 0
+
     def add(
         self, path: str, value: Any, cache: bool = True, filename: str | None = None
     ):
@@ -102,6 +106,9 @@ class NodeCollector:
     def extend(self, other: Iterable[NodeAction]):
         for node in other:
             self._nodes.append(node)
+
+    def clear(self):
+        self._nodes.clear()
 
     def __iter__(self) -> Iterator[NodeAction]:
         for node in self._nodes:

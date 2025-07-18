@@ -32,7 +32,7 @@ from laboneq.controller.devices.node_control import (
     NodeControlKind,
     filter_states,
 )
-from laboneq.controller.util import LabOneQControllerException
+from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.utilities.for_each import for_each
 from laboneq.controller.versioning import SetupCaps
 from laboneq.implementation.utils.devices import target_setup_fingerprint

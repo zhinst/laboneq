@@ -3,4 +3,10 @@
 
 from .controller import Controller
 from .toolkit_adapter import ToolkitDevices
-from .util import LabOneQControllerException
+from .utilities.exception import LabOneQControllerException
+
+__all__ = [
+    "Controller",
+    "ToolkitDevices",
+    "LabOneQControllerException",
+]

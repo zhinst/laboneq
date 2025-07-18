@@ -6,7 +6,7 @@ from __future__ import annotations
 import math
 from typing import Iterator, Any
 
-from laboneq.controller.util import LabOneQControllerException
+from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.attribute_value_tracker import (
     AttributeName,
     DeviceAttribute,
@@ -144,11 +144,10 @@ class DeviceSHFPPC(DeviceBase):
                 nc.add(self._key_to_path(key, ch), _convert(value))
         await self.set_async(nc)
 
-    def _collect_prepare_nt_step_nodes(
-        self, attributes: DeviceAttributesView, recipe_data: RecipeData
-    ) -> NodeCollector:
+    async def _set_nt_step_nodes(
+        self, recipe_data: RecipeData, attributes: DeviceAttributesView
+    ):
         nc = NodeCollector()
-        nc.extend(super()._collect_prepare_nt_step_nodes(attributes, recipe_data))
         for ch in range(self._channels):
             for key, attr_name in DeviceSHFPPC.attribute_keys.items():
                 [value], updated = attributes.resolve(keys=[(attr_name, ch)])
@@ -157,7 +156,7 @@ class DeviceSHFPPC(DeviceBase):
                 if updated:
                     path = self._key_to_path(key, ch)
                     nc.add(path, value)
-        return nc
+        await self.set_async(nc)
 
     async def start_execution(self, with_pipeliner: bool):
         nc = NodeCollector(base=f"/{self.serial}/")

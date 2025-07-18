@@ -9,7 +9,6 @@ pub struct PRNGTracker {
     seed: Option<u32>,
     offset: u32,
     committed: bool,
-    active_sample: Option<String>,
 }
 
 impl PRNGTracker {
@@ -19,7 +18,6 @@ impl PRNGTracker {
             seed: None,
             offset: 0,
             committed: false,
-            active_sample: None,
         }
     }
 
@@ -40,23 +38,6 @@ impl PRNGTracker {
     pub fn set_offset(&mut self, value: u32) {
         assert!(!self.committed);
         self.offset = value;
-    }
-
-    pub fn active_sample(&self) -> Option<&String> {
-        self.active_sample.as_ref()
-    }
-
-    pub fn set_active_sample(&mut self, value: String) {
-        assert!(
-            self.active_sample.is_none(),
-            "must first drop existing sample"
-        );
-        self.active_sample = Some(value);
-    }
-
-    pub fn drop_sample(&mut self) {
-        assert!(self.active_sample.is_some(), "no sample to drop");
-        self.active_sample = None;
     }
 
     pub fn is_committed(&self) -> bool {

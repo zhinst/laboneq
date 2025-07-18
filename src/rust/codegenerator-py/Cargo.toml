@@ -10,9 +10,11 @@ license = "MIT"
 workspace = true
 
 [dependencies]
-pyo3 = { workspace = true }
+pyo3 = { workspace = true, features = ["anyhow"] }
+anyhow = { workspace = true }
 num-complex = { workspace = true }
 log = { workspace = true }
+thiserror = { workspace = true }
 
 codegenerator = { path = "../codegenerator" }
 numeric-array = { path = "../numeric-array", features = ["pyo3"] }

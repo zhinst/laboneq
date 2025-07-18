@@ -17,7 +17,7 @@ from laboneq.controller.devices.node_control import (
     Response,
 )
 from laboneq.controller.recipe_processor import RecipeData
-from laboneq.controller.util import LabOneQControllerException
+from laboneq.controller.utilities.exception import LabOneQControllerException
 
 _logger = logging.getLogger(__name__)
 

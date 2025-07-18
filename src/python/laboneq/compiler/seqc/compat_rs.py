@@ -9,6 +9,9 @@ from laboneq.compiler.seqc.awg_sampled_event import (
     AWGEventType,
 )
 from laboneq.compiler.seqc import signatures
+from laboneq.compiler.seqc.awg_sampled_event import (
+    AWGSampledEventSequence,
+)
 
 
 def handle_playwave(event) -> AWGEvent | None:
@@ -125,7 +128,7 @@ def handle_acquire(event) -> AWGEvent | None:
             "play_wave_id": obj.pulse_defs,
             "oscillator_frequency": obj.oscillator_frequency,
             "id_pulse_params": obj.id_pulse_params,
-            "channels": [int(ch) for ch in obj.channels],
+            "channels": obj.channels,
         },
     )
 
@@ -156,6 +159,112 @@ def handle_ppc_sweep_step_end(event) -> AWGEvent:
     )
 
 
+def handle_reset_phase(event) -> AWGEvent:
+    return AWGEvent(
+        type=AWGEventType.RESET_PHASE,
+        start=event.start,
+        end=event.start,
+        priority=event.position,
+        params={},
+    )
+
+
+def handle_initial_reset_phase(event) -> AWGEvent:
+    return AWGEvent(
+        type=AWGEventType.INITIAL_RESET_PHASE,
+        start=event.start,
+        end=event.start,
+        priority=-100,
+        params={},
+    )
+
+
+def handle_loop_step_start(event) -> AWGEvent:
+    return AWGEvent(
+        type=AWGEventType.LOOP_STEP_START,
+        start=event.start,
+        end=event.start,
+        priority=event.position,
+        params={},
+    )
+
+
+def handle_loop_step_end(event) -> AWGEvent:
+    return AWGEvent(
+        type=AWGEventType.LOOP_STEP_END,
+        start=event.start,
+        end=event.start,
+        priority=event.position,
+        params={},
+    )
+
+
+def handle_push_loop(event) -> AWGEvent:
+    obj = event.data()
+    return AWGEvent(
+        type=AWGEventType.PUSH_LOOP,
+        start=event.start,
+        end=event.start,
+        priority=event.position,
+        params={"num_repeats": obj.num_repeats},
+    )
+
+
+def handle_iterate(event) -> AWGEvent:
+    obj = event.data()
+    return AWGEvent(
+        type=AWGEventType.ITERATE,
+        start=event.start,
+        end=event.start,
+        priority=event.position,
+        params={"num_repeats": obj.num_repeats},
+    )
+
+
+def handle_prng_setup(event) -> AWGEvent:
+    obj = event.data()
+    return AWGEvent(
+        type=AWGEventType.SETUP_PRNG,
+        start=event.start,
+        end=event.start,
+        priority=event.position,
+        params={"range": obj.range, "seed": obj.seed},
+    )
+
+
+def handle_prng_sample(event) -> AWGEvent:
+    obj = event.data()
+    return AWGEvent(
+        type=AWGEventType.PRNG_SAMPLE,
+        start=event.start,
+        end=event.start,
+        priority=event.position,
+        params={"sample_name": obj.sample_name, "section_name": obj.section_name},
+    )
+
+
+def handle_prng_drop_sample(event) -> AWGEvent:
+    obj = event.data()
+    return AWGEvent(
+        type=AWGEventType.DROP_PRNG_SAMPLE,
+        start=event.start,
+        end=event.start,
+        priority=event.position,
+        params={"sample_name": obj.sample_name},
+    )
+
+
+def handle_trigger_output(event) -> AWGEvent:
+    obj = event.data()
+    return AWGEvent(
+        type=AWGEventType.TRIGGER_OUTPUT,
+        start=event.start,
+        end=event.start,
+        priority=event.position,
+        params={"state": obj.state},
+    )
+
+
 def handle_set_oscillator_frequency(event) -> AWGEvent:
     obj = event.data()
     return AWGEvent(
@@ -172,11 +281,24 @@ def handle_set_oscillator_frequency(event) -> AWGEvent:
     )
 
 
-def transform_rs_events_to_awg_events(output: list) -> list[AWGEvent]:
+def handle_qa_event(event) -> AWGEvent:
+    obj = event.data()
+    return AWGEvent(
+        type=AWGEventType.QA_EVENT,
+        start=event.start,
+        end=event.end,
+        params={
+            "acquire_events": obj.acquire_events,
+            "play_events": obj.play_wave_events,
+        },
+    )
+
+
+def transform_rs_events_to_awg_events(output: list) -> AWGSampledEventSequence:
     """Adapter from Rust generated AWG events to Python AWG events."""
+    awg_events = AWGSampledEventSequence()
     if not output:
-        return []
-    awg_events = []
+        return awg_events
     for event in output:
         awg_event = None
         event_type: int = event.event_type()
@@ -197,9 +319,33 @@ def transform_rs_events_to_awg_events(output: list) -> list[AWGEvent]:
         elif event_type == 7:
             awg_event = handle_ppc_sweep_step_end(event)
         elif event_type == 8:
-            awg_event = handle_play_hold(event)
+            awg_event = handle_reset_phase(event)
         elif event_type == 9:
+            awg_event = handle_initial_reset_phase(event)
+        elif event_type == 10:
+            awg_event = handle_loop_step_start(event)
+        elif event_type == 11:
+            awg_event = handle_loop_step_end(event)
+        elif event_type == 12:
+            awg_event = handle_push_loop(event)
+        elif event_type == 13:
+            awg_event = handle_iterate(event)
+        elif event_type == 14:
+            awg_event = handle_prng_setup(event)
+        elif event_type == 15:
+            awg_event = handle_prng_sample(event)
+        elif event_type == 16:
+            awg_event = handle_prng_drop_sample(event)
+        elif event_type == 17:
+            awg_event = handle_trigger_output(event)
+        elif event_type == 18:
+            awg_event = handle_play_hold(event)
+        elif event_type == 19:
             awg_event = handle_set_oscillator_frequency(event)
+        elif event_type == 20:
+            awg_event = handle_qa_event(event)
+        else:
+            raise RuntimeError(f"Internal error: Unknown event type: {event_type}")
         if awg_event:
-            awg_events.append(awg_event)
+            awg_events.add(awg_event.start, awg_event)
     return awg_events

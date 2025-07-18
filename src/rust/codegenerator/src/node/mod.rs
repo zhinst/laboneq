@@ -3,7 +3,7 @@
 
 use std::mem;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Node<S, T> {
     data: T,
     // Offset of the node relative to the context it is used in,
@@ -63,6 +63,10 @@ impl<S, T> Node<S, T> {
 
     pub fn add_child_node(&mut self, node: Node<S, T>) {
         self.children.push(node);
+    }
+
+    pub fn add_child_nodes(&mut self, nodes: Vec<Node<S, T>>) {
+        self.children.extend(nodes);
     }
 
     pub fn add_child(&mut self, offset: S, data: T) {

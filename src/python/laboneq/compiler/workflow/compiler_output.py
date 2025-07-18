@@ -26,3 +26,7 @@ class CombinedRTCompilerOutputContainer:
                 device_class: combined_output.get_artifacts()
                 for device_class, combined_output in self.combined_output.items()
             }
+
+    def get_first_combined_output(self) -> tuple[int, CombinedOutput | None]:
+        """Get the first combined output, if available."""
+        return next(iter(self.combined_output.items()), (-1, None))

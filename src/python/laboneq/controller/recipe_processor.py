@@ -7,6 +7,7 @@ from collections.abc import ItemsView, Iterator
 from collections import defaultdict
 from dataclasses import dataclass, field
 import logging
+from laboneq.data.calibration import PortMode as RecipePortMode
 from packaging.version import Version, InvalidVersion
 from typing import TYPE_CHECKING, Any, KeysView, Literal, TypeVar, cast, overload
 
@@ -19,10 +20,10 @@ from laboneq.controller.attribute_value_tracker import (
     AttributeValueTracker,
     DeviceAttribute,
 )
-from laboneq.controller.util import LabOneQControllerException
+from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
-from laboneq.data.recipe import IO, Initialization, OscillatorParam, Recipe, SignalType
+from laboneq.data.recipe import IO, Initialization, Recipe, SignalType
 from laboneq.data.scheduled_experiment import (
     ArtifactsCodegen,
     CodegenWaveform,
@@ -117,9 +118,55 @@ class AwgConfigs:
 
 
 @dataclass
+class QAChannelRecipeData:
+    output_enable: bool | None = None  # None means no output config provided
+    output_range: float | None = None
+    output_mute_enable: bool = False
+    input_enable: bool | None = None  # None means no input config provided
+    input_range: float | None = None
+    input_rf_path: bool = True
+
+
+@dataclass
+class OutputRouteConfig:
+    source: int
+    fixed_amplitude: float | None = None  # None means parameterized amplitude
+    fixed_phase: float | None = None  # None means parameterized phase
+    param_amplitude: str | None = None  # None means fixed amplitude
+    param_phase: str | None = None  # None means fixed phase
+
+
+@dataclass
+class SGChannelRecipeData:
+    output_enable: bool | None = None  # None means no output config provided
+    output_range: float | None = None
+    output_mute_enable: bool = False
+    modulation: bool | None = None
+    marker_source_trigger: bool = True
+    output_rf_path: bool = True
+    router_config: list[OutputRouteConfig] | None = None
+
+    def ensure_router_config(self):
+        if self.router_config is None:
+            self.router_config = []
+        return self.router_config
+
+
+@dataclass
+class AllocatedOscillator:
+    channels: set[int]
+    index: int
+    id_index: int
+    frequency: float | None
+    param: str | None
+
+
+@dataclass
 class DeviceRecipeData:
     iq_settings: dict[int, tuple[int, int]] = field(default_factory=dict)
-    osc_params: list[OscillatorParam] = field(default_factory=list)
+    allocated_oscs: list[AllocatedOscillator] = field(default_factory=list)
+    qachannels: dict[int, QAChannelRecipeData] = field(default_factory=dict)
+    sgchannels: dict[int, SGChannelRecipeData] = field(default_factory=dict)
 
 
 @dataclass
@@ -216,7 +263,6 @@ class RecipeData:
     device_settings: dict[DeviceUID, DeviceRecipeData]
     awg_configs: AwgConfigs
     attribute_value_tracker: AttributeValueTracker
-    oscillator_ids: list[str]
 
     def get_initialization(self, device_uid: DeviceUID) -> Initialization:
         for initialization in self.recipe.initializations:
@@ -231,6 +277,30 @@ class RecipeData:
         for awg_key, awg_config in self.awg_configs.items():
             if awg_config.result_length is not None:
                 yield awg_key, awg_config
+
+
+def _validate_recipe(recipe: Recipe | None) -> Recipe:
+    # Recipe is present
+    assert recipe is not None
+
+    # Recipe version is correct
+    try:
+        if (
+            Version(Version(recipe.versions.laboneq).base_version)
+            < MIN_LABONEQ_VERSION_FOR_COMPILED_EXPERIMENT
+        ):
+            raise LabOneQControllerException(
+                f"The experiment was compiled with LabOne Q version {recipe.versions.laboneq}, which is not compatible. "
+                "Please recompile using the current LabOne Q version."
+            )
+    except InvalidVersion:
+        _logger.warning(
+            "The experiment was compiled with an invalid LabOne Q version '%s'. "
+            "Passing, as this is only expected to happen in tests. Consider ensuring that the valid version is set.",
+            recipe.versions.laboneq,
+        )
+
+    return recipe
 
 
 def _pre_process_iq_settings_hdawg(
@@ -278,6 +348,128 @@ def _pre_process_iq_settings_hdawg(
         iq_settings[awg_idx] = (i_out.channel, q_out.channel)
 
     return iq_settings
+
+
+def _pre_process_oscillator_allocations(
+    recipe: Recipe, oscillator_ids: list[str], device_id: str
+):
+    allocated_oscs: list[AllocatedOscillator] = []
+    for osc_param in recipe.oscillator_params:
+        if osc_param.device_id != device_id:
+            continue
+        osc_id_index = oscillator_ids.index(osc_param.id)
+        same_id_osc = next(
+            (osc for osc in allocated_oscs if osc.id_index == osc_id_index), None
+        )
+        if same_id_osc is None:
+            allocated_oscs.append(
+                AllocatedOscillator(
+                    channels={osc_param.channel},
+                    index=osc_param.allocated_index,
+                    id_index=osc_id_index,
+                    frequency=osc_param.frequency,
+                    param=osc_param.param,
+                )
+            )
+        else:
+            if same_id_osc.frequency != osc_param.frequency:
+                raise LabOneQControllerException(
+                    f"Ambiguous frequency in recipe for oscillator "
+                    f"'{osc_param.id}': {same_id_osc.frequency} != {osc_param.frequency}"
+                )
+            if same_id_osc.index != osc_param.allocated_index:
+                raise LabOneQControllerException(
+                    f"Ambiguous index in recipe for oscillator "
+                    f"'{osc_param.id}': {same_id_osc.index} != {osc_param.allocated_index}"
+                )
+            same_id_osc.channels.add(osc_param.channel)
+    return allocated_oscs
+
+
+def _pre_process_qa_channels(
+    initialization: Initialization | None,
+) -> dict[int, QAChannelRecipeData]:
+    if initialization is None or initialization.device_type != "SHFQA":
+        return {}
+
+    channels: dict[int, QAChannelRecipeData] = {}
+
+    def _get_channel_data(channel: int) -> QAChannelRecipeData:
+        channel_data = channels.get(channel)
+        if channel_data is None:
+            channel_data = QAChannelRecipeData()
+            channels[channel] = channel_data
+        return channel_data
+
+    outputs = initialization.outputs or []
+    for output in outputs:
+        channel_data = _get_channel_data(output.channel)
+        channel_data.output_enable = True
+        channel_data.output_range = output.range
+        channel_data.output_mute_enable = output.enable_output_mute
+
+    for input in initialization.inputs or []:
+        channel_data = _get_channel_data(input.channel)
+        channel_data.input_enable = True
+        channel_data.input_range = input.range
+        channel_data.input_rf_path = (
+            input.port_mode is None or input.port_mode == RecipePortMode.RF.value
+        )
+
+    return channels
+
+
+def _pre_process_sg_channels(
+    initialization: Initialization | None,
+) -> dict[int, SGChannelRecipeData]:
+    if initialization is None or initialization.device_type != "SHFSG":
+        return {}
+
+    channels: dict[int, SGChannelRecipeData] = {}
+
+    def _get_channel_data(channel: int) -> SGChannelRecipeData:
+        channel_data = channels.get(channel)
+        if channel_data is None:
+            channel_data = SGChannelRecipeData()
+            channels[channel] = channel_data
+        return channel_data
+
+    outputs = initialization.outputs or []
+    for output in outputs:
+        channel_data = _get_channel_data(output.channel)
+        channel_data.output_enable = True
+        channel_data.output_range = output.range
+        channel_data.output_mute_enable = output.enable_output_mute
+        channel_data.modulation = output.modulation
+        channel_data.marker_source_trigger = output.marker_mode != "MARKER"
+        channel_data.output_rf_path = (
+            output.port_mode is None or output.port_mode == "rf"
+        )
+        for route in output.routed_outputs:
+            fixed_amplitude, param_amplitude = (
+                (None, route.amplitude)
+                if isinstance(route.amplitude, str)
+                else (route.amplitude, None)
+            )
+            fixed_phase, param_phase = (
+                (None, route.phase)
+                if isinstance(route.phase, str)
+                else (route.phase, None)
+            )
+            channel_data.ensure_router_config().append(
+                OutputRouteConfig(
+                    source=route.from_channel,
+                    fixed_amplitude=fixed_amplitude,
+                    fixed_phase=fixed_phase,
+                    param_amplitude=param_amplitude,
+                    param_phase=param_phase,
+                )
+            )
+            # Also enable the router for the source channel, even if no other sources are routing to it,
+            # to ensure latency matches between source and destination channels.
+            _get_channel_data(route.from_channel).ensure_router_config()
+
+    return channels
 
 
 @dataclass
@@ -532,34 +724,27 @@ def _calculate_awg_configs(
 
 
 def _pre_process_attributes(
-    recipe: Recipe, devices: DeviceCollection
-) -> tuple[AttributeValueTracker, list[str], dict[str, list[OscillatorParam]]]:
+    recipe: Recipe, devices: DeviceCollection, oscillator_ids: list[str]
+) -> AttributeValueTracker:
     attribute_value_tracker = AttributeValueTracker()
-    oscillator_ids: list[str] = []
     oscillators_check: dict[str, str | float] = {}
 
-    osc_params_per_device = defaultdict(list)
-    # Sort oscillator params by id to match the order in the compiler
-    for oscillator_param in sorted(recipe.oscillator_params, key=lambda p: p.id):
-        osc_params_per_device[oscillator_param.device_id].append(oscillator_param)
+    for oscillator_param in recipe.oscillator_params:
         value_or_param = oscillator_param.param or oscillator_param.frequency
         assert value_or_param is not None, "undefined oscillator frequency"
-        if oscillator_param.id in oscillator_ids:
-            osc_param_index = oscillator_ids.index(oscillator_param.id)
+        if oscillator_param.id in oscillators_check:
             if oscillators_check[oscillator_param.id] != value_or_param:
                 raise LabOneQControllerException(
                     f"Conflicting specifications for the same oscillator id '{oscillator_param.id}' "
                     f"in the recipe: '{oscillators_check[oscillator_param.id]}' != '{value_or_param}'"
                 )
         else:
-            osc_param_index = len(oscillator_ids)
-            oscillator_ids.append(oscillator_param.id)
             oscillators_check[oscillator_param.id] = value_or_param
         attribute_value_tracker.add_attribute(
             device_uid=oscillator_param.device_id,
             attribute=DeviceAttribute(
                 name=AttributeName.OSCILLATOR_FREQ,
-                index=osc_param_index,
+                index=oscillator_ids.index(oscillator_param.id),
                 value_or_param=value_or_param,
             ),
         )
@@ -572,7 +757,7 @@ def _pre_process_attributes(
                 attribute=attribute,
             )
 
-    return attribute_value_tracker, oscillator_ids, osc_params_per_device
+    return attribute_value_tracker
 
 
 def pre_process_compiled(
@@ -581,27 +766,6 @@ def pre_process_compiled(
 ) -> RecipeData:
     for _, device in devices.all:
         device.validate_scheduled_experiment(scheduled_experiment)
-
-    recipe = scheduled_experiment.recipe
-    assert recipe is not None
-    execution = scheduled_experiment.execution
-    assert execution is not None
-
-    try:
-        if (
-            Version(Version(recipe.versions.laboneq).base_version)
-            < MIN_LABONEQ_VERSION_FOR_COMPILED_EXPERIMENT
-        ):
-            raise LabOneQControllerException(
-                f"The experiment was compiled with LabOne Q version {recipe.versions.laboneq}, which is not compatible. "
-                "Please recompile using the current LabOne Q version."
-            )
-    except InvalidVersion:
-        _logger.warning(
-            "The experiment was compiled with an invalid LabOne Q version '%s'. "
-            "Passing, as this is only expected to happen in tests. Consider ensuring that the valid version is set.",
-            recipe.versions.laboneq,
-        )
 
     if (
         scheduled_experiment.device_setup_fingerprint
@@ -612,19 +776,31 @@ def pre_process_compiled(
             "Please recompile using the current device setup."
         )
 
-    attribute_value_tracker, oscillator_ids, osc_params_per_device = (
-        _pre_process_attributes(recipe, devices)
-    )
+    recipe = _validate_recipe(scheduled_experiment.recipe)
+
+    # Mapping of the unique oscillator ids to integer indices for use with the AttributeValueTracker
+    oscillator_ids = list(set(o.id for o in recipe.oscillator_params))
 
     device_settings: dict[DeviceUID, DeviceRecipeData] = {
         device_uid: DeviceRecipeData(
             iq_settings=_pre_process_iq_settings_hdawg(
                 get_initialization_by_device_uid(recipe, device_uid)
             ),
-            osc_params=osc_params_per_device.get(device_uid, []),
+            allocated_oscs=_pre_process_oscillator_allocations(
+                recipe, oscillator_ids, device_uid
+            ),
+            qachannels=_pre_process_qa_channels(
+                get_initialization_by_device_uid(recipe, device_uid)
+            ),
+            sgchannels=_pre_process_sg_channels(
+                get_initialization_by_device_uid(recipe, device_uid)
+            ),
         )
         for device_uid, _ in devices.all
     }
+
+    execution = scheduled_experiment.execution
+    assert execution is not None
 
     lp = _LoopsPreprocessor()
     lp.pipeliner_job_count = scheduled_experiment.chunk_count
@@ -641,8 +817,9 @@ def pre_process_compiled(
         rt_execution_info=rt_execution_info,
         device_settings=device_settings,
         awg_configs=awg_configs,
-        attribute_value_tracker=attribute_value_tracker,
-        oscillator_ids=oscillator_ids,
+        attribute_value_tracker=_pre_process_attributes(
+            recipe, devices, oscillator_ids
+        ),
     )
 
     for _, device in devices.all:

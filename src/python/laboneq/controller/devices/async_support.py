@@ -38,7 +38,7 @@ from zhinst.comms_schemas.labone.core import (
 )
 from zhinst.comms_schemas.labone.core.errors import NotFoundError
 
-from laboneq.controller.util import LabOneQControllerException
+from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.versioning import (
     MINIMUM_SUPPORTED_LABONE_VERSION,
     RECOMMENDED_LABONE_VERSION,

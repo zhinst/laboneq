@@ -409,10 +409,7 @@ mod tests {
         preferred_amplitude_register: Option<u16>,
         pulse_def_kind: PulseDefKind,
     ) -> PulseSignature {
-        let pulse = PulseDef {
-            uid: "".to_string(),
-            kind: pulse_def_kind,
-        };
+        let pulse = PulseDef::test("".to_string(), pulse_def_kind);
         PulseSignature {
             start: 0,
             pulse: Some(Arc::new(pulse)),
@@ -471,10 +468,7 @@ mod tests {
         use std::sync::Arc;
 
         fn make_signature(amplitude: Option<f64>, pulse_def_kind: PulseDefKind) -> PulseSignature {
-            let pulse = PulseDef {
-                uid: "".to_string(),
-                kind: pulse_def_kind,
-            };
+            let pulse = PulseDef::test("".to_string(), pulse_def_kind);
             PulseSignature {
                 start: 0,
                 pulse: Some(Arc::new(pulse)),
@@ -554,10 +548,7 @@ mod tests {
             amplitude: f64,
             preferred_amplitude_register: Option<u16>,
         ) -> PulseSignature {
-            let pulse = PulseDef {
-                uid: "".to_string(),
-                kind: PulseDefKind::Pulse,
-            };
+            let pulse = PulseDef::test("".to_string(), PulseDefKind::Pulse);
             PulseSignature {
                 start: 0,
                 pulse: Some(Arc::new(pulse)),

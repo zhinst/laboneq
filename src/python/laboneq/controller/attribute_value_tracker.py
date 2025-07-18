@@ -27,9 +27,6 @@ class AttributeName(Enum):
     QA_CENTER_FREQ = auto()
     SG_SYNTH_CENTER_FREQ = auto()
     SG_DIG_MIXER_CENTER_FREQ = auto()
-    OUTPUT_ROUTE_1 = auto()
-    OUTPUT_ROUTE_2 = auto()
-    OUTPUT_ROUTE_3 = auto()
     OUTPUT_ROUTE_1_AMPLITUDE = auto()
     OUTPUT_ROUTE_2_AMPLITUDE = auto()
     OUTPUT_ROUTE_3_AMPLITUDE = auto()
@@ -90,15 +87,17 @@ class AttributeValueTracker:
         device_uid: str,
         attribute: DeviceAttribute,
     ):
-        is_param = isinstance(attribute.value_or_param, str)
-        param = attribute.value_or_param if is_param else None
-        value = None if is_param else attribute.value_or_param
+        param, value = (
+            (attribute.value_or_param, None)
+            if isinstance(attribute.value_or_param, str)
+            else (None, attribute.value_or_param)
+        )
 
         attribute_key = AttributeKey(
             device_uid=device_uid, name=attribute.name, index=attribute.index
         )
         self.attributes[attribute_key] = AttributeValue(value)
-        if is_param:
+        if param is not None:
             self.param_to_attributes_map[param].append(attribute_key)
 
     def update(self, param: str, value: float):

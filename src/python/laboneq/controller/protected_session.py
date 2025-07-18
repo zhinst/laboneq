@@ -7,7 +7,8 @@ import copy
 import typing
 from typing import Any
 
-from laboneq.controller.util import LabOneQControllerException, SimpleProxy
+from laboneq.controller.utilities.exception import LabOneQControllerException
+from laboneq.controller.utilities.simple_proxy import SimpleProxy
 from laboneq.core.exceptions import AbortExecution
 from laboneq.data.experiment_results import ExperimentResults
 

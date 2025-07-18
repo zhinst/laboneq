@@ -1,11 +1,14 @@
 [workspace.package]
-version = "2.55.0"
+version = "2.56.0"
 authors = ["Zurich Instruments AG <info@zhinst.com>"]
 edition = "2024"
 publish = false
 
 [workspace]
-members = ["**/src/rust/*"]
+members = [
+  "src/rust/*",
+
+]
 resolver = "2"
 
 [workspace.dependencies]
@@ -18,6 +21,7 @@ indexmap = "2.9"
 log = "0.4.27"
 md5 = "0.8.0"
 num-complex = "0.4.6"
+num-traits = "0.2.19"
 numpy = "0.25.0"
 pyo3 = { version = "0.25.0", features = [
   "abi3-py39",
@@ -33,7 +37,6 @@ serde_json = "1.0"
 thiserror = "2.0"
 uuid = "1.16"
 sha1 = "0.10.6"
-
 
 [workspace.lints.rust]
 ambiguous_negative_literals = "warn"

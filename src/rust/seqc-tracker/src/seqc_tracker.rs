@@ -428,10 +428,6 @@ impl SeqCTracker {
     /// generator can adjust the values and eventually commit them.
     /// Once committed, they values cannot be changed, and the PRNG has to be setup anew.
     pub fn setup_prng(&mut self, seed: Option<u32>, prng_range: Option<u32>) -> Result<()> {
-        // Check if PRNG is already set up
-        if self.prng_tracker.is_some() {
-            return Err(anyhow!("PRNG already set up, cannot set up again",).into());
-        }
         self.seqc_gen_prng = Some(self.append_loop_stack_generator(None, false)?);
         let mut prng_tracker = PRNGTracker::new();
         self.append_loop_stack_generator(None, false)?; // Continuation
@@ -443,15 +439,6 @@ impl SeqCTracker {
             prng_tracker.set_range(range);
         }
         self.prng_tracker = Some(Arc::new(RwLock::new(prng_tracker)));
-        Ok(())
-    }
-
-    /// Discards the current PRNG setup state.
-    pub fn drop_prng(&mut self) -> Result<()> {
-        if self.prng_tracker.is_none() {
-            return Err(anyhow!("PRNG not set up, cannot drop").into());
-        }
-        self.prng_tracker = None;
         Ok(())
     }
 

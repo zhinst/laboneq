@@ -11,7 +11,7 @@ from laboneq.controller.devices.device_shfqa import DeviceSHFQA
 from laboneq.controller.devices.device_shfsg import DeviceSHFSG
 from laboneq.controller.devices.device_uhfqa import DeviceUHFQA
 from laboneq.controller.devices.device_zi import DeviceZI
-from laboneq.controller.util import LabOneQControllerException
+from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.versioning import SetupCaps
 
 

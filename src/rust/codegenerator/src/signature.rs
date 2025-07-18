@@ -497,11 +497,7 @@ mod tests {
     fn test_pulse_signature_hash() {
         let pulse = PulseSignature {
             start: 0,
-            pulse: Arc::new(PulseDef {
-                uid: "0".to_string(),
-                kind: PulseDefKind::Pulse,
-            })
-            .into(),
+            pulse: Arc::new(PulseDef::test("".to_string(), PulseDefKind::Pulse)).into(),
             length: 1,
             amplitude: None,
             phase: 0.0,
@@ -523,11 +519,7 @@ mod tests {
         assert_ne!(create_hash(&pulse), create_hash(&other_pulse));
 
         let mut other_pulse = pulse.clone();
-        other_pulse.pulse = Arc::new(PulseDef {
-            uid: "1".to_string(),
-            kind: PulseDefKind::Pulse,
-        })
-        .into();
+        other_pulse.pulse = Arc::new(PulseDef::test("1".to_string(), PulseDefKind::Pulse)).into();
         assert_ne!(create_hash(&pulse), create_hash(&other_pulse));
 
         let mut other_pulse = pulse.clone();
@@ -576,11 +568,7 @@ mod tests {
     fn create_pulse_signature() -> PulseSignature {
         PulseSignature {
             start: 0,
-            pulse: Arc::new(PulseDef {
-                uid: "0".to_string(),
-                kind: PulseDefKind::Pulse,
-            })
-            .into(),
+            pulse: Arc::new(PulseDef::test("0".to_string(), PulseDefKind::Pulse)).into(),
             length: 1,
             amplitude: 0.5.into(),
             phase: 0.0,

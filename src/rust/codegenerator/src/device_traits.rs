@@ -31,6 +31,7 @@ pub struct DeviceTraits {
     pub require_play_zero_after_loop: bool,
     pub playwave_max_hint: Option<u64>,
     pub is_qa_device: bool,
+    pub number_of_trigger_bits: u8,
 }
 
 pub const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
@@ -49,6 +50,7 @@ pub const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
     require_play_zero_after_loop: false,
     playwave_max_hint: None,
     is_qa_device: false,
+    number_of_trigger_bits: 4,
 };
 
 pub const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
@@ -67,6 +69,7 @@ pub const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
     require_play_zero_after_loop: true,
     playwave_max_hint: None,
     is_qa_device: true,
+    number_of_trigger_bits: 4,
 };
 
 pub const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
@@ -88,6 +91,8 @@ pub const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
     require_play_zero_after_loop: false,
     playwave_max_hint: None,
     is_qa_device: false,
+    // todo: The documentation states 4 trigger bits, but the LabOne Q code only allows 1.
+    number_of_trigger_bits: 1,
 };
 
 pub const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
@@ -110,4 +115,6 @@ pub const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
     require_play_zero_after_loop: false,
     playwave_max_hint: Some(4096),
     is_qa_device: true,
+    // todo: The documentation states 2 trigger bits, but the LabOne Q code only allows 1.
+    number_of_trigger_bits: 1,
 };

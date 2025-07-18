@@ -235,13 +235,6 @@ class Scheduler:
                     section_id, signal_id
                 ):
                     if section_pulse.acquire_params is not None:
-                        is_offset = (
-                            section_pulse.length is None
-                            and section_pulse.pulse is None
-                            and section_pulse.offset is not None
-                        )  # support offset present in legacy dsl experiments
-                        if is_offset:
-                            continue
                         awg = self._schedule_data.signal_objects[signal_id].awg
                         length = get_length(section_pulse, awg)
                         self._max_acquisition_time_per_awg[awg.key] = max(
@@ -702,8 +695,6 @@ class Scheduler:
         for signal in hw_osc_reset_signals:
             device = self._experiment_dao.device_from_signal(signal)
             device_type = DeviceType.from_device_info_type(device.device_type)
-            if not device_type.supports_reset_osc_phase:
-                continue
             duration = round(device_type.reset_osc_duration / TINYSAMPLE)
             hw_osc_devices[device.uid] = duration
             length = max(length, duration)
@@ -968,6 +959,9 @@ class Scheduler:
         section: str,
         current_parameters: ParameterStore[str, float],
     ) -> PulseSchedule:
+        assert pulse.offset is None, (
+            "`SectionSignalPulse.offset` not supported in scheduler"
+        )
         # todo: add memoization
         grid = self.signal_grid(pulse.signal.uid)
 
@@ -985,7 +979,6 @@ class Scheduler:
                     ) from e
             return value, None
 
-        offset, _ = resolve_value_or_parameter("offset", 0.0)
         length, _ = resolve_value_or_parameter("length", None)
         if length is None and (pulse_def := pulse.pulse) is not None:
             if pulse_def.length is not None:
@@ -998,10 +991,6 @@ class Scheduler:
                     f"'{section}'. Either specify the length at the pulse definition, "
                     f"when playing the pulse, or by specifying the samples."
                 )
-        elif length is None:
-            assert offset is not None
-            length = 0.0
-
         amplitude, amp_param_name = resolve_value_or_parameter("amplitude", 1.0)
         if abs(amplitude) > 1.0 + 1e-9:
             raise LabOneQException(
@@ -1046,12 +1035,8 @@ class Scheduler:
         if pulse.play_pulse_parameters:
             play_pulse_params = pulse.play_pulse_parameters.copy()
             resolve_pulse_params(play_pulse_params)
-
-        scheduled_length = length + offset
-
+        scheduled_length = length or 0.0
         length_int = round_to_grid(scheduled_length / TINYSAMPLE, grid)
-        offset_int = round_to_grid(offset / TINYSAMPLE, grid)
-
         signal_info = self._experiment_dao.signal_info(pulse.signal.uid)
         is_acquire = signal_info.type == SignalInfoType.INTEGRATION
         markers = pulse.markers
@@ -1084,7 +1069,6 @@ class Scheduler:
                         self._max_acquisition_time_per_awg[
                             self._schedule_data.signal_objects[signal_info.uid].awg.key
                         ]
-                        + offset
                     )
                     / TINYSAMPLE,
                     grid,
@@ -1101,7 +1085,6 @@ class Scheduler:
             amplitude=amplitude,
             amp_param_name=amp_param_name,
             phase=phase,
-            offset=offset_int,
             set_oscillator_phase=set_oscillator_phase,
             increment_oscillator_phase=increment_oscillator_phase,
             incr_phase_param_name=incr_phase_param_name,
@@ -1122,7 +1105,6 @@ class Scheduler:
     ) -> AcquireGroupSchedule:
         # Take the first one, they all run on the same device
         grid = self.signal_grid(pulses[0].signal.uid)
-        offsets_int = []
         lengths_int = []
         amplitudes = []
         phases = []
@@ -1130,10 +1112,12 @@ class Scheduler:
         pulse_pulse_params = []
 
         for pulse in pulses:
+            assert pulse.offset is None, (
+                "`SectionSignalPulse.offset` not supported in scheduler"
+            )
             pulse_schedule = self._schedule_pulse(pulse, section, current_parameters)
 
             lengths_int.append(pulse_schedule.length)
-            offsets_int.append(pulse_schedule.offset)
             amplitudes.append(pulse_schedule.amplitude)
             phases.append(pulse_schedule.phase)
             pulse_pulse_params.append(pulse_schedule.pulse_pulse_params)
@@ -1143,10 +1127,6 @@ class Scheduler:
             assert not pulse.markers
             assert pulse.set_oscillator_phase is None
             assert pulse.increment_oscillator_phase is None
-
-        assert len(set(offsets_int)) == 1, (
-            f"Cannot schedule pulses with different offsets in the multistate discrimination group in section '{section}'. "
-        )
 
         signal_id = pulses[0].signal.uid
         assert all(p.signal.uid == signal_id for p in pulses[1:])
@@ -1159,7 +1139,6 @@ class Scheduler:
             section=section,
             amplitudes=amplitudes,
             phases=phases,
-            offset=offsets_int[0],
             play_pulse_params=play_pulse_params,
             pulse_pulse_params=pulse_pulse_params,
         )

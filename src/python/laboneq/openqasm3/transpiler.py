@@ -325,11 +325,13 @@ class OpenQASMTranspiler:
                     acquisition loop iteration.
 
                 **repetition_time**:
-                    The length that any single program is padded to.
-                    The duration between the reset and the final readout is fixed and must be specified as
-                    `repetition_time`. It must be chosen large enough to accommodate the longest of the
-                    programs. The `repetition_time` parameter is also required if the resets are
-                    disabled. In a future version we hope to make an explicit `repetition_time` optional.
+                    The minimum duration of any single program.
+                    If `None`, the default, each program runs for its own duration.
+                    If not `None`, any program shorter than `repetition_time` is padded
+                    to reach the given length. Programs longer than `repetition_time`
+                    will keep their longer length.
+                    The length of each program excludes the length of any resets or
+                    measurements added using `add_reset` or `add_measurement`.
 
                 **batch_execution_mode**:
                     The execution mode for the sequence of programs. Can be any of the following:
@@ -369,6 +371,10 @@ class OpenQASMTranspiler:
             ValueError: Supplied qubit(s) or mapped ports does not exists in the QPU.
             OpenQasmException: The program cannot be transpiled.
             TypeError: Extern value is not of type `callable` or `Port`.
+
+        !!! version-changed "Changed in version 2.56.0"
+            The default value of `repetition_time` was changed from `1e-3` to `None`
+            and `None` was added as an allowed value.
         """
         qubit_map = self._create_qubit_register(qubit_map)
         if isinstance(options, dict):

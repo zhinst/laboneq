@@ -4,39 +4,13 @@
 from __future__ import annotations
 
 import itertools
-from collections import defaultdict
-from typing import Any, Callable, Iterator, NamedTuple
-
-from typing_extensions import TypeAlias
+from typing import Any, Callable, Iterator
+from laboneq.compiler.common.compiler_settings import TINYSAMPLE
 
 from laboneq.compiler import ir as ir_mod
-from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.play_wave_type import PlayWaveType
 from laboneq.compiler.event_list.event_type import EventList, EventType
 from laboneq.data.compilation_job import ParameterInfo
-
-
-class PositionInterval(NamedTuple):
-    start: int
-    end: int
-
-
-IrPositionMap: TypeAlias = dict[int, PositionInterval]
-
-
-class IrPositionMapper:
-    def __init__(self):
-        self.id_tracker = itertools.count()
-        self.ir_position_map: IrPositionMap = {}
-
-    def create_ir_position_map(self, ir: ir_mod.IntervalIR | None) -> IrPositionMap:
-        if ir is None:
-            return self.ir_position_map
-        start_id = next(self.id_tracker)
-        for node in ir.children:
-            self.create_ir_position_map(node)
-        self.ir_position_map[id(ir)] = PositionInterval(start_id, next(self.id_tracker))
-        return self.ir_position_map
 
 
 class EventListGenerator:
@@ -46,17 +20,9 @@ class EventListGenerator:
         self,
         id_tracker: Iterator[int] | None = None,
         expand_loops: bool = False,
-        settings: CompilerSettings | None = None,
-        ir_id_map: IrPositionMap | None = None,
     ):
         self.id_tracker = itertools.count() if id_tracker is None else id_tracker
-        self.ir_id_map = (
-            defaultdict(lambda: PositionInterval(0, 0))
-            if ir_id_map is None
-            else ir_id_map
-        )
         self.expand_loops = expand_loops
-        self.settings = CompilerSettings() if settings is None else settings
 
     # This is consumed mainly by the PSV and attached to the
     # CompiledExperiment with compiler flag `OUTPUT_EXTRAS`
@@ -90,53 +56,6 @@ class EventListGenerator:
         # We'll wrap the child events in the section start and end events
         max_events -= 2
 
-        trigger_set_events = []
-        trigger_clear_events = []
-        for trigger_signal, bit in section_ir.trigger_output:
-            if max_events < 2:
-                break
-            max_events -= 2
-            event = {
-                "event_type": EventType.DIGITAL_SIGNAL_STATE_CHANGE,
-                "section_name": section_ir.section,
-                "bit": bit,
-                "signal": trigger_signal,
-                "position": self.ir_id_map[id(section_ir)].start,
-            }
-
-            trigger_set_events.append({**event, "change": "SET", "time": start})
-            trigger_clear_events.append(
-                {
-                    **event,
-                    "change": "CLEAR",
-                    "time": start + section_ir.length,
-                }
-            )
-
-        prng_setup_events = prng_drop_events = []
-        if section_ir.prng_setup is not None and max_events > 0:
-            max_events -= 2
-            prng_setup_events = [
-                {
-                    "event_type": EventType.PRNG_SETUP,
-                    "time": start,
-                    "section_name": section_ir.section,
-                    "range": section_ir.prng_setup.range,
-                    "seed": section_ir.prng_setup.seed,
-                    "id": next(self.id_tracker),
-                    "position": self.ir_id_map[id(section_ir)].start,
-                }
-            ]
-            prng_drop_events = [
-                {
-                    "event_type": EventType.DROP_PRNG_SETUP,
-                    "time": start + section_ir.length,
-                    "section_name": section_ir.section,
-                    "position": self.ir_id_map[id(section_ir)].start,
-                    "id": next(self.id_tracker),
-                }
-            ]
-
         children_events = self.generate_children_events(section_ir, start, max_events)
 
         start_id = next(self.id_tracker)
@@ -146,14 +65,9 @@ class EventListGenerator:
                 "event_type": EventType.SECTION_START,
                 "time": start,
                 "id": start_id,
-                "position": self.ir_id_map[id(section_ir)].start,
                 **d,
             },
-            *trigger_set_events,
-            *prng_setup_events,
             *[e for l in children_events for e in l],
-            *prng_drop_events,
-            *trigger_clear_events,
             {
                 "event_type": EventType.SECTION_END,
                 "time": start + section_ir.length,
@@ -198,16 +112,15 @@ class EventListGenerator:
         for pulse in acquire_group_ir.pulses:
             params_list = [
                 getattr(pulse, f).uid
-                for f in ("length", "amplitude", "phase", "offset")
+                for f in ("length", "amplitude", "phase")
                 if isinstance(getattr(pulse, f), ParameterInfo)
             ]
             d["parametrized_with"].append(params_list)
         return [
             {
                 "event_type": EventType.ACQUIRE_START,
-                "time": start + acquire_group_ir.offset,
+                "time": start,
                 "id": start_id,
-                "position": self.ir_id_map[id(acquire_group_ir)].start,
                 **d,
             },
             {
@@ -244,7 +157,6 @@ class EventListGenerator:
                         "oscillator_id": osc.id,
                         "id": start_id,
                         "chain_element_id": start_id,
-                        "position": self.ir_id_map[id(ir)].start,
                     },
                 ]
             )
@@ -399,54 +311,23 @@ class EventListGenerator:
         children_events = self.generate_children_events(
             loop_iteration_ir, start, max_events
         )
-
-        prio_start, prio_end = self.ir_id_map.get(
-            id(loop_iteration_ir), PositionInterval(0, 0)
-        )
-
-        prng_sample_events = drop_prng_sample_events = []
-        if loop_iteration_ir.prng_sample is not None:
-            prng_sample_events = [
-                {
-                    "event_type": EventType.DRAW_PRNG_SAMPLE,
-                    "time": start,
-                    "sample_name": loop_iteration_ir.prng_sample,
-                    "position": prio_start,
-                    **common,
-                }
-            ]
-            drop_prng_sample_events = [
-                {
-                    "event_type": EventType.DROP_PRNG_SAMPLE,
-                    "time": end,
-                    "sample_name": loop_iteration_ir.prng_sample,
-                    "position": prio_end,
-                    **common,
-                }
-            ]
-
         event_list = [
             {
                 "event_type": EventType.LOOP_STEP_START,
                 "time": start,
-                "position": prio_start,
                 **common,
             },
-            *prng_sample_events,
             *[e for l in children_events for e in l],
             {
                 "event_type": EventType.LOOP_STEP_END,
                 "time": end,
-                "position": prio_end,
                 **common,
             },
-            *drop_prng_sample_events,
             *(
                 [
                     {
                         "event_type": EventType.LOOP_ITERATION_END,
                         "time": end,
-                        "position": prio_end,
                         **common,
                     }
                 ]
@@ -488,7 +369,7 @@ class EventListGenerator:
         assert pulse_ir.length is not None
         params_list = [
             getattr(pulse_ir.pulse, f).uid
-            for f in ("length", "amplitude", "phase", "offset")
+            for f in ("length", "amplitude", "phase")
             if isinstance(getattr(pulse_ir.pulse, f), ParameterInfo)
         ]
         if pulse_ir.pulse.pulse is not None:
@@ -499,7 +380,6 @@ class EventListGenerator:
         start_id = next(self.id_tracker)
         d_start: dict[str, Any] = {
             "id": start_id,
-            "position": self.ir_id_map[id(pulse_ir)].start,
         }
         d_end: dict[str, Any] = {"id": next(self.id_tracker)}
         d_common = {
@@ -558,7 +438,7 @@ class EventListGenerator:
             return [
                 {
                     "event_type": EventType.ACQUIRE_START,
-                    "time": start + pulse_ir.offset,
+                    "time": start,
                     **d_start,
                     **d_common,
                 },
@@ -573,7 +453,7 @@ class EventListGenerator:
         return [
             {
                 "event_type": EventType.PLAY_START,
-                "time": start + pulse_ir.offset,
+                "time": start,
                 **d_start,
                 **d_common,
             },
@@ -599,7 +479,6 @@ class EventListGenerator:
                 "section_name": ir.section,
                 "id": next(self.id_tracker),
                 "device_id": device,
-                "position": self.ir_id_map[id(ir)].start,
             }
             for device in ir.hw_osc_devices
         ]
@@ -665,3 +544,22 @@ class EventListGenerator:
                     ]
 
         return event_list_nested
+
+
+def generate_event_list_from_ir(
+    ir: ir_mod.IRTree,
+    expand_loops: bool,
+    max_events: int,
+) -> EventList:
+    if ir.root is None:
+        return []
+    id_tracker = itertools.count()
+    event_list = EventListGenerator(
+        id_tracker=id_tracker,
+        expand_loops=expand_loops,
+    ).run(ir.root, start=0, max_events=max_events)
+    for event in event_list:
+        if "id" not in event:
+            event["id"] = next(id_tracker)
+        event["time"] = event["time"] * TINYSAMPLE
+    return event_list

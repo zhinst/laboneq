@@ -83,7 +83,8 @@ class MultiProgramOptions(SingleProgramOptions):
             When true, reset all oscillators at the start of every
             acquisition loop iteration.
         repetition_time:
-            The length that any single program is padded to.
+            The length that any single program is padded to. If `None`,
+            all programs retain their own length.
         batch_execution_mode:
             The execution mode for the sequence of programs. Can be any of the following:
 
@@ -104,10 +105,15 @@ class MultiProgramOptions(SingleProgramOptions):
 
         pipeline_chunk_count:
             The number of pipeline chunks to divide the experiment into.
+
+    !!! version-changed "Changed in version 2.56.0"
+        The default value of `repetition_time` was changed from `1e-3` to `None`
+        and `None` was added as an allowed value.
     """
 
-    repetition_time: float = attrs.field(
-        default=1e-3, validator=attrs.validators.instance_of(float)
+    repetition_time: float | None = attrs.field(
+        default=None,
+        validator=attrs.validators.optional(attrs.validators.instance_of(float)),
     )
     batch_execution_mode: str = attrs.field(
         default="pipeline", validator=attrs.validators.in_(("pipeline", "nt", "rt"))

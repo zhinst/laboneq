@@ -6,6 +6,7 @@ use num_complex::Complex;
 use crate::ir::compilation_job as cjob;
 use crate::node;
 use crate::signature::WaveformSignature;
+use core::panic;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -36,20 +37,28 @@ impl<T: Clone> ParameterOperation<T> {
     }
 }
 
-#[derive(Debug, Clone)]
+pub type SectionId = u32;
+
+#[derive(Debug, Default, PartialEq)]
+pub struct SectionInfo {
+    pub name: String,
+    pub id: SectionId,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Case {
     pub signals: Vec<Rc<Signal>>,
     pub length: Samples,
     pub state: u16,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SignalFrequency {
     pub signal: Rc<Signal>,
     pub frequency: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct InitialOscillatorFrequency {
     values: Vec<SignalFrequency>,
 }
@@ -64,7 +73,7 @@ impl InitialOscillatorFrequency {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SetOscillatorFrequency {
     values: Vec<SignalFrequency>,
     iteration: usize,
@@ -84,12 +93,17 @@ impl SetOscillatorFrequency {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PhaseReset {
+    // Whether or not the phase reset should reset the software oscillators
+    // listed in `signals`.
+    // If `reset_sw_oscillators` is false, the phase reset will only
+    // apply to hardware oscillators.
     pub reset_sw_oscillators: bool,
+    pub signals: Vec<Rc<Signal>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PlayPulse {
     pub signal: Rc<Signal>,
     pub length: Samples,
@@ -104,7 +118,8 @@ pub struct PlayPulse {
     pub markers: Vec<cjob::Marker>,
     pub pulse_def: Option<Arc<PulseDef>>,
 }
-#[derive(Debug, Clone)]
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct AcquirePulse {
     // TODO: Should this just be handle?
     // Currently we restrict kernel per signal, so lets keep it for now
@@ -117,7 +132,7 @@ pub struct AcquirePulse {
     pub id_pulse_params: Vec<Option<usize>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Match {
     pub section: String,
     pub length: Samples,
@@ -127,7 +142,7 @@ pub struct Match {
     pub prng_sample: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Loop {
     /// Length of the loop in samples
     pub length: Samples,
@@ -136,17 +151,26 @@ pub struct Loop {
 }
 
 /// One iteration of an loop.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LoopIteration {
     /// Length of the iteration in samples
     pub length: Samples,
     /// Iteration number within the loop
     pub iteration: u64,
+    /// Number of repeats of this loop
+    /// todo: Move to Loop
+    pub num_repeats: u64,
     /// Parameters used in this iteration
     pub parameters: Vec<Arc<cjob::SweepParameter>>,
+    /// PRNG sample name to draw from
+    pub prng_sample: Option<String>,
+    /// Name of the section
+    pub section_info: Arc<SectionInfo>,
+    /// A flag representing whether the loop is compressed
+    pub compressed: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PlayWave {
     pub signals: Vec<Rc<Signal>>,
     pub waveform: WaveformSignature,
@@ -165,12 +189,12 @@ impl PlayWave {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PlayHold {
     pub length: Samples,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FrameChange {
     pub length: Samples,
     pub phase: f64,
@@ -178,18 +202,18 @@ pub struct FrameChange {
     pub signal: Rc<Signal>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct InitAmplitudeRegister {
     pub register: u16,
     pub value: ParameterOperation<f64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResetPrecompensationFilters {
     pub length: Samples,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PlayAcquire {
     signal: Rc<Signal>,
     length: Samples,
@@ -236,7 +260,49 @@ impl PlayAcquire {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct PpcDevice {
+    pub device: String,
+    pub channel: u16,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct QaEvent {
+    acquires: Vec<PlayAcquire>,
+    play_waves: Vec<PlayWave>,
+    length: Samples,
+}
+
+impl QaEvent {
+    pub fn new(acquires: Vec<PlayAcquire>, waveforms: Vec<PlayWave>) -> Self {
+        let length_acquires = acquires.iter().map(|a| a.length()).max().unwrap_or(0);
+        let length_waveforms = waveforms.iter().map(|w| w.length()).max().unwrap_or(0);
+        let length = length_acquires.max(length_waveforms);
+        QaEvent {
+            acquires,
+            play_waves: waveforms,
+            length,
+        }
+    }
+
+    pub fn acquires(&self) -> &[PlayAcquire] {
+        &self.acquires
+    }
+
+    pub fn into_parts(self) -> (Vec<PlayAcquire>, Vec<PlayWave>) {
+        (self.acquires, self.play_waves)
+    }
+
+    pub fn play_waves(&self) -> &[PlayWave] {
+        &self.play_waves
+    }
+
+    pub fn length(&self) -> Samples {
+        self.length
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct SweepCommand {
     pub pump_power: Option<f64>,
     pub pump_frequency: Option<f64>,
@@ -246,10 +312,32 @@ pub struct SweepCommand {
     pub cancellation_attenuation: Option<f64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PpcSweepStep {
+    pub signal: Rc<Signal>,
     pub length: Samples,
     pub sweep_command: SweepCommand,
+    pub ppc_device: Arc<PpcDevice>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PrngSetup {
+    pub range: u16,
+    pub seed: u32,
+    pub section_info: Arc<SectionInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PrngSample {
+    pub length: Samples,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TriggerBitData {
+    pub signal: Rc<Signal>,
+    pub bit: u8,
+    pub set: bool,
+    pub section_info: Arc<SectionInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -280,11 +368,19 @@ pub struct SetOscillatorFrequencySweep {
     pub oscillators: Vec<OscillatorFrequencySweepStep>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct Section {
+    pub length: Samples,
+    pub trigger_output: Vec<(Rc<Signal>, u8)>,
+    pub prng_setup: Option<PrngSetup>,
+    pub section_info: Arc<SectionInfo>,
+}
+
 // TODO: Think of separating AWG specific nodes and public nodes, which
 // are used to build the experiment.
 
 /// Nodes that can live in the IR tree.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)] // TODO: Add eq trait once all nodes implement it
 pub enum NodeKind {
     // IR Nodes
     // IR nodes are consumed by the code generator.
@@ -294,20 +390,29 @@ pub enum NodeKind {
     InitialOscillatorFrequency(InitialOscillatorFrequency),
     SetOscillatorFrequency(SetOscillatorFrequency),
     PhaseReset(PhaseReset),
-    PrecompensationFilterReset(),
+    PrecompensationFilterReset { signal: Rc<Signal> },
     PpcSweepStep(PpcSweepStep),
     Match(Match),
     Loop(Loop),
     LoopIteration(LoopIteration),
+    TriggerSet(TriggerBitData),
+    Section(Section),
     // AWG nodes
     // AWG nodes are produced by the code generator.
     PlayWave(PlayWave),
     PlayHold(PlayHold),
     Acquire(PlayAcquire),
+    QaEvent(QaEvent),
     FrameChange(FrameChange),
     InitAmplitudeRegister(InitAmplitudeRegister),
     ResetPrecompensationFilters(ResetPrecompensationFilters),
     PpcStep(PpcSweepStep),
+    ResetPhase(),
+    InitialResetPhase(),
+    SetupPrng(PrngSetup),
+    DropPrngSetup,
+    SetTrigger(TriggerBitData),
+    SamplePrng(PrngSample),
     SetOscillatorFrequencySweep(SetOscillatorFrequencySweep),
     // No-op node.
     // Should be treated as such, except it's length must be
@@ -328,12 +433,17 @@ impl NodeKind {
             NodeKind::InitialOscillatorFrequency(_) => {}
             NodeKind::SetOscillatorFrequency(_) => {}
             NodeKind::PhaseReset(_) => {}
-            NodeKind::PrecompensationFilterReset() => {}
+            NodeKind::InitialResetPhase() => {}
+            NodeKind::PrecompensationFilterReset { .. } => {}
             NodeKind::PpcSweepStep(x) => x.length = value,
             NodeKind::Match(x) => x.length = value,
             NodeKind::Loop(x) => x.length = value,
             NodeKind::LoopIteration(x) => x.length = value,
             NodeKind::Nop { length } => *length = value,
+            NodeKind::SetupPrng(_) => {}
+            NodeKind::DropPrngSetup => {}
+            NodeKind::TriggerSet(_) => {}
+            NodeKind::Section(_) => panic!("Can't set length of Section nodes"),
             // Disallow settings of AWG nodes.
             _ => panic!("Can't set length of AWG nodes"),
         }
@@ -347,20 +457,29 @@ impl NodeKind {
             NodeKind::InitialOscillatorFrequency(_) => 0,
             NodeKind::SetOscillatorFrequency(_) => 0,
             NodeKind::PhaseReset(_) => 0,
-            NodeKind::PrecompensationFilterReset() => 0,
+            NodeKind::InitialResetPhase() => 0,
+            NodeKind::PrecompensationFilterReset { .. } => 0,
             NodeKind::PpcSweepStep(x) => x.length,
             NodeKind::Match(x) => x.length,
             NodeKind::Loop(x) => x.length,
             NodeKind::LoopIteration(x) => x.length,
             NodeKind::Nop { length } => *length,
+            NodeKind::DropPrngSetup => 0,
+            NodeKind::TriggerSet(_) => 0,
             NodeKind::FrameChange(x) => x.length,
             NodeKind::Acquire(x) => x.length,
             NodeKind::PlayWave(x) => x.length(),
             NodeKind::PlayHold(x) => x.length,
+            NodeKind::QaEvent(x) => x.length(),
             NodeKind::InitAmplitudeRegister(_) => 0,
             NodeKind::ResetPrecompensationFilters(x) => x.length,
             NodeKind::PpcStep(x) => x.length,
+            NodeKind::ResetPhase() => 0,
+            NodeKind::SetupPrng(_) => 0,
+            NodeKind::SetTrigger(_) => 0,
+            NodeKind::SamplePrng(x) => x.length,
             NodeKind::SetOscillatorFrequencySweep(x) => x.length,
+            NodeKind::Section(x) => x.length,
         }
     }
 }

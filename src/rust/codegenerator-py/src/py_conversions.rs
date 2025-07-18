@@ -4,10 +4,16 @@
 //! Translations from Python IR into code generator IR
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::hash::RandomState;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::vec;
 
+use codegenerator::ir::PpcDevice;
+use codegenerator::ir::PrngSetup;
 use codegenerator::ir::SignalFrequency;
+use codegenerator::ir::compilation_job::{AwgCore, Signal};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::exceptions::PyValueError;
 use pyo3::intern;
@@ -15,23 +21,41 @@ use pyo3::prelude::*;
 use pyo3::types::PyList;
 use pyo3::types::{PyComplex, PyString};
 
+use codegenerator::ir::SectionId;
 use num_complex::Complex;
 
+use crate::error::Error;
 use crate::ir::experiment::SweepCommand;
 use codegenerator::ir;
 use codegenerator::ir::compilation_job as cjob;
+use codegenerator::ir::experiment::SectionInfo;
 use codegenerator::node::Node;
-use codegenerator::tinysample::length_to_samples;
 use numeric_array::NumericArray;
+
 struct Deduplicator<'a> {
     // Signals have an unique UID
-    signal_dedup: HashMap<&'a str, &'a Rc<cjob::Signal>>,
+    signal_dedup: HashMap<&'a str, &'a Rc<Signal>>,
     // Loop parameters are unique by the UID
     loop_params: HashMap<String, Arc<cjob::SweepParameter>>,
+    // Section Info
+    section_info: HashMap<String, Arc<SectionInfo>>,
+    // PPC device per signal (channel)
+    ppc_devices: HashMap<String, Arc<PpcDevice>>,
 }
 
 impl<'a> Deduplicator<'a> {
-    fn get_signal(&self, uid: &'a str) -> Option<Rc<cjob::Signal>> {
+    fn new(signals: Vec<&'a Rc<Signal>>) -> Self {
+        let signal_dedup: HashMap<&str, &Rc<Signal>> =
+            signals.iter().map(|&x| (x.uid.as_str(), x)).collect();
+        Self {
+            signal_dedup,
+            loop_params: HashMap::new(),
+            ppc_devices: HashMap::new(),
+            section_info: HashMap::new(),
+        }
+    }
+
+    fn get_signal(&self, uid: &'a str) -> Option<Rc<Signal>> {
         self.signal_dedup.get(uid).cloned().cloned()
     }
 
@@ -41,6 +65,30 @@ impl<'a> Deduplicator<'a> {
 
     fn set_parameter(&mut self, value: Arc<cjob::SweepParameter>) {
         self.loop_params.insert(value.uid.clone(), value);
+    }
+
+    fn get_or_create_section_info(&mut self, uid: &str) -> Arc<SectionInfo> {
+        if let Some(info) = self.section_info.get(uid) {
+            Arc::clone(info)
+        } else {
+            let info = Arc::new(SectionInfo {
+                id: self.section_info.len() as SectionId + 1,
+                name: uid.to_string(),
+            });
+            self.section_info.insert(uid.to_string(), Arc::clone(&info));
+            info
+        }
+    }
+
+    fn set_ppc_device(&mut self, signal: &str, device: String, channel: u16) -> Arc<PpcDevice> {
+        if let Some(ppc_device) = self.ppc_devices.get(signal) {
+            Arc::clone(ppc_device)
+        } else {
+            let ppc = Arc::new(PpcDevice { device, channel });
+            self.ppc_devices
+                .insert(signal.to_string(), Arc::clone(&ppc));
+            ppc
+        }
     }
 }
 
@@ -74,14 +122,17 @@ fn py_to_nodekind(ob: &Bound<PyAny>, dedup: &mut Deduplicator) -> Result<ir::Nod
             extract_initial_oscillator_frequency(ob, dedup)?,
         )),
         "PhaseResetIR" => Ok(ir::NodeKind::PhaseReset(extract_reset_oscillator_phase(
-            ob,
+            ob, dedup,
         )?)),
-        "PrecompClearIR" => Ok(ir::NodeKind::PrecompensationFilterReset()),
-        "PPCStepIR" => Ok(ir::NodeKind::PpcSweepStep(extract_ppc_step(ob)?)),
+        "PrecompClearIR" => Ok(ir::NodeKind::PrecompensationFilterReset {
+            signal: extract_precompensation_clear_signals(ob, dedup)?,
+        }),
+        "PPCStepIR" => Ok(ir::NodeKind::PpcSweepStep(extract_ppc_step(ob, dedup)?)),
         "LoopIR" => Ok(ir::NodeKind::Loop(extract_loop(ob)?)),
         "LoopIterationIR" => Ok(ir::NodeKind::LoopIteration(extract_loop_iteration(
             ob, dedup,
         )?)),
+        "SectionIR" => Ok(ir::NodeKind::Section(extract_section(ob, dedup)?)),
         _ => {
             let length = ob.getattr(intern!(py, "length"))?.extract::<i64>()?;
             Ok(ir::NodeKind::Nop { length })
@@ -89,48 +140,63 @@ fn py_to_nodekind(ob: &Bound<PyAny>, dedup: &mut Deduplicator) -> Result<ir::Nod
     }
 }
 
+fn child_nodes(
+    ir_data: &Bound<'_, PyAny>,
+    dedup: &mut Deduplicator,
+) -> Result<Vec<ir::IrNode>, PyErr> {
+    let py = ir_data.py();
+    let children_start = ir_data
+        .getattr(intern!(py, "children_start"))?
+        .try_iter()?
+        .map(|x| -> Result<i64, PyErr> {
+            match x {
+                Ok(val) => val.extract::<i64>(),
+                Err(e) => Err(e),
+            }
+        });
+    let children_vec = ir_data.getattr(intern!(py, "children"))?;
+    let mut child_nodes = Vec::with_capacity(children_vec.len()?);
+    for (py_child, start_child) in children_vec.try_iter()?.zip(children_start) {
+        let child = extract_node(&py_child?, dedup, start_child?)?;
+        child_nodes.extend(child);
+    }
+    Ok(child_nodes)
+}
+
 fn extract_node(
     ob: &Bound<'_, PyAny>,
     dedup: &mut Deduplicator,
     start: ir::Samples,
-) -> Result<ir::IrNode, PyErr> {
+) -> Result<Vec<ir::IrNode>, PyErr> {
     // ir.IntervalIR
-    let py = ob.py();
-    let mut ir_obj = py_to_nodekind(ob, dedup)?;
-    match &mut ir_obj {
-        ir::NodeKind::PlayPulse(pulse) => {
-            let mut start = start;
-            if pulse.pulse_def.is_some() {
-                // Offset is legacy value used by tests, and should be
-                // safely removed when the tests are refactored.
-                // It cannot be set from the DSL API, defaulting to 0.
-                let offset = ob
-                    .getattr(intern!(py, "offset"))?
-                    .extract::<ir::Samples>()?;
-                pulse.length -= offset;
-                start += offset;
-            }
-            let node = Node::new(ir_obj, start);
-            Ok(node)
-        }
-        _ => {
-            let mut node = Node::new(py_to_nodekind(ob, dedup)?, start);
-            let children_start = ob.getattr(intern!(py, "children_start"))?.try_iter()?.map(
-                |x| -> Result<i64, PyErr> {
-                    match x {
-                        Ok(val) => val.extract::<i64>(),
-                        Err(e) => Err(e),
-                    }
-                },
-            );
-            let children = ob.getattr(intern!(py, "children"))?.try_iter()?;
-            for (py_child, start_child) in children.into_iter().zip(children_start) {
-                let child = extract_node(&py_child?, dedup, start_child?)?;
-                node.add_child_node(child);
-            }
-            Ok(node)
-        }
+    let node_kind = py_to_nodekind(ob, dedup)?;
+    let mut node = Node::new(node_kind, start);
+    let children = child_nodes(ob, dedup)?;
+    node.add_child_nodes(children);
+    Ok(vec![node])
+}
+
+fn signals_set_to_signals(
+    // set[str]
+    signals_set: &Bound<'_, PyAny>,
+    dedup: &Deduplicator<'_>,
+) -> Result<Vec<Rc<Signal>>, PyErr> {
+    if signals_set.is_none() {
+        return Ok(vec![]);
     }
+    let mut signals = Vec::with_capacity(signals_set.len()?);
+    signals_set
+        .try_iter()?
+        .try_for_each(|item| -> Result<(), PyErr> {
+            let item = item?;
+            let sig_ref: Cow<'_, str> = item.downcast::<PyString>()?.to_cow()?;
+            let out = dedup
+                .get_signal(sig_ref.as_ref())
+                .unwrap_or_else(|| panic!("Internal error: Missing signal: {}", sig_ref.as_ref()));
+            signals.push(out);
+            Ok(())
+        })?;
+    Ok(signals)
 }
 
 fn extract_pulse_def(ob: &Bound<'_, PyAny>) -> Result<Option<cjob::PulseDef>, PyErr> {
@@ -145,7 +211,20 @@ fn extract_pulse_def(ob: &Bound<'_, PyAny>) -> Result<Option<cjob::PulseDef>, Py
     } else {
         cjob::PulseDefKind::Pulse
     };
-    let pdef = cjob::PulseDef { uid, kind };
+    let function = ob.getattr(intern!(py, "function"))?;
+    let samples = ob.getattr(intern!(py, "samples"))?;
+    let pulse_type = if !function.is_none() {
+        Some(cjob::PulseType::Function)
+    } else if !samples.is_none() {
+        Some(cjob::PulseType::Samples)
+    } else {
+        None
+    };
+    let pdef = cjob::PulseDef {
+        uid,
+        kind,
+        pulse_type,
+    };
     Ok(Some(pdef))
 }
 
@@ -195,19 +274,26 @@ fn extract_set_oscillator_frequency(
     let mut osc_values = vec![];
     for (osc, value) in oscillators.into_iter().zip(values) {
         let value = value?.extract::<f64>()?;
-        for sig in osc?.getattr(intern!(py, "signals"))?.try_iter()? {
-            let signal_uid = sig?.extract::<String>()?;
-            let signal = dedup
-                .get_signal(&signal_uid)
-                .unwrap_or_else(|| panic!("Internal error: Missing signal: {}", &signal_uid));
+        for sig in signals_set_to_signals(&osc?.getattr(intern!(py, "signals"))?, dedup)? {
             osc_values.push(SignalFrequency {
-                signal,
+                signal: Rc::clone(&sig),
                 frequency: value,
             });
         }
     }
     let out = ir::SetOscillatorFrequency::new(osc_values, iteration);
     Ok(out)
+}
+
+fn extract_precompensation_clear_signals(
+    ob: &Bound<'_, PyAny>,
+    dedup: &Deduplicator,
+) -> Result<Rc<Signal>, Error> {
+    // ir.PrecompClearIR
+    let py = ob.py();
+    signals_set_to_signals(&ob.getattr(intern!(py, "signals"))?, dedup)?
+        .pop()
+        .ok_or_else(|| Error::new("Expected at least one signal in `PrecompClearIR`"))
 }
 
 fn extract_initial_oscillator_frequency(
@@ -221,11 +307,7 @@ fn extract_initial_oscillator_frequency(
     let mut osc_values = vec![];
     for (osc, value) in oscillators.into_iter().zip(values) {
         let value = value?.extract::<f64>()?;
-        for sig in osc?.getattr(intern!(py, "signals"))?.try_iter()? {
-            let signal_uid = sig?.extract::<String>()?;
-            let signal = dedup
-                .get_signal(&signal_uid)
-                .unwrap_or_else(|| panic!("Internal error: Missing signal: {}", &signal_uid));
+        for signal in signals_set_to_signals(&osc?.getattr(intern!(py, "signals"))?, dedup)? {
             osc_values.push(SignalFrequency {
                 signal,
                 frequency: value,
@@ -236,14 +318,19 @@ fn extract_initial_oscillator_frequency(
     Ok(out)
 }
 
-fn extract_reset_oscillator_phase(ob: &Bound<'_, PyAny>) -> Result<ir::PhaseReset, PyErr> {
+fn extract_reset_oscillator_phase(
+    ob: &Bound<'_, PyAny>,
+    dedup: &mut Deduplicator,
+) -> Result<ir::PhaseReset, PyErr> {
     // ir.PhaseResetIR
     let py = ob.py();
     let reset_sw_oscillators = ob
         .getattr(intern!(py, "reset_sw_oscillators"))?
         .extract::<bool>()?;
+    let signals = signals_set_to_signals(&ob.getattr(intern!(py, "signals"))?, dedup)?;
     let out = ir::PhaseReset {
         reset_sw_oscillators,
+        signals,
     };
     Ok(out)
 }
@@ -430,23 +517,11 @@ fn extract_case(ob: &Bound<'_, PyAny>, dedup: &mut Deduplicator) -> Result<ir::C
     let py = ob.py();
     let state = ob.getattr(intern!(py, "state"))?.extract::<u16>()?;
     let length = ob.getattr(intern!(py, "length"))?.extract::<i64>()?;
-    let py_signals = ob.getattr(intern!(py, "signals"))?;
-    let mut signals_out = vec![];
-    py_signals
-        .try_iter()?
-        .try_for_each(|item| -> Result<(), PyErr> {
-            let item = item?;
-            let sig_ref: Cow<'_, str> = item.downcast::<PyString>()?.to_cow()?;
-            let out = dedup
-                .get_signal(sig_ref.as_ref())
-                .unwrap_or_else(|| panic!("Internal error: Missing signal: {}", sig_ref.as_ref()));
-            signals_out.push(out);
-            Ok(())
-        })?;
+    let signals = signals_set_to_signals(&ob.getattr(intern!(py, "signals"))?, dedup)?;
     Ok(ir::Case {
         state,
         length,
-        signals: signals_out,
+        signals,
     })
 }
 
@@ -470,25 +545,37 @@ fn extract_loop_iteration(
 ) -> Result<ir::LoopIteration, PyErr> {
     // ir.LoopIterationIR
     let py = ob.py();
+    let section_uid = ob.getattr(intern!(py, "section"))?.extract::<String>()?;
+    let section_info = dedup.get_or_create_section_info(&section_uid);
     let length = ob
         .getattr(intern!(py, "length"))?
         .extract::<ir::Samples>()?;
     let iteration = ob.getattr(intern!(py, "iteration"))?.extract::<u64>()?;
+    let num_repeats = ob.getattr(intern!(py, "num_repeats"))?.extract::<u64>()?;
     let parameters = ob.getattr(intern!(py, "sweep_parameters"))?;
-    let mut params_out = vec![];
-    for param in parameters.try_iter()? {
-        let param = extract_parameter(&param?, dedup)?;
-        params_out.push(param);
-    }
+    let parameters = parameters
+        .try_iter()?
+        .map(|param| extract_parameter(&param?, dedup))
+        .collect::<Result<Vec<_>, _>>()?;
+    let prng_sample = ob
+        .getattr(intern!(py, "prng_sample"))?
+        .extract::<Option<String>>()?;
     Ok(ir::LoopIteration {
         length,
         iteration,
-        parameters: params_out,
+        num_repeats,
+        parameters,
+        prng_sample,
+        section_info,
+        compressed: false, // Will be set during loop handling
     })
 }
 
 /// Extract PPC Sweep Step
-fn extract_ppc_step(ob: &Bound<'_, PyAny>) -> Result<ir::PpcSweepStep, PyErr> {
+fn extract_ppc_step(
+    ob: &Bound<'_, PyAny>,
+    dedup: &mut Deduplicator,
+) -> Result<ir::PpcSweepStep, Error> {
     // ir.PPCStepIR
     let py = ob.py();
     let trigger_duration = ob
@@ -512,7 +599,14 @@ fn extract_ppc_step(ob: &Bound<'_, PyAny>) -> Result<ir::PpcSweepStep, PyErr> {
     let cancellation_attenuation = ob
         .getattr(intern!(py, "cancellation_attenuation"))?
         .extract::<Option<f64>>()?;
+    let ppc_device = ob.getattr(intern!(py, "ppc_device"))?.extract::<String>()?;
+    let ppc_channel = ob.getattr(intern!(py, "ppc_channel"))?.extract::<u16>()?;
+    let signal = signals_set_to_signals(&ob.getattr(intern!(py, "signals"))?, dedup)?
+        .pop()
+        .ok_or_else(|| Error::new("Expected at least one signal in `PPCStepIR`"))?;
+    let ppc_device = dedup.set_ppc_device(&signal.uid, ppc_device, ppc_channel);
     Ok(ir::PpcSweepStep {
+        signal,
         length: trigger_duration,
         sweep_command: SweepCommand {
             pump_power,
@@ -522,7 +616,49 @@ fn extract_ppc_step(ob: &Bound<'_, PyAny>) -> Result<ir::PpcSweepStep, PyErr> {
             cancellation_phase,
             cancellation_attenuation,
         },
+        ppc_device,
     })
+}
+
+/// Extract section, along with trigger and PRNG data
+fn extract_section(ob: &Bound<'_, PyAny>, dedup: &mut Deduplicator) -> Result<ir::Section, Error> {
+    // ir.SectionIR
+    let py = ob.py();
+    let uid = ob.getattr(intern!(py, "section"))?.extract::<String>()?;
+    let section_info = dedup.get_or_create_section_info(&uid);
+    let length = ob
+        .getattr(intern!(py, "length"))?
+        .extract::<ir::Samples>()?;
+    let prng_setup = ob.getattr(intern!(py, "prng_setup"))?;
+    let prng_setup = if prng_setup.is_none() {
+        None
+    } else {
+        Some(PrngSetup {
+            range: prng_setup.getattr(intern!(py, "range"))?.extract::<u16>()?,
+            seed: prng_setup.getattr(intern!(py, "seed"))?.extract::<u32>()?,
+            section_info: Arc::clone(&section_info),
+        })
+    };
+    let trigger_output: Result<Vec<(Rc<Signal>, u8)>, Error> = ob
+        .getattr(intern!(py, "trigger_output"))?
+        .extract::<HashSet<(String, u8)>>()?
+        .iter()
+        .map(|(sig, bit)| -> Result<(Rc<Signal>, u8), _> {
+            let signal = dedup.get_signal(sig).ok_or_else(|| {
+                Error::new(&format!(
+                    "Internal error: Missing signal for trigger: {sig}"
+                ))
+            })?;
+            Ok((signal, *bit))
+        })
+        .collect();
+    let section = ir::Section {
+        length,
+        prng_setup,
+        trigger_output: trigger_output?,
+        section_info: Arc::clone(&section_info),
+    };
+    Ok(section)
 }
 
 fn extract_oscillator(ob: &Bound<'_, PyAny>) -> Result<Option<cjob::Oscillator>, PyErr> {
@@ -568,7 +704,7 @@ pub fn extract_mixer_type(ob: &Bound<'_, PyAny>) -> Result<Option<cjob::MixerTyp
     Ok(Some(kind))
 }
 
-fn extract_awg_signal(ob: &Bound<'_, PyAny>, sampling_rate: f64) -> Result<cjob::Signal, PyErr> {
+fn extract_awg_signal(ob: &Bound<'_, PyAny>) -> Result<Signal, PyErr> {
     // compilation_job.SignalObj
     let py = ob.py();
     let signal_type = match ob
@@ -586,15 +722,12 @@ fn extract_awg_signal(ob: &Bound<'_, PyAny>, sampling_rate: f64) -> Result<cjob:
             )));
         }
     };
-    let delay = ob
-        .getattr(intern!(py, "total_delay"))?
-        .extract::<f64>()
-        .unwrap_or(0.0);
-    let signal = cjob::Signal {
+    let signal = Signal {
         uid: ob.getattr(intern!(py, "id"))?.extract::<String>()?,
         kind: signal_type,
         channels: ob.getattr(intern!(py, "channels"))?.extract::<Vec<u8>>()?,
-        delay: length_to_samples(delay, sampling_rate),
+        start_delay: ob.getattr(intern!(py, "start_delay"))?.extract::<f64>()?,
+        signal_delay: ob.getattr(intern!(py, "delay_signal"))?.extract::<f64>()?,
         // AWG SignalObj does not have full oscillator info, we take it from elsewhere
         oscillator: None,
         mixer_type: extract_mixer_type(&ob.getattr(intern!(py, "mixer_type"))?)?,
@@ -666,17 +799,17 @@ fn extract_awg_oscs(ob: &Bound<'_, PyAny>) -> Result<HashMap<String, u16>, PyErr
 pub fn extract_awg<'py>(
     ob: &Bound<'py, PyAny>,
     ir_signals: &Bound<'py, PyAny>,
-) -> Result<cjob::AwgCore, PyErr> {
+) -> Result<AwgCore, PyErr> {
     // awg_info.AWGInfo
     let py = ob.py();
     let sampling_rate = ob.getattr(intern!(py, "sampling_rate"))?.extract::<f64>()?;
     // AWG signal must be combined from `SignalIR` and `SignalObj`
     let mut osc_map = extract_oscillator_from_ir_signal(ir_signals)?;
-    let signals: Result<Vec<Rc<cjob::Signal>>, PyErr> = ob
+    let signals: Result<Vec<Rc<Signal>>, PyErr> = ob
         .getattr(intern!(py, "signals"))?
         .try_iter()?
         .map(|x| {
-            let mut sig = extract_awg_signal(&x?, sampling_rate)?;
+            let mut sig = extract_awg_signal(&x?)?;
             sig.oscillator = osc_map.remove(&sig.uid).unwrap_or_else(|| {
                 panic!(
                     "Internal error: No oscillator found for signal: '{}'",
@@ -686,7 +819,16 @@ pub fn extract_awg<'py>(
             Ok(Rc::new(sig))
         })
         .collect();
-    let awg = cjob::AwgCore {
+    let signal_kinds = HashSet::<_, RandomState>::from_iter(
+        signals.as_ref().unwrap().iter().map(|s| s.kind.clone()),
+    );
+    assert!(
+        signal_kinds.len() == 1
+            || signal_kinds.len() == 2 && signal_kinds.contains(&cjob::SignalKind::INTEGRATION),
+        "AWG signals must be of the same type, or of two types, where one is INTEGRATION. Found: {:?}",
+        &signal_kinds
+    );
+    let awg = AwgCore {
         kind: extract_awg_kind(&ob.getattr(intern!(py, "signal_type"))?)?,
         signals: signals?,
         sampling_rate,
@@ -727,15 +869,15 @@ fn extract_parameter(
 /// While the main purpose of this function is to translate Python IR
 /// structs into Rust, it also lowers the source IR into code IR as we
 /// do not (yet) have Rust models for the original IR.
-pub fn transform_py_ir(
-    ob: &Bound<'_, PyAny>,
-    signals: &[Rc<cjob::Signal>],
-) -> Result<ir::IrNode, PyErr> {
-    let lookup: HashMap<&str, &Rc<cjob::Signal>> =
-        signals.iter().map(|x| (x.uid.as_str(), x)).collect();
-    let mut deduplicator = Deduplicator {
-        signal_dedup: lookup,
-        loop_params: HashMap::new(),
-    };
-    extract_node(ob, &mut deduplicator, 0)
+pub fn transform_py_ir(ob: &Bound<'_, PyAny>, awgs: &[AwgCore]) -> Result<ir::IrNode, PyErr> {
+    let all_signals = awgs
+        .iter()
+        .flat_map(|awg| awg.signals.iter())
+        .collect::<Vec<_>>();
+    let mut deduplicator = Deduplicator::new(all_signals);
+    let root = extract_node(ob, &mut deduplicator, 0)?
+        .into_iter()
+        .next()
+        .expect("Internal error: No nodes found");
+    Ok(root)
 }

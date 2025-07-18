@@ -10,20 +10,16 @@ const PRECOMP_RESET_LENGTH: i64 = 32;
 /// Transform precompensation reset nodes from IR to AWG commands
 pub fn handle_precompensation_resets(
     node: &mut ir::IrNode,
-    delay: ir::Samples,
     cut_points: &mut HashSet<ir::Samples>,
 ) -> Result<()> {
     match node.data_mut() {
-        ir::NodeKind::PrecompensationFilterReset() => {
-            let start = node.offset() + delay;
-            let end = start + PRECOMP_RESET_LENGTH;
-            *node.offset_mut() = start;
+        ir::NodeKind::PrecompensationFilterReset { .. } => {
             // We clear the precompensation filters in a dedicated command table entry.
             // Currently, a bug (HULK-1246) prevents us from doing so in a zero-length
             // command, so instead we allocate 32 samples (minimum waveform length) for this, and
             // register the end of this interval as a cut point.
-            cut_points.insert(start);
-            cut_points.insert(end);
+            cut_points.insert(*node.offset());
+            cut_points.insert(node.offset() + PRECOMP_RESET_LENGTH);
             node.replace_data(ir::NodeKind::ResetPrecompensationFilters(
                 ir::ResetPrecompensationFilters {
                     length: PRECOMP_RESET_LENGTH,
@@ -32,7 +28,7 @@ pub fn handle_precompensation_resets(
         }
         _ => {
             for child in node.iter_children_mut() {
-                handle_precompensation_resets(child, delay, cut_points)?;
+                handle_precompensation_resets(child, cut_points)?;
             }
         }
     }

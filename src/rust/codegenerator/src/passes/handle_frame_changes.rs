@@ -28,17 +28,16 @@ fn try_convert_pulse_to_frame_change(pulse: &ir::PlayPulse) -> Option<ir::FrameC
 }
 
 /// Transform hardware oscillator phase increment pulses into frame changes
-pub fn handle_frame_changes(node: &mut ir::IrNode, delay: &ir::Samples) {
+pub fn handle_frame_changes(node: &mut ir::IrNode) {
     match node.data_mut() {
         ir::NodeKind::PlayPulse(x) => {
             if let Some(fc) = try_convert_pulse_to_frame_change(x) {
-                *node.offset_mut() += delay;
                 node.replace_data(ir::NodeKind::FrameChange(fc));
             }
         }
         _ => {
             for child in node.iter_children_mut() {
-                handle_frame_changes(child, delay);
+                handle_frame_changes(child);
             }
         }
     }
@@ -267,7 +266,8 @@ mod tests {
             uid: "test".to_string(),
             kind: cjob::SignalKind::IQ,
             channels: vec![0],
-            delay: 0,
+            signal_delay: 0.0,
+            start_delay: 0.0,
             oscillator: None,
             mixer_type: None,
         });
@@ -300,7 +300,8 @@ mod tests {
             uid: "test".to_string(),
             kind: cjob::SignalKind::IQ,
             channels: vec![0],
-            delay: 0,
+            signal_delay: 0.0,
+            start_delay: 0.0,
             oscillator: None,
             mixer_type: None,
         });
@@ -323,7 +324,8 @@ mod tests {
             uid: "test".to_string(),
             kind: cjob::SignalKind::IQ,
             channels: vec![0],
-            delay: 0,
+            signal_delay: 0.0,
+            start_delay: 0.0,
             oscillator: None,
             mixer_type: None,
         });
@@ -360,7 +362,8 @@ mod tests {
             uid: "test".to_string(),
             kind: cjob::SignalKind::IQ,
             channels: vec![0],
-            delay: 0,
+            signal_delay: 0.0,
+            start_delay: 0.0,
             oscillator: Some(cjob::Oscillator {
                 uid: "osc1".to_string(),
                 kind: cjob::OscillatorKind::HARDWARE,

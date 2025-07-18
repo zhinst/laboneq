@@ -10,13 +10,11 @@ from itertools import groupby
 from typing import Optional, TypedDict
 import time
 
-from laboneq.compiler import CodeGenerator, CompilerSettings
+from laboneq.compiler import CompilerSettings
 from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
 from laboneq.compiler.ir.section_ir import SectionIR
-from laboneq.compiler.seqc.ir_to_event_list import generate_event_list_from_ir
-from laboneq.compiler.common.iface_code_generator import (
-    ICodeGenerator,
-)
+from laboneq.compiler.event_list.event_list_generator import generate_event_list_from_ir
+from laboneq.compiler.common.iface_code_generator import ICodeGenerator
 from laboneq.compiler.common.iface_compiler_output import RTCompilerOutputContainer
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.experiment_access import ExperimentDAO
@@ -24,6 +22,10 @@ from laboneq.compiler.ir.ir import IRTree
 from laboneq.compiler.scheduler.parameter_store import ParameterStore
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.scheduler.scheduler import Scheduler
+from laboneq.compiler.workflow.compiler_hooks import (
+    all_compiler_hooks,
+    get_compiler_hooks,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -36,8 +38,6 @@ class Schedule(TypedDict):
 
 
 class RealtimeCompiler:
-    _registered_codegens: dict[int, type[ICodeGenerator]] = {}
-
     def __init__(
         self,
         experiment_dao: ExperimentDAO,
@@ -60,19 +60,15 @@ class RealtimeCompiler:
 
         self._code_generators: dict[int, ICodeGenerator] = {}
 
-    @classmethod
-    def register_codegen(cls, device_class: int, codegen: type[ICodeGenerator]):
-        assert device_class not in cls._registered_codegens
-        cls._registered_codegens[device_class] = codegen
-
     def _lower_to_ir(self):
         return self._scheduler.generate_ir()
 
     def _lower_ir_to_code(self, ir: IRTree):
         awgs = [signal_obj.awg for signal_obj in self._signal_objects.values()]
         device_classes = {awg.device_class for awg in awgs}
+        known_device_classes = set(h.device_class() for h in all_compiler_hooks())
         unknown_devices = [
-            awg for awg in awgs if awg.device_class not in self._registered_codegens
+            awg for awg in awgs if awg.device_class not in known_device_classes
         ]
 
         if len(unknown_devices) != 0:
@@ -88,9 +84,9 @@ class RealtimeCompiler:
                 for s in self._signal_objects.values()
                 if s.awg.device_class == device_class
             ]
-            self._code_generators[device_class] = self._registered_codegens[
+            self._code_generators[device_class] = get_compiler_hooks(
                 device_class
-            ](
+            ).code_generator()(
                 maybe_copy(ir),
                 settings=self._settings,
                 signals=signals,
@@ -138,9 +134,8 @@ class RealtimeCompiler:
         return compiler_output
 
     def _lower_ir_to_pulse_sheet(self, ir: IRTree):
-        event_list, _ = generate_event_list_from_ir(
+        event_list = generate_event_list_from_ir(
             ir=ir,
-            settings=self._settings,
             expand_loops=self._settings.EXPAND_LOOPS_FOR_SCHEDULE,
             max_events=self._settings.MAX_EVENTS_TO_PUBLISH,
         )
@@ -219,6 +214,3 @@ class RealtimeCompiler:
         if self._ir is None:
             self._ir = self._lower_to_ir()
         return self._lower_ir_to_pulse_sheet(self._ir)
-
-
-RealtimeCompiler.register_codegen(0x0, CodeGenerator)

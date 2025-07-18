@@ -4,24 +4,35 @@
 from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
+import itertools
 import logging
 
+from laboneq.controller.attribute_value_tracker import (
+    AttributeName,
+    DeviceAttributesView,
+)
 from laboneq.controller.devices.async_support import (
     AsyncSubscriber,
     InstrumentConnection,
 )
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
 from laboneq.controller.devices.channel_base import ChannelBase
+from laboneq.controller.devices.device_shf_base import check_synth_frequency
 from laboneq.controller.devices.device_utils import NodeCollector
-from laboneq.controller.devices.device_zi import RawReadoutData
+from laboneq.controller.devices.device_zi import (
+    RawReadoutData,
+    delay_to_rounded_samples,
+)
 from laboneq.controller.recipe_processor import (
     AwgConfig,
     AwgKey,
+    DeviceRecipeData,
     RecipeData,
     WaveformItem,
     Waveforms,
+    get_wave,
 )
-from laboneq.controller.util import LabOneQControllerException
+from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType, is_spectroscopy
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.data.recipe import IntegratorAllocation
@@ -44,6 +55,19 @@ MAX_RESULT_VECTOR_LENGTH = 1 << 19
 MAX_WAVEFORM_LENGTH_INTEGRATION = 4096
 MAX_WAVEFORM_LENGTH_SPECTROSCOPY = 65536
 
+DELAY_NODE_GRANULARITY_SAMPLES = 4
+DELAY_NODE_GENERATOR_MAX_SAMPLES = round(131.058e-6 * SAMPLE_FREQUENCY_HZ)
+DELAY_NODE_READOUT_INTEGRATION_MAX_SAMPLES = round(131.07e-6 * SAMPLE_FREQUENCY_HZ)
+DELAY_NODE_SPECTROSCOPY_ENVELOPE_MAX_SAMPLES = round(131.07e-6 * SAMPLE_FREQUENCY_HZ)
+DELAY_NODE_SPECTROSCOPY_MAX_SAMPLES = round(131.066e-6 * SAMPLE_FREQUENCY_HZ)
+
+# Offsets to align {integration, spectroscopy, scope} delays with playback
+INTEGRATION_DELAY_OFFSET = 212e-9  # LabOne Q calibrated value
+SPECTROSCOPY_DELAY_OFFSET = 220e-9  # LabOne Q calibrated value
+SCOPE_DELAY_OFFSET = INTEGRATION_DELAY_OFFSET  # Equality tested at FW level
+
+MAX_INTEGRATION_WEIGHT_LENGTH = 4096
+
 
 def ch_uses_lrt(device_uid: str, channel: int, recipe_data: RecipeData) -> bool:
     artifacts = recipe_data.get_artifacts(ArtifactsCodegen)
@@ -60,6 +84,33 @@ def ch_uses_lrt(device_uid: str, channel: int, recipe_data: RecipeData) -> bool:
         )
         > 0
     )
+
+
+def _calc_theoretical_assignment_vec(num_weights: int) -> np.ndarray:
+    """Calculates the theoretical assignment vector, assuming that
+    zhinst.utils.QuditSettings ws used to calculate the weights
+    and the first d-1 weights were selected as kernels.
+
+    The theoretical assignment vector is determined by the majority vote
+    (winner takes all) principle.
+
+    see zhinst/utils/shfqa/multistate.py
+    """
+    num_states = num_weights + 1
+    weight_indices = list(itertools.combinations(range(num_states), 2))
+    assignment_len = 2 ** len(weight_indices)
+    assignment_vec = np.zeros(assignment_len, dtype=int)
+
+    for assignment_idx in range(assignment_len):
+        state_counts = np.zeros(num_states, dtype=int)
+        for weight_idx, weight in enumerate(weight_indices):
+            above_threshold = (assignment_idx & (2**weight_idx)) != 0
+            state_idx = weight[0] if above_threshold else weight[1]
+            state_counts[state_idx] += 1
+        winner_state = np.argmax(state_counts)
+        assignment_vec[assignment_idx] = winner_state
+
+    return assignment_vec
 
 
 @dataclass
@@ -85,14 +136,12 @@ class QAChannel(ChannelBase):
         channel: int,
         integrators: int,
         repr_base: str,
+        is_plus: bool,
     ):
-        self._api = api
-        self._subscriber = subscriber
-        self._device_uid = device_uid
-        self._serial = serial
-        self._channel = channel
+        super().__init__(api, subscriber, device_uid, serial, channel)
         self._node_base = f"/{serial}/qachannels/{channel}"
         self._unit_repr = f"{repr_base}:qa{channel}"
+        self._is_plus = is_plus
         self._pipeliner = AwgPipeliner(self._node_base, f"QA{channel}")
         # TODO(2K): Use actual device config to determine number of oscs.
         # Currently the max possible number is hardcoded
@@ -112,12 +161,11 @@ class QAChannel(ChannelBase):
         )
 
     @property
-    def channel(self) -> int:
-        return self._channel
-
-    @property
     def pipeliner(self) -> AwgPipeliner:
         return self._pipeliner
+
+    def _disable_output(self) -> NodeCollector:
+        return NodeCollector.one(self.nodes.output_on, 0, cache=False)
 
     def allocate_resources(self):
         # TODO(2K): Implement channel resources allocation for execution
@@ -126,6 +174,215 @@ class QAChannel(ChannelBase):
     async def load_awg_program(self):
         # TODO(2K): Implement loading of the AWG program.
         return
+
+    async def apply_initialization(self, device_recipe_data: DeviceRecipeData):
+        qa_ch_recipe_data = device_recipe_data.qachannels.get(self._channel)
+        if qa_ch_recipe_data is None:
+            return
+
+        nc = NodeCollector(base=f"{self._node_base}/")
+
+        if qa_ch_recipe_data.output_enable is not None:
+            nc.add("output/on", 1 if qa_ch_recipe_data.output_enable else 0)
+            if qa_ch_recipe_data.output_range is not None:
+                nc.add("output/range", qa_ch_recipe_data.output_range)
+            nc.add("generator/single", 1)
+            if self._is_plus:
+                nc.add(
+                    "output/muting/enable",
+                    1 if qa_ch_recipe_data.output_mute_enable else 0,
+                )
+        if qa_ch_recipe_data.input_enable is not None:
+            nc.add(
+                "input/rflfpath",
+                (
+                    1  # RF
+                    if qa_ch_recipe_data.input_rf_path
+                    else 0  # LF
+                ),
+            )
+            nc.add("input/on", 1 if qa_ch_recipe_data.input_enable else 0)
+
+            if qa_ch_recipe_data.input_range is not None:
+                nc.add("input/range", qa_ch_recipe_data.input_range)
+
+        await self._api.set_parallel(nc)
+
+    async def configure_trigger(self, trig_channel: int):
+        nc = NodeCollector(base=f"{self._node_base}/")
+        # Configure the marker outputs to reflect sequencer trigger outputs 1 and 2
+        nc.add("markers/0/source", 32 + self._channel)
+        nc.add("markers/1/source", 36 + self._channel)
+        nc.add("generator/auxtriggers/0/channel", trig_channel)
+        await self._api.set_parallel(nc)
+
+    async def set_nt_step_nodes(
+        self, recipe_data: RecipeData, attributes: DeviceAttributesView
+    ):
+        nc = NodeCollector(base=f"{self._node_base}/")
+
+        acquisition_type = recipe_data.rt_execution_info.acquisition_type
+
+        [synth_cf], synth_cf_updated = attributes.resolve(
+            keys=[(AttributeName.QA_CENTER_FREQ, self._channel)]
+        )
+        if synth_cf_updated:
+            check_synth_frequency(synth_cf, self._unit_repr, self._channel)
+            nc.add("centerfreq", synth_cf)
+
+        [out_amp], out_amp_updated = attributes.resolve(
+            keys=[(AttributeName.QA_OUT_AMPLITUDE, self._channel)]
+        )
+        if out_amp_updated:
+            nc.add("oscs/0/gain", out_amp)
+
+        (
+            [output_scheduler_port_delay, output_port_delay],
+            output_updated,
+        ) = attributes.resolve(
+            keys=[
+                (AttributeName.OUTPUT_SCHEDULER_PORT_DELAY, self._channel),
+                (AttributeName.OUTPUT_PORT_DELAY, self._channel),
+            ]
+        )
+        output_delay = (
+            0.0
+            if output_scheduler_port_delay is None
+            else output_scheduler_port_delay + (output_port_delay or 0.0)
+        )
+        set_output = output_updated and output_scheduler_port_delay is not None
+
+        (
+            [input_scheduler_port_delay, input_port_delay],
+            input_updated,
+        ) = attributes.resolve(
+            keys=[
+                (AttributeName.INPUT_SCHEDULER_PORT_DELAY, self._channel),
+                (AttributeName.INPUT_PORT_DELAY, self._channel),
+            ]
+        )
+        measurement_delay = (
+            0.0
+            if input_scheduler_port_delay is None
+            else input_scheduler_port_delay + (input_port_delay or 0.0)
+        )
+        set_input = input_updated and input_scheduler_port_delay is not None
+
+        if is_spectroscopy(acquisition_type):
+            output_delay_path = "spectroscopy/envelope/delay"
+            meas_delay_path = "spectroscopy/delay"
+            measurement_delay += SPECTROSCOPY_DELAY_OFFSET
+            max_generator_delay = DELAY_NODE_SPECTROSCOPY_ENVELOPE_MAX_SAMPLES
+            max_integrator_delay = DELAY_NODE_SPECTROSCOPY_MAX_SAMPLES
+        else:
+            output_delay_path = "generator/delay"
+            meas_delay_path = "readout/integration/delay"
+            measurement_delay += output_delay
+            measurement_delay += (
+                INTEGRATION_DELAY_OFFSET
+                if acquisition_type != AcquisitionType.RAW
+                else SCOPE_DELAY_OFFSET
+            )
+            set_input = set_input or set_output
+            max_generator_delay = DELAY_NODE_GENERATOR_MAX_SAMPLES
+            max_integrator_delay = DELAY_NODE_READOUT_INTEGRATION_MAX_SAMPLES
+
+        if set_output:
+            output_delay_rounded = (
+                delay_to_rounded_samples(
+                    ch_repr=self._unit_repr,
+                    delay=output_delay,
+                    sample_frequency_hz=SAMPLE_FREQUENCY_HZ,
+                    granularity_samples=DELAY_NODE_GRANULARITY_SAMPLES,
+                    max_node_delay_samples=max_generator_delay,
+                )
+                / SAMPLE_FREQUENCY_HZ
+            )
+            nc.add(output_delay_path, output_delay_rounded)
+
+        if set_input:
+            measurement_delay_rounded = (
+                delay_to_rounded_samples(
+                    ch_repr=self._unit_repr,
+                    delay=measurement_delay,
+                    sample_frequency_hz=SAMPLE_FREQUENCY_HZ,
+                    granularity_samples=DELAY_NODE_GRANULARITY_SAMPLES,
+                    max_node_delay_samples=max_integrator_delay,
+                )
+                / SAMPLE_FREQUENCY_HZ
+            )
+            if acquisition_type == AcquisitionType.RAW:
+                nc.extend(
+                    # Scopes do not actually belong to the QA channel, but
+                    # that's how it was implemented in the past.
+                    # TODO(2K): Refactor this.
+                    NodeCollector.one(
+                        f"/{self._serial}/scopes/0/trigger/delay",
+                        measurement_delay_rounded,
+                    )
+                )
+            nc.add(meas_delay_path, measurement_delay_rounded)
+
+        await self._api.set_parallel(nc)
+
+    async def set_before_awg_upload(self, recipe_data: RecipeData):
+        nc = NodeCollector(base=f"{self._node_base}/")
+
+        acquisition_type = recipe_data.rt_execution_info.acquisition_type
+
+        nc.add(
+            "mode",
+            0 if is_spectroscopy(acquisition_type) else 1,
+        )
+
+        initialization = recipe_data.get_initialization(self._device_uid)
+        measurement = next(
+            (m for m in initialization.measurements if m.channel == self._channel), None
+        )
+        if measurement is not None:
+            uses_lrt = ch_uses_lrt(self._device_uid, self._channel, recipe_data)
+            if uses_lrt:
+                nc.add("modulation/enable", 1)
+
+            if is_spectroscopy(acquisition_type):
+                nc.add("spectroscopy/trigger/channel", 36 + self._channel)
+                nc.add("spectroscopy/length", measurement.length)
+            elif acquisition_type != AcquisitionType.RAW:
+                # Integration and discrimination modes
+                nc.add("readout/multistate/qudits/*/enable", 0, cache=False)
+                nc.barrier()
+
+                if not uses_lrt:
+                    for (
+                        integrator_allocation
+                    ) in recipe_data.recipe.integrator_allocations:
+                        if (
+                            integrator_allocation.device_id != self._device_uid
+                            or integrator_allocation.awg != self._channel
+                        ):
+                            continue
+
+                        num_states = integrator_allocation.kernel_count + 1
+                        assert len(integrator_allocation.channels) == 1, (
+                            f"{self._unit_repr}: Internal error - expected 1 integrator for "
+                            f"signal '{integrator_allocation.signal_id}', "
+                            f"got {integrator_allocation.channels}"
+                        )
+                        integration_unit_index = integrator_allocation.channels[0]
+
+                        nc.add("readout/multistate/enable", 1)
+                        nc.add("readout/multistate/zsync/packed", 1)
+                        qudit_path = (
+                            f"readout/multistate/qudits/{integration_unit_index}"
+                        )
+                        nc.add(f"{qudit_path}/numstates", num_states)
+                        nc.add(f"{qudit_path}/enable", 1, cache=False)
+                        nc.add(
+                            f"{qudit_path}/assignmentvec",
+                            _calc_theoretical_assignment_vec(num_states - 1),
+                        )
+
+        await self._api.set_parallel(nc)
 
     def configure_acquisition(
         self,
@@ -426,8 +683,74 @@ class QAChannel(ChannelBase):
         nc.add("spectroscopy/envelope/enable", 1 if has_spectroscopy_envelope else 0)
         return nc
 
-    def disable_output(self) -> NodeCollector:
-        return NodeCollector.one(self.nodes.output_on, 0, cache=False)
+    def prepare_upload_all_integration_weights(
+        self,
+        recipe_data: RecipeData,
+        artifacts: ArtifactsCodegen,
+        integrator_allocations: list[IntegratorAllocation],
+        kernel_ref: str,
+    ) -> NodeCollector:
+        nc = NodeCollector(base=f"{self._node_base}/readout/")
+
+        uses_lrt = ch_uses_lrt(self._device_uid, self._channel, recipe_data)
+
+        max_len = MAX_INTEGRATION_WEIGHT_LENGTH
+
+        integration_weights = artifacts.integration_weights.get(kernel_ref, {})
+        used_downsampling_factor = None
+        integration_length = None
+        for signal_id, weight_names in integration_weights.items():
+            integrator_allocation = next(
+                ia for ia in integrator_allocations if ia.signal_id == signal_id
+            )
+            [channel] = integrator_allocation.channels
+
+            assert not (uses_lrt and len(weight_names) > 1)
+
+            for index, weight in enumerate(weight_names):
+                wave_name = weight.id + ".wave"
+                # Note conjugation here:
+                wave = get_wave(wave_name, artifacts.waves)
+                weight_vector = np.conjugate(np.ascontiguousarray(wave.samples))
+                wave_len = len(weight_vector)
+                integration_length = max(integration_length or 0, wave_len)
+                if wave_len > max_len:
+                    max_pulse_len = max_len / SAMPLE_FREQUENCY_HZ
+                    raise LabOneQControllerException(
+                        f"{self._unit_repr}: Length {wave_len} of the integration weight"
+                        f" '{channel}' of channel {integrator_allocation.awg} exceeds"
+                        f" maximum of {max_len} samples ({max_pulse_len * 1e6:.3f} us)."
+                    )
+                if uses_lrt:
+                    nc.add(
+                        f"integration/weights/{channel}/wave",
+                        weight_vector,
+                        filename=wave_name,
+                        cache=False,
+                    )
+                    if (
+                        used_downsampling_factor is None
+                        and wave.downsampling_factor is not None
+                    ):
+                        used_downsampling_factor = wave.downsampling_factor
+                        nc.add(
+                            "integration/downsampling/factor",
+                            wave.downsampling_factor,
+                            cache=False,
+                        )
+                    else:
+                        assert wave.downsampling_factor == used_downsampling_factor
+                else:
+                    nc.add(
+                        f"multistate/qudits/{channel}/weights/{index}/wave",
+                        weight_vector,
+                        filename=wave_name,
+                    )
+
+        if integration_length is not None:
+            nc.add("integration/length", integration_length)
+
+        return nc
 
     def subscribe_nodes(self) -> NodeCollector:
         nc = NodeCollector()
@@ -435,6 +758,14 @@ class QAChannel(ChannelBase):
             nc.add_path(path)
         nc.add_path(self.nodes.spectroscopy_result_wave)
         return nc
+
+    async def start_execution(self, with_pipeliner: bool):
+        nc = NodeCollector(base=f"{self._node_base}/")
+        if with_pipeliner:
+            nc.extend(self.pipeliner.collect_execution_nodes())
+        else:
+            nc.add("generator/enable", 1, cache=False)
+        await self._api.set_parallel(nc)
 
     async def _read_all_jobs_result(
         self,
@@ -535,3 +866,29 @@ class QAChannel(ChannelBase):
             num_results=num_results,
             timeout_s=timeout_s,
         )
+
+    async def teardown_one_step_execution(self, with_pipeliner: bool):
+        nc = NodeCollector(base=f"{self._node_base}/")
+        # In case of hold-off errors, the result logger may still be waiting. Disabling
+        # the result logger then generates an error.
+        # We thus reset the result logger now (rather than waiting for the beginning of
+        # the next experiment or RT execution), so the error is correctly associated
+        # with the _current_ job.
+        nc.add("readout/result/enable", 0, cache=False)
+
+        if with_pipeliner:
+            nc.extend(self.pipeliner.reset_nodes())
+
+        await self._api.set_parallel(nc)
+
+    def collect_warning_nodes(self) -> list[tuple[str, str]]:
+        return [
+            (
+                f"{self._node_base}/output/overrangecount",
+                f"Channel {self._channel} Output overrange count",
+            ),
+            (
+                f"{self._node_base}/input/overrangecount",
+                f"Channel {self._channel} Input overrange count",
+            ),
+        ]

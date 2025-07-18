@@ -4,12 +4,14 @@
 use std::collections::HashSet;
 
 use crate::signature::{self, WaveformSignaturePy};
-use codegenerator::ir::{InitAmplitudeRegister, Match, ParameterOperation, Samples};
+use codegenerator::ir::{
+    InitAmplitudeRegister, Match, ParameterOperation, PlayAcquire, PlayWave, QaEvent, Samples,
+};
 use pyo3::prelude::*;
 
 #[pyclass]
 #[derive(Debug, Clone)]
-pub struct PlayWaveEvent {
+pub struct PlayWaveEventPy {
     pub signals: HashSet<String>,
     #[pyo3(get)]
     pub waveform: WaveformSignaturePy,
@@ -26,8 +28,27 @@ pub struct PlayWaveEvent {
     pub increment_phase_params: Vec<Option<String>>,
 }
 
+impl PlayWaveEventPy {
+    pub fn from_ir(
+        event: PlayWave,
+        state: Option<u16>,
+        hw_oscillator: Option<signature::HwOscillator>,
+    ) -> Self {
+        PlayWaveEventPy {
+            signals: event.signals.iter().map(|sig| sig.uid.clone()).collect(),
+            waveform: WaveformSignaturePy::new(event.waveform),
+            state,
+            hw_oscillator,
+            amplitude_register: event.amplitude_register,
+            amplitude: event.amplitude,
+            increment_phase: event.increment_phase,
+            increment_phase_params: event.increment_phase_params,
+        }
+    }
+}
+
 #[pymethods]
-impl PlayWaveEvent {
+impl PlayWaveEventPy {
     #[getter]
     fn set_amplitude(&self) -> Option<f64> {
         if let Some(ParameterOperation::SET(amp)) = self.amplitude {
@@ -70,6 +91,52 @@ pub struct AcquireEvent {
     pub oscillator_frequency: f64,
     #[pyo3(get)]
     pub channels: Vec<u8>,
+}
+
+impl AcquireEvent {
+    pub fn from_ir(event: PlayAcquire) -> Self {
+        let channels = event.signal().channels.to_vec();
+        let pulse_defs = event.pulse_defs().iter().map(|x| x.uid.clone()).collect();
+        let id_pulse_params = event.id_pulse_params().to_vec();
+        let oscillator_frequency = event.oscillator_frequency();
+        AcquireEvent {
+            signal_id: event.signal().uid.clone(),
+            pulse_defs,
+            id_pulse_params,
+            oscillator_frequency,
+            channels,
+        }
+    }
+}
+
+#[pymethods]
+impl AcquireEvent {
+    #[getter]
+    fn channels(&self) -> Vec<i64> {
+        self.channels.iter().map(|&ch| ch as i64).collect()
+    }
+}
+
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct QaEventPy {
+    #[pyo3(get)]
+    pub acquire_events: Vec<AcquireEvent>,
+    #[pyo3(get)]
+    pub play_wave_events: Vec<PlayWaveEventPy>,
+}
+
+impl QaEventPy {
+    pub fn from_ir(event: QaEvent) -> Self {
+        let (acquires, waveforms) = event.into_parts();
+        QaEventPy {
+            acquire_events: acquires.into_iter().map(AcquireEvent::from_ir).collect(),
+            play_wave_events: waveforms
+                .into_iter()
+                .map(|wf| PlayWaveEventPy::from_ir(wf, None, None))
+                .collect(),
+        }
+    }
 }
 
 #[pyclass]
@@ -169,6 +236,59 @@ pub struct PpcSweepStepStart {
 
 #[pyclass]
 #[derive(Debug, Clone)]
+pub struct PushLoop {
+    #[pyo3(get)]
+    pub num_repeats: u64,
+    pub compressed: bool,
+}
+
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct Iterate {
+    #[pyo3(get)]
+    pub num_repeats: u64,
+}
+
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct PrngSetup {
+    #[pyo3(get)]
+    pub range: u16,
+    #[pyo3(get)]
+    pub seed: u32,
+}
+
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct PrngSample {
+    #[pyo3(get)]
+    pub sample_name: String,
+    #[pyo3(get)]
+    pub section_name: String,
+}
+
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct PrngDropSample {
+    #[pyo3(get)]
+    pub sample_name: String,
+}
+
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct TriggerOutput {
+    #[pyo3(get)]
+    pub state: u16,
+}
+
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct TriggerOutputBit {
+    pub bit: u8,
+    pub set: bool,
+}
+#[pyclass]
+#[derive(Debug, Clone)]
 pub struct SetOscillatorFrequencyPy {
     obj: codegenerator::ir::OscillatorFrequencySweepStep,
 }
@@ -210,7 +330,7 @@ impl SetOscillatorFrequencyPy {
 #[pyclass]
 #[derive(Debug, Clone)]
 pub enum EventType {
-    PlayWave(PlayWaveEvent),
+    PlayWave(PlayWaveEventPy),
     PlayHold(PlayHoldEvent),
     Match(MatchEvent),
     ChangeHwOscPhase(ChangeHwOscPhase),
@@ -220,6 +340,24 @@ pub enum EventType {
     PpcSweepStepStart(PpcSweepStepStart),
     PpcSweepStepEnd(),
     SetOscillatorFrequency(SetOscillatorFrequencyPy),
+    ResetPhase(),
+    InitialResetPhase(),
+    LoopStepStart(),
+    LoopStepEnd(),
+    PushLoop(PushLoop),
+    Iterate(Iterate),
+    PrngSetup(PrngSetup),
+    PrngSample(PrngSample),
+    // todo: Only for assertions, to make sure sampling is not used outside
+    // of a setup; consider testing already
+    // when building the tree instead of creating a separate event.
+    PrngDropSample(PrngDropSample),
+    // This is a bit of a hack, but we need to be able to consolidate
+    // the trigger output events after flattening the tree.
+    // The TriggerOutputBit never appears in the final event list.
+    TriggerOutputBit(TriggerOutputBit),
+    TriggerOutput(TriggerOutput),
+    QaEvent(QaEventPy),
 }
 
 #[pyclass]
@@ -246,8 +384,20 @@ impl AwgEvent {
             EventType::AcquireEvent(_) => 5,
             EventType::PpcSweepStepStart(_) => 6,
             EventType::PpcSweepStepEnd() => 7,
-            EventType::PlayHold(_) => 8,
-            EventType::SetOscillatorFrequency(_) => 9,
+            EventType::ResetPhase() => 8,
+            EventType::InitialResetPhase() => 9,
+            EventType::LoopStepStart() => 10,
+            EventType::LoopStepEnd() => 11,
+            EventType::PushLoop(_) => 12,
+            EventType::Iterate(_) => 13,
+            EventType::PrngSetup(_) => 14,
+            EventType::PrngSample(_) => 15,
+            EventType::PrngDropSample(_) => 16,
+            EventType::TriggerOutput(_) => 17,
+            EventType::TriggerOutputBit(_) => panic!("Internal error: Unresolved TriggerOutputBit"),
+            EventType::PlayHold(_) => 18,
+            EventType::SetOscillatorFrequency(_) => 19,
+            EventType::QaEvent(_) => 20,
         }
     }
 
@@ -263,8 +413,24 @@ impl AwgEvent {
             EventType::AcquireEvent(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
             EventType::PpcSweepStepStart(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
             EventType::PpcSweepStepEnd() => Ok(None::<()>.into_pyobject(py)?.into()),
+            EventType::LoopStepStart() => Ok(None::<()>.into_pyobject(py)?.into()),
+            EventType::LoopStepEnd() => Ok(None::<()>.into_pyobject(py)?.into()),
+            EventType::ResetPhase() => Ok(None::<()>.into_pyobject(py)?.into()),
+            EventType::InitialResetPhase() => Ok(None::<()>.into_pyobject(py)?.into()),
+            EventType::PushLoop(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
+            EventType::Iterate(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
+            EventType::PrngSetup(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
+            EventType::PrngSample(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
+            EventType::PrngDropSample(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
+            EventType::TriggerOutput(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
+            EventType::TriggerOutputBit(_) => {
+                // At this point of the workflow, the single bits must have been
+                // combined into words and replaced with TriggerOutput.
+                panic!("Internal error: Unresolved TriggerOutputBit")
+            }
             EventType::PlayHold(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
             EventType::SetOscillatorFrequency(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
+            EventType::QaEvent(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
         }
     }
 }

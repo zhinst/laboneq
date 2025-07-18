@@ -14,7 +14,6 @@ from laboneq.core.types.enums.acquisition_type import (
 from laboneq._utils import flatten
 from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.feedback_register_config import FeedbackRegisterConfig
-from laboneq.compiler.common.resource_usage import ResourceUsage
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.feedback_router.feedback_router import (
     FeedbackRegisterLayout,
@@ -523,9 +522,9 @@ class SampledEventHandler:
         generator_channels = set()
         play_event: AWGEvent
         for play_event in sampled_event.params["play_events"]:
-            waveform_signature = play_event.signature.waveform
+            waveform_signature = play_event.waveform
             # TODO: Could we somehow add channels to events immediately?
-            signal_ids = play_event.params.get("signal_ids")
+            signal_ids = play_event.signals
             if signal_ids and waveform_signature:
                 [signal_id] = signal_ids
                 current_signal_obj = next(
@@ -541,12 +540,8 @@ class SampledEventHandler:
                 )
 
         integration_channels = list(
-            flatten(
-                event.params["channels"]
-                for event in sampled_event.params["acquire_events"]
-            )
+            flatten(event.channels for event in sampled_event.params["acquire_events"])
         )
-
         if len(integration_channels) > 0:
             integrator_mask: str = "|".join(
                 map(lambda x: "QA_INT_" + str(x), integration_channels)
@@ -634,9 +629,6 @@ class SampledEventHandler:
         )
 
     def handle_reset_phase(self, sampled_event: AWGEvent):
-        if not self.awg.device_type.supports_reset_osc_phase:
-            return
-
         # If multiple phase reset events are scheduled at the same time,
         # only process the *last* one. This way, RESET_PHASE takes
         # precedence over INITIAL_RESET_PHASE.
@@ -727,7 +719,6 @@ class SampledEventHandler:
         osc_index: int = sampled_event.params["osc_index"]
         osc_id_symbol = f"freq_osc_{osc_index}"
         counter_variable_name = f"c_freq_osc_{osc_index}"
-
         if not self.declarations_generator.is_variable_declared(counter_variable_name):
             self.declarations_generator.add_variable_declaration(
                 counter_variable_name, 0
@@ -848,14 +839,6 @@ class SampledEventHandler:
         self.shfppc_sweeper_config_tracker.exit_loop()
 
     def handle_match(self, sampled_event: AWGEvent):
-        if (this_sample := sampled_event.params.get("prng_sample")) is not None:
-            other_sample = self.seqc_tracker.prng_tracker().active_sample
-            section = sampled_event.params["section_name"]
-            if this_sample != other_sample:
-                raise LabOneQException(
-                    f"In section '{section}: cannot match PRNG sample '{this_sample}' here. The only available PRNG sample is '{other_sample}'."
-                )
-
         if self.match_parent_event is not None:
             mpe_par = self.match_parent_event.params
             se_par = sampled_event.params
@@ -890,46 +873,18 @@ class SampledEventHandler:
 
         seed = sampled_event.params["seed"]
         prng_range = sampled_event.params["range"]
-        section = sampled_event.params["section"]
 
         assert seed is not None and prng_range is not None
-
-        if self.seqc_tracker.prng_tracker() is not None:
-            raise LabOneQException(
-                f"In section '{section}': Cannot seed PRNG, it is already allocated in this context"
-            )
-
         self.seqc_tracker.setup_prng(seed=seed, prng_range=prng_range)
-
-    def handle_drop_prng_setup(self, _sampled_event: AWGEvent):
-        if not self.device_type.has_prng:
-            return
-        self.seqc_tracker.drop_prng()
 
     def handle_sample_prng(self, sampled_event: AWGEvent):
         if not self.device_type.has_prng:
             return
-
-        prng_tracker = self.seqc_tracker.prng_tracker()
-        assert prng_tracker is not None
-        if prng_tracker.active_sample is not None:
-            section = sampled_event.params["section_name"]
-            this_sample = sampled_event.params["sample_name"]
-            other_sample = prng_tracker.active_sample
-            raise LabOneQException(
-                f"In section '{section}': Can't draw sample '{this_sample}' from PRNG,"
-                f" when other sample '{other_sample}' is still required at the same time"
-            )
-        prng_tracker.active_sample = sampled_event.params["sample_name"]
-
         self.seqc_tracker.sample_prng(self.declarations_generator)
 
     def handle_drop_prng_sample(self, sampled_event: AWGEvent):
         if not self.device_type.has_prng:
             return
-        prng_tracker = self.seqc_tracker.prng_tracker()
-        assert prng_tracker.active_sample == sampled_event.params["sample_name"]
-        prng_tracker.drop_sample()
         self.match_command_table_entries.clear()
 
     def handle_ppc_step_start(self, sampled_event: AWGEvent):
@@ -1224,8 +1179,6 @@ class SampledEventHandler:
             self.handle_change_oscillator_phase(sampled_event)
         elif signature == AWGEventType.SETUP_PRNG:
             self.handle_setup_prng(sampled_event)
-        elif signature == AWGEventType.DROP_PRNG_SETUP:
-            self.handle_drop_prng_setup(sampled_event)
         elif signature == AWGEventType.PRNG_SAMPLE:
             self.handle_sample_prng(sampled_event)
         elif signature == AWGEventType.DROP_PRNG_SAMPLE:
@@ -1254,13 +1207,3 @@ class SampledEventHandler:
             _logger.debug("-End event list")
             self.handle_sampled_event_list()
         self.seqc_tracker.force_deferred_function_calls()
-
-    def resource_usage(self) -> list[ResourceUsage]:
-        if self.use_command_table:
-            return [
-                ResourceUsage(
-                    f"Command table of device '{self.awg.device_id}', AWG({self.awg.awg_id})",
-                    self.command_table_tracker.command_table_usage(),
-                ),
-            ]
-        return []

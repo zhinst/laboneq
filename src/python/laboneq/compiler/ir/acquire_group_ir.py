@@ -16,7 +16,6 @@ class AcquireGroupIR(IntervalIR):
     pulses: list[SectionSignalPulse]
     amplitudes: list[float]
     phases: list[float]
-    offset: int
     section: str
     play_pulse_params: list[Optional[Dict[str, Any]]]
     pulse_pulse_params: list[Optional[Dict[str, Any]]]
