@@ -28,6 +28,7 @@ from laboneq.controller.recipe_processor import (
     AwgKey,
     DeviceRecipeData,
     RecipeData,
+    RtExecutionInfo,
     WaveformItem,
     Waveforms,
     get_wave,
@@ -767,6 +768,37 @@ class QAChannel(ChannelBase):
             nc.add("generator/enable", 1, cache=False)
         await self._api.set_parallel(nc)
 
+    async def get_measurement_data(
+        self,
+        rt_execution_info: RtExecutionInfo,
+        result_indices: list[int],
+        num_results: int,
+    ) -> RawReadoutData:
+        # TODO(2K): set timeout based on timeout_s from connect
+        timeout_s = 5
+
+        if is_spectroscopy(rt_execution_info.acquisition_type):
+            return await self._read_all_jobs_result(
+                result_path=self.nodes.spectroscopy_result_wave,
+                ch_repr=f"{self._unit_repr}:spectroscopy",
+                pipeliner_jobs=rt_execution_info.pipeliner_jobs,
+                num_results=num_results,
+                timeout_s=timeout_s,
+            )
+
+        assert len(result_indices) == 1
+        integrator = result_indices[0]
+        rt_result = await self._read_all_jobs_result(
+            result_path=self.nodes.readout_result_wave[integrator],
+            ch_repr=f"{self._unit_repr}:readout{integrator}",
+            pipeliner_jobs=rt_execution_info.pipeliner_jobs,
+            num_results=num_results,
+            timeout_s=timeout_s,
+        )
+        if rt_execution_info.acquisition_type == AcquisitionType.DISCRIMINATION:
+            rt_result.vector = rt_result.vector.real
+        return rt_result
+
     async def _read_all_jobs_result(
         self,
         result_path: str,
@@ -837,35 +869,6 @@ class QAChannel(ChannelBase):
             )
 
         return rt_result
-
-    async def get_readout_data(
-        self,
-        pipeliner_jobs: int,
-        num_results: int,
-        timeout_s: float,
-        integrator: int,
-    ) -> RawReadoutData:
-        return await self._read_all_jobs_result(
-            result_path=self.nodes.readout_result_wave[integrator],
-            ch_repr=f"{self._unit_repr}:readout{integrator}",
-            pipeliner_jobs=pipeliner_jobs,
-            num_results=num_results,
-            timeout_s=timeout_s,
-        )
-
-    async def get_spectroscopy_data(
-        self,
-        pipeliner_jobs: int,
-        num_results: int,
-        timeout_s: float,
-    ) -> RawReadoutData:
-        return await self._read_all_jobs_result(
-            result_path=self.nodes.spectroscopy_result_wave,
-            ch_repr=f"{self._unit_repr}:spectroscopy",
-            pipeliner_jobs=pipeliner_jobs,
-            num_results=num_results,
-            timeout_s=timeout_s,
-        )
 
     async def teardown_one_step_execution(self, with_pipeliner: bool):
         nc = NodeCollector(base=f"{self._node_base}/")

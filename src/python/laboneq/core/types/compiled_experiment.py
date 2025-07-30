@@ -24,10 +24,10 @@ class CompiledExperiment:
     """Data structure to store the output of the compiler.
 
     Attributes:
-        device_setup (DeviceSetup) (deprecated):
-            Deprecated. The device setup the experiment was compiled for.
-        experiment (Experiment) (deprecated):
-            Deprecated. The (uncompiled) experiment.
+        device_setup (DeviceSetup):
+            The device setup the experiment was compiled for.
+        experiment (Experiment):
+            The (uncompiled) experiment.
         experiment_dict (deprecated):
             Deprecated. A representation of the source experiment, using
             primitive Python datatypes only (dicts, lists, etc).
@@ -44,11 +44,17 @@ class CompiledExperiment:
 
         Use the `load` and `save` functions from the `laboneq.simple` module instead.
 
+    !!! version-changed "Changed in version 2.56.0"
+        The `.device_setup` and `.experiment` attributes were no longer deprecated.
+
     !!! version-changed "Deprecated in version 2.51.0"
         The `.device_setup` and `.experiment` attributes were
         deprecated in version 2.51.0 and will be removed in a
         future release. Manage and track the device setup and experiment
         separately if they are needed.
+
+        Note that the `.device_setup` and `.experiment` were no longer
+        deprecated in version 2.56.0.˝
 
     !!! version-changed "Deprecated in version 2.14.0"
         The `.experiment_dict` attribute was deprecated in

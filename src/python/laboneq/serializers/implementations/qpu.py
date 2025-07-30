@@ -18,10 +18,10 @@ from laboneq.serializers.types import (
 @serializer(types=[QPU], public=True)
 class QPUSerializer(VersionedClassSerializer[QPU]):
     SERIALIZER_ID = "laboneq.serializers.implementations.QPUSerializer"
-    VERSION = 2
+    VERSION = 3
 
     @classmethod
-    def _edge_to_dict_v2(cls, edge: TopologyEdge) -> dict[str, object]:
+    def _edge_to_dict_v3(cls, edge: TopologyEdge) -> dict[str, object]:
         """Convert an edge to a dict for serialization."""
         return {
             "tag": edge.tag,
@@ -33,8 +33,10 @@ class QPUSerializer(VersionedClassSerializer[QPU]):
             else None,
         }
 
+    _edge_to_dict_v2 = _edge_to_dict_v3
+
     @classmethod
-    def _edge_from_dict_v2(cls, edge: dict) -> dict:
+    def _edge_from_dict_v3(cls, edge: dict) -> dict:
         """Convert a serialized edge dictionary to keyword arguments for .add_edge."""
         return {
             "tag": edge["tag"],
@@ -44,26 +46,59 @@ class QPUSerializer(VersionedClassSerializer[QPU]):
             "quantum_element": edge["quantum_element"],
         }
 
+    _edge_from_dict_v2 = _edge_from_dict_v3
+
     @classmethod
     def to_dict(
         cls, obj: QPU, options: SerializationOptions | None = None
     ) -> JsonSerializableType:
-        # Note: The "topology_edges" entry in "__data__" is optional in
-        # v2 of the serializer.
+        groups_uid = {
+            key: [v.uid for v in value] for key, value in obj.groups._groups.items()
+        }
         qop_cls = obj.quantum_operations.__class__
-        topology_edges = [cls._edge_to_dict_v2(edge) for edge in obj.topology.edges()]
+        topology_edges = [cls._edge_to_dict_v3(edge) for edge in obj.topology.edges()]
 
         return {
             "__serializer__": cls.serializer_id(),
             "__version__": cls.version(),
             "__data__": {
                 "quantum_elements": [to_dict(q) for q in obj.quantum_elements],
+                "groups": groups_uid,
                 # We should use __qualname__ here but that complicates things
                 # for import_cls
                 "quantum_operations_class": f"{qop_cls.__module__}.{qop_cls.__name__}",
                 "topology_edges": topology_edges,
             },
         }
+
+    @classmethod
+    def from_dict_v3(
+        cls,
+        serialized_data: JsonSerializableType,
+        options: DeserializationOptions | None = None,
+    ) -> QPU:
+        data = serialized_data["__data__"]
+        quantum_elements = [from_dict(q) for q in data["quantum_elements"]]
+
+        if data["groups"]:
+            _quantum_element_map = {q.uid: q for q in quantum_elements}
+            groups = {}
+            for key, value in data["groups"].items():
+                groups[key] = [_quantum_element_map[v] for v in value]
+            quantum_elements = groups
+
+        qop_cls = import_cls(data["quantum_operations_class"])
+        qop = qop_cls()
+        qpu = QPU(
+            quantum_elements=quantum_elements,
+            quantum_operations=qop,
+        )
+
+        topology_edges = data["topology_edges"]
+        for edge in topology_edges:
+            qpu.topology.add_edge(**cls._edge_from_dict_v3(edge))
+
+        return qpu
 
     @classmethod
     def from_dict_v2(

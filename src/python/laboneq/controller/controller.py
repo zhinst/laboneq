@@ -6,7 +6,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from copy import deepcopy
 from typing import TYPE_CHECKING, Callable
 
 from laboneq.controller.utilities.exception import LabOneQControllerException
@@ -453,37 +452,14 @@ class Controller(EventLoopMixIn):
     def _prepare_result_shapes(self):
         self._results = ExperimentResults()
         for handle, shape_info in self._recipe_data.result_shapes.items():
-            axis_name = deepcopy(shape_info.base_axis_name)
-            axis = deepcopy(shape_info.base_axis)
-            shape = deepcopy(shape_info.base_shape)
-
-            # Append extra dimension for multiple acquires with the same handle
-            if shape_info.handle_acquire_count > 1:
-                axis_name.append(handle)
-                axis.append(
-                    np.arange(shape_info.handle_acquire_count, dtype=np.float64)
-                )
-                shape.append(shape_info.handle_acquire_count)
-
-            # Append extra dimension for samples of the raw acquisition
-            if self._recipe_data.rt_execution_info.is_raw_acquisition:
-                signal_id = shape_info.signal
-                awg_key, awg_config = self._recipe_data.awg_configs.by_signal(signal_id)
-                raw_acquire_length = self._devices.find_by_uid(
-                    awg_key.device_uid
-                ).calc_raw_acquire_length(
-                    self._recipe_data, awg_key, awg_config, signal_id, handle
-                )
-                axis_name.append("samples")
-                axis.append(np.arange(raw_acquire_length, dtype=np.float64))
-                shape.append(raw_acquire_length)
-
             empty_result = make_acquired_result(
                 data=np.full(
-                    shape=tuple(shape), fill_value=np.nan, dtype=np.complex128
+                    shape=tuple(shape_info.base_shape),
+                    fill_value=np.nan,
+                    dtype=np.complex128,
                 ),
-                axis_name=axis_name,
-                axis=axis,
+                axis_name=shape_info.base_axis_name,
+                axis=shape_info.base_axis,
                 handle=handle,
             )
             self._results.acquired_results[handle] = empty_result

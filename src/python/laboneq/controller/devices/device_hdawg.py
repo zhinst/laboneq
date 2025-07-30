@@ -247,7 +247,6 @@ class DeviceHDAWG(DeviceBase):
                 f"sines/{awg.awg * 2}/phaseshift",
                 90 if (awg.signal_type == SignalType.IQ) else 0,
             )
-            assert isinstance(awg.awg, int)
             nc.add(f"sines/{awg.awg * 2 + 1}/phaseshift", 0)
 
         await self.set_async(nc)

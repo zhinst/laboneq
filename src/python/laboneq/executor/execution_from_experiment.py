@@ -8,7 +8,6 @@ import numpy as np
 from laboneq.core.utilities.prng import PRNG
 from laboneq.data.experiment_description import (
     Acquire,
-    AcquireLoopNt,
     AcquireLoopRt,
     Call,
     Delay,
@@ -41,17 +40,6 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
             if isinstance(child, Operation):
                 self._append_statement(
                     self._statement_from_operation(child, parent_uid)
-                )
-            elif isinstance(child, AcquireLoopNt):
-                loop_body = self._sub_scope(
-                    self._handle_children, child.children, child.uid
-                )
-                self._append_statement(
-                    executor.ForLoop(
-                        count=child.count,
-                        body=loop_body,
-                        loop_flags=executor.LoopFlags.AVERAGE,
-                    )
                 )
             elif isinstance(child, AcquireLoopRt):
                 loop_body = self._sub_scope(

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from laboneq.application_management.application_manager import ApplicationManager
 from laboneq.core.types import CompiledExperiment
 from laboneq.implementation.legacy_adapters.converters_experiment_description import (
     convert_Experiment,
@@ -14,6 +13,7 @@ from laboneq.implementation.legacy_adapters.converters_experiment_description im
 from laboneq.implementation.legacy_adapters.device_setup_converter import (
     convert_device_setup_to_setup,
 )
+from laboneq.implementation.payload_builder.payload_builder import PayloadBuilder
 
 if TYPE_CHECKING:
     from laboneq.dsl.device.device_setup import DeviceSetup
@@ -29,7 +29,7 @@ def laboneq_compile(
     new_experiment = convert_Experiment(experiment)
     signal_mapping = convert_signal_map(experiment)
 
-    payload_builder = ApplicationManager.instance().payload_builder()
+    payload_builder = PayloadBuilder()
     payload = payload_builder.build_payload(
         new_setup,
         new_experiment,

@@ -10,5 +10,5 @@ from .operation import Operation
 from .play_pulse import PlayPulse
 from .pulse import PulseFunctional, PulseSampled
 from .reserve import Reserve
-from .section import AcquireLoopNt, AcquireLoopRt, Case, Match, Section, Sweep
+from .section import AcquireLoopRt, Case, Match, Section, Sweep
 from .set_node import SetNode

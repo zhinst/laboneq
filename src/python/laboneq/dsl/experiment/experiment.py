@@ -22,7 +22,7 @@ from laboneq.dsl.enums import (
 from laboneq.dsl.experiment.pulse import Pulse
 
 from .experiment_signal import ExperimentSignal
-from .section import AcquireLoopNt, AcquireLoopRt, Case, Match, Section, Sweep
+from .section import AcquireLoopRt, Case, Match, Section, Sweep
 
 if TYPE_CHECKING:
     from .. import Parameter
@@ -75,6 +75,11 @@ class Experiment:
             Sections defined in the experiment.
             Default: `[]`.
 
+    !!! version-removed "Removed in version 2.57.0"
+
+        Removed the `acquire_loop_nt` method that was deprecated in 2.14.0.
+        Use `.sweep` outside of an `acquire_loop_rt` instead.
+
     !!! version-changed "Changed in version 2.54.0"
 
         The following deprecated methods for saving and loading were removed:
@@ -84,13 +89,6 @@ class Experiment:
             - `save_signal_map`
 
         Use the `load` and `save` functions from the `laboneq.simple` module instead.
-
-    !!! version-changed "Changed in version 2.27.0"
-
-        The `uid` attribute is no longer automatically generated and
-        will be left as `None` if unspecified.
-
-        The `name` attribute was added.
     """
 
     uid: str | None = attrs.field(default=None)
@@ -377,10 +375,6 @@ class Experiment:
         Arguments:
             path: Path to the node whose value should be set.
             value: Value that should be set.
-
-        !!! version-changed "Changed in version 2.0"
-            Method name renamed from `set` to `set_node`.
-            Removed `key` argument.
         """
         current_section = self._peek_section()
         current_section.set_node(path=path, value=value)
@@ -716,64 +710,6 @@ class Experiment:
         def __exit__(self, exc_type, exc_val, exc_tb):
             self.exp._pop_and_add_section()
 
-    def acquire_loop_nt(
-        self,
-        count: int,
-        averaging_mode: AveragingMode = AveragingMode.CYCLIC,
-        uid: str | None = None,
-    ):
-        """Define an acquire section with averaging in near time.
-
-        !!! version-changed "Deprecated in 2.14"
-            Use `.sweep` outside of an `acquire_loop_rt` instead.
-            For example:
-
-            ``` py
-            param = SweepParameter(values=[1, 2, 3])
-            with exp.sweep(param):  # <-- outer near-time sweep
-                with exp.acquire_loop_rt(count=2):  # <-- inner real-time sweep
-                    ...
-            ```
-
-        Sections need to open a scope in the following way:
-
-        ``` py
-        with exp.acquire_loop_nt(...):
-            # here come the operations that shall be executed in
-            # the acquire_loop_nt section
-        ```
-
-        !!! note
-            A near time section cannot be defined in the scope of a real
-            time section.
-
-        Arguments:
-            uid:
-                The unique ID for this section.
-            count:
-                The number of acquire iterations.
-            averaging_mode:
-                The mode of how to average the acquired data.
-                Defaults to [AveragingMode.CYCLIC][laboneq.core.types.enums.averaging_mode.AveragingMode.CYCLIC].
-        """
-        return Experiment._AcquireLoopNtSectionContext(
-            self, uid=uid, count=count, averaging_mode=averaging_mode
-        )
-
-    class _AcquireLoopNtSectionContext:
-        def __init__(self, experiment, count, averaging_mode, uid=None):
-            self.exp = experiment
-            self.acquire_loop = AcquireLoopNt(
-                uid=uid, count=count, averaging_mode=averaging_mode
-            )
-
-        def __enter__(self):
-            self.exp._push_section(self.acquire_loop)
-            return self.acquire_loop
-
-        def __exit__(self, exc_type, exc_val, exc_tb):
-            self.exp._pop_and_add_section()
-
     def acquire_loop_rt(
         self,
         count: int,
@@ -950,9 +886,6 @@ class Experiment:
 
         When trigger signals on the same signal are issued in nested sections, the values
         are ORed.
-
-        !!! version-changed "Changed in version 2.0.0"
-            Removed deprecated `offset` argument.
         """
         return Experiment._SectionSectionContext(
             self,

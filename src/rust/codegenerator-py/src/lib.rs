@@ -244,47 +244,85 @@ fn generate_output_recursive(
                 seed: ob.seed,
             }),
         }]),
-        NodeKind::LoopIteration(ob) => {
-            let start = *node.offset();
-            let end = start + ob.length;
+        NodeKind::Loop(ob) => {
             let mut events = vec![];
-            if !ob.compressed {
-                let already_added = state
-                    .loop_step_starts_added
-                    .get(&start)
-                    .is_some_and(|set| set.contains(&ob.section_info.id));
-                if !already_added {
+            let num_repeat = ob.count;
+            for (idx, child) in node.take_children().into_iter().enumerate() {
+                let start = *child.offset();
+                let end = start + child.data().length();
+                if !ob.compressed {
+                    let already_added = state
+                        .loop_step_starts_added
+                        .get(&start)
+                        .is_some_and(|set| set.contains(&ob.section_info.id));
+                    if !already_added {
+                        events.push(AwgEvent {
+                            start,
+                            end: start,
+                            position: Some(0),
+                            kind: EventType::LoopStepStart(),
+                        });
+                        state
+                            .loop_step_starts_added
+                            .entry(start)
+                            .or_default()
+                            .insert(ob.section_info.id);
+                    }
+                } else if idx == 0 {
                     events.push(AwgEvent {
                         start,
                         end: start,
                         position: Some(0),
-                        kind: EventType::LoopStepStart(),
+                        kind: EventType::PushLoop(awg_event::PushLoop {
+                            num_repeats: num_repeat,
+                            compressed: ob.compressed,
+                        }),
                     });
-                    state
-                        .loop_step_starts_added
-                        .entry(start)
-                        .or_default()
-                        .insert(ob.section_info.id);
                 }
-            } else if ob.iteration == 0 {
-                events.push(AwgEvent {
-                    start,
-                    end: start,
-                    position: Some(0),
-                    kind: EventType::PushLoop(awg_event::PushLoop {
-                        num_repeats: ob.num_repeats,
-                        compressed: ob.compressed,
-                    }),
-                });
+                events.extend(generate_output_recursive(child, awg, state)?);
+                if !ob.compressed {
+                    let already_added = state
+                        .loop_step_ends_added
+                        .get(&end)
+                        .is_some_and(|set| set.contains(&ob.section_info.id));
+                    if !already_added {
+                        events.push(AwgEvent {
+                            start: end,
+                            end,
+                            position: Some(0),
+                            kind: EventType::LoopStepEnd(),
+                        });
+                        state
+                            .loop_step_ends_added
+                            .entry(end)
+                            .or_default()
+                            .insert(ob.section_info.id);
+                    }
+                }
+                if ob.compressed && idx == 0 {
+                    events.push(AwgEvent {
+                        start: end,
+                        end,
+                        position: Some(0),
+                        kind: EventType::Iterate(awg_event::Iterate {
+                            num_repeats: num_repeat,
+                        }),
+                    });
+                }
             }
-
+            Ok(events)
+        }
+        NodeKind::LoopIteration(ob) => {
+            let start = *node.offset();
+            let end = start + ob.length;
+            let mut events = vec![];
             if let Some(sample_name) = &ob.prng_sample {
                 events.push(AwgEvent {
                     start,
                     end: start,
                     position: Some(0),
                     kind: EventType::PrngSample(awg_event::PrngSample {
-                        section_name: ob.section_info.name.clone(),
+                        section_name: "asd".to_string(),
                         sample_name: sample_name.clone(),
                     }),
                 });
@@ -292,26 +330,6 @@ fn generate_output_recursive(
             for child in node.take_children() {
                 events.extend(generate_output_recursive(child, awg, state)?);
             }
-            if !ob.compressed {
-                let already_added = state
-                    .loop_step_ends_added
-                    .get(&end)
-                    .is_some_and(|set| set.contains(&ob.section_info.id));
-                if !already_added {
-                    events.push(AwgEvent {
-                        start: end,
-                        end,
-                        position: Some(0),
-                        kind: EventType::LoopStepEnd(),
-                    });
-                    state
-                        .loop_step_ends_added
-                        .entry(end)
-                        .or_default()
-                        .insert(ob.section_info.id);
-                }
-            }
-
             if let Some(sample_name) = &ob.prng_sample {
                 events.push(AwgEvent {
                     start: end,
@@ -319,17 +337,6 @@ fn generate_output_recursive(
                     position: Some(0),
                     kind: EventType::PrngDropSample(awg_event::PrngDropSample {
                         sample_name: sample_name.clone(),
-                    }),
-                });
-            }
-
-            if ob.compressed && ob.iteration == 0 {
-                events.push(AwgEvent {
-                    start: end,
-                    end,
-                    position: Some(0),
-                    kind: EventType::Iterate(awg_event::Iterate {
-                        num_repeats: ob.num_repeats,
                     }),
                 });
             }

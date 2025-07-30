@@ -1,9 +1,9 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-pub mod amplitude_registers;
 pub mod analyze_awg;
 pub mod handle_acquire;
+pub mod handle_amplitude_registers;
 pub mod handle_frame_changes;
 pub mod handle_hw_phase_resets;
 pub mod handle_loops;

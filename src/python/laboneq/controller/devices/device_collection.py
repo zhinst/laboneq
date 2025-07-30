@@ -130,12 +130,12 @@ class DeviceCollection:
     ):
         await self._prepare_data_servers(do_emulation=do_emulation)
         self._prepare_devices()
-        for _, device in self.all:
-            await device.connect(
-                self.emulator_state if do_emulation else None,
-                disable_runtime_checks=disable_runtime_checks,
-                timeout_s=self._timeout_s,
-            )
+        await self.for_each(
+            DeviceZI.connect,
+            emulator_state=self.emulator_state if do_emulation else None,
+            disable_runtime_checks=disable_runtime_checks,
+            timeout_s=self._timeout_s,
+        )
         async with self.capture_logs():
             await self.configure_device_setup(reset_devices=reset_devices)
 
@@ -275,8 +275,7 @@ class DeviceCollection:
         _logger.info("The device setup is configured")
 
     async def disconnect(self):
-        for _, device in self.all:
-            device.disconnect()
+        await self.for_each(DeviceZI.disconnect)
         self._devices = {}
         self._data_servers = DataServerConnections()
         self._emulator_state = None

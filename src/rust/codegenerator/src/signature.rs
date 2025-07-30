@@ -48,7 +48,7 @@ pub struct PulseSignature {
     /// Pulse parameters ID
     /// Pulse parameters are parameters that are associated
     /// with the given `pulse`.
-    pub id_pulse_params: Option<usize>,
+    pub id_pulse_params: Option<u64>,
     /// Markers played during this pulse
     pub markers: Vec<Marker>,
     /// Oscillator phase

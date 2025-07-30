@@ -621,7 +621,7 @@ class CodeGenerator(ICodeGenerator):
                 siginfo[2][0],
                 siginfo[2][1],
             )
-        command_table_tracker = CommandTableTracker(awg.device_type)
+        command_table_tracker = CommandTableTracker(awg.device_type, awg.signal_type)
         deferred_function_calls = seqc_generator_from_device_and_signal_type(
             awg.device_type, awg.signal_type
         )

@@ -17,7 +17,9 @@ from laboneq.compiler.seqc.wave_compressor import (
     PlaySamples,
     compress_wave,
 )
-
+from laboneq.compiler.common.pulse_parameters import (
+    PulseParams,
+)
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.pulse_sampler import (
@@ -202,13 +204,15 @@ class WaveformSampler:
     `WaveformSampler`s must be unique across different AWGs / devices.
     """
 
-    def __init__(self, pulse_defs: dict[str, PulseDef], pulse_def_params: list[dict]):
+    def __init__(
+        self, pulse_defs: dict[str, PulseDef], pulse_def_params: dict[int, PulseParams]
+    ):
         # TODO: Ideally both sampling and compression should be standalone functions,
         # but currently they are tightly coupled to the pulse definitions and parameters,
         # which are not yet fully mapped in Rust.
         # This is a temporary solution until the mapping is complete.
         self._pulse_defs: dict[str, PulseDef] = pulse_defs
-        self._pulse_def_params: list[dict] = pulse_def_params
+        self._pulse_def_params: dict[int, dict] = pulse_def_params
 
     def sample_and_compress(
         self,

@@ -109,8 +109,6 @@ def create_connection(
         ValueError: Neither or both 'to_instrument' and 'to_signal' defined.
             'to_instrument' was given more than one port.
             'to_signal' input format is invalid.
-
-    !!! version-added "Added in version 2.19.0"
     """
     if "to_instrument" in kwargs and "to_signal" in kwargs:
         raise ValueError(

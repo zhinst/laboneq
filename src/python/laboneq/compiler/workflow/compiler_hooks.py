@@ -8,6 +8,11 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from laboneq.compiler.feedback_router.feedback_router import (
+    do_assign_feedback_registers_seqc,
+)
+from laboneq.compiler.seqc.linker import CombinedRTOutputSeqC
+
 if TYPE_CHECKING:
     from laboneq.compiler.common.awg_info import AWGInfo
     from laboneq.compiler.common.iface_compiler_output import CombinedOutput
@@ -42,6 +47,10 @@ class CompilerHooks(ABC):
     @staticmethod
     @abstractmethod
     def device_class() -> int: ...
+
+    @staticmethod
+    @abstractmethod
+    def assign_feedback_registers(combined_compiler_output: CombinedOutput): ...
 
     @staticmethod
     @abstractmethod
@@ -87,6 +96,11 @@ class CompilerHooksSeqC(CompilerHooks):
     @staticmethod
     def device_class() -> int:
         return 0
+
+    @staticmethod
+    def assign_feedback_registers(combined_compiler_output: CombinedOutput):
+        assert isinstance(combined_compiler_output, CombinedRTOutputSeqC)
+        do_assign_feedback_registers_seqc(combined_compiler_output)
 
     @staticmethod
     def linker() -> type[ILinker]:

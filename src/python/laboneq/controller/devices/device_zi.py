@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Iterator, cast
+from typing import TYPE_CHECKING, Any, Iterator
 from weakref import ReferenceType, ref
 
 from laboneq.controller.devices.channel_base import ChannelBase
@@ -51,6 +51,7 @@ from laboneq.controller.devices.node_control import (
 from laboneq.controller.pipeliner_reload_tracker import PipelinerReloadTracker
 from laboneq.controller.recipe_processor import (
     AwgConfig,
+    AwgConfigs,
     AwgKey,
     RecipeData,
     RtExecutionInfo,
@@ -232,7 +233,7 @@ class DeviceZI(DeviceAbstract):
         pass
 
     @abstractmethod
-    def disconnect(self):
+    async def disconnect(self):
         pass
 
     async def disable_outputs(self, outputs: set[int], invert: bool):
@@ -262,6 +263,9 @@ class DeviceZI(DeviceAbstract):
     def validate_recipe_data(self, recipe_data: RecipeData):
         pass
 
+    def fetch_awg_configs(self, awg_configs: AwgConfigs, artifacts: Any):
+        pass
+
     def pre_process_attributes(
         self,
         initialization: Initialization,
@@ -271,8 +275,7 @@ class DeviceZI(DeviceAbstract):
     @abstractmethod
     def calc_raw_acquire_length(
         self,
-        recipe_data: RecipeData,
-        awg_key: AwgKey,
+        artifacts: Any,
         awg_config: AwgConfig,
         signal_id: str,
         handle: str,
@@ -455,8 +458,7 @@ class DeviceBase(DeviceZI):
 
     def calc_raw_acquire_length(
         self,
-        recipe_data: RecipeData,
-        awg_key: AwgKey,
+        artifacts: Any,
         awg_config: AwgConfig,
         signal_id: str,
         handle: str,  # unused; all scope acquisitions must share the same length regardless of handle
@@ -496,9 +498,6 @@ class DeviceBase(DeviceZI):
         emulator_state: EmulatorState | None,
         timeout_s: float,
     ):
-        if self._connected:
-            return
-
         _logger.debug("%s: Connecting to %s interface.", self.dev_repr, self.interface)
         try:
             self._api = await InstrumentConnection.connect(
@@ -525,18 +524,20 @@ class DeviceBase(DeviceZI):
             self.dev_opts = dev_opts.upper().splitlines()
         self._process_dev_opts()
 
-        self._connected = True
-
     async def connect(
         self,
         emulator_state: EmulatorState | None,
         disable_runtime_checks: bool,
         timeout_s: float,
     ):
+        if self._connected:
+            return
+
         self._enable_runtime_checks = not disable_runtime_checks
         await self._connect_to_data_server(emulator_state, timeout_s=timeout_s)
+        self._connected = True
 
-    def disconnect(self):
+    async def disconnect(self):
         if not self._connected:
             return
 
@@ -557,7 +558,6 @@ class DeviceBase(DeviceZI):
 
         for awg_key in recipe_data.awg_configs.keys():
             if awg_key.device_uid == self.uid:
-                assert isinstance(awg_key.awg_index, int)
                 self._allocated_awgs.add(awg_key.awg_index)
 
     async def on_experiment_begin(self):
@@ -693,7 +693,7 @@ class DeviceBase(DeviceZI):
         init_awgs = [] if initialization.awgs is None else initialization.awgs
         awg_index: int | None = None
         for awg in init_awgs:
-            if isinstance(awg.awg, int) and awg.awg == target_awg_index:
+            if awg.awg == target_awg_index:
                 awg_index = target_awg_index
                 break
         if awg_index is None:
@@ -1107,13 +1107,11 @@ class DeviceBase(DeviceZI):
         nt_step: NtStepKey,
         results: ExperimentResults,
     ):
-        rt_execution_info = recipe_data.rt_execution_info
         await _gather(
             *(
                 self._read_one_awg_results(
                     recipe_data,
                     nt_step,
-                    rt_execution_info,
                     results,
                     awg_key,
                     awg_config,
@@ -1127,15 +1125,15 @@ class DeviceBase(DeviceZI):
         self,
         recipe_data: RecipeData,
         nt_step: NtStepKey,
-        rt_execution_info: RtExecutionInfo,
         results: ExperimentResults,
         awg_key: AwgKey,
         awg_config: AwgConfig,
     ):
+        rt_execution_info = recipe_data.rt_execution_info
         if rt_execution_info.acquisition_type == AcquisitionType.RAW:
             assert awg_config.raw_acquire_length is not None
             raw_results = await self.get_raw_data(
-                channel=cast(int, awg_key.awg_index),
+                channel=awg_key.awg_index,
                 acquire_length=awg_config.raw_acquire_length,
                 acquires=awg_config.result_length,
             )
@@ -1203,7 +1201,7 @@ class DeviceBase(DeviceZI):
         assert awg_config.result_length is not None, "AWG not producing results"
         raw_readout = await self.get_measurement_data(
             recipe_data,
-            cast(int, awg_key.awg_index),
+            awg_key.awg_index,
             rt_execution_info,
             integrator_allocation.channels,
             awg_config.result_length,

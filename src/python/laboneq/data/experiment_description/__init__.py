@@ -68,14 +68,6 @@ class Acquire(SignalOperation):
 
 
 @dataclass
-class AcquireLoopNt(Section):
-    uid: str = None
-    averaging_mode: AveragingMode = None
-    count: int = None
-    execution_type: ExecutionType = None
-
-
-@dataclass
 class AcquireLoopRt(Section):
     uid: str = None
     acquisition_type: AcquisitionType = AcquisitionType.INTEGRATION

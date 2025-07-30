@@ -113,7 +113,7 @@ pub struct PlayPulse {
     pub set_oscillator_phase: Option<f64>,
     pub increment_oscillator_phase: Option<f64>,
     pub incr_phase_param_name: Option<String>,
-    pub id_pulse_params: Option<usize>,
+    pub id_pulse_params: Option<u64>,
     // TODO: Consider replacing this with an ID of markers
     pub markers: Vec<cjob::Marker>,
     pub pulse_def: Option<Arc<PulseDef>>,
@@ -129,12 +129,12 @@ pub struct AcquirePulse {
     /// Single acquire can consist of multiple individual pulses
     /// Length of pulse defs must match pulse params ID
     pub pulse_defs: Vec<Arc<PulseDef>>,
-    pub id_pulse_params: Vec<Option<usize>>,
+    pub id_pulse_params: Vec<Option<u64>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Match {
-    pub section: String,
+    pub section_info: Arc<SectionInfo>,
     pub length: Samples,
     pub handle: Option<String>,
     pub user_register: Option<i64>,
@@ -144,10 +144,13 @@ pub struct Match {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Loop {
+    pub section_info: Arc<SectionInfo>,
     /// Length of the loop in samples
     pub length: Samples,
     /// A flag representing whether the loop is compressed
     pub compressed: bool,
+    /// Number of iterations in the loop
+    pub count: u64,
 }
 
 /// One iteration of an loop.
@@ -155,19 +158,12 @@ pub struct Loop {
 pub struct LoopIteration {
     /// Length of the iteration in samples
     pub length: Samples,
-    /// Iteration number within the loop
-    pub iteration: u64,
-    /// Number of repeats of this loop
-    /// todo: Move to Loop
-    pub num_repeats: u64,
     /// Parameters used in this iteration
     pub parameters: Vec<Arc<cjob::SweepParameter>>,
     /// PRNG sample name to draw from
     pub prng_sample: Option<String>,
-    /// Name of the section
-    pub section_info: Arc<SectionInfo>,
-    /// A flag representing whether the loop is compressed
-    pub compressed: bool,
+    // Whether or not the iteration is a shadow of previous iteration.
+    pub shadow: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -219,7 +215,7 @@ pub struct PlayAcquire {
     length: Samples,
     // Acquire pulse definitions
     pulse_defs: Vec<Arc<PulseDef>>,
-    id_pulse_params: Vec<Option<usize>>,
+    id_pulse_params: Vec<Option<u64>>,
     oscillator_frequency: f64,
 }
 
@@ -229,7 +225,7 @@ impl PlayAcquire {
         length: Samples,
         pulse_defs: Vec<Arc<PulseDef>>,
         oscillator_frequency: f64,
-        id_pulse_params: Vec<Option<usize>>,
+        id_pulse_params: Vec<Option<u64>>,
     ) -> Self {
         PlayAcquire {
             signal,
@@ -251,7 +247,8 @@ impl PlayAcquire {
     pub fn pulse_defs(&self) -> &[Arc<PulseDef>] {
         &self.pulse_defs
     }
-    pub fn id_pulse_params(&self) -> &[Option<usize>] {
+
+    pub fn id_pulse_params(&self) -> &[Option<u64>] {
         &self.id_pulse_params
     }
 

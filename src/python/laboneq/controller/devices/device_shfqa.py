@@ -527,26 +527,11 @@ class DeviceSHFQA(DeviceSHFBase):
         num_results: int,
         hw_averages: int,
     ) -> RawReadoutData:
-        # TODO(2K): set timeout based on timeout_s from connect
-        timeout_s = 5
-
-        if is_spectroscopy(rt_execution_info.acquisition_type):
-            return await self._qachannels[channel].get_spectroscopy_data(
-                pipeliner_jobs=rt_execution_info.pipeliner_jobs,
-                num_results=num_results,
-                timeout_s=timeout_s,
-            )
-
-        assert len(result_indices) == 1
-        rt_result = await self._qachannels[channel].get_readout_data(
-            pipeliner_jobs=rt_execution_info.pipeliner_jobs,
+        return await self._qachannels[channel].get_measurement_data(
+            rt_execution_info=rt_execution_info,
+            result_indices=result_indices,
             num_results=num_results,
-            timeout_s=timeout_s,
-            integrator=result_indices[0],
         )
-        if rt_execution_info.acquisition_type == AcquisitionType.DISCRIMINATION:
-            rt_result.vector = rt_result.vector.real
-        return rt_result
 
     def _ch_repr_scope(self, ch: int) -> str:
         return f"{self.dev_repr}:scope:ch{ch}"

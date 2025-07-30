@@ -5,7 +5,9 @@ from __future__ import annotations
 
 from collections.abc import ItemsView, Iterator
 from collections import defaultdict
+from copy import deepcopy
 from dataclasses import dataclass, field
+from enum import Enum, auto
 import logging
 from laboneq.data.calibration import PortMode as RecipePortMode
 from packaging.version import Version, InvalidVersion
@@ -69,13 +71,17 @@ HandleResultShapes = dict[AcquireHandle, HandleResultShape]
 @dataclass(frozen=True)
 class AwgKey:
     device_uid: DeviceUID
-    awg_index: int | str
+    awg_index: int
+
+
+class AwgType(Enum):
+    QA = auto()
+    SG = auto()
 
 
 @dataclass
 class AwgConfig:
-    # TODO(2K): use enum
-    device_type: str | None
+    awg_type: AwgType
     signals: set[str]
     # QA
     raw_acquire_length: int | None = None
@@ -492,7 +498,7 @@ class _LoopsPreprocessor(ExecutorBase):
     def __init__(self):
         super().__init__(looping_mode=LoopingMode.ONCE)
 
-        self.result_shapes: HandleResultShapes = {}
+        self._result_shapes: HandleResultShapes = {}
         self._rt_execution_info: RtExecutionInfo | None = None
         self.pipeliner_job_count: int | None = None
         self._loop_stack: list[_LoopStackEntry] = []
@@ -505,6 +511,49 @@ class _LoopsPreprocessor(ExecutorBase):
                 "No 'acquire_loop_rt' section found in the experiment."
             )
         return self._rt_execution_info
+
+    def get_result_shapes(
+        self,
+        devices: DeviceCollection,
+        awg_configs: AwgConfigs,
+        scheduled_experiment: ScheduledExperiment,
+    ) -> HandleResultShapes:
+        result_shapes: HandleResultShapes = HandleResultShapes()
+        for handle, shape_info in self._result_shapes.items():
+            # Append extra dimension for multiple acquires with the same handle
+            axis_name = deepcopy(shape_info.base_axis_name)
+            axis = deepcopy(shape_info.base_axis)
+            shape = deepcopy(shape_info.base_shape)
+            if shape_info.handle_acquire_count > 1:
+                axis_name.append(handle)
+                axis.append(
+                    np.arange(shape_info.handle_acquire_count, dtype=np.float64)
+                )
+                shape.append(shape_info.handle_acquire_count)
+
+            # Append extra dimension for samples of the raw acquisition
+            if self.rt_execution_info.is_raw_acquisition:
+                signal_id = shape_info.signal
+                awg_key, awg_config = awg_configs.by_signal(signal_id)
+                device = devices.find_by_uid(awg_key.device_uid)
+                raw_acquire_length = device.calc_raw_acquire_length(
+                    scheduled_experiment.artifacts,
+                    awg_config,
+                    signal_id,
+                    handle,
+                )
+                axis_name.append("samples")
+                axis.append(np.arange(raw_acquire_length, dtype=np.float64))
+                shape.append(raw_acquire_length)
+
+            result_shapes[handle] = HandleResultShape(
+                signal=shape_info.signal,
+                base_shape=shape,
+                base_axis_name=axis_name,
+                base_axis=axis,
+            )
+
+        return result_shapes
 
     @property
     def current_rt_info(self) -> RtExecutionInfo:
@@ -526,7 +575,7 @@ class _LoopsPreprocessor(ExecutorBase):
             for loop in self._loop_stack
             if not loop.is_averaging or single_shot_cyclic
         ]
-        known_shape = self.result_shapes.get(handle)
+        known_shape = self._result_shapes.get(handle)
         if known_shape is None:
             axis_name = [
                 loop.axis_name
@@ -538,7 +587,7 @@ class _LoopsPreprocessor(ExecutorBase):
                 for loop in self._loop_stack
                 if not loop.is_averaging or single_shot_cyclic
             ]
-            self.result_shapes[handle] = HandleResultShape(
+            self._result_shapes[handle] = HandleResultShape(
                 signal=signal,
                 base_shape=shape,
                 base_axis_name=axis_name,
@@ -608,15 +657,25 @@ class _LoopsPreprocessor(ExecutorBase):
 
 def _calculate_awg_configs(
     rt_execution_info: RtExecutionInfo,
+    scheduled_experiment: ScheduledExperiment,
     recipe: Recipe,
     devices: DeviceCollection,
 ) -> AwgConfigs:
     awg_configs = AwgConfigs()
 
+    for _, device in devices.all:
+        device.fetch_awg_configs(awg_configs, scheduled_experiment.artifacts)
+
     for initialization in recipe.initializations:
+        awg_type = (
+            AwgType.QA
+            if initialization.device_type is not None
+            and initialization.device_type.startswith("SHFQA")
+            else AwgType.SG
+        )
         for awg in initialization.awgs or []:
             awg_config = AwgConfig(
-                device_type=initialization.device_type,
+                awg_type=awg_type,
                 signals=set(awg.signals.keys()),
                 target_feedback_register=awg.target_feedback_register,
                 source_feedback_register=awg.source_feedback_register,
@@ -630,14 +689,17 @@ def _calculate_awg_configs(
                         "Global feedback over QHub is not implemented."
                     )
                 awg_config.fb_reg_source_index = awg.feedback_register_index_select
-                assert isinstance(awg.awg, int)
                 awg_config.fb_reg_target_index = awg.awg
-            if initialization.device_type == "PRETTYPRINTERDEVICE":
-                awg_config.result_length = -1  # result shape determined by device
-            awg_configs.add(AwgKey(initialization.device_uid, awg.awg), awg_config)
+            awg_configs.add(
+                AwgKey(device_uid=initialization.device_uid, awg_index=awg.awg),
+                awg_config,
+            )
 
     for integrator_allocation in recipe.integrator_allocations:
-        awg_key = AwgKey(integrator_allocation.device_id, integrator_allocation.awg)
+        awg_key = AwgKey(
+            device_uid=integrator_allocation.device_id,
+            awg_index=integrator_allocation.awg,
+        )
         awg_configs[awg_key].acquire_signals.add(integrator_allocation.signal_id)
 
     acquire_lengths = {al.signal_id: al.acquire_length for al in recipe.acquire_lengths}
@@ -654,7 +716,6 @@ def _calculate_awg_configs(
             raw_acquire_lengths[ac_awg_key.device_uid][signal] = acquire_lengths.get(
                 signal, 0
             )
-            assert isinstance(ac_awg_key.awg_index, int)
             raw_acquire_channels[ac_awg_key.device_uid].add(ac_awg_key.awg_index)
     for awg_key, awg_config in awg_configs.items():
         dev_raw_acquire_lengths = raw_acquire_lengths.get(awg_key.device_uid, {})
@@ -689,10 +750,7 @@ def _calculate_awg_configs(
                     raise LabOneQControllerException(
                         "Sequential averaging is not supported for raw acquisitions."
                     )
-                device_type = awg_config.device_type
-                if device_type is None:
-                    device_type = ""
-                if device_type.startswith("SHFQA"):  # SHFQA or SHFQC/QA
+                if awg_config.awg_type == AwgType.QA:
                     if devices.find_by_uid(awg_key.device_uid).options.is_qc:
                         SCOPE_MEMORY_SIZE = 64 * 1024
                     else:
@@ -807,13 +865,15 @@ def pre_process_compiled(
     lp.run(execution)
     rt_execution_info = lp.rt_execution_info
 
-    awg_configs = _calculate_awg_configs(rt_execution_info, recipe, devices)
+    awg_configs = _calculate_awg_configs(
+        rt_execution_info, scheduled_experiment, recipe, devices
+    )
 
     recipe_data = RecipeData(
         scheduled_experiment=scheduled_experiment,
         recipe=recipe,
         execution=execution,
-        result_shapes=lp.result_shapes,
+        result_shapes=lp.get_result_shapes(devices, awg_configs, scheduled_experiment),
         rt_execution_info=rt_execution_info,
         device_settings=device_settings,
         awg_configs=awg_configs,

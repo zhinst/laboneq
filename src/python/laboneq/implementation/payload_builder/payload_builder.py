@@ -15,7 +15,6 @@ from laboneq.implementation.payload_builder.experiment_info_builder.experiment_i
 from laboneq.implementation.payload_builder.target_setup_generator import (
     TargetSetupGenerator,
 )
-from laboneq.interfaces.payload_builder.payload_builder_api import PayloadBuilderAPI
 from laboneq.compiler import Compiler
 
 
@@ -29,7 +28,7 @@ def _compile(job: CompilationJob):
     return compiler_output.scheduled_experiment
 
 
-class PayloadBuilder(PayloadBuilderAPI):
+class PayloadBuilder:
     def build_payload(
         self,
         device_setup: Setup,

@@ -27,7 +27,6 @@ from laboneq.dsl.experiment.play_pulse import PlayPulse
 from laboneq.dsl.experiment.pulse import PulseFunctional, PulseSampled
 from laboneq.dsl.experiment.reserve import Reserve
 from laboneq.dsl.experiment.section import (
-    AcquireLoopNt,
     AcquireLoopRt,
     Case,
     Match,
@@ -488,14 +487,6 @@ class MatchModel(SectionModel):
 
 
 @attrs.define
-class AcquireLoopNtModel(SectionModel):
-    averaging_mode: AveragingModeModel
-    count: int
-    execution_type: ExecutionTypeModel
-    _target_class: ClassVar[Type] = AcquireLoopNt
-
-
-@attrs.define
 class AcquireLoopRtModel(SectionModel):
     acquisition_type: AcquisitionTypeModel
     averaging_mode: AveragingModeModel
@@ -536,7 +527,6 @@ class PRNGLoopModel(SectionModel):
 _section_types = [
     SectionModel,
     MatchModel,
-    AcquireLoopNtModel,
     AcquireLoopRtModel,
     SweepModel,
     CaseModel,
@@ -546,7 +536,6 @@ _section_types = [
 AllSectionModel = Union[
     SectionModel,
     MatchModel,
-    AcquireLoopNtModel,
     AcquireLoopRtModel,
     SweepModel,
     CaseModel,

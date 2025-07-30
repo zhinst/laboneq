@@ -3,48 +3,22 @@
 
 use crate::Result;
 use crate::ir;
-use log::warn;
 use std::collections::HashSet;
 
 pub fn handle_loops_recursive(
-    node: &mut ir::IrNode,
+    node: &ir::IrNode,
     cut_points: &mut HashSet<ir::Samples>,
-    sample_multiple: u16,
-    compressed: bool,
 ) -> Result<()> {
-    let mut compressed = compressed;
-
-    for child in node.iter_children_mut() {
-        let offset = *child.offset();
-        match child.data_mut() {
-            ir::NodeKind::Loop(data) => {
-                // todo: Remove this layer from tree
-                compressed = data.compressed;
-            }
-            ir::NodeKind::LoopIteration(data) => {
-                data.compressed = compressed;
-                let start = offset;
-                let end = start + data.length;
-                if compressed && data.iteration == 0 && (end % sample_multiple as i64 != 0) {
-                    warn!(
-                        "Loop end time {end} is not divisible by sample multiple {sample_multiple}"
-                    );
-                }
-                cut_points.insert(start);
-                cut_points.insert(start + data.length);
-                *child.offset_mut() = start;
-            }
-            _ => {}
+    for child in node.iter_children() {
+        if let ir::NodeKind::LoopIteration(data) = child.data() {
+            cut_points.insert(*child.offset());
+            cut_points.insert(*child.offset() + data.length);
         }
-        handle_loops_recursive(child, cut_points, sample_multiple, compressed)?;
+        handle_loops_recursive(child, cut_points)?;
     }
     Ok(())
 }
 
-pub fn handle_loops(
-    node: &mut ir::IrNode,
-    cut_points: &mut HashSet<ir::Samples>,
-    sample_multiple: u16,
-) -> Result<()> {
-    handle_loops_recursive(node, cut_points, sample_multiple, false)
+pub fn handle_loops(node: &ir::IrNode, cut_points: &mut HashSet<ir::Samples>) -> Result<()> {
+    handle_loops_recursive(node, cut_points)
 }

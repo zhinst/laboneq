@@ -41,14 +41,12 @@ from laboneq.dsl.enums import (
     AveragingMode,
     CarrierType,
     ExecutionType,
-    HighPassCompensationClearing,
     ModulationType,
     PortMode,
     RepetitionMode,
     SectionAlignment,
 )
 from laboneq.dsl.experiment import (
-    AcquireLoopNt,
     AcquireLoopRt,
     Case,
     Experiment,

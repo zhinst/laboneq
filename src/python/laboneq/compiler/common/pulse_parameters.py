@@ -4,21 +4,8 @@
 from __future__ import annotations
 
 import pickle
-from typing import Any, Dict
-
-import pybase64 as base64
-
+import hashlib
 from laboneq.core.utilities.pulse_sampler import combine_pulse_parameters
-
-
-def encode_pulse_parameters(parameters: Dict[str, Any]) -> str:
-    return base64.b64encode(pickle.dumps(parameters)).decode()
-
-
-def decode_pulse_parameters(blobs: str) -> object:
-    if not blobs:
-        return None
-    return pickle.loads(base64.b64decode(blobs))
 
 
 class PulseParams:
@@ -27,6 +14,14 @@ class PulseParams:
     def __init__(self, pulse_params: dict | None, play_params: dict | None):
         self.pulse_params = pulse_params
         self.play_params = play_params
+
+    def id(self) -> int:
+        """Return a unique ID for the pulse parameters."""
+        # The values are pickled as currently they can be any arbitrary Python object.
+        pickled = pickle.dumps(dict(sorted(self.combined().items())))
+        hash_digest = hashlib.sha256(pickled).digest()
+        # Unsigned 64-bit integer for the ID
+        return int.from_bytes(hash_digest[:8], "big", signed=False)
 
     def combined(self) -> dict:
         return combine_pulse_parameters(

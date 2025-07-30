@@ -19,7 +19,7 @@ use interval_calculator::interval::{Interval, OrderedRange};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use super::amplitude_registers::AmplitudeRegisterAllocation;
+use super::handle_amplitude_registers::AmplitudeRegisterAllocation;
 
 struct CutPoints {
     general: HashSet<ir::Samples>,

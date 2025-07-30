@@ -21,7 +21,25 @@ from laboneq.dsl.experiment import ExperimentSignal
 @classformatter
 @attrs.define(kw_only=True)
 class QuantumParameters:
-    """Calibration parameters for a [QuantumElement][laboneq.dsl.quantum.quantum_element.QuantumElement]."""
+    """Calibration parameters for a [QuantumElement][laboneq.dsl.quantum.quantum_element.QuantumElement].
+
+    Attributes:
+        custom: A dictionary of custom parameters with attribute-style access.
+
+    !!! note
+        For reliable serialization, the objects in the `custom` dictionary and the
+        attributes added by subclasses need to be supported by the LabOne Q serializer.
+        Examples of supported types include:
+        - Python types: list, dict, tuple, int, float, bool, str
+        - NumPy types: np.integer, np.ndarray
+        - `QuantumParameter` objects
+        For more information on the currently supported objects for serialization,
+        please see the [serializers documentation](https://docs.zhinst.com/labone_q_user_manual/core/functionality_and_concepts/09_serialization/00_serialization.html).
+    """
+
+    custom: dict[str, object] = attrs.field(
+        factory=dict, converter=lambda value: AttrDict(value)
+    )
 
     def copy(self):
         """Returns a copy of the parameters."""
@@ -111,6 +129,42 @@ def _parameters_converter(parameters: dict[str, Any] | QuantumParameters | None,
     if isinstance(parameters, dict):
         return self_.PARAMETERS_TYPE(**parameters)
     return parameters
+
+
+class AttrDict(dict):
+    """A dictionary with attribute-style access."""
+
+    def __init__(self, custom: dict[str, object]):
+        super().__init__(custom)
+        if existing_attributes := set(super().__dir__()) & set(custom.keys()):
+            raise ValueError(
+                f"The following group names shadow existing attributes of "
+                f"{self.__class__.__name__}: {', '.join(existing_attributes)}."
+            )
+        for key, value in custom.items():
+            setattr(self, key, value)
+
+    def __dir__(self) -> list[str]:
+        return list(self.keys()) + list(super().__dir__())
+
+    def __setattr__(self, key: str, value: object):
+        self[key] = value
+
+    def __getattr__(self, key: str):
+        try:
+            return self[key]
+        except KeyError as err:
+            raise AttributeError(
+                f"The {type(self).__name__} object has no attribute `{key}`."
+            ) from err
+
+    def __delattr__(self, key):
+        try:
+            del self[key]
+        except KeyError as err:
+            raise AttributeError(
+                f"The {type(self).__name__} object has no attribute `{key}`."
+            ) from err
 
 
 @classformatter

@@ -50,7 +50,7 @@ pub enum CompressedWaveformPart<T: SampledWaveformSignature> {
 #[derive(Clone, Debug)]
 struct KernelProperties<'a> {
     pulse_id: &'a str,
-    pulse_parameters_id: Option<usize>,
+    pulse_parameters_id: Option<u64>,
     oscillator_frequency: f64,
 }
 
@@ -84,7 +84,7 @@ impl IntegrationKernel<'_> {
         self.properties.pulse_id
     }
 
-    pub fn pulse_parameters_id(&self) -> Option<usize> {
+    pub fn pulse_parameters_id(&self) -> Option<u64> {
         self.properties.pulse_parameters_id
     }
 

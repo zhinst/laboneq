@@ -7,6 +7,7 @@ import itertools
 from typing import TYPE_CHECKING
 
 from collections import Counter
+import matplotlib.pyplot as plt
 import networkx as nx
 
 from laboneq.core.utilities.add_exception_note import add_note
@@ -433,6 +434,12 @@ class QPUTopology:
                 f"QuantumElement | str | None."
             )
 
+        # check nodes are present in QPU
+        if source_node not in self._node_lookup:
+            raise ValueError(f"Source node `{source_node}` is not present in the QPU.")
+        if target_node not in self._node_lookup:
+            raise ValueError(f"Target node `{target_node}` is not present in the QPU.")
+
         # add edge to graph
         edge_params = {
             "parameters": parameters,
@@ -629,17 +636,62 @@ class QPUTopology:
             )
             raise err from None
 
-    def plot(self, *, ax: Axes | None = None, disconnected: bool = True) -> None:
+    def plot(
+        self,
+        *,
+        figsize: tuple[float, float] | None = None,
+        fixed_pos: dict[str, tuple[float, float]] | None = None,
+        equal_aspect: bool = False,
+        show_tags: bool = True,
+        ax: Axes | None = None,
+        disconnected: bool = False,
+    ) -> None:
         """Plot the QPU topology.
 
-        Plot a simple directed graph of the QPU topology, including: nodes, node labels,
-         edges, edge labels, and directionality. The node labels are the UIDs of the
-         quantum elements at the nodes. The edge labels are the custom edge tags in
-         `get_edge`. The arrows on the graph indicate the directionality.
+        Plot a simple directed graph of the QPU topology, including: nodes, node
+        labels, edges, edge labels, and directionality. The node labels are the UIDs
+        of the quantum elements at the nodes. The edge labels are the custom edge tags
+        in `get_edge`. The arrows on the graph indicate the directionality.
 
         Arguments:
+            figsize: The figure size `(width, height)` in inches.
+            fixed_pos: The dictionary of fixed node positions. The keys of the
+                dictionary are the quantum element UIDs and the values of the
+                dictionary are the relative node coordinates.
+            equal_aspect: Whether to set equal aspect ratio.
+            show_tags: Whether to show edge tags.
             ax: The Matplotlib axes on which to draw the graph.
             disconnected: Whether to plot disconnected nodes.
+
+        By default, the graph is drawn using the networkx spring layout. To customise
+        the graph's appearance, we can specify the figure size, dictionary of fixed
+        node positions, aspect ratio, edge labels, and whether to show disconnected
+        nodes. For example, to plot nine disconnected qubits arranged on a square
+        lattice, omitting edge tags, we can construct the graph as follows:
+
+        ```python
+        fixed_pos = {qpu[i].uid: divmod(i, 3) for i in range(9)}
+        qpu.topology.plot(
+            figsize=(10, 10),
+            fixed_pos=fixed_pos,
+            equal_aspect=True,
+            show_tags=False,
+            disconnected=True,
+        )
+        ```
+
+        !!! note
+            If a strict subset of nodes is at a fixed position, the remaining nodes are
+            distributed according to the networkx spring layout.
+
+        !!! version-changed "Changed in version 2.57.0"
+            Changed the default networkx layout from `planar` to `spring`.
+            Changed the default value of the `disconnected` argument from `True` to
+            `False`.
+
+        !!! version-added "Added in version 2.57.0"
+            Added the `figsize`, `fixed_pos`, `equal_aspect`, and `show_tags` optional
+            keyword arguments, which provide greater control over the plot's appearance.
         """
         nx_graph = self._graph.copy()
 
@@ -654,7 +706,11 @@ class QPUTopology:
             f"arc3,rad={r}" for r in itertools.accumulate([0.15] * max_parallel_edges)
         ]
 
-        pos = nx.planar_layout(nx_graph)
+        if ax is None:
+            _, ax = plt.subplots(figsize=figsize)
+
+        fixed = list(fixed_pos.keys()) if fixed_pos else None
+        pos = nx.spring_layout(nx_graph, pos=fixed_pos, fixed=fixed, seed=1)
         nx.draw_networkx_nodes(nx_graph, pos, **zi_draw_nx_theme("nodes"), ax=ax)
         nx.draw_networkx_labels(nx_graph, pos, **zi_draw_nx_theme("labels"), ax=ax)
         nx.draw_networkx_edges(
@@ -666,8 +722,14 @@ class QPUTopology:
         )
 
         edge_labels = {}
-        for u, v, k in nx_graph.edges(keys=True):
-            edge_labels[(u, v, k)] = k
+        for u, v, k, d in nx_graph.edges(keys=True, data=True):
+            if show_tags:
+                edge_label = (
+                    f"{k}: {d['quantum_element']}" if d["quantum_element"] else k
+                )
+            else:
+                edge_label = f"{d['quantum_element']}" if d["quantum_element"] else ""
+            edge_labels[(u, v, k)] = edge_label
 
         nx.draw_networkx_edge_labels(
             nx_graph,
@@ -677,3 +739,6 @@ class QPUTopology:
             **zi_draw_nx_theme("edge_labels"),
             ax=ax,
         )
+
+        if equal_aspect:
+            ax.set_aspect("equal")

@@ -7,14 +7,15 @@ use crate::ir::SectionId;
 use anyhow::anyhow;
 use std::collections::HashSet;
 
-pub fn handle_prng_recursive(
-    node: &mut ir::IrNode,
+pub fn handle_prng_recursive<'a>(
+    node: &'a ir::IrNode,
     cut_points: &mut HashSet<ir::Samples>,
     parent_prng_setup_section: Option<SectionId>,
     active_prng_sample: &mut Option<String>,
+    active_loop: Option<&'a ir::SectionInfo>,
 ) -> Result<()> {
     let mut parent_prng_setup_section_here = parent_prng_setup_section;
-    for child in node.iter_children_mut() {
+    for child in node.iter_children() {
         match child.data() {
             ir::NodeKind::SetupPrng(data) => {
                 if let Some(ref section_id) = parent_prng_setup_section_here {
@@ -32,13 +33,24 @@ pub fn handle_prng_recursive(
             ir::NodeKind::DropPrngSetup => {
                 parent_prng_setup_section_here = None;
             }
+            ir::NodeKind::Loop(ob) => {
+                handle_prng_recursive(
+                    child,
+                    cut_points,
+                    parent_prng_setup_section_here,
+                    active_prng_sample,
+                    ob.section_info.as_ref().into(),
+                )?;
+            }
             ir::NodeKind::LoopIteration(data) => {
                 let mut reset_active_prng_sample = false;
                 if let Some(sample_name) = &data.prng_sample {
                     if let Some(other_sample) = active_prng_sample {
                         return Err(anyhow!(
                         "In section '{}': Can't draw sample '{}' from PRNG, when other sample '{}' is still required at the same time",
-                        data.section_info.name,
+                        active_loop
+                            .as_ref()
+                            .map_or("unknown", |l| l.name.as_str()),
                         sample_name,
                         other_sample
                     ).into());
@@ -51,6 +63,7 @@ pub fn handle_prng_recursive(
                     cut_points,
                     parent_prng_setup_section_here,
                     active_prng_sample,
+                    active_loop,
                 )?;
                 if reset_active_prng_sample {
                     *active_prng_sample = None;
@@ -61,7 +74,7 @@ pub fn handle_prng_recursive(
                     if data.prng_sample != *active_prng_sample {
                         return Err(anyhow!(
                         "In section '{}': cannot match PRNG sample '{}' here. The only available PRNG sample is '{}'.",
-                        data.section,
+                        data.section_info.name,
                         sample_name,
                                                   active_prng_sample
                             .as_ref()
@@ -74,6 +87,7 @@ pub fn handle_prng_recursive(
                     cut_points,
                     parent_prng_setup_section_here,
                     active_prng_sample,
+                    None,
                 )?;
             }
             _ => {
@@ -82,6 +96,7 @@ pub fn handle_prng_recursive(
                     cut_points,
                     parent_prng_setup_section_here,
                     active_prng_sample,
+                    None,
                 )?;
             }
         }
@@ -89,7 +104,7 @@ pub fn handle_prng_recursive(
     Ok(())
 }
 
-pub fn handle_prng(node: &mut ir::IrNode, cut_points: &mut HashSet<ir::Samples>) -> Result<()> {
+pub fn handle_prng(node: &ir::IrNode, cut_points: &mut HashSet<ir::Samples>) -> Result<()> {
     let mut active_prng_sample = Option::<String>::None;
-    handle_prng_recursive(node, cut_points, None, &mut active_prng_sample)
+    handle_prng_recursive(node, cut_points, None, &mut active_prng_sample, None)
 }

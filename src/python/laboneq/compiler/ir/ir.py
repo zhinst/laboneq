@@ -2,10 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from typing import Optional
 
 import attr
-from attr import field
 
 from laboneq.compiler.ir.root_ir import RootScheduleIR
 from laboneq.data.compilation_job import (
@@ -20,7 +18,7 @@ from laboneq.data.compilation_job import (
 @attr.define(slots=True)
 class DeviceIR:
     uid: str = ""
-    device_type: Optional[DeviceInfoType] = None
+    device_type: DeviceInfoType | None = None
 
     @classmethod
     def from_device_info(cls, device_info: DeviceInfo):
@@ -30,8 +28,8 @@ class DeviceIR:
 @attr.define(slots=True)
 class SignalIR:
     uid: str = ""
-    device: Optional[DeviceIR] = None
-    oscillator: Optional[OscillatorInfo] = None
+    device: DeviceIR | None = None
+    oscillator: OscillatorInfo | None = None
 
     @classmethod
     def from_signal_info(cls, signal_info: SignalInfo):
@@ -44,10 +42,10 @@ class SignalIR:
 
 @attr.define(slots=True)
 class IRTree:
-    devices: list[DeviceIR] = field(factory=list)
-    signals: list[SignalIR] = field(factory=list)
-    root: Optional[RootScheduleIR] = None
-    pulse_defs: list[PulseDef] = field(factory=list)
+    devices: list[DeviceIR]
+    signals: list[SignalIR]
+    root: RootScheduleIR
+    pulse_defs: list[PulseDef]
 
     def round_trip(self):
         from laboneq.dsl.serialization import Serializer

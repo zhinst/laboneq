@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import weakref
 from contextlib import contextmanager
-from typing import Dict, Set
+from typing import TypeVar
 
 
 class QueryTracker:
@@ -25,7 +25,11 @@ class QueryTracker:
         return self._queries
 
 
-class ParameterStore(dict):
+KT = TypeVar("KT")
+VT = TypeVar("VT")
+
+
+class ParameterStore(dict[KT, VT]):
     """Key-value store for the sweep parameters.
 
     Tracks the parameters that are actually used in the experiment.
@@ -33,7 +37,7 @@ class ParameterStore(dict):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._query_trackers: Set[weakref.ReferenceType[QueryTracker]] = set()
+        self._query_trackers: set[weakref.ReferenceType[QueryTracker]] = set()
 
     def create_tracker(self):
         tracker = QueryTracker()
@@ -69,7 +73,7 @@ class ParameterStore(dict):
         return super().__contains__(item)
 
     @contextmanager
-    def extend(self, other: Dict):
+    def extend(self, other: dict):
         """Extend the parameter store with the parameters from another store.
 
         This is useful for tracking the parameters used in a sub-block.

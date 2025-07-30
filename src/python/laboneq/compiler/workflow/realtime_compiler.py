@@ -7,7 +7,7 @@ from __future__ import annotations
 import copy
 import logging
 from itertools import groupby
-from typing import Optional, TypedDict
+from typing import TypedDict
 import time
 
 from laboneq.compiler import CompilerSettings
@@ -109,7 +109,7 @@ class RealtimeCompiler:
         _logger.debug("lowering IR to code complete")
 
     def run(
-        self, near_time_parameters: Optional[ParameterStore] = None
+        self, near_time_parameters: ParameterStore[str, float] | None = None
     ) -> RTCompilerOutputContainer:
         time_start = time.perf_counter()
         self._scheduler.run(near_time_parameters)

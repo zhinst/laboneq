@@ -97,31 +97,28 @@ fn insert_amplitude_set(
     node: &mut ir::IrNode,
     allocation: &AmplitudeRegisterAllocation,
     in_compressed_loop: &mut bool,
+    iteration: Option<usize>,
 ) {
     match node.data() {
         ir::NodeKind::Loop(ob) => {
             if ob.compressed {
                 *in_compressed_loop = true;
             }
-            for child in node.iter_children_mut() {
-                insert_amplitude_set(child, allocation, in_compressed_loop);
+            for (idx, child) in node.iter_children_mut().enumerate() {
+                insert_amplitude_set(child, allocation, in_compressed_loop, Some(idx));
             }
         }
         ir::NodeKind::LoopIteration(ob) => {
+            let iteration =
+                iteration.expect("Internal Error: Expected loop iteration to be inside loop.");
             let mut params = vec![];
             for param in ob.parameters.iter() {
                 if !allocation.is_amp_param(&param.uid) {
                     continue;
                 }
-                let amp = param
-                    .values
-                    .abs_at_index(ob.iteration as usize)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "Amplitude sweep values should have index '{}'",
-                            ob.iteration
-                        )
-                    });
+                let amp = param.values.abs_at_index(iteration).unwrap_or_else(|| {
+                    panic!("Internal Error: Amplitude sweep values should have index '{iteration}'")
+                });
                 let obj = ir::InitAmplitudeRegister {
                     register: allocation.get_allocation(Some(&param.uid)),
                     // Take absolute value here, to be compatible with how we later lump the pulse
@@ -139,7 +136,7 @@ fn insert_amplitude_set(
             *in_compressed_loop = false;
             {
                 for child in node.iter_children_mut() {
-                    insert_amplitude_set(child, allocation, in_compressed_loop);
+                    insert_amplitude_set(child, allocation, in_compressed_loop, iteration.into());
                 }
             }
             // TODO: does this clash with PRNG?
@@ -157,7 +154,7 @@ fn insert_amplitude_set(
         }
         _ => {
             for child in node.iter_children_mut() {
-                insert_amplitude_set(child, allocation, in_compressed_loop);
+                insert_amplitude_set(child, allocation, in_compressed_loop, None);
             }
         }
     }
@@ -177,7 +174,7 @@ pub fn handle_amplitude_register_events(
     {
         return;
     }
-    insert_amplitude_set(program, allocation, &mut false);
+    insert_amplitude_set(program, allocation, &mut false, None);
 }
 
 #[cfg(test)]
@@ -265,23 +262,22 @@ mod tests {
             ir::NodeKind::Loop(ir::Loop {
                 length: 0,
                 compressed: false,
+                section_info: Arc::new(SectionInfo {
+                    name: "".to_string(),
+                    id: 1,
+                }),
+                count: 1,
             }),
             0,
         );
 
-        for iteration in 0..2 {
+        for _ in 0..2 {
             let mut top_loop_iteration = ir::IrNode::new(
                 ir::NodeKind::LoopIteration(ir::LoopIteration {
                     length: 0,
-                    iteration,
                     parameters: vec![Arc::clone(&parameter)],
                     prng_sample: None,
-                    num_repeats: 1,
-                    section_info: Arc::new(SectionInfo {
-                        name: String::from("s1"),
-                        id: 1,
-                    }),
-                    compressed: false,
+                    shadow: false,
                 }),
                 0,
             );
@@ -290,6 +286,11 @@ mod tests {
                 ir::NodeKind::Loop(ir::Loop {
                     length: 0,
                     compressed: true,
+                    count: 1,
+                    section_info: Arc::new(SectionInfo {
+                        name: "".to_string(),
+                        id: 1,
+                    }),
                 }),
                 0,
             );
@@ -300,7 +301,7 @@ mod tests {
 
         // Initialize amplitude parameter
         let allocation = AmplitudeRegisterAllocation::allocate(HashSet::from(["test"]), 1);
-        insert_amplitude_set(&mut root, &allocation, &mut false);
+        insert_amplitude_set(&mut root, &allocation, &mut false, None);
 
         // Test that each iteration within the compressed loop has `InitAmplitudeRegister` as a first node
         let compressed_loop_children = &root.take_children()[0].take_children();
@@ -357,6 +358,11 @@ mod tests {
             ir::NodeKind::Loop(ir::Loop {
                 length: 0,
                 compressed: false,
+                section_info: Arc::new(SectionInfo {
+                    name: "".to_string(),
+                    id: 1,
+                }),
+                count: 1,
             }),
             0,
         );
@@ -364,29 +370,33 @@ mod tests {
         let mut top_loop_iteration = ir::IrNode::new(
             ir::NodeKind::LoopIteration(ir::LoopIteration {
                 length: 0,
-                iteration: 0,
                 parameters: vec![Arc::clone(&parameter)],
                 prng_sample: None,
-                num_repeats: 1,
-                compressed: false,
-                section_info: Arc::new(SectionInfo {
-                    name: String::from("s1"),
-                    id: 1,
-                }),
+                shadow: false,
             }),
             0,
         );
         let loop_nested_compressed = ir::IrNode::new(
             ir::NodeKind::Loop(ir::Loop {
+                section_info: Arc::new(SectionInfo {
+                    name: "".to_string(),
+                    id: 1,
+                }),
                 length: 0,
                 compressed: true,
+                count: 1,
             }),
             0,
         );
         let loop_nested_not_compressed = ir::IrNode::new(
             ir::NodeKind::Loop(ir::Loop {
+                section_info: Arc::new(SectionInfo {
+                    name: "".to_string(),
+                    id: 2,
+                }),
                 length: 0,
                 compressed: false,
+                count: 1,
             }),
             0,
         );
@@ -398,7 +408,7 @@ mod tests {
 
         // Initialize amplitude parameter
         let allocation = AmplitudeRegisterAllocation::allocate(HashSet::from(["test"]), 1);
-        insert_amplitude_set(&mut root, &allocation, &mut false);
+        insert_amplitude_set(&mut root, &allocation, &mut false, None);
 
         // Test that the iteration within the compressed loop has `InitAmplitudeRegister` as a first node
         let compressed_loop_children = &root.take_children()[0].take_children();

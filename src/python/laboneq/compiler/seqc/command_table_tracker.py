@@ -7,6 +7,7 @@ import math
 from typing import Dict, Optional, Literal
 
 from laboneq.compiler.common.device_type import DeviceType
+from laboneq.compiler.common.awg_signal_type import AWGSignalType
 from laboneq.compiler.seqc.signatures import PlaybackSignature
 from laboneq.data.scheduled_experiment import COMPLEX_USAGE
 
@@ -18,10 +19,11 @@ CT_SCHEMAS = {
 
 
 class CommandTableTracker:
-    def __init__(self, device_type: DeviceType):
+    def __init__(self, device_type: DeviceType, signal_type: AWGSignalType):
         self._command_table: list[Dict] = []
         self._table_index_by_signature: Dict[PlaybackSignature, int] = {}
         self._device_type = device_type
+        self._signal_type = signal_type
         self._parameter_phase_increment_map: dict[
             str, list[int | Literal[COMPLEX_USAGE]]
         ] = {}
@@ -111,13 +113,14 @@ class CommandTableTracker:
             ct_phase %= 360
             if self._device_type == DeviceType.HDAWG:
                 if do_incr:
-                    d["phase0"] = {"value": ct_phase % 360, "increment": True}
-                    d["phase1"] = {"value": ct_phase}
+                    d["phase0"] = {"value": ct_phase, "increment": True}
+                    d["phase1"] = {"value": ct_phase, "increment": True}
+                elif self._signal_type in (AWGSignalType.SINGLE, AWGSignalType.DOUBLE):
+                    d["phase0"] = {"value": (ct_phase + 90) % 360}
+                    d["phase1"] = {"value": (ct_phase + 90) % 360}
                 else:
                     d["phase0"] = {"value": (ct_phase + 90) % 360}
                     d["phase1"] = {"value": ct_phase}
-                if do_incr:
-                    d["phase1"]["increment"] = True
             elif self._device_type == DeviceType.SHFSG:
                 d["phase"] = {"value": ct_phase}
                 if do_incr:

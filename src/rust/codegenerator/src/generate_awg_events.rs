@@ -6,7 +6,7 @@ use crate::Result;
 use crate::ir;
 use crate::ir::compilation_job::{AwgCore, DeviceKind};
 use crate::passes::{
-    amplitude_registers, handle_acquire, handle_frame_changes, handle_hw_phase_resets,
+    handle_acquire, handle_amplitude_registers, handle_frame_changes, handle_hw_phase_resets,
     handle_loops, handle_match, handle_oscillators, handle_playwaves, handle_ppc_sweeps,
     handle_precompensation_resets, handle_prng, handle_qa_events, handle_signatures,
     handle_triggers, lower_for_awg,
@@ -60,18 +60,14 @@ pub fn transform_ir_to_awg_events(
     if let DeviceKind::SHFQA = &awg.device_kind {
         handle_ppc_sweeps::handle_ppc_sweep_steps(&mut program)?;
     }
-    handle_loops::handle_loops(
-        &mut program,
-        &mut cut_points,
-        awg.device_kind.traits().sample_multiple,
-    )?;
+    handle_loops::handle_loops(&program, &mut cut_points)?;
     handle_triggers::handle_triggers(&mut program, &mut cut_points, awg)?;
-    handle_prng::handle_prng(&mut program, &mut cut_points)?;
+    handle_prng::handle_prng(&program, &mut cut_points)?;
     if let Some(virtual_signals) = create_virtual_signals(awg)? {
         handle_frame_changes::handle_frame_changes(&mut program);
         handle_match::handle_match_nodes(&mut program)?;
-        let amp_reg_alloc = amplitude_registers::assign_amplitude_registers(&program, awg);
-        amplitude_registers::handle_amplitude_register_events(
+        let amp_reg_alloc = handle_amplitude_registers::assign_amplitude_registers(&program, awg);
+        handle_amplitude_registers::handle_amplitude_register_events(
             &mut program,
             &amp_reg_alloc,
             &awg.device_kind,

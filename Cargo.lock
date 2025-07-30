@@ -31,9 +31,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.29"
+version = "1.2.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c1599538de2394445747c8cf7935946e3cc27e9625f889d979bfb2aaf569362"
+checksum = "deec109607ca693028562ed836a5f1c4b8bd77755c4e132fc5ce11b0b6211ae7"
 dependencies = [
  "shlex",
 ]
@@ -46,7 +46,7 @@ checksum = "9555578bc9e57714c812a1f84e4fc5b4d21fcb063490c624de019f7464c91268"
 
 [[package]]
 name = "codegenerator"
-version = "2.56.0"
+version = "2.57.0"
 dependencies = [
  "anyhow",
  "indexmap",
@@ -63,7 +63,7 @@ dependencies = [
 
 [[package]]
 name = "codegenerator-py"
-version = "2.56.0"
+version = "2.57.0"
 dependencies = [
  "anyhow",
  "codegenerator",
@@ -150,7 +150,7 @@ checksum = "f4c7245a08504955605670dbf141fceab975f15ca21570696aebe9d2e71576bd"
 
 [[package]]
 name = "interval-calculator"
-version = "2.56.0"
+version = "2.57.0"
 dependencies = [
  "anyhow",
  "thiserror",
@@ -164,7 +164,7 @@ checksum = "4a5f13b858c8d314ee3e8f639011f7ccefe71f97f96e50151fb991f267928e2c"
 
 [[package]]
 name = "laboneq-rust"
-version = "2.56.0"
+version = "2.57.0"
 dependencies = [
  "codegenerator-py",
  "pyo3",
@@ -173,7 +173,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-units"
-version = "2.56.0"
+version = "2.57.0"
 dependencies = [
  "num-traits",
 ]
@@ -265,7 +265,7 @@ dependencies = [
 
 [[package]]
 name = "numeric-array"
-version = "2.56.0"
+version = "2.57.0"
 dependencies = [
  "num-complex",
  "numpy",
@@ -433,7 +433,7 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
 name = "seqc-tracker"
-version = "2.56.0"
+version = "2.57.0"
 dependencies = [
  "anyhow",
  "codegenerator",
@@ -464,9 +464,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.140"
+version = "1.0.141"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20068b6e96dc6c9bd23e01df8827e6c7e1f2fddd43c21810382803c136b99373"
+checksum = "30b9eff21ebe718216c6ec64e1d9ac57087aad11efc64e32002bce4a0d4c03d3"
 dependencies = [
  "itoa",
  "memchr",

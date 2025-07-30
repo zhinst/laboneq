@@ -3,14 +3,12 @@
 
 from __future__ import annotations
 
-import warnings
 import attrs
 from typing import List, Optional
 
 import numpy as np
 from numpy.typing import ArrayLike
 
-from laboneq.core.types.enums import HighPassCompensationClearing
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 
 precompensation_id = 0
@@ -66,33 +64,19 @@ class HighPassCompensation:
     Attributes:
         timeconstant (float):
             High-pass filter time constant. Default: `1e-6`.
-        clearing (HighPassCompensationClearing):
-            Deprecated and has no effect. Default: `None`.
 
     !!! note
         Only supported on the HDAWG with the
         [precompensation option](https://www.zhinst.com/ch/en/products/hdawg-pc-real-time-precompensation).
         Ignored on other devices.
 
-    !!! version-changed "Changed in version 2.8"
-        Deprecated `clearing` argument: It has no effect.
+    !!! version-removed "Removed in version 2.57.0"
+        Removed the `.clearing` attribute that was deprecated in version 2.8.0.
+        It had no effect.
     """
 
     # high-pass filter time constant
     timeconstant: float = 1e-6
-    # Deprecated. Choose the clearing mode of the high-pass filter
-    clearing: HighPassCompensationClearing | None = attrs.field(default=None)
-
-    @clearing.validator
-    def _warn_deprecation_if_set(
-        self, attr: attrs.Attribute, value: HighPassCompensationClearing | None
-    ):
-        if value is not None:
-            warnings.warn(
-                f"`{self.__class__.__name__}` argument `{attr.name}` will be removed in a future version. It has no functionality.",
-                FutureWarning,
-                stacklevel=3,
-            )
 
 
 @classformatter

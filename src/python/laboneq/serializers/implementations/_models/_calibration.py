@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+import logging
 from enum import Enum
 from functools import partial
 from typing import ClassVar, Type, Union
@@ -13,9 +14,6 @@ import numpy
 from cattrs import Converter
 
 from laboneq.core.types.enums.carrier_type import CarrierType
-from laboneq.core.types.enums.high_pass_compensation_clearing import (
-    HighPassCompensationClearing,
-)
 from laboneq.core.types.enums.modulation_type import ModulationType
 from laboneq.core.types.enums.port_mode import PortMode
 from laboneq.core.types.units import Quantity, Unit
@@ -66,14 +64,6 @@ class PortModeModel(Enum):
     LF = "LF"
     RF = "RF"
     _target_class = PortMode
-
-
-class HighPassCompensationClearingModel(Enum):
-    LEVEL = "LEVEL"
-    RISE = "RISE"
-    FALL = "FALL"
-    BOTH = "BOTH"
-    _target_class = HighPassCompensationClearing
 
 
 class UnitModel(Enum):
@@ -214,7 +204,6 @@ class ExponentialCompensationModel:
 @attrs.define
 class HighPassCompensationModel:
     timeconstant: float
-    clearing: HighPassCompensationClearingModel | None
     _target_class: ClassVar[Type] = HighPassCompensation
 
 
@@ -255,6 +244,28 @@ class SignalCalibrationModel:
 class CalibrationModel:
     calibration_items: dict[str, SignalCalibrationModel]
     _target_class: ClassVar[Type] = Calibration
+
+
+def remove_high_pass_clearing(
+    signal_id: str, calibration_info: dict, logger: logging.Logger
+):
+    """Remove HighPassCompensation.clearing from serialized calibration data."""
+    if calibration_info is None:
+        return
+    precompensation_info = calibration_info.get("precompensation")
+    if not precompensation_info:
+        return
+    high_pass_info = precompensation_info.get("high_pass")
+    if not high_pass_info:
+        return
+    clearing = high_pass_info.pop("clearing", None)
+    if clearing is not None:
+        logger.warning(
+            f"Dropping high-pass clearing={clearing!r} precompensation setting"
+            f" for signal {signal_id!r}. The high-pass clearing precompensation"
+            f" setting was removed in LabOne Q version 2.57.0 and had no effect"
+            f" since LabOne Q version 2.8.0."
+        )
 
 
 def make_converter():

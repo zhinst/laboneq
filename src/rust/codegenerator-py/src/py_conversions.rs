@@ -113,7 +113,7 @@ fn py_to_nodekind(ob: &Bound<PyAny>, dedup: &mut Deduplicator) -> Result<ir::Nod
         "AcquireGroupIR" => Ok(ir::NodeKind::AcquirePulse(
             extract_acquire_pulse_group(ob, dedup)?.expect("Expected acquire pulse"),
         )),
-        "MatchIR" => Ok(ir::NodeKind::Match(extract_match(ob)?)),
+        "MatchIR" => Ok(ir::NodeKind::Match(extract_match(ob, dedup)?)),
         "CaseIR" => Ok(ir::NodeKind::Case(extract_case(ob, dedup)?)),
         "SetOscillatorFrequencyIR" => Ok(ir::NodeKind::SetOscillatorFrequency(
             extract_set_oscillator_frequency(ob, dedup)?,
@@ -128,7 +128,7 @@ fn py_to_nodekind(ob: &Bound<PyAny>, dedup: &mut Deduplicator) -> Result<ir::Nod
             signal: extract_precompensation_clear_signals(ob, dedup)?,
         }),
         "PPCStepIR" => Ok(ir::NodeKind::PpcSweepStep(extract_ppc_step(ob, dedup)?)),
-        "LoopIR" => Ok(ir::NodeKind::Loop(extract_loop(ob)?)),
+        "LoopIR" => Ok(ir::NodeKind::Loop(extract_loop(ob, dedup)?)),
         "LoopIterationIR" => Ok(ir::NodeKind::LoopIteration(extract_loop_iteration(
             ob, dedup,
         )?)),
@@ -361,7 +361,7 @@ fn extract_pulse(ob: &Bound<'_, PyAny>, dedup: &mut Deduplicator) -> Result<ir::
     // NOTE: This works only after pulse parameters are indexes!
     let id_pulse_params = ob
         .getattr(intern!(py, "play_pulse_params"))?
-        .extract::<Option<usize>>()?;
+        .extract::<Option<u64>>()?;
     let amp_param_name = ob
         .getattr(intern!(py, "amp_param_name"))?
         .extract::<Option<String>>()?;
@@ -414,7 +414,7 @@ fn extract_acquire_pulse(
     // NOTE: This works only after pulse parameters are indexes!
     let id_pulse_params = ob
         .getattr(intern!(py, "play_pulse_params"))?
-        .extract::<Option<usize>>()?;
+        .extract::<Option<u64>>()?;
 
     let acquire_pulse = ir::AcquirePulse {
         length,
@@ -455,7 +455,7 @@ fn extract_acquire_pulse_group(
     // NOTE: This works only after pulse parameters are indexes!
     let id_pulse_params = ob
         .getattr(intern!(py, "play_pulse_params"))?
-        .extract::<Vec<Option<usize>>>()?;
+        .extract::<Vec<Option<u64>>>()?;
     let acquire_pulse = ir::AcquirePulse {
         length,
         signal,
@@ -482,10 +482,11 @@ fn extract_maybe_complex(ob: &Bound<'_, PyAny>) -> Result<Option<Complex<f64>>, 
     Ok(Some(out))
 }
 
-fn extract_match(ob: &Bound<'_, PyAny>) -> Result<ir::Match, PyErr> {
+fn extract_match(ob: &Bound<'_, PyAny>, dedup: &mut Deduplicator) -> Result<ir::Match, PyErr> {
     // ir.MatchIR
     let py = ob.py();
     let section = ob.getattr(intern!(py, "section"))?.extract::<String>()?;
+    let section_info = dedup.get_or_create_section_info(&section);
     let handle = ob
         .getattr(intern!(py, "handle"))?
         .extract::<Option<String>>()?;
@@ -502,7 +503,7 @@ fn extract_match(ob: &Bound<'_, PyAny>) -> Result<ir::Match, PyErr> {
         .getattr(intern!(py, "prng_sample"))?
         .extract::<Option<String>>()?;
     let obj = ir::Match {
-        section,
+        section_info,
         length,
         handle,
         user_register,
@@ -526,14 +527,25 @@ fn extract_case(ob: &Bound<'_, PyAny>, dedup: &mut Deduplicator) -> Result<ir::C
 }
 
 /// Extract loop
-fn extract_loop(ob: &Bound<'_, PyAny>) -> Result<ir::Loop, PyErr> {
+fn extract_loop(ob: &Bound<'_, PyAny>, dedup: &mut Deduplicator) -> Result<ir::Loop, PyErr> {
     // ir.LoopIR
     let py = ob.py();
     let length = ob
         .getattr(intern!(py, "length"))?
         .extract::<ir::Samples>()?;
     let compressed = ob.getattr(intern!(py, "compressed"))?.extract::<bool>()?;
-    Ok(ir::Loop { length, compressed })
+    let section_info = dedup.get_or_create_section_info(
+        ob.getattr(intern!(py, "section"))?
+            .extract::<String>()?
+            .as_str(),
+    );
+    let count = ob.getattr(intern!(py, "iterations"))?.extract::<u64>()?;
+    Ok(ir::Loop {
+        length,
+        compressed,
+        section_info,
+        count,
+    })
 }
 
 /// Extract loop iteration
@@ -545,13 +557,9 @@ fn extract_loop_iteration(
 ) -> Result<ir::LoopIteration, PyErr> {
     // ir.LoopIterationIR
     let py = ob.py();
-    let section_uid = ob.getattr(intern!(py, "section"))?.extract::<String>()?;
-    let section_info = dedup.get_or_create_section_info(&section_uid);
     let length = ob
         .getattr(intern!(py, "length"))?
         .extract::<ir::Samples>()?;
-    let iteration = ob.getattr(intern!(py, "iteration"))?.extract::<u64>()?;
-    let num_repeats = ob.getattr(intern!(py, "num_repeats"))?.extract::<u64>()?;
     let parameters = ob.getattr(intern!(py, "sweep_parameters"))?;
     let parameters = parameters
         .try_iter()?
@@ -560,14 +568,12 @@ fn extract_loop_iteration(
     let prng_sample = ob
         .getattr(intern!(py, "prng_sample"))?
         .extract::<Option<String>>()?;
+    let shadow = ob.getattr(intern!(py, "shadow"))?.extract::<bool>()?;
     Ok(ir::LoopIteration {
         length,
-        iteration,
-        num_repeats,
         parameters,
         prng_sample,
-        section_info,
-        compressed: false, // Will be set during loop handling
+        shadow,
     })
 }
 

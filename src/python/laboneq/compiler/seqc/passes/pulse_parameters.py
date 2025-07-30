@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from laboneq.compiler import ir
 from laboneq.compiler.common.pulse_parameters import (
-    encode_pulse_parameters,
     PulseParams,
 )
 
@@ -20,12 +19,9 @@ def _detach_pulse_params(
         params = PulseParams(
             pulse_params=node.pulse_pulse_params, play_params=node.play_pulse_params
         )
-        params_combined = encode_pulse_parameters(params.combined())
-        if params_combined not in param_map:
-            params_id = len(param_map)
-            param_map[params_combined] = (params_id, params)
-        else:
-            params_id, _ = param_map[params_combined]
+        params_id = params.id()
+        if params_id not in param_map:
+            param_map[params_id] = params
         # NOTE: Must always be same
         node.play_pulse_params = params_id
         node.pulse_pulse_params = params_id
@@ -36,12 +32,9 @@ def _detach_pulse_params(
                 ids.append(None)
                 continue
             params = PulseParams(pulse_params=pulse_p, play_params=play_p)
-            params_combined = encode_pulse_parameters(params.combined())
-            if params_combined not in param_map:
-                params_id = len(param_map)
-                param_map[params_combined] = (params_id, params)
-            else:
-                params_id, _ = param_map[params_combined]
+            params_id = params.id()
+            if params_id not in param_map:
+                param_map[params_id] = params
             ids.append(params_id)
         # NOTE: Must always be same
         node.play_pulse_params = ids
@@ -51,7 +44,7 @@ def _detach_pulse_params(
             _detach_pulse_params(child, param_map)
 
 
-def detach_pulse_params(root: ir.IntervalIR) -> list[PulseParams]:
+def detach_pulse_params(root: ir.IntervalIR) -> dict[int, PulseParams]:
     """Pass to extra arbitrary pulse parameters out of the IR.
 
     The parameters are replaced with an ID that points to the index of the
@@ -59,4 +52,4 @@ def detach_pulse_params(root: ir.IntervalIR) -> list[PulseParams]:
     """
     params = {}
     _detach_pulse_params(root, param_map=params)
-    return [p[1] for p in params.values()]
+    return params

@@ -86,7 +86,7 @@ pub struct AcquireEvent {
     #[pyo3(get)]
     pub pulse_defs: Vec<String>,
     #[pyo3(get)]
-    pub id_pulse_params: Vec<Option<usize>>,
+    pub id_pulse_params: Vec<Option<u64>>,
     #[pyo3(get)]
     pub oscillator_frequency: f64,
     #[pyo3(get)]
@@ -161,7 +161,7 @@ impl MatchEvent {
             local: event.local,
             user_register: event.user_register,
             prng_sample: event.prng_sample,
-            section: event.section,
+            section: event.section_info.name.clone(),
         }
     }
 }

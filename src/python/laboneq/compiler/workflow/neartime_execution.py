@@ -7,7 +7,7 @@ import abc
 import logging
 from builtins import frozenset
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any
 import time
 
 from laboneq.compiler import CompilerSettings
@@ -16,6 +16,8 @@ from laboneq.compiler.workflow import rt_linker
 from laboneq.compiler.common.iface_compiler_output import RTCompilerOutputContainer
 from laboneq.compiler.workflow.realtime_compiler import RealtimeCompiler
 from laboneq.compiler.workflow.rt_linker import CombinedRTCompilerOutputContainer
+from laboneq.core.types.enums.acquisition_type import AcquisitionType
+from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.executor.executor import (
     ExecRT,
     ExecutorBase,
@@ -40,14 +42,14 @@ class IterationStep:
 
     # The values of the near-time parameters for this iteration, not including
     # parameters from the parent loop
-    parameter_values: Dict[str, Any]
+    parameter_values: dict[str, Any]
 
 
 @dataclass
 class IterationStack:
-    _stack: List[IterationStep] = field(default_factory=list)
+    _stack: list[IterationStep] = field(default_factory=list)
 
-    def push(self, count: int, index: int, parameter_values: Dict[str, Any]):
+    def push(self, count: int, index: int, parameter_values: dict[str, Any]):
         self._stack.append(IterationStep(count, index, parameter_values))
 
     def pop(self):
@@ -84,7 +86,11 @@ def legacy_execution_program():
     # `None` as placeholder is acceptable here. Currently the executor requires none of
     # these.
     return ExecRT(
-        count=1, body=Sequence(), uid="", acquisition_type=None, averaging_mode=None
+        count=1,
+        body=Sequence(),
+        uid="",
+        acquisition_type=AcquisitionType.INTEGRATION,
+        averaging_mode=AveragingMode.CYCLIC,
     )
 
 
@@ -117,14 +123,12 @@ class NtCompilerExecutor(ExecutorBase):
         self._chunk_count = chunk_count
         self._iteration_stack = IterationStack()
 
-        self._compiler_output_by_param_values: Dict[
+        self._compiler_output_by_param_values: dict[
             frozenset, RTCompilerOutputContainer
         ] = {}
-        self._last_compiler_output: Optional[RTCompilerOutputContainer] = None
-        self._required_parameters: Optional[Set[str]] = None
-        self._combined_compiler_output: Optional[CombinedRTCompilerOutputContainer] = (
-            None
-        )
+        self._last_compiler_output: RTCompilerOutputContainer | None = None
+        self._required_parameters: set[str] | None = None
+        self._combined_compiler_output: CombinedRTCompilerOutputContainer | None = None
 
         self._delegates = [
             Delegate(self._settings) for Delegate in self._delegates_types
@@ -197,7 +201,9 @@ class NtCompilerExecutor(ExecutorBase):
                 return
 
         # We don't have a compiler output for this state yet, so we need to compile
-        parameter_store = ParameterStore(self._iteration_stack.nt_parameter_values())
+        parameter_store = ParameterStore[str, float](
+            self._iteration_stack.nt_parameter_values()
+        )
         tracker = parameter_store.create_tracker()
         new_compiler_output = self._rt_compiler.run(parameter_store)
 
@@ -241,6 +247,7 @@ class NtCompilerExecutor(ExecutorBase):
         )
 
     def _frozen_required_parameters(self):
+        assert self._required_parameters is not None
         return frozenset(
             (k, v)
             for k, v in self._iteration_stack.nt_parameter_values().items()

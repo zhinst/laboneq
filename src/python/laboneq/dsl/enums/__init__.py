@@ -7,7 +7,6 @@ from laboneq.core.types.enums import (
     CarrierType,
     DSLVersion,
     ExecutionType,
-    HighPassCompensationClearing,
     IODirection,
     IOSignalType,
     ModulationType,

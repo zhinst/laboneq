@@ -11,16 +11,7 @@ import logging
 from dataclasses import replace
 from itertools import groupby
 from math import ceil
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    Iterable,
-    Optional,
-    Set,
-    Tuple,
-    Iterator,
-)
+from typing import TYPE_CHECKING, Any, Iterable, Iterator
 
 from laboneq._utils import UIDReference, cached_method
 from laboneq.core.types.enums import AcquisitionType
@@ -186,7 +177,7 @@ class _ScheduleToIRConverter:
 class RepetitionInfo:
     section: str
     mode: RepetitionMode
-    time: Optional[float]
+    time: float | None
 
 
 # from more_itertools
@@ -201,7 +192,7 @@ class Scheduler:
         self,
         experiment_dao: ExperimentDAO,
         sampling_rate_tracker: SamplingRateTracker,
-        signal_objects: Dict[str, SignalObj],
+        signal_objects: dict[str, SignalObj],
         settings: CompilerSettings | None = None,
     ):
         self._schedule_data = ScheduleData(
@@ -213,7 +204,7 @@ class Scheduler:
         self._sampling_rate_tracker = sampling_rate_tracker
 
         _, self._system_grid = self.grid(*self._experiment_dao.signals())
-        self._root_schedule: Optional[IntervalSchedule] = None
+        self._root_schedule: IntervalSchedule | None = None
         self._scheduled_sections = {}
         self._max_acquisition_time_per_awg = {}
 
@@ -242,9 +233,9 @@ class Scheduler:
                             length,
                         )
 
-    def run(self, nt_parameters: Optional[ParameterStore] = None):
+    def run(self, nt_parameters: ParameterStore[str, float] | None = None):
         if nt_parameters is None:
-            nt_parameters = ParameterStore()
+            nt_parameters = ParameterStore[str, float]()
         self._compute_max_acquisition_time_per_awg()
         self._schedule_data.reset()
         self._root_schedule = self._schedule_root(nt_parameters)
@@ -255,8 +246,9 @@ class Scheduler:
             warning_generator(warning_data)
 
     def generate_ir(self):
-        root_ir = None
-        if self._root_schedule is not None:
+        if self._root_schedule is None:
+            root_ir = RootScheduleIR()
+        else:
             root_ir = _ScheduleToIRConverter(
                 acquisition_type=self._experiment_dao.acquisition_type
             ).visit(self._root_schedule)
@@ -482,8 +474,8 @@ class Scheduler:
         return schedule
 
     def _swept_oscillators(
-        self, sweep_parameters: Set[str], signals: Set[str]
-    ) -> Dict[str, SweptOscillator]:
+        self, sweep_parameters: set[str], signals: set[str]
+    ) -> dict[str, SweptOscillator]:
         """Collect all oscillators with a frequency swept by one of the
         given parameters, and that modulate one of the given signals. The keys of the
         returned dict are the parameter names."""
@@ -616,7 +608,7 @@ class Scheduler:
 
     def _schedule_oscillator_frequency_step(
         self,
-        swept_oscillators: Dict[str, SweptOscillator],
+        swept_oscillators: dict[str, SweptOscillator],
         global_iteration: int,
         local_iteration: int,
         sweep_parameters: list[ParameterInfo],
@@ -801,7 +793,7 @@ class Scheduler:
         local_iteration: int,
         global_iteration: int,
         sweep_parameters: list[ParameterInfo],
-        swept_hw_oscillators: Dict[str, SweptOscillator],
+        swept_hw_oscillators: dict[str, SweptOscillator],
     ) -> LoopIterationPreambleSchedule:
         section_info = self._experiment_dao.section_info(section_id)
 
@@ -849,7 +841,7 @@ class Scheduler:
         num_repeats: int,
         all_parameters: ParameterStore[str, float],
         sweep_parameters: list[ParameterInfo],
-        swept_oscillators: Dict[str, SweptOscillator],
+        swept_oscillators: dict[str, SweptOscillator],
     ) -> LoopIterationSchedule:
         """Schedule a single iteration of a loop.
 
@@ -1013,7 +1005,7 @@ class Scheduler:
                     f" '{osc.uid}' on signal '{pulse.signal.uid}' is not supported"
                 )
 
-        def resolve_pulse_params(params: Dict[str, Any]):
+        def resolve_pulse_params(params: dict[str, Any]):
             for param, value in params.items():
                 if isinstance(value, UIDReference):
                     try:
@@ -1155,10 +1147,10 @@ class Scheduler:
             or section_info.match_sweep_parameter is not None
         )
         handle: str | None = section_info.match_handle
-        user_register: Optional[int] = section_info.match_user_register
+        user_register: int | None = section_info.match_user_register
         prng_sample = section_info.match_prng_sample
         match_sweep_parameter = section_info.match_sweep_parameter
-        local: Optional[bool] = section_info.local
+        local: bool | None = section_info.local
 
         if match_sweep_parameter is not None:
             return self._schedule_static_branch(section_info, current_parameters)
@@ -1244,7 +1236,7 @@ class Scheduler:
     def _schedule_static_branch(
         self,
         section_info: SectionInfo,
-        current_parameters: ParameterStore,
+        current_parameters: ParameterStore[str, float],
     ) -> SectionSchedule:
         match_sweep_parameter = section_info.match_sweep_parameter
         val = current_parameters[match_sweep_parameter.uid]
@@ -1262,7 +1254,7 @@ class Scheduler:
         )
 
     def _schedule_case(
-        self, section_id: str, current_parameters: ParameterStore
+        self, section_id: str, current_parameters: ParameterStore[str, float]
     ) -> CaseSchedule:
         try:
             # todo: do not hash the entire current_parameters dict, but just the param values
@@ -1380,7 +1372,7 @@ class Scheduler:
         signal_grid = round(1 / (TINYSAMPLE * sample_rate))
         return signal_grid
 
-    def grid(self, *signal_ids: Iterable[str]) -> Tuple[int, int]:
+    def grid(self, *signal_ids: Iterable[str]) -> tuple[int, int]:
         """Compute signal and sequencer grid for the given signals. If multiple signals
         are given, return the LCM of the individual grids."""
 
@@ -1417,7 +1409,7 @@ class Scheduler:
 
     def _compute_trigger_output(
         self, section_info: SectionInfo
-    ) -> Set[Tuple[str, int]]:
+    ) -> set[tuple[str, int]]:
         """Compute the effective trigger signals for the given section.
 
         The return value is a set of `(signal_id, bit_index)` tuples.
@@ -1456,13 +1448,13 @@ class Scheduler:
         return section_trigger_signals
 
     def _resolve_repetition_time(
-        self, root_sections: Tuple[str]
+        self, root_sections: tuple[str]
     ) -> RepetitionInfo | None:
         """Locate the loop section which corresponds to the shot boundary.
 
         This section will be padded to the repetition length."""
 
-        repetition_info: Optional[RepetitionInfo] = None
+        repetition_info: RepetitionInfo | None = None
         for section in self._schedule_data.experiment_dao.sections():
             section_info = self._schedule_data.experiment_dao.section_info(section)
             if (

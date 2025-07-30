@@ -19,7 +19,6 @@ from laboneq.serializers.serializer_registry import serializer
         enums.RepetitionMode,
         enums.PortMode,
         enums.ModulationType,
-        enums.HighPassCompensationClearing,
         enums.SectionAlignment,
     ],
     public=True,

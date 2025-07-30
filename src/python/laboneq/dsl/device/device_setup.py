@@ -57,14 +57,6 @@ class DeviceSetup:
             - `load`
             - `dumps`
         Use the `load` and `save` methods from the `laboneq.serializers` module instead.
-
-
-    !!! version-changed "Changed in version 2.19.0"
-        `DeviceSetup` can now be created by using the following methods:
-
-            - `DeviceSetup.add_dataserver()`
-            - `DeviceSetup.add_instruments()`
-            - `DeviceSetup.add_connections()`
     """
 
     uid: str = attrs.field(default="unknown")
@@ -108,8 +100,6 @@ class DeviceSetup:
 
         Raises:
             LabOneQException: Dataserver already exists.
-
-        !!! version-added "Added in version 2.19.0"
         """
         try:
             setup_modifier.add_dataserver(
@@ -136,8 +126,6 @@ class DeviceSetup:
                 - If an instrument with the same UID already exists.
                 - No dataservers are defined in the setup.
                 - Instrument is missing `uid` or `address`.
-
-        !!! version-added "Added in version 2.19.0"
         """
         try:
             for instrument in instruments:
@@ -162,8 +150,6 @@ class DeviceSetup:
         Raises:
             LabOneQException: Connection information is wrong or the given
                 instrument does not support the connection.
-
-        !!! version-added "Added in version 2.19.0"
         """
         try:
             for connection in connections:
@@ -191,8 +177,6 @@ class DeviceSetup:
             Logical signal with the UID.
         Raises:
             KeyError: Logical signal UID was not found.
-
-        !!! version-added "Added in version 2.5.0"
         """
         for grp in self.logical_signal_groups.values():
             for sig in grp.logical_signals.values():
@@ -339,10 +323,10 @@ class DeviceSetup:
 
     def reset_calibration(self, calibration: Calibration | None = None):
         """Reset the calibration of all logical signals and instruments."""
-        for logical_signal_group in self.logical_signal_groups.values():
-            logical_signal_group.reset_calibration()
         for physical_channel in self.physical_channel_groups.values():
             physical_channel.reset_calibration()
+        for logical_signal_group in self.logical_signal_groups.values():
+            logical_signal_group.reset_calibration()
         if calibration:
             self.set_calibration(calibration)
 
@@ -429,8 +413,6 @@ class DeviceSetup:
             server_host: Server host of the setup that should be created.
             server_port: Port of the server that should be created.
             setup_name: Name of the setup that should be created.
-
-        !!! version-added "Added in version 2.5.0"
         """
         ds = _DeviceSetupGenerator.from_dicts(
             instrument_list=data.get("instrument_list"),

@@ -62,13 +62,6 @@ class AmplifierPump:
 
     Notes:
         If an attribute is set to `None`, the corresponding node is not set.
-
-    !!! version-changed "Some fields were renamed in version 2.24.0"
-
-        - `AmplifierPump.pump_freq` is now `AmplifierPump.pump_frequency`
-        - `AmplifierPump.pump_engaged` is now `AmplifierPump.pump_on`
-        - `AmplifierPump.alc_engaged` is now `AmplifierPump.alc_on`
-        - `AmplifierPump.use_probe` is now `AmplifierPump.probe_on`
     """
 
     #: Unique identifier. If left blank, a new unique ID will be generated.

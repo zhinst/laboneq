@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict
+from typing import Any, Callable
 import warnings
 
 import numpy as np
@@ -25,7 +25,7 @@ def register_pulse_functional(sampler: Callable, name: str | None = None):
 
     ``` py
 
-        def sampler(x: ndarray, **pulse_params: Dict[str, Any]) -> ndarray:
+        def sampler(x: ndarray, **pulse_params: Any) -> ndarray:
             pass
     ```
 
@@ -60,7 +60,7 @@ def register_pulse_functional(sampler: Callable, name: str | None = None):
                     uid: str = None,
                     length: float = 100e-9,
                     amplitude: float = 1.0,
-                    **pulse_parameters: Dict[str, Any],
+                    **pulse_parameters: Any,
                 ):
                     pass
             ```
@@ -75,7 +75,7 @@ def register_pulse_functional(sampler: Callable, name: str | None = None):
         length: float = 100e-9,
         amplitude: float = 1.0,
         can_compress=False,
-        **pulse_parameters: Dict[str, Any],
+        **pulse_parameters: Any,
     ):
         if pulse_parameters == {}:
             pulse_parameters = None

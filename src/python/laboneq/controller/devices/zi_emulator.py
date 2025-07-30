@@ -305,12 +305,18 @@ class PipelinerEmu:
         self._staging_slot: dict[int, int] = defaultdict(lambda: 0)
         # self._pipelined[<channel>][<slot>][<path_part>] = <value>
         self._pipelined: dict[int, list[dict[str, Any]]] = defaultdict(list)
+        self._armed_channels: set[int] = set()
 
     @property
     def _parent(self) -> DevEmu:
         parent = self._parent_ref()
         assert parent is not None
         return parent
+
+    def trigger(self):
+        for channel in self._armed_channels:
+            self._pipeliner_stop(channel)
+        self._armed_channels.clear()
 
     def is_active(self, channel) -> bool:
         mode: int = self._parent._get_node(
@@ -364,10 +370,16 @@ class PipelinerEmu:
 
     def _pipeliner_enable(self, node: NodeBase, channel: int):
         # exec
-        self._parent._set_val(f"{self._pipeliner_base}/{channel}/pipeliner/status", 1)
-        self._parent.schedule(
-            delay=0.001, action=self._pipeliner_stop, argument=(channel,)
-        )
+        if node.value != 0:
+            self._parent._set_val(
+                f"{self._pipeliner_base}/{channel}/pipeliner/status", 1
+            )
+            self._armed_channels.add(channel)
+        elif channel in self._armed_channels:
+            self._parent._set_val(
+                f"{self._pipeliner_base}/{channel}/pipeliner/status", 0
+            )
+            self._armed_channels.remove(channel)
 
     def _node_def_pipeliner(self) -> dict[str, NodeInfo]:
         nd = {}
@@ -527,6 +539,7 @@ class DevEmuHDAWG(DevEmuHW):
 
     def trigger(self):
         super().trigger()
+        self._hd_pipeliner.trigger()
         for awg_idx in self._armed_awgs:
             self._awg_stop(awg_idx)
         self._armed_awgs.clear()
@@ -878,6 +891,7 @@ class DevEmuSHFQABase(DevEmuSHFBase):
 
     def trigger(self):
         super().trigger()
+        self._qa_pipeliner.trigger()
         for channel in self._armed_qa_awgs:
             self._awg_stop_qa(channel)
         self._armed_qa_awgs.clear()
@@ -1236,6 +1250,7 @@ class DevEmuSHFSGBase(DevEmuSHFBase):
 
     def trigger(self):
         super().trigger()
+        self._sg_pipeliner.trigger()
         for channel in self._armed_sg_awgs:
             self._awg_stop_sg(channel)
         self._armed_sg_awgs.clear()
@@ -1332,6 +1347,25 @@ class DevEmuSHFQC(DevEmuSHFSGBase, DevEmuSHFQABase):
 
 
 class DevEmuSHFPPC(DevEmu):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._armed_sweepers: set[int] = set()
+
+    def trigger(self):
+        super().trigger()
+        for sweeper_idx in self._armed_sweepers:
+            self._sweeper_stop(sweeper_idx)
+        self._armed_sweepers.clear()
+
+    def _sweeper_stop(self, sweeper_idx):
+        self._set_val(f"ppchannels/{sweeper_idx}/sweeper/enable", 0)
+
+    def _sweeper_start(self, node: NodeBase, sweeper_idx):
+        if node.value != 0:
+            self._armed_sweepers.add(sweeper_idx)
+        elif sweeper_idx in self._armed_sweepers:
+            self._armed_sweepers.remove(sweeper_idx)
+
     def _node_def(self) -> dict[str, NodeInfo]:
         nd = {
             "raw/error/json/errors": NodeInfo(
@@ -1357,15 +1391,6 @@ class DevEmuSHFPPC(DevEmu):
             )
 
         return nd
-
-    def _sweeper_stop(self, sweeper_idx):
-        self._set_val(f"ppchannels/{sweeper_idx}/sweeper/enable", 0)
-
-    def _sweeper_start(self, node: NodeBase, sweeper_idx):
-        if node.value == 1:
-            self.schedule(
-                delay=0.001, action=self._sweeper_stop, argument=(sweeper_idx,)
-            )
 
 
 class DevEmuNONQC(DevEmuHW):
@@ -1423,22 +1448,22 @@ class EmulatorState:
         self._options: dict[str, dict[str, Any]] = defaultdict(dict)
         self._scheduler = sched.scheduler()
         self._devices: dict[str, ReferenceType[DevEmu]] = {}
-        self._events: dict[str, dict[str, list[PollEvent]]] = {}
+        self._events: dict[str, list[PollEvent]] = {}
 
     @property
     def scheduler(self) -> sched.scheduler:
         return self._scheduler
 
-    def make_device(self, serial: str) -> tuple[DevEmu, dict[str, list[PollEvent]]]:
+    def make_device(self, serial: str) -> tuple[DevEmu, list[PollEvent]]:
         dev_type = _dev_type_map.get(self.get_device_type(serial), DevEmuNONQC)
         # if dev_type is None:
         #     dev_type = _serial_to_device_type(serial)
         device = self.get_device_by_serial(serial)
-        events: dict[str, list[PollEvent]]
+        events: list[PollEvent]
         if device is None:
             device = dev_type(serial=serial, emulator_state=self)
-            events = defaultdict(list)
             self._devices[serial] = ref(device)
+            events = []
             self._events[serial] = events
         else:
             assert isinstance(device, dev_type)
@@ -1710,11 +1735,18 @@ class MockDataQueue:
     def __init__(self, path: str, kernel_session: KernelSessionEmulator):
         self._path = path
         self._kernel_session = kernel_session
-        self._path_events = self._kernel_session._events[self._path]
+        self._events: list[PollEvent] = []
+
+    @property
+    def path(self) -> str:
+        return self._path
+
+    def append(self, event: PollEvent):
+        self._events.append(event)
 
     def empty(self) -> bool:
         self._kernel_session._poll()
-        return len(self._path_events) == 0
+        return len(self._events) == 0
 
     async def get(self) -> MockAnnotatedValue:
         while self.empty():
@@ -1727,11 +1759,11 @@ class MockDataQueue:
         return self._get()
 
     def _get(self) -> MockAnnotatedValue:
-        value = self._path_events.pop(0)
+        value = self._events.pop(0)
         return make_annotated_value(path=self._path, value=value)
 
     def disconnect(self):
-        pass
+        self._kernel_session.unsubscribe(self)
 
 
 DUMP_TO_NODE_LOGGER_FROM_EMULATOR = False
@@ -1744,6 +1776,7 @@ class KernelSessionEmulator:
     def __init__(self, serial: str, emulator_state: EmulatorState):
         self._emulator_state = emulator_state
         self._device, self._events = emulator_state.make_device(serial)
+        self._subscriptions: dict[str, set[MockDataQueue]] = {}
         self._cache: dict[str, Any] = {}
 
     def clear_cache(self):  # TODO(2K): Remove once legacy API is gone
@@ -1877,14 +1910,45 @@ class KernelSessionEmulator:
 
     def _poll(self):
         self._progress_scheduler()
-        events = self._device.poll()
-        for ev in events:
-            self._events[ev.path].append(ev.value)
+        # Keep events in the per-device repo, as the same device can be connected
+        # by multiple sessions, and poll here will remove all pending events, regardless
+        # of the session calling it.
+        # TODO(2K): Consider moving this logic to the device class
+        self._events.extend(self._device.poll())
+        event_index = 0
+        while event_index < len(self._events):
+            ev = self._events[event_index]
+            path_subs = self._subscriptions.get(ev.path)
+            if path_subs is None:
+                event_index += 1
+                continue
+            # Here is a shortcut in the logic: we assume that the subscription paths
+            # are not shared between sessions, however the same session can have
+            # multiple subscriptions to the same path.
+            self._events.pop(event_index)
+            for queue in path_subs:
+                queue.append(ev.value)
 
     async def subscribe(self, path: str, get_initial_value: bool = False, **kwargs):
         self._progress_scheduler()
-        dev_path = self.dev_path(path)
-        self._device.subscribe(dev_path)
+        path_subs = self._subscriptions.get(path)
+        if path_subs is None:
+            path_subs = set()
+            self._subscriptions[path] = path_subs
+            self._device.subscribe(self.dev_path(path))
+        queue = MockDataQueue(path, self)
+        path_subs.add(queue)
         if get_initial_value:
-            self._device.getAsEvent(dev_path)
-        return MockDataQueue(path, self)
+            raise NotImplementedError(
+                "get_initial_value is not implemented in the emulator"
+            )
+        return queue
+
+    def unsubscribe(self, queue: MockDataQueue):
+        path = queue.path
+        path_subs = self._subscriptions.get(path)
+        if path_subs is not None:
+            path_subs.discard(queue)
+            if len(path_subs) == 0:
+                del self._subscriptions[path]
+                self._device.unsubscribe(self.dev_path(path))

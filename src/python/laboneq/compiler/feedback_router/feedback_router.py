@@ -4,14 +4,12 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from functools import singledispatch
 from typing import TYPE_CHECKING, NamedTuple, Union
 
 from laboneq.compiler.common.awg_info import AwgKey
-from laboneq.compiler.seqc.linker import CombinedRTOutputSeqC
-from laboneq.compiler.workflow.compiler_output import CombinedRTCompilerOutputContainer
 
 if TYPE_CHECKING:
+    from laboneq.compiler.seqc.linker import CombinedRTOutputSeqC
     from laboneq.compiler.workflow.compiler import IntegrationUnitAllocation
 
 
@@ -75,13 +73,7 @@ def calculate_feedback_register_layout(
     return feedback_register_layouts
 
 
-@singledispatch
-def do_assign_feedback_registers(combined_compiler_output):
-    raise NotImplementedError
-
-
-@do_assign_feedback_registers.register
-def _(combined_compiler_output: CombinedRTOutputSeqC):
+def do_assign_feedback_registers_seqc(combined_compiler_output: CombinedRTOutputSeqC):
     reg_configs = combined_compiler_output.feedback_register_configurations
     feedback_connections = combined_compiler_output.feedback_connections
 
@@ -91,10 +83,3 @@ def _(combined_compiler_output: CombinedRTOutputSeqC):
             if reg_configs[rx].source_feedback_register is None:
                 # don't need to assign if already set (local feedback)
                 reg_configs[rx].source_feedback_register = register
-
-
-def assign_feedback_registers(
-    combined_compiler_output: CombinedRTCompilerOutputContainer,
-):
-    for output in combined_compiler_output.combined_output.values():
-        do_assign_feedback_registers(output)

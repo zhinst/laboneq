@@ -19,7 +19,7 @@ from laboneq.serializers.types import (
 @serializer(types=[QuantumParameters], public=True)
 class QuantumParametersSerializer(VersionedClassSerializer[QuantumParameters]):
     SERIALIZER_ID = "laboneq.serializers.implementations.QuantumParametersSerializer"
-    VERSION = 1
+    VERSION = 2
 
     @classmethod
     def to_dict(
@@ -35,7 +35,7 @@ class QuantumParametersSerializer(VersionedClassSerializer[QuantumParameters]):
         }
 
     @classmethod
-    def from_dict_v1(
+    def from_dict_v2(
         cls,
         serialized_data: JsonSerializableType,
         options: DeserializationOptions | None = None,
@@ -43,6 +43,11 @@ class QuantumParametersSerializer(VersionedClassSerializer[QuantumParameters]):
         data = serialized_data["__data__"]
         qp_cls = import_cls(data["quantum_parameters_class"])
         return qp_cls(**from_dict(data["parameters"]))
+
+    # v2 added the custom parameter to the QuantumParameters base class.
+    # v1 is guaranteed to not have the custom parameter so that older versions
+    # of LabOne Q that support v1 can load any v1 file.
+    from_dict_v1 = from_dict_v2
 
 
 class QuantumParametersContainer:

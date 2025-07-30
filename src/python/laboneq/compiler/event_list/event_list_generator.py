@@ -549,10 +549,8 @@ class EventListGenerator:
 def generate_event_list_from_ir(
     ir: ir_mod.IRTree,
     expand_loops: bool,
-    max_events: int,
+    max_events: int | float,
 ) -> EventList:
-    if ir.root is None:
-        return []
     id_tracker = itertools.count()
     event_list = EventListGenerator(
         id_tracker=id_tracker,

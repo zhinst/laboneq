@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import attrs
-import warnings
 from typing import TYPE_CHECKING, Any
 
 from laboneq._utils import id_generator
@@ -88,12 +87,6 @@ class Section:
             If True, the section boundaries are always rounded to the system grid,
             even if the contained signals would allow for tighter alignment.
             Default: `False`.
-
-    !!! version-changed "Changed in version 2.0.0"
-        Removed `offset` member variable.
-
-    !!! version-changed "Added in version 2.26.0"
-        Added `name` member variable.
     """
 
     # Unique identifier of the section.
@@ -363,56 +356,6 @@ class Section:
 
 @classformatter
 @attrs.define
-class AcquireLoopNt(Section):
-    """Near time acquire loop.
-
-    !!! version-changed "Deprecated in 2.14"
-        Use `.sweep` outside of an `acquire_loop_rt` instead.
-        For example:
-
-        ``` py
-        param = SweepParameter(values=[1, 2, 3])
-        with exp.sweep(param):  # <-- outer near-time sweep
-            with exp.acquire_loop_rt(count=2):  # <-- inner real-time sweep
-                ...
-        ```
-
-    Attributes:
-        averaging_mode (AveragingMode):
-            Averaging method. One of sequential, cyclic or single shot.
-            Default: [AveragingMode.CYCLIC][laboneq.core.types.enums.averaging_mode.AveragingMode].
-        count (int):
-            Number of loops to perform.
-
-    [AcquireLoopNt][laboneq.dsl.experiment.section.AcquireLoopNt] inherits
-    all the attributes of
-    [Section][laboneq.dsl.experiment.section.Section].
-
-    The execution type of [AcquireLoopNt][laboneq.dsl.experiment.section.AcquireLoopNt]
-    sections is always
-    [ExecutionType.NEAR_TIME][laboneq.core.types.enums.execution_type.ExecutionType]
-    and should not be altered.
-    """
-
-    # Averaging method. One of sequential, cyclic and single_shot.
-    averaging_mode: AveragingMode = attrs.field(default=AveragingMode.CYCLIC)
-    # Number of loops.
-    count: int | None = attrs.field(default=None)
-    execution_type: ExecutionType = attrs.field(default=ExecutionType.NEAR_TIME)
-
-    def __attrs_post_init__(self):
-        warnings.warn(
-            "AcquireLoopNt and acquire_loop_nt are deprecated and may be"
-            " removed in a future version of LabOne Q. Use a sweep outside"
-            " of the acquire_loop_rt instead.",
-            FutureWarning,
-            stacklevel=2,
-        )
-        super().__attrs_post_init__()
-
-
-@classformatter
-@attrs.define
 class AcquireLoopRt(Section):
     """Real time acquire loop.
 
@@ -440,7 +383,7 @@ class AcquireLoopRt(Section):
     all the attributes of
     [Section][laboneq.dsl.experiment.section.Section].
 
-    The execution type of [AcquireLoopRt][laboneq.dsl.experiment.section.AcquireLoopNt]
+    The execution type of [AcquireLoopRt][laboneq.dsl.experiment.section.AcquireLoopRt]
     sections is always
     [ExecutionType.REAL_TIME][laboneq.core.types.enums.execution_type.ExecutionType]
     and should not be altered.
@@ -494,10 +437,6 @@ class Sweep(Section):
     [Sweep][laboneq.dsl.experiment.section.Sweep] inherits
     all the attributes of
     [Section][laboneq.dsl.experiment.section.Section].
-
-    !!! version-changed "Changed in 2.24.0"
-        `parameters` now accepts a single `Parameter` in addition to accepting a list.
-
     """
 
     # Parameters that should be swept.

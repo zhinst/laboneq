@@ -30,6 +30,7 @@ from laboneq.data.compilation_job import (
     AcquireInfo,
     AmplifierPumpInfo,
     ChunkingInfo,
+    DeviceInfoType,
     ExperimentInfo,
     Marker,
     MixerCalibrationInfo,
@@ -1276,6 +1277,12 @@ class ExperimentInfoBuilder:
             ).is_qa_device
             if is_qa_device:
                 osc.is_hardware = acq_type.is_spectroscopy(self._acquisition_type)
+            elif (
+                signal.type is SignalInfoType.RF
+                and signal.device.device_type is DeviceInfoType.HDAWG
+            ):
+                # for HDAWG RF signals SW modulation tends to be more useful
+                osc.is_hardware = False
             else:
                 osc.is_hardware = True
 

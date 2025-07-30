@@ -3,8 +3,13 @@
 
 from __future__ import annotations
 
+import logging
+
 from laboneq.dsl.device.device_setup import DeviceSetup
 from laboneq.serializers.base import LabOneQClassicSerializer, VersionedClassSerializer
+from laboneq.serializers.implementations._models._calibration import (
+    remove_high_pass_clearing,
+)
 from laboneq.serializers.implementations._models._device_setup import (
     DataServerModel,
     LogicalSignalGroupModel,
@@ -20,13 +25,14 @@ from laboneq.serializers.types import (
     SerializationOptions,
 )
 
+_logger = logging.getLogger(__name__)
 _converter = make_converter()
 
 
 @serializer(types=DeviceSetup, public=True)
 class DeviceSetupSerializer(VersionedClassSerializer[DeviceSetup]):
     SERIALIZER_ID = "laboneq.serializers.implementations.DeviceSetupSerializer"
-    VERSION = 2
+    VERSION = 3
 
     @classmethod
     def to_dict(
@@ -67,7 +73,7 @@ class DeviceSetupSerializer(VersionedClassSerializer[DeviceSetup]):
         }
 
     @classmethod
-    def from_dict_v2(
+    def from_dict_v3(
         cls,
         serialized_data: JsonSerializableType,
         options: DeserializationOptions | None = None,
@@ -102,6 +108,35 @@ class DeviceSetupSerializer(VersionedClassSerializer[DeviceSetup]):
             logical_signal_groups=logical_signal_groups,
             qubits=qubits,
         )
+
+    @classmethod
+    def _remove_high_pass_clearing_v2(cls, device_setup_data: dict):
+        for group in device_setup_data["logical_signal_groups"].values():
+            for logical_signal in group["logical_signals"].values():
+                signal_uid = logical_signal["path"]
+                calibration_info = logical_signal["calibration"]
+                remove_high_pass_clearing(signal_uid, calibration_info, _logger)
+                physical_channel = logical_signal["_physical_channel"]
+                calibration_info_physical = physical_channel["calibration"]
+                remove_high_pass_clearing(
+                    signal_uid, calibration_info_physical, _logger
+                )
+
+        for device in device_setup_data["physical_channel_groups"].values():
+            for physical_channel in device["channels"].values():
+                signal_uid = physical_channel["path"]
+                calibration_info = physical_channel["calibration"]
+                remove_high_pass_clearing(signal_uid, calibration_info, _logger)
+
+    @classmethod
+    def from_dict_v2(
+        cls,
+        serialized_data: JsonSerializableType,
+        options: DeserializationOptions | None = None,
+    ) -> DeviceSetup:
+        se = serialized_data["__data__"]
+        cls._remove_high_pass_clearing_v2(se)
+        return cls.from_dict_v3(serialized_data, options)
 
     @classmethod
     def from_dict_v1(

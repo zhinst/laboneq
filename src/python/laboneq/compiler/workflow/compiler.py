@@ -15,7 +15,6 @@ from laboneq.compiler.common.compiler_settings import TINYSAMPLE
 from laboneq.compiler.feedback_router.feedback_router import (
     FeedbackRegisterLayout,
     calculate_feedback_register_layout,
-    assign_feedback_registers,
 )
 from laboneq.compiler.common import compiler_settings
 from laboneq.compiler.common.awg_info import AWGInfo, AwgKey
@@ -71,7 +70,7 @@ if TYPE_CHECKING:
     from laboneq.compiler.workflow.on_device_delays import OnDeviceDelayCompensation
 
 
-AWGMapping = dict[AwgKey, AWGInfo]
+AWGMapping = list[AWGInfo]
 
 _logger = logging.getLogger(__name__)
 
@@ -189,7 +188,7 @@ def _allocate_oscillators(awg: AWGInfo, dao: ExperimentDAO):
 
 
 def calc_awgs(dao: ExperimentDAO) -> AWGMapping:
-    awgs: AWGMapping = {}
+    awgs: dict[AwgKey, AWGInfo] = {}
     signals_by_channel_and_awg: dict[
         tuple[str, int, int], dict[str, set[str] | AWGInfo]
     ] = {}
@@ -246,7 +245,7 @@ def calc_awgs(dao: ExperimentDAO) -> AWGMapping:
         _verify_rf_signal_delays(awg, dao)
         _allocate_oscillators(awg, dao)
 
-    return awgs
+    return list(awgs.values())
 
 
 def calc_awg_number(channel, device_type: DeviceType):
@@ -400,7 +399,7 @@ class Compiler:
         self._clock_settings: dict[str, Any] = {}
         self._shfqa_generator_allocation: dict[str, _ShfqaGeneratorAllocation] = {}
         self._integration_unit_allocation: dict[str, IntegrationUnitAllocation] = {}
-        self._awgs: AWGMapping = {}
+        self._awgs: AWGMapping = []
         self._delays_by_signal: dict[str, OnDeviceDelayCompensation] = {}
         self._precompensations: dict[str, PrecompensationInfo] = {}
         self._signal_objects: dict[str, SignalObj] = {}
@@ -659,15 +658,17 @@ class Compiler:
                         candidates=divisors,
                     )
 
-        assign_feedback_registers(
-            combined_compiler_output=self._combined_compiler_output
-        )
+        for (
+            device_class,
+            output,
+        ) in self._combined_compiler_output.combined_output.items():
+            get_compiler_hooks(device_class).assign_feedback_registers(output)
 
     @staticmethod
-    def _calc_awgs(dao: ExperimentDAO):
-        d = {}
+    def _calc_awgs(dao: ExperimentDAO) -> AWGMapping:
+        d: AWGMapping = []
         for compiler_hooks in all_compiler_hooks():
-            d.update(compiler_hooks.calc_awgs(dao))
+            d.extend(compiler_hooks.calc_awgs(dao))
         return d
 
     def _adjust_signals_for_on_device_delays(
@@ -717,9 +718,7 @@ class Compiler:
         delay_measure_acquire: dict[AwgKey, DelayInfo] = {}
 
         awgs_by_signal_id = {
-            signal_id: awg
-            for awg in self._awgs.values()
-            for signal_id, _ in awg.signal_channels
+            signal_id: awg for awg in self._awgs for signal_id, _ in awg.signal_channels
         }
 
         for signal_id in self._experiment_dao.signals():
@@ -882,7 +881,7 @@ class Compiler:
         self._analyze_setup(self._experiment_dao)
         self._process_experiment()
 
-        awgs: list[AWGInfo] = sorted(self._awgs.values(), key=lambda awg: awg.key)
+        awgs: list[AWGInfo] = sorted(self._awgs, key=lambda awg: awg.key)
 
         device_class, combined_output = (
             self._combined_compiler_output.get_first_combined_output()

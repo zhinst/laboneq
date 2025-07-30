@@ -300,6 +300,11 @@ mod tests {
             let root = NodeKind::Loop(Loop {
                 length,
                 compressed: false,
+                section_info: Arc::new(SectionInfo {
+                    name: "".to_string(),
+                    id: 0,
+                }),
+                count: 1,
             });
             self.enter_stack(IrNode::new(root, 0), f);
         }

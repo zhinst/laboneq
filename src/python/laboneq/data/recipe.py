@@ -80,7 +80,7 @@ class IO:
 
 @dataclass
 class AWG:
-    awg: int | str
+    awg: int
     signal_type: SignalType
     # signal id -> channel (cast to str for compat with json) -> port
     signals: dict[str, dict[str, str]] = field(default_factory=dict)

@@ -76,7 +76,7 @@ impl PulseSignaturePy {
     }
 
     #[getter]
-    fn id_pulse_params(&self) -> Option<usize> {
+    fn id_pulse_params(&self) -> Option<u64> {
         self.signature.id_pulse_params
     }
 

@@ -23,7 +23,6 @@ from laboneq.dsl.experiment.experiment_context import (
     current_experiment_context,
 )
 from laboneq.dsl.experiment.section import (
-    AcquireLoopNt,
     AcquireLoopRt,
     Case,
     Match,
@@ -190,21 +189,6 @@ class SweepSectionContextManager(SectionContextManagerBase):
         if len(section.parameters) == 1:
             return section.parameters[0]
         return tuple(section.parameters)
-
-
-class AcquireLoopNtSectionContextManager(SectionContextManagerBase):
-    section_class = AcquireLoopNt
-
-    def __init__(self, count, averaging_mode=AveragingMode.CYCLIC, uid=None, name=None):
-        kwargs = dict(
-            count=count,
-            averaging_mode=averaging_mode,
-        )
-        if uid is not None:
-            kwargs["uid"] = uid
-        if name is not None:
-            kwargs["name"] = name
-        super().__init__(kwargs=kwargs)
 
 
 class AcquireLoopRtSectionContextManager(SectionContextManagerBase):
