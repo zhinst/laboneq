@@ -1,26 +1,33 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{Result, ir};
-use anyhow::anyhow;
+use crate::ir::{IrNode, NodeKind};
+use crate::{Error, Result};
 
-fn handle_match(node: &mut ir::IrNode, state: Option<u16>) -> Result<()> {
-    // TODO: Validate that all the pulses inside match does not have HW oscillator switching
+fn handle_match(node: &IrNode, state: Option<u16>) -> Result<()> {
     let state = match node.data() {
-        ir::NodeKind::Case(ob) => {
+        NodeKind::Case(ob) => {
             if state.is_some() {
-                return Err(anyhow!("Match cases cannot be nested.").into());
+                return Err(Error::new("Match cases cannot be nested."));
             }
             Some(ob.state)
         }
-        _ => None,
+        NodeKind::Section(_) => None,
+        _ => {
+            if state.is_some() && node.has_children() {
+                return Err(Error::new(
+                    "No special sections permitted inside 'case()' blocks.",
+                ));
+            }
+            None
+        }
     };
-    for child in node.iter_children_mut() {
+    for child in node.iter_children() {
         handle_match(child, state)?;
     }
     Ok(())
 }
 
-pub fn handle_match_nodes(node: &mut ir::IrNode) -> Result<()> {
+pub fn handle_match_nodes(node: &IrNode) -> Result<()> {
     handle_match(node, None)
 }

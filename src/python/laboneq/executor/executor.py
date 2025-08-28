@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass
 from enum import Enum, Flag, auto
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -38,7 +39,9 @@ LOOP_INDEX = "_loop_index"
 
 
 class ExecutionScope:
-    def __init__(self, parent: ExecutionScope | None, root: ExecutorBase):
+    def __init__(
+        self, parent: ExecutionScope | None, root: ExecutorBase | AsyncExecutorBase
+    ):
         self._parent = parent
         self._is_real_time: bool = False if parent is None else parent._is_real_time
         self._root = root
@@ -420,7 +423,7 @@ class ExecutorBase:
 
     def __init__(self, looping_mode: LoopingMode = LoopingMode.NEAR_TIME_ONLY):
         self.looping_mode: LoopingMode = looping_mode
-        self._handlers_map = {
+        self._handlers_map: dict[StatementType, Callable[..., None]] = {
             StatementType.Set: self.set_handler,
             StatementType.NTCallback: self.nt_callback_handler,
             StatementType.Acquire: self.acquire_handler,
@@ -481,7 +484,9 @@ class AsyncExecutorBase:
 
     def __init__(self, looping_mode: LoopingMode = LoopingMode.NEAR_TIME_ONLY):
         self.looping_mode: LoopingMode = looping_mode
-        self._handlers_map = {
+        self._handlers_map: dict[
+            StatementType, Callable[..., Coroutine[Any, Any, None]]
+        ] = {
             StatementType.Set: self.set_handler,
             StatementType.NTCallback: self.nt_callback_handler,
             StatementType.Acquire: self.acquire_handler,

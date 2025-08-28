@@ -26,7 +26,8 @@ from laboneq.compiler.common.shfppc_sweeper_config import SHFPPCSweeperConfig
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.seqc.linker import NeartimeStep, CombinedRTOutputSeqC
-from laboneq.compiler.seqc.measurement_calculator import IntegrationTimes, SignalDelays
+from laboneq.compiler.seqc.measurement_calculator import SignalDelays
+from laboneq.compiler.common.integration_times import IntegrationTimes
 from laboneq.compiler.workflow.on_device_delays import OnDeviceDelayCompensation
 from laboneq.compiler.workflow.precompensation_helpers import (
     precompensation_is_nonzero,
@@ -461,7 +462,7 @@ class RecipeGenerator:
         self._recipe.realtime_execution_init.append(
             RealtimeExecutionInit(
                 device_id=nt_step.device_id,
-                awg_id=nt_step.awg_id,
+                awg_index=nt_step.awg_id,
                 program_ref=nt_step.seqc_ref,
                 wave_indices_ref=nt_step.wave_indices_ref,
                 kernel_indices_ref=nt_step.kernel_indices_ref,

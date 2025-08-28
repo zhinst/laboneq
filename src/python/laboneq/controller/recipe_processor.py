@@ -30,6 +30,7 @@ from laboneq.data.scheduled_experiment import (
     ArtifactsCodegen,
     CodegenWaveform,
     ScheduledExperiment,
+    WeightInfo,
 )
 from laboneq.executor.executor import (
     ExecutorBase,
@@ -86,6 +87,15 @@ class AwgConfig:
     # QA
     raw_acquire_length: int | None = None
     signal_raw_acquire_lengths: dict[str, int] = field(default_factory=dict)
+    # signal_id -> sequence of handle/None for each result vector entry.
+    # Important! Length must be equal for all acquire signals / integrators of one AWG.
+    # All integrators occupy an entry in the respective result vectors per startQA event,
+    # regardless of the given integrators mask. Masked-out integrators just leave the
+    # value at NaN (corresponds to None in the map).
+    # TODO(2K): to be replaced by event-based calculation in the compiler
+    signal_result_map: dict[str, list[str | None]] = field(
+        default_factory=lambda: defaultdict(list)
+    )
     result_length: int | None = None
     acquire_signals: set[str] = field(default_factory=set)
     target_feedback_register: int | None = None
@@ -182,10 +192,7 @@ class RtExecutionInfo:
     averaging_mode: AveragingMode
     acquisition_type: AcquisitionType
     pipeliner_job_count: int | None
-
-    # signal -> flat list of result handles
-    # TODO(2K): to be replaced by event-based calculation in the compiler
-    signal_result_map: dict[str, list[str | None]] = field(default_factory=dict)
+    max_step_execution_time: float
 
     @property
     def with_pipeliner(self) -> bool:
@@ -283,6 +290,12 @@ class RecipeData:
         for awg_key, awg_config in self.awg_configs.items():
             if awg_config.result_length is not None:
                 yield awg_key, awg_config
+
+    def awg_by_seqc_name(self, seqc_name: str) -> AwgKey | None:
+        for rt_exec_step in self.recipe.realtime_execution_init:
+            if rt_exec_step.program_ref == seqc_name:
+                return AwgKey(rt_exec_step.device_id, rt_exec_step.awg_index)
+        return None
 
 
 def _validate_recipe(recipe: Recipe | None) -> Recipe:
@@ -494,29 +507,45 @@ class _LoopStackEntry:
         return self.axis_points[0] if len(self.axis_points) == 1 else self.axis_points
 
 
+@dataclass
+class _RtExecutionState:
+    uid: str
+    averages: int
+    averaging_mode: AveragingMode
+    acquisition_type: AcquisitionType
+
+
 class _LoopsPreprocessor(ExecutorBase):
     def __init__(self):
         super().__init__(looping_mode=LoopingMode.ONCE)
 
         self._result_shapes: HandleResultShapes = {}
-        self._rt_execution_info: RtExecutionInfo | None = None
-        self.pipeliner_job_count: int | None = None
         self._loop_stack: list[_LoopStackEntry] = []
-        self._current_rt_info: RtExecutionInfo | None = None
+        self._current_rt_state: _RtExecutionState | None = None
+        self._last_rt_state: _RtExecutionState | None = None
 
-    @property
-    def rt_execution_info(self) -> RtExecutionInfo:
-        if self._rt_execution_info is None:
+    def get_rt_execution_info(
+        self, pipeliner_job_count: int | None, max_step_execution_time: float
+    ) -> RtExecutionInfo:
+        if self._last_rt_state is None:
             raise LabOneQControllerException(
                 "No 'acquire_loop_rt' section found in the experiment."
             )
-        return self._rt_execution_info
+        return RtExecutionInfo(
+            uid=self._last_rt_state.uid,
+            averages=self._last_rt_state.averages,
+            averaging_mode=self._last_rt_state.averaging_mode,
+            acquisition_type=self._last_rt_state.acquisition_type,
+            pipeliner_job_count=pipeliner_job_count,
+            max_step_execution_time=max_step_execution_time,
+        )
 
     def get_result_shapes(
         self,
         devices: DeviceCollection,
         awg_configs: AwgConfigs,
         scheduled_experiment: ScheduledExperiment,
+        rt_execution_info: RtExecutionInfo,
     ) -> HandleResultShapes:
         result_shapes: HandleResultShapes = HandleResultShapes()
         for handle, shape_info in self._result_shapes.items():
@@ -532,7 +561,7 @@ class _LoopsPreprocessor(ExecutorBase):
                 shape.append(shape_info.handle_acquire_count)
 
             # Append extra dimension for samples of the raw acquisition
-            if self.rt_execution_info.is_raw_acquisition:
+            if rt_execution_info.is_raw_acquisition:
                 signal_id = shape_info.signal
                 awg_key, awg_config = awg_configs.by_signal(signal_id)
                 device = devices.find_by_uid(awg_key.device_uid)
@@ -556,19 +585,19 @@ class _LoopsPreprocessor(ExecutorBase):
         return result_shapes
 
     @property
-    def current_rt_info(self) -> RtExecutionInfo:
-        assert self._current_rt_info is not None
-        return self._current_rt_info
+    def current_rt_state(self) -> _RtExecutionState:
+        assert self._current_rt_state is not None
+        return self._current_rt_state
 
     def _single_shot_axis(self) -> NumPyArray:
         return np.linspace(
-            0, self.current_rt_info.averages - 1, self.current_rt_info.averages
+            0, self.current_rt_state.averages - 1, self.current_rt_state.averages
         )
 
     def acquire_handler(self, handle: str, signal: str, parent_uid: str):
         # Determine result shape for each acquire handle
         single_shot_cyclic = (
-            self.current_rt_info.averaging_mode == AveragingMode.SINGLE_SHOT
+            self.current_rt_state.averaging_mode == AveragingMode.SINGLE_SHOT
         )
         shape = [
             loop.count
@@ -612,10 +641,10 @@ class _LoopsPreprocessor(ExecutorBase):
         )
         if loop_flags.is_average:
             single_shot_cyclic = (
-                self.current_rt_info.averaging_mode == AveragingMode.SINGLE_SHOT
+                self.current_rt_state.averaging_mode == AveragingMode.SINGLE_SHOT
             )
             if single_shot_cyclic:
-                self._loop_stack[-1].axis_names.append(self.current_rt_info.uid)
+                self._loop_stack[-1].axis_names.append(self.current_rt_state.uid)
                 self._loop_stack[-1].axis_points.append(self._single_shot_axis())
 
     def for_loop_exit_handler(self, count: int, index: int, loop_flags: LoopFlags):
@@ -628,16 +657,15 @@ class _LoopsPreprocessor(ExecutorBase):
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
     ):
-        if self._rt_execution_info is not None and self._rt_execution_info.uid != uid:
+        if self._last_rt_state is not None and self._last_rt_state.uid != uid:
             raise LabOneQControllerException(
                 "Multiple 'acquire_loop_rt' sections per experiment is not supported."
             )
-        self._current_rt_info = RtExecutionInfo(
+        self._current_rt_state = _RtExecutionState(
             uid=uid,
             averages=count,
             averaging_mode=averaging_mode,
             acquisition_type=acquisition_type,
-            pipeliner_job_count=self.pipeliner_job_count,
         )
 
     def rt_exit_handler(
@@ -647,12 +675,12 @@ class _LoopsPreprocessor(ExecutorBase):
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
     ):
-        if self._current_rt_info is None:
+        if self._current_rt_state is None:
             raise LabOneQControllerException(
                 "Nested 'acquire_loop_rt' are not allowed."
             )
-        self._rt_execution_info = self._current_rt_info
-        self._current_rt_info = None
+        self._last_rt_state = self._current_rt_state
+        self._current_rt_state = None
 
 
 def _calculate_awg_configs(
@@ -702,8 +730,10 @@ def _calculate_awg_configs(
         )
         awg_configs[awg_key].acquire_signals.add(integrator_allocation.signal_id)
 
-    acquire_lengths = {al.signal_id: al.acquire_length for al in recipe.acquire_lengths}
-    acquire_signals = set(acquire_lengths.keys())
+    raw_acquire_length_by_signal = {
+        al.signal_id: al.acquire_length for al in recipe.acquire_lengths
+    }
+    raw_acquire_signals = set(raw_acquire_length_by_signal.keys())
 
     # Determine the raw acquisition lengths across various acquire events.
     # Will use the maximum length, as scope / monitor can only be configured for one.
@@ -711,10 +741,10 @@ def _calculate_awg_configs(
     raw_acquire_lengths: dict[str, dict[str, int]] = defaultdict(dict)
     raw_acquire_channels: dict[str, set[int]] = defaultdict(set)
     if rt_execution_info.acquisition_type == AcquisitionType.RAW:
-        for signal in acquire_signals:
+        for signal in raw_acquire_signals:
             ac_awg_key, _ = awg_configs.by_signal(signal)
-            raw_acquire_lengths[ac_awg_key.device_uid][signal] = acquire_lengths.get(
-                signal, 0
+            raw_acquire_lengths[ac_awg_key.device_uid][signal] = (
+                raw_acquire_length_by_signal.get(signal, 0)
             )
             raw_acquire_channels[ac_awg_key.device_uid].add(ac_awg_key.awg_index)
     for awg_key, awg_config in awg_configs.items():
@@ -724,20 +754,15 @@ def _calculate_awg_configs(
         awg_config.raw_acquire_length = raw_acquire_length
         awg_config.signal_raw_acquire_lengths = dev_raw_acquire_lengths
 
-        # signal_id -> sequence of handle/None for each result vector entry.
-        # Important! Length must be equal for all acquire signals / integrators of one AWG.
-        # All integrators occupy an entry in the respective result vectors per startQA event,
-        # regardless of the given integrators mask. Masked-out integrators just leave the
-        # value at NaN (corresponds to None in the map).
-        awg_result_map: dict[str, list[str | None]] = defaultdict(list)
         for acquires in recipe.simultaneous_acquires:
             if any(signal in acquires for signal in awg_config.acquire_signals):
                 for signal in awg_config.acquire_signals:
-                    awg_result_map[signal].append(acquires.get(signal))
-        if len(awg_result_map) > 0:
-            rt_execution_info.signal_result_map.update(awg_result_map)
+                    awg_config.signal_result_map[signal].append(acquires.get(signal))
+        if len(awg_config.signal_result_map) > 0:
             # All lengths are the same, see comment above.
-            any_awg_signal_result_map = next(iter(awg_result_map.values()))
+            any_awg_signal_result_map = next(
+                iter(awg_config.signal_result_map.values())
+            )
             result_length = (
                 len(any_awg_signal_result_map) * rt_execution_info.mapping_repeats
             )
@@ -861,19 +886,24 @@ def pre_process_compiled(
     assert execution is not None
 
     lp = _LoopsPreprocessor()
-    lp.pipeliner_job_count = scheduled_experiment.chunk_count
     lp.run(execution)
-    rt_execution_info = lp.rt_execution_info
+    rt_execution_info = lp.get_rt_execution_info(
+        scheduled_experiment.chunk_count, recipe.max_step_execution_time
+    )
 
     awg_configs = _calculate_awg_configs(
         rt_execution_info, scheduled_experiment, recipe, devices
+    )
+
+    result_shapes = lp.get_result_shapes(
+        devices, awg_configs, scheduled_experiment, rt_execution_info
     )
 
     recipe_data = RecipeData(
         scheduled_experiment=scheduled_experiment,
         recipe=recipe,
         execution=execution,
-        result_shapes=lp.get_result_shapes(devices, awg_configs, scheduled_experiment),
+        result_shapes=result_shapes,
         rt_execution_info=rt_execution_info,
         device_settings=device_settings,
         awg_configs=awg_configs,
@@ -886,6 +916,27 @@ def pre_process_compiled(
         device.validate_recipe_data(recipe_data)
 
     return recipe_data
+
+
+def get_execution_time(rt_execution_info: RtExecutionInfo) -> tuple[float, float]:
+    min_wait_time = rt_execution_info.max_step_execution_time
+    if rt_execution_info.with_pipeliner:
+        pipeliner_reload_worst_case = 1500e-6
+        min_wait_time = (
+            min_wait_time + pipeliner_reload_worst_case
+        ) * rt_execution_info.pipeliner_jobs
+
+    guarded_wait_time = round(min_wait_time * 1.1 + 1)  # +10% and fixed 1sec guard time
+
+    return min_wait_time, guarded_wait_time
+
+
+def get_weights_info(
+    artifacts: ArtifactsCodegen, kernel_ref: str | None
+) -> dict[str, list[WeightInfo]]:
+    if kernel_ref is None:
+        return {}
+    return artifacts.integration_weights.get(kernel_ref, {})
 
 
 @overload

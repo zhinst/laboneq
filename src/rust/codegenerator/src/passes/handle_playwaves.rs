@@ -361,7 +361,7 @@ pub fn handle_plays(
     osc_parameters: &SoftwareOscillatorParameters,
     amp_reg_alloc: &AmplitudeRegisterAllocation,
 ) -> Result<()> {
-    let traits = &awg.device_kind.traits();
+    let traits = awg.device_kind().traits();
     let mut local_cut_pts = evaluate_cut_points(program);
     local_cut_pts.general.extend(cut_points);
     let ct_intervals: HashSet<OrderedRange<i64>> = local_cut_pts
@@ -445,7 +445,7 @@ pub fn handle_plays(
                     {} samples on device '{}'.\n\
                     Suggested workaround: manually add delays to overly short loops, etc.",
                         traits.min_play_wave,
-                        awg.device_kind.as_str()
+                        awg.device_kind().as_str()
                     );
                     return Err(anyhow!(msg).into());
                 }
@@ -454,7 +454,7 @@ pub fn handle_plays(
             Ok(out) => out,
         };
         let use_ct_hw_oscillator =
-            awg.use_command_table_phase_amp() && awg.device_kind == cjob::DeviceKind::SHFSG;
+            awg.use_command_table_phase_amp() && awg.device_kind() == &cjob::DeviceKind::SHFSG;
         for wave_range in compacted_intervals.into_iter() {
             let waveform_start = wave_range.start();
             let waveform_length = wave_range.length();

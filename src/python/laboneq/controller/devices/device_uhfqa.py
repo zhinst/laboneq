@@ -33,6 +33,7 @@ from laboneq.controller.recipe_processor import (
     RtExecutionInfo,
     get_initialization_by_device_uid,
     get_wave,
+    get_weights_info,
 )
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
@@ -453,12 +454,12 @@ class DeviceUHFQA(DeviceBase):
         awg_index: int,
         artifacts: ArtifactsCodegen,
         integrator_allocations: list[IntegratorAllocation],
-        kernel_ref: str,
+        kernel_ref: str | None,
     ) -> NodeCollector:
         nc = NodeCollector(base=f"/{self.serial}/")
 
-        integration_weights = artifacts.integration_weights.get(kernel_ref, {})
-        for signal_id, weight_names in integration_weights.items():
+        weights_info = get_weights_info(artifacts, kernel_ref)
+        for signal_id, weight_names in weights_info.items():
             integrator_allocation = next(
                 ia for ia in integrator_allocations if ia.signal_id == signal_id
             )
@@ -604,7 +605,6 @@ class DeviceUHFQA(DeviceBase):
 
     async def get_measurement_data(
         self,
-        recipe_data: RecipeData,
         channel: int,
         rt_execution_info: RtExecutionInfo,
         result_indices: list[int],

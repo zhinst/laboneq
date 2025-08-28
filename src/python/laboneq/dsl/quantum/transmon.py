@@ -23,10 +23,15 @@ from laboneq.dsl.quantum.quantum_element import (
 class TransmonParameters(QuantumParameters):
     """A class for the parameters of a superconducting, flux-tunable transmon qubit.
 
+    !!! version-changed "Deprecated in version 2.58.0."
+
+        The `user_defined` attribute is deprecated. Use the `custom` attribute from
+        the `QuantumParameters` parent class instead.
+
     !!! version-changed "Deprecated in version 2.43.0."
 
         This class is deprecated and was intended primarily for demonstration purposes.
-        Instead of using it write a class that directly inherits from
+        Instead of using it, write a class that directly inherits from
         [QuantumParameters][laboneq.dsl.quantum.quantum_element.QuantumParameters].
     """
 
@@ -50,7 +55,7 @@ class TransmonParameters(QuantumParameters):
     readout_range_in: Optional[float] = 10.0
     #: offset voltage for flux control line - defaults to 0.
     flux_offset_voltage: Optional[float] = 0.0
-    #: free form dictionary of user defined parameters.
+    #: free form dictionary of user-defined parameters (deprecated).
     user_defined: dict | None = attrs.field(factory=dict)
 
     @property
@@ -86,7 +91,7 @@ class Transmon(QuantumElement):
     !!! version-changed "Deprecated in version 2.43.0."
 
         This class is deprecated and was intended primarily for demonstration purposes.
-        Instead of using it write a class that directly inherits from
+        Instead of using it, write a class that directly inherits from
         [QuantumElement][laboneq.dsl.quantum.quantum_element.QuantumElement].
     """
 

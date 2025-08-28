@@ -38,7 +38,7 @@ Find the LabOne Q Manual here:
 <https://docs.zhinst.com/labone_q_user_manual/>
 
 Dive right into using LabOne Q and generate your first pulse sequence:
-<https://docs.zhinst.com/labone_q_user_manual/core/getting_started/hello_world.html>
+<https://docs.zhinst.com/labone_q_user_manual/getting_started/index.html>
 
 The API Documentation is published here:
 <https://docs.zhinst.com/labone_q_user_manual/core/reference/simple.html>

@@ -110,6 +110,18 @@ class DeviceSetupSerializer(VersionedClassSerializer[DeviceSetup]):
         )
 
     @classmethod
+    def _rename_physical_channel_field(cls, device_setup_data: dict):
+        """Rename `physical_channel` to `_physical_channel` for v2
+        serializations where logical signal was saved using the former field
+        name."""
+        for group in device_setup_data["logical_signal_groups"].values():
+            for logical_signal in group["logical_signals"].values():
+                if "physical_channel" in logical_signal:
+                    logical_signal["_physical_channel"] = logical_signal.pop(
+                        "physical_channel"
+                    )
+
+    @classmethod
     def _remove_high_pass_clearing_v2(cls, device_setup_data: dict):
         for group in device_setup_data["logical_signal_groups"].values():
             for logical_signal in group["logical_signals"].values():
@@ -135,6 +147,7 @@ class DeviceSetupSerializer(VersionedClassSerializer[DeviceSetup]):
         options: DeserializationOptions | None = None,
     ) -> DeviceSetup:
         se = serialized_data["__data__"]
+        cls._rename_physical_channel_field(se)
         cls._remove_high_pass_clearing_v2(se)
         return cls.from_dict_v3(serialized_data, options)
 

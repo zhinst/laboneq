@@ -77,7 +77,7 @@ def create_dummy_transmon(index, base_parameters, device_setup):
             drive_range=base_parameters["drive_range"],
             readout_range_out=base_parameters["readout_range_out"],
             readout_range_in=base_parameters["readout_range_in"],
-            user_defined={
+            custom={
                 "amplitude_pi": base_parameters["amplitude_pi"],
                 "pulse_length": base_parameters["pulse_length"],
                 "readout_length": base_parameters["readout_length"],
@@ -110,7 +110,7 @@ def create_dummy_qubit(index, base_parameters, device_setup):
             drive_range=base_parameters["drive_range"],
             readout_range_out=base_parameters["readout_range_out"],
             readout_range_in=base_parameters["readout_range_in"],
-            user_defined={
+            custom={
                 "amplitude_pi": base_parameters["amplitude_pi"],
                 "pulse_length": base_parameters["pulse_length"],
                 "readout_length": base_parameters["readout_length"],

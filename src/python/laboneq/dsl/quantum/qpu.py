@@ -71,11 +71,17 @@ class QuantumPlatform:
 
     def __repr__(self) -> str:
         quantum_elements = ", ".join(q.uid for q in self.qpu.quantum_elements)
+        groups = ", ".join(
+            f"{key}: [{', '.join(q.uid for q in value)}]"
+            for key, value in self.qpu.groups._groups.items()
+        )
         return (
             f"<{type(self).__qualname__}"
             f" setup={self.setup.uid!r}"
             f" qpu.quantum_elements=[{quantum_elements}]"
+            f" qpu.groups={{{groups}}}"
             f" qpu.quantum_operations={type(self.qpu.quantum_operations).__qualname__}"
+            f" qpu.topology={self.qpu.topology}"
             f">"
         )
 
@@ -202,9 +208,14 @@ class QPU:
 
     def __repr__(self) -> str:
         quantum_elements = ", ".join(q.uid for q in self.quantum_elements)
+        groups = ", ".join(
+            f"{key}: [{', '.join(q.uid for q in value)}]"
+            for key, value in self.groups._groups.items()
+        )
         return (
             f"<{type(self).__qualname__}"
             f" quantum_elements=[{quantum_elements}]"
+            f" groups={{{groups}}}"
             f" quantum_operations={type(self.quantum_operations).__qualname__}"
             f" topology={self.topology}"
             f">"
@@ -267,6 +278,10 @@ class QPU:
 
     def __rich_repr__(self):
         yield "quantum_elements", [q.uid for q in self.quantum_elements]
+        yield (
+            "groups",
+            {key: [q.uid for q in value] for key, value in self.groups._groups.items()},
+        )
         yield "quantum_operations", type(self.quantum_operations).__qualname__
         yield "topology", self.topology
 

@@ -35,7 +35,7 @@ class PlaybackSignature:
     waveform: Optional[WaveformSignature]
     hw_oscillator: HWOscillator | None
     state: Optional[int] = None
-    set_phase: float | None = None
+    reset_phase: bool = False
     increment_phase: float | None = None
     # A collection of the pulse parameters that drive the phase increment. If some phase
     # increment is not associated with a parameter, this is indicated by the special value `None`
@@ -63,10 +63,6 @@ class PlaybackSignature:
                         round(pulse.phase * phase_resolution_range)
                         / phase_resolution_range
                     )
-        if self.set_phase is not None:
-            self.set_phase = normalize_phase(
-                round(self.set_phase * PHASE_RESOLUTION_CT) / PHASE_RESOLUTION_CT
-            )
         if self.increment_phase is not None:
             self.increment_phase = normalize_phase(
                 round(self.increment_phase * PHASE_RESOLUTION_CT) / PHASE_RESOLUTION_CT

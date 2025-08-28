@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 from collections.abc import ItemsView, Iterator, KeysView, ValuesView
-import warnings
 import attrs
 from typing import Any
 
@@ -91,49 +90,3 @@ class Calibration:
                 An iterator over calibration items.
         """
         return self.calibration_items.values()
-
-    @staticmethod
-    def load(filename: str) -> Calibration:
-        """Load calibration data from file.
-
-        The file is in JSON format, as generated via
-        [.save()][laboneq.dsl.calibration.Calibration.save].
-
-        !!! version-changed "Deprecated in version 2.50.0"
-            Use `laboneq.simple.load` instead.
-
-        Args:
-            filename: The filename to load data from.
-        """
-        warnings.warn(
-            "The `Calibration.load` method is deprecated and will be removed in future releases. "
-            "Please use the `load` function from the `laboneq.simple` module instead. ",
-            FutureWarning,
-            stacklevel=2,
-        )
-        # TODO ErC: Error handling
-        from ..serialization import Serializer
-
-        return Serializer.from_json_file(filename, Calibration)
-
-    def save(self, filename: str):
-        """Save calibration data to file.
-
-        The file is written in JSON format.
-
-        !!! version-changed "Deprecated in version 2.50.0"
-            Use `laboneq.simple.save` instead.
-
-        Args:
-            filename: The filename to save data to.
-        """
-        warnings.warn(
-            "The `Calibration.save` method is deprecated and will be removed in future releases. "
-            "Please use the `save` function from the `laboneq.simple` module instead. ",
-            FutureWarning,
-            stacklevel=2,
-        )
-        from ..serialization import Serializer
-
-        # TODO ErC: Error handling
-        Serializer.to_json_file(self, filename)

@@ -7,11 +7,29 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from laboneq.data.experiment_results import AcquiredResult
+from laboneq.data.experiment_results import AcquiredResult, ExperimentResults
 
 if TYPE_CHECKING:
     from laboneq.core.types.numpy_support import NumPyArray
     from laboneq.data.recipe import NtStepKey
+    from laboneq.controller.recipe_processor import RecipeData
+
+
+def init_empty_result_by_shape(recipe_data: RecipeData) -> ExperimentResults:
+    results = ExperimentResults()
+    for handle, shape_info in recipe_data.result_shapes.items():
+        empty_result = make_acquired_result(
+            data=np.full(
+                shape=tuple(shape_info.base_shape),
+                fill_value=np.nan,
+                dtype=np.complex128,
+            ),
+            axis_name=shape_info.base_axis_name,
+            axis=shape_info.base_axis,
+            handle=handle,
+        )
+        results.acquired_results[handle] = empty_result
+    return results
 
 
 def make_acquired_result(

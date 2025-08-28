@@ -6,11 +6,11 @@ from __future__ import annotations
 import logging
 import warnings
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Callable, Dict, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, NoReturn, Union
 
+from laboneq.data.experiment_results import ExperimentResults
 from numpy import typing as npt
 
-from laboneq.controller.protected_session import ProtectedSession
 from laboneq.controller.toolkit_adapter import ToolkitDevices
 from laboneq.core.exceptions import AbortExecution, LabOneQException
 from laboneq.core.types import CompiledExperiment
@@ -54,6 +54,12 @@ class ConnectionState:
 
 
 _FLEXIBLE_FEEDBACK_SETTING = "FLEXIBLE_FEEDBACK"
+
+
+def _requires_neartime_callback() -> NoReturn:
+    raise LabOneQException(
+        "This method only works when called from a near-time callback."
+    )
 
 
 class Session:
@@ -291,6 +297,7 @@ class Session:
             target_setup=target_setup,
             ignore_version_mismatch=ignore_version_mismatch,
             neartime_callbacks=self._neartime_callbacks,
+            parent_session=self,
         )
         controller.connect(
             do_emulation=self._connection_state.emulated,
@@ -460,12 +467,19 @@ class Session:
             raise LabOneQException("No experiment available to run.")
 
         self._last_results = None
+        handle = None
         try:
-            controller.execute_compiled(
-                self.compiled_experiment.scheduled_experiment, ProtectedSession(self)
+            handle = controller.submit_compiled(
+                self.compiled_experiment.scheduled_experiment
             )
+            controller.wait_submission(handle)
+            controller.stop_workers()
         finally:
-            results = controller.results()
+            results = (
+                ExperimentResults()
+                if handle is None
+                else controller.submission_results(handle)
+            )
             results_kwargs: dict[str, Any] = {}
             if include_results_metadata:
                 results_kwargs["experiment"] = self.compiled_experiment.experiment
@@ -543,7 +557,7 @@ class Session:
                 Replacement pulse, can be a Pulse object or array of values.
                 Needs to have the same length as the pulse it replaces.
         """
-        self._controller.replace_pulse(pulse_uid, pulse_or_array)
+        _requires_neartime_callback()
 
     def replace_phase_increment(
         self,
@@ -561,7 +575,7 @@ class Session:
             new_value: The new replacement value.
 
         """
-        self._controller.replace_phase_increment(parameter_uid, new_value)
+        _requires_neartime_callback()
 
     def get_results(self) -> Results:
         """

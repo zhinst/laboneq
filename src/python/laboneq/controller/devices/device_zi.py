@@ -75,7 +75,7 @@ from laboneq.data.scheduled_experiment import (
 )
 
 if TYPE_CHECKING:
-    from laboneq.core.types.numpy_support import NumPyArray
+    import numpy as np
 
 
 _logger = logging.getLogger(__name__)
@@ -97,7 +97,7 @@ class SequencerPaths:
 
 @dataclass
 class RawReadoutData:
-    vector: NumPyArray
+    vector: np.ndarray
 
     # metadata by job_id
     metadata: dict[int, dict[str, Any]] = field(default_factory=dict)
@@ -727,7 +727,7 @@ class DeviceBase(DeviceZI):
                     r
                     for r in recipe_data.recipe.realtime_execution_init
                     if r.device_id == self.uid
-                    and r.awg_id == awg_index
+                    and r.awg_index == awg_index
                     and r.nt_step == effective_nt_step
                 ),
                 None,
@@ -889,7 +889,7 @@ class DeviceBase(DeviceZI):
         awg_index: int,
         artifacts: ArtifactsCodegen,
         integrator_allocations: list[IntegratorAllocation],
-        kernel_ref: str,
+        kernel_ref: str | None,
     ) -> NodeCollector:
         return NodeCollector()
 
@@ -1021,7 +1021,7 @@ class DeviceBase(DeviceZI):
         )
 
     async def setup_one_step_execution(
-        self, recipe_data: RecipeData, with_pipeliner: bool
+        self, recipe_data: RecipeData, nt_step: NtStepKey, with_pipeliner: bool
     ):
         pass
 
@@ -1139,7 +1139,7 @@ class DeviceBase(DeviceZI):
             )
             # Raw data is per physical port, and is the same for all logical signals of the AWG
             for signal in awg_config.acquire_signals:
-                mapping = rt_execution_info.signal_result_map.get(signal, [])
+                mapping = awg_config.signal_result_map.get(signal, [])
                 signal_acquire_length = awg_config.signal_raw_acquire_lengths.get(
                     signal
                 )
@@ -1200,14 +1200,13 @@ class DeviceBase(DeviceZI):
         assert integrator_allocation.awg == awg_key.awg_index
         assert awg_config.result_length is not None, "AWG not producing results"
         raw_readout = await self.get_measurement_data(
-            recipe_data,
             awg_key.awg_index,
             rt_execution_info,
             integrator_allocation.channels,
             awg_config.result_length,
             effective_averages,
         )
-        mapping = rt_execution_info.signal_result_map.get(signal, [])
+        mapping = awg_config.signal_result_map.get(signal, [])
         unique_handles = set(mapping)
         for handle in unique_handles:
             if handle is None:
@@ -1231,7 +1230,6 @@ class DeviceBase(DeviceZI):
 
     async def get_measurement_data(
         self,
-        recipe_data: RecipeData,
         channel: int,
         rt_execution_info: RtExecutionInfo,
         result_indices: list[int],

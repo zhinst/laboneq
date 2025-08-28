@@ -18,6 +18,7 @@ from laboneq.controller.devices.node_control import (
 )
 from laboneq.controller.recipe_processor import RecipeData
 from laboneq.controller.utilities.exception import LabOneQControllerException
+from laboneq.data.recipe import NtStepKey
 
 _logger = logging.getLogger(__name__)
 
@@ -172,7 +173,7 @@ class DeviceLeaderBase(DeviceBase):
         await self.set_async(nc)
 
     async def setup_one_step_execution(
-        self, recipe_data: RecipeData, with_pipeliner: bool
+        self, recipe_data: RecipeData, nt_step: NtStepKey, with_pipeliner: bool
     ):
         if with_pipeliner:
             # TODO(2K): Use timeout from connect

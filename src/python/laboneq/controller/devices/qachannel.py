@@ -31,7 +31,9 @@ from laboneq.controller.recipe_processor import (
     RtExecutionInfo,
     WaveformItem,
     Waveforms,
+    get_execution_time,
     get_wave,
+    get_weights_info,
 )
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType, is_spectroscopy
@@ -473,39 +475,35 @@ class QAChannel(ChannelBase):
                 # 1 - sequential
                 0 if averaging_mode == AveragingMode.CYCLIC else 1,
             )
-            if acquisition_type in [
-                AcquisitionType.INTEGRATION,
-                AcquisitionType.DISCRIMINATION,
-            ]:
-                uses_lrt = ch_uses_lrt(self._device_uid, self._channel, recipe_data)
-                for integrator in integrator_allocations:
-                    if (
-                        integrator.device_id != self._device_uid
-                        or integrator.signal_id not in awg_config.acquire_signals
-                    ):
-                        continue
-                    assert len(integrator.channels) == 1
-                    integrator_idx = integrator.channels[0]
-                    if uses_lrt:
-                        if len(integrator.thresholds) > 1:
-                            raise LabOneQControllerException(
-                                f"{self._unit_repr}: Multistate discrimination cannot be used with a long readout."
-                            )
-                        threshold = (
-                            0.0
-                            if len(integrator.thresholds) == 0
-                            else integrator.thresholds[0]
+            uses_lrt = ch_uses_lrt(self._device_uid, self._channel, recipe_data)
+            for integrator in integrator_allocations:
+                if (
+                    integrator.device_id != self._device_uid
+                    or integrator.signal_id not in awg_config.acquire_signals
+                ):
+                    continue
+                assert len(integrator.channels) == 1
+                integrator_idx = integrator.channels[0]
+                if uses_lrt:
+                    if len(integrator.thresholds) > 1:
+                        raise LabOneQControllerException(
+                            f"{self._unit_repr}: Multistate discrimination cannot be used with a long readout."
                         )
-                        nc.add(
-                            f"readout/discriminators/{integrator_idx}/threshold",
-                            threshold,
-                        )
-                        continue
-                    for state_i, threshold in enumerate(integrator.thresholds):
-                        nc.add(
-                            f"readout/multistate/qudits/{integrator_idx}/thresholds/{state_i}/value",
-                            threshold or 0.0,
-                        )
+                    threshold = (
+                        0.0
+                        if len(integrator.thresholds) == 0
+                        else integrator.thresholds[0]
+                    )
+                    nc.add(
+                        f"readout/discriminators/{integrator_idx}/threshold",
+                        threshold,
+                    )
+                    continue
+                for state_i, threshold in enumerate(integrator.thresholds):
+                    nc.add(
+                        f"readout/multistate/qudits/{integrator_idx}/thresholds/{state_i}/value",
+                        threshold or 0.0,
+                    )
         nc.barrier()
         nc.add(
             "readout/result/enable",
@@ -689,7 +687,7 @@ class QAChannel(ChannelBase):
         recipe_data: RecipeData,
         artifacts: ArtifactsCodegen,
         integrator_allocations: list[IntegratorAllocation],
-        kernel_ref: str,
+        kernel_ref: str | None,
     ) -> NodeCollector:
         nc = NodeCollector(base=f"{self._node_base}/readout/")
 
@@ -697,10 +695,10 @@ class QAChannel(ChannelBase):
 
         max_len = MAX_INTEGRATION_WEIGHT_LENGTH
 
-        integration_weights = artifacts.integration_weights.get(kernel_ref, {})
+        weights_info = get_weights_info(artifacts, kernel_ref)
         used_downsampling_factor = None
         integration_length = None
-        for signal_id, weight_names in integration_weights.items():
+        for signal_id, weight_names in weights_info.items():
             integrator_allocation = next(
                 ia for ia in integrator_allocations if ia.signal_id == signal_id
             )
@@ -774,8 +772,11 @@ class QAChannel(ChannelBase):
         result_indices: list[int],
         num_results: int,
     ) -> RawReadoutData:
+        # In the async execution model, result waiting starts as soon as execution begins,
+        # so the execution time must be included when calculating the result retrieval timeout.
+        _, guarded_wait_time = get_execution_time(rt_execution_info)
         # TODO(2K): set timeout based on timeout_s from connect
-        timeout_s = 5
+        timeout_s = 5 + guarded_wait_time
 
         if is_spectroscopy(rt_execution_info.acquisition_type):
             return await self._read_all_jobs_result(

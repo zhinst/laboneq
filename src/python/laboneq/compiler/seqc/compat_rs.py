@@ -233,24 +233,20 @@ def handle_prng_setup(event) -> AWGEvent:
 
 
 def handle_prng_sample(event) -> AWGEvent:
-    obj = event.data()
     return AWGEvent(
         type=AWGEventType.PRNG_SAMPLE,
         start=event.start,
         end=event.start,
         priority=event.position,
-        params={"sample_name": obj.sample_name, "section_name": obj.section_name},
     )
 
 
 def handle_prng_drop_sample(event) -> AWGEvent:
-    obj = event.data()
     return AWGEvent(
         type=AWGEventType.DROP_PRNG_SAMPLE,
         start=event.start,
         end=event.start,
         priority=event.position,
-        params={"sample_name": obj.sample_name},
     )
 
 

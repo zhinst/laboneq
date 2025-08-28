@@ -72,6 +72,7 @@ __all__ = [
     "prng_loop",
     "reserve",
     "reset_global_uid_generator",
+    "reset_oscillator_phase",
     "section",
     "set_node",
     "sweep",
@@ -625,6 +626,21 @@ def measure(
         acquire_delay=acquire_delay,
         reset_delay=reset_delay,
     )
+
+
+def reset_oscillator_phase(signal: str | None = None):
+    """Reset the phase of the oscillator.
+
+    Arguments:
+        signal:
+            The signal whose oscillator phase should be reset.
+            If `None`, all signals of the section will be reset.
+
+    Raises:
+        LabOneQException:
+            If oscillator reset is not supported for the signal.
+    """
+    active_section().reset_oscillator_phase_(signal=signal)
 
 
 def add(section: Section | Operation):

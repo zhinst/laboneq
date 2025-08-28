@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, NamedTuple, Union
 from laboneq.compiler.common.awg_info import AwgKey
 
 if TYPE_CHECKING:
-    from laboneq.compiler.seqc.linker import CombinedRTOutputSeqC
     from laboneq.compiler.workflow.compiler import IntegrationUnitAllocation
 
 
@@ -71,15 +70,3 @@ def calculate_feedback_register_layout(
     feedback_register_layouts = dict(feedback_register_layouts)
 
     return feedback_register_layouts
-
-
-def do_assign_feedback_registers_seqc(combined_compiler_output: CombinedRTOutputSeqC):
-    reg_configs = combined_compiler_output.feedback_register_configurations
-    feedback_connections = combined_compiler_output.feedback_connections
-
-    for conn in feedback_connections.values():
-        register = reg_configs[conn.tx].target_feedback_register
-        for rx in conn.rx:
-            if reg_configs[rx].source_feedback_register is None:
-                # don't need to assign if already set (local feedback)
-                reg_configs[rx].source_feedback_register = register

@@ -73,17 +73,24 @@ def _process_errors(messages: list[str]):
     for msg in messages:
         msg_lower = msg.lower()
         if any(m in msg_lower for m in ["not fitting", "out of memory", "too large"]):
+            hint = None
             if (
                 match := re.search(
                     r"program is too large to fit into memory - has (\d+) instructions, maximum is (\d+)",
                     msg_lower,
                 )
             ) is not None:
-                collector.add(
-                    ResourceUsage(msg, int(match.group(1)) / int(match.group(2)))
+                hint = int(match.group(1)) / int(match.group(2))
+            elif (
+                match := re.search(
+                    r"waveforms are not fitting into wave memory \((\d*\.\d) ksa over a maximum of (\d*\.\d) ksa\)",
+                    msg_lower,
                 )
-            else:
-                collector.add(ResourceUsage(msg, UsageClassification.BEYOND_LIMIT))
+            ) is not None:
+                excess, max_capacity = float(match.group(1)), float(match.group(2))
+                hint = (max_capacity + excess) / max_capacity
+
+            collector.add(ResourceUsage(msg, hint or UsageClassification.BEYOND_LIMIT))
     collector.raise_or_pass()
     all_errors = "\n".join([e for e in messages])
     raise LabOneQException(f"Compilation failed.\n{all_errors}")

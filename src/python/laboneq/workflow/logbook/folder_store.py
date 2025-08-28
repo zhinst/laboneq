@@ -8,9 +8,11 @@ from __future__ import annotations
 import datetime
 import json
 import logging
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from laboneq.workflow.blocks import Namespace
 from laboneq.workflow.recorder import Artifact
 from laboneq.workflow.timestamps import local_date_stamp, local_timestamp, utc_now
 
@@ -23,7 +25,6 @@ from .serializer import (
 from .simple_serializer import NOT_SIMPLE, SimpleType, simple_serialize
 
 if TYPE_CHECKING:
-    import datetime
     from typing import IO, Callable
 
     from laboneq.workflow import Workflow, WorkflowResult
@@ -44,6 +45,28 @@ def _sanitize_filename(filename: str) -> str:
     )
 
 
+class SaveMode(Enum):
+    """An enumeration for specifying how task inputs and outputs are saved.
+
+    The modes are:
+
+        - WARN:
+            The inputs and outputs are saved when possible. If
+            unsupported types which cannot be saved are encountered,
+            a warning message is logged.
+        - RAISE:
+            The input and outputs are always saved. If
+            unsupported types which cannot be saved are encountered,
+            an exception is raised.
+        - SKIP:
+            The task and workflow inputs and outputs are not saved.
+    """
+
+    WARN = "WARN"
+    RAISE = "RAISE"
+    SKIP = "SKIP"
+
+
 class FolderStore(LogbookStore):
     """A folder-based store that stores workflow results and artifacts in a folder.
 
@@ -54,14 +77,32 @@ class FolderStore(LogbookStore):
 
     For tasks which are marked as not to be saved, their inputs and outputs are
     omitted from logfiles and from generating any external files.
+
+    Arguments:
+        folder:
+            The root path for the folder store.
+        serialize:
+            The folder store serializer to use. It defaults to
+            `laboneq.workflow.logbook.serializer.serializer`.
+        save_mode:
+            Controls whether the folder store saves task and workflow inputs
+            and outputs and whether a warning is logged or an error is raised
+            when an unsupported input or output is encountered.
     """
 
-    def __init__(self, folder: Path | str, serialize: Callable | None = None):
+    def __init__(
+        self,
+        folder: Path | str,
+        serialize: Callable | None = None,
+        *,
+        save_mode: str | SaveMode = SaveMode.WARN,
+    ):
         self._folder = Path(folder)
         self._folder.mkdir(parents=True, exist_ok=True)
         if serialize is None:
             serialize = default_serialize
         self._serialize = serialize
+        self._save_mode = self._convert_save_mode(save_mode)
 
     def create_logbook(
         self, workflow: Workflow, start_time: datetime.datetime
@@ -72,7 +113,31 @@ class FolderStore(LogbookStore):
         assert workflow.name is not None  # noqa: S101
         folder_name = self._unique_workflow_folder_name(workflow.name, start_time)
 
-        return FolderLogbook(self._folder / day / folder_name, self._serialize)
+        return FolderLogbook(
+            self._folder / day / folder_name,
+            serialize=self._serialize,
+            save_mode=self._save_mode,
+        )
+
+    def save_mode(self, save_mode: str | SaveMode | None = None):
+        """Set or retrieve the saving mode.
+
+        Arguments:
+            save_mode:
+                The new save mode to set or `None` to leave the
+                save mode unchanged.
+
+        Return:
+            The set or existing save mode.
+        """
+        if save_mode is not None:
+            self._save_mode = self._convert_save_mode(save_mode)
+        return self._save_mode
+
+    def _convert_save_mode(self, save_mode: str | SaveMode):
+        if isinstance(save_mode, str):
+            save_mode = save_mode.upper()
+        return SaveMode(save_mode)
 
     def _unique_workflow_folder_name(
         self, workflow_name: str, start_time: datetime.datetime
@@ -204,12 +269,14 @@ class FolderLogbook(Logbook):
         self,
         folder: Path | str,
         serialize: Callable[[object, FolderLogbookOpener], None],
+        save_mode: SaveMode,
     ) -> None:
         self._folder = Path(folder)
         self._folder.mkdir(parents=False, exist_ok=False)
         self._log = Path(self._folder / "log.jsonl")
         self._log.touch(exist_ok=False)
         self._serialize = serialize
+        self._save_mode = save_mode
         self._deduplication_cache: DeduplicationCache = DeduplicationCache()
 
     def _unique_filename(
@@ -266,10 +333,18 @@ class FolderLogbook(Logbook):
             )
         return files
 
-    def _save_safe(self, artifact: Artifact) -> str | list[dict[str, str]]:
+    def _save_io(
+        self,
+        artifact: Artifact,
+    ) -> str | list[dict[str, str | bool]]:
+        """Save workflow and task inputs and outputs, honouring the specified save_mode."""
+        if self._save_mode == SaveMode.SKIP:
+            return [{"skipped": True}]
         try:
             ref = self._save(artifact)
         except SerializationNotSupportedError as e:
+            if self._save_mode == SaveMode.RAISE:
+                raise
             _logger.warning(str(e))
             return [{"error": str(e)}]
         return ref.as_dicts()
@@ -286,27 +361,36 @@ class FolderLogbook(Logbook):
             if simple is not NOT_SIMPLE:
                 input_dict[k] = simple
             else:
-                input_dict[k] = self._save_safe(Artifact(f"{name_hint}.{k}", v))
+                input_dict[k] = self._save_io(Artifact(f"{name_hint}.{k}", v))
         return input_dict
 
     def _save_output(
-        self, result: object, name_hint: str
-    ) -> str | dict[str, SimpleType | list[dict[str, str]]]:
+        self,
+        result: object,
+        name_hint: str,
+    ) -> str | dict[str, SimpleType | list[dict[str, str | bool]]]:
         """Store artifacts for task or workflow results."""
         simple = simple_serialize(result)
         if simple is not NOT_SIMPLE:
             return simple
 
-        if not isinstance(result, dict):
-            return self._save_safe(Artifact(f"{name_hint}", result))
+        if isinstance(result, Namespace):
+            # A return block Namespace is equivalent to
+            # just its underlying dictionary of values:
+            result = vars(result)
 
-        result_dict: dict[str, SimpleType | list[dict[str, str]]] = {}
+        if not isinstance(result, dict):
+            return self._save_io(Artifact(f"{name_hint}", result))
+
+        result_dict: dict[str, SimpleType | list[dict[str, str | bool]]] = {}
         for k, v in result.items():
             simple = simple_serialize(v)
             if simple is not NOT_SIMPLE:
                 result_dict[k] = simple
             else:
-                result_dict[k] = self._save_safe(Artifact(f"{name_hint}.{k}", v))
+                result_dict[k] = self._save_io(
+                    Artifact(f"{name_hint}.{k}", v),
+                )
         return result_dict
 
     @staticmethod
@@ -320,6 +404,7 @@ class FolderLogbook(Logbook):
 
     def on_start(self, workflow_result: WorkflowResult) -> None:
         """Called when the workflow execution starts."""
+        # TODO: Allow workflows to also specify @workflow(save=False)
         self._append_log(
             {
                 "event": "start",
@@ -335,6 +420,7 @@ class FolderLogbook(Logbook):
 
     def on_end(self, workflow_result: WorkflowResult) -> None:
         """Called when the workflow execution ends."""
+        # TODO: Allow workflows to also specify @workflow(save=False)
         self._append_log(
             {
                 "event": "end",

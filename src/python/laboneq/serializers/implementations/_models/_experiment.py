@@ -26,6 +26,7 @@ from laboneq.dsl.experiment.experiment_signal import ExperimentSignal
 from laboneq.dsl.experiment.play_pulse import PlayPulse
 from laboneq.dsl.experiment.pulse import PulseFunctional, PulseSampled
 from laboneq.dsl.experiment.reserve import Reserve
+from laboneq.dsl.experiment.reset_oscillator_phase import ResetOscillatorPhase
 from laboneq.dsl.experiment.section import (
     AcquireLoopRt,
     Case,
@@ -257,6 +258,12 @@ class PlayPulseModel:
 class ReserveModel:
     signal: str
     _target_class: ClassVar[Type] = Reserve
+
+
+@attrs.define
+class ResetOscillatorPhaseModel:
+    signal: str | None
+    _target_class: ClassVar[Type] = ResetOscillatorPhase
 
 
 @attrs.define

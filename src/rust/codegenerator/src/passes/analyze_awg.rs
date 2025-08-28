@@ -1,26 +1,26 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::ir::{IrNode, NodeKind, PpcDevice};
+use crate::ir::{IrNode, NodeKind, PpcDevice, experiment::Handle};
 use std::sync::Arc;
 
 #[derive(Default)]
 pub struct AwgCompilationInfo {
     ppc_device: Option<Arc<PpcDevice>>,
-    has_readout_feedback: bool,
+    feedback_handles: Vec<Handle>,
 }
 
 impl AwgCompilationInfo {
     pub fn has_readout_feedback(&self) -> bool {
-        self.has_readout_feedback
+        !self.feedback_handles.is_empty()
     }
 
     pub fn ppc_device(&self) -> Option<&Arc<PpcDevice>> {
         self.ppc_device.as_ref()
     }
 
-    fn add_readout_feedback(&mut self) {
-        self.has_readout_feedback = true;
+    pub fn feedback_handles(&self) -> &Vec<Handle> {
+        &self.feedback_handles
     }
 
     fn add_ppc_device(&mut self, ppc_device: &Arc<PpcDevice>) {
@@ -39,8 +39,8 @@ impl AwgCompilationInfo {
 fn traverse_awg_ir(node: &IrNode, info: &mut AwgCompilationInfo) {
     match node.data() {
         NodeKind::Match(ob) => {
-            if ob.handle.is_some() {
-                info.add_readout_feedback();
+            if let Some(handle) = ob.handle.as_ref() {
+                info.feedback_handles.push(handle.clone());
             }
         }
         NodeKind::PpcSweepStep(ob) => {

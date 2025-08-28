@@ -96,14 +96,14 @@ class CommandTableTracker:
 
         ct_phase = None
         do_incr = None
-        set_phase = signature.set_phase
-        if set_phase is not None:
-            assert signature.set_phase == 0.0
-            ct_phase = set_phase
+        if signature.reset_phase:
+            ct_phase = 0.0
             do_incr = False
         incr_phase = signature.increment_phase
         if incr_phase is not None:
-            assert set_phase is None, "Cannot set and increment phase at the same time"
+            assert not signature.reset_phase, (
+                "Cannot reset and increment phase at the same time"
+            )
             ct_phase = incr_phase
             do_incr = True
 

@@ -56,7 +56,8 @@ class _AWG_ID:
                     (
                         rt_init
                         for rt_init in realtime_inits
-                        if rt_init.awg_id == awg_no and rt_init.device_id == device_name
+                        if rt_init.awg_index == awg_no
+                        and rt_init.device_id == device_name
                     ),
                     key=lambda rt_init: rt_init.nt_step.indices,
                 )

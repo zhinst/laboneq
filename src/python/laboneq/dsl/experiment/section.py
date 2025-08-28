@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
-import attrs
 from typing import TYPE_CHECKING, Any
+
+import attrs
 
 from laboneq._utils import id_generator
 from laboneq.core.exceptions import LabOneQException
@@ -26,6 +27,7 @@ from .delay import Delay
 from .operation import Operation
 from .play_pulse import PlayPulse
 from .reserve import Reserve
+from .reset_oscillator_phase import ResetOscillatorPhase
 from .set_node import SetNode
 
 if TYPE_CHECKING:
@@ -343,6 +345,15 @@ class Section:
         self.add(
             Delay(signal=signal, time=time, precompensation_clear=precompensation_clear)
         )
+
+    def reset_oscillator_phase_(self, signal: str | None = None):
+        """Reset the phase of the oscillator on the given signal.
+
+        Arguments:
+            signal: Unique identifier of the signal whose oscillator
+                    phase should be reset. None resets all signals of the section.
+        """
+        self.add(ResetOscillatorPhase(signal=signal))
 
     def call(self, func_name, **kwargs):
         """Function call.

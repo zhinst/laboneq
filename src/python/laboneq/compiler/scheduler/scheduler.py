@@ -7,7 +7,6 @@ import copy
 import dataclasses
 import functools
 import itertools
-import logging
 from dataclasses import replace
 from itertools import groupby
 from math import ceil
@@ -87,11 +86,12 @@ from laboneq.data.compilation_job import (
     SignalInfoType,
     DeviceInfoType,
 )
+from laboneq.laboneq_logging import get_logger
 
 if TYPE_CHECKING:
     from laboneq.compiler.common.signal_obj import SignalObj
 
-_logger = logging.getLogger(__name__)
+_logger = get_logger(__name__)
 
 
 class _ScheduleToIRConverter:
@@ -456,7 +456,10 @@ class Scheduler:
         ):
             schedule = self._schedule_match(section_info, current_parameters)
         else:  # regular section
-            children_schedules = self._collect_children_schedules(
+            children_schedules = []
+            if section_info.reset_oscillator_phase:
+                children_schedules += self._schedule_phase_reset(section_id)
+            children_schedules += self._collect_children_schedules(
                 section_id, current_parameters
             )
             schedule = self._schedule_children(
@@ -658,37 +661,63 @@ class Scheduler:
             iteration=local_iteration,
         )
 
-    @cached_method(8)
     def _schedule_phase_reset(
         self,
-        section_id: str,
+        section_id: str | None = None,
+        signal_to_reset: SignalInfo | None = None,
     ) -> list[PhaseResetSchedule]:
-        section_info = self._experiment_dao.section_info(section_id)
-        hw_osc_reset_signals = set()
-        grid = 1
-        if section_info.reset_oscillator_phase:
-            for signal in self._experiment_dao.section_signals_with_children(
-                section_id
-            ):
-                osc_info = self._experiment_dao.signal_oscillator(signal)
-                if osc_info is not None and osc_info.is_hardware:
-                    hw_osc_reset_signals.add(signal)
-
-        reset_sw_oscillators = section_info.reset_oscillator_phase or (
-            section_info.execution_type == "hardware"
-            and section_info.averaging_mode is not None
+        assert (section_id is None) != (signal_to_reset is None), (
+            "Internal error: Either section_id or signal must be provided"
         )
+
+        hw_osc_reset_candidates: set[str] = set()
+        sw_signals: list[str] = []
+
+        def is_hw_modulated(signal_id: str) -> bool:
+            osc_info = self._experiment_dao.signal_oscillator(signal_id)
+            return osc_info is not None and osc_info.is_hardware
+
+        if section_id:
+            # Reset the oscillators for a sweep/realtime acquire loop
+            section_info = self._experiment_dao.section_info(section_id)
+            if section_info.reset_oscillator_phase:
+                hw_osc_reset_candidates.update(
+                    signal
+                    for signal in self._experiment_dao.section_signals_with_children(
+                        section_id
+                    )
+                )
+            reset_sw_oscillators = section_info.reset_oscillator_phase or (
+                section_info.execution_type == "hardware"
+                and section_info.averaging_mode is not None
+            )
+            if reset_sw_oscillators:
+                sw_signals = list(
+                    self._experiment_dao.section_signals_with_children(section_id)
+                )
+        else:
+            # Reset the oscillators on demand at arbitrary points in the schedule
+            if signal_to_reset.type == SignalInfoType.RF:
+                return []
+            reset_sw_oscillators = True
+            hw_osc_reset_candidates = {signal_to_reset.uid}
+            sw_signals = [signal_to_reset.uid]
+
+        hw_osc_reset_signals = {
+            signal for signal in hw_osc_reset_candidates if is_hw_modulated(signal)
+        }
 
         if not reset_sw_oscillators and len(hw_osc_reset_signals) == 0:
             return []
 
+        grid = 1
         length = 0
-        hw_osc_devices = {}
+        hw_osc_devices: set[str] = set()
         for signal in hw_osc_reset_signals:
             device = self._experiment_dao.device_from_signal(signal)
             device_type = DeviceType.from_device_info_type(device.device_type)
             duration = round(device_type.reset_osc_duration / TINYSAMPLE)
-            hw_osc_devices[device.uid] = duration
+            hw_osc_devices.add(device.uid)
             length = max(length, duration)
             grid = lcm(grid, self._system_grid)
             if device_type.lo_frequency_granularity is not None:
@@ -698,19 +727,22 @@ class Scheduler:
                 df = device_type.lo_frequency_granularity
                 lo_granularity_tinysamples = round(1 / df / TINYSAMPLE)
                 grid = lcm(grid, lo_granularity_tinysamples)
-                _logger.info(
-                    f"Phase reset in section '{section_id}' has extended the section's "
-                    f"timing grid to {grid * TINYSAMPLE * 1e9:.2f} ns, so to be "
-                    f"commensurate with the local oscillator."
+                _logger.diagnostic(
+                    "Phase reset in section '{%s}' has extended the section's "
+                    "timing grid to %.2f ns, so to be "
+                    "commensurate with the local oscillator.",
+                    section_id,
+                    grid * TINYSAMPLE * 1e9,
+                )
+            if signal_to_reset is not None and device_type.reset_osc_duration > 0:
+                _logger.diagnostic(
+                    "An additional delay of %.2f ns has "
+                    "been added to signal '%s' to wait for the phase reset.",
+                    device_type.reset_osc_duration * 1e9,
+                    signal,
                 )
 
-        hw_osc_devices = list(hw_osc_devices)
         length = ceil_to_grid(length, grid)
-
-        if reset_sw_oscillators:
-            sw_signals = self._experiment_dao.section_signals_with_children(section_id)
-        else:
-            sw_signals = ()
 
         return [
             PhaseResetSchedule(
@@ -718,7 +750,7 @@ class Scheduler:
                 length=length,
                 signals={*hw_osc_reset_signals, *sw_signals},
                 section=section_id,
-                hw_osc_devices=hw_osc_devices,
+                hw_osc_devices=list(hw_osc_devices),
                 reset_sw_oscillators=reset_sw_oscillators,
             )
         ]
@@ -800,7 +832,9 @@ class Scheduler:
         grid = 1
 
         # Deepcopy here because of caching
-        osc_phase_resets = copy.deepcopy(self._schedule_phase_reset(section_id))
+        osc_phase_resets = copy.deepcopy(
+            self._schedule_phase_reset(section_id=section_id)
+        )
 
         if len(swept_hw_oscillators):
             osc_sweep = [
@@ -1323,7 +1357,7 @@ class Scheduler:
             for child_section in section_children
         ]
 
-        pulse_schedules = []
+        pulse_schedules: list[IntervalSchedule] = []
         section_signals = self._schedule_data.experiment_dao.section_signals(section_id)
 
         for signal_id in sorted(section_signals):
@@ -1346,6 +1380,11 @@ class Scheduler:
                     )
                 else:
                     for pulse in group_pulses:
+                        if pulse.reset_oscillator_phase:
+                            pulse_schedules += self._schedule_phase_reset(
+                                signal_to_reset=pulse.signal
+                            )
+                            continue
                         pulse_schedules.append(
                             self._schedule_pulse(pulse, section_id, parameters)
                         )

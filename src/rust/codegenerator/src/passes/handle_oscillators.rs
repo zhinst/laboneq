@@ -1,7 +1,6 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::anyhow;
 use std::cmp::max;
 use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
@@ -120,6 +119,8 @@ fn collect_osc_parameters(
     state: &mut SoftwareOscillatorParameters,
     phase_tracker: &mut Option<PhaseTracker>,
     func: &impl Fn(&str, Samples) -> Samples,
+    in_branch: bool,
+    device: &DeviceKind,
 ) -> Result<()> {
     let node_offset = *node.offset();
     match node.data_mut() {
@@ -140,14 +141,42 @@ fn collect_osc_parameters(
             Ok(())
         }
         NodeKind::PlayPulse(ob) => {
-            if let Some(osc) = &ob.signal.oscillator {
-                if osc.kind == cjob::OscillatorKind::HARDWARE {
-                    if ob.set_oscillator_phase.is_some() {
-                        let msg = format!("Cannot set phase of hardware oscillator: {}", osc.uid);
-                        return Err(anyhow!(msg).into());
-                    }
-                    return Ok(());
+            if ob.set_oscillator_phase.is_some() {
+                if ob.signal.is_hw_modulated() {
+                    let msg = format!(
+                        "Cannot use 'set_oscillator_phase' of hardware modulated signal: {}",
+                        &ob.signal.uid
+                    );
+                    return Err(Error::new(&msg));
                 }
+                if in_branch && ob.signal.is_sw_modulated() {
+                    let msg = format!(
+                        "Conditional 'set_oscillator_phase' of software modulated signal '{}' is not supported",
+                        &ob.signal.uid
+                    );
+                    return Err(Error::new(&msg));
+                }
+            }
+            if ob.increment_oscillator_phase.is_some() && in_branch {
+                // SHFQA and UHFQA do not support phase registers.
+                if device.is_qa_device() {
+                    let msg = format!(
+                        "Conditional 'increment_oscillator_phase' of signal '{}' is not supported on device type '{}'",
+                        &ob.signal.uid,
+                        device.as_str()
+                    );
+                    return Err(Error::new(&msg));
+                }
+                if ob.signal.is_sw_modulated() {
+                    let msg = format!(
+                        "Conditional 'increment_oscillator_phase' of software modulated signal '{}' is not supported",
+                        &ob.signal.uid
+                    );
+                    return Err(Error::new(&msg));
+                }
+            }
+            if ob.signal.is_hw_modulated() {
+                return Ok(());
             }
             // TODO: More elegant way to map to the node than a timestamp
             let offset = func(&ob.signal.uid, node_offset);
@@ -196,9 +225,15 @@ fn collect_osc_parameters(
             }
             Ok(())
         }
+        NodeKind::Case(_) => {
+            for child in node.iter_children_mut() {
+                collect_osc_parameters(child, state, phase_tracker, func, true, device)?;
+            }
+            Ok(())
+        }
         _ => {
             for child in node.iter_children_mut() {
-                collect_osc_parameters(child, state, phase_tracker, func)?;
+                collect_osc_parameters(child, state, phase_tracker, func, in_branch, device)?;
             }
             Ok(())
         }
@@ -235,6 +270,8 @@ pub fn handle_oscillator_parameters(
         &mut state,
         &mut phase_tracker,
         &timestamp_shifting_function,
+        false,
+        device_kind,
     )?;
     Ok(state)
 }
@@ -445,7 +482,7 @@ pub fn handle_oscillator_sweeps(
         return Ok(());
     }
     let sweep_info = evaluate_sweep_properties(&nodes, signal_osc_index_allocation)?;
-    check_device_compatibility(&awg.device_kind, &sweep_info)?;
+    check_device_compatibility(awg.device_kind(), &sweep_info)?;
     replace_hw_oscillator_sweep_nodes(nodes, &sweep_info, cut_points);
     Ok(())
 }
@@ -467,8 +504,8 @@ mod tests {
                 uid: "osc".to_string(),
                 kind,
             }),
-            signal_delay: 0.0,
-            start_delay: 0.0,
+            signal_delay: 0,
+            start_delay: 0,
             mixer_type: None,
         };
         Rc::new(sig)
@@ -596,8 +633,8 @@ mod tests {
             kind: cjob::SignalKind::IQ,
             channels: vec![],
             oscillator: None,
-            signal_delay: 0.0,
-            start_delay: 0.0,
+            signal_delay: 0,
+            start_delay: 0,
             mixer_type: None,
         };
         let signal = Rc::new(sig);
@@ -623,7 +660,7 @@ mod tests {
     mod handle_oscillator_sweeps {
         use super::*;
         use crate::ir::compilation_job::{
-            AwgCore, DeviceKind, Oscillator, OscillatorKind, Signal, SignalKind,
+            AwgCore, Device, DeviceKind, Oscillator, OscillatorKind, Signal, SignalKind,
         };
         use crate::ir::{
             LinearParameterInfo, NodeKind, OscillatorFrequencySweepStep, SetOscillatorFrequency,
@@ -655,8 +692,8 @@ mod tests {
                             uid: "osc".to_string(),
                             kind: OscillatorKind::HARDWARE,
                         }),
-                        signal_delay: 0.0,
-                        start_delay: 0.0,
+                        signal_delay: 0,
+                        start_delay: 0,
                         mixer_type: None,
                     }),
                     frequency,
@@ -669,8 +706,10 @@ mod tests {
         /// Test that oscillator frequency sweeps are correctly calculated and replaced in the IR tree.
         #[test]
         fn test_osc_freq_sweep_parameter_calculator() {
-            let awg = AwgCore {
-                signals: vec![Rc::new(Signal {
+            let awg = AwgCore::new(
+                0,
+                cjob::AwgKind::IQ,
+                vec![Rc::new(Signal {
                     uid: "test".to_string(),
                     kind: SignalKind::IQ,
                     channels: vec![],
@@ -678,16 +717,17 @@ mod tests {
                         uid: "osc".to_string(),
                         kind: OscillatorKind::HARDWARE,
                     }),
-                    signal_delay: 0.0,
-                    start_delay: 0.0,
+                    signal_delay: 0,
+                    start_delay: 0,
                     mixer_type: None,
                 })],
-                device_kind: DeviceKind::SHFSG,
-                kind: cjob::AwgKind::IQ,
-                sampling_rate: 1e9,
-                osc_allocation: HashMap::from([("osc".to_string(), 0)]),
-            };
-
+                1e9,
+                Arc::new(Device::new(
+                    "test_device".to_string().into(),
+                    DeviceKind::SHFSG,
+                )),
+                HashMap::from([("osc".to_string(), 0)]),
+            );
             let n_iterations = 3;
             let start_freq = 1e9;
             let freq_step = 0.5e9;

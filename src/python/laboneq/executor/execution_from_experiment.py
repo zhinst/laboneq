@@ -114,5 +114,6 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
         if isinstance(operation, Reserve):
             return executor.Nop()
         if isinstance(operation, Acquire):
+            assert operation.signal is not None
             return executor.ExecAcquire(operation.handle, operation.signal, parent_uid)
         return executor.Nop()

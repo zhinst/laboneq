@@ -1,8 +1,8 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::AwgTiming;
 use crate::Result;
+use crate::awg_delays::AwgTiming;
 use crate::ir::compilation_job as cjob;
 use crate::ir::{self, NodeKind};
 use crate::tinysample;
@@ -78,7 +78,7 @@ pub fn apply_delay_information(
     // This is necessary to ensure that the waveform can be played correctly.
     let adjusted_end = adjust_sequence_end_point(
         node.data().length(),
-        awg.device_kind.traits().sample_multiple,
+        awg.device_kind().traits().sample_multiple,
         delays.delay(),
         play_wave_size_hint,
         play_zero_size_hint,

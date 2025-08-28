@@ -9,11 +9,12 @@ See the functions below named `serialize_` for the list of types that can be ser
 from __future__ import annotations
 
 import abc
-from functools import singledispatch
+from functools import singledispatch, singledispatchmethod
 from typing import TYPE_CHECKING
 
 import matplotlib.figure as mpl_figure
 import numpy as np
+import orjson
 import PIL
 
 if TYPE_CHECKING:
@@ -75,6 +76,107 @@ class SerializeOpener(abc.ABC):
     @abc.abstractmethod
     def name(self) -> str:
         """Return a name for the object being serialized."""
+
+
+class OrjsonSerializer:
+    """A helper class for using `orjson`.
+
+    It applies consistent settings when calling `orjson.dumps`.
+    """
+
+    # Types supported by orjson or by provided default handler:
+    SUPPORTED_TYPES = (
+        type(None),
+        int,
+        float,
+        complex,
+        bool,
+        str,
+        dict,
+        list,
+        tuple,
+        np.integer,
+        np.ndarray,
+    )
+
+    COMPLEX_DTYPE_MAP = {
+        # complex-dtype: float-view-dtype
+        np.dtype(np.complex128): np.dtype(np.float64),
+        np.dtype(np.complex64): np.dtype(np.float32),
+    }
+
+    def supported_type(self, obj) -> bool:
+        """Return true if the *type* of the object is supported."""
+        return isinstance(obj, self.SUPPORTED_TYPES)
+
+    def supported_object(self, obj) -> bool:
+        """Return true if the whole object is supported."""
+        if isinstance(obj, dict):
+            if not all(isinstance(k, str) for k in obj):
+                return False
+            return all(self.supported_object(o) for o in obj.values())
+        elif isinstance(obj, (list, tuple)):
+            return all(self.supported_object(o) for o in obj)
+        elif isinstance(obj, np.ndarray) and obj.dtype is np.dtype(object):
+            return False
+        else:
+            return self.supported_type(obj)
+
+    @singledispatchmethod
+    def default(self, obj) -> object:
+        """A `default` handler for objects `orjson` does not support directly."""
+        raise TypeError(
+            f"{type(obj).__name__!r} is not supported by the logbook JSON serializer."
+        )
+
+    @default.register
+    def _default_ndarray(self, obj: np.ndarray) -> object:
+        """A `default` orjson handler for numpy arrays."""
+        # orjson can handle most numpy arrays natively but not
+        # complex or non-contiguous arrays:
+        obj = np.ascontiguousarray(obj)
+        if obj.dtype in self.COMPLEX_DTYPE_MAP:
+            float_dtype = self.COMPLEX_DTYPE_MAP[obj.dtype]
+            float_view = obj.view(dtype=float_dtype)
+            return {
+                "description": "Array of complex values arranged as: [real(v0), imag(v0), real(v1), imag(v1), ...]",
+                "data": orjson.Fragment(
+                    orjson.dumps(float_view, option=orjson.OPT_SERIALIZE_NUMPY)
+                ),
+            }
+        else:
+            return orjson.Fragment(orjson.dumps(obj, option=orjson.OPT_SERIALIZE_NUMPY))
+
+    @default.register
+    def _default_complex(self, obj: complex) -> object:
+        """A `default` orjson handler for lists."""
+        return {"real": obj.real, "imag": obj.imag}
+
+    def dumps(self, obj) -> bytes:
+        """Call orjson.dumps with the appropriate settings.
+
+        Current options set are:
+
+            * OPT_SORT_KEYS
+            * OPT_SERIALIZE_NUMPY
+
+        The method `self.default` is passed to `orjson.dump(..., default=...)`.
+            * `self.default`
+        """
+        return orjson.dumps(
+            obj,
+            option=orjson.OPT_SORT_KEYS | orjson.OPT_SERIALIZE_NUMPY,
+            default=self.default,
+        )
+
+    def serialize(self, obj, opener):
+        """Serialize the provided JSON-serializable object."""
+        json_data = self.dumps(obj)
+        with opener.open("json", binary=True) as f:
+            f.write(json_data)
+
+
+_ORJSON_SERIALIZER = OrjsonSerializer()
 
 
 @singledispatch
@@ -170,6 +272,11 @@ def serialize_numpy_array(obj: np.ndarray, opener: SerializeOpener) -> None:
 
     Any options are passed directly as keyword arguments to `.save`.
     """
+    if obj.dtype is np.dtype(object):
+        raise SerializationNotSupportedError(
+            f"NumPy arrays with dtype {obj.dtype!r} are not supported"
+            f" by the serializer [name: {opener.name()}]."
+        )
     with opener.open("npy", binary=True) as f:
         np.save(f, obj, allow_pickle=False, **opener.options())
 
@@ -208,13 +315,41 @@ def serialize_laboneq_object(obj: object, opener: SerializeOpener) -> None:
 
 @serialize.register
 def serialize_list(obj: list, opener: SerializeOpener) -> None:
-    """Serialize lists."""
+    """Serialize lists.
+
+    Supports lists of quantum parameters and lists that can be
+    serialized by converting them to numpy arrays and using
+    `.serialize_numpy_array`.
+    """
     if all(isinstance(x, QuantumParameters) for x in obj):
         serialize_laboneq_object(QuantumParametersContainer(obj), opener)
     elif all(isinstance(x, QuantumElement) for x in obj):
         serialize_laboneq_object(QuantumElementContainer(obj), opener)
     else:
-        # TODO: We should be more careful about what we try serialize
-        #       using numpy (e.g. lists of LabOne Q objects)
-        #       Perhaps we can have a better heuristic than this.
-        serialize_numpy_array(obj, opener)
+        # serialize_numpy_array passes allow_pickle=False to numpy
+        # write_array, so the line below rejects lists that numpy
+        # will convert to an array with a dtype of object:
+        obj_array = np.array(obj)
+        if obj_array.dtype is np.dtype(object):
+            raise SerializationNotSupportedError(
+                f"Lists that convert to NumPy arrays with dtype dtype('O') are"
+                f" not supported by the serializer [name: {opener.name()}]."
+            )
+        serialize_numpy_array(obj_array, opener)
+
+
+@serialize.register
+def serialize_dict(obj: dict, opener: SerializeOpener) -> None:
+    """Serialize dicts."""
+    if not _ORJSON_SERIALIZER.supported_object(obj):
+        supported_types = ", ".join(
+            t.__name__ for t in _ORJSON_SERIALIZER.SUPPORTED_TYPES
+        )
+        raise SerializationNotSupportedError(
+            f"Type {type(obj)!r} has unsupported keys or values."
+            f" Keys must be strings and values must have one of the"
+            f" following types: [{supported_types}]"
+            f" [name: {opener.name()}]."
+        )
+
+    _ORJSON_SERIALIZER.serialize(obj, opener)

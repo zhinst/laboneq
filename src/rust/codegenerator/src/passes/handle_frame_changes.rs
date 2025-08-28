@@ -266,8 +266,8 @@ mod tests {
             uid: "test".to_string(),
             kind: cjob::SignalKind::IQ,
             channels: vec![0],
-            signal_delay: 0.0,
-            start_delay: 0.0,
+            signal_delay: 0,
+            start_delay: 0,
             oscillator: None,
             mixer_type: None,
         });
@@ -300,8 +300,8 @@ mod tests {
             uid: "test".to_string(),
             kind: cjob::SignalKind::IQ,
             channels: vec![0],
-            signal_delay: 0.0,
-            start_delay: 0.0,
+            signal_delay: 0,
+            start_delay: 0,
             oscillator: None,
             mixer_type: None,
         });
@@ -324,8 +324,8 @@ mod tests {
             uid: "test".to_string(),
             kind: cjob::SignalKind::IQ,
             channels: vec![0],
-            signal_delay: 0.0,
-            start_delay: 0.0,
+            signal_delay: 0,
+            start_delay: 0,
             oscillator: None,
             mixer_type: None,
         });
@@ -362,8 +362,8 @@ mod tests {
             uid: "test".to_string(),
             kind: cjob::SignalKind::IQ,
             channels: vec![0],
-            signal_delay: 0.0,
-            start_delay: 0.0,
+            signal_delay: 0,
+            start_delay: 0,
             oscillator: Some(cjob::Oscillator {
                 uid: "osc1".to_string(),
                 kind: cjob::OscillatorKind::HARDWARE,

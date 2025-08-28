@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from typing import Sequence
+from typing import Sequence, Literal
 from enum import Enum
 import numpy.typing as npt
 from laboneq.compiler.common.awg_signal_type import AWGSignalType
@@ -26,6 +26,17 @@ class SignalType(Enum):
 class MixerType(Enum):
     IQ = 0
     UhfqaEnvelope = 1
+
+class AwgKey:
+    """Unique identifier for an AWG.
+
+    The class `__eq__`, `__hash__` and `__repr__` equals to the Python `AwgKey` class.
+    Serialization support is not yet implemented and should be avoided.
+    Use the Python `AwgKey` class for serialization if needed.
+    """
+
+    device_id = str
+    awg_id = int
 
 class WaveIndexTracker:
     def __init__(self) -> None: ...
@@ -225,19 +236,6 @@ class WaveformSignature:
     length: int
     pulses: list[PulseSignature]
 
-    @classmethod
-    def from_samples_id(
-        _cls,
-        length: int,
-        uid: int,
-        label: str,
-        has_i: bool,
-        has_q: bool | None = None,
-        has_marker1: bool | None = None,
-        has_marker2: bool | None = None,
-    ) -> WaveformSignature:
-        """Create a WaveformSignature from samples ID and other parameters."""
-
     def is_playzero(self) -> bool:
         """Check if the waveform signature represents a play zero waveform."""
 
@@ -249,15 +247,16 @@ class SampledWaveform:
     signature: SampledWaveformSignature
     signature_string: str
 
-def string_sanitize(input: str) -> str:
-    """Sanitize a string for use in SeqC code."""
-
 class IntegrationWeight:
     basename: str
     samples_i: npt.ArrayLike
     samples_q: npt.ArrayLike
     downsampling_factor: int | None
     signals: set[str]
+
+class SignalIntegrationInfo:
+    is_play: bool
+    length: int
 
 class AwgCodeGenerationResult:
     awg_events: list[object]
@@ -266,17 +265,37 @@ class AwgCodeGenerationResult:
     ppc_device: str | None
     ppc_channel: int | None
     global_delay: int = 0
+    # Signal delays in seconds to be applied to the signal
+    signal_delays: dict[str, float] = {}
+    # Signal integration lengths in seconds
+    # This is a mapping from signal name to SignalIntegrationInfo
+    integration_lengths: dict[str, SignalIntegrationInfo] = {}
+    feedback_register: int | Literal["local"] | None = None
+    source_feedback_register: int | Literal["local"] | None = None
 
 class SeqCGenOutput:
+    """Output of the SeqC code generation process.
+
+    Attributes:
+        awg_results: List of code generation results for each awg.
+        total_execution_time: Total execution time in seconds of the generated code.
+        qa_signal_by_handle: Mapping from QA signal handles to their corresponding signal IDs and AWG keys.
+        simultaneous_acquires: List of simultaneous acquisitions.
+            Each element is a mapping from signal name to its acquisition handle which
+            happen at the same time.
+    """
+
     awg_results: list[AwgCodeGenerationResult]
+    total_execution_time: float = 0.0
+    qa_signal_by_handle: dict[str, tuple[str, AwgKey]] = {}
+    simultaneous_acquires: list[dict[str, str]] = []
 
 def generate_code(
     ir: IRTree,
     awgs: list[AWGInfo],
     settings: dict[str, object],
     waveform_sampler: object,
-    delays: dict[str, float],
-) -> list[SeqCGenOutput]:
+) -> SeqCGenOutput:
     """Generate SeqC code for given AWGs.
 
     Arguments:
@@ -284,6 +303,4 @@ def generate_code(
         awgs: List of target awgs.
         settings: Compiler settings as dictionary.
         waveform_sampler: Python object for waveform sampling.
-        delays: Additional delays per signal in seconds. This value is on top of what is already
-            defined in the signals.
     """

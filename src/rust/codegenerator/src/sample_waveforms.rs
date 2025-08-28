@@ -7,6 +7,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::ir::compilation_job::{AwgCore, Signal, SignalKind};
+use crate::ir::experiment::PulseParametersId;
 use crate::ir::{IrNode, NodeKind, PlayAcquire, PlayHold, Samples};
 use crate::signature::WaveformSignature;
 use crate::{Error, Result};
@@ -50,7 +51,7 @@ pub enum CompressedWaveformPart<T: SampledWaveformSignature> {
 #[derive(Clone, Debug)]
 struct KernelProperties<'a> {
     pulse_id: &'a str,
-    pulse_parameters_id: Option<u64>,
+    pulse_parameters_id: Option<PulseParametersId>,
     oscillator_frequency: f64,
 }
 
@@ -84,7 +85,7 @@ impl IntegrationKernel<'_> {
         self.properties.pulse_id
     }
 
-    pub fn pulse_parameters_id(&self) -> Option<u64> {
+    pub fn pulse_parameters_id(&self) -> Option<PulseParametersId> {
         self.properties.pulse_parameters_id
     }
 

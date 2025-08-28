@@ -38,6 +38,7 @@ from laboneq.data.recipe import (
     IO,
     Initialization,
     IntegratorAllocation,
+    NtStepKey,
     TriggeringMode,
 )
 from laboneq.data.scheduled_experiment import ArtifactsCodegen, ScheduledExperiment
@@ -276,7 +277,7 @@ class DeviceSHFQA(DeviceSHFBase):
         )
 
     async def setup_one_step_execution(
-        self, recipe_data: RecipeData, with_pipeliner: bool
+        self, recipe_data: RecipeData, nt_step: NtStepKey, with_pipeliner: bool
     ):
         hw_sync = with_pipeliner and (
             self._has_awg_in_use(recipe_data) or self.options.is_qc
@@ -436,7 +437,7 @@ class DeviceSHFQA(DeviceSHFBase):
         awg_index: int,
         artifacts: ArtifactsCodegen,
         integrator_allocations: list[IntegratorAllocation],
-        kernel_ref: str,
+        kernel_ref: str | None,
     ) -> NodeCollector:
         return self._qachannels[awg_index].prepare_upload_all_integration_weights(
             recipe_data,
@@ -520,7 +521,6 @@ class DeviceSHFQA(DeviceSHFBase):
 
     async def get_measurement_data(
         self,
-        recipe_data: RecipeData,
         channel: int,
         rt_execution_info: RtExecutionInfo,
         result_indices: list[int],

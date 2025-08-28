@@ -1,8 +1,8 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::AwgTiming;
 use crate::Result;
+use crate::awg_delays::calculate_awg_delays;
 use crate::ir;
 use crate::ir::compilation_job::{AwgCore, DeviceKind};
 use crate::passes::{
@@ -13,7 +13,7 @@ use crate::passes::{
 };
 use crate::tinysample::tinysample_to_samples;
 use crate::virtual_signal::create_virtual_signals;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Transform the IR program into a AWG events for the target AWG.
 ///
@@ -24,8 +24,9 @@ pub fn transform_ir_to_awg_events(
     program: ir::IrNode,
     awg: &AwgCore,
     settings: &crate::CodeGeneratorSettings,
-    awg_timing: &AwgTiming,
+    signal_delays: &HashMap<&str, ir::Samples>,
 ) -> Result<ir::IrNode> {
+    let awg_timing: crate::awg_delays::AwgTiming = calculate_awg_delays(awg, signal_delays)?;
     let mut program = program;
     let mut cut_points = HashSet::from_iter([awg_timing.delay()]); // Sequencer start
     // Source IR children offsets are relative to parent, change them to absolute from the start (0)
@@ -35,29 +36,30 @@ pub fn transform_ir_to_awg_events(
     let osc_params = handle_oscillators::handle_oscillator_parameters(
         &mut program,
         &awg.signals,
-        &awg.device_kind,
+        awg.device_kind(),
         |signal_uid, ts| {
             tinysample_to_samples(ts, awg.sampling_rate) + awg_timing.signal_delay(signal_uid)
         },
     )?;
     lower_for_awg::convert_to_samples(&mut program, awg);
-    let (play_wave_size_hint, play_zero_size_hint) = settings.waveform_size_hints(&awg.device_kind);
+    let (play_wave_size_hint, play_zero_size_hint) =
+        settings.waveform_size_hints(awg.device_kind());
     lower_for_awg::apply_delay_information(
         &mut program,
         awg,
-        awg_timing,
+        &awg_timing,
         play_wave_size_hint,
         play_zero_size_hint,
     )?;
     handle_oscillators::handle_oscillator_sweeps(&mut program, awg, &mut cut_points)?;
     handle_acquire::handle_acquisitions(
         &mut program,
-        awg.device_kind.traits().sample_multiple,
+        awg.device_kind().traits().sample_multiple,
         &osc_params,
     )?;
     handle_hw_phase_resets::handle_hw_phase_resets(&mut program, &mut cut_points)?;
     handle_precompensation_resets::handle_precompensation_resets(&mut program, &mut cut_points)?;
-    if let DeviceKind::SHFQA = &awg.device_kind {
+    if let DeviceKind::SHFQA = awg.device_kind() {
         handle_ppc_sweeps::handle_ppc_sweep_steps(&mut program)?;
     }
     handle_loops::handle_loops(&program, &mut cut_points)?;
@@ -65,15 +67,15 @@ pub fn transform_ir_to_awg_events(
     handle_prng::handle_prng(&program, &mut cut_points)?;
     if let Some(virtual_signals) = create_virtual_signals(awg)? {
         handle_frame_changes::handle_frame_changes(&mut program);
-        handle_match::handle_match_nodes(&mut program)?;
+        handle_match::handle_match_nodes(&program)?;
         let amp_reg_alloc = handle_amplitude_registers::assign_amplitude_registers(&program, awg);
         handle_amplitude_registers::handle_amplitude_register_events(
             &mut program,
             &amp_reg_alloc,
-            &awg.device_kind,
+            awg.device_kind(),
         );
         let (play_wave_size_hint, play_zero_size_hint) =
-            settings.waveform_size_hints(&awg.device_kind);
+            settings.waveform_size_hints(awg.device_kind());
         handle_playwaves::handle_plays(
             &mut program,
             awg,
@@ -93,6 +95,6 @@ pub fn transform_ir_to_awg_events(
             settings.phase_resolution_range(),
         );
     }
-    handle_qa_events(&mut program, &awg.device_kind)?;
+    handle_qa_events(&mut program, awg.device_kind())?;
     Ok(program)
 }

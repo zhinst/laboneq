@@ -13,11 +13,15 @@ use std::vec;
 use codegenerator::ir::PpcDevice;
 use codegenerator::ir::PrngSetup;
 use codegenerator::ir::SignalFrequency;
+use codegenerator::ir::compilation_job::Device;
 use codegenerator::ir::compilation_job::{AwgCore, Signal};
+use codegenerator::ir::experiment::{Handle, PulseParametersId};
+use codegenerator::tinysample::length_to_samples;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::exceptions::PyValueError;
 use pyo3::intern;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use pyo3::types::PyList;
 use pyo3::types::{PyComplex, PyString};
 
@@ -26,6 +30,7 @@ use num_complex::Complex;
 
 use crate::error::Error;
 use crate::ir::experiment::SweepCommand;
+use crate::pulse_parameters::{PulseParameters, create_pulse_parameters};
 use codegenerator::ir;
 use codegenerator::ir::compilation_job as cjob;
 use codegenerator::ir::experiment::SectionInfo;
@@ -41,6 +46,7 @@ struct Deduplicator<'a> {
     section_info: HashMap<String, Arc<SectionInfo>>,
     // PPC device per signal (channel)
     ppc_devices: HashMap<String, Arc<PpcDevice>>,
+    pulse_parameters: HashMap<PulseParametersId, PulseParameters>,
 }
 
 impl<'a> Deduplicator<'a> {
@@ -52,6 +58,7 @@ impl<'a> Deduplicator<'a> {
             loop_params: HashMap::new(),
             ppc_devices: HashMap::new(),
             section_info: HashMap::new(),
+            pulse_parameters: HashMap::new(),
         }
     }
 
@@ -89,6 +96,27 @@ impl<'a> Deduplicator<'a> {
                 .insert(signal.to_string(), Arc::clone(&ppc));
             ppc
         }
+    }
+
+    fn register_pulse_parameters(
+        &mut self,
+        py: Python,
+        pulse_parameters: Option<&Bound<'_, PyDict>>,
+        play_parameters: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Option<PulseParametersId>> {
+        if pulse_parameters.is_none() && play_parameters.is_none() {
+            return Ok(None);
+        }
+        let parameters = create_pulse_parameters(py, pulse_parameters, play_parameters)?;
+        let parameters_id = parameters.id();
+        self.pulse_parameters
+            .entry(parameters_id)
+            .or_insert(parameters);
+        Ok(Some(parameters_id))
+    }
+
+    fn take_pulse_parameters(&mut self) -> HashMap<PulseParametersId, PulseParameters> {
+        std::mem::take(&mut self.pulse_parameters)
     }
 }
 
@@ -358,10 +386,14 @@ fn extract_pulse(ob: &Bound<'_, PyAny>, dedup: &mut Deduplicator) -> Result<ir::
     let set_oscillator_phase = ob
         .getattr(intern!(py, "set_oscillator_phase"))?
         .extract::<Option<f64>>()?;
-    // NOTE: This works only after pulse parameters are indexes!
-    let id_pulse_params = ob
-        .getattr(intern!(py, "play_pulse_params"))?
-        .extract::<Option<u64>>()?;
+
+    // Index pulse parameters
+    let pulse_pulse_params = ob.getattr(intern!(py, "pulse_pulse_params"))?;
+    let play_pulse_params = ob.getattr(intern!(py, "play_pulse_params"))?;
+    let pulse_parameters = pulse_pulse_params.downcast::<PyDict>().ok();
+    let play_parameters = play_pulse_params.downcast::<PyDict>().ok();
+    let id_pulse_params = dedup.register_pulse_parameters(py, pulse_parameters, play_parameters)?;
+
     let amp_param_name = ob
         .getattr(intern!(py, "amp_param_name"))?
         .extract::<Option<String>>()?;
@@ -411,16 +443,24 @@ fn extract_acquire_pulse(
     } else {
         vec![]
     };
-    // NOTE: This works only after pulse parameters are indexes!
-    let id_pulse_params = ob
-        .getattr(intern!(py, "play_pulse_params"))?
-        .extract::<Option<u64>>()?;
 
+    // Index pulse parameters
+    let pulse_pulse_params = ob.getattr(intern!(py, "pulse_pulse_params"))?;
+    let play_pulse_params = ob.getattr(intern!(py, "play_pulse_params"))?;
+    let pulse_parameters = pulse_pulse_params.downcast::<PyDict>().ok();
+    let play_parameters = play_pulse_params.downcast::<PyDict>().ok();
+    let id_pulse_params = dedup.register_pulse_parameters(py, pulse_parameters, play_parameters)?;
+
+    let acq_params = py_section_signal_pulse.getattr(intern!(py, "acquire_params"))?;
+    let handle = acq_params
+        .getattr(intern!(py, "handle"))?
+        .extract::<String>()?;
     let acquire_pulse = ir::AcquirePulse {
         length,
         signal,
         pulse_defs: pulse_def,
         id_pulse_params: vec![id_pulse_params],
+        handle: handle.into(),
     };
     Ok(Some(acquire_pulse))
 }
@@ -452,15 +492,33 @@ fn extract_acquire_pulse_group(
         pulse_defs.push(Arc::new(pulse_def));
     }
     let length = ob.getattr(intern!(py, "length"))?.extract::<i64>()?;
-    // NOTE: This works only after pulse parameters are indexes!
-    let id_pulse_params = ob
-        .getattr(intern!(py, "play_pulse_params"))?
-        .extract::<Vec<Option<u64>>>()?;
+
+    // Index pulse parameters
+    let pulse_pulse_params = ob.getattr(intern!(py, "pulse_pulse_params"))?;
+    let play_pulse_params = ob.getattr(intern!(py, "play_pulse_params"))?;
+    let mut id_pulse_params = vec![];
+    for (pulse, play) in pulse_pulse_params
+        .try_iter()?
+        .zip(play_pulse_params.try_iter()?)
+    {
+        let pulse_parameters_py = pulse?;
+        let play_parameters_py = play?;
+        let pulse = pulse_parameters_py.downcast::<PyDict>().ok();
+        let play = play_parameters_py.downcast::<PyDict>().ok();
+        let parameters_id = dedup.register_pulse_parameters(py, pulse, play)?;
+        id_pulse_params.push(parameters_id);
+    }
+
+    let acq_params = py_section_signal_pulse_base.getattr(intern!(py, "acquire_params"))?;
+    let handle = acq_params
+        .getattr(intern!(py, "handle"))?
+        .extract::<String>()?;
     let acquire_pulse = ir::AcquirePulse {
         length,
         signal,
         pulse_defs,
         id_pulse_params,
+        handle: handle.into(),
     };
     Ok(Some(acquire_pulse))
 }
@@ -505,7 +563,7 @@ fn extract_match(ob: &Bound<'_, PyAny>, dedup: &mut Deduplicator) -> Result<ir::
     let obj = ir::Match {
         section_info,
         length,
-        handle,
+        handle: handle.map(Handle::from),
         user_register,
         local: local.unwrap_or(false),
         prng_sample,
@@ -523,6 +581,11 @@ fn extract_case(ob: &Bound<'_, PyAny>, dedup: &mut Deduplicator) -> Result<ir::C
         state,
         length,
         signals,
+        section_info: dedup.get_or_create_section_info(
+            ob.getattr(intern!(py, "section"))?
+                .extract::<String>()?
+                .as_str(),
+        ),
     })
 }
 
@@ -540,11 +603,21 @@ fn extract_loop(ob: &Bound<'_, PyAny>, dedup: &mut Deduplicator) -> Result<ir::L
             .as_str(),
     );
     let count = ob.getattr(intern!(py, "iterations"))?.extract::<u64>()?;
+    // NOTE: Currently PRNG information is only available in loop iterations.
+    // This is a workaround to get the PRNG sample from the first iteration.
+    let first_iteration = ob
+        .getattr(intern!(py, "children"))?
+        .get_item(0)
+        .expect("Internal Error: Loop has no children");
+    let prng_sample = first_iteration
+        .getattr(intern!(py, "prng_sample"))?
+        .extract::<Option<String>>()?;
     Ok(ir::Loop {
         length,
         compressed,
         section_info,
         count,
+        prng_sample,
     })
 }
 
@@ -565,14 +638,10 @@ fn extract_loop_iteration(
         .try_iter()?
         .map(|param| extract_parameter(&param?, dedup))
         .collect::<Result<Vec<_>, _>>()?;
-    let prng_sample = ob
-        .getattr(intern!(py, "prng_sample"))?
-        .extract::<Option<String>>()?;
     let shadow = ob.getattr(intern!(py, "shadow"))?.extract::<bool>()?;
     Ok(ir::LoopIteration {
         length,
         parameters,
-        prng_sample,
         shadow,
     })
 }
@@ -710,7 +779,7 @@ pub fn extract_mixer_type(ob: &Bound<'_, PyAny>) -> Result<Option<cjob::MixerTyp
     Ok(Some(kind))
 }
 
-fn extract_awg_signal(ob: &Bound<'_, PyAny>) -> Result<Signal, PyErr> {
+fn extract_awg_signal(ob: &Bound<'_, PyAny>, sampling_rate: f64) -> Result<Signal, PyErr> {
     // compilation_job.SignalObj
     let py = ob.py();
     let signal_type = match ob
@@ -728,12 +797,17 @@ fn extract_awg_signal(ob: &Bound<'_, PyAny>) -> Result<Signal, PyErr> {
             )));
         }
     };
+    let start_delay_seconds = ob.getattr(intern!(py, "start_delay"))?.extract::<f64>()?;
+    let signal_delay_seconds = ob.getattr(intern!(py, "delay_signal"))?.extract::<f64>()?;
+    let start_delay = length_to_samples(start_delay_seconds, sampling_rate);
+    let signal_delay = length_to_samples(signal_delay_seconds, sampling_rate);
+
     let signal = Signal {
         uid: ob.getattr(intern!(py, "id"))?.extract::<String>()?,
         kind: signal_type,
         channels: ob.getattr(intern!(py, "channels"))?.extract::<Vec<u8>>()?,
-        start_delay: ob.getattr(intern!(py, "start_delay"))?.extract::<f64>()?,
-        signal_delay: ob.getattr(intern!(py, "delay_signal"))?.extract::<f64>()?,
+        start_delay,
+        signal_delay,
         // AWG SignalObj does not have full oscillator info, we take it from elsewhere
         oscillator: None,
         mixer_type: extract_mixer_type(&ob.getattr(intern!(py, "mixer_type"))?)?,
@@ -809,13 +883,14 @@ pub fn extract_awg<'py>(
     // awg_info.AWGInfo
     let py = ob.py();
     let sampling_rate = ob.getattr(intern!(py, "sampling_rate"))?.extract::<f64>()?;
+    let device_kind = extract_device_kind(&ob.getattr(intern!(py, "device_type"))?)?;
     // AWG signal must be combined from `SignalIR` and `SignalObj`
     let mut osc_map = extract_oscillator_from_ir_signal(ir_signals)?;
     let signals: Result<Vec<Rc<Signal>>, PyErr> = ob
         .getattr(intern!(py, "signals"))?
         .try_iter()?
         .map(|x| {
-            let mut sig = extract_awg_signal(&x?)?;
+            let mut sig = extract_awg_signal(&x?, sampling_rate)?;
             sig.oscillator = osc_map.remove(&sig.uid).unwrap_or_else(|| {
                 panic!(
                     "Internal error: No oscillator found for signal: '{}'",
@@ -834,13 +909,20 @@ pub fn extract_awg<'py>(
         "AWG signals must be of the same type, or of two types, where one is INTEGRATION. Found: {:?}",
         &signal_kinds
     );
-    let awg = AwgCore {
-        kind: extract_awg_kind(&ob.getattr(intern!(py, "signal_type"))?)?,
-        signals: signals?,
+    let awg_id = ob.getattr(intern!(py, "awg_id"))?.extract::<u16>()?;
+    let awg = AwgCore::new(
+        awg_id,
+        extract_awg_kind(&ob.getattr(intern!(py, "signal_type"))?)?,
+        signals?,
         sampling_rate,
-        device_kind: extract_device_kind(&ob.getattr(intern!(py, "device_type"))?)?,
-        osc_allocation: extract_awg_oscs(&ob.getattr(intern!(py, "oscs"))?)?,
-    };
+        Arc::new(Device::new(
+            ob.getattr(intern!(py, "device_id"))?
+                .extract::<String>()?
+                .into(),
+            device_kind,
+        )),
+        extract_awg_oscs(&ob.getattr(intern!(py, "oscs"))?)?,
+    );
     Ok(awg)
 }
 
@@ -875,7 +957,10 @@ fn extract_parameter(
 /// While the main purpose of this function is to translate Python IR
 /// structs into Rust, it also lowers the source IR into code IR as we
 /// do not (yet) have Rust models for the original IR.
-pub fn transform_py_ir(ob: &Bound<'_, PyAny>, awgs: &[AwgCore]) -> Result<ir::IrNode, PyErr> {
+pub fn transform_py_ir(
+    ob: &Bound<'_, PyAny>,
+    awgs: &[AwgCore],
+) -> Result<(ir::IrNode, HashMap<PulseParametersId, PulseParameters>), PyErr> {
     let all_signals = awgs
         .iter()
         .flat_map(|awg| awg.signals.iter())
@@ -885,5 +970,5 @@ pub fn transform_py_ir(ob: &Bound<'_, PyAny>, awgs: &[AwgCore]) -> Result<ir::Ir
         .into_iter()
         .next()
         .expect("Internal error: No nodes found");
-    Ok(root)
+    Ok((root, deduplicator.take_pulse_parameters()))
 }

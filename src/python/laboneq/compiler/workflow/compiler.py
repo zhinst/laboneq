@@ -658,12 +658,6 @@ class Compiler:
                         candidates=divisors,
                     )
 
-        for (
-            device_class,
-            output,
-        ) in self._combined_compiler_output.combined_output.items():
-            get_compiler_hooks(device_class).assign_feedback_registers(output)
-
     @staticmethod
     def _calc_awgs(dao: ExperimentDAO) -> AWGMapping:
         d: AWGMapping = []

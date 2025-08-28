@@ -33,6 +33,7 @@ from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.data.recipe import (
     IO,
     Initialization,
+    NtStepKey,
     TriggeringMode,
 )
 
@@ -255,7 +256,7 @@ class DeviceSHFSG(DeviceSHFBase):
             return super().clock_source_control_nodes()
 
     async def setup_one_step_execution(
-        self, recipe_data: RecipeData, with_pipeliner: bool
+        self, recipe_data: RecipeData, nt_step: NtStepKey, with_pipeliner: bool
     ):
         hw_sync = (
             with_pipeliner

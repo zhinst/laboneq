@@ -10,9 +10,38 @@ use core::panic;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use super::compilation_job::{PulseDef, Signal};
-pub type Samples = i64;
+use super::compilation_job::{PulseDef, Samples, Signal};
 pub type IrNode = node::Node<Samples, NodeKind>;
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Copy)]
+pub struct PulseParametersId(pub u64);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Handle(Arc<String>);
+
+impl Handle {
+    pub fn new<S: Into<String>>(name: S) -> Self {
+        Handle(Arc::new(name.into()))
+    }
+}
+
+impl From<&str> for Handle {
+    fn from(value: &str) -> Self {
+        Handle(Arc::new(value.to_string()))
+    }
+}
+
+impl From<String> for Handle {
+    fn from(value: String) -> Self {
+        Handle(Arc::new(value))
+    }
+}
+
+impl std::fmt::Display for Handle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 /// Represents an operation on a parameter.
 #[derive(Debug, Clone, PartialEq)]
@@ -47,6 +76,7 @@ pub struct SectionInfo {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Case {
+    pub section_info: Arc<SectionInfo>,
     pub signals: Vec<Rc<Signal>>,
     pub length: Samples,
     pub state: u16,
@@ -113,7 +143,7 @@ pub struct PlayPulse {
     pub set_oscillator_phase: Option<f64>,
     pub increment_oscillator_phase: Option<f64>,
     pub incr_phase_param_name: Option<String>,
-    pub id_pulse_params: Option<u64>,
+    pub id_pulse_params: Option<PulseParametersId>,
     // TODO: Consider replacing this with an ID of markers
     pub markers: Vec<cjob::Marker>,
     pub pulse_def: Option<Arc<PulseDef>>,
@@ -129,14 +159,15 @@ pub struct AcquirePulse {
     /// Single acquire can consist of multiple individual pulses
     /// Length of pulse defs must match pulse params ID
     pub pulse_defs: Vec<Arc<PulseDef>>,
-    pub id_pulse_params: Vec<Option<u64>>,
+    pub id_pulse_params: Vec<Option<PulseParametersId>>,
+    pub handle: Handle,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Match {
     pub section_info: Arc<SectionInfo>,
     pub length: Samples,
-    pub handle: Option<String>,
+    pub handle: Option<Handle>,
     pub user_register: Option<i64>,
     pub local: bool,
     pub prng_sample: Option<String>,
@@ -151,6 +182,8 @@ pub struct Loop {
     pub compressed: bool,
     /// Number of iterations in the loop
     pub count: u64,
+    /// PRNG sample name to draw from
+    pub prng_sample: Option<String>,
 }
 
 /// One iteration of an loop.
@@ -160,8 +193,6 @@ pub struct LoopIteration {
     pub length: Samples,
     /// Parameters used in this iteration
     pub parameters: Vec<Arc<cjob::SweepParameter>>,
-    /// PRNG sample name to draw from
-    pub prng_sample: Option<String>,
     // Whether or not the iteration is a shadow of previous iteration.
     pub shadow: bool,
 }
@@ -215,7 +246,7 @@ pub struct PlayAcquire {
     length: Samples,
     // Acquire pulse definitions
     pulse_defs: Vec<Arc<PulseDef>>,
-    id_pulse_params: Vec<Option<u64>>,
+    id_pulse_params: Vec<Option<PulseParametersId>>,
     oscillator_frequency: f64,
 }
 
@@ -225,7 +256,7 @@ impl PlayAcquire {
         length: Samples,
         pulse_defs: Vec<Arc<PulseDef>>,
         oscillator_frequency: f64,
-        id_pulse_params: Vec<Option<u64>>,
+        id_pulse_params: Vec<Option<PulseParametersId>>,
     ) -> Self {
         PlayAcquire {
             signal,
@@ -248,7 +279,7 @@ impl PlayAcquire {
         &self.pulse_defs
     }
 
-    pub fn id_pulse_params(&self) -> &[Option<u64>] {
+    pub fn id_pulse_params(&self) -> &[Option<PulseParametersId>] {
         &self.id_pulse_params
     }
 
@@ -436,11 +467,11 @@ impl NodeKind {
             NodeKind::Match(x) => x.length = value,
             NodeKind::Loop(x) => x.length = value,
             NodeKind::LoopIteration(x) => x.length = value,
+            NodeKind::Section(x) => x.length = value,
             NodeKind::Nop { length } => *length = value,
             NodeKind::SetupPrng(_) => {}
             NodeKind::DropPrngSetup => {}
             NodeKind::TriggerSet(_) => {}
-            NodeKind::Section(_) => panic!("Can't set length of Section nodes"),
             // Disallow settings of AWG nodes.
             _ => panic!("Can't set length of AWG nodes"),
         }
@@ -477,6 +508,45 @@ impl NodeKind {
             NodeKind::SamplePrng(x) => x.length,
             NodeKind::SetOscillatorFrequencySweep(x) => x.length,
             NodeKind::Section(x) => x.length,
+        }
+    }
+
+    /// Returns the section information for a given node kind.
+    ///
+    /// This is used to retrieve the section information for nodes that are identified as a section,
+    /// such as loops, cases, and sections.
+    /// Returns the section information for a given node kind.
+    pub fn get_section_info(&self) -> Option<&SectionInfo> {
+        match &self {
+            NodeKind::Loop(ob) => Some(ob.section_info.as_ref()),
+            NodeKind::Case(ob) => Some(ob.section_info.as_ref()),
+            NodeKind::Match(ob) => Some(ob.section_info.as_ref()),
+            NodeKind::Section(ob) => Some(ob.section_info.as_ref()),
+            NodeKind::QaEvent(_) => None,
+            NodeKind::PlayWave(_) => None,
+            NodeKind::PlayHold(_) => None,
+            NodeKind::Acquire(_) => None,
+            NodeKind::FrameChange(_) => None,
+            NodeKind::InitAmplitudeRegister(_) => None,
+            NodeKind::ResetPrecompensationFilters(_) => None,
+            NodeKind::PpcStep(_) => None,
+            NodeKind::ResetPhase() => None,
+            NodeKind::InitialResetPhase() => None,
+            NodeKind::SetupPrng(_) => None,
+            NodeKind::DropPrngSetup => None,
+            NodeKind::TriggerSet(_) => None,
+            NodeKind::SamplePrng(_) => None,
+            NodeKind::SetOscillatorFrequencySweep(_) => None,
+            NodeKind::PlayPulse(_) => None,
+            NodeKind::AcquirePulse(_) => None,
+            NodeKind::SetOscillatorFrequency(_) => None,
+            NodeKind::InitialOscillatorFrequency(_) => None,
+            NodeKind::PhaseReset(_) => None,
+            NodeKind::PrecompensationFilterReset { .. } => None,
+            NodeKind::PpcSweepStep(_) => None,
+            NodeKind::Nop { .. } => None,
+            NodeKind::SetTrigger(_) => None,
+            NodeKind::LoopIteration(_) => None,
         }
     }
 }

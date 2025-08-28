@@ -220,7 +220,9 @@ class JsonLoader(LoaderBase):
         section_reuse_counter = {}
 
         sections_to_process = deque((s, None) for s in self._root_sections)
-
+        # None of the legacy experiments use match, so we add an arbitrary handle
+        # for acquisitions as the new API requires handle to be present.
+        placeholder_acquisition_handles = {}
         while len(sections_to_process) > 0:
             section_name, parent_instance = sections_to_process.pop()
             if section_name in section_reuse_counter:
@@ -432,8 +434,16 @@ class JsonLoader(LoaderBase):
                             acquire_params = None
                             signal_type = self._signals[signal_id].type.value
                             if signal_type == "integration":
+                                if pulse_ref.get("readout_handle") is None:
+                                    handle = placeholder_acquisition_handles.get(
+                                        signal_id,
+                                        f"placeholder{len(placeholder_acquisition_handles)}",
+                                    )
+                                    placeholder_acquisition_handles[signal_id] = handle
+                                else:
+                                    handle = pulse_ref["readout_handle"]
                                 acquire_params = AcquireInfo(
-                                    handle=pulse_ref.get("readout_handle"),
+                                    handle=handle,
                                     acquisition_type=getattr(
                                         self.acquisition_type, "value", None
                                     ),

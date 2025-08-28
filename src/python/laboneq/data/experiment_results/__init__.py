@@ -190,7 +190,9 @@ class AcquiredResults(UserDict[str, AcquiredResult]):
         )
         datasets = [res.to_xarray(copy=copy) for res in self.data.values()]
         try:
-            ds = xr.merge(datasets, combine_attrs="drop_conflicts")
+            ds = xr.merge(
+                datasets, combine_attrs="drop_conflicts", compat="broadcast_equals"
+            )
         except xr.MergeError as error:
             # NOTE: Sweep parameters are allowed to have duplicate `axis_name`, but not `uid`.
             #   If duplicate `axis_name` is used for different parallel sweep parameters, it is not

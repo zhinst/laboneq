@@ -102,8 +102,8 @@ mod tests {
             signal: Signal {
                 uid: "".to_string(),
                 kind: SignalKind::INTEGRATION,
-                signal_delay: 0.0,
-                start_delay: 0.0,
+                signal_delay: 0,
+                start_delay: 0,
                 channels: vec![0],
                 oscillator: None,
                 mixer_type: None,
@@ -112,6 +112,7 @@ mod tests {
             pulse_defs: vec![],
             id_pulse_params: vec![],
             length,
+            handle: "".into(),
         };
         let offset = 0;
         let (start, play_acquire) = lower_acquire_pulse(&pulse, offset, grid as u16, 0.0).unwrap();

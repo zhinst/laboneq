@@ -12,9 +12,9 @@ import numpy as np
 
 from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.shfppc_sweeper_config import SHFPPCSweeperConfig
+from laboneq.compiler.common.integration_times import IntegrationTimes
 from laboneq.compiler.seqc.measurement_calculator import (
     SignalDelays,
-    IntegrationTimes,
 )
 from laboneq.compiler.common.awg_info import AwgKey
 from laboneq.compiler.common.feedback_register_config import FeedbackRegisterConfig
@@ -40,11 +40,11 @@ from laboneq.data.scheduled_experiment import (
 
 @dataclass
 class CombinedRTOutputSeqC(CombinedOutput):
+    integration_times: IntegrationTimes
     feedback_connections: dict[str, FeedbackConnection] = field(default_factory=dict)
     signal_delays: SignalDelays = field(default_factory=dict)
     # key - SeqC name
     integration_weights: dict[str, AwgWeights] = field(default_factory=dict)
-    integration_times: IntegrationTimes | None = None
     simultaneous_acquires: list[dict[str, str]] = field(default_factory=list)
     src: dict[str, SeqCProgram] = field(default_factory=dict)
     waves: dict[str, CodegenWaveform] = field(default_factory=dict)
@@ -204,10 +204,10 @@ class SeqCLinker(ILinker):
             )
 
         return CombinedRTOutputSeqC(
+            integration_times=output.integration_times,
             feedback_connections=output.feedback_connections,
             signal_delays=output.signal_delays,
             integration_weights=integration_weights,
-            integration_times=output.integration_times,
             simultaneous_acquires=output.simultaneous_acquires,
             total_execution_time=output.total_execution_time,
             max_execution_time_per_step=output.total_execution_time,

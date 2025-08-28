@@ -4,9 +4,13 @@
 use anyhow::Context;
 use awg_event::{AcquireEvent, AwgEvent, EventType, InitAmplitudeRegisterPy, PlayWaveEventPy};
 use codegenerator::CodeGeneratorSettings;
+use codegenerator::analyze_measurements;
 use codegenerator::fanout_for_awg;
+use codegenerator::handle_feedback_registers::{FeedbackConfig, collect_feedback_config};
 use codegenerator::ir::compilation_job::AwgCore;
+use codegenerator::ir::{IrNode, Samples, SectionId};
 use codegenerator::signature::WaveformSignature;
+use codegenerator::tinysample::TINYSAMPLE;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use pyo3::types::PyList;
@@ -21,39 +25,42 @@ mod py_conversions;
 mod waveform_sampler;
 use codegenerator::ir::{self, NodeKind};
 use codegenerator::{
-    AwgWaveforms, analyze_awg_ir, calculate_awg_delays, collect_and_finalize_waveforms,
-    collect_integration_kernels, transform_ir_to_awg_events,
+    AwgWaveforms, analyze_awg_ir, collect_and_finalize_waveforms, collect_integration_kernels,
+    transform_ir_to_awg_events,
 };
 mod awg_event;
 mod common_types;
+mod pulse_parameters;
 mod result;
 mod signature;
 mod triggers;
 use crate::awg_event::SetOscillatorFrequencyPy;
 use crate::awg_event::{ChangeHwOscPhase, MatchEvent, QaEventPy};
 mod settings;
+use crate::pulse_parameters::PulseParameters;
+use crate::result::SignalIntegrationInfo;
 use crate::settings::code_generator_settings_from_dict;
+use codegenerator::ir::experiment::PulseParametersId;
 use result::{AwgCodeGenerationResultPy, SampledWaveformPy, SeqCGenOutputPy};
 
 mod error;
 use crate::code_generator::{
     SeqCGeneratorPy, SeqCTrackerPy, WaveIndexTrackerPy, merge_generators_py,
-    seqc_generator_from_device_and_signal_type_py, string_sanitize_py,
+    seqc_generator_from_device_and_signal_type_py,
 };
 use crate::error::Result;
 use crate::waveform_sampler::WaveformSamplerPy;
 use crate::waveform_sampler::batch_calculate_integration_weights;
-use codegenerator::ir::SectionId;
 use std::collections::HashMap;
 use triggers::generate_trigger_states;
 
 struct GeneratorState {
-    pub loop_step_starts_added: HashMap<ir::Samples, HashSet<SectionId>>,
-    pub loop_step_ends_added: HashMap<ir::Samples, HashSet<SectionId>>,
+    pub loop_step_starts_added: HashMap<Samples, HashSet<SectionId>>,
+    pub loop_step_ends_added: HashMap<Samples, HashSet<SectionId>>,
     pub state: Option<u16>,
 }
 
-fn generate_output(node: ir::IrNode, awg: &AwgCore) -> Result<Vec<AwgEvent>> {
+fn generate_output(node: IrNode, awg: &AwgCore) -> Result<Vec<AwgEvent>> {
     let mut state = GeneratorState {
         loop_step_starts_added: HashMap::new(),
         loop_step_ends_added: HashMap::new(),
@@ -68,7 +75,7 @@ fn generate_output(node: ir::IrNode, awg: &AwgCore) -> Result<Vec<AwgEvent>> {
 
 /// Generate Python compatible AWG sampled events from the IR tree
 fn generate_output_recursive(
-    mut node: ir::IrNode,
+    mut node: IrNode,
     awg: &AwgCore,
     state: &mut GeneratorState,
 ) -> Result<Vec<AwgEvent>> {
@@ -125,7 +132,7 @@ fn generate_output_recursive(
         }
         NodeKind::FrameChange(ob) => {
             let mut hw_osc = None;
-            if awg.device_kind.traits().supports_oscillator_switching {
+            if awg.device_kind().traits().supports_oscillator_switching {
                 if let Some(osc) = &ob.signal.oscillator {
                     let out = signature::HwOscillator {
                         uid: osc.uid.clone(),
@@ -279,7 +286,25 @@ fn generate_output_recursive(
                         }),
                     });
                 }
+                // Add PRNG sample drawing around iteration
+                let draw_prng_sample = ob.prng_sample.is_some();
+                if draw_prng_sample {
+                    events.push(AwgEvent {
+                        start,
+                        end: start,
+                        position: Some(0),
+                        kind: EventType::PrngSample(),
+                    });
+                }
                 events.extend(generate_output_recursive(child, awg, state)?);
+                if draw_prng_sample {
+                    events.push(AwgEvent {
+                        start: end,
+                        end,
+                        position: Some(0),
+                        kind: EventType::PrngDropSample(),
+                    });
+                }
                 if !ob.compressed {
                     let already_added = state
                         .loop_step_ends_added
@@ -309,36 +334,6 @@ fn generate_output_recursive(
                         }),
                     });
                 }
-            }
-            Ok(events)
-        }
-        NodeKind::LoopIteration(ob) => {
-            let start = *node.offset();
-            let end = start + ob.length;
-            let mut events = vec![];
-            if let Some(sample_name) = &ob.prng_sample {
-                events.push(AwgEvent {
-                    start,
-                    end: start,
-                    position: Some(0),
-                    kind: EventType::PrngSample(awg_event::PrngSample {
-                        section_name: "asd".to_string(),
-                        sample_name: sample_name.clone(),
-                    }),
-                });
-            }
-            for child in node.take_children() {
-                events.extend(generate_output_recursive(child, awg, state)?);
-            }
-            if let Some(sample_name) = &ob.prng_sample {
-                events.push(AwgEvent {
-                    start: end,
-                    end,
-                    position: Some(0),
-                    kind: EventType::PrngDropSample(awg_event::PrngDropSample {
-                        sample_name: sample_name.clone(),
-                    }),
-                });
             }
             Ok(events)
         }
@@ -385,47 +380,95 @@ fn add_positions(events: &mut [AwgEvent]) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn generate_code_for_awg(
-    root: &ir::IrNode,
+    root: &IrNode,
     awg: &AwgCore,
+    pulse_parameters: &HashMap<PulseParametersId, PulseParameters>,
     settings: &CodeGeneratorSettings,
-    delays: &HashMap<String, f64>,
     waveform_sampler: &Py<PyAny>,
+    acquisition_config: &FeedbackConfig<'_>,
 ) -> Result<AwgCodeGenerationResultPy> {
     let root = fanout_for_awg(root, awg);
     let awg_info = analyze_awg_ir(&root);
-    let awg_timing = calculate_awg_delays(awg, delays)?;
-    let mut awg_node = transform_ir_to_awg_events(root, awg, settings, &awg_timing)?;
+    let measurement_info = analyze_measurements(&root, awg.device_kind(), awg.sampling_rate)?;
+    let mut awg_node = transform_ir_to_awg_events(
+        root,
+        awg,
+        settings,
+        &measurement_info
+            .delays
+            .iter()
+            .map(|(signal, delay)| (signal.as_str(), delay.delay_sequencer()))
+            .collect(),
+    )?;
     let waveforms = if WaveformSamplerPy::supports_waveform_sampling(awg) {
-        collect_and_finalize_waveforms(&mut awg_node, WaveformSamplerPy::new(waveform_sampler, awg))
+        collect_and_finalize_waveforms(
+            &mut awg_node,
+            WaveformSamplerPy::new(waveform_sampler, awg, pulse_parameters),
+        )
     } else {
         Ok(AwgWaveforms::default())
     }?;
     let integration_kernels = collect_integration_kernels(&awg_node, awg)?;
-    let integration_weights =
-        batch_calculate_integration_weights(awg, waveform_sampler, integration_kernels)?;
+    let integration_weights = batch_calculate_integration_weights(
+        awg,
+        waveform_sampler,
+        integration_kernels,
+        pulse_parameters,
+    )?;
+    let global_delay = *awg_node.offset();
     let awg_events = generate_output(awg_node, awg)?;
     let (sampled_waveforms, wave_declarations) = waveforms.into_inner();
+
+    // Feedback registers
+    let target_feedback_register = acquisition_config.target_feedback_register(&awg.key());
+    let source_feedback_register = if let Some(handle) = awg_info.feedback_handles().first() {
+        let source = acquisition_config
+            .feedback_source(handle)
+            .expect("Internal Error: Missing feedback source for handle");
+        acquisition_config.target_feedback_register(&source.awg_key)
+    } else {
+        None
+    };
     let output = AwgCodeGenerationResultPy::create(
         awg_events,
         sampled_waveforms,
         wave_declarations,
         integration_weights,
         awg_info,
-        awg_timing.delay(),
+        global_delay,
+        &measurement_info
+            .delays
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.delay_port().into()))
+            .collect(),
+        measurement_info
+            .integration_lengths
+            .into_iter()
+            .map(|x| {
+                (
+                    x.signal().to_string(),
+                    SignalIntegrationInfo {
+                        is_play: x.is_play(),
+                        length: x.duration(),
+                    },
+                )
+            })
+            .collect(),
+        target_feedback_register.cloned(),
+        source_feedback_register.cloned(),
     )?;
     Ok(output)
-}
-
-fn transform_delays(value: &Bound<PyDict>) -> Result<HashMap<String, f64>> {
-    Ok(value.extract::<HashMap<String, f64>>()?)
 }
 
 fn transform_ir_and_awg(
     ir_tree: &Bound<PyAny>,
     awgs: &Bound<PyList>,
-) -> Result<(ir::IrNode, Vec<AwgCore>)> {
+) -> Result<(
+    IrNode,
+    Vec<AwgCore>,
+    HashMap<PulseParametersId, PulseParameters>,
+)> {
     let root_ir = ir_tree.getattr("root")?;
     let ir_signals = ir_tree.getattr("signals")?;
     let mut awg_cores = vec![];
@@ -435,8 +478,12 @@ fn transform_ir_and_awg(
         awg.signals.sort_by(|a, b| a.channels.cmp(&b.channels));
         awg_cores.push(awg);
     }
-    let root = py_conversions::transform_py_ir(&root_ir, &awg_cores)?;
-    Ok((root, awg_cores))
+    let (root, pulse_parameters) = py_conversions::transform_py_ir(&root_ir, &awg_cores)?;
+    Ok((root, awg_cores, pulse_parameters))
+}
+
+fn estimate_total_execution_time(root: &IrNode) -> f64 {
+    root.data().length() as f64 * TINYSAMPLE
 }
 
 // NOTE: When changing the API, update the stub in 'laboneq/_rust/codegenerator'
@@ -450,11 +497,9 @@ fn generate_code(
     // Dictionary with compiler settings
     settings: &Bound<PyDict>,
     waveform_sampler: Py<PyAny>,
-    delays: &Bound<PyDict>,
 ) -> Result<SeqCGenOutputPy> {
     let mut settings = code_generator_settings_from_dict(settings)?;
-    let (ir_root, awgs) = transform_ir_and_awg(ir, awgs)?;
-    let delays: HashMap<String, f64> = transform_delays(delays)?;
+    let (ir_root, awgs, pulse_parameters) = transform_ir_and_awg(ir, awgs)?;
     for msg in settings.sanitize()? {
         log::warn!(
             "Compiler setting `{}` is sanitized from {} to {}. Reason: {}",
@@ -464,23 +509,32 @@ fn generate_code(
             msg.reason
         );
     }
+    let total_execution_time = estimate_total_execution_time(&ir_root);
+    let awg_refs: Vec<&AwgCore> = awgs.iter().collect();
+    let feedback_config = collect_feedback_config(&ir_root, &awg_refs)
+        .context("Error while processing feedback configuration")?;
     let mut awg_results = vec![];
     for awg in awgs.iter() {
-        let awg_result =
-            generate_code_for_awg(&ir_root, awg, &settings, &delays, &waveform_sampler).context(
-                format!(
-                    "Error while generating code for signals: {}",
-                    &awg.signals
-                        .iter()
-                        .map(|s| s.uid.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            )?;
+        let awg_result = generate_code_for_awg(
+            &ir_root,
+            awg,
+            &pulse_parameters,
+            &settings,
+            &waveform_sampler,
+            &feedback_config,
+        )
+        .context(format!(
+            "Error while generating code for signals: {}",
+            &awg.signals
+                .iter()
+                .map(|s| s.uid.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))?;
         awg_results.push(awg_result);
     }
     Python::with_gil(|py| {
-        let result = SeqCGenOutputPy::new(py, awg_results);
+        let result = SeqCGenOutputPy::new(py, awg_results, total_execution_time, feedback_config);
         Ok(result)
     })
 }
@@ -495,6 +549,7 @@ pub fn create_py_module<'a>(
     m.add_class::<common_types::SignalTypePy>()?;
     m.add_class::<common_types::DeviceTypePy>()?;
     m.add_class::<common_types::MixerTypePy>()?;
+    m.add_class::<common_types::AwgKeyPy>()?;
     // AWG Code generation
     m.add_function(wrap_pyfunction!(generate_code, &m)?)?;
     m.add_class::<PulseSignaturePy>()?;
@@ -512,7 +567,6 @@ pub fn create_py_module<'a>(
         &m
     )?)?;
     m.add_function(wrap_pyfunction!(merge_generators_py, &m)?)?;
-    m.add_function(wrap_pyfunction!(string_sanitize_py, &m)?)?;
     // Result
     m.add_class::<AwgCodeGenerationResultPy>()?;
     Ok(m)

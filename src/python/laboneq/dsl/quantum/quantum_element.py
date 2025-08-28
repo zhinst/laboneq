@@ -34,7 +34,7 @@ class QuantumParameters:
         - NumPy types: np.integer, np.ndarray
         - `QuantumParameter` objects
         For more information on the currently supported objects for serialization,
-        please see the [serializers documentation](https://docs.zhinst.com/labone_q_user_manual/core/functionality_and_concepts/09_serialization/00_serialization.html).
+        please see the [serializers documentation](https://docs.zhinst.com/labone_q_user_manual/core/functionality_and_concepts/09_serialization/tutorials/00_serialization.html).
     """
 
     custom: dict[str, object] = attrs.field(

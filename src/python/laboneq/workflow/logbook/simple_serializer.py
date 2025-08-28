@@ -59,6 +59,11 @@ def simple_serialize_float(obj: float) -> SimpleType:
 
 
 @simple_serialize.register
+def simple_serialize_complex(obj: complex) -> SimpleType:
+    return {"real": obj.real, "imag": obj.imag}
+
+
+@simple_serialize.register
 def simple_serialize_bool(obj: bool) -> SimpleType:
     return obj
 

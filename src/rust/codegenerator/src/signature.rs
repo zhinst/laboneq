@@ -16,6 +16,7 @@
 use crate::Result;
 use crate::ir::Samples;
 use crate::ir::compilation_job::{Marker, PulseDef};
+use crate::ir::experiment::PulseParametersId;
 use crate::utils::{normalize_f64, normalize_phase};
 use num_complex::Complex64;
 use serde::ser::SerializeStruct;
@@ -48,7 +49,7 @@ pub struct PulseSignature {
     /// Pulse parameters ID
     /// Pulse parameters are parameters that are associated
     /// with the given `pulse`.
-    pub id_pulse_params: Option<u64>,
+    pub id_pulse_params: Option<PulseParametersId>,
     /// Markers played during this pulse
     pub markers: Vec<Marker>,
     /// Oscillator phase
@@ -133,7 +134,7 @@ impl Serialize for PulseSignature {
         )?;
         state.serialize_field("channel", &self.channel)?;
         state.serialize_field("sub_channel", &self.sub_channel)?;
-        state.serialize_field("id_pulse_params", &self.id_pulse_params)?;
+        state.serialize_field("id_pulse_params", &self.id_pulse_params.map(|p| p.0))?;
         state.serialize_field(
             "markers",
             &self
@@ -504,7 +505,7 @@ mod tests {
             oscillator_frequency: 1.1.into(),
             channel: 0.into(),
             sub_channel: 0.into(),
-            id_pulse_params: 1.into(),
+            id_pulse_params: PulseParametersId(1).into(),
             markers: vec![],
             oscillator_phase: None,
             increment_oscillator_phase: None,
@@ -575,7 +576,7 @@ mod tests {
             oscillator_frequency: 0.0.into(),
             channel: 0.into(),
             sub_channel: 0.into(),
-            id_pulse_params: 0.into(),
+            id_pulse_params: PulseParametersId(0).into(),
             markers: vec![],
             oscillator_phase: None,
             increment_oscillator_phase: None,
@@ -616,7 +617,9 @@ mod tests {
         ));
         cases.push((
             "id_pulse_params",
-            Box::new(|p: &mut PulseSignature| p.id_pulse_params = p.id_pulse_params.map(|x| x + 1)),
+            Box::new(|p: &mut PulseSignature| {
+                p.id_pulse_params = p.id_pulse_params.map(|x| PulseParametersId(x.0 + 1))
+            }),
         ));
 
         for (desc, mutator) in cases.iter_mut() {

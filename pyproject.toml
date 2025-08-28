@@ -52,10 +52,11 @@ dependencies = [
   "sortedcontainers >= 2.4.0",
   "sqlitedict >= 2.1.0",
   "typing_extensions >= 4.10.0",
+  "zhinst-comms >= 3.1",
   "zhinst-comms-schemas==0.0.1",
   "zhinst-core~=25.7.0",
   "zhinst-timing-models~=25.7.0",
-  "zhinst-toolkit == 1.0.1",
+  "zhinst-toolkit ==1.1.0",
   "zhinst-utils ==0.7.0",
 ]
 
@@ -101,12 +102,12 @@ dev = [
 tools = [
   "rust-just >= 1.40",
   "maturin >= 1.6, < 2.0",
-  "mypy >= 1.14.1, < 1.16",            # 1.16.x fails with INTERNAL ERROR
+  "mypy >=1.17.1, <1.18",
   "types-PyYAML >= 6.0.12",
   "mypy-gitlab-code-quality >= 1.3.0",
   "pip >= 25.0.1",                     # used by PyCharm for scanning the venv
   "pre-commit >= 4.1.0",
-  "ruff ==0.12.5",
+  "ruff ==0.12.9",
   "taplo >= 0.9.3",
 ]
 

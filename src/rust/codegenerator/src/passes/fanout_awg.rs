@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::ir::compilation_job::{AwgCore, Signal};
+use crate::ir::compilation_job::{AwgCore, DeviceKind, Signal};
 use crate::ir::{
     Case, InitialOscillatorFrequency, IrNode, NodeKind, PhaseReset, Samples,
     SetOscillatorFrequency, TriggerBitData,
@@ -13,6 +13,7 @@ use crate::ir::{
 
 struct Context<'a> {
     signals: HashSet<&'a str>,
+    inline_sections: bool,
 }
 
 fn contains_signal(ctx: &Context, signal_uid: &str) -> bool {
@@ -98,6 +99,7 @@ fn build_awg_ir(node: &IrNode, parent_offset: Samples, ctx: &Context<'_>, nodes:
                 return;
             }
             let ob = Case {
+                section_info: Arc::clone(&ob.section_info),
                 signals,
                 length: ob.length,
                 state: ob.state,
@@ -145,9 +147,16 @@ fn build_awg_ir(node: &IrNode, parent_offset: Samples, ctx: &Context<'_>, nodes:
             nodes.push(new_node);
         }
         NodeKind::Section(ob) => {
+            // When inlining sections, we must extend the children offsets
+            // with previous parent offsets
+            let children_offset = if ctx.inline_sections {
+                node.offset() + parent_offset
+            } else {
+                0
+            };
             let mut children = vec![];
             for child in node.iter_children() {
-                build_awg_ir(child, *node.offset() + parent_offset, ctx, &mut children);
+                build_awg_ir(child, children_offset, ctx, &mut children);
             }
             if children.is_empty() && ob.trigger_output.is_empty() {
                 // If there are no children and no trigger output, we can skip this section
@@ -197,7 +206,14 @@ fn build_awg_ir(node: &IrNode, parent_offset: Samples, ctx: &Context<'_>, nodes:
                 end_nodes.push(new_node);
             }
             nodes.extend(start_nodes);
-            nodes.extend(children);
+            if ctx.inline_sections {
+                // If we are inlining sections, we do not add the section node itself
+                nodes.extend(children);
+            } else {
+                let mut new_node = IrNode::new(node.data().clone(), *node.offset() + parent_offset);
+                new_node.add_child_nodes(children);
+                nodes.push(new_node);
+            }
             nodes.extend(end_nodes);
         }
         _ => {
@@ -222,6 +238,7 @@ fn build_awg_ir(node: &IrNode, parent_offset: Samples, ctx: &Context<'_>, nodes:
 ///
 /// The function collects all nodes that are relevant for the AWG.
 /// The function also inlines all the [`NodeKind::Section`] nodes.
+/// The pass expects the node timing to be relative to the parent node.
 ///
 /// # Returns
 ///
@@ -230,6 +247,7 @@ fn build_awg_ir(node: &IrNode, parent_offset: Samples, ctx: &Context<'_>, nodes:
 pub fn fanout_for_awg(node: &IrNode, awg: &AwgCore) -> IrNode {
     let ctx = Context {
         signals: awg.signals.iter().map(|s| s.uid.as_str()).collect(),
+        inline_sections: !matches!(awg.device_kind(), &DeviceKind::SHFQA | &DeviceKind::UHFQA),
     };
     let mut children = vec![];
     build_awg_ir(node, 0, &ctx, &mut children);
@@ -244,7 +262,7 @@ pub fn fanout_for_awg(node: &IrNode, awg: &AwgCore) -> IrNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::compilation_job::{AwgKind, DeviceKind, Signal, SignalKind};
+    use crate::ir::compilation_job::{AwgKind, Device, DeviceKind, Signal, SignalKind};
     use crate::ir::{IrNode, Loop, NodeKind, Section, SectionInfo};
 
     struct IrBuilder {
@@ -305,6 +323,7 @@ mod tests {
                     id: 0,
                 }),
                 count: 1,
+                prng_sample: None,
             });
             self.enter_stack(IrNode::new(root, 0), f);
         }
@@ -320,22 +339,23 @@ mod tests {
         }
     }
 
-    fn create_awg_core(signals: Vec<Signal>) -> AwgCore {
-        AwgCore {
-            kind: AwgKind::MULTI,
-            device_kind: DeviceKind::SHFQA,
-            sampling_rate: 2e9,
-            osc_allocation: std::collections::HashMap::new(),
-            signals: signals.iter().map(|s| Rc::new(s.clone())).collect(),
-        }
+    fn create_awg_core(signals: Vec<Signal>, device_kind: DeviceKind) -> AwgCore {
+        AwgCore::new(
+            0,
+            AwgKind::MULTI,
+            signals.iter().map(|s| Rc::new(s.clone())).collect(),
+            2e9,
+            Arc::new(Device::new("test_device".to_string().into(), device_kind)),
+            std::collections::HashMap::new(),
+        )
     }
 
     fn create_signal(uid: &str) -> Signal {
         Signal {
             uid: uid.to_string(),
             kind: SignalKind::IQ,
-            signal_delay: 0.0,
-            start_delay: 0.0,
+            signal_delay: 0,
+            start_delay: 0,
             channels: vec![],
             oscillator: None,
             mixer_type: None,
@@ -367,7 +387,7 @@ mod tests {
 
         let fanout = fanout_for_awg(
             &builder.build(),
-            &create_awg_core(vec![create_signal("sig0")]),
+            &create_awg_core(vec![create_signal("sig0")], DeviceKind::SHFSG),
         );
 
         let mut builder = IrBuilder::new();
@@ -396,7 +416,7 @@ mod tests {
 
         let fanout = fanout_for_awg(
             &builder.build(),
-            &create_awg_core(vec![create_signal("sig0")]),
+            &create_awg_core(vec![create_signal("sig0")], DeviceKind::SHFSG),
         );
 
         let mut builder = IrBuilder::new();
@@ -406,5 +426,26 @@ mod tests {
             });
         });
         assert_eq!(builder.build(), fanout);
+    }
+
+    /// Test fanout for device with measurement support.
+    ///
+    /// Test that Sections are not inlined for SHFQA.
+    #[test]
+    fn test_fanout_for_awg_qa_skip_inline() {
+        let mut builder = IrBuilder::new();
+        builder.with(|b| {
+            b.sweep(5, |b| {
+                b.section("s0", 0, 0, |b| {
+                    b.reset_precompensation(5, Rc::new(create_signal("sig0")));
+                });
+            });
+        });
+        let ir = builder.build();
+        let fanout = fanout_for_awg(
+            &ir,
+            &create_awg_core(vec![create_signal("sig0")], DeviceKind::SHFQA),
+        );
+        assert_eq!(ir, fanout);
     }
 }

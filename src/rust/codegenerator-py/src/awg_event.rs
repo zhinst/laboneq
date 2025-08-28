@@ -97,7 +97,11 @@ impl AcquireEvent {
     pub fn from_ir(event: PlayAcquire) -> Self {
         let channels = event.signal().channels.to_vec();
         let pulse_defs = event.pulse_defs().iter().map(|x| x.uid.clone()).collect();
-        let id_pulse_params = event.id_pulse_params().to_vec();
+        let id_pulse_params = event
+            .id_pulse_params()
+            .iter()
+            .map(|x| x.map(|p| p.0))
+            .collect();
         let oscillator_frequency = event.oscillator_frequency();
         AcquireEvent {
             signal_id: event.signal().uid.clone(),
@@ -157,7 +161,7 @@ pub struct MatchEvent {
 impl MatchEvent {
     pub fn from_ir(event: Match) -> Self {
         MatchEvent {
-            handle: event.handle,
+            handle: event.handle.map(|h| h.to_string()),
             local: event.local,
             user_register: event.user_register,
             prng_sample: event.prng_sample,
@@ -260,22 +264,6 @@ pub struct PrngSetup {
 
 #[pyclass]
 #[derive(Debug, Clone)]
-pub struct PrngSample {
-    #[pyo3(get)]
-    pub sample_name: String,
-    #[pyo3(get)]
-    pub section_name: String,
-}
-
-#[pyclass]
-#[derive(Debug, Clone)]
-pub struct PrngDropSample {
-    #[pyo3(get)]
-    pub sample_name: String,
-}
-
-#[pyclass]
-#[derive(Debug, Clone)]
 pub struct TriggerOutput {
     #[pyo3(get)]
     pub state: u16,
@@ -347,11 +335,11 @@ pub enum EventType {
     PushLoop(PushLoop),
     Iterate(Iterate),
     PrngSetup(PrngSetup),
-    PrngSample(PrngSample),
+    PrngSample(),
     // todo: Only for assertions, to make sure sampling is not used outside
     // of a setup; consider testing already
     // when building the tree instead of creating a separate event.
-    PrngDropSample(PrngDropSample),
+    PrngDropSample(),
     // This is a bit of a hack, but we need to be able to consolidate
     // the trigger output events after flattening the tree.
     // The TriggerOutputBit never appears in the final event list.
@@ -391,8 +379,8 @@ impl AwgEvent {
             EventType::PushLoop(_) => 12,
             EventType::Iterate(_) => 13,
             EventType::PrngSetup(_) => 14,
-            EventType::PrngSample(_) => 15,
-            EventType::PrngDropSample(_) => 16,
+            EventType::PrngSample() => 15,
+            EventType::PrngDropSample() => 16,
             EventType::TriggerOutput(_) => 17,
             EventType::TriggerOutputBit(_) => panic!("Internal error: Unresolved TriggerOutputBit"),
             EventType::PlayHold(_) => 18,
@@ -420,8 +408,8 @@ impl AwgEvent {
             EventType::PushLoop(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
             EventType::Iterate(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
             EventType::PrngSetup(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
-            EventType::PrngSample(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
-            EventType::PrngDropSample(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
+            EventType::PrngSample() => Ok(py.None()),
+            EventType::PrngDropSample() => Ok(py.None()),
             EventType::TriggerOutput(ob) => Ok(ob.clone().into_pyobject(py)?.into()),
             EventType::TriggerOutputBit(_) => {
                 // At this point of the workflow, the single bits must have been

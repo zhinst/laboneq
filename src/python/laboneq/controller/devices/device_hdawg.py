@@ -34,6 +34,7 @@ from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.data.recipe import (
     Initialization,
+    NtStepKey,
     SignalType,
     TriggeringMode,
 )
@@ -309,7 +310,7 @@ class DeviceHDAWG(DeviceBase):
         return conditions
 
     async def setup_one_step_execution(
-        self, recipe_data: RecipeData, with_pipeliner: bool
+        self, recipe_data: RecipeData, nt_step: NtStepKey, with_pipeliner: bool
     ):
         nc = NodeCollector(base=f"/{self.serial}/")
         if (

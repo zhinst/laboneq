@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 from functools import cmp_to_key
-from typing import TYPE_CHECKING, Callable, List, Optional
+from typing import TYPE_CHECKING, Callable, List, Optional, Literal
 
 from laboneq.core.types.enums import AcquisitionType
 from laboneq.core.types.enums.acquisition_type import (
@@ -14,7 +14,6 @@ from laboneq.core.types.enums.acquisition_type import (
 from laboneq._utils import flatten
 from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.feedback_register_config import FeedbackRegisterConfig
-from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.feedback_router.feedback_router import (
     FeedbackRegisterLayout,
     GlobalFeedbackRegister,
@@ -44,7 +43,11 @@ if TYPE_CHECKING:
     from laboneq.compiler.seqc.command_table_tracker import (
         CommandTableTracker,
     )
-    from laboneq._rust.codegenerator import WaveIndexTracker, SeqCTracker
+    from laboneq._rust.codegenerator import (
+        WaveIndexTracker,
+        SeqCTracker,
+        AwgKey as AwgKeyRs,
+    )
     from laboneq.compiler.common.awg_info import AWGInfo, AWGSignalType
 
 _logger = logging.getLogger(__name__)
@@ -139,8 +142,8 @@ class SampledEventHandler:
         function_defs_generator: SeqCGenerator,
         declarations_generator: SeqCGenerator,
         wave_indices: WaveIndexTracker,
-        qa_signal_by_handle: dict[str, SignalObj],
-        feedback_register: int | None,
+        qa_signal_by_handle: dict[str, tuple[str, AwgKeyRs]],
+        feedback_register: int | Literal["local"] | None,
         feedback_connections: dict[str, FeedbackConnection],
         feedback_register_layout: FeedbackRegisterLayout,
         feedback_register_config: FeedbackRegisterConfig,
@@ -430,8 +433,8 @@ class SampledEventHandler:
         if hw_oscillator is not None:
             parts.append(f"osc={hw_oscillator.osc_index}|{hw_oscillator.osc_id}")
 
-        if signature.set_phase is not None:
-            parts.append(f"phase={signature.set_phase:.2g}")
+        if signature.reset_phase:
+            parts.append("phase=0.0")
         elif signature.increment_phase is not None:
             parts.append(f"phase+={signature.increment_phase:.2g}")
 
@@ -581,7 +584,11 @@ class SampledEventHandler:
             )
         else:
             monitor = 1 if self.acquisition_type == AcquisitionType.RAW else 0
-            feedback_register = self.feedback_register or 0
+            feedback_register = (
+                0
+                if self.feedback_register in (None, "local")
+                else self.feedback_register
+            )
             self.seqc_tracker.add_startqa_shfqa_statement(
                 generator_mask,
                 integrator_mask,
@@ -647,7 +654,7 @@ class SampledEventHandler:
             signature = PlaybackSignature(
                 waveform=None,
                 hw_oscillator=None,
-                set_phase=0.0,
+                reset_phase=True,
             )
 
             ct_index = self.command_table_tracker.get_or_create_entry(
@@ -923,30 +930,26 @@ class SampledEventHandler:
         return register_bitshift, width, mask
 
     def add_feedback_config(self, handle: str, local: bool):
-        qa_signal = self.qa_signal_by_handle[handle]
-
+        qa_signal, qa_awg_key = self.qa_signal_by_handle[handle]
         self.feedback_connections.setdefault(
-            handle, FeedbackConnection(tx=qa_signal.awg.key)
+            handle, FeedbackConnection(tx=qa_awg_key)
         ).rx.add(self.awg.key)
 
         if local:
-            register = LocalFeedbackRegister(qa_signal.awg.device_id)
+            register = LocalFeedbackRegister(qa_awg_key.device_id)
             codeword_bitshift, width, mask = self._register_bitshift(
-                register, qa_signal=qa_signal.id, force_local_alignment=True
+                register, qa_signal=qa_signal, force_local_alignment=True
             )
             index_select = None
         else:
-            register = GlobalFeedbackRegister(qa_signal.awg.key)
+            register = GlobalFeedbackRegister(qa_awg_key)
             qa_register_bitshift, width, mask = self._register_bitshift(
-                register, qa_signal=qa_signal.id, force_local_alignment=False
+                register, qa_signal=qa_signal, force_local_alignment=False
             )
 
             # feedback through PQSC: assign index based on AWG number
             index_select = qa_register_bitshift // 2
             codeword_bitshift = 2 * self.awg.awg_id + qa_register_bitshift % 2
-
-        if local:
-            self.feedback_register_config.source_feedback_register = "local"
 
         if not local:
             path = "ZSYNC_DATA_PROCESSED_A"

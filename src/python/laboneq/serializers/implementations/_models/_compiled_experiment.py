@@ -192,8 +192,8 @@ class AcquireLengthModel:
 
 @attrs.define
 class RealtimeExecutionInitModel:
-    device_id: str | None
-    awg_id: int | str
+    device_id: str
+    awg_index: int
     program_ref: str
     nt_step: NtStepKeyModel
     wave_indices_ref: str | None

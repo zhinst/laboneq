@@ -204,14 +204,13 @@ class LogicalSignalModel:
             )
         else:
             calibration = None
-        # LogicalSignal was updated in 2.51.0 to
-        # have _physical_channel as a private attribute.
-        # This is a workaround to keep backward compatibility
-        physical_channel = obj.get("_physical_channel") or obj.get("physical_channel")
-        if physical_channel is not None:
+
+        if obj["_physical_channel"] is not None:
             physical_channel = _converter.structure(
-                physical_channel, PhysicalChannelModel
+                obj["_physical_channel"], PhysicalChannelModel
             )
+        else:
+            physical_channel = None
         return cls._target_class(
             uid=obj["uid"],
             name=obj["name"],

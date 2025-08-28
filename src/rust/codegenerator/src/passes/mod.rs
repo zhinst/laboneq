@@ -20,3 +20,5 @@ pub mod handle_triggers;
 pub mod lower_for_awg;
 pub use analyze_awg::{AwgCompilationInfo, analyze_awg_ir};
 pub mod fanout_awg;
+mod handle_measure_times;
+pub use handle_measure_times::analyze_measurements;

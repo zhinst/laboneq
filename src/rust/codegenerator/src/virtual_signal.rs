@@ -89,14 +89,14 @@ fn validate_signal_oscillators(signal: &VirtualSignal, awg: &cjob::AwgCore) -> R
             hw_modulated_signals.push(&channel.uid);
         }
     }
-    if hw_modulated_signals.len() > 1 && !awg.device_kind.traits().supports_oscillator_switching {
+    if hw_modulated_signals.len() > 1 && !awg.device_kind().traits().supports_oscillator_switching {
         let mut signals = hw_modulated_signals.into_iter().collect::<Vec<_>>();
         signals.sort();
         let msg = format!(
             "Attempting to multiplex several hardware-modulated signals: \
             '{}' on device '{}', which does not support oscillator switching.",
             signals.join(", "),
-            awg.device_kind.as_str()
+            awg.device_kind().as_str()
         );
         return Err(anyhow!(msg).into());
     }
@@ -116,7 +116,7 @@ pub fn create_virtual_signals(awg: &cjob::AwgCore) -> Result<Option<VirtualSigna
                 }
                 // TODO: What is the function of the subchannel?
                 let sub_channel = {
-                    match &awg.device_kind {
+                    match awg.device_kind() {
                         cjob::DeviceKind::SHFQA => Some(signal_obj.channels[0]),
                         _ => None,
                     }

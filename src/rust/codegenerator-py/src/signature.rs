@@ -1,9 +1,9 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use codegenerator::signature::{PulseSignature, SamplesSignatureID, WaveformSignature};
+use codegenerator::signature::{PulseSignature, WaveformSignature};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyTuple, PyType};
+use pyo3::types::{PyDict, PyTuple};
 use std::hash::Hash;
 
 #[pyclass]
@@ -77,7 +77,7 @@ impl PulseSignaturePy {
 
     #[getter]
     fn id_pulse_params(&self) -> Option<u64> {
-        self.signature.id_pulse_params
+        self.signature.id_pulse_params.map(|id| id.0)
     }
 
     #[getter]
@@ -112,34 +112,6 @@ impl WaveformSignaturePy {
 
 #[pymethods]
 impl WaveformSignaturePy {
-    #[classmethod]
-    #[pyo3(signature = (length, uid, label, has_i, has_q=None, has_marker1=None, has_marker2=None))]
-    #[allow(clippy::too_many_arguments)]
-    fn from_samples_id(
-        _cls: &Bound<'_, PyType>,
-        length: i64,
-        uid: u64,
-        label: String,
-        has_i: bool,
-        has_q: Option<bool>,
-        has_marker1: Option<bool>,
-        has_marker2: Option<bool>,
-    ) -> Self {
-        let id = SamplesSignatureID {
-            uid,
-            label: label.to_string(),
-            has_i,
-            has_q: has_q.unwrap_or(false),
-            has_marker1: has_marker1.unwrap_or(false),
-            has_marker2: has_marker2.unwrap_or(false),
-        };
-        let waveform = WaveformSignature::Samples {
-            length,
-            samples_id: id,
-        };
-        WaveformSignaturePy { waveform }
-    }
-
     fn __deepcopy__(&self, _memo: Py<PyAny>) -> Self {
         self.clone()
     }

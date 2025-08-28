@@ -12,27 +12,22 @@ import numpy as np
 from engineering_notation import EngNumber
 from laboneq.core.types.enums import AcquisitionType
 from laboneq.compiler.common.compiler_settings import (
-    TINYSAMPLE,
     CompilerSettings,
+)
+from .measurement_calculator import SignalDelays, SignalDelay
+from laboneq.compiler.common.integration_times import (
+    IntegrationTimes,
+    SignalIntegrationInfo,
 )
 from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.resource_usage import ResourceUsage, ResourceUsageCollector
 from laboneq.compiler.common.shfppc_sweeper_config import SHFPPCSweeperConfig
 from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
 from laboneq.compiler.ir import IRTree
-from laboneq.compiler.seqc import passes
 from laboneq.compiler.seqc.linker import AwgWeights, SeqCGenOutput, SeqCProgram
 from laboneq.compiler.seqc.command_table_tracker import CommandTableTracker
-from laboneq.compiler.seqc.feedback_register_allocator import (
-    FeedbackRegisterAllocator,
-    FeedbackRegisterAllocation,
-)
 from laboneq.compiler.common.iface_code_generator import ICodeGenerator
 from laboneq.compiler.common.feedback_register_config import FeedbackRegisterConfig
-from laboneq.compiler.seqc.measurement_calculator import (
-    IntegrationTimes,
-    SignalDelays,
-)
 from laboneq.compiler.seqc.sampled_event_handler import SampledEventHandler
 from laboneq.compiler.seqc.shfppc_sweeper_config_tracker import (
     SHFPPCSweeperConfigTracker,
@@ -162,10 +157,9 @@ class CodeGenerator(ICodeGenerator):
             self._settings = CompilerSettings()
 
         self._ir = ir
-        self._awgs: dict[AwgKey, AWGInfo] = {}
-        self._signals: dict[str, SignalObj] = {}
-        for signal_obj in signals:
-            self.add_signal(signal_obj)
+        self._awgs: dict[AwgKey, AWGInfo] = {
+            signal.awg.key: signal.awg for signal in signals
+        }
         self._src: dict[AwgKey, SeqCProgram] = {}
         self._wave_indices_all: dict[AwgKey, dict] = {}
         self._waves: dict[str, CodegenWaveform] = {}
@@ -176,8 +170,8 @@ class CodeGenerator(ICodeGenerator):
             AwgKey, dict[str, list[int | Literal[COMPLEX_USAGE]]]
         ] = {}
         self._sampled_waveforms: dict[AwgKey, list[SampledWaveform]] = {}
-        self._integration_times: IntegrationTimes | None = None
-        self._signal_delays: SignalDelays | None = None
+        self._integration_times: dict[str, SignalIntegrationInfo] = {}
+        self._signal_delays: SignalDelays = {}
         # awg key -> signal id -> kernel index -> kernel data
         self._integration_weights: dict[AwgKey, list[codegen_rs.IntegrationWeight]] = (
             defaultdict(dict)
@@ -188,21 +182,12 @@ class CodeGenerator(ICodeGenerator):
             defaultdict(FeedbackRegisterConfig)
         )
         self._feedback_connections: dict[str, FeedbackConnection] = {}
-        self._qa_signals_by_handle: dict[str, SignalObj] = {}
         self._shfppc_sweep_configs: dict[AwgKey, SHFPPCSweeperConfig] = {}
         self._total_execution_time: float | None = None
 
     def generate_code(self):
-        passes.inline_sections_in_branch(self._ir)
-        measurement_info = passes.collect_measurement_info(self._ir.root, self._signals)
         self.gen_seq_c(
             pulse_defs={p.uid: p for p in self._ir.pulse_defs},
-            qa_signals_by_handle=measurement_info.qa_signals_by_handle,
-            simultaneous_acquires=measurement_info.simultaneous_acquires,
-            feedback_register_allocator=measurement_info.feedback_register_allocator,
-            integration_times=measurement_info.integration_times,
-            signal_delays=measurement_info.signal_delays,
-            total_execution_time=self._ir.root.length * TINYSAMPLE,
         )
 
     def get_output(self):
@@ -265,18 +250,6 @@ class CodeGenerator(ICodeGenerator):
 
     def total_execution_time(self):
         return self._total_execution_time
-
-    def add_signal(self, signal_obj: SignalObj):
-        self._signals[signal_obj.id] = signal_obj
-        awg_key = signal_obj.awg.key
-        if awg_key not in self._awgs:
-            self._awgs[awg_key] = signal_obj.awg
-
-    def sort_signals(self):
-        for awg in self._awgs.values():
-            awg.signals = list(
-                sorted(awg.signals, key=lambda signal: tuple(signal.channels))
-            )
 
     def _append_to_pulse_map(self, signature_pulse_map, sig_string):
         if signature_pulse_map is None:
@@ -471,41 +444,11 @@ class CodeGenerator(ICodeGenerator):
     def gen_seq_c(
         self,
         pulse_defs: dict[str, PulseDef],
-        qa_signals_by_handle: dict[str, SignalObj],
-        simultaneous_acquires: list[dict[str, str]],
-        feedback_register_allocator: FeedbackRegisterAllocator,
-        integration_times: IntegrationTimes,
-        signal_delays: SignalDelays,
-        total_execution_time: float,
     ):
-        # TODO: Remove state
-        self._integration_times = integration_times
-        self._signal_delays = signal_delays
-        self._simultaneous_acquires = simultaneous_acquires
-        self._qa_signals_by_handle = qa_signals_by_handle
-        self._total_execution_time = total_execution_time
-
-        self.sort_signals()
         awgs_sorted = sorted(
             self._awgs.values(),
             key=lambda item: item.key,
         )
-        feedback_register_alloc = passes.allocate_feedback_registers(
-            awgs=awgs_sorted,
-            signal_to_handle={
-                sig.id: handle for handle, sig in self._qa_signals_by_handle.items()
-            },
-            feedback_register_allocator=feedback_register_allocator,
-        )
-        # Detach must happen before Rust conversion
-        user_pulse_params = passes.detach_pulse_params(self._ir.root)
-        signal_delays = {}
-        for awg in awgs_sorted:
-            for sig in awg.signals:
-                if sig.id in self._signal_delays:
-                    signal_delays[sig.id] = self._signal_delays[sig.id].code_generation
-                else:
-                    signal_delays[sig.id] = 0.0
         settings = {
             "HDAWG_MIN_PLAYWAVE_HINT": self._settings.HDAWG_MIN_PLAYWAVE_HINT,
             "HDAWG_MIN_PLAYZERO_HINT": self._settings.HDAWG_MIN_PLAYZERO_HINT,
@@ -521,22 +464,20 @@ class CodeGenerator(ICodeGenerator):
             "PHASE_RESOLUTION_BITS": max(self._settings.PHASE_RESOLUTION_BITS, 0),
             "USE_AMPLITUDE_INCREMENT": self._settings.USE_AMPLITUDE_INCREMENT,
         }
-
         codegen_result = codegen_rs.generate_code(
             ir=self._ir,
             awgs=awgs_sorted,
-            waveform_sampler=WaveformSampler(
-                pulse_defs=pulse_defs, pulse_def_params=user_pulse_params
-            ),
-            delays=signal_delays,
+            waveform_sampler=WaveformSampler(pulse_defs=pulse_defs),
             settings=settings,
         )
+        self._total_execution_time = codegen_result.total_execution_time
+        self._simultaneous_acquires = codegen_result.simultaneous_acquires
         res_usage_collector: ResourceUsageCollector = ResourceUsageCollector()
         for idx, awg in enumerate(awgs_sorted):
             self._gen_seq_c_per_awg(
                 awg=awg,
                 result=codegen_result.awg_results[idx],
-                feedback_register=feedback_register_alloc.get(awg.key),
+                qa_signal_by_handle=codegen_result.qa_signal_by_handle,
                 acquisition_type=self._ir.root.acquisition_type,
             )
             command_table = self._command_tables.get(awg.key, {}).get("ct")
@@ -561,21 +502,30 @@ class CodeGenerator(ICodeGenerator):
                 if awg_info.device_type == DeviceType.HDAWG
                 else None
             )
-
-        tgt_feedback_regs = feedback_register_allocator.target_feedback_registers
-        for awg, target_fb_register in tgt_feedback_regs.items():
-            feedback_reg_config = self._feedback_register_config[awg]
-            feedback_reg_config.target_feedback_register = target_fb_register
         self._gen_waves()
 
     def _gen_seq_c_per_awg(
         self,
         awg: AWGInfo,
-        result: codegen_rs.SingleAwgCodegenResult,
-        feedback_register: FeedbackRegisterAllocation,
+        result: codegen_rs.AwgCodeGenerationResult,
+        qa_signal_by_handle: dict[str, tuple[str, codegen_rs.AwgKey]],
         acquisition_type: AcquisitionType | None,
     ):
         awg_code_output = result
+        for signal, delay in awg_code_output.signal_delays.items():
+            self._signal_delays[signal] = SignalDelay(on_device=delay)
+        for signal, integration_time in awg_code_output.integration_lengths.items():
+            self._integration_times[signal] = SignalIntegrationInfo(
+                is_play=integration_time.is_play,
+                length_in_samples=integration_time.length,
+            )
+        self._feedback_register_config[
+            awg.key
+        ].target_feedback_register = awg_code_output.feedback_register
+        feedback_register = awg_code_output.feedback_register
+        self._feedback_register_config[
+            awg.key
+        ].source_feedback_register = awg_code_output.source_feedback_register
         self._integration_weights[awg.key] = awg_code_output.integration_weights
         sampled_events = compat_rs.transform_rs_events_to_awg_events(
             awg_code_output.awg_events
@@ -653,7 +603,7 @@ class CodeGenerator(ICodeGenerator):
             feedback_register=feedback_register,
             feedback_connections=self._feedback_connections,
             feedback_register_config=self._feedback_register_config[awg.key],
-            qa_signal_by_handle=self._qa_signals_by_handle,
+            qa_signal_by_handle=qa_signal_by_handle,
             feedback_register_layout=self._feedback_register_layout,
             awg=awg,
             device_type=awg.device_type,
@@ -729,7 +679,7 @@ class CodeGenerator(ICodeGenerator):
         return self._parameter_phase_increment_map
 
     def integration_times(self) -> IntegrationTimes:
-        return self._integration_times
+        return IntegrationTimes(signal_infos=self._integration_times)
 
     def signal_delays(self) -> SignalDelays:
         return self._signal_delays

@@ -583,6 +583,17 @@ class Experiment:
             reset_delay=reset_delay,
         )
 
+    def reset_oscillator_phase(self, signal: str | None = None):
+        """Reset the phase of the oscillator on the given signal.
+
+        Arguments:
+            signal:
+                The unique id of the signal whose oscillator phase
+                should be reset. If `None`, all signals of the section will be reset.
+        """
+        current_section = self._peek_section()
+        current_section.reset_oscillator_phase_(signal=signal)
+
     def call(self, func_name: str | Callable[..., Any], **kwargs):
         """Add a near-time callback function in the execution of the experiment.
 
@@ -754,8 +765,6 @@ class Experiment:
                 This is the shot repetition time in seconds. This
                 argument is only required and valid if `repetition_mode` is
                 [RepetitionMode.CONSTANT][laboneq.core.types.enums.repetition_mode.RepetitionMode.CONSTANT].
-                The parameter can either be given as a float or as a sweep parameter
-                ([Parameter][laboneq.dsl.parameter.Parameter]).
             acquisition_type:
                 This is the acquisition type.
                 Defaults to [AcquisitionType.INTEGRATION][laboneq.core.types.enums.acquisition_type.AcquisitionType.INTEGRATION].

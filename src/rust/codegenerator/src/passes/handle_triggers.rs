@@ -75,7 +75,7 @@ pub fn handle_triggers(
     let number_of_trigger_bits = if hdawg_rf_mode {
         1
     } else {
-        awg.device_kind.traits().number_of_trigger_bits
+        awg.device_kind().traits().number_of_trigger_bits
     };
     handle_triggers_recursive(node, hdawg_rf_mode, number_of_trigger_bits, cut_points)
 }

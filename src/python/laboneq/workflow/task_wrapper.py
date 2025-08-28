@@ -31,6 +31,9 @@ class task_(Generic[T, B]):  # noqa: N801
         save: A flag to indicate whether the task inputs and outputs should be
             saved by logbooks.
             The flag has no effect on saving done inside the task.
+        hidden: Mark the task as hidden task.
+            When set, the task won't be visible to `LogBook`s and won't be
+            included in the results.
     """
 
     def __init__(
@@ -103,7 +106,11 @@ def task(
 
 @overload
 def task(
-    func: None = ..., *, name: str | None = ..., save: bool = ..., hidden: bool = ...
+    func: None = ...,
+    *,
+    name: str | None = ...,
+    save: bool = ...,
+    hidden: bool = ...,
 ) -> Callable[[Callable[T, B]], task_[T, B]]: ...
 
 

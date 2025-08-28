@@ -10,10 +10,12 @@ use pyo3::types::{PyList, PyTuple};
 use pyo3::{intern, prelude::*};
 
 use crate::common_types::{DeviceTypePy, MixerTypePy, SignalTypePy};
+use crate::pulse_parameters::{PulseParameters, PulseParametersPy};
 use crate::signature::WaveformSignaturePy;
 use codegenerator::ir::compilation_job::{
     AwgCore, AwgKind, DeviceKind, MixerType, Signal, SignalKind,
 };
+use codegenerator::ir::experiment::PulseParametersId;
 use codegenerator::signature::{SamplesSignatureID, WaveformSignature};
 use codegenerator::waveform_sampler::{
     CompressedWaveformPart, IntegrationKernel, SampleWaveforms, SampledWaveformCollection,
@@ -128,6 +130,7 @@ pub struct WaveformSamplerPy<'a> {
     signal_map: HashMap<&'a str, Rc<Signal>>,
     mixer_type: Option<&'a MixerType>,
     signal_kind: &'a SignalKind,
+    pulse_parameters: &'a HashMap<PulseParametersId, PulseParameters>,
 }
 
 impl<'a> WaveformSamplerPy<'a> {
@@ -137,7 +140,11 @@ impl<'a> WaveformSamplerPy<'a> {
             .any(|s| s.kind != SignalKind::INTEGRATION)
     }
 
-    pub fn new(sampler: &'a Py<PyAny>, awg: &'a AwgCore) -> Self {
+    pub fn new(
+        sampler: &'a Py<PyAny>,
+        awg: &'a AwgCore,
+        pulse_parameters: &'a HashMap<PulseParametersId, PulseParameters>,
+    ) -> Self {
         let sampling_rate = awg.sampling_rate;
         let multi_iq_signal = awg.kind == AwgKind::MULTI;
         let signal_map = awg
@@ -178,11 +185,12 @@ impl<'a> WaveformSamplerPy<'a> {
         WaveformSamplerPy {
             sampler,
             sampling_rate,
-            device_kind: &awg.device_kind,
+            device_kind: awg.device_kind(),
             multi_iq_signal,
             signal_map,
             mixer_type,
             signal_kind,
+            pulse_parameters,
         }
     }
 }
@@ -199,6 +207,24 @@ impl SampleWaveforms for WaveformSamplerPy<'_> {
         let mut sampled_waveforms: SampledWaveformCollection<SampledWaveformSignaturePy> =
             SampledWaveformCollection::new();
         Python::with_gil(|py| -> Result<()> {
+            let pulse_parameters: HashMap<u64, Py<PulseParametersPy>> = self
+                .pulse_parameters
+                .iter()
+                .map(
+                    |(id, params)| -> std::result::Result<(u64, Py<PulseParametersPy>), Error> {
+                        Ok((
+                            id.0,
+                            Py::new(
+                                py,
+                                PulseParametersPy {
+                                    parameters: params.clone(),
+                                },
+                            )
+                            .map_err(Error::with_error)?,
+                        ))
+                    },
+                )
+                .collect::<std::result::Result<HashMap<_, _>, Error>>()?;
             let sampler = self.sampler.bind(py);
             let device_type: Bound<'_, DeviceTypePy> =
                 DeviceTypePy::from_device_kind(self.device_kind)
@@ -235,6 +261,7 @@ impl SampleWaveforms for WaveformSamplerPy<'_> {
                     multi_iq_signal,
                     mixer_type.as_ref(),
                     &signal_type,
+                    &pulse_parameters,
                 )
                 .with_context(|| {
                     format!(
@@ -364,6 +391,7 @@ fn sample_and_compress(
     multi_iq_signal: bool,
     mixer_type: Option<&Bound<'_, MixerTypePy>>,
     signal_type: &Bound<'_, SignalTypePy>,
+    pulse_parameters: &HashMap<u64, Py<PulseParametersPy>>,
 ) -> Result<Option<PyObject>> {
     if !should_sample_waveform(waveform) {
         // If the waveform does not need to be sampled, skip the sampling process
@@ -382,6 +410,7 @@ fn sample_and_compress(
                 device_type,
                 mixer_type,
                 multi_iq_signal,
+                pulse_parameters,
             ),
             None,
         )
@@ -469,6 +498,7 @@ pub fn batch_calculate_integration_weights<'a>(
     awg: &'a AwgCore,
     sampler: &Py<PyAny>,
     kernels: Vec<IntegrationKernel<'_>>,
+    pulse_parameters: &'a HashMap<PulseParametersId, PulseParameters>,
 ) -> Result<Vec<IntegrationWeight<'a>>> {
     let integration_signals = awg
         .signals
@@ -499,12 +529,15 @@ pub fn batch_calculate_integration_weights<'a>(
             Vec::with_capacity(kernels.len());
         let sampler = sampler.bind(py);
         for kernel in kernels {
+            let params = kernel
+                .pulse_parameters_id()
+                .and_then(|id| pulse_parameters.get(&id).map(|p| p.parameters()));
             let result: Bound<'_, PyAny> = sampler
                 .call_method(
                     intern!(py, "sample_integration_weight"),
                     (
                         kernel.pulse_id(),
-                        kernel.pulse_parameters_id(),
+                        params,
                         kernel.oscillator_frequency(),
                         kernel.signals().iter().collect::<Vec<_>>(),
                         &awg.sampling_rate,
@@ -539,7 +572,7 @@ pub fn batch_calculate_integration_weights<'a>(
                 .map_err(Error::with_error)?,
             );
         }
-        let out = create_integration_weights(py, bound_weights, &awg.device_kind)?;
+        let out = create_integration_weights(py, bound_weights, awg.device_kind())?;
         Ok(out)
     })
 }

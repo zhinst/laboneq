@@ -209,7 +209,9 @@ class QPUTopology:
 
             if isinstance(tag, slice):
                 if isinstance(source_node, str) and isinstance(target_node, str):
-                    return self.get_edges(source_node, other_node="q1", outgoing=True)
+                    return self.get_edges(
+                        source_node, other_node=target_node, outgoing=True
+                    )
                 if isinstance(source_node, str) and isinstance(target_node, slice):
                     return self.get_edges(source_node, outgoing=True)
                 if isinstance(source_node, slice) and isinstance(target_node, str):

@@ -15,11 +15,11 @@ pub(crate) mod utils;
 pub(crate) mod virtual_signal;
 pub use awg_delays::{AwgTiming, calculate_awg_delays};
 pub use passes::fanout_awg::fanout_for_awg;
-
+pub mod handle_feedback_registers;
 pub use generate_awg_events::transform_ir_to_awg_events;
+pub use passes::analyze_measurements;
 pub use passes::{AwgCompilationInfo, analyze_awg_ir};
 pub use settings::CodeGeneratorSettings;
-pub use utils::string_sanitize;
 pub type Samples = u64;
 
 pub use sample_waveforms::{

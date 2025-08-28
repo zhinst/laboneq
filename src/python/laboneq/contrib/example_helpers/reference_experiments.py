@@ -9,7 +9,7 @@ from laboneq.simple import (
 )
 
 
-# simple qubit frequency spectroscopy used to demonstrate signal calibration in examples/02_logical_signals/02_calibration.ipynb
+# simple qubit frequency spectroscopy used to demonstrate signal calibration in examples/02_logical_signals/01_calibration.ipynb
 def make_reference_experiment():
     # define readout pulse
     readout_pulse = pulse_library.gaussian_square(

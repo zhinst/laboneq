@@ -9,7 +9,7 @@ from .loop_ir import LoopIR
 from .loop_iteration_ir import LoopIterationIR, LoopIterationPreambleIR
 from .match_ir import MatchIR
 from .oscillator_ir import SetOscillatorFrequencyIR, InitialOscillatorFrequencyIR
-from .phase_reset_ir import PhaseIncrementIR, PhaseResetIR
+from .phase_reset_ir import PhaseResetIR
 from .ppc_step_ir import PPCStepIR
 from .pulse_ir import PulseIR, PrecompClearIR
 from .root_ir import RootScheduleIR
@@ -28,7 +28,6 @@ __all__ = [
     "MatchIR",
     "SetOscillatorFrequencyIR",
     "InitialOscillatorFrequencyIR",
-    "PhaseIncrementIR",
     "PhaseResetIR",
     "PPCStepIR",
     "PulseIR",

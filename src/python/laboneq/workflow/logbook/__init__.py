@@ -8,6 +8,7 @@ __all__ = [
     "Logbook",
     "FolderStore",
     "LoggingStore",
+    "SaveMode",
     "active_logbook_stores",
     "format_time",
     "DEFAULT_LOGGING_STORE",
@@ -20,7 +21,7 @@ from .core import (
     active_logbook_stores,
     format_time,
 )
-from .folder_store import FolderStore
+from .folder_store import FolderStore, SaveMode
 from .logging_store import LoggingStore
 
 # Add the default logging store:

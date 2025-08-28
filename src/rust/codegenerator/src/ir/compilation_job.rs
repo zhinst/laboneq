@@ -6,7 +6,10 @@ use crate::utils::normalize_f64;
 use anyhow::anyhow;
 use numeric_array::NumericArray;
 use std::hash::Hash;
+use std::sync::Arc;
 use std::{collections::HashMap, rc::Rc};
+
+pub type Samples = i64;
 
 /// Represents different kinds of pulse definitions.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,11 +76,11 @@ pub struct Signal {
     pub channels: Vec<u8>,
     pub oscillator: Option<Oscillator>,
     pub mixer_type: Option<MixerType>,
-    /// The delay in seconds from the trigger to the start of the sequence (lead time).
+    /// The delay from the trigger to the start of the sequence (lead time).
     /// Includes lead time and precompensation
-    pub start_delay: f64,
-    // Additional delay in seconds on the signal
-    pub signal_delay: f64,
+    pub start_delay: Samples,
+    // Additional delay on the signal
+    pub signal_delay: Samples,
 }
 
 impl Signal {
@@ -93,7 +96,7 @@ impl Signal {
             .is_some_and(|x| matches!(x.kind, OscillatorKind::SOFTWARE))
     }
 
-    pub fn delay(&self) -> f64 {
+    pub fn delay(&self) -> Samples {
         self.start_delay + self.signal_delay
     }
 }
@@ -110,19 +113,82 @@ pub enum AwgKind {
     MULTI,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct AwgKey {
+    device_name: Arc<String>,
+    index: u16,
+}
+
+impl AwgKey {
+    fn new(device_name: Arc<String>, index: u16) -> Self {
+        AwgKey { device_name, index }
+    }
+
+    pub fn device_name(&self) -> &str {
+        &self.device_name
+    }
+
+    pub fn index(&self) -> u16 {
+        self.index
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Device {
+    name: Arc<String>,
+    kind: DeviceKind,
+}
+
+impl Device {
+    pub fn new(name: Arc<String>, kind: DeviceKind) -> Self {
+        Device { name, kind }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn kind(&self) -> &DeviceKind {
+        &self.kind
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AwgCore {
+    pub uid: u16,
     pub kind: AwgKind,
     // AWG signals
     // In the case of multiplexed, signals with different UID points to the same channel(s)
     pub signals: Vec<Rc<Signal>>,
     pub sampling_rate: f64,
-    pub device_kind: DeviceKind,
+    pub device: Arc<Device>,
     // Mapping from HW oscillator to an assigned index
     pub osc_allocation: HashMap<String, u16>,
 }
 
 impl AwgCore {
+    pub fn new(
+        uid: u16,
+        kind: AwgKind,
+        signals: Vec<Rc<Signal>>,
+        sampling_rate: f64,
+        device: Arc<Device>,
+        osc_allocation: HashMap<String, u16>,
+    ) -> Self {
+        AwgCore {
+            uid,
+            kind,
+            signals,
+            sampling_rate,
+            device,
+            osc_allocation,
+        }
+    }
+
+    pub fn key(&self) -> AwgKey {
+        AwgKey::new(Arc::clone(&self.device.name), self.uid)
+    }
+
     /// A mapping from signal UID to the index of the oscillator in the `osc_allocation` map.
     pub fn oscillator_index_by_signal_uid(&self) -> HashMap<&str, u16> {
         let mut index_map = HashMap::new();
@@ -136,9 +202,13 @@ impl AwgCore {
         index_map
     }
 
+    pub fn device_kind(&self) -> &DeviceKind {
+        &self.device.kind
+    }
+
     /// Use command table for pulses
     pub(crate) fn use_command_table(&self) -> bool {
-        matches!(self.device_kind, DeviceKind::SHFSG | DeviceKind::HDAWG)
+        matches!(self.device_kind(), DeviceKind::SHFSG | DeviceKind::HDAWG)
     }
 
     /// Use command table to set phase / amplitude
@@ -180,6 +250,10 @@ impl DeviceKind {
             DeviceKind::SHFSG => "SHFSG",
             DeviceKind::UHFQA => "UHFQA",
         }
+    }
+
+    pub fn is_qa_device(&self) -> bool {
+        matches!(self, DeviceKind::SHFQA | DeviceKind::UHFQA)
     }
 }
 impl std::str::FromStr for DeviceKind {

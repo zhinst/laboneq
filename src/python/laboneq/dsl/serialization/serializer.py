@@ -73,15 +73,6 @@ class Serializer:
         )
 
     @staticmethod
-    def to_json_file(serializable_object, filename: str):
-        json_string = Serializer.to_json(serializable_object)
-        try:
-            with open(filename, mode="w") as file:
-                file.write(json_string)
-        except IOError as e:
-            raise LabOneQException() from e
-
-    @staticmethod
     def from_json(serialized_string: str, type_hint):
         if type_hint is dict:
             obj = orjson.loads(serialized_string)
@@ -112,13 +103,3 @@ class Serializer:
             )
 
         return obj
-
-    @staticmethod
-    def from_json_file(filename: str, type_hint: type[T]) -> T:
-        try:
-            with open(filename, mode="r") as file:
-                json_string = file.read()
-        except IOError as e:
-            raise LabOneQException(e.__repr__()) from e
-
-        return Serializer.from_json(json_string, type_hint)

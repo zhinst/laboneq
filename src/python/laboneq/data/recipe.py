@@ -150,8 +150,8 @@ class AcquireLength:
 
 @dataclass
 class RealtimeExecutionInit:
-    device_id: str | None
-    awg_id: int | str
+    device_id: str
+    awg_index: int
     program_ref: str
     nt_step: NtStepKey
     wave_indices_ref: str | None = None

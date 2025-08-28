@@ -4,24 +4,32 @@
 from __future__ import annotations
 
 import copy
-import typing
-from typing import Any
+from typing import TYPE_CHECKING, Any
+from numpy import typing as npt
 
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.utilities.simple_proxy import SimpleProxy
 from laboneq.core.exceptions import AbortExecution
-from laboneq.data.experiment_results import ExperimentResults
 
-if typing.TYPE_CHECKING:
+if TYPE_CHECKING:
     from laboneq.dsl.result.results import Results
+    from laboneq.dsl.experiment.pulse import Pulse
+    from laboneq.data.experiment_results import ExperimentResults
+    from laboneq.controller.controller import Controller
+    from laboneq.controller.recipe_processor import RecipeData
 
 
 class ProtectedSession(SimpleProxy):
-    def __init__(self, wrapped_session: Any):
+    def __init__(
+        self,
+        wrapped_session: Any,
+        controller: Controller,
+        recipe_data: RecipeData,
+        experiment_results: ExperimentResults,
+    ):
         super().__init__(wrapped_session)
-        self._experiment_results: ExperimentResults | None = None
-
-    def _set_experiment_results(self, experiment_results: ExperimentResults):
+        self._controller = controller
+        self._recipe_data = recipe_data
         self._experiment_results = experiment_results
 
     # Backwards compatibility after migration to the new architecture
@@ -55,3 +63,23 @@ class ProtectedSession(SimpleProxy):
 
         Note: This currently exclusively works when called from within a near-time callback."""
         raise AbortExecution
+
+    def replace_pulse(
+        self, pulse_uid: str | Pulse, pulse_or_array: npt.ArrayLike | Pulse
+    ):
+        self._controller.replace_pulse(
+            recipe_data=self._recipe_data,
+            pulse_uid=pulse_uid,
+            pulse_or_array=pulse_or_array,
+        )
+
+    def replace_phase_increment(
+        self,
+        parameter_uid: str,
+        new_value: int | float,
+    ):
+        self._controller.replace_phase_increment(
+            recipe_data=self._recipe_data,
+            parameter_uid=parameter_uid,
+            new_value=new_value,
+        )

@@ -48,7 +48,7 @@ def _integration_weights_by_signal(
     for (
         rt_init
     ) in compiled_experiment.scheduled_experiment.recipe.realtime_execution_init:
-        key = (rt_init.device_id, rt_init.awg_id)
+        key = (rt_init.device_id, rt_init.awg_index)
         if key not in rt_step_by_awg:
             rt_step_by_awg[key] = rt_init.kernel_indices_ref
     kernel_indices_ref = set(rt_step_by_awg.values())

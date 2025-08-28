@@ -345,6 +345,7 @@ class SectionSignalPulse:
     acquire_params: AcquireInfo = None
     markers: list[Marker] = field(default_factory=list)
     pulse_group: str | None = None
+    reset_oscillator_phase: bool = False
 
 
 @dataclass

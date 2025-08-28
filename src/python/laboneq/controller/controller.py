@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, field
 import logging
 import time
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Generic, TypeVar
+from weakref import ref
 
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.utilities.for_each import for_each_sync
@@ -21,14 +23,14 @@ from laboneq.controller.devices.device_collection import DeviceCollection
 from laboneq.controller.devices.device_utils import NodeCollector, zhinst_core_version
 from laboneq.controller.devices.device_zi import DeviceBase, DeviceZI
 from laboneq.controller.near_time_runner import NearTimeRunner
-from laboneq.controller.protected_session import ProtectedSession
 from laboneq.controller.recipe_processor import (
     RecipeData,
     RtExecutionInfo,
     WaveformItem,
+    get_execution_time,
     pre_process_compiled,
 )
-from laboneq.controller.results import make_acquired_result
+from laboneq.controller.results import init_empty_result_by_shape
 from laboneq.controller.versioning import (
     MINIMUM_SUPPORTED_LABONE_VERSION,
     RECOMMENDED_LABONE_VERSION,
@@ -37,7 +39,7 @@ from laboneq.controller.versioning import (
 )
 from laboneq.core.exceptions import AbortExecution
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
-from laboneq.core.utilities.async_helpers import EventLoopMixIn
+from laboneq.core.utilities.async_helpers import AsyncWorker, EventLoopMixIn
 from laboneq.core.utilities.replace_phase_increment import calc_ct_replacement
 from laboneq.core.utilities.replace_pulse import ReplacementType, calc_wave_replacements
 from laboneq.data.execution_payload import TargetSetup
@@ -61,14 +63,58 @@ _logger = logging.getLogger(__name__)
 CONNECT_CHECK_HOLDOFF = 10  # sec
 
 
-class Controller(EventLoopMixIn):
+_SessionClass = TypeVar("_SessionClass")
+
+
+@dataclass
+class ControllerSubmission:
+    scheduled_experiment: ScheduledExperiment
+    completion_future: asyncio.Future[ExperimentResults]
+    temp_run_future: asyncio.Future[None]  # TODO(2K): Temporary
+    results: ExperimentResults = field(default_factory=lambda: ExperimentResults())
+
+
+@dataclass
+class ExecutionContext:
+    submission: ControllerSubmission
+    recipe_data: RecipeData
+
+
+@dataclass
+class NtStepResultContext:
+    nt_step: NtStepKey | None
+    nt_step_result_completed: asyncio.Future[None]
+    execution_context: ExecutionContext
+
+
+class ExperimentRunner(AsyncWorker[ControllerSubmission]):
+    def __init__(self, controller: Controller):
+        super().__init__()
+        self._controller = controller
+
+    async def run_one(self, item: ControllerSubmission):
+        await self._controller._run_one_experiment(item)
+
+
+class ResultCollector(AsyncWorker[NtStepResultContext]):
+    def __init__(self, controller: Controller):
+        super().__init__()
+        self._controller = controller
+
+    async def run_one(self, item: NtStepResultContext):
+        await self._controller._collect_nt_step_results(item)
+
+
+class Controller(EventLoopMixIn, Generic[_SessionClass]):
     def __init__(
         self,
         target_setup: TargetSetup,
-        ignore_version_mismatch: bool = False,
-        neartime_callbacks: dict[str, Callable] | None = None,
+        ignore_version_mismatch: bool,
+        neartime_callbacks: dict[str, Callable],
+        parent_session: _SessionClass,
     ):
         self._ignore_version_mismatch = ignore_version_mismatch
+        self._parent_session_ref = ref(parent_session)
         self._do_emulation = True
 
         _zhinst_core_version = LabOneVersion.from_version_string(zhinst_core_version())
@@ -88,12 +134,11 @@ class Controller(EventLoopMixIn):
         self._neartime_callbacks: dict[str, Callable] = (
             {} if neartime_callbacks is None else neartime_callbacks
         )
-        self._recipe_data: RecipeData = None
-        self._results = ExperimentResults()
 
-        _logger.debug("Controller created")
+        self._experiment_runner = ExperimentRunner(self)
+        self._result_collector = ResultCollector(self)
+
         _logger.debug("Controller debug logging is on")
-
         _logger.info("VERSION: laboneq %s", __version__)
 
     def _check_zhinst_core_version_support(self, version: LabOneVersion):
@@ -111,34 +156,33 @@ class Controller(EventLoopMixIn):
 
     async def _prepare_nt_step(
         self,
+        recipe_data: RecipeData,
         sweep_params_tracker: SweepParamsTracker,
         user_set_nodes: NodeCollector,
         nt_step: NtStepKey,
     ):
         # Trigger
-        await self._devices.for_each(DeviceBase.configure_trigger, self._recipe_data)
+        await self._devices.for_each(DeviceBase.configure_trigger, recipe_data)
 
         # NT Sweep parameters
         for param, value in sweep_params_tracker.updated_params():
-            self._recipe_data.attribute_value_tracker.update(param, value)
+            recipe_data.attribute_value_tracker.update(param, value)
         await self._devices.for_each(
-            DeviceBase.set_nt_step_nodes, self._recipe_data, user_set_nodes
+            DeviceBase.set_nt_step_nodes, recipe_data, user_set_nodes
         )
-        self._recipe_data.attribute_value_tracker.reset_updated()
+        recipe_data.attribute_value_tracker.reset_updated()
 
         # Feedback
-        await self._devices.for_each(DeviceBase.configure_feedback, self._recipe_data)
+        await self._devices.for_each(DeviceBase.configure_feedback, recipe_data)
 
         # AWG / pipeliner upload
-        await self._devices.for_each(
-            DeviceBase.set_before_awg_upload, self._recipe_data
-        )
+        await self._devices.for_each(DeviceBase.set_before_awg_upload, recipe_data)
         await self._devices.for_each(
             DeviceZI.prepare_artifacts,
-            recipe_data=self._recipe_data,
+            recipe_data=recipe_data,
             nt_step=nt_step,
         )
-        await self._devices.for_each(DeviceBase.set_after_awg_upload, self._recipe_data)
+        await self._devices.for_each(DeviceBase.set_after_awg_upload, recipe_data)
 
     async def _after_nt_step(self):
         await self._devices.for_each(DeviceBase.update_warning_nodes)
@@ -147,19 +191,14 @@ class Controller(EventLoopMixIn):
             raise LabOneQControllerException(device_errors)
 
     async def _wait_execution_to_stop(
-        self, acquisition_type: AcquisitionType, rt_execution_info: RtExecutionInfo
+        self,
+        recipe_data: RecipeData,
+        acquisition_type: AcquisitionType,
+        rt_execution_info: RtExecutionInfo,
     ):
-        min_wait_time = self._recipe_data.recipe.max_step_execution_time
-        if rt_execution_info.with_pipeliner:
-            pipeliner_reload_worst_case = 1500e-6
-            min_wait_time = (
-                min_wait_time + pipeliner_reload_worst_case
-            ) * rt_execution_info.pipeliner_jobs
+        min_wait_time, guarded_wait_time = get_execution_time(rt_execution_info)
         if min_wait_time > 5:  # Only inform about RT executions taking longer than 5s
             _logger.info("Estimated RT execution time: %.2f s.", min_wait_time)
-        guarded_wait_time = round(
-            min_wait_time * 1.1 + 1
-        )  # +10% and fixed 1sec guard time
 
         target_devs = [
             device for _, device in self._devices.all if isinstance(device, DeviceBase)
@@ -194,8 +233,22 @@ class Controller(EventLoopMixIn):
         )
 
     # TODO(2K): use timeout passed to connect
-    async def _execute_one_step(self, *, timeout_s=5.0):
-        rt_execution_info = self._recipe_data.rt_execution_info
+    async def _execute_one_step(
+        self,
+        *,
+        execution_context: ExecutionContext,
+        recipe_data: RecipeData,
+        nt_step: NtStepKey,
+        timeout_s=5.0,
+    ) -> asyncio.Future[None]:
+        rt_execution_info = recipe_data.rt_execution_info
+
+        nt_step_result_completed = asyncio.get_running_loop().create_future()
+        nt_step_result_context = NtStepResultContext(
+            nt_step=nt_step,
+            nt_step_result_completed=nt_step_result_completed,
+            execution_context=execution_context,
+        )
 
         try:
             await self._devices.for_each(
@@ -204,9 +257,14 @@ class Controller(EventLoopMixIn):
 
             await self._devices.for_each(
                 DeviceBase.setup_one_step_execution,
-                recipe_data=self._recipe_data,
+                recipe_data=recipe_data,
+                nt_step=nt_step,
                 with_pipeliner=rt_execution_info.with_pipeliner,
             )
+
+            # This call must happen after the setup_one_step_execution,
+            # as result futures are created there.
+            await self._result_collector.submit(nt_step_result_context)
 
             await self._devices.for_each(
                 DeviceBase.wait_for_execution_ready,
@@ -214,7 +272,9 @@ class Controller(EventLoopMixIn):
                 timeout_s=timeout_s,
             )
             await self._wait_execution_to_stop(
-                rt_execution_info.acquisition_type, rt_execution_info=rt_execution_info
+                recipe_data,
+                rt_execution_info.acquisition_type,
+                rt_execution_info=rt_execution_info,
             )
             await self._devices.for_each(
                 DeviceBase.teardown_one_step_execution,
@@ -224,6 +284,7 @@ class Controller(EventLoopMixIn):
             raise LabOneQControllerException(
                 "Timeout during execution of a near-time step"
             ) from e
+        return nt_step_result_completed
 
     def connect(
         self,
@@ -283,29 +344,63 @@ class Controller(EventLoopMixIn):
         self._last_connect_check_ts = None
         _logger.info("Successfully disconnected from all devices and servers.")
 
-    def execute_compiled(
-        self,
-        scheduled_experiment: ScheduledExperiment,
-        protected_session: ProtectedSession | None = None,
-    ):
-        self._event_loop.run(
-            self._execute_compiled_async, scheduled_experiment, protected_session
+    def submit_compiled(
+        self, scheduled_experiment: ScheduledExperiment
+    ) -> ControllerSubmission:
+        return self._event_loop.run(
+            self._submit_compiled_async,
+            scheduled_experiment=scheduled_experiment,
         )
 
-    async def _execute_compiled_async(
+    def wait_submission(self, submission: ControllerSubmission):
+        self._event_loop.run(self._wait_submission_async, submission=submission)
+
+    def stop_workers(self):
+        self._event_loop.run(self.stop_workers_async)
+
+    def submission_results(self, submission: ControllerSubmission) -> ExperimentResults:
+        return submission.results
+
+    async def _submit_compiled_async(
         self,
         scheduled_experiment: ScheduledExperiment,
-        protected_session: ProtectedSession | None = None,
-    ):
+    ) -> ControllerSubmission:
+        submission = ControllerSubmission(
+            scheduled_experiment=scheduled_experiment,
+            completion_future=asyncio.get_running_loop().create_future(),
+            temp_run_future=asyncio.get_running_loop().create_future(),
+        )
+        await self._experiment_runner.submit(submission)
+        return submission
+
+    async def _wait_submission_async(self, submission: ControllerSubmission):
+        await submission.completion_future
+        await submission.temp_run_future  # TODO(2K): Temporary
+
+    async def stop_workers_async(self):
+        await self._experiment_runner.stop()
+        await self._result_collector.stop()
+
+    async def _run_one_experiment(self, submission: ControllerSubmission):
+        try:
+            await self._execute_compiled_async(submission=submission)
+        except BaseException as e:
+            submission.completion_future.set_exception(e)
+
+    async def _execute_compiled_async(self, submission: ControllerSubmission):
         # Ensure all connect configurations are still valid!
         await self._connect_async()
 
-        self._recipe_data = pre_process_compiled(scheduled_experiment, self._devices)
-        self._prepare_result_shapes()
+        recipe_data = pre_process_compiled(
+            submission.scheduled_experiment, self._devices
+        )
+        results = init_empty_result_by_shape(recipe_data)
+        submission.results = results
 
-        if protected_session is None:
-            protected_session = ProtectedSession(None)
-        protected_session._set_experiment_results(self._results)
+        execution_context = ExecutionContext(
+            submission=submission,
+            recipe_data=recipe_data,
+        )
 
         async with self._devices.capture_logs():
             try:
@@ -313,15 +408,15 @@ class Controller(EventLoopMixIn):
                 for_each_sync(
                     self._devices.devices.values(),
                     DeviceBase.allocate_resources,
-                    self._recipe_data,
+                    recipe_data,
                 )
                 await self._devices.for_each(DeviceBase.on_experiment_begin)
                 await self._devices.for_each(DeviceBase.init_warning_nodes)
                 await self._devices.for_each(
-                    DeviceBase.apply_initialization, self._recipe_data
+                    DeviceBase.apply_initialization, recipe_data
                 )
                 await self._devices.for_each(
-                    DeviceBase.initialize_oscillators, self._recipe_data
+                    DeviceBase.initialize_oscillators, recipe_data
                 )
 
                 # Ensure no side effects from the previous execution in the same session
@@ -331,11 +426,28 @@ class Controller(EventLoopMixIn):
                 try:
                     await NearTimeRunner(
                         controller=self,
-                        protected_session=protected_session,
-                    ).run(self._recipe_data.execution)
+                        parent_session_ref=self._parent_session_ref,
+                        execution_context=execution_context,
+                        recipe_data=recipe_data,
+                    ).run(recipe_data.execution)
                 except AbortExecution:
                     # eat the exception
                     pass
+
+                # In case of an exception in the preceding flow, we skip this finalization step,
+                # as the `completion_future` will be set with the exception, that should take precedence.
+                nt_step_result_context = NtStepResultContext(
+                    nt_step=None,  # Finalize the execution
+                    nt_step_result_completed=asyncio.get_running_loop().create_future(),
+                    execution_context=execution_context,
+                )
+                await self._result_collector.submit(nt_step_result_context)
+                # TODO(2K): Waiting for the results here is a temporary workaround, as the
+                # result collector has to finish before we unsubscribe in `on_experiment_end` in
+                # the `finally` clause. For the future, result nodes subscription lifecycle should
+                # be outside the experiment execution.
+                await nt_step_result_context.execution_context.submission.completion_future
+
                 _logger.info("Finished near-time execution.")
             except LabOneQControllerException:
                 # Report device errors if any - it maybe useful to diagnose the original exception
@@ -347,35 +459,19 @@ class Controller(EventLoopMixIn):
                 # Ensure that the experiment run time is not included in the idle timeout for the connection check.
                 self._last_connect_check_ts = time.monotonic()
                 await self._devices.for_each(DeviceBase.on_experiment_end)
-
-    def results(self) -> ExperimentResults:
-        return self._results
-
-    def _find_awg(self, seqc_name: str) -> tuple[str | None, int | None]:
-        # TODO(2K): Do this in the recipe preprocessor, or even modify the compiled experiment
-        #  data model
-        for rt_exec_step in self._recipe_data.recipe.realtime_execution_init:
-            if rt_exec_step.program_ref == seqc_name:
-                assert isinstance(rt_exec_step.awg_id, int)
-                return rt_exec_step.device_id, rt_exec_step.awg_id
-        return None, None
+                # TODO(2K): This is another workaround to ensure that the on_experiment_end
+                # is called before the test run completes and the nodes touched in `on_experiment_end`
+                # are still captured.
+                execution_context.submission.temp_run_future.set_result(None)
 
     def replace_pulse(
-        self, pulse_uid: str | Pulse, pulse_or_array: npt.ArrayLike | Pulse
+        self,
+        recipe_data: RecipeData,
+        pulse_uid: str | Pulse,
+        pulse_or_array: npt.ArrayLike | Pulse,
     ):
-        """Replaces specific pulse with the new sample data on the device.
-
-        This is useful when called from the near-time callback, allows fast
-        waveform replacement within near-time loop without experiment
-        recompilation.
-
-        Args:
-            pulse_uid: pulse to replace, can be Pulse object or uid of the pulse
-            pulse_or_array: replacement pulse, can be Pulse object or value array
-            (see sampled_pulse_* from the pulse library)
-        """
         if isinstance(pulse_uid, str):
-            for waveform in self._recipe_data.scheduled_experiment.pulse_map[
+            for waveform in recipe_data.scheduled_experiment.pulse_map[
                 pulse_uid
             ].waveforms.values():
                 if any([instance.can_compress for instance in waveform.instances]):
@@ -390,9 +486,9 @@ class Controller(EventLoopMixIn):
                 f"Pulse {pulse_uid.uid}"  # type: ignore
             )
 
-        acquisition_type = self._recipe_data.rt_execution_info.acquisition_type
+        acquisition_type = recipe_data.rt_execution_info.acquisition_type
         wave_replacements = calc_wave_replacements(
-            self._recipe_data.scheduled_experiment,
+            recipe_data.scheduled_experiment,
             pulse_uid,
             pulse_or_array,
             self._current_waves,
@@ -400,23 +496,23 @@ class Controller(EventLoopMixIn):
         for repl in wave_replacements:
             awg_indices = next(
                 a
-                for a in self._recipe_data.scheduled_experiment.wave_indices
+                for a in recipe_data.scheduled_experiment.wave_indices
                 if a["filename"] == repl.awg_id
             )
             awg_wave_map: dict[str, list[int | str]] = awg_indices["value"]
             target_wave_index = awg_wave_map[repl.sig_string][0]
             assert isinstance(target_wave_index, int)
             seqc_name = repl.awg_id
-            awg = self._find_awg(seqc_name)
-            assert awg[0] is not None and awg[1] is not None
-            device = self._devices.find_by_uid(awg[0])
+            awg_key = recipe_data.awg_by_seqc_name(seqc_name)
+            assert awg_key is not None
+            device = self._devices.find_by_uid(awg_key.device_uid)
 
             if repl.replacement_type == ReplacementType.I_Q:
                 assert isinstance(repl.samples, list)
                 clipped = np.clip(repl.samples, -1.0, 1.0)
                 bin_wave = zhinst.utils.convert_awg_waveform(*clipped)
                 device.add_waveform_replacement(
-                    awg_index=awg[1],
+                    awg_index=awg_key.awg_index,
                     wave=WaveformItem(
                         index=target_wave_index,
                         name=repl.sig_string + " (repl)",
@@ -429,7 +525,7 @@ class Controller(EventLoopMixIn):
                 np.clip(repl.samples.real, -1.0, 1.0, out=repl.samples.real)
                 np.clip(repl.samples.imag, -1.0, 1.0, out=repl.samples.imag)
                 device.add_waveform_replacement(
-                    awg_index=awg[1],
+                    awg_index=awg_key.awg_index,
                     wave=WaveformItem(
                         index=target_wave_index,
                         name=repl.sig_string + " (repl)",
@@ -438,39 +534,46 @@ class Controller(EventLoopMixIn):
                     acquisition_type=acquisition_type,
                 )
 
-    def replace_phase_increment(self, parameter_uid: str, new_value: int | float):
+    def replace_phase_increment(
+        self, recipe_data: RecipeData, parameter_uid: str, new_value: int | float
+    ):
         ct_replacements = calc_ct_replacement(
-            self._recipe_data.scheduled_experiment, parameter_uid, new_value
+            recipe_data.scheduled_experiment, parameter_uid, new_value
         )
         for repl in ct_replacements:
             seqc_name = repl["seqc"]
-            device_id, awg_index = self._find_awg(seqc_name)
-            assert device_id is not None and awg_index is not None
-            device = self._devices.find_by_uid(device_id)
-            device.add_command_table_replacement(awg_index, repl["ct"])
+            awg_key = recipe_data.awg_by_seqc_name(seqc_name)
+            assert awg_key is not None
+            device = self._devices.find_by_uid(awg_key.device_uid)
+            device.add_command_table_replacement(awg_key.awg_index, repl["ct"])
 
-    def _prepare_result_shapes(self):
-        self._results = ExperimentResults()
-        for handle, shape_info in self._recipe_data.result_shapes.items():
-            empty_result = make_acquired_result(
-                data=np.full(
-                    shape=tuple(shape_info.base_shape),
-                    fill_value=np.nan,
-                    dtype=np.complex128,
-                ),
-                axis_name=shape_info.base_axis_name,
-                axis=shape_info.base_axis,
-                handle=handle,
+    async def _collect_nt_step_results(
+        self, nt_step_result_context: NtStepResultContext
+    ):
+        if nt_step_result_context.nt_step is None:
+            nt_step_result_context.execution_context.submission.completion_future.set_result(
+                nt_step_result_context.execution_context.submission.results
             )
-            self._results.acquired_results[handle] = empty_result
+        else:
+            await self._read_one_step_results(
+                recipe_data=nt_step_result_context.execution_context.recipe_data,
+                results=nt_step_result_context.execution_context.submission.results,
+                nt_step=nt_step_result_context.nt_step,
+            )
+        # Indicate that the results for this step are ready.
+        nt_step_result_context.nt_step_result_completed.set_result(None)
 
-    async def _read_one_step_results(self, nt_step: NtStepKey):
+    async def _read_one_step_results(
+        self, recipe_data: RecipeData, results: ExperimentResults, nt_step: NtStepKey
+    ):
         await self._devices.for_each(
             DeviceZI.read_results,
-            recipe_data=self._recipe_data,
+            recipe_data=recipe_data,
             nt_step=nt_step,
-            results=self._results,
+            results=results,
         )
 
-    def _report_step_error(self, nt_step: NtStepKey, uid: str, message: str):
-        self._results.execution_errors.append((list(nt_step.indices), uid, message))
+    def _report_step_error(
+        self, results: ExperimentResults, nt_step: NtStepKey, uid: str, message: str
+    ):
+        results.execution_errors.append((list(nt_step.indices), uid, message))

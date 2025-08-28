@@ -33,7 +33,7 @@ class SignalOperation(Operation):
     """Operation on a specific signal."""
 
     #: Unique identifier of the signal for which the operation is executed.
-    signal: str = field(default=None)
+    signal: str | None = field(default=None)
 
 
 @dataclass
@@ -156,6 +156,10 @@ class PulseSampled(Pulse):
 
 @dataclass
 class Reserve(SignalOperation): ...
+
+
+@dataclass
+class ResetOscillatorPhase(SignalOperation): ...
 
 
 @dataclass

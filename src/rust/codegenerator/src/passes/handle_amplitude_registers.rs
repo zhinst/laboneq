@@ -85,7 +85,7 @@ pub fn assign_amplitude_registers(
     awg: &cjob::AwgCore,
 ) -> AmplitudeRegisterAllocation {
     let amplitude_register_count = match awg.use_command_table_phase_amp() {
-        true => awg.device_kind.traits().amplitude_register_count,
+        true => awg.device_kind().traits().amplitude_register_count,
         false => 0,
     };
     let mut amp_params = HashSet::new();
@@ -267,6 +267,7 @@ mod tests {
                     id: 1,
                 }),
                 count: 1,
+                prng_sample: None,
             }),
             0,
         );
@@ -276,7 +277,6 @@ mod tests {
                 ir::NodeKind::LoopIteration(ir::LoopIteration {
                     length: 0,
                     parameters: vec![Arc::clone(&parameter)],
-                    prng_sample: None,
                     shadow: false,
                 }),
                 0,
@@ -291,6 +291,7 @@ mod tests {
                         name: "".to_string(),
                         id: 1,
                     }),
+                    prng_sample: None,
                 }),
                 0,
             );
@@ -363,6 +364,7 @@ mod tests {
                     id: 1,
                 }),
                 count: 1,
+                prng_sample: None,
             }),
             0,
         );
@@ -371,7 +373,6 @@ mod tests {
             ir::NodeKind::LoopIteration(ir::LoopIteration {
                 length: 0,
                 parameters: vec![Arc::clone(&parameter)],
-                prng_sample: None,
                 shadow: false,
             }),
             0,
@@ -385,6 +386,7 @@ mod tests {
                 length: 0,
                 compressed: true,
                 count: 1,
+                prng_sample: None,
             }),
             0,
         );
@@ -397,6 +399,7 @@ mod tests {
                 length: 0,
                 compressed: false,
                 count: 1,
+                prng_sample: None,
             }),
             0,
         );

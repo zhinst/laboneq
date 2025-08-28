@@ -1082,7 +1082,7 @@ def analyze_recipe(
             rt_exec_step = next(
                 r
                 for r in recipe.realtime_execution_init
-                if r.device_id == device_uid and r.awg_id == awg_nr
+                if r.device_id == device_uid and r.awg_index == awg_nr
             )
             seqc = rt_exec_step.program_ref
             if device_type == "SHFSG" or device_type == "SHFQA":

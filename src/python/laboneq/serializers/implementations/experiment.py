@@ -112,7 +112,7 @@ class ExperimentSerializer(VersionedClassSerializer[Experiment]):
                     }
                 ]
                 ctx["acquire_loop_nt_count"] += 1
-            if children := section["children"]:
+            if isinstance(children := section.get("children"), list):
                 cls._replace_acquire_loop_nt_with_sweep_v2(children, ctx=ctx)
 
     @classmethod
