@@ -6,7 +6,6 @@ use crate::ir;
 use crate::ir::TriggerBitData;
 use crate::ir::compilation_job as cjob;
 use std::collections::HashSet;
-use std::rc::Rc;
 use std::sync::Arc;
 
 // Create trigger events from sections.
@@ -18,7 +17,7 @@ use std::sync::Arc;
 // events depend on the signal delay though, so we need to process the events
 // _after_ flattening the tree.
 
-pub fn handle_triggers_recursive(
+fn handle_triggers_recursive(
     node: &mut ir::IrNode,
     hdawg_rf_mode: bool,
     number_of_trigger_bits: u8,
@@ -30,7 +29,7 @@ pub fn handle_triggers_recursive(
                 section_info: Arc::clone(&data.section_info),
                 bit: data.bit + mask_shift(hdawg_rf_mode, number_of_trigger_bits, data)?,
                 set: data.set,
-                signal: Rc::clone(&data.signal),
+                signal: Arc::clone(&data.signal),
             }));
             cut_points.insert(*child.offset());
         }

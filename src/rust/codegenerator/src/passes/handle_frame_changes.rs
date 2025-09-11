@@ -8,7 +8,7 @@ use crate::signature::PulseSignature;
 use anyhow::anyhow;
 use std::collections::HashMap;
 use std::ops::Range;
-use std::rc::Rc;
+use std::sync::Arc;
 
 fn try_convert_pulse_to_frame_change(pulse: &ir::PlayPulse) -> Option<ir::FrameChange> {
     // TODO: Prune `Delay` nodes from  the IR
@@ -20,7 +20,7 @@ fn try_convert_pulse_to_frame_change(pulse: &ir::PlayPulse) -> Option<ir::FrameC
             length: pulse.length,
             phase: incr_phase,
             parameter: pulse.incr_phase_param_name.clone(),
-            signal: Rc::clone(&pulse.signal),
+            signal: Arc::clone(&pulse.signal),
         };
         return Some(frame);
     }
@@ -231,7 +231,6 @@ pub fn insert_frame_changes(mut nodes: Vec<(Option<u16>, &mut ir::IrNode)>) -> R
 #[cfg(test)]
 mod tests {
     use crate::signature::PulseSignature;
-    use std::rc::Rc;
 
     use super::*;
 
@@ -262,7 +261,7 @@ mod tests {
 
     #[test]
     fn test_frame_change_tracker_increment_phase() {
-        let signal = Rc::new(cjob::Signal {
+        let signal = Arc::new(cjob::Signal {
             uid: "test".to_string(),
             kind: cjob::SignalKind::IQ,
             channels: vec![0],
@@ -270,6 +269,7 @@ mod tests {
             start_delay: 0,
             oscillator: None,
             mixer_type: None,
+            automute: false,
         });
         let mut tracker = FrameChangeTracker::new();
         let pulse_signature = make_signature(0, 50, None, Some(1.0), vec![]);
@@ -296,7 +296,7 @@ mod tests {
 
     #[test]
     fn test_frame_change_tracker_increment_phase_parameters() {
-        let signal = Rc::new(cjob::Signal {
+        let signal = Arc::new(cjob::Signal {
             uid: "test".to_string(),
             kind: cjob::SignalKind::IQ,
             channels: vec![0],
@@ -304,6 +304,7 @@ mod tests {
             start_delay: 0,
             oscillator: None,
             mixer_type: None,
+            automute: false,
         });
         let mut tracker = FrameChangeTracker::new();
         let pulse_signature = make_signature(0, 50, None, None, vec!["param0".to_string()]);
@@ -320,7 +321,7 @@ mod tests {
 
     #[test]
     fn test_frame_change_not_inserted() {
-        let signal = Rc::new(cjob::Signal {
+        let signal = Arc::new(cjob::Signal {
             uid: "test".to_string(),
             kind: cjob::SignalKind::IQ,
             channels: vec![0],
@@ -328,6 +329,7 @@ mod tests {
             start_delay: 0,
             oscillator: None,
             mixer_type: None,
+            automute: false,
         });
         let mut tracker = FrameChangeTracker::new();
         let pulse_signature = make_signature(0, 50, None, None, vec!["param0".to_string()]);
@@ -358,7 +360,7 @@ mod tests {
         let mut signatures = vec![pulse_signature];
         tracker.set_active_waveform(0, 10, None, Some("osc0"), &mut signatures);
 
-        let signal_fc = Rc::new(cjob::Signal {
+        let signal_fc = Arc::new(cjob::Signal {
             uid: "test".to_string(),
             kind: cjob::SignalKind::IQ,
             channels: vec![0],
@@ -369,6 +371,7 @@ mod tests {
                 kind: cjob::OscillatorKind::HARDWARE,
             }),
             mixer_type: None,
+            automute: false,
         });
 
         // Test error when frame change inside waveform, start/end exclusive

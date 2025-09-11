@@ -328,7 +328,7 @@ def exp_from_qasm_list(
             The number of pipeline chunks to divide the experiment into.
 
             The default chunk count is equal to the number of programs, so that there is one
-            program per pipeliner chunk. Future versions of LabOne Q may use a more
+            program per chunk. Future versions of LabOne Q may use a more
             sophisticated default based on the program sizes.
 
             Currently the number of programs must be a multiple of the chunk count so that

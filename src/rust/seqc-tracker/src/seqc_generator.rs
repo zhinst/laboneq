@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::seqc_statements::{SeqCStatement, SeqCVariant};
+use crate::wave_index_tracker::WaveIndex;
 use crate::{Result, Samples};
 use anyhow::anyhow;
 use codegenerator::device_traits::DeviceTraits;
-use codegenerator::ir::compilation_job::DeviceKind;
+use codegenerator::ir::compilation_job::{AwgKind, ChannelIndex, DeviceKind};
 
 type WaveId = str;
 type Variable = str;
@@ -64,7 +65,7 @@ fn gen_zero_wave_declaration_placeholder(
 fn build_wave_channel_assignment(
     dual_channel: bool,
     wave_id: &WaveId,
-    channel: Option<u16>,
+    channel: Option<ChannelIndex>,
     supports_digital_iq_modulation: bool,
 ) -> String {
     if dual_channel && supports_digital_iq_modulation {
@@ -140,7 +141,7 @@ impl SeqCGenerator {
             .count()
     }
 
-    pub fn merge_statements_from(&mut self, other: &SeqCGenerator) {
+    pub fn append_statements_from(&mut self, other: &SeqCGenerator) {
         // TODO: Consider whether it's possible to move instead of clone
         // or to use shared pointers if this turns out to be a performance issue
         self.statements.append(&mut other.statements.to_vec());
@@ -351,8 +352,8 @@ impl SeqCGenerator {
     pub fn add_assign_wave_index_statement<S: Into<String>>(
         &mut self,
         wave_id: S,
-        wave_index: u64,
-        channel: Option<u16>,
+        wave_index: WaveIndex,
+        channel: Option<ChannelIndex>,
     ) {
         self.statements.push(SeqCStatement::AssignWaveIndex {
             wave_id: wave_id.into(),
@@ -361,7 +362,11 @@ impl SeqCGenerator {
         });
     }
 
-    pub fn add_play_wave_statement<S: Into<String>>(&mut self, wave_id: S, channel: Option<u16>) {
+    pub fn add_play_wave_statement<S: Into<String>>(
+        &mut self,
+        wave_id: S,
+        channel: Option<ChannelIndex>,
+    ) {
         self.statements.push(SeqCStatement::PlayWave {
             wave_id: wave_id.into(),
             channel,
@@ -412,7 +417,7 @@ impl SeqCGenerator {
             )
             .into());
         }
-        let add_statement = |_self: &mut SeqCGenerator, n: u64| {
+        let add_statement = |_self: &mut SeqCGenerator, n: Samples| {
             _self.statements.push(SeqCStatement::PlayZeroOrHold {
                 num_samples: n,
                 hold,
@@ -421,7 +426,7 @@ impl SeqCGenerator {
         let flush_deferred_calls =
             |_self: &mut SeqCGenerator, deferred_calls: &mut Option<&mut SeqCGenerator>| {
                 if let Some(def_calls) = deferred_calls {
-                    _self.merge_statements_from(def_calls);
+                    _self.append_statements_from(def_calls);
                     def_calls.clear();
                 }
             };
@@ -444,7 +449,7 @@ impl SeqCGenerator {
             // the loop (HBAR-2075).
 
             let (mut num_segments, mut head) = (
-                num_samples / max_play_zero_hold,
+                (num_samples / max_play_zero_hold) as u64,
                 num_samples % max_play_zero_hold,
             );
             if num_segments < 2 {
@@ -457,7 +462,7 @@ impl SeqCGenerator {
                 flush_deferred_calls(self, deferred_calls);
                 num_samples -= chunk;
                 (num_segments, head) = (
-                    num_samples / max_play_zero_hold,
+                    (num_samples / max_play_zero_hold) as u64,
                     num_samples % max_play_zero_hold,
                 );
             }
@@ -708,4 +713,12 @@ pub fn seqc_generator_from_device_and_signal_type<S: AsRef<str>>(
     let signal_type = signal_type.as_ref().to_lowercase();
     let dual_channel = signal_type == "iq" || signal_type == "double" || signal_type == "multi";
     Ok(SeqCGenerator::new(device_traits, dual_channel))
+}
+
+pub fn seqc_generator_from_device_traits(
+    device_traits: &'static DeviceTraits,
+    signal_type: &AwgKind,
+) -> SeqCGenerator {
+    let dual_channel = !matches!(signal_type, AwgKind::SINGLE);
+    SeqCGenerator::new(device_traits, dual_channel)
 }

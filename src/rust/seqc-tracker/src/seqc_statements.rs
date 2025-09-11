@@ -1,8 +1,11 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use codegenerator::ir::compilation_job::ChannelIndex;
+
 use crate::Samples;
 use crate::seqc_generator::SeqCGenerator;
+use crate::wave_index_tracker::WaveIndex;
 use std::fmt;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -108,12 +111,12 @@ pub enum SeqCStatement {
     },
     AssignWaveIndex {
         wave_id: WaveIdInternal,
-        wave_index: u64,
-        channel: Option<u16>,
+        wave_index: WaveIndex,
+        channel: Option<ChannelIndex>,
     },
     PlayWave {
         wave_id: WaveIdInternal,
-        channel: Option<u16>,
+        channel: Option<ChannelIndex>,
     },
     CommandTableExecution {
         table_index: SeqCVariant,

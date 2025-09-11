@@ -4,7 +4,6 @@
 use std::cmp::max;
 use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::ir::compilation_job::{self as cjob, AwgCore, DeviceKind};
@@ -27,7 +26,7 @@ struct PhaseTracker {
 }
 
 impl PhaseTracker {
-    fn new(signals: &[Rc<cjob::Signal>]) -> Self {
+    fn new(signals: &[Arc<cjob::Signal>]) -> Self {
         let mut trackers = HashMap::new();
         for sig in signals.iter() {
             trackers.insert(
@@ -251,7 +250,7 @@ fn collect_osc_parameters(
 /// which is calculated by the `timestamp_shifting_function`.
 pub fn handle_oscillator_parameters(
     node: &mut IrNode,
-    signals: &[Rc<cjob::Signal>],
+    signals: &[Arc<cjob::Signal>],
     device_kind: &DeviceKind,
     timestamp_shifting_function: impl Fn(&str, Samples) -> Samples,
 ) -> Result<SoftwareOscillatorParameters> {
@@ -495,7 +494,7 @@ mod tests {
 
     use super::*;
 
-    fn make_signal(uid: &str, kind: cjob::OscillatorKind) -> Rc<cjob::Signal> {
+    fn make_signal(uid: &str, kind: cjob::OscillatorKind) -> Arc<cjob::Signal> {
         let sig = cjob::Signal {
             uid: uid.to_string(),
             kind: cjob::SignalKind::IQ,
@@ -507,8 +506,9 @@ mod tests {
             signal_delay: 0,
             start_delay: 0,
             mixer_type: None,
+            automute: false,
         };
-        Rc::new(sig)
+        Arc::new(sig)
     }
 
     fn make_reset(reset_sw_oscillators: bool) -> NodeKind {
@@ -519,7 +519,7 @@ mod tests {
     }
 
     fn make_pulse(
-        signal: Rc<cjob::Signal>,
+        signal: Arc<cjob::Signal>,
         set_oscillator_phase: Option<f64>,
         increment_oscillator_phase: Option<f64>,
     ) -> NodeKind {
@@ -546,17 +546,17 @@ mod tests {
         let signal = make_signal("test", cjob::OscillatorKind::SOFTWARE);
         let mut root = IrNode::new(NodeKind::Nop { length: 0 }, 0);
         root.add_child(0, make_reset(true));
-        root.add_child(1, make_pulse(Rc::clone(&signal), None, Some(0.5)));
-        root.add_child(3, make_pulse(Rc::clone(&signal), None, Some(0.5)));
+        root.add_child(1, make_pulse(Arc::clone(&signal), None, Some(0.5)));
+        root.add_child(3, make_pulse(Arc::clone(&signal), None, Some(0.5)));
         let mut nested_section = IrNode::new(NodeKind::Nop { length: 0 }, 5);
         nested_section.add_child(5, make_reset(true));
-        nested_section.add_child(7, make_pulse(Rc::clone(&signal), None, Some(0.5)));
+        nested_section.add_child(7, make_pulse(Arc::clone(&signal), None, Some(0.5)));
         root.add_child_node(nested_section);
-        root.add_child(11, make_pulse(Rc::clone(&signal), None, Some(0.5)));
+        root.add_child(11, make_pulse(Arc::clone(&signal), None, Some(0.5)));
 
         let params = handle_oscillator_parameters(
             &mut root,
-            &[Rc::clone(&signal)],
+            &[Arc::clone(&signal)],
             &DeviceKind::SHFSG,
             |_, ts| ts,
         )
@@ -571,13 +571,13 @@ mod tests {
     fn test_phase_increment_no_sw_reset() {
         let signal = make_signal("test", cjob::OscillatorKind::SOFTWARE);
         let mut root = IrNode::new(NodeKind::Nop { length: 0 }, 0);
-        root.add_child(0, make_pulse(Rc::clone(&signal), None, Some(0.5)));
+        root.add_child(0, make_pulse(Arc::clone(&signal), None, Some(0.5)));
         root.add_child(1, make_reset(false));
-        root.add_child(3, make_pulse(Rc::clone(&signal), None, Some(0.5)));
+        root.add_child(3, make_pulse(Arc::clone(&signal), None, Some(0.5)));
 
         let params = handle_oscillator_parameters(
             &mut root,
-            &[Rc::clone(&signal)],
+            &[Arc::clone(&signal)],
             &DeviceKind::SHFSG,
             |_, ts| ts,
         )
@@ -590,12 +590,12 @@ mod tests {
     fn test_phase_increment_hw_osc() {
         let signal = make_signal("test", cjob::OscillatorKind::HARDWARE);
         let mut root = IrNode::new(NodeKind::Nop { length: 0 }, 0);
-        root.add_child(0, make_pulse(Rc::clone(&signal), None, Some(0.5)));
-        root.add_child(1, make_pulse(Rc::clone(&signal), None, Some(0.5)));
+        root.add_child(0, make_pulse(Arc::clone(&signal), None, Some(0.5)));
+        root.add_child(1, make_pulse(Arc::clone(&signal), None, Some(0.5)));
 
         let params = handle_oscillator_parameters(
             &mut root,
-            &[Rc::clone(&signal)],
+            &[Arc::clone(&signal)],
             &DeviceKind::SHFSG,
             |_, ts| ts,
         )
@@ -608,14 +608,14 @@ mod tests {
     fn test_set_phase() {
         let signal = make_signal("test", cjob::OscillatorKind::SOFTWARE);
         let mut root = IrNode::new(NodeKind::Nop { length: 0 }, 0);
-        root.add_child(0, make_pulse(Rc::clone(&signal), Some(1.0), Some(0.5)));
-        root.add_child(1, make_pulse(Rc::clone(&signal), None, Some(0.5)));
+        root.add_child(0, make_pulse(Arc::clone(&signal), Some(1.0), Some(0.5)));
+        root.add_child(1, make_pulse(Arc::clone(&signal), None, Some(0.5)));
         root.add_child(3, make_reset(true));
-        root.add_child(5, make_pulse(Rc::clone(&signal), Some(1.0), None));
+        root.add_child(5, make_pulse(Arc::clone(&signal), Some(1.0), None));
 
         let params = handle_oscillator_parameters(
             &mut root,
-            &[Rc::clone(&signal)],
+            &[Arc::clone(&signal)],
             &DeviceKind::SHFSG,
             |_, ts| ts,
         )
@@ -636,17 +636,18 @@ mod tests {
             signal_delay: 0,
             start_delay: 0,
             mixer_type: None,
+            automute: false,
         };
-        let signal = Rc::new(sig);
+        let signal = Arc::new(sig);
         let mut root = IrNode::new(NodeKind::Nop { length: 0 }, 0);
-        root.add_child(0, make_pulse(Rc::clone(&signal), Some(1.0), Some(0.5)));
-        root.add_child(1, make_pulse(Rc::clone(&signal), None, Some(0.5)));
+        root.add_child(0, make_pulse(Arc::clone(&signal), Some(1.0), Some(0.5)));
+        root.add_child(1, make_pulse(Arc::clone(&signal), None, Some(0.5)));
         root.add_child(3, make_reset(true));
-        root.add_child(5, make_pulse(Rc::clone(&signal), Some(1.0), None));
+        root.add_child(5, make_pulse(Arc::clone(&signal), Some(1.0), None));
 
         let params = handle_oscillator_parameters(
             &mut root,
-            &[Rc::clone(&signal)],
+            &[Arc::clone(&signal)],
             &DeviceKind::SHFSG,
             |_, ts| ts,
         )
@@ -666,7 +667,6 @@ mod tests {
             LinearParameterInfo, NodeKind, OscillatorFrequencySweepStep, SetOscillatorFrequency,
             SignalFrequency,
         };
-        use std::rc::Rc;
         use std::sync::Arc;
 
         fn assert_set_oscillator_sweep(
@@ -684,7 +684,7 @@ mod tests {
             let values = values
                 .into_iter()
                 .map(|(signal_uid, frequency)| SignalFrequency {
-                    signal: Rc::new(Signal {
+                    signal: Arc::new(Signal {
                         uid: signal_uid,
                         kind: SignalKind::IQ,
                         channels: vec![],
@@ -695,6 +695,7 @@ mod tests {
                         signal_delay: 0,
                         start_delay: 0,
                         mixer_type: None,
+                        automute: false,
                     }),
                     frequency,
                 })
@@ -709,7 +710,7 @@ mod tests {
             let awg = AwgCore::new(
                 0,
                 cjob::AwgKind::IQ,
-                vec![Rc::new(Signal {
+                vec![Arc::new(Signal {
                     uid: "test".to_string(),
                     kind: SignalKind::IQ,
                     channels: vec![],
@@ -720,6 +721,7 @@ mod tests {
                     signal_delay: 0,
                     start_delay: 0,
                     mixer_type: None,
+                    automute: false,
                 })],
                 1e9,
                 Arc::new(Device::new(
@@ -727,6 +729,8 @@ mod tests {
                     DeviceKind::SHFSG,
                 )),
                 HashMap::from([("osc".to_string(), 0)]),
+                None,
+                false,
             );
             let n_iterations = 3;
             let start_freq = 1e9;

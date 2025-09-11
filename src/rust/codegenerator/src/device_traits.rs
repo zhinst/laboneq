@@ -14,7 +14,7 @@ use crate::Samples;
 ///     frequency of 2.4 GHz used in a non-SHF* setup. todo: Add support for
 ///     the large setup case once this part of the code is used in rust.
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DeviceTraits {
     pub type_str: &'static str,
     pub sample_multiple: u16,
@@ -28,10 +28,15 @@ pub struct DeviceTraits {
     pub supports_output_mute: bool,
     pub output_mute_engage_delay: f64,
     pub output_mute_disengage_delay: f64,
+    pub supports_wait_wave: bool,
+    pub supports_command_table: bool,
+    pub supports_zsync: bool,
+    pub has_prng: bool,
     pub require_play_zero_after_loop: bool,
-    pub playwave_max_hint: Option<u64>,
+    pub playwave_max_hint: Option<Samples>,
     pub is_qa_device: bool,
     pub number_of_trigger_bits: u8,
+    pub ct_schema_version: Option<&'static str>,
 }
 
 pub const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
@@ -47,10 +52,15 @@ pub const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
     supports_output_mute: false,
     output_mute_engage_delay: f64::NAN,    // Not supported
     output_mute_disengage_delay: f64::NAN, // Not supported
+    supports_wait_wave: true,
+    supports_command_table: true,
+    supports_zsync: true,
+    has_prng: true,
     require_play_zero_after_loop: false,
     playwave_max_hint: None,
     is_qa_device: false,
     number_of_trigger_bits: 4,
+    ct_schema_version: Some("hd_1.1.0"),
 };
 
 pub const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
@@ -66,10 +76,15 @@ pub const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
     supports_output_mute: false,
     output_mute_engage_delay: f64::NAN,    // Not supported
     output_mute_disengage_delay: f64::NAN, // Not supported
+    supports_wait_wave: true,
+    supports_command_table: false,
+    supports_zsync: false,
+    has_prng: false,
     require_play_zero_after_loop: true,
     playwave_max_hint: None,
     is_qa_device: true,
     number_of_trigger_bits: 4,
+    ct_schema_version: None,
 };
 
 pub const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
@@ -88,11 +103,16 @@ pub const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
     output_mute_engage_delay: 24e-9 + 26e-9,
     // Verified by MH (2024-03-16) on dev12156 & dev12093 rev 69800.
     output_mute_disengage_delay: -100e-9,
+    supports_wait_wave: true,
+    supports_command_table: true,
+    supports_zsync: true,
+    has_prng: true,
     require_play_zero_after_loop: false,
     playwave_max_hint: None,
     is_qa_device: false,
     // todo: The documentation states 4 trigger bits, but the LabOne Q code only allows 1.
     number_of_trigger_bits: 1,
+    ct_schema_version: Some("sg_1.2.0"),
 };
 
 pub const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
@@ -112,9 +132,14 @@ pub const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
     // Verified by MH (2024-03-16) on dev12156 & dev12093 rev 69800.
     // Marker output setTrigger(0) delay time
     output_mute_disengage_delay: -16e-9,
+    supports_wait_wave: false,
+    supports_command_table: false,
+    supports_zsync: true,
+    has_prng: false,
     require_play_zero_after_loop: false,
     playwave_max_hint: Some(4096),
     is_qa_device: true,
     // todo: The documentation states 2 trigger bits, but the LabOne Q code only allows 1.
     number_of_trigger_bits: 1,
+    ct_schema_version: None,
 };

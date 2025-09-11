@@ -1,7 +1,11 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::awg_event::{AwgEvent, EventType, TriggerOutput};
+use sampled_event_handler::{
+    AwgEvent,
+    awg_events::{EventType, TriggerOutput},
+};
+
 use crate::ir;
 
 /// Resample state at given times, when state changes are known at independently defined times.
@@ -113,7 +117,6 @@ pub fn generate_trigger_states(events: &mut Vec<AwgEvent>) {
                             kind: EventType::TriggerOutput(TriggerOutput {
                                 state: current_trigger_state,
                             }),
-                            position: Some(0),
                         }
                     }
                     EventType::PushLoop(ref data) => {
@@ -180,7 +183,6 @@ pub fn generate_trigger_states(events: &mut Vec<AwgEvent>) {
                     start: time_in_samples,
                     end: time_in_samples,
                     kind: EventType::TriggerOutput(TriggerOutput { state }),
-                    position: Some(0),
                 });
             }
         } else {

@@ -125,9 +125,11 @@ class QPU:
             dictionary, quantum elements may be organized into groups, which are
             accessible as attributes of `self.groups`.
         quantum_operations: The quantum operations to use when building the experiment.
+
     Attributes:
         groups: The groups of quantum elements on the QPU.
         topology: The topology information for the QPU.
+
     Raises:
         TypeError: If `quantum_operations` has an invalid type.
     """
@@ -257,8 +259,10 @@ class QPU:
 
         Arguments:
             key: The key determining the quantum element(s) to retrieve.
+
         Returns:
             The selected quantum element(s).
+
         Raises:
             KeyError: If the quantum element is not found in the QPU.
             TypeError: If `key` has an invalid type.
@@ -340,8 +344,10 @@ class QPU:
                     ```python
                     {qb_uid: {qb_param_name: qb_param_value}}
                     ```
+
         Returns:
             A new QPU with overridden quantum element parameters.
+
         Raises:
             ValueError:
                 If one of the quantum elements passed is not found in the qpu.
@@ -386,8 +392,10 @@ class QPU:
                     ```python
                     {qb_uid: {qb_param_name: qb_param_value}}
                     ```
+
         Returns:
             A new QPU with overridden qubit parameters.
+
         Raises:
             ValueError:
                 If one of the qubits passed is not found in the qpu.
@@ -452,6 +460,7 @@ class QPU:
                     ```python
                     {qb_uid: {qb_param_name: qb_param_value}}
                     ```
+
         Raises:
             ValueError:
                 If one of the qubits passed is not found in the qpu.
@@ -470,6 +479,7 @@ class QPU:
         Args:
             quantum_elements:
                 The quantum elements that are being measured.
+
         Returns:
             The length of the multiplexed-readout measure section.
         """
@@ -491,8 +501,10 @@ class QPU:
 
         Arguments:
             uid: Unique identifier of the quantum element within the QPU.
+
         Returns:
             Quantum element with given `uid`.
+
         Raises:
             KeyError: Quantum element does not exist.
         """
@@ -514,8 +526,10 @@ class QPU:
 
         Arguments:
             uid: Unique identifier of the qubit within the QPU.
+
         Returns:
             Qubit with given `uid`.
+
         Raises:
             KeyError: Qubit does not exist.
         """

@@ -17,7 +17,7 @@ use anyhow::anyhow;
 use interval_calculator::calculate_intervals;
 use interval_calculator::interval::{Interval, OrderedRange};
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use super::handle_amplitude_registers::AmplitudeRegisterAllocation;
 
@@ -71,7 +71,7 @@ fn evaluate_cut_points(node: &ir::IrNode) -> CutPoints {
 struct PlayPulseSlot<'a> {
     node: &'a mut ir::IrNode,
     state: Option<u16>,
-    signal: Rc<cjob::Signal>,
+    signal: Arc<cjob::Signal>,
 }
 
 impl PlayPulseSlot<'_> {
@@ -87,7 +87,7 @@ impl PlayPulseSlot<'_> {
 fn assign_pulse_slots(node: &mut ir::IrNode, state: Option<u16>) -> Vec<PlayPulseSlot<'_>> {
     match node.data() {
         ir::NodeKind::FrameChange(ob) => {
-            let signal = Rc::clone(&ob.signal);
+            let signal = Arc::clone(&ob.signal);
             let slot = PlayPulseSlot {
                 node,
                 state,
@@ -100,7 +100,7 @@ fn assign_pulse_slots(node: &mut ir::IrNode, state: Option<u16>) -> Vec<PlayPuls
             if ob.pulse_def.is_none() || ob.length == 0 {
                 return vec![];
             }
-            let signal = Rc::clone(&ob.signal);
+            let signal = Arc::clone(&ob.signal);
             let slot = PlayPulseSlot {
                 node,
                 state,
@@ -129,7 +129,7 @@ fn assign_pulse_slots(node: &mut ir::IrNode, state: Option<u16>) -> Vec<PlayPuls
                 out.push(PlayPulseSlot {
                     node: ch,
                     state,
-                    signal: Rc::clone(&signals[idx]),
+                    signal: Arc::clone(&signals[idx]),
                 })
             }
             out
@@ -149,7 +149,7 @@ struct WaveformSlot {
     node: usize,
     start: ir::Samples,
     end: ir::Samples,
-    signal: Rc<cjob::Signal>,
+    signal: Arc<cjob::Signal>,
 }
 
 fn signals_share_hw_oscillator(s0: &cjob::Signal, s1: &cjob::Signal) -> bool {
@@ -327,7 +327,7 @@ fn create_waveform_slots(
                     node: node_id,
                     start,
                     end,
-                    signal: Rc::clone(&pulse_slot.signal),
+                    signal: Arc::clone(&pulse_slot.signal),
                 };
                 waveform_slots.push(wf);
             }
@@ -433,7 +433,7 @@ pub fn handle_plays(
             traits.min_play_wave.into(),
             play_wave_size_hint.into(),
             play_zero_size_hint.into(),
-            Some(traits.playwave_max_hint.unwrap_or(i64::MAX as u64) as i64),
+            Some(traits.playwave_max_hint.unwrap_or(i64::MAX)),
             Some(&ct_intervals),
         );
 

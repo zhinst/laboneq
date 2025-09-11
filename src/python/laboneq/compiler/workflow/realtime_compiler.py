@@ -9,7 +9,7 @@ import logging
 from itertools import groupby
 from typing import TypedDict
 import time
-
+from laboneq.compiler.event_list.preorder_map import preorder_map
 from laboneq.compiler import CompilerSettings
 from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
 from laboneq.compiler.ir.section_ir import SectionIR
@@ -153,8 +153,7 @@ class RealtimeCompiler:
 
         root_section: SectionIR | None = find_root_section(ir.root)
         assert root_section is not None
-
-        preorder_map = self._scheduler.preorder_map()
+        preorder_map_ = preorder_map(root_section)
 
         section_info_out = {}
         section_signals_with_children = {}
@@ -173,7 +172,7 @@ class RealtimeCompiler:
                 section_signals_with_children[section_id] = list(section_ir.signals)
                 section_info_out[section_id] = {
                     "section_display_name": section_display_name,
-                    "preorder": preorder_map[section_id],
+                    "preorder": preorder_map_[section_id],
                 }
             except KeyError:  # noqa: PERF203
                 continue

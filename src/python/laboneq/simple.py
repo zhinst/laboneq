@@ -64,6 +64,9 @@ from laboneq.dsl.quantum import (
     QubitParameters,
     Transmon,
     TransmonParameters,
+    QPU,
+    QPUTopology,
+    QuantumPlatform,
 )
 from laboneq.dsl.result import Results
 from laboneq.dsl.session import Session

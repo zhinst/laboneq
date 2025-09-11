@@ -181,17 +181,7 @@ def sample_pulse(
         assert len(shape) == 2 and shape[1] == 2
         samples = samples[:, 0] + 1j * samples[:, 1]
 
-    if signal_type == "iq":
-        samples = samples.astype(complex)
-    else:
-        if not all(samples.imag == 0.0):
-            _logger.info(
-                "Complex-valued pulse envelope provided for an rf-signal, imaginary part will be dropped."
-            )
-        amplitude = amplitude.real
-        samples = samples.real
-
-    samples *= amplitude
+    samples = amplitude * samples.astype(complex)
 
     phase = phase or 0.0
     modulation_frequency = modulation_frequency or 0.0
@@ -209,10 +199,7 @@ def sample_pulse(
         carrier_phase = 0
     carrier_phase += phase
 
-    if signal_type == "iq":
-        samples = np.exp(-1.0j * carrier_phase) * samples
-    else:
-        samples = np.cos(carrier_phase) * samples
+    samples = np.exp(-1.0j * carrier_phase) * samples
 
     if mixer_type == MixerType.UHFQA_ENVELOPE and signal_type == "iq":
         if not np.allclose(samples.imag, 0.0):
@@ -221,6 +208,19 @@ def sample_pulse(
                 "modulation is not permitted)."
             )
         samples = samples.real * (1.0 + 1.0j)
+
+    if signal_type != "iq":
+        if not all(samples.imag == 0.0):
+            if modulation_frequency:
+                _logger.debug(
+                    "Complex-valued pulse envelope provided for an rf-signal, imaginary part will be dropped after performing software modulation."
+                )
+            else:
+                # i.e. either HW modulation or no modulation
+                _logger.warning(
+                    "Complex-valued pulse envelope provided for an rf-signal, imaginary part will be dropped."
+                )
+        samples = samples.real
 
     retval = {"samples_i": samples.real, "samples_q": samples.imag}
 

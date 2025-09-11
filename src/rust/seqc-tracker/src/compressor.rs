@@ -332,14 +332,14 @@ pub fn merge_generators(
                                         unreachable!();
                                     };
                                     let generator = generator_by_hash.get(&hash).unwrap();
-                                    body.merge_statements_from(generator);
+                                    body.append_statements_from(generator);
                                 }
                                 body
                             };
                             retval.add_repeat(count as u64, compress_generator(body));
                         }
                         HashOrRun::Hash(hash) => {
-                            retval.merge_statements_from(generator_by_hash.get(&hash).unwrap());
+                            retval.append_statements_from(generator_by_hash.get(&hash).unwrap());
                         }
                     }
                 }
@@ -353,7 +353,7 @@ pub fn merge_generators(
         }
     }
     for g in generators {
-        retval.merge_statements_from(g);
+        retval.append_statements_from(g);
     }
     retval
 }

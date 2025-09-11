@@ -37,10 +37,12 @@ from laboneq.workflow.recorder import (
 from laboneq.workflow.result import TaskResult, WorkflowResult
 from laboneq.workflow.task_wrapper import task
 from laboneq.workflow import logbook
+from laboneq.workflow import tasks
 
 __all__ = [
     # Decorators
     "task",
+    "tasks",
     "workflow",
     # Core
     "Workflow",

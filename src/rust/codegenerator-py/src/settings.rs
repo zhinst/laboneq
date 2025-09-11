@@ -48,6 +48,12 @@ pub(crate) fn code_generator_settings_from_dict(
     let use_amplitude_increment = settings_py
         .get_item("USE_AMPLITUDE_INCREMENT")?
         .extract::<bool>()?;
+    let emit_timing_comments = settings_py
+        .get_item("EMIT_TIMING_COMMENTS")?
+        .extract::<bool>()?;
+    let shf_output_mute_min_duration = settings_py
+        .get_item("SHF_OUTPUT_MUTE_MIN_DURATION")?
+        .extract::<f64>()?;
     let out = CodeGeneratorSettings::new(
         hdawg_min_playwave_hint,
         hdawg_min_playzero_hint,
@@ -60,6 +66,8 @@ pub(crate) fn code_generator_settings_from_dict(
         amplitude_resolution_bits,
         phase_resolution_bits,
         use_amplitude_increment,
+        emit_timing_comments,
+        shf_output_mute_min_duration,
     );
     Ok(out)
 }

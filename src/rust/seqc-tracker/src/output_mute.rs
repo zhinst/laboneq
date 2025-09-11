@@ -3,8 +3,7 @@
 
 use crate::{Result, Samples};
 use anyhow::anyhow;
-use codegenerator::{ir::compilation_job::DeviceKind, tinysample::length_to_samples};
-use std::str::FromStr;
+use codegenerator::{device_traits::DeviceTraits, tinysample::length_to_samples};
 
 fn ceil(value: i64, grid: u16) -> Samples {
     assert!(value > 0, "Value must be greater than 0");
@@ -35,14 +34,11 @@ pub struct OutputMute {
 }
 
 impl OutputMute {
-    pub fn new(device_type: &str, duration_min: f64) -> Result<Self> {
-        let device_kind = DeviceKind::from_str(device_type)?;
-
-        let device_traits = device_kind.traits();
+    pub fn new(device_traits: &'static DeviceTraits, duration_min: f64) -> Result<Self> {
         if !device_traits.supports_output_mute {
             return Err(anyhow!(
                 "Unsupported device type: {0}. Supported types are: SHFQA, SHFSG and SHFQC.",
-                device_type.to_uppercase()
+                device_traits.type_str
             )
             .into());
         }

@@ -27,6 +27,8 @@ use std::fmt::Write;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+pub type Uid = u64;
+
 /// Signature of a single pulse, part of a sampled waveform
 #[derive(Debug, Clone)]
 pub struct PulseSignature {
@@ -172,7 +174,7 @@ impl Serialize for PulseSignature {
 /// A unique identifier for a set of waveform samples.
 pub struct SamplesSignatureID {
     /// The unique ID of the waveform samples
-    pub uid: u64,
+    pub uid: Uid,
     /// The name of the waveform samples
     pub label: String,
     /// Flag whether the samples has I-component
@@ -224,7 +226,7 @@ impl WaveformSignature {
     /// UID of the waveform signature.
     ///
     /// NOTE: Currently calling `.uid()` hashes the signature, therefore it is not a cheap operation.
-    pub fn uid(&self) -> u64 {
+    pub fn uid(&self) -> Uid {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.hash(&mut hasher);
         hasher.finish()

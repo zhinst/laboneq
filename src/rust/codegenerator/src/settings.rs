@@ -29,6 +29,8 @@ pub struct CodeGeneratorSettings {
     amplitude_resolution_bits: u64,
     phase_resolution_bits: u64,
     use_amplitude_increment: bool,
+    pub emit_timing_comments: bool,
+    pub shf_output_mute_min_duration: f64,
 }
 
 impl CodeGeneratorSettings {
@@ -45,6 +47,8 @@ impl CodeGeneratorSettings {
         amplitude_resolution_bits: u64,
         phase_resolution_bits: u64,
         use_amplitude_increment: bool,
+        emit_timing_comments: bool,
+        shf_output_mute_min_duration: f64,
     ) -> Self {
         CodeGeneratorSettings {
             hdawg_min_playwave_hint,
@@ -58,6 +62,8 @@ impl CodeGeneratorSettings {
             amplitude_resolution_bits,
             phase_resolution_bits,
             use_amplitude_increment,
+            emit_timing_comments,
+            shf_output_mute_min_duration,
         }
     }
 
@@ -162,7 +168,7 @@ mod tests {
         let min_play_wave: u16 = DeviceKind::HDAWG.traits().min_play_wave.try_into().unwrap();
         let pw_original: u16 = min_play_wave + offset;
         let mut settings =
-            CodeGeneratorSettings::new(pw_original, 0, 0, 0, 0, 0, 0, 0, 16, 16, true);
+            CodeGeneratorSettings::new(pw_original, 0, 0, 0, 0, 0, 0, 0, 16, 16, true, true, 0.0);
         let changes = settings.sanitize().unwrap();
         assert_eq!(
             settings.hdawg_min_playwave_hint,

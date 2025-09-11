@@ -5,11 +5,12 @@ use crate::device_traits;
 use crate::utils::normalize_f64;
 use anyhow::anyhow;
 use numeric_array::NumericArray;
+use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
-use std::{collections::HashMap, rc::Rc};
 
 pub type Samples = i64;
+pub type ChannelIndex = u8;
 
 /// Represents different kinds of pulse definitions.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,7 +74,7 @@ pub enum SignalKind {
 pub struct Signal {
     pub uid: String,
     pub kind: SignalKind,
-    pub channels: Vec<u8>,
+    pub channels: Vec<ChannelIndex>,
     pub oscillator: Option<Oscillator>,
     pub mixer_type: Option<MixerType>,
     /// The delay from the trigger to the start of the sequence (lead time).
@@ -81,6 +82,8 @@ pub struct Signal {
     pub start_delay: Samples,
     // Additional delay on the signal
     pub signal_delay: Samples,
+    // The signal output can be automatically muted when no waveforms are played
+    pub automute: bool,
 }
 
 impl Signal {
@@ -120,7 +123,7 @@ pub struct AwgKey {
 }
 
 impl AwgKey {
-    fn new(device_name: Arc<String>, index: u16) -> Self {
+    pub fn new(device_name: Arc<String>, index: u16) -> Self {
         AwgKey { device_name, index }
     }
 
@@ -153,27 +156,41 @@ impl Device {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum TriggerMode {
+    ZSync,
+    DioTrigger,
+    InternalReadyCheck,
+    DioWait,
+    InternalTriggerWait,
+}
+
 #[derive(Debug, Clone)]
 pub struct AwgCore {
     pub uid: u16,
     pub kind: AwgKind,
     // AWG signals
     // In the case of multiplexed, signals with different UID points to the same channel(s)
-    pub signals: Vec<Rc<Signal>>,
+    pub signals: Vec<Arc<Signal>>,
     pub sampling_rate: f64,
     pub device: Arc<Device>,
     // Mapping from HW oscillator to an assigned index
     pub osc_allocation: HashMap<String, u16>,
+    pub trigger_mode: TriggerMode,
+    pub is_reference_clock_internal: bool,
 }
 
 impl AwgCore {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         uid: u16,
         kind: AwgKind,
-        signals: Vec<Rc<Signal>>,
+        signals: Vec<Arc<Signal>>,
         sampling_rate: f64,
         device: Arc<Device>,
         osc_allocation: HashMap<String, u16>,
+        trigger_mode: Option<TriggerMode>,
+        is_reference_clock_internal: bool,
     ) -> Self {
         AwgCore {
             uid,
@@ -182,6 +199,8 @@ impl AwgCore {
             sampling_rate,
             device,
             osc_allocation,
+            trigger_mode: trigger_mode.unwrap_or(TriggerMode::ZSync),
+            is_reference_clock_internal,
         }
     }
 
@@ -234,7 +253,7 @@ pub enum DeviceKind {
 }
 
 impl DeviceKind {
-    pub const fn traits(&self) -> &device_traits::DeviceTraits {
+    pub const fn traits(&self) -> &'static device_traits::DeviceTraits {
         match self {
             DeviceKind::HDAWG => &device_traits::HDAWG_TRAITS,
             DeviceKind::SHFQA => &device_traits::SHFQA_TRAITS,

@@ -33,7 +33,6 @@ from laboneq.compiler.workflow.compiler_hooks import (
 )
 from laboneq.compiler.workflow.neartime_execution import (
     NtCompilerExecutor,
-    legacy_execution_program,
 )
 from laboneq.compiler.workflow import on_device_delays
 from laboneq.compiler.workflow.precompensation_helpers import (
@@ -428,9 +427,8 @@ class Compiler:
             self._experiment_dao = ExperimentDAO(experiment.experiment_info)
             self._execution = experiment.execution
             self._chunking_info = experiment.experiment_info.chunking
-        else:  # legacy JSON
-            self._experiment_dao = ExperimentDAO(experiment)
-            self._execution = legacy_execution_program()
+        else:
+            raise ValueError("Invalid experiment format")
 
     @staticmethod
     def _get_first_instr_of(device_infos: list[DeviceInfo], type: str) -> DeviceInfo:

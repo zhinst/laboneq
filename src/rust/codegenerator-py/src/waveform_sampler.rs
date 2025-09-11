@@ -3,7 +3,6 @@
 
 use anyhow::Context;
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 use std::sync::Arc;
 
 use pyo3::types::{PyList, PyTuple};
@@ -16,12 +15,12 @@ use codegenerator::ir::compilation_job::{
     AwgCore, AwgKind, DeviceKind, MixerType, Signal, SignalKind,
 };
 use codegenerator::ir::experiment::PulseParametersId;
-use codegenerator::signature::{SamplesSignatureID, WaveformSignature};
+use codegenerator::signature::{SamplesSignatureID, Uid, WaveformSignature};
 use codegenerator::waveform_sampler::{
     CompressedWaveformPart, IntegrationKernel, SampleWaveforms, SampledWaveformCollection,
     SampledWaveformSignature, WaveformSamplingCandidate,
 };
-use codegenerator::{Error, Result};
+use codegenerator::{Error, Result, Samples};
 /// Represents a sampled waveform signature that is returned by the Python sampler.
 ///
 /// Some information is read and stored from the Python signature to avoid the
@@ -68,9 +67,9 @@ impl PlayHoldPy {
 
 #[pyclass(name = "PlaySamples")]
 pub struct PlaySamplesPy {
-    offset: i64,
-    length: i64,
-    uid: u64,
+    offset: Samples,
+    length: Samples,
+    uid: Uid,
     label: String,
     has_i: bool,
     has_q: bool,
@@ -84,9 +83,9 @@ impl PlaySamplesPy {
     #[new]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        offset: i64,
-        length: i64,
-        uid: u64,
+        offset: Samples,
+        length: Samples,
+        uid: Uid,
         label: String,
         has_i: bool,
         has_q: bool,
@@ -127,7 +126,7 @@ pub struct WaveformSamplerPy<'a> {
     sampling_rate: f64,
     device_kind: &'a DeviceKind,
     multi_iq_signal: bool,
-    signal_map: HashMap<&'a str, Rc<Signal>>,
+    signal_map: HashMap<&'a str, Arc<Signal>>,
     mixer_type: Option<&'a MixerType>,
     signal_kind: &'a SignalKind,
     pulse_parameters: &'a HashMap<PulseParametersId, PulseParameters>,
@@ -150,7 +149,7 @@ impl<'a> WaveformSamplerPy<'a> {
         let signal_map = awg
             .signals
             .iter()
-            .map(|s| (s.uid.as_str(), Rc::clone(s)))
+            .map(|s| (s.uid.as_str(), Arc::clone(s)))
             .collect();
         // Filter out integration signals, as they are not supported for waveform sampling
         // and also ensure that all signals are of the same kind and mixer type.
@@ -515,7 +514,7 @@ pub fn batch_calculate_integration_weights<'a>(
         }
         return Ok(vec![]);
     };
-    let signal_map: HashMap<&str, &Rc<Signal>> = integration_signals
+    let signal_map: HashMap<&str, &Arc<Signal>> = integration_signals
         .iter()
         .map(|s| (s.uid.as_str(), *s))
         .collect();

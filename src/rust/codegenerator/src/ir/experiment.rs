@@ -3,18 +3,28 @@
 
 use num_complex::Complex;
 
-use crate::ir::compilation_job as cjob;
 use crate::node;
 use crate::signature::WaveformSignature;
+use crate::{ir::compilation_job as cjob, utils::normalize_f64};
 use core::panic;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use super::compilation_job::{PulseDef, Samples, Signal};
 pub type IrNode = node::Node<Samples, NodeKind>;
+pub type UserRegister = u16;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Copy)]
 pub struct PulseParametersId(pub u64);
+
+#[allow(non_camel_case_types)]
+#[derive(PartialEq)]
+pub enum AcquisitionType {
+    INTEGRATION,
+    SPECTROSCOPY_IQ,
+    SPECTROSCOPY_PSD,
+    DISCRIMINATION,
+    RAW,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Handle(Arc<String>);
@@ -66,6 +76,22 @@ impl<T: Clone> ParameterOperation<T> {
     }
 }
 
+impl Eq for ParameterOperation<f64> {}
+impl std::hash::Hash for ParameterOperation<f64> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            ParameterOperation::INCREMENT(value) => {
+                0.hash(state);
+                normalize_f64(*value).hash(state);
+            }
+            ParameterOperation::SET(value) => {
+                1.hash(state);
+                normalize_f64(*value).hash(state);
+            }
+        }
+    }
+}
+
 pub type SectionId = u32;
 
 #[derive(Debug, Default, PartialEq)]
@@ -77,14 +103,14 @@ pub struct SectionInfo {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Case {
     pub section_info: Arc<SectionInfo>,
-    pub signals: Vec<Rc<Signal>>,
+    pub signals: Vec<Arc<Signal>>,
     pub length: Samples,
     pub state: u16,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SignalFrequency {
-    pub signal: Rc<Signal>,
+    pub signal: Arc<Signal>,
     pub frequency: f64,
 }
 
@@ -130,12 +156,12 @@ pub struct PhaseReset {
     // If `reset_sw_oscillators` is false, the phase reset will only
     // apply to hardware oscillators.
     pub reset_sw_oscillators: bool,
-    pub signals: Vec<Rc<Signal>>,
+    pub signals: Vec<Arc<Signal>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayPulse {
-    pub signal: Rc<Signal>,
+    pub signal: Arc<Signal>,
     pub length: Samples,
     pub amplitude: Option<Complex<f64>>,
     pub amp_param_name: Option<String>,
@@ -153,7 +179,7 @@ pub struct PlayPulse {
 pub struct AcquirePulse {
     // TODO: Should this just be handle?
     // Currently we restrict kernel per signal, so lets keep it for now
-    pub signal: Rc<Signal>,
+    pub signal: Arc<Signal>,
     /// Integration length
     pub length: Samples,
     /// Single acquire can consist of multiple individual pulses
@@ -168,7 +194,7 @@ pub struct Match {
     pub section_info: Arc<SectionInfo>,
     pub length: Samples,
     pub handle: Option<Handle>,
-    pub user_register: Option<i64>,
+    pub user_register: Option<UserRegister>,
     pub local: bool,
     pub prng_sample: Option<String>,
 }
@@ -199,7 +225,7 @@ pub struct LoopIteration {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayWave {
-    pub signals: Vec<Rc<Signal>>,
+    pub signals: Vec<Arc<Signal>>,
     pub waveform: WaveformSignature,
     pub oscillator: Option<String>,
     pub amplitude_register: u16,
@@ -226,7 +252,7 @@ pub struct FrameChange {
     pub length: Samples,
     pub phase: f64,
     pub parameter: Option<String>,
-    pub signal: Rc<Signal>,
+    pub signal: Arc<Signal>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -242,7 +268,7 @@ pub struct ResetPrecompensationFilters {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayAcquire {
-    signal: Rc<Signal>,
+    signal: Arc<Signal>,
     length: Samples,
     // Acquire pulse definitions
     pulse_defs: Vec<Arc<PulseDef>>,
@@ -252,7 +278,7 @@ pub struct PlayAcquire {
 
 impl PlayAcquire {
     pub(crate) fn new(
-        signal: Rc<Signal>,
+        signal: Arc<Signal>,
         length: Samples,
         pulse_defs: Vec<Arc<PulseDef>>,
         oscillator_frequency: f64,
@@ -330,7 +356,7 @@ impl QaEvent {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SweepCommand {
     pub pump_power: Option<f64>,
     pub pump_frequency: Option<f64>,
@@ -342,7 +368,7 @@ pub struct SweepCommand {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PpcSweepStep {
-    pub signal: Rc<Signal>,
+    pub signal: Arc<Signal>,
     pub length: Samples,
     pub sweep_command: SweepCommand,
     pub ppc_device: Arc<PpcDevice>,
@@ -362,7 +388,7 @@ pub struct PrngSample {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TriggerBitData {
-    pub signal: Rc<Signal>,
+    pub signal: Arc<Signal>,
     pub bit: u8,
     pub set: bool,
     pub section_info: Arc<SectionInfo>,
@@ -399,7 +425,7 @@ pub struct SetOscillatorFrequencySweep {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Section {
     pub length: Samples,
-    pub trigger_output: Vec<(Rc<Signal>, u8)>,
+    pub trigger_output: Vec<(Arc<Signal>, u8)>,
     pub prng_setup: Option<PrngSetup>,
     pub section_info: Arc<SectionInfo>,
 }
@@ -418,7 +444,7 @@ pub enum NodeKind {
     InitialOscillatorFrequency(InitialOscillatorFrequency),
     SetOscillatorFrequency(SetOscillatorFrequency),
     PhaseReset(PhaseReset),
-    PrecompensationFilterReset { signal: Rc<Signal> },
+    PrecompensationFilterReset { signal: Arc<Signal> },
     PpcSweepStep(PpcSweepStep),
     Match(Match),
     Loop(Loop),

@@ -61,7 +61,14 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
                     assert isinstance(parameter, SweepParameter)
                     count = len(parameter.values)
                 loop_body = self._sub_scope(self._handle_sweep, child)
-                self._append_statement(executor.ForLoop(count=count, body=loop_body))
+                flag = (
+                    executor.LoopFlags.CHUNKED
+                    if child.chunk_count > 1 or child.auto_chunking
+                    else executor.LoopFlags.NONE
+                )
+                self._append_statement(
+                    executor.ForLoop(count=count, body=loop_body, loop_flags=flag)
+                )
             elif isinstance(child, PrngLoop):
                 prng_sample = child.prng_sample
                 count = prng_sample.count

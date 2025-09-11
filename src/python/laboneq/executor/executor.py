@@ -22,8 +22,9 @@ if TYPE_CHECKING:
 
 
 class LoopFlags(Flag):
-    NONE = 0
+    NONE = auto()
     AVERAGE = auto()
+    CHUNKED = auto()
 
     @property
     def is_average(self) -> bool:

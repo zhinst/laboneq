@@ -11,7 +11,7 @@ mod sample_waveforms;
 mod settings;
 pub mod signature;
 pub mod tinysample;
-pub(crate) mod utils;
+pub mod utils;
 pub(crate) mod virtual_signal;
 pub use awg_delays::{AwgTiming, calculate_awg_delays};
 pub use passes::fanout_awg::fanout_for_awg;
@@ -20,7 +20,8 @@ pub use generate_awg_events::transform_ir_to_awg_events;
 pub use passes::analyze_measurements;
 pub use passes::{AwgCompilationInfo, analyze_awg_ir};
 pub use settings::CodeGeneratorSettings;
-pub type Samples = u64;
+pub use utils::normalize_phase;
+pub type Samples = i64;
 
 pub use sample_waveforms::{
     AwgWaveforms, SampledWaveform, WaveDeclaration, collect_and_finalize_waveforms,

@@ -1212,7 +1212,15 @@ class DeviceBase(DeviceZI):
             if handle is None:
                 continue  # unused entries in sparse result vector map to None handle
             result = results.acquired_results[handle]
-            build_partial_result(result, nt_step, raw_readout.vector, mapping, handle)
+            build_partial_result(
+                result,
+                nt_step,
+                raw_readout.vector,
+                mapping,
+                handle,
+                rt_execution_info.pipeliner_job_count,
+                recipe_data.result_shapes[handle].chunked_axis_index,
+            )
 
         timestamps = results.pipeline_jobs_timestamps.setdefault(signal, [])
 

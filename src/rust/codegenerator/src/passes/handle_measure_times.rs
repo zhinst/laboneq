@@ -613,7 +613,6 @@ pub fn analyze_measurements(
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
     use std::sync::Arc;
 
     use super::*;
@@ -677,7 +676,7 @@ mod tests {
 
         pub fn play(&mut self, offset: Samples, signal: &Signal, length: Samples) {
             let play = NodeKind::PlayPulse(PlayPulse {
-                signal: Rc::new(signal.clone()),
+                signal: Arc::new(signal.clone()),
                 set_oscillator_phase: None,
                 increment_oscillator_phase: None,
                 length,
@@ -695,7 +694,7 @@ mod tests {
 
         pub fn acquire(&mut self, offset: Samples, signal: &Signal, length: Samples) {
             let play = NodeKind::AcquirePulse(AcquirePulse {
-                signal: Rc::new(signal.clone()),
+                signal: Arc::new(signal.clone()),
                 length,
                 pulse_defs: vec![Arc::new(PulseDef::test(
                     "".to_string(),
@@ -722,6 +721,7 @@ mod tests {
             channels: vec![],
             oscillator: None,
             mixer_type: None,
+            automute: false,
         }
     }
 

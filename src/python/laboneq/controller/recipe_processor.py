@@ -57,6 +57,7 @@ class HandleResultShape:
     base_shape: list[int]
     base_axis_name: list[str | list[str]]
     base_axis: list[NumPyArray | list[NumPyArray]]
+    chunked_axis_index: int | None
     # If a handle is used in multiple acquires, it adds an extra result dimension.
     # handle_acquire_count tracks the number of such acquires. This works only if
     # outer loops are the same for all acquires with the same handle.
@@ -495,6 +496,7 @@ def _pre_process_sg_channels(
 class _LoopStackEntry:
     count: int
     is_averaging: bool
+    is_chunked: bool
     axis_names: list[str] = field(default_factory=list)
     axis_points: list[NumPyArray] = field(default_factory=list)
 
@@ -580,6 +582,7 @@ class _LoopsPreprocessor(ExecutorBase):
                 base_shape=shape,
                 base_axis_name=axis_name,
                 base_axis=axis,
+                chunked_axis_index=shape_info.chunked_axis_index,
             )
 
         return result_shapes
@@ -606,21 +609,23 @@ class _LoopsPreprocessor(ExecutorBase):
         ]
         known_shape = self._result_shapes.get(handle)
         if known_shape is None:
-            axis_name = [
-                loop.axis_name
+            relevant_loops = [
+                loop
                 for loop in self._loop_stack
                 if not loop.is_averaging or single_shot_cyclic
             ]
-            axis = [
-                loop.axis
-                for loop in self._loop_stack
-                if not loop.is_averaging or single_shot_cyclic
-            ]
+            axis_name = [loop.axis_name for loop in relevant_loops]
+            axis = [loop.axis for loop in relevant_loops]
+            chunked_axis_index = next(
+                (i for i, loop in enumerate(relevant_loops) if loop.is_chunked),
+                None,
+            )
             self._result_shapes[handle] = HandleResultShape(
                 signal=signal,
                 base_shape=shape,
                 base_axis_name=axis_name,
                 base_axis=axis,
+                chunked_axis_index=chunked_axis_index,
             )
         elif known_shape.base_shape == shape:
             known_shape.handle_acquire_count += 1
@@ -637,7 +642,11 @@ class _LoopsPreprocessor(ExecutorBase):
 
     def for_loop_entry_handler(self, count: int, index: int, loop_flags: LoopFlags):
         self._loop_stack.append(
-            _LoopStackEntry(count=count, is_averaging=loop_flags.is_average)
+            _LoopStackEntry(
+                count=count,
+                is_averaging=loop_flags.is_average,
+                is_chunked=bool(loop_flags & LoopFlags.CHUNKED),
+            )
         )
         if loop_flags.is_average:
             single_shot_cyclic = (

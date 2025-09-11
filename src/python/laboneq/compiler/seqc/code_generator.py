@@ -7,136 +7,46 @@ import logging
 from collections import defaultdict
 from itertools import groupby
 from typing import Any, Literal
-from laboneq._rust import codegenerator as codegen_rs
+
 import numpy as np
-from engineering_notation import EngNumber
-from laboneq.core.types.enums import AcquisitionType
+
+from laboneq._rust import codegenerator as codegen_rs
+from laboneq._rust.codegenerator import SampledWaveform
+from laboneq.compiler.common.awg_info import AWGInfo, AwgKey
+from laboneq.compiler.common.awg_signal_type import AWGSignalType
 from laboneq.compiler.common.compiler_settings import (
     CompilerSettings,
 )
-from .measurement_calculator import SignalDelays, SignalDelay
+from laboneq.compiler.common.device_type import DeviceType
+from laboneq.compiler.common.feedback_connection import FeedbackConnection
+from laboneq.compiler.common.iface_code_generator import ICodeGenerator
 from laboneq.compiler.common.integration_times import (
     IntegrationTimes,
     SignalIntegrationInfo,
 )
-from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.resource_usage import ResourceUsage, ResourceUsageCollector
-from laboneq.compiler.common.shfppc_sweeper_config import SHFPPCSweeperConfig
+from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
 from laboneq.compiler.ir import IRTree
 from laboneq.compiler.seqc.linker import AwgWeights, SeqCGenOutput, SeqCProgram
-from laboneq.compiler.seqc.command_table_tracker import CommandTableTracker
-from laboneq.compiler.common.iface_code_generator import ICodeGenerator
-from laboneq.compiler.common.feedback_register_config import FeedbackRegisterConfig
-from laboneq.compiler.seqc.sampled_event_handler import SampledEventHandler
-from laboneq.compiler.seqc.shfppc_sweeper_config_tracker import (
-    SHFPPCSweeperConfigTracker,
-)
-from laboneq._rust.codegenerator import (
-    WaveIndexTracker,
-    SeqCGenerator,
-    SeqCTracker,
-    seqc_generator_from_device_and_signal_type as seqc_generator_from_device_and_signal_type_str,
-    merge_generators,
-    SampledWaveform,
-)
-from laboneq.compiler.common.awg_info import AWGInfo, AwgKey
-from laboneq.compiler.common.awg_signal_type import AWGSignalType
-from laboneq.compiler.common.device_type import DeviceType
-from laboneq.compiler.common.signal_obj import SignalObj
-from laboneq.compiler.common.trigger_mode import TriggerMode
-from laboneq.data.compilation_job import PulseDef
+from laboneq.core.types.enums import AcquisitionType
 from laboneq.data.scheduled_experiment import (
+    COMPLEX_USAGE,
     CodegenWaveform,
     PulseMapEntry,
-    COMPLEX_USAGE,
     WeightInfo,
 )
-from laboneq.compiler.seqc import compat_rs
+
+from .measurement_calculator import SignalDelay, SignalDelays
 from .waveform_sampler import WaveformSampler
 
 _logger = logging.getLogger(__name__)
-
-
-def seqc_generator_from_device_and_signal_type(
-    device_type: DeviceType,
-    signal_type: AWGSignalType,
-) -> SeqCGenerator:
-    return seqc_generator_from_device_and_signal_type_str(
-        device_type.value, signal_type.value
-    )
-
-
-def add_wait_trigger_statements(
-    awg: AWGInfo,
-    init_generator: SeqCGenerator,
-    deferred_function_calls: SeqCGenerator,
-):
-    if awg.trigger_mode == TriggerMode.DIO_TRIGGER:
-        # HDAWG+UHFQA connected via DIO, no PQSC
-        if awg.awg_id == 0:
-            assert awg.reference_clock_source != "internal", (
-                "HDAWG+UHFQA system can only be used with an external clock connected to HDAWG in order to prevent jitter."
-            )
-            init_generator.add_function_call_statement("waitDigTrigger", ["1"])
-            init_generator.add_function_call_statement("setDIO", ["0xffffffff"])
-            init_generator.add_function_call_statement("waitDIOTrigger")
-            delay_first_awg_samples = str(
-                round(awg.sampling_rate * CodeGenerator.DELAY_FIRST_AWG / 16) * 16
-            )
-            if int(delay_first_awg_samples) > 0:
-                deferred_function_calls.add_function_call_statement(
-                    "playZero", [delay_first_awg_samples]
-                )
-        else:
-            init_generator.add_function_call_statement("waitDIOTrigger")
-            delay_other_awg_samples = str(
-                round(awg.sampling_rate * CodeGenerator.DELAY_OTHER_AWG / 16) * 16
-            )
-            if int(delay_other_awg_samples) > 0:
-                deferred_function_calls.add_function_call_statement(
-                    "playZero", [delay_other_awg_samples]
-                )
-    elif awg.trigger_mode == TriggerMode.INTERNAL_READY_CHECK:
-        # Standalone HDAWG
-        # We don't need to do anything for alignment because ready check
-        # mechanism handles that.
-        pass
-
-    elif awg.trigger_mode == TriggerMode.DIO_WAIT:
-        # UHFQA triggered by HDAWG
-        init_generator.add_function_call_statement("waitDIOTrigger")
-        delay_uhfqa_samples = str(
-            round(awg.sampling_rate * CodeGenerator.DELAY_UHFQA / 8) * 8
-        )
-        if int(delay_uhfqa_samples) > 0:
-            init_generator.add_function_call_statement(
-                "playZero", [delay_uhfqa_samples]
-            )
-
-    elif awg.trigger_mode == TriggerMode.INTERNAL_TRIGGER_WAIT:
-        # SHFQC, internally triggered
-        init_generator.add_function_call_statement("waitDigTrigger", ["1"])
-
-    else:
-        if CodeGenerator.USE_ZSYNC_TRIGGER and awg.device_type.supports_zsync:
-            # Any instrument triggered directly via ZSync
-            init_generator.add_function_call_statement("waitZSyncTrigger")
-        else:
-            # UHFQA triggered by PQSC (forwarded over DIO)
-            init_generator.add_function_call_statement("waitDIOTrigger")
 
 
 _SEQUENCER_TYPES = {DeviceType.SHFQA: "qa", DeviceType.SHFSG: "sg"}
 
 
 class CodeGenerator(ICodeGenerator):
-    USE_ZSYNC_TRIGGER = True
-
-    DELAY_FIRST_AWG = 32 / DeviceType.HDAWG.sampling_rate
-    DELAY_OTHER_AWG = 32 / DeviceType.HDAWG.sampling_rate
-    DELAY_UHFQA = 128 / DeviceType.UHFQA.sampling_rate
-
     # This is used as a workaround for the SHFQA requiring that for sampled pulses,  abs(s)  < 1.0 must hold
     # to be able to play pulses with an amplitude of 1.0, we scale complex pulses by this factor
     SHFQA_COMPLEX_SAMPLE_SCALING = 1 - 1e-10
@@ -178,17 +88,12 @@ class CodeGenerator(ICodeGenerator):
         )
         self._simultaneous_acquires: list[dict[str, str]] = []
         self._feedback_register_layout = feedback_register_layout or {}
-        self._feedback_register_config: dict[AwgKey, FeedbackRegisterConfig] = (
-            defaultdict(FeedbackRegisterConfig)
-        )
+        self._feedback_register_config: dict[
+            AwgKey, codegen_rs.FeedbackRegisterConfig
+        ] = {}
         self._feedback_connections: dict[str, FeedbackConnection] = {}
-        self._shfppc_sweep_configs: dict[AwgKey, SHFPPCSweeperConfig] = {}
+        self._shfppc_sweep_configs: dict[AwgKey, dict[str, object]] = {}
         self._total_execution_time: float | None = None
-
-    def generate_code(self):
-        self.gen_seq_c(
-            pulse_defs={p.uid: p for p in self._ir.pulse_defs},
-        )
 
     def get_output(self):
         return SeqCGenOutput(
@@ -441,15 +346,13 @@ class CodeGenerator(ICodeGenerator):
             group = list(group)
             assert all(np.all(group[0][1] == g[1]) for g in group[1:])
 
-    def gen_seq_c(
-        self,
-        pulse_defs: dict[str, PulseDef],
-    ):
+    def generate_code(self):
+        pulse_defs = {p.uid: p for p in self._ir.pulse_defs}
         awgs_sorted = sorted(
             self._awgs.values(),
             key=lambda item: item.key,
         )
-        settings = {
+        settings: dict[str, bool | int | float] = {
             "HDAWG_MIN_PLAYWAVE_HINT": self._settings.HDAWG_MIN_PLAYWAVE_HINT,
             "HDAWG_MIN_PLAYZERO_HINT": self._settings.HDAWG_MIN_PLAYZERO_HINT,
             "UHFQA_MIN_PLAYWAVE_HINT": self._settings.UHFQA_MIN_PLAYWAVE_HINT,
@@ -458,35 +361,68 @@ class CodeGenerator(ICodeGenerator):
             "SHFQA_MIN_PLAYZERO_HINT": self._settings.SHFQA_MIN_PLAYZERO_HINT,
             "SHFSG_MIN_PLAYWAVE_HINT": self._settings.SHFSG_MIN_PLAYWAVE_HINT,
             "SHFSG_MIN_PLAYZERO_HINT": self._settings.SHFSG_MIN_PLAYZERO_HINT,
+            "SHF_OUTPUT_MUTE_MIN_DURATION": self._settings.SHF_OUTPUT_MUTE_MIN_DURATION,
             "AMPLITUDE_RESOLUTION_BITS": max(
                 self._settings.AMPLITUDE_RESOLUTION_BITS, 0
             ),
             "PHASE_RESOLUTION_BITS": max(self._settings.PHASE_RESOLUTION_BITS, 0),
             "USE_AMPLITUDE_INCREMENT": self._settings.USE_AMPLITUDE_INCREMENT,
+            "EMIT_TIMING_COMMENTS": self._settings.EMIT_TIMING_COMMENTS,
         }
         codegen_result = codegen_rs.generate_code(
             ir=self._ir,
             awgs=awgs_sorted,
             waveform_sampler=WaveformSampler(pulse_defs=pulse_defs),
+            feedback_register_layout=self._feedback_register_layout,
+            acquisition_type=self._ir.root.acquisition_type
+            or AcquisitionType.INTEGRATION,  # Any default if no acquire
             settings=settings,
         )
         self._total_execution_time = codegen_result.total_execution_time
         self._simultaneous_acquires = codegen_result.simultaneous_acquires
         res_usage_collector: ResourceUsageCollector = ResourceUsageCollector()
         for idx, awg in enumerate(awgs_sorted):
-            self._gen_seq_c_per_awg(
-                awg=awg,
-                result=codegen_result.awg_results[idx],
-                qa_signal_by_handle=codegen_result.qa_signal_by_handle,
-                acquisition_type=self._ir.root.acquisition_type,
+            awg_key = awg.key
+            awg_code_output = codegen_result.awg_results[idx]
+            for signal, delay in awg_code_output.signal_delays.items():
+                self._signal_delays[signal] = SignalDelay(on_device=delay)
+            for signal, integration_time in awg_code_output.integration_lengths.items():
+                self._integration_times[signal] = SignalIntegrationInfo(
+                    is_play=integration_time.is_play,
+                    length_in_samples=integration_time.length,
+                )
+            self._integration_weights[awg_key] = awg_code_output.integration_weights
+
+            self._sampled_waveforms[awg_key] = awg_code_output.sampled_waveforms
+            self._src[awg_key] = SeqCProgram(src=awg_code_output.seqc)
+            self._feedback_register_config[awg_key] = (
+                awg_code_output.feedback_register_config
             )
-            command_table = self._command_tables.get(awg.key, {}).get("ct")
-            if command_table is not None and awg.device_type.max_ct_entries:
-                res_usage_collector.add(
-                    ResourceUsage(
-                        f"Command table of device '{awg.device_id}', AWG({awg.awg_id})",
-                        len(command_table["table"]) / awg.device_type.max_ct_entries,
+            self._wave_indices_all[awg_key] = {
+                "value": {k: v for k, v in awg_code_output.wave_indices}
+            }
+            if awg_code_output.command_table:
+                self._command_tables[awg_key] = {"ct": awg_code_output.command_table}
+                command_table_length = len(awg_code_output.command_table["table"])
+                self._parameter_phase_increment_map[awg_key] = {
+                    k: [i if i >= 0 else COMPLEX_USAGE for i in v]
+                    for k, v in awg_code_output.parameter_phase_increment_map.items()
+                }
+                if command_table_length > 0 and awg.device_type.max_ct_entries:
+                    res_usage_collector.add(
+                        ResourceUsage(
+                            f"Command table of device '{awg.device_id}', AWG({awg.awg_id})",
+                            command_table_length / awg.device_type.max_ct_entries,
+                        )
                     )
+
+            if awg_code_output.shf_sweeper_config is not None:
+                self._shfppc_sweep_configs[awg_key] = awg_code_output.shf_sweeper_config
+                self._shfppc_sweep_configs[awg_key]["ppc_device"] = (
+                    awg_code_output.shf_sweeper_config["ppc_device"]
+                )
+                self._shfppc_sweep_configs[awg_key]["ppc_channel"] = (
+                    awg_code_output.shf_sweeper_config["ppc_channel"]
                 )
         res_usage_collector.raise_or_pass()
 
@@ -503,157 +439,6 @@ class CodeGenerator(ICodeGenerator):
                 else None
             )
         self._gen_waves()
-
-    def _gen_seq_c_per_awg(
-        self,
-        awg: AWGInfo,
-        result: codegen_rs.AwgCodeGenerationResult,
-        qa_signal_by_handle: dict[str, tuple[str, codegen_rs.AwgKey]],
-        acquisition_type: AcquisitionType | None,
-    ):
-        awg_code_output = result
-        for signal, delay in awg_code_output.signal_delays.items():
-            self._signal_delays[signal] = SignalDelay(on_device=delay)
-        for signal, integration_time in awg_code_output.integration_lengths.items():
-            self._integration_times[signal] = SignalIntegrationInfo(
-                is_play=integration_time.is_play,
-                length_in_samples=integration_time.length,
-            )
-        self._feedback_register_config[
-            awg.key
-        ].target_feedback_register = awg_code_output.feedback_register
-        feedback_register = awg_code_output.feedback_register
-        self._feedback_register_config[
-            awg.key
-        ].source_feedback_register = awg_code_output.source_feedback_register
-        self._integration_weights[awg.key] = awg_code_output.integration_weights
-        sampled_events = compat_rs.transform_rs_events_to_awg_events(
-            awg_code_output.awg_events
-        )
-        signature_infos = [
-            (
-                wave_declaration.signature_string,
-                wave_declaration.length,
-                (wave_declaration.has_marker1, wave_declaration.has_marker2),
-            )
-            for wave_declaration in awg_code_output.wave_declarations
-        ]
-        self._sampled_waveforms[awg.key] = awg_code_output.sampled_waveforms
-        _logger.debug(
-            "** Start processing events for awg %d of %s",
-            awg.awg_id,
-            awg.device_id,
-        )
-        emit_timing_comments = self._settings.EMIT_TIMING_COMMENTS
-        has_readout_feedback = awg_code_output.has_readout_feedback
-        ppc_device = awg_code_output.ppc_device
-        ppc_channel = awg_code_output.ppc_channel
-        global_delay = awg_code_output.global_delay
-        global_sampling_rate = awg.sampling_rate
-        use_command_table = awg.device_type in (DeviceType.HDAWG, DeviceType.SHFSG)
-        function_defs_generator = seqc_generator_from_device_and_signal_type(
-            awg.device_type, awg.signal_type
-        )
-        declarations_generator = seqc_generator_from_device_and_signal_type(
-            awg.device_type, awg.signal_type
-        )
-        if emit_timing_comments:
-            declarations_generator.add_comment(
-                f"{awg.device_type}/{awg.awg_id} global delay {EngNumber(global_delay)} sampling_rate: {EngNumber(global_sampling_rate)}Sa/s "
-            )
-        if has_readout_feedback:
-            declarations_generator.add_variable_declaration("current_seq_step", 0)
-
-        for siginfo in sorted(list(signature_infos)):
-            declarations_generator.add_wave_declaration(
-                siginfo[0],
-                siginfo[1],
-                siginfo[2][0],
-                siginfo[2][1],
-            )
-        command_table_tracker = CommandTableTracker(awg.device_type, awg.signal_type)
-        deferred_function_calls = seqc_generator_from_device_and_signal_type(
-            awg.device_type, awg.signal_type
-        )
-        init_generator = seqc_generator_from_device_and_signal_type(
-            awg.device_type, awg.signal_type
-        )
-        add_wait_trigger_statements(awg, init_generator, deferred_function_calls)
-        seqc_tracker = SeqCTracker(
-            init_generator=init_generator,
-            deferred_function_calls=deferred_function_calls,
-            sampling_rate=global_sampling_rate,
-            delay=global_delay,
-            device_type=awg.device_type.name,
-            signal_type=awg.signal_type.name,
-            emit_timing_comments=emit_timing_comments,
-            automute_playzeros_min_duration=self._settings.SHF_OUTPUT_MUTE_MIN_DURATION,
-            automute_playzeros=any([sig.automute for sig in awg.signals]),
-        )
-        shfppc_sweeper_config_tracker = SHFPPCSweeperConfigTracker(
-            ppc_device, ppc_channel
-        )
-        handler = SampledEventHandler(
-            seqc_tracker=seqc_tracker,
-            command_table_tracker=command_table_tracker,
-            shfppc_sweeper_config_tracker=shfppc_sweeper_config_tracker,
-            function_defs_generator=function_defs_generator,
-            declarations_generator=declarations_generator,
-            wave_indices=WaveIndexTracker(),
-            feedback_register=feedback_register,
-            feedback_connections=self._feedback_connections,
-            feedback_register_config=self._feedback_register_config[awg.key],
-            qa_signal_by_handle=qa_signal_by_handle,
-            feedback_register_layout=self._feedback_register_layout,
-            awg=awg,
-            device_type=awg.device_type,
-            channels=awg.signals[0].channels,
-            use_command_table=use_command_table,
-            emit_timing_comments=emit_timing_comments,
-            use_current_sequencer_step=has_readout_feedback,
-            acquisition_type=acquisition_type,
-        )
-
-        handler.handle_sampled_events(sampled_events)
-
-        seq_c_generators: list[SeqCGenerator] = []
-        while (part := seqc_tracker.pop_loop_stack_generators()) is not None:
-            seq_c_generators = part + seq_c_generators
-        _logger.debug(
-            "***  collected generators, seq_c_generators: %s", seq_c_generators
-        )
-
-        main_generator = merge_generators(seq_c_generators, True)
-
-        seq_c_generator = seqc_generator_from_device_and_signal_type(
-            awg.device_type, awg.signal_type
-        )
-        if function_defs_generator.num_statements() > 0:
-            seq_c_generator.append_statements_from(function_defs_generator)
-            seq_c_generator.add_comment("=== END-OF-FUNCTION-DEFS ===")
-        seq_c_generator.append_statements_from(declarations_generator)
-        seq_c_generator.append_statements_from(main_generator)
-
-        seq_c_text = seq_c_generator.generate_seq_c()
-
-        for line in seq_c_text.splitlines():
-            _logger.debug(line)
-
-        awg_key = AwgKey(awg.device_id, awg.awg_id)
-
-        self._src[awg_key] = SeqCProgram(src=seq_c_text)
-        self._wave_indices_all[awg_key] = {"value": handler.wave_indices.wave_indices()}
-        if use_command_table:
-            self._command_tables[awg_key] = {
-                "ct": handler.command_table_tracker.command_table()
-            }
-            self._parameter_phase_increment_map[awg_key] = (
-                handler.command_table_tracker.parameter_phase_increment_map()
-            )
-
-        if shfppc_sweeper_config_tracker.has_sweep_commands():
-            shfppc_config = shfppc_sweeper_config_tracker.finish()
-            self._shfppc_sweep_configs[awg_key] = shfppc_config
 
     def waves(self) -> dict[str, CodegenWaveform]:
         return self._waves
@@ -684,12 +469,14 @@ class CodeGenerator(ICodeGenerator):
     def signal_delays(self) -> SignalDelays:
         return self._signal_delays
 
-    def feedback_register_config(self) -> dict[AwgKey, FeedbackRegisterConfig]:
+    def feedback_register_config(
+        self,
+    ) -> dict[AwgKey, codegen_rs.FeedbackRegisterConfig]:
         # convert defaultdict to dict
         return dict(self._feedback_register_config)
 
     def feedback_connections(self) -> dict[str, FeedbackConnection]:
         return self._feedback_connections
 
-    def shfppc_sweep_configs(self) -> dict[AwgKey, SHFPPCSweeperConfig]:
+    def shfppc_sweep_configs(self) -> dict[AwgKey, dict[str, object]]:
         return self._shfppc_sweep_configs

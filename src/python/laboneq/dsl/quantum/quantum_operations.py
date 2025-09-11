@@ -11,6 +11,7 @@ import inspect
 import textwrap
 from numbers import Number
 from typing import TYPE_CHECKING, Callable, ClassVar
+import warnings
 
 import numpy as np
 from laboneq.dsl.experiment import builtins, pulse_library
@@ -55,9 +56,7 @@ def quantum_operation(
             section is set to near-time and no qubit signals are reserved.
 
     Returns:
-        If `f` is given, returns the decorated method.
-        Otherwise returns a partial evaluation of `quantum_operation` with
-        the other arguments set.
+        If `f` is given, returns the decorated method. Otherwise, returns a partial evaluation of `quantum_operation` with the other arguments set.
     """
     if f is None:
         return functools.partial(
@@ -228,8 +227,10 @@ class QuantumOperations:
             the base operations provided.
     """
 
-    QUBIT_TYPES: type[QuantumElement] | tuple[type[QuantumElement]] | None = None
-    BASE_OPS: dict[str, Callable] = None
+    QUBIT_TYPES: ClassVar[type[QuantumElement] | tuple[type[QuantumElement]] | None] = (
+        None
+    )
+    BASE_OPS: ClassVar[dict[str, Callable] | None] = None
 
     def __init__(self, qpu: QPU | None = None):
         if self.QUBIT_TYPES is None:
@@ -242,6 +243,21 @@ class QuantumOperations:
 
         for name, f in self.BASE_OPS.items():
             self.register(f, name=name)
+
+        warnings.warn(
+            "The `self.BASE_OPS` class attribute will be of type "
+            "`dict[str, MultiMethod] | None` starting from LabOne Q 2.60.0, which will "
+            "be released on 25.09.2025. A `MultiMethod` is a dictionary of functions "
+            "that is keyed by their simplified type signatures. Following this change, "
+            "to call a function directly, please replace `self.BASE_OPS[op_name]` with "
+            "`self.BASE_OPS[op_name][simplified_type_signature]`, where "
+            "`simplified_type_signature` is the tuple of simplified types used for "
+            "function dispatching. For example, for a quantum operation that was "
+            "defined without type hints, you can replace `self.BASE_OPS[op_name]` with "
+            "`self.BASE_OPS[op_name][()]`.",
+            FutureWarning,
+            stacklevel=2,
+        )
 
     def __init_subclass__(cls, **kw):
         """Move any quantum operations into BASE_OPS."""
@@ -745,6 +761,19 @@ class Operation:
         Returns:
             The function implementing the operation.
         """
+        warnings.warn(
+            "The `op` property will return a `MultiMethod` instead of a "
+            "`Callable` starting from LabOne Q 2.60.0, which will be released on "
+            "25.09.2025. A `MultiMethod` is a dictionary of functions that is keyed "
+            "by their simplified type signatures. Following this change, please "
+            "replace `self.op` with `self.op[simplified_type_signature]` to continue "
+            "using existing code, where `simplified_type_signature` is the tuple of "
+            "simplified types used for function dispatching. For example, for a "
+            "quantum operation that was defined without type hints, you can replace "
+            "`self.op` with `self.op[()]`.",
+            FutureWarning,
+            stacklevel=2,
+        )
         return self._op
 
     @property

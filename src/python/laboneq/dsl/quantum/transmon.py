@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, ClassVar
 
 import attrs
 
@@ -95,21 +95,21 @@ class Transmon(QuantumElement):
         [QuantumElement][laboneq.dsl.quantum.quantum_element.QuantumElement].
     """
 
-    PARAMETERS_TYPE = TransmonParameters
+    PARAMETERS_TYPE: ClassVar[type[QuantumParameters]] = TransmonParameters
 
-    REQUIRED_SIGNALS = (
+    REQUIRED_SIGNALS: ClassVar[tuple[str, ...]] = (
         "acquire",
         "drive",
         "measure",
     )
 
-    OPTIONAL_SIGNALS = (
+    OPTIONAL_SIGNALS: ClassVar[tuple[str, ...]] = (
         "drive_ef",
         "drive_cr",
         "flux",
     )
 
-    SIGNAL_ALIASES = {
+    SIGNAL_ALIASES: ClassVar[dict[str, str]] = {
         "acquire_line": "acquire",
         "drive_line": "drive",
         "measure_line": "measure",

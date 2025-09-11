@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=65.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "laboneq_benchmark"
+version = "0.1.0"
+description = "LabOne Q benchmark tools and experiments."
+license = { text = "Apache 2.0" }
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering",
+]
+dependencies = [
+  # TODO: A nice version restriction
+  "laboneq >= 2.41.0",
+  "laboneq_applications",
+  "opentelemetry-api >= 1.29.0",
+  "opentelemetry-sdk >= 1.29.0",
+  "opentelemetry-instrumentation >= 0.51b0",
+  "wrapt >= 1.16.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["src*"]
+namespaces = false

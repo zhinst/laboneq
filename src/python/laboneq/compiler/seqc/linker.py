@@ -7,34 +7,33 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
-from laboneq.core.utilities.seqc_compile import SeqCCompileItem, awg_compile
 import numpy as np
 
+from laboneq._rust.codegenerator import FeedbackRegisterConfig
+from laboneq.compiler.common.awg_info import AwgKey
 from laboneq.compiler.common.feedback_connection import FeedbackConnection
-from laboneq.compiler.common.shfppc_sweeper_config import SHFPPCSweeperConfig
+from laboneq.compiler.common.iface_compiler_output import (
+    CombinedOutput,
+    NeartimeStepBase,
+    RTCompilerOutput,
+)
+from laboneq.compiler.common.iface_linker import ILinker
 from laboneq.compiler.common.integration_times import IntegrationTimes
 from laboneq.compiler.seqc.measurement_calculator import (
     SignalDelays,
 )
-from laboneq.compiler.common.awg_info import AwgKey
-from laboneq.compiler.common.feedback_register_config import FeedbackRegisterConfig
-from laboneq.compiler.common.iface_linker import ILinker
-from laboneq.compiler.common.iface_compiler_output import (
-    RTCompilerOutput,
-    CombinedOutput,
-    NeartimeStepBase,
-)
 from laboneq.core.exceptions import LabOneQException
+from laboneq.core.utilities.seqc_compile import SeqCCompileItem, awg_compile
 from laboneq.data.recipe import NtStepKey
 from laboneq.data.scheduled_experiment import (
+    COMPLEX_USAGE,
+    ArtifactsCodegen,
     AwgWeights,
     CodegenWaveform,
-    PulseMapEntry,
-    CompilerArtifact,
-    ArtifactsCodegen,
-    ParameterPhaseIncrementMap,
-    COMPLEX_USAGE,
     CommandTableMapEntry,
+    CompilerArtifact,
+    ParameterPhaseIncrementMap,
+    PulseMapEntry,
 )
 
 
@@ -61,7 +60,7 @@ class CombinedRTOutputSeqC(CombinedOutput):
         default_factory=dict
     )
     neartime_steps: list[NeartimeStep] = field(default_factory=list)
-    shfppc_sweep_configurations: dict[AwgKey, SHFPPCSweeperConfig] = field(
+    shfppc_sweep_configurations: dict[AwgKey, dict[str, object]] = field(
         default_factory=dict
     )
 
@@ -112,12 +111,12 @@ class SeqCGenOutput(RTCompilerOutput):
     src: dict[AwgKey, SeqCProgram]
     waves: dict[str, CodegenWaveform]
     requires_long_readout: dict[str, list[str]]
-    wave_indices: dict[AwgKey, dict[str, Any]]
+    wave_indices: dict[AwgKey, dict[str, dict[str, tuple[int, str]]]]
     command_tables: dict[AwgKey, dict[str, Any]]
     pulse_map: dict[str, PulseMapEntry]
     parameter_phase_increment_map: dict[AwgKey, dict[str, list]]
     feedback_register_configurations: dict[AwgKey, FeedbackRegisterConfig]
-    shfppc_sweep_configurations: dict[AwgKey, SHFPPCSweeperConfig]
+    shfppc_sweep_configurations: dict[AwgKey, dict[str, object]]
 
     total_execution_time: float = 0
 

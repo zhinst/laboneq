@@ -6,16 +6,16 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::hash::RandomState;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::vec;
 
 use codegenerator::ir::PpcDevice;
 use codegenerator::ir::PrngSetup;
 use codegenerator::ir::SignalFrequency;
+use codegenerator::ir::compilation_job::AwgKey;
 use codegenerator::ir::compilation_job::Device;
 use codegenerator::ir::compilation_job::{AwgCore, Signal};
-use codegenerator::ir::experiment::{Handle, PulseParametersId};
+use codegenerator::ir::experiment::{AcquisitionType, Handle, PulseParametersId, UserRegister};
 use codegenerator::tinysample::length_to_samples;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::exceptions::PyValueError;
@@ -23,10 +23,14 @@ use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use pyo3::types::PyList;
+use pyo3::types::PyTuple;
 use pyo3::types::{PyComplex, PyString};
 
 use codegenerator::ir::SectionId;
 use num_complex::Complex;
+use sampled_event_handler::FeedbackRegister;
+use sampled_event_handler::FeedbackRegisterLayout;
+use sampled_event_handler::SingleFeedbackRegisterLayoutItem;
 
 use crate::error::Error;
 use crate::ir::experiment::SweepCommand;
@@ -39,7 +43,7 @@ use numeric_array::NumericArray;
 
 struct Deduplicator<'a> {
     // Signals have an unique UID
-    signal_dedup: HashMap<&'a str, &'a Rc<Signal>>,
+    signal_dedup: HashMap<&'a str, &'a Arc<Signal>>,
     // Loop parameters are unique by the UID
     loop_params: HashMap<String, Arc<cjob::SweepParameter>>,
     // Section Info
@@ -50,8 +54,8 @@ struct Deduplicator<'a> {
 }
 
 impl<'a> Deduplicator<'a> {
-    fn new(signals: Vec<&'a Rc<Signal>>) -> Self {
-        let signal_dedup: HashMap<&str, &Rc<Signal>> =
+    fn new(signals: Vec<&'a Arc<Signal>>) -> Self {
+        let signal_dedup: HashMap<&str, &Arc<Signal>> =
             signals.iter().map(|&x| (x.uid.as_str(), x)).collect();
         Self {
             signal_dedup,
@@ -62,7 +66,7 @@ impl<'a> Deduplicator<'a> {
         }
     }
 
-    fn get_signal(&self, uid: &'a str) -> Option<Rc<Signal>> {
+    fn get_signal(&self, uid: &'a str) -> Option<Arc<Signal>> {
         self.signal_dedup.get(uid).cloned().cloned()
     }
 
@@ -208,7 +212,7 @@ fn signals_set_to_signals(
     // set[str]
     signals_set: &Bound<'_, PyAny>,
     dedup: &Deduplicator<'_>,
-) -> Result<Vec<Rc<Signal>>, PyErr> {
+) -> Result<Vec<Arc<Signal>>, PyErr> {
     if signals_set.is_none() {
         return Ok(vec![]);
     }
@@ -304,7 +308,7 @@ fn extract_set_oscillator_frequency(
         let value = value?.extract::<f64>()?;
         for sig in signals_set_to_signals(&osc?.getattr(intern!(py, "signals"))?, dedup)? {
             osc_values.push(SignalFrequency {
-                signal: Rc::clone(&sig),
+                signal: Arc::clone(&sig),
                 frequency: value,
             });
         }
@@ -316,7 +320,7 @@ fn extract_set_oscillator_frequency(
 fn extract_precompensation_clear_signals(
     ob: &Bound<'_, PyAny>,
     dedup: &Deduplicator,
-) -> Result<Rc<Signal>, Error> {
+) -> Result<Arc<Signal>, Error> {
     // ir.PrecompClearIR
     let py = ob.py();
     signals_set_to_signals(&ob.getattr(intern!(py, "signals"))?, dedup)?
@@ -553,7 +557,7 @@ fn extract_match(ob: &Bound<'_, PyAny>, dedup: &mut Deduplicator) -> Result<ir::
         .extract::<ir::Samples>()?;
     let user_register = ob
         .getattr(intern!(py, "user_register"))?
-        .extract::<Option<i64>>()?;
+        .extract::<Option<UserRegister>>()?;
     let local = ob
         .getattr(intern!(py, "local"))?
         .extract::<Option<bool>>()?;
@@ -714,11 +718,11 @@ fn extract_section(ob: &Bound<'_, PyAny>, dedup: &mut Deduplicator) -> Result<ir
             section_info: Arc::clone(&section_info),
         })
     };
-    let trigger_output: Result<Vec<(Rc<Signal>, u8)>, Error> = ob
+    let trigger_output: Result<Vec<(Arc<Signal>, u8)>, Error> = ob
         .getattr(intern!(py, "trigger_output"))?
         .extract::<HashSet<(String, u8)>>()?
         .iter()
-        .map(|(sig, bit)| -> Result<(Rc<Signal>, u8), _> {
+        .map(|(sig, bit)| -> Result<(Arc<Signal>, u8), _> {
             let signal = dedup.get_signal(sig).ok_or_else(|| {
                 Error::new(&format!(
                     "Internal error: Missing signal for trigger: {sig}"
@@ -801,6 +805,7 @@ fn extract_awg_signal(ob: &Bound<'_, PyAny>, sampling_rate: f64) -> Result<Signa
     let signal_delay_seconds = ob.getattr(intern!(py, "delay_signal"))?.extract::<f64>()?;
     let start_delay = length_to_samples(start_delay_seconds, sampling_rate);
     let signal_delay = length_to_samples(signal_delay_seconds, sampling_rate);
+    let automute = ob.getattr(intern!(py, "automute"))?.extract::<bool>()?;
 
     let signal = Signal {
         uid: ob.getattr(intern!(py, "id"))?.extract::<String>()?,
@@ -811,6 +816,7 @@ fn extract_awg_signal(ob: &Bound<'_, PyAny>, sampling_rate: f64) -> Result<Signa
         // AWG SignalObj does not have full oscillator info, we take it from elsewhere
         oscillator: None,
         mixer_type: extract_mixer_type(&ob.getattr(intern!(py, "mixer_type"))?)?,
+        automute,
     };
     Ok(signal)
 }
@@ -876,6 +882,25 @@ fn extract_awg_oscs(ob: &Bound<'_, PyAny>) -> Result<HashMap<String, u16>, PyErr
     Ok(out)
 }
 
+fn extract_trigger_mode(ob: &Bound<'_, PyAny>) -> Result<cjob::TriggerMode, PyErr> {
+    // compilation_job.TriggerMode
+    let py = ob.py();
+    let py_name = ob.getattr(intern!(py, "name"))?;
+    let mode = match py_name.downcast::<PyString>()?.to_cow()?.as_ref() {
+        "NONE" => cjob::TriggerMode::ZSync,
+        "DIO_TRIGGER" => cjob::TriggerMode::DioTrigger,
+        "DIO_WAIT" => cjob::TriggerMode::DioWait,
+        "INTERNAL_TRIGGER_WAIT" => cjob::TriggerMode::InternalTriggerWait,
+        "INTERNAL_READY_CHECK" => cjob::TriggerMode::InternalReadyCheck,
+        _ => {
+            return Err(PyRuntimeError::new_err(format!(
+                "Unknown trigger mode: {ob}"
+            )));
+        }
+    };
+    Ok(mode)
+}
+
 pub fn extract_awg<'py>(
     ob: &Bound<'py, PyAny>,
     ir_signals: &Bound<'py, PyAny>,
@@ -886,7 +911,7 @@ pub fn extract_awg<'py>(
     let device_kind = extract_device_kind(&ob.getattr(intern!(py, "device_type"))?)?;
     // AWG signal must be combined from `SignalIR` and `SignalObj`
     let mut osc_map = extract_oscillator_from_ir_signal(ir_signals)?;
-    let signals: Result<Vec<Rc<Signal>>, PyErr> = ob
+    let signals: Result<Vec<Arc<Signal>>, PyErr> = ob
         .getattr(intern!(py, "signals"))?
         .try_iter()?
         .map(|x| {
@@ -897,7 +922,7 @@ pub fn extract_awg<'py>(
                     &sig.uid
                 )
             });
-            Ok(Rc::new(sig))
+            Ok(Arc::new(sig))
         })
         .collect();
     let signal_kinds = HashSet::<_, RandomState>::from_iter(
@@ -910,6 +935,14 @@ pub fn extract_awg<'py>(
         &signal_kinds
     );
     let awg_id = ob.getattr(intern!(py, "awg_id"))?.extract::<u16>()?;
+    let trigger_mode = extract_trigger_mode(&ob.getattr(intern!(py, "trigger_mode"))?)?;
+    let reference_clock_source = &ob
+        .getattr(intern!(py, "reference_clock_source"))?
+        .extract::<Option<String>>()?;
+    let is_reference_clock_internal = reference_clock_source
+        .as_ref()
+        .map(|s| s == "internal")
+        .unwrap_or(false);
     let awg = AwgCore::new(
         awg_id,
         extract_awg_kind(&ob.getattr(intern!(py, "signal_type"))?)?,
@@ -922,6 +955,8 @@ pub fn extract_awg<'py>(
             device_kind,
         )),
         extract_awg_oscs(&ob.getattr(intern!(py, "oscs"))?)?,
+        Some(trigger_mode),
+        is_reference_clock_internal,
     );
     Ok(awg)
 }
@@ -952,6 +987,21 @@ fn extract_parameter(
     Ok(obj)
 }
 
+pub fn extract_acquisition_type(ob: &Bound<'_, PyAny>) -> Result<AcquisitionType, PyErr> {
+    // compilation_job.AcquisitionType
+    let value = ob.getattr(intern!(ob.py(), "value"))?;
+    match value.downcast::<PyString>()?.to_cow()?.as_ref() {
+        "integration_trigger" => Ok(AcquisitionType::INTEGRATION),
+        "spectroscopy" => Ok(AcquisitionType::SPECTROSCOPY_IQ),
+        "spectroscopy_psd" => Ok(AcquisitionType::SPECTROSCOPY_PSD),
+        "discrimination" => Ok(AcquisitionType::DISCRIMINATION),
+        "RAW" => Ok(AcquisitionType::RAW),
+        _ => Err(PyRuntimeError::new_err(format!(
+            "Unknown acquisition type: {value}"
+        ))),
+    }
+}
+
 /// Transform Python IR to code IR
 ///
 /// While the main purpose of this function is to translate Python IR
@@ -971,4 +1021,45 @@ pub fn transform_py_ir(
         .next()
         .expect("Internal error: No nodes found");
     Ok((root, deduplicator.take_pulse_parameters()))
+}
+
+pub fn extract_feedback_register_layout(
+    ob: &Bound<'_, PyDict>,
+) -> Result<FeedbackRegisterLayout, PyErr> {
+    let mut out = FeedbackRegisterLayout::new();
+    for (k, v) in ob.iter() {
+        let k = if let Ok(device) = k.getattr(intern!(k.py(), "device")) {
+            FeedbackRegister::Local {
+                device: device.downcast_into::<PyString>()?.to_cow()?.into_owned(),
+            }
+        } else if let Ok(source) = k.getattr(intern!(k.py(), "source")) {
+            let device = source.getattr(intern!(k.py(), "device_id"))?;
+            let awg_key = AwgKey::new(
+                Arc::new(device.downcast_into::<PyString>()?.to_cow()?.into_owned()),
+                source
+                    .getattr(intern!(k.py(), "awg_id"))?
+                    .extract::<u16>()?,
+            );
+            FeedbackRegister::Global { awg_key }
+        } else {
+            unreachable!(
+                "Internal error: Feedback register key must be either have a 'device' or 'source' attribute"
+            );
+        };
+        let mut register_list_out = Vec::new();
+        for item in v.downcast::<PyList>()?.iter() {
+            let item = item.downcast::<PyTuple>()?;
+            if item.len() != 2 {
+                return Err(PyValueError::new_err(format!(
+                    "Internal error: Expected tuple of length 2, got: {}",
+                    item.len()
+                )));
+            }
+            let width = item.get_item(0)?.extract::<u8>()?;
+            let signal = item.get_item(1)?.extract::<Option<String>>()?;
+            register_list_out.push(SingleFeedbackRegisterLayoutItem { width, signal });
+        }
+        out.insert(k, register_list_out);
+    }
+    Ok(out)
 }

@@ -1,7 +1,7 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::Result;
 use crate::ir::compilation_job::Signal;
@@ -12,7 +12,7 @@ use indexmap::IndexMap;
 #[derive(Debug)]
 struct Channel {
     pub id: Option<u16>,
-    pub signal: Rc<Signal>,
+    pub signal: Arc<Signal>,
 }
 
 #[derive(Debug)]
@@ -30,7 +30,7 @@ impl VirtualSignal {
         }
     }
 
-    pub fn signals(&self) -> impl Iterator<Item = &Rc<Signal>> {
+    pub fn signals(&self) -> impl Iterator<Item = &Arc<Signal>> {
         self.signals.iter().map(|x| &x.1.signal)
     }
 
@@ -123,7 +123,7 @@ pub fn create_virtual_signals(awg: &cjob::AwgCore) -> Result<Option<VirtualSigna
                 };
                 let channel = Channel {
                     id: Some(0),
-                    signal: Rc::clone(signal_obj),
+                    signal: Arc::clone(signal_obj),
                 };
                 let v_sig = VirtualSignal::new(vec![channel], sub_channel);
                 signals.push(v_sig);
@@ -135,7 +135,7 @@ pub fn create_virtual_signals(awg: &cjob::AwgCore) -> Result<Option<VirtualSigna
             for signal_obj in awg.signals.iter() {
                 if signal_obj.kind != cjob::SignalKind::INTEGRATION {
                     let channel = Channel {
-                        signal: Rc::clone(signal_obj),
+                        signal: Arc::clone(signal_obj),
                         id: Some(channels.len() as u16),
                     };
                     channels.push(channel);
@@ -147,11 +147,11 @@ pub fn create_virtual_signals(awg: &cjob::AwgCore) -> Result<Option<VirtualSigna
             assert_eq!(awg.signals.len(), 2, "DOUBLE signal must have 2 signals");
             let channels = vec![
                 Channel {
-                    signal: Rc::clone(&awg.signals[0]),
+                    signal: Arc::clone(&awg.signals[0]),
                     id: Some(0),
                 },
                 Channel {
-                    signal: Rc::clone(&awg.signals[1]),
+                    signal: Arc::clone(&awg.signals[1]),
                     id: Some(1),
                 },
             ];

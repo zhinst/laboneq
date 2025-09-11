@@ -2,11 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-
-from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
-from laboneq.compiler.scheduler.loop_iteration_schedule import LoopIterationSchedule
-from laboneq.compiler.scheduler.loop_schedule import LoopSchedule
-from laboneq.compiler.scheduler.section_schedule import SectionSchedule
+from laboneq.compiler import ir
 
 
 class _Interval:
@@ -24,27 +20,27 @@ class _Interval:
         )
 
 
-def calculate_preorder_map(
-    schedule: IntervalSchedule,
+def _calculate_preorder_map(
+    schedule: ir.IntervalIR,
     preorder_map: dict[str, int],
     section_children: dict[str, set[str]],
     current_depth=0,
 ) -> int:
-    if not isinstance(schedule, SectionSchedule):
+    if not isinstance(schedule, ir.SectionIR):
         return current_depth
     max_depth = current_depth
-    if isinstance(schedule, LoopSchedule):
+    if isinstance(schedule, ir.LoopIR):
         # Normally we only need to look at the first loop iteration to find all the
         # sections. When there are statically resolved branches however, not every
         # iteration may contain all the subsections.
 
         for child in schedule.children:
-            assert isinstance(child, LoopIterationSchedule)
+            assert isinstance(child, ir.LoopIterationIR)
             # In the PSV, we do not consider the loop and the loop iteration separately, so
             # we immediately pass to the children without incrementing the depth.
             max_depth = max(
                 max_depth,
-                calculate_preorder_map(
+                _calculate_preorder_map(
                     child, preorder_map, section_children, current_depth
                 ),
             )
@@ -57,7 +53,7 @@ def calculate_preorder_map(
             pass
         return max_depth
 
-    if isinstance(schedule, SectionSchedule):
+    if isinstance(schedule, ir.SectionIR):
         # Draw the section on this row
         preorder_map[schedule.section] = current_depth
         current_depth += 1
@@ -71,7 +67,7 @@ def calculate_preorder_map(
         # Recurse on the children
         section_range: _Interval | None = None
         for i, (c, _) in enumerate(children):
-            if not isinstance(c, SectionSchedule):
+            if not isinstance(c, ir.SectionIR):
                 continue
             c_start = schedule.children_start[i]
             c_end = c_start + c.length
@@ -79,7 +75,7 @@ def calculate_preorder_map(
                 # Place child in this row
                 max_depth = max(
                     max_depth,
-                    calculate_preorder_map(
+                    _calculate_preorder_map(
                         c, preorder_map, section_children, current_depth
                     ),
                 )
@@ -88,9 +84,29 @@ def calculate_preorder_map(
                 # Place child in next free row
                 max_depth = max(
                     max_depth,
-                    calculate_preorder_map(
+                    _calculate_preorder_map(
                         c, preorder_map, section_children, max_depth + 1
                     ),
                 )
                 section_range = section_range.merge(_Interval(c_start, c_end))
     return max_depth
+
+
+def _section_children_map(node: ir.IntervalIR) -> dict[str, set[str]]:
+    section_children: dict[str, set[str]] = {}
+    if isinstance(node, ir.SectionIR) and node.section not in section_children:
+        section_children[node.section] = set()
+    for child in node.children:
+        child_map = _section_children_map(child)
+        if isinstance(child, ir.SectionIR):
+            section_children[node.section].add(child.section)
+            section_children[node.section].update(child_map[child.section])
+        section_children.update(child_map)
+    return section_children
+
+
+def preorder_map(node: ir.SectionIR) -> dict[str, int]:
+    preorder_map: dict[str, int] = {}
+    section_children = _section_children_map(node)
+    _calculate_preorder_map(node, preorder_map, section_children)
+    return preorder_map

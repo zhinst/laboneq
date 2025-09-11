@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import os
 from collections import defaultdict
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, ClassVar
 from typing_extensions import deprecated
 
 import attrs
@@ -45,7 +45,7 @@ class QuantumParameters:
         """Returns a copy of the parameters."""
         return self.replace()
 
-    def replace(self, **changes: dict[str, object]):
+    def replace(self, **changes: dict[str, object]) -> QuantumParameters:
         """Return a new set of parameters with changes applied.
 
         Arguments:
@@ -54,7 +54,7 @@ class QuantumParameters:
                 Dotted key names such as `a.b.c` update nested parameters
                 or items within parameter values that are dictionaries.
 
-        Return:
+        Returns:
             A new parameters instance.
         """
         invalid_params = self._get_invalid_param_paths(**changes)
@@ -175,6 +175,21 @@ class QuantumElement:
     For example, a qubit or a coupler.
 
     Attributes:
+        PARAMETERS_TYPE:
+            (class attribute) The type of the parameters used. Should be a sub-class of QuantumParameters.
+        REQUIRED_SIGNALS:
+            (class attribute) A tuple of experiment signal names that must be provided.
+        OPTIONAL_SIGNALS:
+            (class attribute) A tuple of optional signal names. Optional signals are used by the class
+            but not required.
+        SIGNAL_ALIASES:
+            (class attribute) A mapping from alternative names for signals to their canonical names.
+            Signal names are translated to canonical signal names when a
+            quantum element is instantiated.
+
+            This attribute is provided as a means to provide backwards
+            compatibility with existing device configurations when signal naming
+            conventions change.
         uid:
             A unique identifier for the quantum element. E.g. `q0`.
         signals:
@@ -182,37 +197,20 @@ class QuantumElement:
         parameters:
             Parameter values for the quantum element. For example, qubit
             frequency, drive pulse lengths.
-
-    Class attributes:
-        PARAMETERS_TYPE:
-            The type of the parameters used. Should be a sub-class of QuantumParameters.
-        REQUIRED_SIGNALS:
-            A tuple of experiment signal names that must be provided.
-        OPTIONAL_SIGNALS:
-            A tuple of optional signal names. Optional signals are used by the class
-            but not required.
-        SIGNAL_ALIASES:
-            A mapping from alternative names for signals to their canonical names.
-            Signal names are translated to canonical signal names when a
-            quantum element is instantiated.
-
-            This attribute is provided as a means to provide backwards
-            compatibility with existing device configurations when signal naming
-            conventions change.
     """
 
-    # Class attributes: These cannot have type hints otherwise attrs will treat
-    #                   them as instance attributes.
+    # Class attributes: These should have ClassVar type hints and not regular type
+    #                   hints, otherwise attrs will treat them as instance attributes.
 
-    PARAMETERS_TYPE = QuantumParameters
+    PARAMETERS_TYPE: ClassVar[type[QuantumParameters]] = QuantumParameters
 
-    REQUIRED_SIGNALS = ()
+    REQUIRED_SIGNALS: ClassVar[tuple[str, ...]] = ()
 
-    OPTIONAL_SIGNALS = ()
+    OPTIONAL_SIGNALS: ClassVar[tuple[str, ...]] = ()
 
-    SIGNAL_ALIASES = {}
+    SIGNAL_ALIASES: ClassVar[dict[str, str]] = {}
 
-    # Instance attributes: These should have type hints and preferably be
+    # Instance attributes: These should have regular type hints and preferably be
     #                      assigned to `attrs.field(...)`.
 
     uid: str = attrs.field()
@@ -324,7 +322,7 @@ class QuantumElement:
         Returns:
             A list of quantum elements.
 
-        !!! version-changed "Changed in version 2.46.0
+        !!! version-changed "Changed in version 2.46.0"
 
             The `parameters` argument was added.
 
@@ -377,7 +375,7 @@ class QuantumElement:
             parameter_changes:
                 Parameter changes to apply passed as keyword arguments.
 
-        Return:
+        Returns:
             A new quantum element with the parameter changes applied.
         """
         params = self.parameters.replace(**parameter_changes)

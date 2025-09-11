@@ -16,14 +16,10 @@ from laboneq.compiler.workflow import rt_linker
 from laboneq.compiler.common.iface_compiler_output import RTCompilerOutputContainer
 from laboneq.compiler.workflow.realtime_compiler import RealtimeCompiler
 from laboneq.compiler.workflow.rt_linker import CombinedRTCompilerOutputContainer
-from laboneq.core.types.enums.acquisition_type import AcquisitionType
-from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.executor.executor import (
-    ExecRT,
     ExecutorBase,
     LoopFlags,
     LoopingMode,
-    Sequence,
 )
 
 if TYPE_CHECKING:
@@ -76,22 +72,6 @@ class IterationStack:
         for step in self._stack:
             count *= step.count
         return count
-
-
-def legacy_execution_program():
-    """Near-time seqc reloading not supported in JSON mode.
-
-    Use dummy execution to emulate legacy behaviour."""
-
-    # `None` as placeholder is acceptable here. Currently the executor requires none of
-    # these.
-    return ExecRT(
-        count=1,
-        body=Sequence(),
-        uid="",
-        acquisition_type=AcquisitionType.INTEGRATION,
-        averaging_mode=AveragingMode.CYCLIC,
-    )
 
 
 class NtCompilerExecutorDelegate(abc.ABC):

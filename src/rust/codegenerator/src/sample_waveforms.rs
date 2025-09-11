@@ -3,13 +3,12 @@
 
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::ir::compilation_job::{AwgCore, Signal, SignalKind};
 use crate::ir::experiment::PulseParametersId;
 use crate::ir::{IrNode, NodeKind, PlayAcquire, PlayHold, Samples};
-use crate::signature::WaveformSignature;
+use crate::signature::{Uid, WaveformSignature};
 use crate::{Error, Result};
 use indexmap::{IndexMap, IndexSet};
 
@@ -135,7 +134,7 @@ enum SampledWaveformType<T: SampledWaveformSignature> {
 
 pub struct SampledWaveformCollection<T: SampledWaveformSignature> {
     // A mapping from waveform UID to sampled waveform type.
-    samples: HashMap<u64, SampledWaveformType<T>>,
+    samples: HashMap<Uid, SampledWaveformType<T>>,
 }
 
 impl<T: SampledWaveformSignature> Default for SampledWaveformCollection<T> {
@@ -181,7 +180,7 @@ pub struct WaveformSamplingCandidate<'a> {
 fn update_waveform_candidates<'a>(
     candidates: &mut HashMap<&'a WaveformSignature, WaveformSamplingCandidate<'a>>,
     waveform: &'a WaveformSignature,
-    signals: &'a [Rc<Signal>],
+    signals: &'a [Arc<Signal>],
 ) {
     if let Some(candidate) = candidates.get_mut(waveform) {
         // If the waveform is already in the candidates, we can just update the signals.
@@ -323,7 +322,7 @@ fn split_compressed_waveforms<T: SampledWaveformSignature>(
 /// Waveforms that were compressed are omitted from the output.
 fn collect_sampled_signatures<T: SampledWaveformSignature>(
     sampled_waveform_signatures: SampledWaveformCollection<T>,
-) -> HashMap<u64, T> {
+) -> HashMap<Uid, T> {
     let mut sampled_signatures = HashMap::new();
     for (waveform_uid, sampled_waveform) in sampled_waveform_signatures.samples {
         match sampled_waveform {
@@ -349,17 +348,17 @@ fn collect_sampled_signatures<T: SampledWaveformSignature>(
 }
 
 struct PassContext<T: SampledWaveformSignature> {
-    sampled_waveform_signatures: HashMap<u64, T>,
+    sampled_waveform_signatures: HashMap<Uid, T>,
     // Collect output into vectors to keep track of the order of waveforms.
     // The output should be deterministic, so we use a vector instead of a hash map.
     // Alternative way would be to insert timestamp into the output structs and sort them later.
     sampled_waveforms: Vec<SampledWaveform<T>>,
     wave_declarations: Vec<WaveDeclaration>,
-    waveforms_handled_to_index: HashMap<u64, usize>,
+    waveforms_handled_to_index: HashMap<Uid, usize>,
 }
 
 impl<T: SampledWaveformSignature> PassContext<T> {
-    fn new(sampled_waveform_signatures: HashMap<u64, T>) -> Self {
+    fn new(sampled_waveform_signatures: HashMap<Uid, T>) -> Self {
         PassContext {
             sampled_waveform_signatures,
             sampled_waveforms: vec![],
@@ -368,7 +367,7 @@ impl<T: SampledWaveformSignature> PassContext<T> {
         }
     }
 
-    fn register_waveform(&mut self, waveform: &WaveformSignature, signals: &[Rc<Signal>]) {
+    fn register_waveform(&mut self, waveform: &WaveformSignature, signals: &[Arc<Signal>]) {
         let waveform_uid = waveform.uid();
         if let Some(wave_index) = self.waveforms_handled_to_index.get(&waveform_uid) {
             // If the waveform has already been processed, we only update the signals.
@@ -423,7 +422,7 @@ fn collect_waveform_info<T: SampledWaveformSignature>(node: &IrNode, ctx: &mut P
 
 fn generate_output<T: SampledWaveformSignature>(
     node: &IrNode,
-    sampled_waveform_signatures: HashMap<u64, T>,
+    sampled_waveform_signatures: HashMap<Uid, T>,
 ) -> (Vec<SampledWaveform<T>>, Vec<WaveDeclaration>) {
     let mut ctx = PassContext::new(sampled_waveform_signatures);
     collect_waveform_info(node, &mut ctx);

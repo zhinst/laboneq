@@ -58,7 +58,6 @@ from laboneq.compiler.scheduler.voltage_offset import InitialOffsetVoltageSchedu
 from laboneq.compiler.scheduler.parameter_store import ParameterStore
 from laboneq.compiler.scheduler.phase_reset_schedule import PhaseResetSchedule
 from laboneq.compiler.scheduler.ppc_step_schedule import PPCStepSchedule
-from laboneq.compiler.scheduler.preorder_map import calculate_preorder_map
 from laboneq.compiler.scheduler.pulse_schedule import (
     PrecompClearSchedule,
     PulseSchedule,
@@ -1548,16 +1547,3 @@ class Scheduler:
         if shot_loop is None:
             return None
         return replace(repetition_info, section=shot_loop)
-
-    def preorder_map(self):
-        preorder_map = {}
-        assert self._root_schedule is not None
-
-        section_children = {
-            s: self._experiment_dao.all_section_children(s)
-            for s in self._experiment_dao.sections()
-        }
-
-        for s in self._root_schedule.children:
-            calculate_preorder_map(s, preorder_map, section_children)
-        return preorder_map

@@ -22,26 +22,20 @@ class DeviceTraits:
     min_play_wave: int
     sample_multiple: int
     port_delay_granularity: int  # Granularity of the port delay in samples
-    supports_zsync: bool
     supports_binary_waves: bool
     supports_complex_waves: bool
     supports_precompensation: bool
     channels_per_awg: int
     is_qa_device: bool
-    amplitude_register_count: int = 1
     sampling_rate_2GHz: float = None
     num_integration_units_per_acquire_signal: int = None
     oscillator_set_latency: float = 0.0
     reset_osc_duration: float = 0.0
-    supports_oscillator_switching: bool = False
     lo_frequency_granularity: Optional[float] = None
     min_lo_frequency: Optional[float] = None
     max_lo_frequency: Optional[float] = None
-    ct_schema_version: str = "Undefined"
     max_ct_entries: Optional[int] = None
     integration_dsp_latency: Optional[float] = None
-    spectroscopy_dsp_latency: Optional[float] = None
-    has_prng: bool = False
     supports_output_mute: bool = False
     device_class: int = 0x0
 
@@ -69,8 +63,6 @@ class DeviceType(DeviceTraits, Enum):
         min_play_wave=32,
         sample_multiple=16,
         port_delay_granularity=1,
-        amplitude_register_count=4,
-        supports_zsync=True,
         supports_binary_waves=True,
         supports_complex_waves=False,
         supports_precompensation=True,
@@ -84,11 +76,8 @@ class DeviceType(DeviceTraits, Enum):
         oscillator_set_latency=304e-9,
         # Verified by PW (2022-10-13) on dev8047, proc. FPGA 68603. Observed ~77 ns.
         reset_osc_duration=80e-9,
-        supports_oscillator_switching=False,
-        ct_schema_version="hd_1.1.0",
         max_ct_entries=1024,
         is_qa_device=False,
-        has_prng=True,
         device_class=0x0,
     )
 
@@ -98,7 +87,6 @@ class DeviceType(DeviceTraits, Enum):
         min_play_wave=16,
         sample_multiple=8,
         port_delay_granularity=4,
-        supports_zsync=False,
         supports_binary_waves=True,  # Todo (Pol): useful or not?
         supports_complex_waves=False,
         supports_precompensation=False,
@@ -106,7 +94,6 @@ class DeviceType(DeviceTraits, Enum):
         num_integration_units_per_acquire_signal=2,
         # Verified by PW (2022-10-13) on dev2086, rev 68366. Observed ~25 ns.
         reset_osc_duration=40e-9,
-        supports_oscillator_switching=False,
         is_qa_device=True,
         device_class=0x0,
     )
@@ -125,7 +112,6 @@ class DeviceType(DeviceTraits, Enum):
         min_play_wave=32,
         sample_multiple=16,
         port_delay_granularity=4,
-        supports_zsync=True,
         supports_binary_waves=False,
         supports_complex_waves=True,
         supports_precompensation=False,
@@ -135,12 +121,10 @@ class DeviceType(DeviceTraits, Enum):
         # Verified by PW (2022-10-13) on dev12093, rev 68689. Observed ~50 ns.
         reset_osc_duration=56e-9,
         lo_frequency_granularity=100e6,
-        supports_oscillator_switching=False,
         min_lo_frequency=1e9,
         max_lo_frequency=8.5e9,
         is_qa_device=True,
         integration_dsp_latency=212e-9,
-        spectroscopy_dsp_latency=220e-9,
         device_class=0x0,
         supports_output_mute=True,
     )
@@ -150,7 +134,6 @@ class DeviceType(DeviceTraits, Enum):
         min_play_wave=32,
         sample_multiple=16,
         port_delay_granularity=1,
-        supports_zsync=True,
         supports_binary_waves=True,
         supports_complex_waves=False,
         supports_precompensation=False,
@@ -160,13 +143,10 @@ class DeviceType(DeviceTraits, Enum):
         # Verified by PW (2022-10-13) on dev12117, rev 68689. Observed ~35 ns.
         reset_osc_duration=56e-9,
         lo_frequency_granularity=100e6,
-        supports_oscillator_switching=True,
         min_lo_frequency=1e9,
         max_lo_frequency=8.5e9,
-        ct_schema_version="sg_1.2.0",
         max_ct_entries=4096,
         is_qa_device=False,
-        has_prng=True,
         supports_output_mute=True,
         device_class=0x0,
     )
@@ -176,7 +156,6 @@ class DeviceType(DeviceTraits, Enum):
         min_play_wave=4,
         sample_multiple=4,
         port_delay_granularity=-(1 << 32),  # FIXME: Unknown or NA
-        supports_zsync=False,
         supports_binary_waves=False,
         supports_complex_waves=False,
         supports_precompensation=False,

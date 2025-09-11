@@ -1,34 +1,34 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::Result;
+use crate::FeedbackRegisterIndex;
+use crate::awg::Awg;
 use crate::output_mute::OutputMute;
 use crate::prng_tracker::PRNGTracker;
+use crate::seqc_generator::seqc_generator_from_device_traits;
+use crate::{Result, Samples};
 use crate::{
-    compressor::compress_generator,
-    seqc_generator::{SeqCGenerator, seqc_generator_from_device_and_signal_type},
-    seqc_statements::SeqCVariant,
+    compressor::compress_generator, seqc_generator::SeqCGenerator, seqc_statements::SeqCVariant,
 };
 use anyhow::anyhow;
-use codegenerator::Samples;
+use codegenerator::ir::compilation_job::{AwgKind, ChannelIndex, DeviceKind};
 use std::ops::DerefMut;
+use std::sync::Arc;
 use std::sync::RwLock;
-use std::{fmt, sync::Arc};
 
 pub struct SeqCTracker {
     deferred_function_calls: SeqCGenerator,
     deferred_phase_changes: SeqCGenerator,
     loop_stack_generators: Vec<Vec<Arc<RwLock<SeqCGenerator>>>>,
     sampling_rate: f64,
-    delay: f64,
-    device_type: String,
-    signal_type: String,
+    device_kind: DeviceKind,
+    signal_type: AwgKind,
     emit_timing_comments: bool,
     current_time: Samples,
     seqc_gen_prng: Option<Arc<RwLock<SeqCGenerator>>>,
     prng_tracker: Option<Arc<RwLock<PRNGTracker>>>,
     automute: Option<OutputMute>,
-    active_trigger_outputs: u32,
+    active_trigger_outputs: u16,
 }
 
 impl SeqCTracker {
@@ -36,33 +36,28 @@ impl SeqCTracker {
     pub fn new(
         init_generator: SeqCGenerator,
         deferred_function_calls: SeqCGenerator,
-        sampling_rate: f64,
-        delay: f64,
-        device_type: String,
-        signal_type: String,
+        awg: &Awg,
         emit_timing_comments: bool,
-        automute_playzeros_min_duration: f64,
-        automute_playzeros: bool,
+        automute_playzeros_min_duration: Option<f64>,
     ) -> Result<Self> {
         let deferred_phase_changes =
-            seqc_generator_from_device_and_signal_type(&device_type, &signal_type)?;
+            seqc_generator_from_device_traits(awg.device_kind.traits(), &awg.signal_kind);
 
         let loop_stack_generators = vec![vec![
             Arc::new(RwLock::new(init_generator)),
-            Arc::new(RwLock::new(seqc_generator_from_device_and_signal_type(
-                &device_type,
-                &signal_type,
-            )?)),
+            Arc::new(RwLock::new(seqc_generator_from_device_traits(
+                awg.device_kind.traits(),
+                &awg.signal_kind,
+            ))),
         ]];
 
         let mut tracker = Self {
             deferred_function_calls,
             deferred_phase_changes,
             loop_stack_generators,
-            sampling_rate,
-            delay,
-            device_type,
-            signal_type,
+            sampling_rate: awg.sampling_rate,
+            device_kind: awg.device_kind.clone(),
+            signal_type: awg.signal_kind.clone(),
             emit_timing_comments,
             current_time: 0,
             seqc_gen_prng: None,
@@ -71,11 +66,8 @@ impl SeqCTracker {
             active_trigger_outputs: 0,
         };
 
-        if automute_playzeros {
-            tracker.automute = Some(OutputMute::new(
-                &tracker.device_type,
-                automute_playzeros_min_duration,
-            )?);
+        if let Some(duration_min) = automute_playzeros_min_duration {
+            tracker.automute = Some(OutputMute::new(tracker.device_kind.traits(), duration_min)?);
         }
 
         Ok(tracker)
@@ -99,9 +91,9 @@ impl SeqCTracker {
     /// If muting is enabled, the emitted playZeros are muted if possible.
     /// Also clears deferred function calls within the context of the new playZero.
     /// Returns the updated current time.
-    pub fn add_required_playzeros(&mut self, start: i64) -> Result<Samples> {
-        if start > self.current_time as i64 {
-            let play_zero_samples = (start - self.current_time as i64) as Samples;
+    pub fn add_required_playzeros(&mut self, start: Samples) -> Result<Samples> {
+        if start > self.current_time {
+            let play_zero_samples = (start - self.current_time) as Samples;
 
             if !self.mute_samples(play_zero_samples)? {
                 self.add_timing_comment(self.current_time + play_zero_samples);
@@ -171,7 +163,7 @@ impl SeqCTracker {
         if !self.has_deferred_function_calls() {
             return Ok(());
         }
-        if self.device_type.to_uppercase() == "SHFQA" {
+        if !self.device_kind.traits().supports_wait_wave {
             // SHFQA does not support waitWave()
             self.add_play_zero_statement(32, false)?;
         } else {
@@ -187,7 +179,7 @@ impl SeqCTracker {
             self.current_loop_stack_generator()
                 .write()
                 .expect("Failed to lock generator")
-                .merge_statements_from(&self.deferred_function_calls);
+                .append_statements_from(&self.deferred_function_calls);
             self.deferred_function_calls.clear();
         }
     }
@@ -203,7 +195,7 @@ impl SeqCTracker {
             self.current_loop_stack_generator()
                 .write()
                 .expect("Failed to lock generator")
-                .merge_statements_from(&self.deferred_phase_changes);
+                .append_statements_from(&self.deferred_phase_changes);
             self.deferred_phase_changes.clear();
         }
     }
@@ -234,8 +226,8 @@ impl SeqCTracker {
         if !self.emit_timing_comments {
             return;
         }
-        let start_time_s = self.current_time as f64 / self.sampling_rate - self.delay;
-        let end_time_s = end_samples as f64 / self.sampling_rate - self.delay;
+        let start_time_s = self.current_time as f64 / self.sampling_rate;
+        let end_time_s = end_samples as f64 / self.sampling_rate;
         let start_time_ns = (start_time_s * 1e10).round() / 10.0;
         let end_time_ns = (end_time_s * 1e10).round() / 10.0;
 
@@ -302,7 +294,11 @@ impl SeqCTracker {
     }
 
     /// Add playWave statement.
-    pub fn add_play_wave_statement<S: Into<String>>(&mut self, wave_id: S, channel: Option<u16>) {
+    pub fn add_play_wave_statement<S: Into<String>>(
+        &mut self,
+        wave_id: S,
+        channel: Option<ChannelIndex>,
+    ) {
         self.current_loop_stack_generator()
             .write()
             .expect("Failed to lock generator")
@@ -365,9 +361,7 @@ impl SeqCTracker {
     ) -> Result<Arc<RwLock<SeqCGenerator>>> {
         let generator = match generator {
             Some(generator) => generator,
-            None => {
-                seqc_generator_from_device_and_signal_type(&self.device_type, &self.signal_type)?
-            }
+            None => seqc_generator_from_device_traits(self.device_kind.traits(), &self.signal_type),
         };
         let top_of_stack = self.loop_stack_generators.last_mut().ok_or_else(|| {
             anyhow!("Loop stack should not be empty in append_loop_stack_generator")
@@ -427,23 +421,19 @@ impl SeqCTracker {
     /// This function returns a reference to a PRNGTracker through which the code
     /// generator can adjust the values and eventually commit them.
     /// Once committed, they values cannot be changed, and the PRNG has to be setup anew.
-    pub fn setup_prng(&mut self, seed: Option<u32>, prng_range: Option<u32>) -> Result<()> {
+    pub fn setup_prng(&mut self, seed: u32, prng_range: u32) -> Result<()> {
         self.seqc_gen_prng = Some(self.append_loop_stack_generator(None, false)?);
         let mut prng_tracker = PRNGTracker::new();
         self.append_loop_stack_generator(None, false)?; // Continuation
 
-        if let Some(seed) = seed {
-            prng_tracker.set_seed(seed);
-        }
-        if let Some(range) = prng_range {
-            prng_tracker.set_range(range);
-        }
+        prng_tracker.set_seed(seed);
+        prng_tracker.set_range(prng_range);
         self.prng_tracker = Some(Arc::new(RwLock::new(prng_tracker)));
         Ok(())
     }
 
     /// Adds a command table execution statement indexed by the PRNG value plus an offset.
-    pub fn add_prng_match_command_table_execution(&mut self, offset: i64) -> Result<()> {
+    pub fn add_prng_match_command_table_execution(&mut self, offset: u32) -> Result<()> {
         assert!(
             self.prng_tracker
                 .as_ref()
@@ -462,20 +452,26 @@ impl SeqCTracker {
         Ok(())
     }
 
-    pub fn commit_prng(&mut self) {
-        self.prng_tracker
+    pub fn commit_prng(&mut self, offset: u32) -> u32 {
+        let mut tracker = self
+            .prng_tracker
             .as_mut()
             .expect("PRNG not set up")
-            .write()
-            .expect("Failed to lock PRNG tracker")
-            .commit(
-                self.seqc_gen_prng
-                    .as_mut()
-                    .unwrap()
-                    .write()
-                    .expect("Failed to lock generator")
-                    .deref_mut(),
-            );
+            .try_write()
+            .expect("Failed to lock PRNG tracker");
+        if tracker.is_committed() {
+            return tracker.offset();
+        }
+        tracker.set_offset(offset);
+        tracker.commit(
+            self.seqc_gen_prng
+                .as_mut()
+                .unwrap()
+                .write()
+                .expect("Failed to lock generator")
+                .deref_mut(),
+        );
+        offset
     }
 
     /// Adds commands to sample the PRNG value into the 'prng_value' variable.
@@ -494,7 +490,7 @@ impl SeqCTracker {
     }
 
     /// Add a setTrigger statement.
-    pub fn add_set_trigger_statement(&mut self, value: u32, deferred: bool) {
+    pub fn add_set_trigger_statement(&mut self, value: u16, deferred: bool) {
         self.add_function_call_statement(
             "setTrigger",
             vec![SeqCVariant::Integer(value as i64)],
@@ -510,9 +506,9 @@ impl SeqCTracker {
         &mut self,
         generator_mask: S1,
         integrator_mask: S2,
-        monitor: Option<u8>,            // Default: None
-        feedback_register: Option<u32>, // Default: None
-        trigger: Option<u32>,           // Default: None
+        monitor: Option<u8>,                              // Default: None
+        feedback_register: Option<FeedbackRegisterIndex>, // Default: None
+        trigger: Option<u16>,                             // Default: None
     ) {
         let mut args = vec![
             SeqCVariant::String(generator_mask.into()),
@@ -522,7 +518,7 @@ impl SeqCTracker {
 
         if let Some(mon) = monitor {
             assert!(mon == 0 || mon == 1, "either of the 2 LSBs must be set");
-            args.push(SeqCVariant::Integer(mon as i64));
+            args.push(SeqCVariant::Integer(mon.into()));
         }
         if let Some(reg) = feedback_register {
             assert!(
@@ -540,7 +536,7 @@ impl SeqCTracker {
                 feedback_register.is_some(),
                 "Trigger specified with no feedback register in startQA"
             );
-            args.push(SeqCVariant::Integer(trig as i64));
+            args.push(SeqCVariant::Integer(trig.into()));
             final_trigger_val = trig;
         }
 
@@ -549,7 +545,7 @@ impl SeqCTracker {
     }
 
     /// Get the last set state of the trigger outputs.
-    pub fn trigger_output_state(&self) -> u32 {
+    pub fn trigger_output_state(&self) -> u16 {
         self.active_trigger_outputs
     }
 
@@ -564,26 +560,18 @@ impl SeqCTracker {
     }
 }
 
-impl fmt::Debug for SeqCTracker {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SeqCTracker")
-            .field("sampling_rate", &self.sampling_rate)
-            .field("delay", &self.delay)
-            .field("device_type", &self.device_type)
-            .field("signal_type", &self.signal_type)
-            .field("emit_timing_comments", &self.emit_timing_comments)
-            .field("current_time", &self.current_time)
-            .field("active_trigger_outputs", &self.active_trigger_outputs)
-            .field(
-                "has_deferred_calls",
-                &(self.deferred_function_calls.num_statements() > 0),
-            )
-            .field("has_deferred_phase", &self.has_deferred_phase_changes())
-            .field("automute_enabled", &self.automute.is_some())
-            .field("prng_enabled", &self.prng_tracker.is_some())
-            .field("loop_stack_depth", &self.loop_stack_generators.len())
-            // Avoid printing full generators unless necessary
-            // .field("loop_stack_generators", &self.loop_stack_generators)
-            .finish()
-    }
+pub fn top_loop_stack_generators_have_statements(seqc_tracker: &SeqCTracker) -> bool {
+    let has_statements = if let Some(generators) = seqc_tracker.top_loop_stack_generators() {
+        generators.iter().any(|g| {
+            g.read()
+                .expect("SeqCGenerator is already locked")
+                .num_noncomment_statements()
+                > 0
+        })
+    } else {
+        false
+    };
+    has_statements
+        || seqc_tracker.has_deferred_phase_changes()
+        || seqc_tracker.has_deferred_function_calls()
 }

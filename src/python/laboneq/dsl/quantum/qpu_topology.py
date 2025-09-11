@@ -28,18 +28,18 @@ class TopologyEdge:
     """An edge on the QPU topology graph.
 
     Attributes:
-        tag:
+        tag (str):
             The edge tag (unique between two quantum element nodes in a
             given direction). This string is a user-defined tag used to categorize
             the edges. The edge tag, together with the source and target node
             UIDs, uniquely defines an edge.
-        source_node:
+        source_node (QuantumElement):
             The source quantum element for the edge.
-        target_node:
+        target_node (QuantumElement):
             The target quantum element for the edge.
-        parameters:
+        parameters (QuantumParameters| None):
             The quantum parameters for the edge.
-        quantum_element:
+        quantum_element (QuantumElement | None):
             The quantum element associated to the edge.
     """
 
@@ -157,8 +157,10 @@ class QPUTopology:
 
         Arguments:
             key: The key determining the topology edge(s) to retrieve.
+
         Returns:
             The selected topology edge(s).
+
         Raises:
             TypeError: If `key` has an invalid type.
             KeyError: If non-null slices are passed.
@@ -308,8 +310,10 @@ class QPUTopology:
 
         Arguments:
             node: The node UID.
+
         Returns:
             The quantum element at the node.
+
         Raises:
             KeyError: If the node UID is not in the topology graph.
         """
@@ -344,6 +348,7 @@ class QPUTopology:
             outgoing:
                 If false, exclude outgoing edges from `node`. If true, include
                 outgoing edges.
+
         Returns:
             The list of neighbouring nodes.
 
@@ -411,6 +416,7 @@ class QPUTopology:
                 or the quantum element object may be provided.
             parameters: The quantum parameters for the edge.
             quantum_element: The quantum element associated to the edge.
+
         Raises:
             TypeError: If `quantum_element` has an invalid type.
 
@@ -468,8 +474,10 @@ class QPUTopology:
                 the quantum element object may be provided.
             target_node: The quantum element at the target node. Either the quantum element UID
                 or the quantum element object may be provided.
+
         Returns:
             The edge.
+
         Raises:
             KeyError: If the edge key `(tag, source_node, target_node)` does not exist
                 in the QPU.
@@ -532,8 +540,10 @@ class QPUTopology:
             outgoing:
                 If false, exclude outgoing edges from `node`. If true, include
                 outgoing edges. Only applicable if `node` is not None.
+
         Returns:
             The list of edges.
+
         Raises:
             ValueError: If `node` is None and any of `other_node`, `incoming`, or
                 `outgoing` are not None.
@@ -616,6 +626,7 @@ class QPUTopology:
                 the quantum element object may be provided.
             target_node: The quantum element at the target node. Either the quantum element UID
                 or the quantum element object may be provided.
+
         Raises:
             KeyError: If the edge key `(tag, source_node, target_node)` does not exist
                 in the QPU.

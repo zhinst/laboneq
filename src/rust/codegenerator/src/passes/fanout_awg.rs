@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashSet;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::ir::compilation_job::{AwgCore, DeviceKind, Signal};
@@ -20,10 +19,10 @@ fn contains_signal(ctx: &Context, signal_uid: &str) -> bool {
     ctx.signals.contains(signal_uid)
 }
 
-fn filter_signals(awg: &Context, signals: &[Rc<Signal>]) -> Vec<Rc<Signal>> {
+fn filter_signals(awg: &Context, signals: &[Arc<Signal>]) -> Vec<Arc<Signal>> {
     signals
         .iter()
-        .filter_map(|s| contains_signal(awg, &s.uid).then_some(Rc::clone(s)))
+        .filter_map(|s| contains_signal(awg, &s.uid).then_some(Arc::clone(s)))
         .collect()
 }
 
@@ -99,10 +98,10 @@ fn build_awg_ir(node: &IrNode, parent_offset: Samples, ctx: &Context<'_>, nodes:
                 return;
             }
             let ob = Case {
-                section_info: Arc::clone(&ob.section_info),
                 signals,
                 length: ob.length,
                 state: ob.state,
+                section_info: Arc::clone(&ob.section_info),
             };
             let mut new_node = IrNode::new(NodeKind::Case(ob), *node.offset() + parent_offset);
             let mut children = vec![];
@@ -140,7 +139,7 @@ fn build_awg_ir(node: &IrNode, parent_offset: Samples, ctx: &Context<'_>, nodes:
             }
             let new_node = IrNode::new(
                 NodeKind::PrecompensationFilterReset {
-                    signal: Rc::clone(signal),
+                    signal: Arc::clone(signal),
                 },
                 *node.offset() + parent_offset,
             );
@@ -183,7 +182,7 @@ fn build_awg_ir(node: &IrNode, parent_offset: Samples, ctx: &Context<'_>, nodes:
                     continue;
                 }
                 let set_data = TriggerBitData {
-                    signal: Rc::clone(signal),
+                    signal: Arc::clone(signal),
                     bit: *bit,
                     set: true,
                     section_info: Arc::clone(&ob.section_info),
@@ -194,7 +193,7 @@ fn build_awg_ir(node: &IrNode, parent_offset: Samples, ctx: &Context<'_>, nodes:
                 );
                 start_nodes.push(new_node);
                 let unset_data = TriggerBitData {
-                    signal: Rc::clone(signal),
+                    signal: Arc::clone(signal),
                     bit: *bit,
                     set: false,
                     section_info: Arc::clone(&ob.section_info),
@@ -328,7 +327,7 @@ mod tests {
             self.enter_stack(IrNode::new(root, 0), f);
         }
 
-        pub fn reset_precompensation(&mut self, offset: Samples, signal: Rc<Signal>) {
+        pub fn reset_precompensation(&mut self, offset: Samples, signal: Arc<Signal>) {
             let node = NodeKind::PrecompensationFilterReset { signal };
             let ir_node = IrNode::new(node, offset);
             self.node_stack.last_mut().unwrap().add_child_node(ir_node);
@@ -343,10 +342,12 @@ mod tests {
         AwgCore::new(
             0,
             AwgKind::MULTI,
-            signals.iter().map(|s| Rc::new(s.clone())).collect(),
+            signals.iter().map(|s| Arc::new(s.clone())).collect(),
             2e9,
             Arc::new(Device::new("test_device".to_string().into(), device_kind)),
             std::collections::HashMap::new(),
+            None,
+            false,
         )
     }
 
@@ -359,6 +360,7 @@ mod tests {
             channels: vec![],
             oscillator: None,
             mixer_type: None,
+            automute: false,
         }
     }
 
@@ -376,12 +378,12 @@ mod tests {
             b.section("s0", 0, 8, |b| {
                 // 2 parallel sections where the first reset happens after second Section reset.
                 b.section("s1", 0, 16, |b| {
-                    b.reset_precompensation(32, Rc::new(create_signal("sig0")));
+                    b.reset_precompensation(32, Arc::new(create_signal("sig0")));
                 });
                 b.section("s2", 0, 16, |b| {
-                    b.reset_precompensation(16, Rc::new(create_signal("sig0")));
+                    b.reset_precompensation(16, Arc::new(create_signal("sig0")));
                 });
-                b.reset_precompensation(0, Rc::new(create_signal("sig1")));
+                b.reset_precompensation(0, Arc::new(create_signal("sig1")));
             });
         });
 
@@ -392,8 +394,8 @@ mod tests {
 
         let mut builder = IrBuilder::new();
         builder.with(|b| {
-            b.reset_precompensation(8 + 16 + 16, Rc::new(create_signal("sig0")));
-            b.reset_precompensation(8 + 16 + 32, Rc::new(create_signal("sig0")));
+            b.reset_precompensation(8 + 16 + 16, Arc::new(create_signal("sig0")));
+            b.reset_precompensation(8 + 16 + 32, Arc::new(create_signal("sig0")));
         });
         assert_eq!(builder.build(), fanout);
     }
@@ -408,8 +410,8 @@ mod tests {
         builder.with(|b| {
             b.sweep(5, |b| {
                 b.section("s0", 0, 0, |b| {
-                    b.reset_precompensation(5, Rc::new(create_signal("sig0")));
-                    b.reset_precompensation(0, Rc::new(create_signal("sig1")));
+                    b.reset_precompensation(5, Arc::new(create_signal("sig0")));
+                    b.reset_precompensation(0, Arc::new(create_signal("sig1")));
                 });
             });
         });
@@ -422,7 +424,7 @@ mod tests {
         let mut builder = IrBuilder::new();
         builder.with(|b| {
             b.sweep(5, |b| {
-                b.reset_precompensation(5, Rc::new(create_signal("sig0")));
+                b.reset_precompensation(5, Arc::new(create_signal("sig0")));
             });
         });
         assert_eq!(builder.build(), fanout);
@@ -437,7 +439,7 @@ mod tests {
         builder.with(|b| {
             b.sweep(5, |b| {
                 b.section("s0", 0, 0, |b| {
-                    b.reset_precompensation(5, Rc::new(create_signal("sig0")));
+                    b.reset_precompensation(5, Arc::new(create_signal("sig0")));
                 });
             });
         });

@@ -9,6 +9,7 @@ import math
 from typing import TYPE_CHECKING, Any, Dict, cast
 
 from sortedcontainers import SortedDict
+import orjson
 from zhinst.core import __version__ as zhinst_version
 
 from laboneq._utils import ensure_list
@@ -19,10 +20,6 @@ from laboneq.compiler.common.device_type import (
     DeviceType,
     validate_local_oscillator_frequency,
 )
-from laboneq.compiler.common.feedback_register_config import (
-    FeedbackRegisterConfig,
-)
-from laboneq.compiler.common.shfppc_sweeper_config import SHFPPCSweeperConfig
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.seqc.linker import NeartimeStep, CombinedRTOutputSeqC
@@ -62,6 +59,7 @@ from laboneq.data.recipe import (
 )
 
 if TYPE_CHECKING:
+    from laboneq._rust.codegenerator import FeedbackRegisterConfig
     from laboneq.compiler.workflow.compiler import (
         LeaderProperties,
         IntegrationUnitAllocation,
@@ -416,7 +414,7 @@ class RecipeGenerator:
         signal_type: str,
         feedback_register_config: FeedbackRegisterConfig | None,
         signals: dict[str, dict[str, str]],
-        shfppc_sweep_configuration: SHFPPCSweeperConfig | None,
+        shfppc_sweep_configuration: dict[str, object] | None,
     ):
         awg = AWG(
             awg=awg_number,
@@ -429,6 +427,8 @@ class RecipeGenerator:
             )
             awg.source_feedback_register = (
                 feedback_register_config.source_feedback_register
+                if feedback_register_config.source_feedback_register != -1
+                else "local"
             )
             awg.codeword_bitmask = feedback_register_config.codeword_bitmask
             awg.codeword_bitshift = feedback_register_config.codeword_bitshift
@@ -437,14 +437,16 @@ class RecipeGenerator:
             )
             awg.target_feedback_register = (
                 feedback_register_config.target_feedback_register
+                if feedback_register_config.target_feedback_register != -1
+                else "local"
             )
 
         initialization = self._find_initialization(device_id)
         initialization.awgs.append(awg)
 
         if shfppc_sweep_configuration is not None:
-            ppc_device = shfppc_sweep_configuration.ppc_device
-            ppc_channel_idx = shfppc_sweep_configuration.ppc_channel
+            ppc_device = shfppc_sweep_configuration.pop("ppc_device")
+            ppc_channel_idx = shfppc_sweep_configuration.pop("ppc_channel")
             ppc_initialization = self._find_initialization(ppc_device)
             for ppchannel in ppc_initialization.ppchannels:
                 if ppchannel["channel"] == ppc_channel_idx:
@@ -453,10 +455,11 @@ class RecipeGenerator:
                 raise AssertionError("channel not found")
 
             # remove the swept fields from the initialization; no need to set it in NT
-            for field in shfppc_sweep_configuration.swept_fields():
+            for field in shfppc_sweep_configuration["dimensions"]:
                 del ppchannel[field]
-
-            ppchannel["sweep_config"] = shfppc_sweep_configuration.build_table()
+            ppchannel["sweep_config"] = orjson.dumps(
+                shfppc_sweep_configuration, option=orjson.OPT_SORT_KEYS
+            ).decode()
 
     def add_neartime_execution_step(self, nt_step: NeartimeStep):
         self._recipe.realtime_execution_init.append(

@@ -115,7 +115,7 @@ mod tests {
         device_traits::SHFQA_TRAITS,
         ir::compilation_job::{AwgCore, Device, Signal, SignalKind},
     };
-    use std::{collections::HashMap, rc::Rc, sync::Arc};
+    use std::{collections::HashMap, sync::Arc};
 
     fn create_signal(uid: &str, kind: SignalKind, delay: Samples) -> Signal {
         Signal {
@@ -126,6 +126,7 @@ mod tests {
             channels: vec![],
             oscillator: None,
             mixer_type: None,
+            automute: false,
         }
     }
 
@@ -133,10 +134,12 @@ mod tests {
         AwgCore::new(
             0,
             AwgKind::MULTI,
-            signals.iter().map(|s| Rc::new(s.clone())).collect(),
+            signals.iter().map(|s| Arc::new(s.clone())).collect(),
             2e9,
             Arc::new(Device::new("".to_string().into(), DeviceKind::SHFQA)),
             HashMap::new(),
+            None,
+            false,
         )
     }
 

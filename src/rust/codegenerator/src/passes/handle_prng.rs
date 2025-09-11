@@ -7,7 +7,7 @@ use crate::ir::SectionId;
 use anyhow::anyhow;
 use std::collections::HashSet;
 
-pub fn handle_prng_recursive(
+fn handle_prng_recursive(
     node: &ir::IrNode,
     cut_points: &mut HashSet<ir::Samples>,
     parent_prng_setup_section: Option<SectionId>,

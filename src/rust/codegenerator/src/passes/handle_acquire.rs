@@ -5,7 +5,7 @@ use crate::ir::{AcquirePulse, IrNode, NodeKind, PlayAcquire, Samples};
 use crate::passes::handle_oscillators::SoftwareOscillatorParameters;
 use crate::tinysample::floor_to_grid;
 use crate::{Error, Result};
-use std::rc::Rc;
+use std::sync::Arc;
 
 fn validate(pulse: &AcquirePulse) -> Result<()> {
     assert_ne!(pulse.length, 0, "Acquire length must be non-zero");
@@ -30,7 +30,7 @@ fn lower_acquire_pulse(
     let start = floor_to_grid(offset, sample_multiple.into());
     let end = floor_to_grid(offset + pulse.length, sample_multiple.into());
     let acquire = PlayAcquire::new(
-        Rc::clone(&pulse.signal),
+        Arc::clone(&pulse.signal),
         end - start,
         pulse.pulse_defs.clone(),
         oscillator_frequency,
@@ -107,6 +107,7 @@ mod tests {
                 channels: vec![0],
                 oscillator: None,
                 mixer_type: None,
+                automute: false,
             }
             .into(),
             pulse_defs: vec![],
