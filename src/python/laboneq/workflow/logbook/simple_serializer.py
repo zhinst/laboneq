@@ -27,8 +27,24 @@ NOT_SIMPLE = NotSimpleType()
 # at all.
 DONT_SERIALIZE = "..."
 
+# A constant specifying the maximum number of items a container
+# may have in order to be considered simple
+MAX_CONTAINER_ITEMS = 10
+
+# A constant specifying the maximum string length that is considered
+# simple
+MAX_STR_LENGTH = 1000
+
 SimpleType: TypeAlias = Union[
-    str, int, float, bool, None, NotSimpleType, dict[str, "SimpleType"]
+    str,
+    int,
+    float,
+    bool,
+    None,
+    NotSimpleType,
+    dict[str, "SimpleType"],
+    list["SimpleType"],
+    tuple["SimpleType"],
 ]
 
 
@@ -70,7 +86,7 @@ def simple_serialize_bool(obj: bool) -> SimpleType:
 
 @simple_serialize.register
 def simple_serialize_str(obj: str) -> SimpleType:
-    if len(obj) < 1000:
+    if len(obj) <= MAX_STR_LENGTH:
         return obj
     return NOT_SIMPLE
 
@@ -86,8 +102,27 @@ def simple_serialize_date(obj: datetime.date) -> SimpleType:
 
 
 @simple_serialize.register
+def simple_serialize_list(obj: list) -> SimpleType:
+    if len(obj) <= MAX_CONTAINER_ITEMS:
+        simple_list = [simple_serialize(v) for v in obj]
+        if all(v is not NOT_SIMPLE for v in simple_list):
+            return simple_list
+    return NOT_SIMPLE
+
+
+@simple_serialize.register
+def simple_serialize_tuple(obj: tuple) -> SimpleType:
+    if hasattr(obj, "_asdict"):
+        # support namedtuples nicely:
+        return simple_serialize_dict(obj._asdict())
+    return simple_serialize_list(obj)
+
+
+@simple_serialize.register
 def simple_serialize_dict(obj: dict) -> SimpleType:
-    if len(obj) < 10 and all(isinstance(k, str) and len(k) < 1000 for k in obj):
+    if len(obj) <= MAX_CONTAINER_ITEMS and all(
+        isinstance(k, str) and len(k) < 1000 for k in obj
+    ):
         simple_dict = {k: simple_serialize(v) for k, v in obj.items()}
         if all(v is not NOT_SIMPLE for v in simple_dict.values()):
             return simple_dict

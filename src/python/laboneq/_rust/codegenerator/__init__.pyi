@@ -11,17 +11,6 @@ from laboneq.compiler.seqc.waveform_sampler import SampledWaveformSignature
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.data.compilation_job import Marker
 
-class AwgKey:
-    """Unique identifier for an AWG.
-
-    The class `__eq__`, `__hash__` and `__repr__` equals to the Python `AwgKey` class.
-    Serialization support is not yet implemented and should be avoided.
-    Use the Python `AwgKey` class for serialization if needed.
-    """
-
-    device_id = str
-    awg_id = int
-
 class PulseSignature:
     start: int
     length: int

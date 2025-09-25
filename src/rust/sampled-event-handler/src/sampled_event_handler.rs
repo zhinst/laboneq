@@ -391,7 +391,7 @@ impl<'a> SampledEventHandler<'a> {
         Ok(SampledEventHandler {
             command_table_tracker: CommandTableTracker::new(
                 awg.device_kind.clone(),
-                awg.signal_kind.clone(),
+                awg.signal_kind,
             ),
             shfppc_sweeper_config_tracker: SHFPPCSweeperConfigTracker::new(),
             seqc_tracker,
@@ -440,7 +440,7 @@ impl<'a> SampledEventHandler<'a> {
 
     fn assert_command_table(&self, msg: &str) -> Result<()> {
         if !self.awg.device_kind.traits().supports_command_table {
-            return Err(anyhow::anyhow!(format!("Internal error: {}", msg)));
+            return Err(anyhow::anyhow!("Internal error: {msg}"));
         }
         Ok(())
     }
@@ -583,9 +583,7 @@ impl<'a> SampledEventHandler<'a> {
         if let Some(entry) = self.match_command_table_entries.get(&state) {
             if entry != &(waveform, wave_index, start - parent_match_start) {
                 return Err(anyhow::anyhow!(
-                    "Duplicate state {} with different pulses for PRNG found in section {}.",
-                    state,
-                    section
+                    "Duplicate state {state} with different pulses for PRNG found in section {section}."
                 ));
             }
         } else {
@@ -1169,24 +1167,23 @@ impl<'a> SampledEventHandler<'a> {
         } else {
             let wave_index = self.wave_indices.lookup_index_by_wave_id(sig_string);
             match wave_index {
-                Some(index) => Ok(index),
+                Some(index) => Ok(Some(index)),
                 None => {
-                    let signal_type = if self.awg.device_kind.traits().supports_binary_waves {
-                        SignalType::SIGNAL(self.awg.signal_kind.clone())
-                    } else {
-                        SignalType::CSV
-                    };
+                    assert!(
+                        self.awg.device_kind.traits().supports_binary_waves,
+                        "Internal error: Device {} does not support binary waves",
+                        self.awg.device_kind.traits().type_str
+                    );
+                    let signal_type = SignalType::SIGNAL(self.awg.signal_kind);
                     let new_wave_index = self
                         .wave_indices
                         .create_index_for_wave(sig_string, signal_type)?;
-                    if let Some(new_wave_index) = new_wave_index {
-                        self.declarations_generator.add_assign_wave_index_statement(
-                            sig_string,
-                            new_wave_index,
-                            play_wave_channel,
-                        );
-                    }
-                    Ok(new_wave_index)
+                    self.declarations_generator.add_assign_wave_index_statement(
+                        sig_string,
+                        new_wave_index,
+                        play_wave_channel,
+                    );
+                    Ok(Some(new_wave_index))
                 }
             }
         }
@@ -1215,16 +1212,12 @@ impl<'a> SampledEventHandler<'a> {
                 .add_zero_wave_declaration(signature_string, length)?;
             let wave_index = self
                 .wave_indices
-                .create_index_for_wave(
-                    signature_string,
-                    SignalType::SIGNAL(self.awg.signal_kind.clone()),
-                )
+                .create_index_for_wave(signature_string, SignalType::SIGNAL(self.awg.signal_kind))
                 .map_err(|_| {
                     anyhow::anyhow!(
                         "Internal error: Could not create wave index for precompensation reset."
                     )
-                })?
-                .expect("Internal error: Wave index for precompensation reset not created.");
+                })?;
             let play_wave_channel = self.awg.play_channels.first().map(|c| c % 2);
             self.declarations_generator.add_assign_wave_index_statement(
                 signature_string,
@@ -1374,10 +1367,7 @@ impl<'a> SampledEventHandler<'a> {
                     .command_table_tracker
                     .get(idx as usize + command_table_offset as usize)
                     .map_err(|e| {
-                        anyhow::anyhow!(
-                            "Internal error: Error retrieving command table entry: {}",
-                            e
-                        )
+                        anyhow::anyhow!("Internal error: Error retrieving command table entry: {e}")
                     })?;
                 let current_wf_idx = current_ct_entry
                     .1
@@ -1394,8 +1384,7 @@ impl<'a> SampledEventHandler<'a> {
                 if current_ct_entry.0.waveform != signature.waveform || wave_index != current_wf_idx
                 {
                     return Err(anyhow::anyhow!(
-                        "Multiple command table entry sets for feedback (handle {}), do you use the same pulses and states?",
-                        handle
+                        "Multiple command table entry sets for feedback (handle {handle}), do you use the same pulses and states?"
                     ));
                 }
             }
@@ -1455,8 +1444,7 @@ impl<'a> SampledEventHandler<'a> {
     ) -> Result<()> {
         if user_register > 15 {
             return Err(anyhow::anyhow!(
-                "Invalid user register {} in match statement. User registers must be between 0 and 15.",
-                user_register
+                "Invalid user register {user_register} in match statement. User registers must be between 0 and 15."
             ));
         }
         let var_name = format!("_match_user_register_{user_register}");

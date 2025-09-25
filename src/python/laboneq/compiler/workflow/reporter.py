@@ -5,21 +5,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from io import StringIO
-from typing import Optional
+from typing import Optional, cast
 
 from rich import box
 from rich.console import Console
 from rich.table import Table
 
+from laboneq.compiler import CompilerSettings
+from laboneq.compiler.common.awg_info import AwgKey
 from laboneq.compiler.common.iface_compiler_output import (
     CombinedOutput,
     RTCompilerOutputContainer,
 )
-from laboneq.compiler import CompilerSettings
-from laboneq.compiler.common.awg_info import AwgKey
 from laboneq.compiler.workflow.compiler_output import (
     CombinedRTCompilerOutputContainer,
 )
+from laboneq.core.types.enums.wave_type import WaveType
 from laboneq.data.scheduled_experiment import CodegenWaveform
 from laboneq.laboneq_logging import get_logger
 
@@ -27,30 +28,32 @@ _logger = get_logger(__name__)
 
 
 from laboneq.compiler.workflow.neartime_execution import (
-    NtCompilerExecutorDelegate,
     NtCompilerExecutor,
+    NtCompilerExecutorDelegate,
 )
 
 
-def _count_samples(waves: dict[str, CodegenWaveform], wave_index):
+def _count_samples(
+    waves: dict[str, CodegenWaveform], wave_index: tuple[str, tuple[int, WaveType]]
+):
     multiplier = 1
     wave_name, (_, wave_type) = wave_index
     if wave_name == "precomp_reset":
         # for precomp reset we use an all-zero waveform that is not explicitly
         # listed in the waveform table
-        if wave_type in ("iq", "double", "multi"):
+        if wave_type in (WaveType.IQ, WaveType.DOUBLE):
             return 64
         return 32
-    if wave_type in ("iq", "double", "multi"):
+    if wave_type in (WaveType.IQ, WaveType.DOUBLE):
         waveform_name = f"{wave_name}_i.wave"
         multiplier = 2  # two samples per clock cycle
-    elif wave_type == "complex":
+    elif wave_type == WaveType.COMPLEX:
         waveform_name = f"{wave_name}.wave"
         multiplier = 2  # two samples per clock cycle
-    elif wave_type == "single":
+    elif wave_type == WaveType.SINGLE:
         waveform_name = f"{wave_name}.wave"
     else:
-        raise ValueError("invalid wave type")
+        raise ValueError(f"invalid wave type {wave_type}")
 
     waveform = waves[waveform_name]
     return len(waveform.samples) * multiplier
@@ -111,7 +114,7 @@ class CompilationReportGenerator(NtCompilerExecutorDelegate):
                 "ct"
             ]["table"]
             ct_len = len(ct)
-            wave_indices = compiler_output.wave_indices[awg_key]["value"]
+            wave_indices = compiler_output.wave_indices[awg_key]
             wave_indices_count = len(wave_indices)
             sample_count = 0
             for wave_index in wave_indices.items():
@@ -138,7 +141,7 @@ class CompilationReportGenerator(NtCompilerExecutorDelegate):
         total_samples = sum(
             _count_samples(compiler_output.waves, wi)
             for wil in compiler_output.wave_indices
-            for wi in wil["value"].items()
+            for wi in cast(dict[str, tuple[int, WaveType]], wil["value"]).items()
         )
         self._total = ReportEntry(
             nt_step_indices=(),

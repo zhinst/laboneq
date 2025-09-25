@@ -4,15 +4,13 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
 import logging
 import time
-from typing import TYPE_CHECKING, Callable, Generic, TypeVar
+import traceback
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Callable, Generic, TypeVar, cast
 from weakref import ref
 
-from laboneq.controller.utilities.exception import LabOneQControllerException
-from laboneq.controller.utilities.for_each import for_each_sync
-from laboneq.controller.utilities.sweep_params_tracker import SweepParamsTracker
 import numpy as np
 import zhinst.utils  # type: ignore
 from numpy import typing as npt
@@ -31,6 +29,9 @@ from laboneq.controller.recipe_processor import (
     pre_process_compiled,
 )
 from laboneq.controller.results import init_empty_result_by_shape
+from laboneq.controller.utilities.exception import LabOneQControllerException
+from laboneq.controller.utilities.for_each import for_each_sync
+from laboneq.controller.utilities.sweep_params_tracker import SweepParamsTracker
 from laboneq.controller.versioning import (
     MINIMUM_SUPPORTED_LABONE_VERSION,
     RECOMMENDED_LABONE_VERSION,
@@ -39,6 +40,7 @@ from laboneq.controller.versioning import (
 )
 from laboneq.core.exceptions import AbortExecution
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
+from laboneq.core.types.enums.wave_type import WaveType
 from laboneq.core.utilities.async_helpers import AsyncWorker, EventLoopMixIn
 from laboneq.core.utilities.replace_phase_increment import calc_ct_replacement
 from laboneq.core.utilities.replace_pulse import ReplacementType, calc_wave_replacements
@@ -46,6 +48,7 @@ from laboneq.data.execution_payload import TargetSetup
 from laboneq.data.experiment_results import ExperimentResults
 from laboneq.data.recipe import NtStepKey
 from laboneq.data.scheduled_experiment import (
+    ArtifactsCodegen,
     CodegenWaveform,
     ScheduledExperiment,
 )
@@ -87,24 +90,6 @@ class NtStepResultContext:
     execution_context: ExecutionContext
 
 
-class ExperimentRunner(AsyncWorker[ControllerSubmission]):
-    def __init__(self, controller: Controller):
-        super().__init__()
-        self._controller = controller
-
-    async def run_one(self, item: ControllerSubmission):
-        await self._controller._run_one_experiment(item)
-
-
-class ResultCollector(AsyncWorker[NtStepResultContext]):
-    def __init__(self, controller: Controller):
-        super().__init__()
-        self._controller = controller
-
-    async def run_one(self, item: NtStepResultContext):
-        await self._controller._collect_nt_step_results(item)
-
-
 class Controller(EventLoopMixIn, Generic[_SessionClass]):
     def __init__(
         self,
@@ -135,8 +120,8 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
             {} if neartime_callbacks is None else neartime_callbacks
         )
 
-        self._experiment_runner = ExperimentRunner(self)
-        self._result_collector = ResultCollector(self)
+        self._experiment_runner = AsyncWorker(run_one=self._run_one_experiment)
+        self._result_collector = AsyncWorker(run_one=self._collect_nt_step_results)
 
         _logger.debug("Controller debug logging is on")
         _logger.info("VERSION: laboneq %s", __version__)
@@ -183,6 +168,8 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
             nt_step=nt_step,
         )
         await self._devices.for_each(DeviceBase.set_after_awg_upload, recipe_data)
+        sweep_params_tracker.clear_for_next_step()
+        user_set_nodes.clear()
 
     async def _after_nt_step(self):
         await self._devices.for_each(DeviceBase.update_warning_nodes)
@@ -192,7 +179,6 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
 
     async def _wait_execution_to_stop(
         self,
-        recipe_data: RecipeData,
         acquisition_type: AcquisitionType,
         rt_execution_info: RtExecutionInfo,
     ):
@@ -238,9 +224,18 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
         *,
         execution_context: ExecutionContext,
         recipe_data: RecipeData,
+        sweep_params_tracker: SweepParamsTracker,
+        user_set_nodes: NodeCollector,
         nt_step: NtStepKey,
         timeout_s=5.0,
     ) -> asyncio.Future[None]:
+        await self._prepare_nt_step(
+            recipe_data=recipe_data,
+            sweep_params_tracker=sweep_params_tracker,
+            user_set_nodes=user_set_nodes,
+            nt_step=nt_step,
+        )
+
         rt_execution_info = recipe_data.rt_execution_info
 
         nt_step_result_completed = asyncio.get_running_loop().create_future()
@@ -272,7 +267,6 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
                 timeout_s=timeout_s,
             )
             await self._wait_execution_to_stop(
-                recipe_data,
                 rt_execution_info.acquisition_type,
                 rt_execution_info=rt_execution_info,
             )
@@ -280,10 +274,21 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
                 DeviceBase.teardown_one_step_execution,
                 with_pipeliner=rt_execution_info.with_pipeliner,
             )
-        except (asyncio.TimeoutError, TimeoutError) as e:
-            raise LabOneQControllerException(
-                "Timeout during execution of a near-time step"
-            ) from e
+        except (asyncio.TimeoutError, TimeoutError, LabOneQControllerException) as e:
+            if not isinstance(e, LabOneQControllerException):
+                e = LabOneQControllerException(
+                    "Timeout during execution of a near-time step",
+                    cause=e,
+                )
+            # TODO(2K): introduce "hard" controller exceptions
+            execution_context.submission.results.execution_errors.append(
+                (
+                    list(nt_step.indices),
+                    execution_context.recipe_data.rt_execution_info.uid,
+                    "".join(traceback.format_exception(e)),
+                )
+            )
+        await self._after_nt_step()
         return nt_step_result_completed
 
     def connect(
@@ -385,7 +390,9 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
         try:
             await self._execute_compiled_async(submission=submission)
         except BaseException as e:
-            submission.completion_future.set_exception(e)
+            # completion_future maybe cancelled by SIGINT handler, avoid InvalidStateError in that case
+            if not submission.completion_future.done():
+                submission.completion_future.set_exception(e)
 
     async def _execute_compiled_async(self, submission: ControllerSubmission):
         # Ensure all connect configurations are still valid!
@@ -428,7 +435,6 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
                         controller=self,
                         parent_session_ref=self._parent_session_ref,
                         execution_context=execution_context,
-                        recipe_data=recipe_data,
                     ).run(recipe_data.execution)
                 except AbortExecution:
                     # eat the exception
@@ -470,38 +476,26 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
         pulse_uid: str | Pulse,
         pulse_or_array: npt.ArrayLike | Pulse,
     ):
-        if isinstance(pulse_uid, str):
-            for waveform in recipe_data.scheduled_experiment.pulse_map[
-                pulse_uid
-            ].waveforms.values():
-                if any([instance.can_compress for instance in waveform.instances]):
-                    raise LabOneQControllerException(
-                        f"Pulse replacement on pulses that allow compression not "
-                        f"allowed. Pulse {pulse_uid}"
-                    )
-
-        if getattr(pulse_uid, "can_compress", False):
-            raise LabOneQControllerException(
-                f"Pulse replacement on pulses that allow compression not allowed. "
-                f"Pulse {pulse_uid.uid}"  # type: ignore
-            )
-
-        acquisition_type = recipe_data.rt_execution_info.acquisition_type
+        artifacts = recipe_data.scheduled_experiment.artifacts
         wave_replacements = calc_wave_replacements(
-            recipe_data.scheduled_experiment,
+            artifacts,
             pulse_uid,
             pulse_or_array,
             self._current_waves,
         )
+
+        # Ensured by `calc_wave_replacements`
+        assert isinstance(artifacts, ArtifactsCodegen)
+        assert artifacts.wave_indices is not None
+
+        acquisition_type = recipe_data.rt_execution_info.acquisition_type
         for repl in wave_replacements:
             awg_indices = next(
-                a
-                for a in recipe_data.scheduled_experiment.wave_indices
+                cast(dict[str, tuple[int, WaveType]], a["value"])
+                for a in artifacts.wave_indices
                 if a["filename"] == repl.awg_id
             )
-            awg_wave_map: dict[str, list[int | str]] = awg_indices["value"]
-            target_wave_index = awg_wave_map[repl.sig_string][0]
-            assert isinstance(target_wave_index, int)
+            target_wave_index = awg_indices[repl.sig_string][0]
             seqc_name = repl.awg_id
             awg_key = recipe_data.awg_by_seqc_name(seqc_name)
             assert awg_key is not None
@@ -551,6 +545,8 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
         self, nt_step_result_context: NtStepResultContext
     ):
         if nt_step_result_context.nt_step is None:
+            # Indicates end of the near-time execution.
+            # Resolve the overall submission future with the results.
             nt_step_result_context.execution_context.submission.completion_future.set_result(
                 nt_step_result_context.execution_context.submission.results
             )
@@ -572,8 +568,3 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
             nt_step=nt_step,
             results=results,
         )
-
-    def _report_step_error(
-        self, results: ExperimentResults, nt_step: NtStepKey, uid: str, message: str
-    ):
-        results.execution_errors.append((list(nt_step.indices), uid, message))

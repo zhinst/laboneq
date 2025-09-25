@@ -107,7 +107,7 @@ fn generate_output(
             .push(std::mem::take(&mut event));
     }
     let awg = Awg {
-        signal_kind: awg.kind.clone(),
+        signal_kind: awg.kind,
         awg_key: awg.key(),
         play_channels: awg
             .signals
@@ -627,7 +627,7 @@ fn generate_code(
     let feedback_config: FeedbackConfig<'_> = collect_feedback_config(&ir_root, &awg_refs)
         .context("Error while processing feedback configuration")?;
     let feedback_config_ref = &feedback_config;
-    let awg_results = py.allow_threads(|| {
+    let awg_results = py.detach(|| {
         generate_code_for_multiple_awgs(
             &ir_root,
             awgs.as_slice(),
@@ -639,7 +639,7 @@ fn generate_code(
             &feedback_register_layout,
         )
     })?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let result = SeqCGenOutputPy::new(py, awg_results, total_execution_time, feedback_config);
         Ok(result)
     })
@@ -655,7 +655,6 @@ pub fn create_py_module<'a>(
     m.add_class::<common_types::SignalTypePy>()?;
     m.add_class::<common_types::DeviceTypePy>()?;
     m.add_class::<common_types::MixerTypePy>()?;
-    m.add_class::<common_types::AwgKeyPy>()?;
     // AWG Code generation
     m.add_function(wrap_pyfunction!(generate_code, &m)?)?;
     m.add_class::<PulseSignaturePy>()?;

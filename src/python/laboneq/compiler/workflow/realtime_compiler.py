@@ -15,7 +15,10 @@ from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLay
 from laboneq.compiler.ir.section_ir import SectionIR
 from laboneq.compiler.event_list.event_list_generator import generate_event_list_from_ir
 from laboneq.compiler.common.iface_code_generator import ICodeGenerator
-from laboneq.compiler.common.iface_compiler_output import RTCompilerOutputContainer
+from laboneq.compiler.common.iface_compiler_output import (
+    RTCompilerOutput,
+    RTCompilerOutputContainer,
+)
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.experiment_access import ExperimentDAO
 from laboneq.compiler.ir.ir import IRTree
@@ -120,7 +123,7 @@ class RealtimeCompiler:
         time_start = time.perf_counter()
         self._generate_code()
 
-        outputs = {
+        outputs: dict[int, RTCompilerOutput] = {
             device_class: code_generator.get_output()
             for device_class, code_generator in self._code_generators.items()
         }

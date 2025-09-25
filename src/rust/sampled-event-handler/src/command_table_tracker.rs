@@ -101,10 +101,9 @@ impl CommandTableTracker {
         ignore_already_in_table: bool, // Default to false
     ) -> Result<usize> {
         if !ignore_already_in_table && self.table_index_by_signature.contains_key(signature) {
-            return Err(anyhow::anyhow!(format!(
-                "Signature {:?} already exists in command table",
-                signature
-            )));
+            return Err(anyhow::anyhow!(
+                "Signature {signature:?} already exists in command table"
+            ));
         }
         let index = self.command_table.len();
 

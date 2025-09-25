@@ -23,7 +23,7 @@ class _BaseLabOneQInstrumentor(BaseInstrumentor):
 
     def __init__(self):
         super().__init__()
-        self._to_instrument: list[object, str, Callable] = []
+        self._to_instrument: list[tuple[object, str, Callable]] = []
 
     def instrumentation_dependencies(self):
         return [f"laboneq == {__version__}"]
@@ -123,32 +123,32 @@ class ControllerInstrumentor(_BaseLabOneQInstrumentor):
         self._to_instrument = [
             (
                 laboneq.controller.controller.Controller,
-                "_connect_async",
+                laboneq.controller.controller.Controller._connect_async.__name__,
                 self._wrap_controller_connect,
             ),
             (
                 laboneq.controller.controller.Controller,
-                "_execute_compiled_async",
+                laboneq.controller.controller.Controller._execute_compiled_async.__name__,
                 self._wrap_controller_execute,
             ),
             (
                 laboneq.controller.controller.NearTimeRunner,
-                "run",
+                laboneq.controller.controller.NearTimeRunner.run.__name__,
                 self._wrap_near_time_execution,
             ),
             (
                 laboneq.controller.controller.Controller,
-                "_execute_one_step",
+                laboneq.controller.controller.Controller._execute_one_step.__name__,
                 self._wrap_controller_step_execution,
             ),
             (
                 laboneq.controller.controller.Controller,
-                "_read_one_step_results",
+                laboneq.controller.controller.Controller._read_one_step_results.__name__,
                 self._wrap_read_step_results,
             ),
             (
                 laboneq.controller.controller.Controller,
-                "_prepare_nt_step",
+                laboneq.controller.controller.Controller._prepare_nt_step.__name__,
                 self._wrap_prepare_step,
             ),
         ]

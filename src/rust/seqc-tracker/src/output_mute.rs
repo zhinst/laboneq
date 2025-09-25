@@ -49,8 +49,7 @@ impl OutputMute {
             + device_traits.min_play_wave as f64 / device_traits.sampling_rate; // ... plus a minimal playZero
         if duration_min <= device_duration_min {
             return Err(anyhow!(
-                "Output mute duration must be larger than {} s.",
-                device_duration_min
+                "Output mute duration must be larger than {device_duration_min} s."
             )
             .into());
         }

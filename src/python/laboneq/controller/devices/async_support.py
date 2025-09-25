@@ -17,6 +17,7 @@ from typing import (
     Iterator,
     Literal,
     TypeVar,
+    cast,
     overload,
 )
 from laboneq.controller.devices.device_utils import is_expected, to_l1_timeout
@@ -189,9 +190,11 @@ class DataServerConnection:
                 timeout=to_l1_timeout(timeout_s),
             )
         else:
-            data_server = KernelSessionEmulator(
-                serial="ZI", emulator_state=emulator_state
-            )  # type: ignore
+            # Fool the type checker that the KernelSessionEmulator is a KernelSession
+            data_server = cast(
+                KernelSession,
+                KernelSessionEmulator(serial="ZI", emulator_state=emulator_state),
+            )
 
         try:
             (
@@ -356,10 +359,14 @@ class InstrumentConnection:
                 timeout=to_l1_timeout(timeout_s),
             )
         else:
-            instrument = KernelSessionEmulator(
-                serial=device_qualifier.options.serial,
-                emulator_state=emulator_state,
-            )  # type: ignore
+            # Fool the type checker that the KernelSessionEmulator is a KernelSession
+            instrument = cast(
+                KernelSession,
+                KernelSessionEmulator(
+                    serial=device_qualifier.options.serial,
+                    emulator_state=emulator_state,
+                ),
+            )
         return InstrumentConnection(instrument)
 
     @property
@@ -491,7 +498,7 @@ def canonical_vector(value: Any) -> NumPyArray:
 
 
 def canonical_properties(value: Any) -> dict[str, Any]:
-    properties = getattr(value, "properties", {})
+    properties: dict[str, Any] = getattr(value, "properties", {})
     return {_key_translate.get(key, key): val for key, val in dict(properties).items()}
 
 

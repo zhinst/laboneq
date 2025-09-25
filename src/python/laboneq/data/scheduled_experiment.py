@@ -7,13 +7,15 @@ import copy
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal
-from laboneq.executor.executor import Statement
+
 import numpy as np
 from numpy import typing as npt
 
+from laboneq.core.types.enums.wave_type import WaveType
 from laboneq.core.validators import dicts_equal
 from laboneq.data import EnumReprMixin
 from laboneq.data.recipe import Recipe
+from laboneq.executor.executor import Statement
 
 
 class MixerType(EnumReprMixin, Enum):
@@ -122,7 +124,7 @@ class ArtifactsCodegen(CompilerArtifact):
 
     # Data structure for storing the indices or filenames by which the waveforms are
     # referred to during and after upload.
-    wave_indices: list[dict[str, Any]] | None = None
+    wave_indices: list[dict[str, str | dict[str, tuple[int, WaveType]]]] | None = None
 
     # Data structure for storing the command table data
     command_tables: list[dict[str, Any]] = field(default_factory=list)

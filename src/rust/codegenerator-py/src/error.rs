@@ -38,7 +38,7 @@ impl From<Error> for PyErr {
         let err_message = create_python_error_message(&error);
         if let Some(py_err) = find_python_root_cause(&error) {
             let error = LabOneQException::new_err(err_message);
-            Python::with_gil(|py| {
+            Python::attach(|py| {
                 error.set_cause(py, Some(py_err.clone_ref(py)));
                 error
             })

@@ -27,7 +27,7 @@ impl AwgTiming {
 }
 
 fn validate_signal_delays(awg: &AwgCore) -> Result<()> {
-    if awg.kind != AwgKind::IQ {
+    if awg.kind == AwgKind::IQ {
         return Ok(());
     }
     let delays: Vec<_> = awg
@@ -133,7 +133,7 @@ mod tests {
     fn create_awg_core(signals: Vec<Signal>) -> AwgCore {
         AwgCore::new(
             0,
-            AwgKind::MULTI,
+            AwgKind::IQ,
             signals.iter().map(|s| Arc::new(s.clone())).collect(),
             2e9,
             Arc::new(Device::new("".to_string().into(), DeviceKind::SHFQA)),

@@ -23,6 +23,7 @@ from laboneq.compiler.seqc.measurement_calculator import (
     SignalDelays,
 )
 from laboneq.core.exceptions import LabOneQException
+from laboneq.core.types.enums.wave_type import WaveType
 from laboneq.core.utilities.seqc_compile import SeqCCompileItem, awg_compile
 from laboneq.data.recipe import NtStepKey
 from laboneq.data.scheduled_experiment import (
@@ -50,7 +51,9 @@ class CombinedRTOutputSeqC(CombinedOutput):
     requires_long_readout: dict[str, list[str]] = field(
         default_factory=lambda: defaultdict(list)
     )
-    wave_indices: list[dict[str, Any]] = field(default_factory=list)
+    wave_indices: list[dict[str, str | dict[str, tuple[int, WaveType]]]] = field(
+        default_factory=list
+    )
     command_tables: list[dict[str, Any]] = field(default_factory=list)
     pulse_map: dict[str, PulseMapEntry] = field(default_factory=dict)
     parameter_phase_increment_map: dict[str, ParameterPhaseIncrementMap] = field(
@@ -111,7 +114,7 @@ class SeqCGenOutput(RTCompilerOutput):
     src: dict[AwgKey, SeqCProgram]
     waves: dict[str, CodegenWaveform]
     requires_long_readout: dict[str, list[str]]
-    wave_indices: dict[AwgKey, dict[str, dict[str, tuple[int, str]]]]
+    wave_indices: dict[AwgKey, dict[str, tuple[int, WaveType]]]
     command_tables: dict[AwgKey, dict[str, Any]]
     pulse_map: dict[str, PulseMapEntry]
     parameter_phase_increment_map: dict[AwgKey, dict[str, list]]
@@ -179,7 +182,7 @@ class SeqCLinker(ILinker):
     def combined_from_single_run(output: SeqCGenOutput, step_indices: list[int]):
         src = {}
         command_tables = []
-        wave_indices = []
+        wave_indices: list[dict[str, str | dict[str, tuple[int, WaveType]]]] = []
         integration_weights: dict[str, AwgWeights] = {}
         parameter_phase_increment_map: dict[str, ParameterPhaseIncrementMap] = {}
         for awg, seqc_program in output.src.items():
@@ -193,7 +196,7 @@ class SeqCLinker(ILinker):
             wave_indices.append(
                 {
                     "filename": seqc_name,
-                    **output.wave_indices[awg],
+                    "value": output.wave_indices[awg],
                 }
             )
             if awg in output.integration_weights:
@@ -243,20 +246,18 @@ class SeqCLinker(ILinker):
             previous_ct = previous.command_tables.get(awg)
             new_ct = new.command_tables.get(awg)
 
-            previous_wave_indices = previous.wave_indices.get(awg)
-            new_wave_indices = new.wave_indices.get(awg)
+            previous_wave_indices = previous.wave_indices.get(awg, {})
+            new_wave_indices = new.wave_indices.get(awg, {})
 
             previous_waves: dict[str, CodegenWaveform] = {
                 name: wave
                 for name, wave in previous.waves.items()
-                if any(
-                    index_name in name for index_name in previous_wave_indices["value"]
-                )
+                if any(index_name in name for index_name in previous_wave_indices)
             }
             new_waves: dict[str, CodegenWaveform] = {
                 name: wave
                 for name, wave in new.waves.items()
-                if any(index_name in name for index_name in new_wave_indices["value"])
+                if any(index_name in name for index_name in new_wave_indices)
             }
 
             previous_integration_weights = previous.integration_weights.get(awg)
@@ -313,7 +314,9 @@ class SeqCLinker(ILinker):
             if new_ct is not None:
                 this.command_tables.append({"seqc": seqc_name, **new_ct})
             if new_wave_indices is not None:
-                this.wave_indices.append({"filename": seqc_name, **new_wave_indices})
+                this.wave_indices.append(
+                    {"filename": seqc_name, "value": new_wave_indices}
+                )
             if new_integration_weights is not None:
                 this.integration_weights[seqc_name] = new_integration_weights
             this.waves.update(new_waves)

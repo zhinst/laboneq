@@ -109,7 +109,7 @@ impl SampledWaveformPy {
     }
 
     #[getter]
-    pub fn signature(&self, py: Python) -> PyObject {
+    pub fn signature(&self, py: Python) -> Py<PyAny> {
         self.obj.signature.signature.clone_ref(py)
     }
 }
@@ -120,9 +120,9 @@ pub struct IntegrationWeightPy {
     #[pyo3(get)]
     pub signals: HashSet<String>,
     #[pyo3(get)]
-    pub samples_i: PyObject,
+    pub samples_i: Py<PyAny>,
     #[pyo3(get)]
-    pub samples_q: PyObject,
+    pub samples_q: Py<PyAny>,
     #[pyo3(get)]
     pub downsampling_factor: Option<usize>,
     #[pyo3(get)]
@@ -144,11 +144,11 @@ pub struct AwgCodeGenerationResultPy {
     #[pyo3(get)]
     seqc: String,
     #[pyo3(get)]
-    wave_indices: Vec<(String, (i32, String))>,
+    wave_indices: Vec<(String, (u32, String))>,
     #[pyo3(get)]
-    command_table: Option<PyObject>,
+    command_table: Option<Py<PyAny>>,
     #[pyo3(get)]
-    shf_sweeper_config: Option<PyObject>,
+    shf_sweeper_config: Option<Py<PyAny>>,
     sampled_waveforms: Vec<Py<SampledWaveformPy>>,
     integration_weights: Vec<Py<IntegrationWeightPy>>,
     #[pyo3(get)]
@@ -165,7 +165,7 @@ impl AwgCodeGenerationResultPy {
     #[allow(clippy::too_many_arguments)]
     pub fn create(
         seqc: String,
-        wave_indices: IndexMap<String, (Option<WaveIndex>, SignalType)>,
+        wave_indices: IndexMap<String, (WaveIndex, SignalType)>,
         command_table: Option<Value>,
         shf_sweeper_config: Option<SHFPPCSweeperConfig>,
         sampled_waveforms: Vec<SampledWaveform<SampledWaveformSignaturePy>>,
@@ -178,7 +178,7 @@ impl AwgCodeGenerationResultPy {
         target_feedback_register: Option<i64>,
         source_feedback_register: Option<FeedbackRegisterAllocation>,
     ) -> PyResult<Self> {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let sampled_waveforms: Vec<Py<SampledWaveformPy>> = sampled_waveforms
                 .into_iter()
                 .map(|sampled| Py::new(py, SampledWaveformPy { obj: sampled }).unwrap())
@@ -260,25 +260,20 @@ impl AwgCodeGenerationResultPy {
                     (
                         k,
                         (
-                            match v {
-                                Some(v) => v as i32,
-                                None => -1,
-                            },
+                            v,
                             match signal_type {
-                                SignalType::CSV => "csv",
                                 SignalType::COMPLEX => "complex",
                                 SignalType::SIGNAL(s) => match s {
                                     AwgKind::DOUBLE => "double",
                                     AwgKind::SINGLE => "single",
                                     AwgKind::IQ => "iq",
-                                    AwgKind::MULTI => "multi",
                                 },
                             }
                             .to_string(),
                         ),
                     )
                 })
-                .collect::<Vec<(String, (i32, String))>>();
+                .collect::<Vec<(String, (u32, String))>>();
             let feedback_register_config = FeedbackRegisterConfigPy {
                 local: feedback_register_config.local,
                 source_feedback_register: source_feedback_register.map(|sfr| match sfr {
@@ -379,7 +374,7 @@ impl SeqCGenOutputPy {
     }
 
     #[getter]
-    fn simultaneous_acquires(&self, py: Python) -> PyResult<Vec<PyObject>> {
+    fn simultaneous_acquires(&self, py: Python) -> PyResult<Vec<Py<PyAny>>> {
         let mut sim_acquires = Vec::new();
         for acquisitions in &self.simultaneous_acquires {
             let dict = PyDict::new(py);

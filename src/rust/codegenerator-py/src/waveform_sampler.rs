@@ -28,7 +28,7 @@ use codegenerator::{Error, Result, Samples};
 #[derive(Debug)]
 pub struct SampledWaveformSignaturePy {
     /// The Python signature of the sampled waveform (i.e. SampledWaveformSignature)
-    pub signature: Arc<PyObject>,
+    pub signature: Arc<Py<PyAny>>,
     /// Whether the sampled waveform has marker 1.
     pub has_markers1: bool,
     /// Whether the sampled waveform has marker 2.
@@ -36,7 +36,7 @@ pub struct SampledWaveformSignaturePy {
 }
 
 impl SampledWaveformSignature for SampledWaveformSignaturePy {
-    type Inner = Arc<PyObject>;
+    type Inner = Arc<Py<PyAny>>;
 
     fn has_marker1(&self) -> bool {
         self.has_markers1
@@ -46,7 +46,7 @@ impl SampledWaveformSignature for SampledWaveformSignaturePy {
         self.has_markers2
     }
 
-    fn signature(&self) -> Arc<PyObject> {
+    fn signature(&self) -> Arc<Py<PyAny>> {
         Arc::clone(&self.signature)
     }
 }
@@ -110,8 +110,8 @@ impl PlaySamplesPy {
 #[derive(Debug)]
 pub struct IntegrationWeight<'a> {
     pub signals: HashSet<&'a str>,
-    pub samples_i: PyObject,
-    pub samples_q: PyObject,
+    pub samples_i: Py<PyAny>,
+    pub samples_q: Py<PyAny>,
     pub downsampling_factor: Option<usize>,
     pub basename: String,
 }
@@ -125,7 +125,7 @@ pub struct WaveformSamplerPy<'a> {
     sampler: &'a Py<PyAny>,
     sampling_rate: f64,
     device_kind: &'a DeviceKind,
-    multi_iq_signal: bool,
+    rf_signal: bool,
     signal_map: HashMap<&'a str, Arc<Signal>>,
     mixer_type: Option<&'a MixerType>,
     signal_kind: &'a SignalKind,
@@ -145,7 +145,7 @@ impl<'a> WaveformSamplerPy<'a> {
         pulse_parameters: &'a HashMap<PulseParametersId, PulseParameters>,
     ) -> Self {
         let sampling_rate = awg.sampling_rate;
-        let multi_iq_signal = awg.kind == AwgKind::MULTI;
+        let rf_signal = awg.kind == AwgKind::SINGLE || awg.kind == AwgKind::DOUBLE;
         let signal_map = awg
             .signals
             .iter()
@@ -185,7 +185,7 @@ impl<'a> WaveformSamplerPy<'a> {
             sampler,
             sampling_rate,
             device_kind: awg.device_kind(),
-            multi_iq_signal,
+            rf_signal,
             signal_map,
             mixer_type,
             signal_kind,
@@ -202,10 +202,10 @@ impl SampleWaveforms for WaveformSamplerPy<'_> {
         waveforms: &[WaveformSamplingCandidate],
     ) -> Result<SampledWaveformCollection<SampledWaveformSignaturePy>> {
         let sampling_rate = self.sampling_rate;
-        let multi_iq_signal = self.multi_iq_signal;
+        let rf_signal = self.rf_signal;
         let mut sampled_waveforms: SampledWaveformCollection<SampledWaveformSignaturePy> =
             SampledWaveformCollection::new();
-        Python::with_gil(|py| -> Result<()> {
+        Python::attach(|py| -> Result<()> {
             let pulse_parameters: HashMap<u64, Py<PulseParametersPy>> = self
                 .pulse_parameters
                 .iter()
@@ -257,7 +257,7 @@ impl SampleWaveforms for WaveformSamplerPy<'_> {
                     signals,
                     sampling_rate,
                     &device_type,
-                    multi_iq_signal,
+                    rf_signal,
                     mixer_type.as_ref(),
                     &signal_type,
                     &pulse_parameters,
@@ -316,11 +316,11 @@ fn convert_sampled_waveform_signature(
     let py = signature.py();
     let m1 = signature
         .getattr(intern!(py, "samples_marker1"))?
-        .extract::<Option<PyObject>>()?
+        .extract::<Option<Py<PyAny>>>()?
         .is_some();
     let m2 = signature
         .getattr(intern!(py, "samples_marker2"))?
-        .extract::<Option<PyObject>>()?
+        .extract::<Option<Py<PyAny>>>()?
         .is_some();
     let signature = SampledWaveformSignaturePy {
         signature: Arc::new(signature.into_pyobject(py).unwrap().into()),
@@ -387,11 +387,11 @@ fn sample_and_compress(
     signals: &[&Signal],
     sampling_rate: f64,
     device_type: &Bound<'_, DeviceTypePy>,
-    multi_iq_signal: bool,
+    rf_signal: bool,
     mixer_type: Option<&Bound<'_, MixerTypePy>>,
     signal_type: &Bound<'_, SignalTypePy>,
     pulse_parameters: &HashMap<u64, Py<PulseParametersPy>>,
-) -> Result<Option<PyObject>> {
+) -> Result<Option<Py<PyAny>>> {
     if !should_sample_waveform(waveform) {
         // If the waveform does not need to be sampled, skip the sampling process
         return Ok(None);
@@ -408,7 +408,7 @@ fn sample_and_compress(
                 signal_type,
                 device_type,
                 mixer_type,
-                multi_iq_signal,
+                rf_signal,
                 pulse_parameters,
             ),
             None,
@@ -518,7 +518,7 @@ pub fn batch_calculate_integration_weights<'a>(
         .iter()
         .map(|s| (s.uid.as_str(), *s))
         .collect();
-    Python::with_gil(|py| -> Result<Vec<IntegrationWeight<'a>>> {
+    Python::attach(|py| -> Result<Vec<IntegrationWeight<'a>>> {
         let mixer_type = mixer_type.map(|mixer| {
             MixerTypePy::from_mixer_type(mixer)
                 .into_pyobject(py)

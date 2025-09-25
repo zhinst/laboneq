@@ -223,7 +223,7 @@ class WaveformSampler:
         signal_type: codegen_rs.SignalType,
         device_type: codegen_rs.DeviceType,
         mixer_type: MixerType | None,
-        multi_iq_signal=False,
+        rf_signal=False,
         pulse_parameters: dict[int, PulseParameters] | None = None,
     ) -> (
         SampledWaveformSignature
@@ -241,7 +241,7 @@ class WaveformSampler:
             signal_type,
             device_type,
             mixer_type,
-            multi_iq_signal,
+            rf_signal,
             pulse_parameters=pulse_parameters,
         )
         compressed_events = self.compress_waveform(sampled_signature, device_type)
@@ -294,7 +294,7 @@ class WaveformSampler:
         signal_type: str,
         device_type: DeviceType,
         mixer_type: MixerType | None,
-        multi_iq_signal=False,
+        rf_signal=False,
         pulse_parameters: dict[int, PulseParameters] | None = None,
     ) -> SampledWaveformSignature:
         """Sample a single waveform signature."""
@@ -390,24 +390,20 @@ class WaveformSampler:
                     pulse_def.length * sampling_rate,
                 )
                 raise Exception(msg)
-            if (
-                pulse_part.channel == 0
-                and not multi_iq_signal
-                and not device_type == DeviceType.SHFQA
-            ):
-                self.stencil_samples(
-                    pulse_part.start, sampled_pulse.samples_i, samples_i
-                )
-                has_q = True
-            elif (
-                pulse_part.channel == 1
-                and not multi_iq_signal
-                and not device_type == DeviceType.SHFQA
-            ):
-                self.stencil_samples(
-                    pulse_part.start, sampled_pulse.samples_i, samples_q
-                )
-                has_q = True
+
+            # Add waveform
+            if rf_signal and pulse_part.channel is not None:
+                if pulse_part.channel == 0:
+                    # RF signal, channel 0
+                    self.stencil_samples(
+                        pulse_part.start, sampled_pulse.samples_i, samples_i
+                    )
+                elif pulse_part.channel == 1:
+                    # RF signal, channel 1
+                    self.stencil_samples(
+                        pulse_part.start, sampled_pulse.samples_i, samples_q
+                    )
+                    has_q = True
             else:
                 self.stencil_samples(
                     pulse_part.start, sampled_pulse.samples_i, samples_i
@@ -417,8 +413,8 @@ class WaveformSampler:
                         pulse_part.start, sampled_pulse.samples_q, samples_q
                     )
                     has_q = True
-            # RF case
             if pulse_part.channel is not None and device_type == DeviceType.HDAWG:
+                # Markers: RF case
                 if (
                     sampled_pulse.samples_marker1 is not None
                     and pulse_part.channel == 0
@@ -450,6 +446,7 @@ class WaveformSampler:
                         f"Marker 2 not supported on channel 1 of multiplexed RF signal {signals}. Please use marker 1"
                     )
             else:
+                # Markers: IQ case
                 if sampled_pulse.samples_marker1 is not None:
                     self.stencil_samples(
                         pulse_part.start,

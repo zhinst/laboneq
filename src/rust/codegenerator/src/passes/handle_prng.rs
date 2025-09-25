@@ -37,9 +37,7 @@ fn handle_prng_recursive(
                 if let Some(sample_name) = &ob.prng_sample {
                     if let Some(other_sample) = active_prng_sample {
                         return Err(anyhow!(
-                            "Nested PRNG loops are not allowed: '{}' (current) vs '{}' (existing)",
-                            sample_name,
-                            other_sample
+                            "Nested PRNG loops are not allowed: '{sample_name}' (current) vs '{other_sample}' (existing)"
                         )
                         .into());
                     }

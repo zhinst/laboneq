@@ -23,6 +23,10 @@ class PipelinerReloadTracker:
     def __init__(self):
         self.last_rt_exec_steps: list[RealtimeExecutionInit] = []
 
+    def reset(self):
+        """Reset the tracker to start a new pipeliner."""
+        self.last_rt_exec_steps.clear()
+
     def calc_next_step(
         self,
         pipeliner_job: int,

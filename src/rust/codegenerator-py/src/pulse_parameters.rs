@@ -11,11 +11,11 @@ use pyo3::{intern, prelude::*};
 pub struct PulseParameters {
     id: PulseParametersId,
     // Original parameters from pulse (Python dictionary)
-    pulse_parameters: Arc<PyObject>,
+    pulse_parameters: Arc<Py<PyAny>>,
     // Original parameters from play (Python dictionary)
-    play_parameters: Arc<PyObject>,
+    play_parameters: Arc<Py<PyAny>>,
     // Combined parameters (Python dictionary)
-    parameters: Arc<PyObject>,
+    parameters: Arc<Py<PyAny>>,
 }
 
 impl PulseParameters {
@@ -23,15 +23,15 @@ impl PulseParameters {
         self.id
     }
 
-    pub fn parameters(&self) -> &PyObject {
+    pub fn parameters(&self) -> &Py<PyAny> {
         &self.parameters
     }
 
-    pub fn pulse_parameters(&self) -> &PyObject {
+    pub fn pulse_parameters(&self) -> &Py<PyAny> {
         &self.pulse_parameters
     }
 
-    pub fn play_parameters(&self) -> &PyObject {
+    pub fn play_parameters(&self) -> &Py<PyAny> {
         &self.play_parameters
     }
 }
@@ -72,17 +72,17 @@ pub struct PulseParametersPy {
 #[pymethods]
 impl PulseParametersPy {
     #[getter]
-    pub fn parameters(&self) -> &PyObject {
+    pub fn parameters(&self) -> &Py<PyAny> {
         self.parameters.parameters()
     }
 
     #[getter]
-    pub fn pulse_parameters(&mut self) -> &PyObject {
+    pub fn pulse_parameters(&mut self) -> &Py<PyAny> {
         self.parameters.pulse_parameters()
     }
 
     #[getter]
-    pub fn play_parameters(&mut self) -> &PyObject {
+    pub fn play_parameters(&mut self) -> &Py<PyAny> {
         self.parameters.play_parameters()
     }
 }

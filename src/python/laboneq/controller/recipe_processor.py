@@ -3,19 +3,17 @@
 
 from __future__ import annotations
 
-from collections.abc import ItemsView, Iterator
+import logging
 from collections import defaultdict
+from collections.abc import ItemsView, Iterator
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum, auto
-import logging
-from laboneq.data.calibration import PortMode as RecipePortMode
-from packaging.version import Version, InvalidVersion
 from typing import TYPE_CHECKING, Any, KeysView, Literal, TypeVar, cast, overload
 
 import numpy as np
-
 import zhinst.utils  # type: ignore[import-untyped]
+from packaging.version import InvalidVersion, Version
 
 from laboneq.controller.attribute_value_tracker import (
     AttributeName,
@@ -25,6 +23,8 @@ from laboneq.controller.attribute_value_tracker import (
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
+from laboneq.core.types.enums.wave_type import WaveType
+from laboneq.data.calibration import PortMode as RecipePortMode
 from laboneq.data.recipe import IO, Initialization, Recipe, SignalType
 from laboneq.data.scheduled_experiment import (
     ArtifactsCodegen,
@@ -40,9 +40,9 @@ from laboneq.executor.executor import (
 )
 
 if TYPE_CHECKING:
-    from laboneq.core.types.numpy_support import NumPyArray
     from laboneq.controller.devices.device_collection import DeviceCollection
     from laboneq.controller.devices.device_setup_dao import DeviceUID
+    from laboneq.core.types.numpy_support import NumPyArray
 
 
 _logger = logging.getLogger(__name__)
@@ -701,8 +701,11 @@ def _calculate_awg_configs(
     awg_configs = AwgConfigs()
 
     for _, device in devices.all:
+        # Newer interface that assumes all information is in the device-class-specific artifacts.
+        # Not yet implemented for all device classes.
         device.fetch_awg_configs(awg_configs, scheduled_experiment.artifacts)
 
+    # TODO(2K): Move recipe data into artifacts.
     for initialization in recipe.initializations:
         awg_type = (
             AwgType.QA
@@ -1071,27 +1074,30 @@ def prepare_waves(
         return None
     if artifacts.wave_indices is None:
         return None
-    wave_indices: dict[str, list[int | str]] = next(
-        (i for i in artifacts.wave_indices if i["filename"] == wave_indices_ref),
-        {"value": {}},
-    )["value"]
+    wave_indices: dict[str, tuple[int, WaveType]] = cast(
+        dict[str, tuple[int, WaveType]],
+        next(
+            (i for i in artifacts.wave_indices if i["filename"] == wave_indices_ref),
+            {},
+        )["value"],
+    )
 
     waves: Waveforms = []
-    for sig, [_index, _sig_type] in wave_indices.items():
-        index = cast(int, _index)
-        sig_type = cast(str, _sig_type)
+    for sig, (index, sig_type) in [
+        i for i in wave_indices.items() if i[0] != "filename"
+    ]:
         if sig.startswith("precomp_reset"):
             continue  # precomp reset waveform is bundled with ELF
-        if sig_type in ("iq", "double", "multi"):
+        if sig_type in (WaveType.IQ, WaveType.DOUBLE):
             wave = _prepare_wave_iq(artifacts.waves, sig, index)
-        elif sig_type == "single":
+        elif sig_type == WaveType.SINGLE:
             wave = _prepare_wave_single(artifacts.waves, sig, index)
-        elif sig_type == "complex":
+        elif sig_type == WaveType.COMPLEX:
             wave = _prepare_wave_complex(artifacts.waves, sig, index)
         else:
             raise LabOneQControllerException(
                 f"Unexpected signal type for binary wave for '{sig}' in '{wave_indices_ref}' - "
-                f"'{sig_type}', should be one of [iq, double, multi, single, complex]"
+                f"'{sig_type}', should be one of [iq, double, single, complex]"
             )
         waves.append(wave)
 

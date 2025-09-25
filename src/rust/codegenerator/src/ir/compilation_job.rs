@@ -104,7 +104,7 @@ impl Signal {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AwgKind {
     /// Only one channel is played
     SINGLE,
@@ -112,8 +112,6 @@ pub enum AwgKind {
     DOUBLE,
     /// Two channels form an I/Q signal
     IQ,
-    /// Multiple logical I/Q channels mixed
-    MULTI,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -285,8 +283,7 @@ impl std::str::FromStr for DeviceKind {
             "SHFSG" => Ok(DeviceKind::SHFSG),
             "UHFQA" => Ok(DeviceKind::UHFQA),
             _ => Err(anyhow!(
-                "Unsupported device type: {}. Supported types are: SHFQA, SHFSG, HDAWG, UHFQA",
-                s
+                "Unsupported device type: {s}. Supported types are: SHFQA, SHFSG, HDAWG, UHFQA"
             )),
         }
     }

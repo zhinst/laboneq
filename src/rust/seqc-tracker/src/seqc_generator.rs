@@ -314,8 +314,7 @@ impl SeqCGenerator {
         let variable_name: String = variable_name.into();
         if self.symbols.contains(&variable_name) {
             return Err(anyhow!(
-                "Trying to declare variable {} which has already been declared in this scope",
-                variable_name
+                "Trying to declare variable {variable_name} which has already been declared in this scope"
             )
             .into());
         }
@@ -398,7 +397,7 @@ impl SeqCGenerator {
             return Err(anyhow!(
                 "Emitting {function_name}({wave_length}), which is not divisible by \
                     {sample_multiple}, which it should be for {device_name}",
-                function_name = fname.to_string(),
+                function_name = fname,
                 wave_length = num_samples,
                 sample_multiple = self.device_traits.sample_multiple,
                 device_name = self.device_traits.type_str,
@@ -409,7 +408,7 @@ impl SeqCGenerator {
             return Err(anyhow!(
                 "Attempting to emit {}({}), which is below the minimum \
                 waveform length {} of device '{}' (sample multiple is {})",
-                fname.to_string(),
+                fname,
                 num_samples,
                 self.device_traits.min_play_wave,
                 self.device_traits.type_str,
@@ -705,13 +704,13 @@ pub fn seqc_generator_from_device_and_signal_type<S: AsRef<str>>(
         _ => {
             return Err(anyhow!(
                 "Unsupported device type: {}. Supported types are: SHFQA, SHFSG, HDAWG, UHFQA",
-                device.as_ref().to_string()
+                device.as_ref()
             )
             .into());
         }
     };
     let signal_type = signal_type.as_ref().to_lowercase();
-    let dual_channel = signal_type == "iq" || signal_type == "double" || signal_type == "multi";
+    let dual_channel = signal_type == "iq" || signal_type == "double";
     Ok(SeqCGenerator::new(device_traits, dual_channel))
 }
 

@@ -93,7 +93,7 @@ class AWG:
     command_table_match_offset: int | None = None
 
     # transmitter (QA instruments)
-    target_feedback_register: int | None = None
+    target_feedback_register: int | Literal["local"] | None = None
 
 
 @dataclass

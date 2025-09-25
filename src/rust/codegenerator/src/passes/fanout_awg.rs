@@ -341,7 +341,7 @@ mod tests {
     fn create_awg_core(signals: Vec<Signal>, device_kind: DeviceKind) -> AwgCore {
         AwgCore::new(
             0,
-            AwgKind::MULTI,
+            AwgKind::IQ,
             signals.iter().map(|s| Arc::new(s.clone())).collect(),
             2e9,
             Arc::new(Device::new("test_device".to_string().into(), device_kind)),

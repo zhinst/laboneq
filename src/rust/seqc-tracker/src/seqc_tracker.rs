@@ -57,7 +57,7 @@ impl SeqCTracker {
             loop_stack_generators,
             sampling_rate: awg.sampling_rate,
             device_kind: awg.device_kind.clone(),
-            signal_type: awg.signal_kind.clone(),
+            signal_type: awg.signal_kind,
             emit_timing_comments,
             current_time: 0,
             seqc_gen_prng: None,
@@ -314,7 +314,7 @@ impl SeqCTracker {
     ) -> Result<()> {
         if let Some(SeqCVariant::Integer(lat)) = &latency {
             if *lat < 31 {
-                return Err(anyhow!("Latency must be >= 31 if specified, was {}", lat).into());
+                return Err(anyhow!("Latency must be >= 31 if specified, was {lat}").into());
             }
         }
         self.current_loop_stack_generator()

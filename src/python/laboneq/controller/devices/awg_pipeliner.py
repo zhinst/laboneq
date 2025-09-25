@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Any
 
 from laboneq.controller.devices.device_utils import NodeCollector
+from laboneq.controller.pipeliner_reload_tracker import PipelinerReloadTracker
 
 
 class AwgPipeliner:
@@ -13,6 +14,7 @@ class AwgPipeliner:
         self._node_base = node_base
         self._unit = unit
         self._pipeliner_slot_tracker = 0
+        self._reload_tracker = PipelinerReloadTracker()
 
     def prepare_for_upload(self) -> NodeCollector:
         self._pipeliner_slot_tracker = 0

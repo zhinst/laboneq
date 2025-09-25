@@ -14,9 +14,12 @@ from typing import TYPE_CHECKING, Callable, ClassVar
 import warnings
 
 import numpy as np
+from laboneq.dsl.quantum._multimethod import MultiMethod
+
 from laboneq.dsl.experiment import builtins, pulse_library
 from laboneq.dsl.experiment.build_experiment import _qubits_from_args
 from laboneq.dsl.parameter import Parameter
+from laboneq.dsl.quantum import QuantumElement
 from laboneq.core.types.enums.execution_type import ExecutionType
 from laboneq.core.utilities.highlight import pygmentize
 
@@ -24,7 +27,6 @@ from laboneq.core.utilities.highlight import pygmentize
 if TYPE_CHECKING:
     from laboneq.dsl.experiment.pulse import Pulse
     from laboneq.simple import (
-        QuantumElement,
         Section,
     )
     from laboneq.dsl.quantum.qpu import QPU
@@ -82,6 +84,19 @@ class _QuantumOperationMarker:
     def __init__(self, *, broadcast: bool = True, neartime: bool = False):
         self.broadcast = broadcast
         self.neartime = neartime
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, _QuantumOperationMarker)
+            and self.broadcast == other.broadcast
+            and self.neartime == other.neartime
+        )
+
+    def __repr__(self) -> str:
+        return f"<{type(self).__qualname__} broadcast={self.broadcast}, neartime={self.neartime}>"
+
+    def copy(self) -> _QuantumOperationMarker:
+        return type(self)(broadcast=self.broadcast, neartime=self.neartime)
 
 
 class _PulseCache:
@@ -223,14 +238,23 @@ class QuantumOperations:
             (class attribute) The classes of qubits supported by this set of
             operations. The value may be a single class or a tuple of classes.
         BASE_OPS:
-            (class attribute) A dictionary of names and functions that define
-            the base operations provided.
+            (class attribute) A dictionary of names and `MultiMethod` objects that
+            define the base operations provided.
+
+    !!! version-changed "Changed in version 2.60.0"
+            The `BASE_OPS` class attribute is of type `dict[str, MultiMethod] | None`,
+            instead of `dict[str, Callable] | None`. A `MultiMethod` is a dictionary of
+            functions that is keyed by their simplified type signatures. To call a
+            function directly, please specify the `simplified_type_signature`, which is
+            the tuple of simplified types used for function dispatching. For example,
+            for a quantum operation that was defined without type hints, you can
+            replace `self.BASE_OPS[op_name]` with `self.BASE_OPS[op_name][()]`.
     """
 
-    QUBIT_TYPES: ClassVar[type[QuantumElement] | tuple[type[QuantumElement]] | None] = (
-        None
-    )
-    BASE_OPS: ClassVar[dict[str, Callable] | None] = None
+    QUBIT_TYPES: ClassVar[
+        type[QuantumElement] | tuple[type[QuantumElement], ...] | None
+    ] = None
+    BASE_OPS: ClassVar[dict[str, MultiMethod] | None] = None
 
     def __init__(self, qpu: QPU | None = None):
         if self.QUBIT_TYPES is None:
@@ -242,7 +266,37 @@ class QuantumOperations:
         self._ops = {}
 
         for name, f in self.BASE_OPS.items():
-            self.register(f, name=name)
+            self.register(f.copy(), name=name)
+
+    @classmethod
+    def _register_base_op(cls, name: str, f: Callable | MultiMethod):
+        """Register a BASE_OP."""
+        if name not in cls.BASE_OPS:
+            if isinstance(f, MultiMethod):
+                cls.BASE_OPS[name] = f.copy()
+            else:
+                cls.BASE_OPS[name] = MultiMethod(f)
+        else:
+            if isinstance(f, MultiMethod):
+                values_to_register = list(f.values())
+                for v in values_to_register:
+                    cls.BASE_OPS[name].register(v)
+            else:
+                cls.BASE_OPS[name].register(f)
+
+    @classmethod
+    def _add_qubit_types(
+        cls, types: type[QuantumElement] | tuple[type[QuantumElement], ...] | None
+    ) -> tuple[type[QuantumElement], ...] | None:
+        if types is None or not types:
+            return
+        if inspect.isclass(types) and issubclass(types, QuantumElement):
+            types = (types,)
+        if cls.QUBIT_TYPES is None:
+            cls.QUBIT_TYPES = ()
+        for t in types:
+            if t not in cls.QUBIT_TYPES:
+                cls.QUBIT_TYPES += (t,)
 
         warnings.warn(
             "The `self.BASE_OPS` class attribute will be of type "
@@ -261,26 +315,37 @@ class QuantumOperations:
 
     def __init_subclass__(cls, **kw):
         """Move any quantum operations into BASE_OPS."""
-        if cls.BASE_OPS is None:
-            cls.BASE_OPS = {}
+        # Clear QUBIT_TYPES --
+        # it will be populated again at the end.
+        cls_qubit_types = cls.QUBIT_TYPES
+        cls.QUBIT_TYPES = None
+
+        # Create an empty BASE_OPS --
+        # we walk the mro in this method to repopulate it from scratch.
+        cls.BASE_OPS = {}
 
         # Collect quantum operations from the class and its parent classes
-        base_ops = {}
         for base in reversed(cls.mro()):
+            cls._add_qubit_types(getattr(base, "QUBIT_TYPES", None))
             ops = getattr(base, "BASE_OPS", None)
             if ops is None:
                 continue
-            base_ops.update(
-                {k: v for k, v in ops.items() if getattr(v, "_quantum_op", False)}
-            )
+            for k, v in ops.items():
+                if not getattr(v, "_quantum_op", False):
+                    continue
+                cls._register_base_op(k, v)
 
         quantum_ops = {
             k: v for k, v in cls.__dict__.items() if getattr(v, "_quantum_op", False)
         }
 
-        for k in quantum_ops:
+        cls._add_qubit_types(cls_qubit_types)
+        if isinstance(cls.QUBIT_TYPES, tuple) and len(cls.QUBIT_TYPES) == 1:
+            cls.QUBIT_TYPES = cls.QUBIT_TYPES[0]
+
+        for k, v in quantum_ops.items():
             delattr(cls, k)
-        cls.BASE_OPS = {**base_ops, **quantum_ops}
+            cls._register_base_op(k, v)
 
         super().__init_subclass__(**kw)
 
@@ -333,8 +398,7 @@ class QuantumOperations:
         """
         qops = type(self)()
         for op_key, op_value in self._ops.items():
-            if op_key not in self.BASE_OPS.keys():
-                qops.register(op_value, name=op_key)
+            qops.register(op_value.op, name=op_key)
         return qops
 
     def detach_qpu(self) -> None:
@@ -345,10 +409,14 @@ class QuantumOperations:
         """Return the names of the registered quantum operations."""
         return sorted(self._ops.keys())
 
-    def register(self, f: Callable, name: str | None = None) -> None:
+    def register(
+        self,
+        f: Callable,
+        name: str | None = None,
+    ) -> None:
         """Registers a quantum operation.
 
-        The given operation is wrapped in a `Operation` instance
+        The given operation is wrapped in an `Operation` instance
         and added to this set of operations.
 
         Arguments:
@@ -395,13 +463,76 @@ class QuantumOperations:
         name = name if name is not None else f.__name__
         self._ops[name] = Operation(f, name, self)
 
+    def register_multimethod(
+        self,
+        f: Callable,
+        name: str | None = None,
+    ) -> None:
+        """Registers a quantum operation.
+
+        The given operation is wrapped in an `Operation` instance
+        and added to an existing operation `MultiMethod`.
+
+        Arguments:
+            f:
+                The function to register as a quantum operation.
+
+                The first parameter of `f` should be the set of quantum
+                operations to use. This allows `f` to use other quantum
+                operations if needed.
+
+                The qubits `f` operates on must be passed as positional
+                arguments, not keyword arguments.
+
+                Additional non-qubit arguments may be passed to `f` as
+                either positional or keyword arguments.
+            name:
+                The name of the operation. Defaults to `f.__name__`.
+
+        Raises:
+            KeyError: If `name` is not an existing operation.
+        """
+        name = name if name is not None else f.__name__
+        if name in self._ops:
+            self._ops[name]._register(f)
+        else:
+            raise KeyError(name)
+
+
+def _check_equal_op_markers(
+    op: Operation, func_value: Callable, func_key: tuple | None = None
+) -> None:
+    """Check that the operation markers for an Operation and a function are equal.
+
+    Arguments:
+        op: The `Operation` object.
+        func_value: The candidate function.
+        func_key: The tuple of simplified types in the function signature (optional).
+            If provided, this will print the offending type signature in the error
+            message. This is particularly useful when validating functions inside
+            `MultiMethod` objects.
+
+    Raises:
+        ValueError: If the operation markers are not equal.
+    """
+    if op._op_marker != getattr(func_value, "_quantum_op", _QuantumOperationMarker()):
+        type_sig_string = (
+            f" for type signature {tuple([i.__name__ for i in func_key])}"
+            if func_key
+            else ""
+        )
+        raise ValueError(
+            f"Operation markers are not equal. Existing operation marker: {op._op_marker}. "
+            f"Incompatible operation marker: {getattr(func_value, '_quantum_op', _QuantumOperationMarker())}{type_sig_string}."
+        )
+
 
 class Operation:
     """An operation on one or more qubits.
 
     Arguments:
         op:
-            The callable that implements the operation.
+            The callable or `MultiMethod` that implements the operation.
             `op` should take as positional arguments the
             qubits to operate on. It may take additional
             arguments that specify other parameters of the
@@ -415,15 +546,45 @@ class Operation:
 
     def __init__(
         self,
-        op: Callable,
+        op: Callable | MultiMethod,
         op_name: str,
         quantum_ops: QuantumOperations,
     ):
+        if not isinstance(op, MultiMethod):
+            op = MultiMethod(op)
         self._op = op
         self._op_name = op_name
         self._op_marker = getattr(op, "_quantum_op", _QuantumOperationMarker())
         self._quantum_ops = quantum_ops
-        self.__doc__ = self._op.__doc__
+
+        for k_func, v_func in op.items():
+            _check_equal_op_markers(self, v_func, k_func)
+
+    def _register(
+        self,
+        op: Callable | MultiMethod,
+    ):
+        """Register an extension to the existing operation `MultiMethod`.
+
+        If `op` is a callable, register this callable to the existing `MultiMethod`. If
+        `op` is a `MultiMethod`, then loop through the callables in `op` and register
+        them to the existing `MultiMethod`.
+
+        Arguments:
+            op:
+                The callable or `MultiMethod` that implements the operation.
+                `op` should take as positional arguments the
+                qubits to operate on. It may take additional
+                arguments that specify other parameters of the
+                operation.
+        """
+        if not isinstance(op, MultiMethod):
+            _check_equal_op_markers(self, op)
+            self._op.register(op)
+        else:
+            for k_func, v_func in op.items():
+                _check_equal_op_markers(self, v_func, k_func)
+                self._op.register(v_func)
 
     def __call__(self, *args, **kw) -> Section | list[Section]:
         """Build a section using the operation.
@@ -755,11 +916,20 @@ class Operation:
                 builtins.reserve(signal)
 
     @property
-    def op(self) -> Callable:
+    def op(self) -> MultiMethod:
         """Return the implementation of the operation.
 
         Returns:
-            The function implementing the operation.
+            The `MultiMethod` implementing the operation.
+
+        !!! version-changed "Changed in version 2.60.0"
+            The `op` property returns a `MultiMethod` instead of a `Callable`.
+            A `MultiMethod` is a dictionary of functions that is keyed by their
+            simplified type signatures. Please replace `self.op` with
+            `self.op[simplified_type_signature]`, where `simplified_type_signature` is
+            the tuple of simplified types used for function dispatching. For example,
+            for a quantum operation that was defined without type hints, you can
+            replace `self.op` with `self.op[()]`.
         """
         warnings.warn(
             "The `op` property will return a `MultiMethod` instead of a "
@@ -797,10 +967,28 @@ class Operation:
     @property
     @pygmentize
     def src(self) -> str:
-        """Return the source code of the underlying operation.
+        """Return the source code of the underlying operation(s).
+
+        Returns:
+            The source code of the underlying operation(s).
+        """
+        src = [textwrap.dedent(inspect.getsource(value)) for value in self._op.values()]
+        return "\n".join(src)
+
+    @property
+    def __doc__(self) -> str:
+        """Return the docstring of the underlying operation(s).
 
         Returns:
             The source code of the underlying operation.
+            The docstring of the underlying operation(s).
         """
-        src = inspect.getsource(self._op)
-        return textwrap.dedent(src)
+        doc_list = []
+        for key, value in self._op.items():
+            simplified_key = tuple([k.__name__ for k in key])
+            if value.__doc__:
+                doc = textwrap.dedent(value.__doc__)
+            else:
+                doc = ""
+            doc_list.append(f"Signature: {simplified_key}\n{doc}")
+        return "\n\n".join(doc_list)

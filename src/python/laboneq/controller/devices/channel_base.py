@@ -11,6 +11,7 @@ from laboneq.controller.devices.async_support import (
 )
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.recipe_processor import RecipeData
+from laboneq.data.recipe import NtStepKey
 
 
 class ChannelBase(ABC):
@@ -48,7 +49,11 @@ class ChannelBase(ABC):
         raise NotImplementedError("This method should be implemented by subclasses.")
 
     @abstractmethod
-    async def load_awg_program(self):
+    async def load_awg_program(
+        self,
+        recipe_data: RecipeData,
+        nt_step: NtStepKey,
+    ):
         """Load an AWG program into the channel's AWG."""
         raise NotImplementedError("This method should be implemented by subclasses.")
 

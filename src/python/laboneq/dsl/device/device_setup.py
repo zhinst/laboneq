@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import attrs
-from collections import defaultdict
 from typing import TYPE_CHECKING, Any
 
 from laboneq.core import path as qct_path
@@ -21,7 +20,6 @@ from laboneq.dsl.device.logical_signal_group import LogicalSignalGroup
 from laboneq.dsl.device.physical_channel_group import PhysicalChannelGroup
 from laboneq.dsl.device.servers import DataServer
 
-from ...core.types.enums import IOSignalType
 from ._device_setup_generator import _DeviceSetupGenerator
 
 if TYPE_CHECKING:
@@ -154,7 +152,6 @@ class DeviceSetup:
         try:
             for connection in connections:
                 setup_modifier.add_connection(self, instrument, connection)
-            self.check_no_rf_multiplexing()
         except DeviceSetupInternalException as e:
             raise LabOneQException(str(e)) from e
 
@@ -373,7 +370,6 @@ class DeviceSetup:
         ds = _DeviceSetupGenerator.from_descriptor(
             yaml_text, server_host, server_port, setup_name
         )
-        ds.check_no_rf_multiplexing()
         return ds
 
     @classmethod
@@ -395,7 +391,6 @@ class DeviceSetup:
         ds = _DeviceSetupGenerator.from_yaml(
             filepath, server_host, server_port, setup_name
         )
-        ds.check_no_rf_multiplexing()
         return ds
 
     @classmethod
@@ -423,7 +418,6 @@ class DeviceSetup:
             server_port=server_port,
             setup_name=setup_name,
         )
-        ds.check_no_rf_multiplexing()
         return ds
 
     @classmethod
@@ -464,7 +458,6 @@ class DeviceSetup:
             server_port=server_port,
             setup_name=setup_name,
         )
-        ds.check_no_rf_multiplexing()
         return ds
 
     def _server_leader_instrument(self, server_uid: str) -> str | None:
@@ -473,38 +466,4 @@ class DeviceSetup:
             if isinstance(dev, (PQSC, QHUB)):
                 if dev.server_uid == server_uid:
                     return dev.uid
-
-    def check_no_rf_multiplexing(self):
-        """Check each instrument in DeviceSetup for RF signal multiplexing.
-
-        This function verifies that no RF signal multiplexing occurs in the device setup.
-        RF multiplexing happens when multiple logical RF signals are connected to the same local port
-        of an instrument, which is currently not supported with LabOne Q.
-
-        Raises:
-            LabOneQException: If RF multiplexing is detected, with details about the affected
-                instrument, ports, and the signals causing the multiplexing.
-        """
-        # Iterate over all instruments
-        for instrument in self.instruments:
-            # Dictionary to map local_port to list of RF connections within this instrument
-            rf_port_usage = defaultdict(list)
-
-            # Iterate over all connections in the current instrument
-            for conn in instrument.connections:
-                if conn.signal_type == IOSignalType.RF:
-                    rf_port_usage[conn.local_port].append(conn)
-
-            # Identify local_ports with more than one RF connection
-            multiplexed_ports = [
-                port for port, conns in rf_port_usage.items() if len(conns) > 1
-            ]
-
-            if multiplexed_ports:
-                multiplexed_details = f"Instrument '{instrument.uid}' has RF multiplexing on the following ports:\n"
-                for port in multiplexed_ports:
-                    connections = rf_port_usage[port]
-                    # Extract remote paths for detailed reporting
-                    remote_paths = [conn.remote_path for conn in connections]
-                    multiplexed_details += f"  - Port '{port}' is used by signals: {', '.join(remote_paths)}\n"
-                raise LabOneQException(multiplexed_details)
+        return None

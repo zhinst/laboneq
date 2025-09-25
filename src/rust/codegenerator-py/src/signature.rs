@@ -82,7 +82,7 @@ impl PulseSignaturePy {
 
     #[getter]
     fn markers(&self, py: Python) -> PyResult<Py<PyTuple>> {
-        let mut out: Vec<PyObject> = vec![];
+        let mut out: Vec<Py<PyAny>> = vec![];
         for marker in self.signature.markers.iter() {
             let d = PyDict::new(py);
             d.set_item("marker_selector", marker.marker_selector.clone())?;

@@ -411,14 +411,19 @@ class RecipeGenerator:
         self,
         device_id: str,
         awg_number: int,
-        signal_type: str,
+        signal_type: AWGSignalType,
         feedback_register_config: FeedbackRegisterConfig | None,
         signals: dict[str, dict[str, str]],
         shfppc_sweep_configuration: dict[str, object] | None,
     ):
+        awg_signal_type = {
+            AWGSignalType.SINGLE: SignalType.SINGLE,
+            AWGSignalType.DOUBLE: SignalType.SINGLE,
+            AWGSignalType.IQ: SignalType.IQ,
+        }[signal_type]
         awg = AWG(
             awg=awg_number,
-            signal_type=SignalType(signal_type),
+            signal_type=awg_signal_type,
             signals=signals,
         )
         if feedback_register_config is not None:
@@ -924,14 +929,10 @@ def generate_recipe(
     for awg in awgs:
         device_id = awg.key.device_id
         signal_type = awg.signal_type
-        if signal_type == AWGSignalType.DOUBLE:
-            signal_type = AWGSignalType.SINGLE
-        elif signal_type == AWGSignalType.MULTI:
-            signal_type = AWGSignalType.IQ
         recipe_generator.add_awg(
             device_id=device_id,
             awg_number=cast(int, awg.awg_id),
-            signal_type=signal_type.value,
+            signal_type=signal_type,
             feedback_register_config=combined_compiler_output.feedback_register_configurations.get(
                 awg.key
             ),

@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 # Note: The simulator may be used as a testing tool, so it must be independent of the production code
 # Do not add dependencies to the code being tested here (such as compiler, DSL asf.)
-from typing import TYPE_CHECKING, Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, Sequence, cast
 
 import numpy as np
 from numpy import typing as npt
@@ -33,6 +33,7 @@ from pycparser.c_ast import (
 from pycparser.c_parser import CParser
 
 from laboneq.compiler.common.compiler_settings import EXECUTETABLEENTRY_LATENCY
+from laboneq.core.types.enums.wave_type import WaveType
 from laboneq.core.utilities.prng import PRNG
 from laboneq.data.recipe import Recipe, RoutedOutput, TriggeringMode
 from laboneq.data.scheduled_experiment import ArtifactsCodegen
@@ -319,7 +320,7 @@ class SeqCDescriptor:
     output_port_delay: float
     source: str = None
     channels: list[int] = None
-    wave_index: dict[Any, Any] = None
+    wave_index: dict[int, dict[str, str | WaveType]] = None
     command_table: list[Any] = None
     is_spectroscopy: bool = False
     feedback_command_table_offset: int = 0
@@ -748,16 +749,17 @@ class SimpleRuntime:
         if "waveform" not in ct_entry:
             return None, None
         assert "index" in ct_entry["waveform"]
-        wave_index = ct_entry["waveform"]["index"]
+        wave_index = cast(int, ct_entry["waveform"]["index"])
         known_wave = WaveRefInfo(assigned_index=wave_index)
 
         wave = self.descriptor.wave_index[wave_index]
-
-        if wave["type"] in ("iq", "multi"):
+        wave_type = cast(WaveType, wave["type"])
+        if wave_type == WaveType.IQ:
             wave_names = [
-                wave["wave_name"] + suffix + ".wave" for suffix in ("_i", "_q")
+                cast(str, wave["wave_name"]) + suffix + ".wave"
+                for suffix in ("_i", "_q")
             ]
-        elif wave["type"] in ["single", "double"]:
+        elif wave_type in [WaveType.SINGLE, WaveType.DOUBLE]:
             wave_names = [
                 name + ".wave" if name is not None else None
                 for name in self.wave_names_by_index[wave_index]
@@ -1032,7 +1034,10 @@ class SimpleRuntime:
 
 
 def analyze_recipe(
-    recipe: Recipe, sources, wave_indices, command_tables
+    recipe: Recipe,
+    sources,
+    wave_indices: list[dict[str, str | tuple[int, WaveType]]] | None,
+    command_tables,
 ) -> list[SeqCDescriptor]:
     outputs: dict[str, list[int]] = {}
     seqc_descriptors_from_recipe: dict[str, SeqCDescriptor] = {}
@@ -1136,11 +1141,12 @@ def analyze_recipe(
             awg_index += 1
 
     seq_c_wave_indices = {}
-    for wave_index in wave_indices:
+    for wave_index in wave_indices or []:
         wave_seq_c_filename = wave_index["filename"]
-        if len(wave_index["value"]) > 0:
+        values = cast(dict[int, tuple[str, WaveType]], wave_index["value"])
+        if len(values) > 0:
             seq_c_wave_indices[wave_seq_c_filename] = {}
-            for wave_name, index_value in wave_index["value"].items():
+            for wave_name, index_value in values.items():
                 seq_c_wave_indices[wave_seq_c_filename][index_value[0]] = {
                     "type": index_value[1],
                     "wave_name": wave_name,

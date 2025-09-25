@@ -30,6 +30,7 @@ from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLay
 from laboneq.compiler.ir import IRTree
 from laboneq.compiler.seqc.linker import AwgWeights, SeqCGenOutput, SeqCProgram
 from laboneq.core.types.enums import AcquisitionType
+from laboneq.core.types.enums.wave_type import WaveType
 from laboneq.data.scheduled_experiment import (
     COMPLEX_USAGE,
     CodegenWaveform,
@@ -41,7 +42,6 @@ from .measurement_calculator import SignalDelay, SignalDelays
 from .waveform_sampler import WaveformSampler
 
 _logger = logging.getLogger(__name__)
-
 
 _SEQUENCER_TYPES = {DeviceType.SHFQA: "qa", DeviceType.SHFSG: "sg"}
 
@@ -71,7 +71,7 @@ class CodeGenerator(ICodeGenerator):
             signal.awg.key: signal.awg for signal in signals
         }
         self._src: dict[AwgKey, SeqCProgram] = {}
-        self._wave_indices_all: dict[AwgKey, dict] = {}
+        self._wave_indices_all: dict[AwgKey, dict[str, tuple[int, WaveType]]] = {}
         self._waves: dict[str, CodegenWaveform] = {}
         self._requires_long_readout: dict[str, list[str]] = defaultdict(list)
         self._command_tables: dict[AwgKey, dict[str, Any]] = {}
@@ -106,7 +106,7 @@ class CodeGenerator(ICodeGenerator):
             total_execution_time=self.total_execution_time(),
             waves=self.waves(),
             requires_long_readout=self.requires_long_readout(),
-            wave_indices=self.wave_indices(),
+            wave_indices=self._wave_indices_all,
             command_tables=self.command_tables(),
             pulse_map=self.pulse_map(),
             parameter_phase_increment_map=self.parameter_phase_increment_map(),
@@ -225,11 +225,11 @@ class CodeGenerator(ICodeGenerator):
                         self._save_wave_bin(
                             weight.samples_q, None, weight.basename, "_q"
                         )
-
-            if awg.signal_type in (AWGSignalType.IQ, AWGSignalType.SINGLE):
+            if awg.signal_type in (
+                AWGSignalType.IQ,
+                AWGSignalType.SINGLE,
+            ):
                 for sampled_waveform in self._sampled_waveforms.get(awg.key, []):
-                    assert len(sampled_waveform.signals) == 1
-                    signals = sampled_waveform.signals
                     sampled_signature = sampled_waveform.signature
                     sig_string = sampled_waveform.signature_string
                     if awg.device_type.supports_binary_waves:
@@ -283,6 +283,7 @@ class CodeGenerator(ICodeGenerator):
                                     "_marker2",
                                 )
                     elif awg.device_type.supports_complex_waves:
+                        signal_id = min(sampled_waveform.signals)
                         self._save_wave_bin(
                             CodeGenerator.SHFQA_COMPLEX_SAMPLE_SCALING
                             * (
@@ -293,7 +294,7 @@ class CodeGenerator(ICodeGenerator):
                             sig_string,
                             "",
                             device_id=awg.device_id,
-                            signal_id=list(signals)[0],
+                            signal_id=signal_id,
                             hold_start=sampled_signature.hold_start,
                             hold_length=sampled_signature.hold_length,
                         )
@@ -399,7 +400,8 @@ class CodeGenerator(ICodeGenerator):
                 awg_code_output.feedback_register_config
             )
             self._wave_indices_all[awg_key] = {
-                "value": {k: v for k, v in awg_code_output.wave_indices}
+                k: (filename, WaveType(wavetype))
+                for k, (filename, wavetype) in awg_code_output.wave_indices
             }
             if awg_code_output.command_table:
                 self._command_tables[awg_key] = {"ct": awg_code_output.command_table}
@@ -448,9 +450,6 @@ class CodeGenerator(ICodeGenerator):
 
     def src(self) -> dict[AwgKey, SeqCProgram]:
         return self._src
-
-    def wave_indices(self):
-        return self._wave_indices_all
 
     def command_tables(self):
         return self._command_tables

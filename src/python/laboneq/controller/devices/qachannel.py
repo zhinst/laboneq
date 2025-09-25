@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass
 import itertools
 import logging
+from typing import Any
 
 from laboneq.controller.attribute_value_tracker import (
     AttributeName,
@@ -14,6 +15,7 @@ from laboneq.controller.attribute_value_tracker import (
 from laboneq.controller.devices.async_support import (
     AsyncSubscriber,
     InstrumentConnection,
+    ResponseWaiterAsync,
 )
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
 from laboneq.controller.devices.channel_base import ChannelBase
@@ -31,14 +33,16 @@ from laboneq.controller.recipe_processor import (
     RtExecutionInfo,
     WaveformItem,
     Waveforms,
+    get_elf,
     get_execution_time,
     get_wave,
     get_weights_info,
+    prepare_waves,
 )
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType, is_spectroscopy
 from laboneq.core.types.enums.averaging_mode import AveragingMode
-from laboneq.data.recipe import IntegratorAllocation
+from laboneq.data.recipe import IntegratorAllocation, NtStepKey
 from laboneq.data.scheduled_experiment import ArtifactsCodegen
 import numpy as np
 
@@ -171,12 +175,7 @@ class QAChannel(ChannelBase):
         return NodeCollector.one(self.nodes.output_on, 0, cache=False)
 
     def allocate_resources(self):
-        # TODO(2K): Implement channel resources allocation for execution
-        pass
-
-    async def load_awg_program(self):
-        # TODO(2K): Implement loading of the AWG program.
-        return
+        self._pipeliner._reload_tracker.reset()
 
     async def apply_initialization(self, device_recipe_data: DeviceRecipeData):
         qa_ch_recipe_data = device_recipe_data.qachannels.get(self._channel)
@@ -386,6 +385,89 @@ class QAChannel(ChannelBase):
                         )
 
         await self._api.set_parallel(nc)
+
+    async def load_awg_program(
+        self,
+        recipe_data: RecipeData,
+        nt_step: NtStepKey,
+    ):
+        artifacts = recipe_data.get_artifacts(ArtifactsCodegen)
+        rt_execution_info = recipe_data.rt_execution_info
+
+        elf_nodes = NodeCollector()
+        upload_ready_conditions: dict[str, Any] = {}
+
+        if rt_execution_info.with_pipeliner:
+            # enable pipeliner
+            elf_nodes.extend(self.pipeliner.prepare_for_upload())
+
+        for pipeliner_job in range(rt_execution_info.pipeliner_jobs):
+            effective_nt_step = (
+                NtStepKey(indices=tuple([*nt_step.indices, pipeliner_job]))
+                if rt_execution_info.with_pipeliner
+                else nt_step
+            )
+            rt_exec_step = next(
+                (
+                    r
+                    for r in recipe_data.recipe.realtime_execution_init
+                    if r.device_id == self._device_uid
+                    and r.awg_index == self._channel
+                    and r.nt_step == effective_nt_step
+                ),
+                None,
+            )
+
+            if rt_execution_info.with_pipeliner:
+                rt_exec_step = self._pipeliner._reload_tracker.calc_next_step(
+                    pipeliner_job=pipeliner_job,
+                    rt_exec_step=rt_exec_step,
+                )
+            # Todo (PW): This currently needlessly reconfigures the acquisition in every
+            #  NT step. The acquisition parameters really are constant across NT steps,
+            #  we only care about re-enabling the result logger.
+            elf_nodes.extend(self.configure_acquisition(recipe_data, pipeliner_job))
+
+            if rt_exec_step is None:
+                continue
+
+            seqc_elf = get_elf(artifacts, rt_exec_step.program_ref)
+            if seqc_elf is not None:
+                elf_nodes.add(
+                    path=self.nodes.generator_elf_data,
+                    value=seqc_elf,
+                    cache=False,
+                    filename=rt_exec_step.program_ref,
+                )
+
+            waves = prepare_waves(artifacts, rt_exec_step.wave_indices_ref)
+            if waves is not None:
+                acquisition_type = rt_execution_info.acquisition_type
+                elf_nodes.extend(
+                    self.prepare_upload_all_binary_waves(waves, acquisition_type)
+                )
+
+            elf_nodes.extend(
+                # TODO(2K): Cleanup arguments to prepare_upload_all_integration_weights
+                self.prepare_upload_all_integration_weights(
+                    recipe_data,
+                    artifacts,
+                    recipe_data.recipe.integrator_allocations,
+                    rt_exec_step.kernel_indices_ref,
+                )
+            )
+
+            if rt_execution_info.with_pipeliner:
+                elf_nodes.extend(self._pipeliner.commit())
+
+        if rt_execution_info.with_pipeliner:
+            upload_ready_conditions.update(self._pipeliner.ready_conditions())
+
+        rw = ResponseWaiterAsync(api=self._api, dev_repr=self._unit_repr, timeout_s=10)
+        rw.add_nodes(upload_ready_conditions)
+        await rw.prepare()
+        await self._api.set_parallel(elf_nodes)
+        await rw.wait()
 
     def configure_acquisition(
         self,

@@ -17,6 +17,31 @@ import numpy as np
 import orjson
 import PIL
 
+try:
+    from lmfit.model import ModelResult as LmfitModelResult
+
+    LMFIT_IMPORTED = True
+except ImportError:
+    LMFIT_IMPORTED = False
+
+
+try:
+    from uncertainties.core import Variable as UncertaintiesVariable
+    from uncertainties.core import AffineScalarFunc as UncertaintiesAffineScalarFunc
+
+    UNCERTAINTIES_IMPORTED = True
+except ImportError:
+    UNCERTAINTIES_IMPORTED = False
+
+
+try:
+    from sklearn.base import BaseEstimator as SklearnBaseEstimator
+
+    SKLEARN_IMPORTED = True
+except ImportError:
+    SKLEARN_IMPORTED = False
+
+
 if TYPE_CHECKING:
     from typing import IO
 
@@ -99,6 +124,15 @@ class OrjsonSerializer:
         np.ndarray,
     )
 
+    if LMFIT_IMPORTED:
+        SUPPORTED_TYPES += (LmfitModelResult,)
+
+    if UNCERTAINTIES_IMPORTED:
+        SUPPORTED_TYPES += (UncertaintiesVariable, UncertaintiesAffineScalarFunc)
+
+    if SKLEARN_IMPORTED:
+        SUPPORTED_TYPES += (SklearnBaseEstimator,)
+
     COMPLEX_DTYPE_MAP = {
         # complex-dtype: float-view-dtype
         np.dtype(np.complex128): np.dtype(np.float64),
@@ -151,6 +185,41 @@ class OrjsonSerializer:
     def _default_complex(self, obj: complex) -> object:
         """A `default` orjson handler for lists."""
         return {"real": obj.real, "imag": obj.imag}
+
+    if LMFIT_IMPORTED:
+
+        @default.register
+        def _default_lmfit_model_result(self, obj: LmfitModelResult) -> object:
+            """A `default` orjson handler for LmfitModelResults."""
+            return obj.summary()
+
+    if UNCERTAINTIES_IMPORTED:
+
+        @default.register
+        def _default_uncertainties_variable(self, obj: UncertaintiesVariable) -> object:
+            """A `default` orjson handler for UncertaintiesVariable."""
+            return {
+                "value": obj.nominal_value,
+                "std_dev": obj.std_dev,
+                "tag": obj.tag,
+            }
+
+        @default.register
+        def _default_uncertainties_affine_scalar_func(
+            self, obj: UncertaintiesAffineScalarFunc
+        ) -> object:
+            """A `default` orjson handler for UncertaintiesAffineScalarFunc."""
+            return {
+                "value": obj.nominal_value,
+                "std_dev": obj.std_dev,
+            }
+
+    if SKLEARN_IMPORTED:
+
+        @default.register
+        def _default_sklearn_base_estimator(self, obj: SklearnBaseEstimator) -> object:
+            """A `default` orjson handler for SklearnBaseEstimator."""
+            return {k: v for k, v in obj.__dict__.items() if k.endswith("_")}
 
     def dumps(self, obj) -> bytes:
         """Call orjson.dumps with the appropriate settings.
@@ -281,6 +350,60 @@ def serialize_numpy_array(obj: np.ndarray, opener: SerializeOpener) -> None:
         np.save(f, obj, allow_pickle=False, **opener.options())
 
 
+if LMFIT_IMPORTED:
+
+    @serialize.register
+    def serialize_lmfit_model_result(
+        obj: LmfitModelResult, opener: SerializeOpener
+    ) -> None:
+        """Serialize an lmfit `ModelResult`.
+
+        `ModelResult`s are saved as JSON using their `.summary` method.
+        """
+        _ORJSON_SERIALIZER.serialize(obj, opener)
+
+
+if SKLEARN_IMPORTED:
+
+    @serialize.register
+    def serialize_scikit_learn_base_estimator(
+        obj: SklearnBaseEstimator, opener: SerializeOpener
+    ) -> None:
+        """Serialize scikit-learn estimators.
+
+        Estimators parameter values are saved as JSON.
+        """
+        _ORJSON_SERIALIZER.serialize(obj, opener)
+
+
+if UNCERTAINTIES_IMPORTED:
+
+    @serialize.register
+    def serialize_uncertainties_variable(
+        obj: UncertaintiesVariable,
+        opener: SerializeOpener,
+    ) -> None:
+        """Serialize uncertainties `Variable`.
+
+        The `Variable` has its `value`, `std_dev` and `tag` saved as JSON.
+        """
+        _ORJSON_SERIALIZER.serialize(obj, opener)
+
+    @serialize.register
+    def serialize_uncertainties_affince_scalar_func(
+        obj: UncertaintiesAffineScalarFunc,
+        opener: SerializeOpener,
+    ) -> None:
+        """Serialize uncertainties `AffineScalarFunc`.
+
+        `AfficeScalarFunc` objects are created when performing arithmetic on
+        uncertainties `Variable` objects.
+
+        The `AffineScalarFunc` has its `value`, `std_dev` and `tag` saved as JSON.
+        """
+        _ORJSON_SERIALIZER.serialize(obj, opener)
+
+
 from laboneq.dsl.experiment.experiment import Experiment
 from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.dsl.device.device_setup import DeviceSetup
@@ -288,7 +411,9 @@ from laboneq.dsl.quantum import QPU, QuantumParameters, QuantumElement, Transmon
 from laboneq.dsl.result.results import Results
 from laboneq.serializers.implementations.quantum_element import (
     QuantumParametersContainer,
+    QuantumParametersDict,
     QuantumElementContainer,
+    QuantumElementDict,
 )
 from laboneq.workflow import TaskOptions, WorkflowOptions
 
@@ -303,6 +428,8 @@ from laboneq.workflow import TaskOptions, WorkflowOptions
 @serialize.register(Results)
 @serialize.register(QuantumParametersContainer)
 @serialize.register(QuantumElementContainer)
+@serialize.register(QuantumParametersDict)
+@serialize.register(QuantumElementDict)
 @serialize.register(TaskOptions)
 @serialize.register(WorkflowOptions)
 def serialize_laboneq_object(obj: object, opener: SerializeOpener) -> None:
@@ -321,9 +448,9 @@ def serialize_list(obj: list, opener: SerializeOpener) -> None:
     serialized by converting them to numpy arrays and using
     `.serialize_numpy_array`.
     """
-    if all(isinstance(x, QuantumParameters) for x in obj):
+    if obj and QuantumParametersContainer.supports(obj):
         serialize_laboneq_object(QuantumParametersContainer(obj), opener)
-    elif all(isinstance(x, QuantumElement) for x in obj):
+    elif obj and QuantumElementContainer.supports(obj):
         serialize_laboneq_object(QuantumElementContainer(obj), opener)
     else:
         # serialize_numpy_array passes allow_pickle=False to numpy
@@ -339,17 +466,63 @@ def serialize_list(obj: list, opener: SerializeOpener) -> None:
 
 
 @serialize.register
+def serialize_tuple(obj: tuple, opener: SerializeOpener) -> None:
+    """Serialize tuples.
+
+    Supports tuples of quantum parameters and values that can be
+    serialized to JSON.
+    """
+    if obj and QuantumParametersContainer.supports(obj):
+        serialize_laboneq_object(QuantumParametersContainer(obj), opener)
+    elif obj and QuantumElementContainer.supports(obj):
+        serialize_laboneq_object(QuantumElementContainer(obj), opener)
+    else:
+        if _ORJSON_SERIALIZER.supported_object(obj):
+            _ORJSON_SERIALIZER.serialize(obj, opener)
+        else:
+            unsupported = ", ".join(
+                f"{i}: value={v!r} type={type(v).__qualname__}"
+                for i, v in enumerate(obj)
+                if not _ORJSON_SERIALIZER.supported_object(v)
+            )
+            supported_types = ", ".join(
+                t.__qualname__ for t in _ORJSON_SERIALIZER.SUPPORTED_TYPES
+            )
+            raise SerializationNotSupportedError(
+                f"Type {type(obj)!r} has the following unsupported values: ({unsupported})."
+                f" Only tuples with values of the following types are supported: [{supported_types}]."
+                f" [name: {opener.name()}]."
+            )
+
+
+@serialize.register
 def serialize_dict(obj: dict, opener: SerializeOpener) -> None:
     """Serialize dicts."""
-    if not _ORJSON_SERIALIZER.supported_object(obj):
-        supported_types = ", ".join(
-            t.__name__ for t in _ORJSON_SERIALIZER.SUPPORTED_TYPES
-        )
-        raise SerializationNotSupportedError(
-            f"Type {type(obj)!r} has unsupported keys or values."
-            f" Keys must be strings and values must have one of the"
-            f" following types: [{supported_types}]"
-            f" [name: {opener.name()}]."
-        )
-
-    _ORJSON_SERIALIZER.serialize(obj, opener)
+    if obj and QuantumParametersDict.supports(obj):
+        serialize_laboneq_object(QuantumParametersDict(obj), opener)
+    elif obj and QuantumElementDict.supports(obj):
+        serialize_laboneq_object(QuantumElementDict(obj), opener)
+    else:
+        if _ORJSON_SERIALIZER.supported_object(obj):
+            _ORJSON_SERIALIZER.serialize(obj, opener)
+        else:
+            non_string_keys = [k for k in obj if not isinstance(k, str)]
+            if non_string_keys:
+                raise SerializationNotSupportedError(
+                    f"Type {type(obj)!r} has the following non-string keys: {non_string_keys!r}."
+                    f" Only dictionaries with str keys are supported by the folder store serializer."
+                    f" [name: {opener.name()}]."
+                )
+            unsupported = ", ".join(
+                f"{k!r}: value={v!r} type={type(v).__qualname__}"
+                for k, v in obj.items()
+                if not _ORJSON_SERIALIZER.supported_object(v)
+            )
+            supported_types = ", ".join(
+                t.__qualname__ for t in _ORJSON_SERIALIZER.SUPPORTED_TYPES
+            )
+            raise SerializationNotSupportedError(
+                f"Type {type(obj)!r} has the following unsupported values: {{{unsupported}}}."
+                f" Only dictionaries with values of the following types are supported: [{supported_types}]."
+                f" [name: {opener.name()}]."
+            )

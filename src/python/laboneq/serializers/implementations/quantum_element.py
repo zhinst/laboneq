@@ -56,9 +56,23 @@ class QuantumParametersContainer:
     def __init__(self, quantum_parameters):
         self.quantum_parameters = quantum_parameters
 
+    @classmethod
+    def supports(cls, obj: object) -> bool:
+        """Return true if `obj` is a tuple or list of QuantumParameters.
+
+        Arguments:
+            obj:
+                The object to check.
+        """
+        if not isinstance(obj, (tuple, list)):
+            return False
+        return all(isinstance(x, QuantumParameters) for x in obj)
+
 
 @serializer(types=QuantumParametersContainer, public=True)
-class QuantumParametersContainerSerializer(VersionedClassSerializer[QuantumParameters]):
+class QuantumParametersContainerSerializer(
+    VersionedClassSerializer[QuantumParametersContainer]
+):
     SERIALIZER_ID = (
         "laboneq.serializers.implementations.QuantumParametersContainerSerializer"
     )
@@ -84,6 +98,57 @@ class QuantumParametersContainerSerializer(VersionedClassSerializer[QuantumParam
     ) -> list[QuantumParameters]:
         data = serialized_data["__data__"]
         return [from_dict(q) for q in data]
+
+
+class QuantumParametersDict:
+    """A class for identifying a dict as a dict of quantum parameters."""
+
+    def __init__(self, quantum_parameters: dict[str, QuantumParameters]):
+        self.quantum_parameters = quantum_parameters
+
+    @classmethod
+    def supports(cls, obj: object) -> bool:
+        """Return true if `obj` is a dict of QuantumParameters with string keys.
+
+        Arguments:
+            obj:
+                The object to check.
+        """
+        if not isinstance(obj, dict):
+            return False
+        return all(
+            isinstance(k, str) and isinstance(p, QuantumParameters)
+            for k, p in obj.items()
+        )
+
+
+@serializer(types=QuantumParametersDict, public=True)
+class QuantumParametersDictSerializer(VersionedClassSerializer[QuantumParametersDict]):
+    SERIALIZER_ID = (
+        "laboneq.serializers.implementations.QuantumParametersDictSerializer"
+    )
+    VERSION = 1
+
+    @classmethod
+    def to_dict(
+        cls,
+        obj: QuantumParametersDict,
+        options: SerializationOptions | None = None,
+    ) -> JsonSerializableType:
+        return {
+            "__serializer__": cls.serializer_id(),
+            "__version__": cls.version(),
+            "__data__": {k: to_dict(q) for k, q in obj.quantum_parameters.items()},
+        }
+
+    @classmethod
+    def from_dict_v1(
+        cls,
+        serialized_data: JsonSerializableType,
+        options: DeserializationOptions | None = None,
+    ) -> dict[str, QuantumParameters]:
+        data = serialized_data["__data__"]
+        return {k: from_dict(q) for k, q in data.items()}
 
 
 @serializer(types=[QuantumElement], public=True)
@@ -133,6 +198,18 @@ class QuantumElementContainer:
     def __init__(self, quantum_elements):
         self.quantum_elements = quantum_elements
 
+    @classmethod
+    def supports(cls, obj: object) -> bool:
+        """Return true if `obj` is a tuple or list of QuantumElements.
+
+        Arguments:
+            obj:
+                The object to check.
+        """
+        if not isinstance(obj, (tuple, list)):
+            return False
+        return all(isinstance(x, QuantumElement) for x in obj)
+
 
 @serializer(types=QuantumElementContainer, public=True)
 class QuantumElementContainerSerializer(VersionedClassSerializer[QuantumElement]):
@@ -159,3 +236,51 @@ class QuantumElementContainerSerializer(VersionedClassSerializer[QuantumElement]
     ) -> list[QuantumElement]:
         data = serialized_data["__data__"]
         return [from_dict(q) for q in data]
+
+
+class QuantumElementDict:
+    """A class for identifying a dict as a dict of quantum elements."""
+
+    def __init__(self, quantum_elements: dict[str, QuantumElement]):
+        self.quantum_elements = quantum_elements
+
+    @classmethod
+    def supports(cls, obj: object) -> bool:
+        """Return true if `obj` is a dict of QuantumElements with string keys.
+
+        Arguments:
+            obj:
+                The object to check.
+        """
+        if not isinstance(obj, dict):
+            return False
+        return all(
+            isinstance(k, str) and isinstance(p, QuantumElement) for k, p in obj.items()
+        )
+
+
+@serializer(types=QuantumElementDict, public=True)
+class QuantumElementDictSerializer(VersionedClassSerializer[QuantumElementDict]):
+    SERIALIZER_ID = "laboneq.serializers.implementations.QuantumElementDictSerializer"
+    VERSION = 1
+
+    @classmethod
+    def to_dict(
+        cls,
+        obj: QuantumElementDict,
+        options: SerializationOptions | None = None,
+    ) -> JsonSerializableType:
+        return {
+            "__serializer__": cls.serializer_id(),
+            "__version__": cls.version(),
+            "__data__": {k: to_dict(q) for k, q in obj.quantum_elements.items()},
+        }
+
+    @classmethod
+    def from_dict_v1(
+        cls,
+        serialized_data: JsonSerializableType,
+        options: DeserializationOptions | None = None,
+    ) -> dict[str, QuantumElement]:
+        data = serialized_data["__data__"]
+        return {k: from_dict(q) for k, q in data.items()}

@@ -1,5 +1,5 @@
 [workspace.package]
-version = "2.59.0"
+version = "2.60.0"
 authors = ["Zurich Instruments AG <info@zhinst.com>"]
 edition = "2024"
 publish = false
@@ -22,17 +22,17 @@ log = "0.4.27"
 md5 = "0.8.0"
 num-complex = "0.4.6"
 num-traits = "0.2.19"
-numpy = "0.25.0"
-pythonize = "0.25.0"
-pyo3 = { version = "0.25.0", features = [
+numpy = "0.26.0"
+pythonize = "0.26.0"
+pyo3 = { version = "0.26.0", features = [
   "abi3-py39",
   "generate-import-lib",
   "num-complex",
   "auto-initialize",
   "anyhow",
 ] }
-pyo3-ffi = "0.25.0"
-pyo3-log = "0.12.4"
+pyo3-ffi = "0.26.0"
+pyo3-log = "0.13.0"
 serde = "1.0"
 serde_json = "1.0"
 thiserror = "2.0"

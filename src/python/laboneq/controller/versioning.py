@@ -50,7 +50,7 @@ class LabOneVersion:
 RECOMMENDED_LABONE_VERSION = LabOneVersion(year=25, month=7, patch=0, build=0)
 """This variable holds the version what we currently support and actively test against."""
 
-MINIMUM_SUPPORTED_LABONE_VERSION = LabOneVersion(year=25, month=4, patch=1, build=0)
+MINIMUM_SUPPORTED_LABONE_VERSION = LabOneVersion(year=25, month=7, patch=0, build=0)
 """This variable holds the minimum version that we expect LabOne Q to work
 reliably, but may not be testing against anymore. Most of the time, this will
 be equal to `RECOMMENDED_LABONE_VERSION` with the exceptions happening

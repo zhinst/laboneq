@@ -75,12 +75,18 @@ class QuantumPlatform:
             f"{key}: [{', '.join(q.uid for q in value)}]"
             for key, value in self.qpu.groups._groups.items()
         )
+        if isinstance(self.qpu._quantum_operations_input, list):
+            quantum_operations = [
+                qop.__name__ for qop in self.qpu._quantum_operations_input
+            ]
+        else:
+            quantum_operations = type(self.qpu.quantum_operations).__name__
         return (
             f"<{type(self).__qualname__}"
             f" setup={self.setup.uid!r}"
             f" qpu.quantum_elements=[{quantum_elements}]"
             f" qpu.groups={{{groups}}}"
-            f" qpu.quantum_operations={type(self.qpu.quantum_operations).__qualname__}"
+            f" qpu.quantum_operations={quantum_operations}"
             f" qpu.topology={self.qpu.topology}"
             f">"
         )
@@ -120,11 +126,20 @@ class QPU:
     !!! version-changed "Deprecated in version 2.52.0."
         The argument `qubits` was deprecated and replaced with the argument `quantum_elements`.
 
+    !!! version-added "Added in version 2.60.0"
+        The `quantum_operations` argument may now also be of type
+        `list[type[QuantumOperations]]`. In this case, the list of `QuantumOperations`
+        classes is automatically combined into a single class. If the
+        `QuantumOperations` classes have methods with the same name, these are
+        dispatched based on their simplified type signatures.
+
     Arguments:
         quantum_elements: The quantum elements to run the experiments on. By passing a
             dictionary, quantum elements may be organized into groups, which are
             accessible as attributes of `self.groups`.
         quantum_operations: The quantum operations to use when building the experiment.
+            If multiple quantum operations classes are given, these are combined into a
+            single quantum operations class.
 
     Attributes:
         groups: The groups of quantum elements on the QPU.
@@ -137,7 +152,9 @@ class QPU:
     def __init__(
         self,
         quantum_elements: QuantumElements | dict[str, QuantumElements],
-        quantum_operations: QuantumOperations | type[QuantumOperations],
+        quantum_operations: QuantumOperations
+        | type[QuantumOperations]
+        | list[type[QuantumOperations]],
     ) -> None:
         if isinstance(quantum_elements, QuantumElement):
             self.groups: QuantumElementGroups = QuantumElementGroups({})
@@ -193,17 +210,31 @@ class QPU:
             q.uid: q for q in self.quantum_elements
         }
 
+        self._quantum_operations_input = quantum_operations
         if isinstance(quantum_operations, QuantumOperations):
-            quantum_operations.attach_qpu(self)
+            pass
         elif inspect.isclass(quantum_operations) and issubclass(
             quantum_operations, QuantumOperations
         ):
-            quantum_operations = quantum_operations(self)
+            quantum_operations = quantum_operations()
+        elif isinstance(quantum_operations, list) and all(
+            [
+                inspect.isclass(op) and issubclass(op, QuantumOperations)
+                for op in quantum_operations
+            ]
+        ):
+
+            class CombinedOperations(*tuple(quantum_operations)):
+                pass
+
+            quantum_operations = CombinedOperations()
         else:
             raise TypeError(
                 f"quantum_operations has invalid type: {type(quantum_operations)}. "
-                f"Expected type: QuantumOperations | type[QuantumOperations]."
+                f"Expected type: QuantumOperations | type[QuantumOperations] | list[type[QuantumOperations]]."
             )
+
+        quantum_operations.attach_qpu(self)
 
         self.quantum_operations: QuantumOperations = quantum_operations
         self.topology: QPUTopology = QPUTopology(self.quantum_elements)
@@ -214,11 +245,17 @@ class QPU:
             f"{key}: [{', '.join(q.uid for q in value)}]"
             for key, value in self.groups._groups.items()
         )
+        if isinstance(self._quantum_operations_input, list):
+            quantum_operations = [
+                qop.__name__ for qop in self._quantum_operations_input
+            ]
+        else:
+            quantum_operations = type(self.quantum_operations).__name__
         return (
             f"<{type(self).__qualname__}"
             f" quantum_elements=[{quantum_elements}]"
             f" groups={{{groups}}}"
-            f" quantum_operations={type(self.quantum_operations).__qualname__}"
+            f" quantum_operations={quantum_operations}"
             f" topology={self.topology}"
             f">"
         )
@@ -281,12 +318,19 @@ class QPU:
         )
 
     def __rich_repr__(self):
+        if isinstance(self._quantum_operations_input, list):
+            quantum_operations = [
+                qop.__name__ for qop in self._quantum_operations_input
+            ]
+        else:
+            quantum_operations = type(self.quantum_operations).__name__
+
         yield "quantum_elements", [q.uid for q in self.quantum_elements]
         yield (
             "groups",
             {key: [q.uid for q in value] for key, value in self.groups._groups.items()},
         )
-        yield "quantum_operations", type(self.quantum_operations).__qualname__
+        yield "quantum_operations", quantum_operations
         yield "topology", self.topology
 
     def copy_quantum_elements(self) -> QuantumElements:
@@ -367,7 +411,7 @@ class QPU:
                 if edge.quantum_element is not None
                 else None,
             )
-        new_qpu.update_quantum_elements(quantum_element_parameters)
+        new_qpu.update(quantum_element_parameters)
         return new_qpu
 
     @deprecated(
@@ -403,6 +447,73 @@ class QPU:
         """
         return self.override_quantum_elements(qubit_parameters)
 
+    def update(
+        self,
+        parameters: dict[
+            str | tuple[str, str, str], dict[str, int | float | str | dict | None]
+        ],
+    ) -> None:
+        """Updates quantum object parameters.
+
+        A quantum object is any object that has associated quantum parameters. This
+        includes quantum elements and topology edges.
+
+        Arguments:
+            parameters:
+                The quantum objects and their parameters that need to be updated
+                passed as a dict of the form:
+                    ```python
+                    {key: {param_name: param_value}}
+                    ```
+
+        !!! note
+            The key for a quantum element is the quantum element UID. The key for a
+            topology edge is the tuple `(tag, source node UID, target node UID)`, as
+            returned by the `self.topology.edge_keys()` method.
+
+        Raises:
+            TypeError:
+                If one of the quantum object keys has an invalid type.
+            ValueError:
+                If one of the quantum objects passed is not found in the qpu.
+                If one of the parameters passed is not found in the quantum object.
+        """
+        invalid_params = []
+        for key, params_dict in parameters.items():
+            if not isinstance(key, str) and not (
+                isinstance(key, tuple)
+                and len(key) == 3
+                and all(isinstance(k, str) for k in key)
+            ):
+                raise TypeError(
+                    f"The key {key} has invalid type: {type(key)}. Expected type: str | tuple[str, str, str]."
+                )
+
+            if isinstance(key, str):
+                if key not in self._quantum_element_map:
+                    raise ValueError(f"Quantum element {key} was not found in the QPU.")
+                quantum_object = self._quantum_element_map[key]
+            elif isinstance(key, tuple):
+                if key not in self.topology.edge_keys():
+                    raise ValueError(f"Topology edge {key} was not found in the QPU.")
+                quantum_object = self.topology[key[0], key[1], key[2]]
+            invalid_params += self._get_invalid_param_paths(quantum_object, params_dict)
+        if invalid_params:
+            raise ValueError(
+                f"Update parameters do not match the quantum object "
+                f"parameters: {invalid_params}.",
+            )
+
+        for key, params_dict in parameters.items():
+            if isinstance(key, str):
+                self[key].update(**params_dict)
+            elif isinstance(key, tuple):
+                self.topology.update_edge(*key, **params_dict)
+
+    @deprecated(
+        "The .update_quantum_elements method is deprecated. Use `.update` instead.",
+        category=FutureWarning,
+    )
     def update_quantum_elements(
         self,
         quantum_element_parameters: dict[
@@ -410,6 +521,11 @@ class QPU:
         ],
     ) -> None:
         """Updates quantum element parameters.
+
+        !!! version-changed "Deprecated in version 2.60.0."
+            The method `update_quantum_elements` was deprecated and replaced with the
+            more general method `update`. The new method `update` works for both
+            quantum elements and topology edges.
 
         Arguments:
             quantum_element_parameters:

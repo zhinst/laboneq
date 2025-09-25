@@ -367,6 +367,10 @@ class DeviceBase(DeviceZI):
         """Iterable over all channels of the device."""
         return iter([])
 
+    def allocated_channels(self) -> Iterator[ChannelBase]:
+        """Iterable over actually allocated channels of the device."""
+        return iter([])
+
     def clear_cache(self):
         # TODO(2K): the code below is only needed to keep async API behavior
         # in emulation mode matching that of legacy API with LabOne Q cache.
@@ -671,34 +675,32 @@ class DeviceBase(DeviceZI):
         recipe_data: RecipeData,
         nt_step: NtStepKey,
     ):
-        await for_each(self.all_channels(), ChannelBase.load_awg_program)
+        await for_each(
+            self.allocated_channels(),
+            ChannelBase.load_awg_program,
+            recipe_data=recipe_data,
+            nt_step=nt_step,
+        )
         await _gather(
             *(
                 self._prepare_artifacts_impl(
                     recipe_data=recipe_data,
                     nt_step=nt_step,
-                    target_awg_index=awg_index,
+                    awg_index=awg_index,
                 )
                 for awg_index in self._allocated_awgs
             )
+        )
+        await self._apply_near_time_replacements(
+            with_pipeliner=recipe_data.rt_execution_info.with_pipeliner
         )
 
     async def _prepare_artifacts_impl(
         self,
         recipe_data: RecipeData,
         nt_step: NtStepKey,
-        target_awg_index: int,
+        awg_index: int,
     ):
-        initialization = recipe_data.get_initialization(self.uid)
-        init_awgs = [] if initialization.awgs is None else initialization.awgs
-        awg_index: int | None = None
-        for awg in init_awgs:
-            if awg.awg == target_awg_index:
-                awg_index = target_awg_index
-                break
-        if awg_index is None:
-            return
-
         artifacts = recipe_data.get_artifacts(ArtifactsCodegen)
         rt_execution_info = recipe_data.rt_execution_info
 
@@ -798,9 +800,6 @@ class DeviceBase(DeviceZI):
         await self.set_async(elf_nodes)
         await rw.wait()
         await self.set_async(wf_nodes)
-        await self._apply_near_time_replacements(
-            with_pipeliner=rt_execution_info.with_pipeliner
-        )
 
     async def _apply_near_time_replacements(self, with_pipeliner: bool):
         """Apply near-time user nodes that were collected since the previous real-time execution."""

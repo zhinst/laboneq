@@ -70,7 +70,7 @@ mod tests {
     use num_complex::Complex;
 
     fn build_arr(py_text: &CStr) -> Result<NumericArray, PyErr> {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let activators =
                 PyModule::from_code(py, py_text, c_str!("test.py"), c_str!("test")).unwrap();
             let py_obj = activators.getattr("arr").unwrap();

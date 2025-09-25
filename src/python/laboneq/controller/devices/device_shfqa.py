@@ -411,6 +411,15 @@ class DeviceSHFQA(DeviceSHFBase):
             attributes=attributes,
         )
 
+    async def _prepare_artifacts_impl(
+        self,
+        recipe_data: RecipeData,
+        nt_step: NtStepKey,
+        awg_index: int,
+    ):
+        # Artifacts upload for the SHFQA is done in the QAChannel class.
+        pass
+
     def prepare_upload_binary_wave(
         self,
         awg_index: int,

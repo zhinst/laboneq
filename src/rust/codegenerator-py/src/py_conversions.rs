@@ -864,7 +864,6 @@ fn extract_awg_kind(ob: &Bound<'_, PyAny>) -> Result<cjob::AwgKind, PyErr> {
         .as_ref()
     {
         "IQ" => cjob::AwgKind::IQ,
-        "MULTI" => cjob::AwgKind::MULTI,
         "SINGLE" => cjob::AwgKind::SINGLE,
         "DOUBLE" => cjob::AwgKind::DOUBLE,
         _ => {

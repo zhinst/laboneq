@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 from dataclasses import dataclass
+import json
+from typing import Any
 
 from laboneq.controller.attribute_value_tracker import (
     AttributeName,
@@ -11,12 +13,21 @@ from laboneq.controller.attribute_value_tracker import (
 from laboneq.controller.devices.async_support import (
     AsyncSubscriber,
     InstrumentConnection,
+    ResponseWaiterAsync,
 )
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
 from laboneq.controller.devices.channel_base import ChannelBase
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import delay_to_rounded_samples
-from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
+from laboneq.controller.recipe_processor import (
+    DeviceRecipeData,
+    RecipeData,
+    get_elf,
+    prepare_command_table,
+    prepare_waves,
+)
+from laboneq.data.recipe import NtStepKey
+from laboneq.data.scheduled_experiment import ArtifactsCodegen
 import numpy as np
 
 
@@ -32,6 +43,7 @@ class SGChannelNodes:
     awg_elf_progress: str
     awg_enable: str
     awg_ready: str
+    awg_command_table: str
     osc_freq: list[str]
     busy: str
 
@@ -63,6 +75,7 @@ class SGChannel(ChannelBase):
             awg_elf_progress=f"{self._node_base}/awg/elf/progress",
             awg_enable=f"{self._node_base}/awg/enable",
             awg_ready=f"{self._node_base}/awg/ready",
+            awg_command_table=f"{self._node_base}/awg/commandtable",
             osc_freq=[f"{self._node_base}/oscs/{i}/freq" for i in range(8)],
             busy=f"{self._node_base}/busy",
         )
@@ -79,12 +92,7 @@ class SGChannel(ChannelBase):
         return NodeCollector.one(self.nodes.output_on, 0, cache=False)
 
     def allocate_resources(self):
-        # TODO(2K): Implement channel resources allocation for execution
-        pass
-
-    async def load_awg_program(self):
-        # TODO(2K): Implement loading of the AWG program.
-        return
+        self._pipeliner._reload_tracker.reset()
 
     def _collect_configure_oscillator_nodes(self, oscillator_idx: int) -> NodeCollector:
         nc = NodeCollector(base=f"{self._node_base}/")
@@ -245,6 +253,88 @@ class SGChannel(ChannelBase):
                     )
                 )
         await self._api.set_parallel(nc)
+
+    async def load_awg_program(
+        self,
+        recipe_data: RecipeData,
+        nt_step: NtStepKey,
+    ):
+        artifacts = recipe_data.get_artifacts(ArtifactsCodegen)
+        rt_execution_info = recipe_data.rt_execution_info
+
+        elf_nodes = NodeCollector()
+        upload_ready_conditions: dict[str, Any] = {}
+
+        if rt_execution_info.with_pipeliner:
+            # enable pipeliner
+            elf_nodes.extend(self._pipeliner.prepare_for_upload())
+
+        for pipeliner_job in range(rt_execution_info.pipeliner_jobs):
+            effective_nt_step = (
+                NtStepKey(indices=tuple([*nt_step.indices, pipeliner_job]))
+                if rt_execution_info.with_pipeliner
+                else nt_step
+            )
+            rt_exec_step = next(
+                (
+                    r
+                    for r in recipe_data.recipe.realtime_execution_init
+                    if r.device_id == self._device_uid
+                    and r.awg_index == self._channel
+                    and r.nt_step == effective_nt_step
+                ),
+                None,
+            )
+
+            if rt_execution_info.with_pipeliner:
+                rt_exec_step = self._pipeliner._reload_tracker.calc_next_step(
+                    pipeliner_job=pipeliner_job,
+                    rt_exec_step=rt_exec_step,
+                )
+
+            if rt_exec_step is None:
+                continue
+
+            seqc_elf = get_elf(artifacts, rt_exec_step.program_ref)
+            if seqc_elf is not None:
+                elf_nodes.add(
+                    path=self.nodes.awg_elf_data,
+                    value=seqc_elf,
+                    cache=False,
+                    filename=rt_exec_step.program_ref,
+                )
+
+            waves = prepare_waves(artifacts, rt_exec_step.wave_indices_ref)
+            if waves is not None:
+                for wave in waves:
+                    elf_nodes.add(
+                        path=f"{self._node_base}/awg/waveform/waves/{wave.index}",
+                        value=wave.samples,
+                        cache=False,
+                        filename=wave.name,
+                    )
+
+            command_table = prepare_command_table(
+                artifacts, rt_exec_step.wave_indices_ref
+            )
+            if command_table is not None:
+                elf_nodes.add(
+                    path=self.nodes.awg_command_table + "/data",
+                    value=json.dumps(command_table, sort_keys=True),
+                    cache=False,
+                )
+
+            if rt_execution_info.with_pipeliner:
+                elf_nodes.extend(self._pipeliner.commit())
+
+        if rt_execution_info.with_pipeliner:
+            upload_ready_conditions.update(self._pipeliner.ready_conditions())
+
+        rw = ResponseWaiterAsync(api=self._api, dev_repr=self._unit_repr, timeout_s=10)
+        rw.add_nodes(upload_ready_conditions)
+        await rw.prepare()
+        await self._api.set_parallel(elf_nodes)
+        await rw.wait()
 
     def collect_warning_nodes(self) -> list[tuple[str, str]]:
         warning_nodes = []

@@ -1,17 +1,17 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::Result;
-use crate::ir::compilation_job::Signal;
-use crate::ir::compilation_job::{self as cjob};
+use crate::ir::compilation_job::{AwgCore, AwgKind, DeviceKind, Signal, SignalKind};
 use anyhow::anyhow;
 use indexmap::IndexMap;
 
 #[derive(Debug)]
 struct Channel {
-    pub id: Option<u16>,
+    pub id: u16,
     pub signal: Arc<Signal>,
 }
 
@@ -47,7 +47,7 @@ impl VirtualSignal {
     }
 
     pub fn get_channel_by_signal(&self, uid: &str) -> Option<u16> {
-        self.signals.get(uid).and_then(|x| x.id)
+        self.signals.get(uid).map(|x| x.id)
     }
 }
 
@@ -59,17 +59,23 @@ impl VirtualSignals {
     }
 }
 
-fn validate_signal_oscillators(signal: &VirtualSignal, awg: &cjob::AwgCore) -> Result<()> {
-    // Skip validation for DOUBLE
-    if !signal.is_multiplexed() || awg.kind == cjob::AwgKind::DOUBLE {
+fn validate_signal_oscillators(signal: &VirtualSignal, awg: &AwgCore) -> Result<()> {
+    if !signal.is_multiplexed() {
         return Ok(());
     }
-    let mut hw_modulated_signals: Vec<&str> = vec![];
-    let mut sw_modulated_signals: Vec<&str> = vec![];
+    let mut hw_modulated_signals: HashMap<u8, Vec<&str>> = HashMap::new();
+    let mut sw_modulated_signals: HashMap<u8, Vec<&str>> = HashMap::new();
     for channel in signal.signals() {
+        let subchannel = if awg.kind == AwgKind::DOUBLE {
+            channel.channels.first().unwrap_or(&0)
+        } else {
+            &0
+        };
         if channel.is_sw_modulated() {
-            if !hw_modulated_signals.is_empty() {
-                let mut signals = hw_modulated_signals.into_iter().collect::<Vec<_>>();
+            if hw_modulated_signals.contains_key(subchannel)
+                && !hw_modulated_signals[subchannel].is_empty()
+            {
+                let mut signals = hw_modulated_signals[subchannel].iter().collect::<Vec<_>>();
                 signals.sort();
                 let err_msg = format!(
                     "Attempting to multiplex HW-modulated signal(s) ({}) with signal that is not HW modulated ({}).",
@@ -77,90 +83,150 @@ fn validate_signal_oscillators(signal: &VirtualSignal, awg: &cjob::AwgCore) -> R
                 );
                 return Err(anyhow!(err_msg).into());
             }
-            sw_modulated_signals.push(&channel.uid);
+            sw_modulated_signals
+                .entry(*subchannel)
+                .or_default()
+                .push(&channel.uid);
         } else if channel.is_hw_modulated() {
-            if let Some(sw_modulated_signal) = sw_modulated_signals.first() {
+            if sw_modulated_signals.contains_key(subchannel)
+                && let Some(sw_modulated_signal) = sw_modulated_signals[subchannel].first()
+            {
                 let err_msg = format!(
-                    "Attempting to multiplex HW-modulated signal(s) ({}) with signal that is not HW modulated ({}).",
+                    "Attempting to multiplex SW-modulated signal(s) ({}) with signal that is not SW modulated ({}).",
                     channel.uid, sw_modulated_signal
                 );
                 return Err(anyhow!(err_msg).into());
             }
-            hw_modulated_signals.push(&channel.uid);
+            hw_modulated_signals
+                .entry(*subchannel)
+                .or_default()
+                .push(&channel.uid);
         }
     }
-    if hw_modulated_signals.len() > 1 && !awg.device_kind().traits().supports_oscillator_switching {
-        let mut signals = hw_modulated_signals.into_iter().collect::<Vec<_>>();
-        signals.sort();
-        let msg = format!(
-            "Attempting to multiplex several hardware-modulated signals: \
-            '{}' on device '{}', which does not support oscillator switching.",
-            signals.join(", "),
-            awg.device_kind().as_str()
-        );
-        return Err(anyhow!(msg).into());
+    if awg.device_kind().traits().supports_oscillator_switching {
+        return Ok(());
     }
-    Ok(())
+    let mut signals = if awg.kind == AwgKind::DOUBLE {
+        if hw_modulated_signals.values().all(|ids| ids.len() == 1) {
+            return Ok(());
+        }
+        hw_modulated_signals
+            .values()
+            .find(|ids| ids.len() > 1)
+            .expect("Internal error: Expected at least one HW-modulated signal")
+            .clone()
+    } else {
+        let hw_modulated_signals: Vec<&&str> =
+            hw_modulated_signals.values().flatten().collect::<Vec<_>>();
+        if hw_modulated_signals.len() <= 1 {
+            return Ok(());
+        }
+        hw_modulated_signals
+            .into_iter()
+            .copied()
+            .collect::<Vec<_>>()
+    };
+    signals.sort();
+    let msg = format!(
+        "Attempting to multiplex several hardware-modulated signals: \
+                '{}' on device '{}', which does not support oscillator switching.",
+        signals.join(", "),
+        awg.device_kind().as_str()
+    );
+    Err(anyhow!(msg).into())
+}
+
+fn get_signal_channels(signals: &[Arc<Signal>]) -> HashSet<Vec<u8>> {
+    signals
+        .iter()
+        .filter(|signal| signal.kind != SignalKind::INTEGRATION)
+        .map(|signal| signal.channels.clone())
+        .collect()
+}
+
+fn is_multiplexing(awg: &AwgCore) -> Result<bool> {
+    let is_shfqa = *awg.device_kind() == DeviceKind::SHFQA;
+    let is_hdawg = *awg.device_kind() == DeviceKind::HDAWG;
+    let channel_sets = get_signal_channels(&awg.signals);
+    match awg.kind {
+        AwgKind::DOUBLE => {
+            // Signals of this type have two channels, like 0 and 1 or 4 and 5.
+            if channel_sets.len() != 2 {
+                return Err(
+                    anyhow!("DOUBLE signals need two channels. Found: {channel_sets:?}").into(),
+                );
+            }
+            assert!(is_hdawg, "HDAWG device required for DOUBLE signals");
+            Ok(awg.signals.len() > 2)
+        }
+        AwgKind::SINGLE => {
+            if channel_sets.len() != 1 {
+                return Err(anyhow!(
+                    "SINGLE signals need a single channel. Found: {channel_sets:?}"
+                )
+                .into());
+            }
+            assert!(is_hdawg, "HDAWG device required for SINGLE signals");
+            Ok(awg.signals.len() > 1)
+        }
+        AwgKind::IQ => {
+            if !is_shfqa && channel_sets.len() > 1 {
+                return Err(anyhow!(
+                    "IQ signals need a single channel configuration. Found: {channel_sets:?}"
+                )
+                .into());
+            }
+            Ok(!is_shfqa && awg.signals.len() > 1)
+        }
+    }
 }
 
 /// Creates virtual signals and allocates channels for each signal.
 ///
 /// Virtual signals do not include integration signals.
-pub fn create_virtual_signals(awg: &cjob::AwgCore) -> Result<Option<VirtualSignals>> {
-    let virtual_signals = match awg.kind {
-        cjob::AwgKind::SINGLE | cjob::AwgKind::IQ => {
-            let mut signals = vec![];
-            for signal_obj in awg.signals.iter() {
-                if signal_obj.kind == cjob::SignalKind::INTEGRATION {
-                    continue;
-                }
-                // TODO: What is the function of the subchannel?
-                let sub_channel = {
-                    match awg.device_kind() {
-                        cjob::DeviceKind::SHFQA => Some(signal_obj.channels[0]),
-                        _ => None,
-                    }
-                };
-                let channel = Channel {
-                    id: Some(0),
-                    signal: Arc::clone(signal_obj),
-                };
-                let v_sig = VirtualSignal::new(vec![channel], sub_channel);
-                signals.push(v_sig);
-            }
-            signals
+pub fn create_virtual_signals(awg: &AwgCore) -> Result<Option<VirtualSignals>> {
+    let is_multiplexing = is_multiplexing(awg)?;
+    let mut virtual_signals: HashMap<Option<u8>, Vec<Channel>> = HashMap::new();
+    let mut channel_to_id: HashMap<u8, u16> = HashMap::new();
+    for signal_obj in awg.signals.iter() {
+        if signal_obj.kind == SignalKind::INTEGRATION {
+            continue;
         }
-        cjob::AwgKind::MULTI => {
-            let mut channels = vec![];
-            for signal_obj in awg.signals.iter() {
-                if signal_obj.kind != cjob::SignalKind::INTEGRATION {
-                    let channel = Channel {
-                        signal: Arc::clone(signal_obj),
-                        id: Some(channels.len() as u16),
-                    };
-                    channels.push(channel);
-                }
-            }
-            vec![VirtualSignal::new(channels, None)]
-        }
-        cjob::AwgKind::DOUBLE => {
-            assert_eq!(awg.signals.len(), 2, "DOUBLE signal must have 2 signals");
-            let channels = vec![
-                Channel {
-                    signal: Arc::clone(&awg.signals[0]),
-                    id: Some(0),
-                },
-                Channel {
-                    signal: Arc::clone(&awg.signals[1]),
-                    id: Some(1),
-                },
-            ];
-            vec![VirtualSignal::new(channels, None)]
-        }
-    };
+        // The channels are 0..15 for an SHFQA
+        let sub_channel = if *awg.device_kind() == DeviceKind::SHFQA {
+            Some(signal_obj.channels[0])
+        } else {
+            None
+        };
+        let entry = virtual_signals.entry(sub_channel).or_default();
+
+        // The ID is an index into the list of channel numbers. In the case of
+        // an RF signal, we map the actual channels to 0 (and maybe 1). In the
+        // case of multiplexed IQ signals, we just count up. In any other case,
+        // we anyway have only one channel.
+        let id = if matches!(awg.kind, AwgKind::DOUBLE | AwgKind::SINGLE) {
+            let l = channel_to_id.len();
+            *channel_to_id
+                .entry(signal_obj.channels[0])
+                .or_insert_with(|| l as u16)
+        } else if is_multiplexing {
+            entry.len() as u16
+        } else {
+            assert!(entry.is_empty());
+            0
+        };
+        entry.push(Channel {
+            id,
+            signal: Arc::clone(signal_obj),
+        });
+    }
     if virtual_signals.is_empty() {
         return Ok(None);
     }
+    let virtual_signals: Vec<_> = virtual_signals
+        .into_iter()
+        .map(|(sub_channel, channels)| VirtualSignal::new(channels, sub_channel))
+        .collect();
     for vsig in virtual_signals.iter() {
         validate_signal_oscillators(vsig, awg)?
     }

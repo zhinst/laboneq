@@ -8,12 +8,11 @@ use indexmap::IndexMap;
 pub type WaveIndex = u32;
 
 pub enum SignalType {
-    CSV,
     COMPLEX,
     SIGNAL(AwgKind),
 }
 pub struct WaveIndexTracker {
-    pub wave_indices: IndexMap<String, (Option<WaveIndex>, SignalType)>,
+    pub wave_indices: IndexMap<String, (WaveIndex, SignalType)>,
     next_wave_index: WaveIndex,
 }
 
@@ -30,7 +29,7 @@ impl WaveIndexTracker {
             next_wave_index: 0,
         }
     }
-    pub fn lookup_index_by_wave_id(&self, wave_id: &str) -> Option<Option<WaveIndex>> {
+    pub fn lookup_index_by_wave_id(&self, wave_id: &str) -> Option<WaveIndex> {
         let entry = self.wave_indices.get(wave_id);
         entry.map(|entry| entry.0)
     }
@@ -39,19 +38,13 @@ impl WaveIndexTracker {
         &mut self,
         wave_id: S1,
         signal_type: SignalType,
-    ) -> Result<Option<WaveIndex>> {
+    ) -> Result<WaveIndex> {
         let wave_id: String = wave_id.into();
         if self.wave_indices.contains_key(&wave_id) {
             return Err(Error::new("Wave ID already exists"));
         }
-        let index = if matches!(signal_type, SignalType::CSV) {
-            // For CSV store only the signature, do not allocate an index
-            None
-        } else {
-            let index = self.next_wave_index;
-            self.next_wave_index += 1;
-            Some(index)
-        };
+        let index = self.next_wave_index;
+        self.next_wave_index += 1;
         self.wave_indices.insert(wave_id, (index, signal_type));
         Ok(index)
     }
@@ -63,10 +56,10 @@ impl WaveIndexTracker {
         index: WaveIndex,
     ) {
         self.wave_indices
-            .insert(wave_id.into(), (Some(index), signal_type));
+            .insert(wave_id.into(), (index, signal_type));
     }
 
-    pub fn finish(self) -> IndexMap<String, (Option<WaveIndex>, SignalType)> {
+    pub fn finish(self) -> IndexMap<String, (WaveIndex, SignalType)> {
         self.wave_indices
     }
 }

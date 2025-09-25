@@ -93,10 +93,7 @@ def _chunk_count_trial(requested: int, candidates: list[int]) -> int:
 
 def _adjust_awg_signal_type(awg: AWGInfo):
     occupied_channels = {sc[1] for sc in awg.signal_channels}
-    if len(occupied_channels) == 2 and awg.signal_type not in [
-        AWGSignalType.IQ,
-        AWGSignalType.MULTI,
-    ]:
+    if len(occupied_channels) == 2 and awg.signal_type == AWGSignalType.SINGLE:
         awg.signal_type = AWGSignalType.DOUBLE
 
 
@@ -232,12 +229,6 @@ def calc_awgs(dao: ExperimentDAO) -> AWGMapping:
                         "awg": awg,
                         "signals": {signal_id},
                     }
-
-    for v in signals_by_channel_and_awg.values():
-        if len(v["signals"]) > 1 and v["awg"].device_type != DeviceType.SHFQA:
-            awg = v["awg"]
-            awg.signal_type = AWGSignalType.MULTI
-            _logger.debug("Changing signal type to multi: %s", awg)
 
     for awg in awgs.values():
         _adjust_awg_signal_type(awg)
@@ -596,14 +587,30 @@ class Compiler:
             use_2ghz_for_hdawg=self._clock_settings["use_2GHz_for_HDAWG"],
         )
         self._signal_objects = self._generate_signal_objects()
-
         self._feedback_register_layout = calculate_feedback_register_layout(
             self._integration_unit_allocation
         )
 
         chunking = self._chunking_info
         if chunking is None or not chunking.auto:
-            chunk_count = None if chunking is None else chunking.chunk_count
+            if chunking is None:
+                chunk_count = None
+            else:
+                chunk_count = chunking.chunk_count
+
+                if chunk_count > chunking.sweep_iterations:
+                    _logger.warning(
+                        "Provided chunk count (%s) is larger than the sweep length (%s). Using %s instead.",
+                        chunk_count,
+                        chunking.sweep_iterations,
+                        chunking.sweep_iterations,
+                    )
+                    chunk_count = chunking.sweep_iterations
+                if chunking.sweep_iterations % chunk_count != 0:
+                    raise LabOneQException(
+                        f"Chunk count ({chunk_count}) does not evenly divide sweep length ({chunking.sweep_iterations})"
+                    )
+
             try:
                 self._combined_compiler_output = self._compile_whole_or_with_chunks(
                     chunk_count=chunk_count

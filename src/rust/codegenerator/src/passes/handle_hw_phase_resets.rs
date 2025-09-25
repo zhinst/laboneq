@@ -8,9 +8,14 @@ use crate::ir::{IrNode, NodeKind, Samples};
 
 fn transform_phase_reset_nodes(node: &mut IrNode, cut_points: &mut HashSet<Samples>) -> Result<()> {
     match node.data_mut() {
-        NodeKind::PhaseReset(_) => {
-            node.replace_data(NodeKind::ResetPhase());
-            cut_points.insert(*node.offset());
+        NodeKind::PhaseReset(data) => {
+            let has_hw_modulated_signals = data.signals.iter().any(|s| !s.is_sw_modulated());
+            node.replace_data(if has_hw_modulated_signals {
+                cut_points.insert(*node.offset());
+                NodeKind::ResetPhase()
+            } else {
+                NodeKind::Nop { length: 0 }
+            });
         }
         _ => {
             for child in node.iter_children_mut() {

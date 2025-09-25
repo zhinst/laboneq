@@ -7,12 +7,13 @@ import logging
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 from numpy.typing import ArrayLike
 
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
+from laboneq.core.types.enums.wave_type import WaveType
 from laboneq.core.utilities.pulse_sampler import (
     combine_pulse_parameters,
     sample_pulse,
@@ -21,8 +22,8 @@ from laboneq.core.utilities.pulse_sampler import (
 from laboneq.data.scheduled_experiment import (
     ArtifactsCodegen,
     CodegenWaveform,
+    CompilerArtifact,
     PulseWaveformMap,
-    ScheduledExperiment,
 )
 
 if TYPE_CHECKING:
@@ -40,7 +41,7 @@ class Component(Enum):
 
 
 def _replace_pulse_in_wave(
-    scheduled_experiment: ScheduledExperiment,
+    artifacts: ArtifactsCodegen,
     wave_name: str,
     pulse_or_array: ArrayLike | Pulse,
     pwm: PulseWaveformMap,
@@ -52,8 +53,6 @@ def _replace_pulse_in_wave(
     if current_waves is not None:
         current_wave = current_waves.get(wave_name)
     if current_wave is None:
-        artifacts = scheduled_experiment.artifacts
-        assert isinstance(artifacts, ArtifactsCodegen)
         specified_wave = artifacts.waves[wave_name]
         # TODO(2K): Avoid deepcopy on every iteration, create working copy once per execution
         current_wave = deepcopy(specified_wave)
@@ -65,7 +64,7 @@ def _replace_pulse_in_wave(
     amplitude = 1.0
     function = None
     pulse_id = "<replaced pulse>"
-    pulse_parameters = {}
+    pulse_parameters: dict[str, Any] = {}
     if isinstance(pulse_or_array, list):
         pulse_or_array = np.asarray(pulse_or_array)
     if isinstance(pulse_or_array, np.ndarray):
@@ -75,7 +74,7 @@ def _replace_pulse_in_wave(
         amplitude = getattr(pulse_or_array, "amplitude", 1.0)
         function = getattr(pulse_or_array, "function", None)
         pulse_id = getattr(pulse_or_array, "uid", pulse_id)
-        pulse_parameters = getattr(pulse_or_array, "pulse_parameters", None) or {}
+        pulse_parameters = getattr(pulse_or_array, "pulse_parameters", {})
 
     if (
         not is_complex
@@ -162,31 +161,47 @@ class WaveReplacement:
 
 
 def calc_wave_replacements(
-    scheduled_experiment: ScheduledExperiment,
+    artifacts: CompilerArtifact | None,
     pulse_uid: str | Pulse,
     pulse_or_array: ArrayLike | Pulse,
     current_waves: dict[str, CodegenWaveform] | None = None,
 ) -> list[WaveReplacement]:
-    if not isinstance(pulse_uid, str):
-        pulse_uid = pulse_uid.uid
-    pm = scheduled_experiment.pulse_map.get(pulse_uid)
+    if not isinstance(artifacts, ArtifactsCodegen):
+        raise LabOneQException("Wave replacement is not supported for this instrument.")
+
+    if artifacts.pulse_map is None or artifacts.wave_indices is None:
+        raise LabOneQException("No waves available for replacement.")
+
+    eff_pulse_uid = (
+        pulse_uid
+        if isinstance(pulse_uid, str)
+        else getattr(pulse_uid, "uid", "<unknown>")
+    )
+
+    pm = artifacts.pulse_map.get(eff_pulse_uid)
     if pm is None:
-        _logger.warning("No mapping found for pulse '%s' - ignoring", pulse_uid)
+        _logger.warning("No mapping found for pulse '%s' - ignoring", eff_pulse_uid)
         return []
+
+    for waveform in pm.waveforms.values():
+        if any([instance.can_compress for instance in waveform.instances]):
+            raise LabOneQException(
+                f"Pulse replacement is not allowed for pulses that support compression. Pulse '{eff_pulse_uid}'."
+            )
 
     replacements: list[WaveReplacement] = []
     for sig_string, pwm in pm.waveforms.items():
-        for awgs in scheduled_experiment.wave_indices:
-            awg_wave_map: dict[str, list[int | str]] = awgs["value"]
-            target_wave = awg_wave_map.get(sig_string)
-            if target_wave is None:
+        for awg_wave_map in artifacts.wave_indices:
+            target_wave = cast(
+                tuple[int, WaveType], awg_wave_map["value"].get(sig_string)
+            )
+            if target_wave is None or len(target_wave) != 2:
                 continue
-            wave_type: str = target_wave[1]
-            is_complex = wave_type in ("iq", "complex")
-            if wave_type == "single":
+            _, sig_type = target_wave  # unpack
+            if sig_type == WaveType.SINGLE:
                 replacement_type = ReplacementType.I_Q
                 samples_i = _replace_pulse_in_wave(
-                    scheduled_experiment,
+                    artifacts,
                     sig_string + ".wave",
                     pulse_or_array,
                     pwm,
@@ -195,10 +210,11 @@ def calc_wave_replacements(
                     is_complex=False,
                 )
                 samples = [samples_i]
-            elif wave_type != "complex":
+            elif sig_type != WaveType.COMPLEX:
+                is_complex = sig_type == WaveType.IQ
                 replacement_type = ReplacementType.I_Q
                 samples_i = _replace_pulse_in_wave(
-                    scheduled_experiment,
+                    artifacts,
                     sig_string + "_i.wave",
                     pulse_or_array,
                     pwm,
@@ -207,7 +223,7 @@ def calc_wave_replacements(
                     is_complex=is_complex,
                 )
                 samples_q = _replace_pulse_in_wave(
-                    scheduled_experiment,
+                    artifacts,
                     sig_string + "_q.wave",
                     pulse_or_array,
                     pwm,
@@ -219,17 +235,17 @@ def calc_wave_replacements(
             else:
                 replacement_type = ReplacementType.COMPLEX
                 samples = _replace_pulse_in_wave(
-                    scheduled_experiment,
+                    artifacts,
                     sig_string + ".wave",
                     pulse_or_array,
                     pwm,
                     current_waves=current_waves,
                     component=Component.COMPLEX,
-                    is_complex=is_complex,
+                    is_complex=True,
                 )
             replacements.append(
                 WaveReplacement(
-                    awg_id=awgs["filename"],
+                    awg_id=cast(str, awg_wave_map["filename"]),
                     sig_string=sig_string,
                     replacement_type=replacement_type,
                     samples=samples,
@@ -255,11 +271,9 @@ def replace_pulse(
     from laboneq.core.types.compiled_experiment import CompiledExperiment
 
     if isinstance(target, CompiledExperiment):
-        scheduled_experiment = target.scheduled_experiment
-        wave_replacements = calc_wave_replacements(
-            scheduled_experiment, pulse_uid, pulse_or_array
-        )
-        artifacts = scheduled_experiment.artifacts
+        artifacts = target.scheduled_experiment.artifacts
+        wave_replacements = calc_wave_replacements(artifacts, pulse_uid, pulse_or_array)
+        # Ensured by `calc_wave_replacements`
         assert isinstance(artifacts, ArtifactsCodegen)
         for repl in wave_replacements:
             if repl.replacement_type == ReplacementType.I_Q:

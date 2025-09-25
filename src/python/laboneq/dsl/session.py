@@ -473,8 +473,8 @@ class Session:
                 self.compiled_experiment.scheduled_experiment
             )
             controller.wait_submission(handle)
-            controller.stop_workers()
         finally:
+            controller.stop_workers()
             results = (
                 ExperimentResults()
                 if handle is None

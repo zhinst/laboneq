@@ -454,6 +454,15 @@ class DeviceSHFSG(DeviceSHFBase):
             attributes=attributes,
         )
 
+    async def _prepare_artifacts_impl(
+        self,
+        recipe_data: RecipeData,
+        nt_step: NtStepKey,
+        awg_index: int,
+    ):
+        # Artifacts upload for the SHFSG is done in the SGChannel class.
+        pass
+
     def prepare_upload_binary_wave(
         self,
         awg_index: int,
@@ -531,7 +540,7 @@ class DeviceSHFSG(DeviceSHFBase):
         await self.set_async(nc)
 
     def command_table_path(self, awg_index: int) -> str:
-        return f"/{self.serial}/sgchannels/{awg_index}/awg/commandtable/"
+        return self._sgchannels[awg_index].nodes.awg_command_table + "/"
 
     async def reset_to_idle(self):
         if not self.is_secondary:

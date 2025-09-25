@@ -326,7 +326,7 @@ class QPUTopology:
 
         return self._node_lookup[node]
 
-    def neighbours(
+    def neighbors(
         self,
         node: str | QuantumElement,
         tag: str | None = None,
@@ -334,14 +334,14 @@ class QPUTopology:
         incoming: bool | None = None,
         outgoing: bool | None = None,
     ) -> list[QuantumElement]:
-        """Return a list of neighbouring nodes attached to a quantum element node.
+        """Return a list of neighboring nodes attached to a quantum element node.
 
         Arguments:
             node:
-                The quantum element whose neighbours to return. May be passed as
+                The quantum element whose neighbors to return. May be passed as
                 either the UID or the `QuantumElement` object.
             tag:
-                If specified, filter the list of neighbours by edge tag.
+                If specified, filter the list of neighbors by edge tag.
             incoming:
                 If false, exclude incoming edges to `node`. If true, include
                 incoming edges.
@@ -350,10 +350,10 @@ class QPUTopology:
                 outgoing edges.
 
         Returns:
-            The list of neighbouring nodes.
+            The list of neighboring nodes.
 
         !!! note
-            If `incoming` and `outgoing` are both `None`, all neighbours are returned.
+            If `incoming` and `outgoing` are both `None`, all neighbors are returned.
             If only one is `None`, the other takes the sensible default of
             `not` the other.
         """
@@ -419,6 +419,7 @@ class QPUTopology:
 
         Raises:
             TypeError: If `quantum_element` has an invalid type.
+            ValueError: If nodes are not present in the QPU.
 
         !!! warning
             Multiple edges between two quantum elements in a given direction with the
@@ -454,6 +455,42 @@ class QPUTopology:
             "quantum_element": quantum_element,
         }
         self._graph.add_edge(source_node, target_node, key=tag, **edge_params)
+
+    def update_edge(
+        self,
+        tag: str,
+        source_node: str | QuantumElement,
+        target_node: str | QuantumElement,
+        **parameter_changes: dict[str, object],
+    ):
+        """Update the topology edge with supplied parameter changes.
+
+        Arguments:
+            tag: The edge tag (unique between two quantum element nodes in a
+                given direction). This string is a user-defined tag used to categorize
+                the edges. The edge tag, together with the source and target node
+                UIDs, uniquely defines an edge.
+            source_node: The quantum element at the source node. Either the quantum element UID or
+                 the quantum element object may be provided.
+            target_node: The quantum element at the target node. Either the quantum element UID
+                or the quantum element object may be provided.
+            parameter_changes:
+                Parameter changes to apply passed as keyword arguments.
+
+        !!! note
+            The `parameters` attribute of this topology edge is replaced
+            with a *new* parameter instance.
+        """
+        # convert quantum element types if necessary
+        if isinstance(source_node, QuantumElement):
+            source_node = source_node.uid
+        if isinstance(target_node, QuantumElement):
+            target_node = target_node.uid
+
+        params = self[tag, source_node, target_node].parameters.replace(
+            **parameter_changes
+        )
+        self._graph.edges[source_node, target_node, tag]["parameters"] = params
 
     def get_edge(
         self,
@@ -658,7 +695,7 @@ class QPUTopology:
         show_tags: bool = True,
         ax: Axes | None = None,
         disconnected: bool = False,
-    ) -> None:
+    ) -> Axes:
         """Plot the QPU topology.
 
         Plot a simple directed graph of the QPU topology, including: nodes, node
@@ -705,6 +742,9 @@ class QPUTopology:
         !!! version-added "Added in version 2.57.0"
             Added the `figsize`, `fixed_pos`, `equal_aspect`, and `show_tags` optional
             keyword arguments, which provide greater control over the plot's appearance.
+
+        Returns:
+            The Matplotlib axes on which the graph was drawn.
         """
         nx_graph = self._graph.copy()
 
@@ -755,3 +795,5 @@ class QPUTopology:
 
         if equal_aspect:
             ax.set_aspect("equal")
+
+        return ax

@@ -113,9 +113,11 @@ class AsyncWorker(Generic[T]):
     def __init__(
         self,
         *,
+        run_one: Callable[[T], Coroutine[None, None, None]],
         max_idle_cycles: int = 5,
         cycle_timeout: float = 1.0,
     ):
+        self._run_one = run_one
         self._max_idle_cycles = max_idle_cycles
         self._cycle_timeout = cycle_timeout
         self._idle_cycles = 0
@@ -143,7 +145,7 @@ class AsyncWorker(Generic[T]):
                         self._queue.get(), timeout=self._cycle_timeout
                     )
                     self._idle_cycles = 0
-                    await self.run_one(item)
+                    await self._run_one(item)
                     self._queue.task_done()
                 except asyncio.TimeoutError:  # noqa: PERF203
                     self._idle_cycles += 1

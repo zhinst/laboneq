@@ -31,7 +31,7 @@ pub type Samples = i64;
 
 pub struct SeqcResults {
     pub seqc: String,
-    pub wave_indices: IndexMap<String, (Option<WaveIndex>, SignalType)>,
+    pub wave_indices: IndexMap<String, (WaveIndex, SignalType)>,
     pub command_table: Option<Value>,
     pub parameter_phase_increment_map: Option<HashMap<String, Vec<ParameterPhaseIncrement>>>,
     pub shf_sweeper_config: Option<SHFPPCSweeperConfig>,

@@ -9,7 +9,6 @@ import functools
 import itertools
 from dataclasses import replace
 from itertools import groupby
-from math import ceil
 from typing import TYPE_CHECKING, Any, Iterable, Iterator
 
 from laboneq._utils import UIDReference, cached_method
@@ -565,10 +564,13 @@ class Scheduler:
             if section_info.chunked:
                 chunk_index = current_parameters["__chunk_index"]
                 chunk_count = current_parameters["__chunk_count"]
-                max_chunk_size = ceil(section_info.count / chunk_count)
+                chunk_size = section_info.count // chunk_count
+                assert chunk_size * chunk_count == section_info.count, (
+                    "sweep is not evenly divided into chunks"
+                )
                 global_iterations = range(
-                    chunk_index * max_chunk_size,
-                    min((chunk_index + 1) * max_chunk_size, section_info.count),
+                    chunk_index * chunk_size,
+                    min((chunk_index + 1) * chunk_size, section_info.count),
                 )
             else:
                 global_iterations = range(section_info.count)

@@ -6,10 +6,11 @@ from __future__ import annotations
 from enum import Enum
 
 
-class AWGSignalType(Enum):
-    SINGLE = "single"  # Only one channel is played
-    DOUBLE = "double"  # Two independent channels
-    IQ = "iq"  # Two channels form an I/Q signal
+class WaveType(Enum):
+    COMPLEX = "complex"
+    SINGLE = "single"
+    DOUBLE = "double"
+    IQ = "iq"
 
     def __repr__(self):
         cls_name = self.__class__.__name__

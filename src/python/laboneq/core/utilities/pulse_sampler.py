@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import logging
-from numbers import Complex
 from typing import Any, Callable, cast
 
 import numpy as np
@@ -96,7 +95,7 @@ def sample_pulse(
     signal_type: str,
     sampling_rate: float,
     length: float,
-    amplitude: Complex,
+    amplitude: complex,
     pulse_function: str | None,
     modulation_frequency: float | None = None,
     phase: float | None = None,

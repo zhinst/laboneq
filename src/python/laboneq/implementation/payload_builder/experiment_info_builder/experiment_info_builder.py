@@ -1037,14 +1037,6 @@ class ExperimentInfoBuilder:
             assert (
                 self._chunking_info is None
             )  # multiple sweeps being chunked should have been caught earlier in validation
-            if _chunk_count > count:
-                _logger.warning(
-                    "Provided chunk count (%s) is larger than the sweep length (%s). Using %s instead.",
-                    _chunk_count,
-                    count,
-                    count,
-                )
-                _chunk_count = count
             self._chunking_info = ChunkingInfo(_auto_chunking, _chunk_count, count)
 
         this_acquisition_type = None

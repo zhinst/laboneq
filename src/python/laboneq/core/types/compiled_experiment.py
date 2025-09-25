@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from laboneq.core.types.enums.wave_type import WaveType
 from laboneq.core.validators import dicts_equal
 from laboneq.data.scheduled_experiment import CodegenWaveform, ScheduledExperiment
 
@@ -139,7 +140,7 @@ class CompiledExperiment:
         return self.scheduled_experiment.recipe.total_execution_time
 
     @property
-    def wave_indices(self) -> list[dict]:
+    def wave_indices(self) -> list[dict[str, str | tuple[int, WaveType]]] | None:
         """A list of which waves are used by each Sequence C program.
 
         !!! version-changed "Deprecated in version 2.14.0"
@@ -152,8 +153,7 @@ class CompiledExperiment:
         - `value` ([dict][]):
           A mapping from the names of waves to pairs of `(channel, type)`
           where `channel` is an integer specifying the channel to play
-          the wave samples on and `type` is either `"float"` or `"complex"`
-          and specifies the type of the samples.
+          the wave samples on and `type` specifies the type of the samples.
         """
         return self.scheduled_experiment.wave_indices
 
