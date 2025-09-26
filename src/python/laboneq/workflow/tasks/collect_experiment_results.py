@@ -21,7 +21,7 @@ def append_result(results: list[Results], result: Results) -> None:
     results.append(result)
 
 
-@workflow.task
+@workflow.task(save=False)
 def combine_results(results: list[Results]) -> Results:
     """Combines the results in results into a single Results instance.
 
@@ -62,8 +62,10 @@ def combine_results(results: list[Results]) -> Results:
         acquired_results.update(res.acquired_results)
         execution_errors.extend(res.execution_errors or [])
         neartime_callback_results.update(res.neartime_callback_results or {})
-    return Results(
+    combined_results = Results(
         acquired_results=acquired_results,
         execution_errors=execution_errors,
         neartime_callback_results=neartime_callback_results,
     )
+    workflow.save_artifact("combine_results.output", combined_results)
+    return combined_results

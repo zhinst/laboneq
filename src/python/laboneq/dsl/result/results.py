@@ -170,7 +170,7 @@ class Results:
         )
 
     def __dir__(self):
-        return super().__dir__() + list(self._acquired_results_wrapper._key_cache)
+        return super().__dir__() + self._acquired_results_wrapper._attr_keys()
 
     def __getattr__(self, key: object) -> AttributeWrapper | object:
         # This intentionally only looks up the keys on the wrapper and

@@ -11,7 +11,6 @@ import inspect
 import textwrap
 from numbers import Number
 from typing import TYPE_CHECKING, Callable, ClassVar
-import warnings
 
 import numpy as np
 from laboneq.dsl.quantum._multimethod import MultiMethod
@@ -297,21 +296,6 @@ class QuantumOperations:
         for t in types:
             if t not in cls.QUBIT_TYPES:
                 cls.QUBIT_TYPES += (t,)
-
-        warnings.warn(
-            "The `self.BASE_OPS` class attribute will be of type "
-            "`dict[str, MultiMethod] | None` starting from LabOne Q 2.60.0, which will "
-            "be released on 25.09.2025. A `MultiMethod` is a dictionary of functions "
-            "that is keyed by their simplified type signatures. Following this change, "
-            "to call a function directly, please replace `self.BASE_OPS[op_name]` with "
-            "`self.BASE_OPS[op_name][simplified_type_signature]`, where "
-            "`simplified_type_signature` is the tuple of simplified types used for "
-            "function dispatching. For example, for a quantum operation that was "
-            "defined without type hints, you can replace `self.BASE_OPS[op_name]` with "
-            "`self.BASE_OPS[op_name][()]`.",
-            FutureWarning,
-            stacklevel=2,
-        )
 
     def __init_subclass__(cls, **kw):
         """Move any quantum operations into BASE_OPS."""
@@ -931,19 +915,6 @@ class Operation:
             for a quantum operation that was defined without type hints, you can
             replace `self.op` with `self.op[()]`.
         """
-        warnings.warn(
-            "The `op` property will return a `MultiMethod` instead of a "
-            "`Callable` starting from LabOne Q 2.60.0, which will be released on "
-            "25.09.2025. A `MultiMethod` is a dictionary of functions that is keyed "
-            "by their simplified type signatures. Following this change, please "
-            "replace `self.op` with `self.op[simplified_type_signature]` to continue "
-            "using existing code, where `simplified_type_signature` is the tuple of "
-            "simplified types used for function dispatching. For example, for a "
-            "quantum operation that was defined without type hints, you can replace "
-            "`self.op` with `self.op[()]`.",
-            FutureWarning,
-            stacklevel=2,
-        )
         return self._op
 
     @property
