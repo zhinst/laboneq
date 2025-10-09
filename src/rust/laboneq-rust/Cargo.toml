@@ -13,7 +13,14 @@ name = "laboneq_rust"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { workspace = true }
+pyo3 = { workspace = true, features = ["anyhow"] }
+num-complex = { workspace = true }
 pyo3-log = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
 
+laboneq-common = { path = "../laboneq-common" }
 codegenerator-py = { path = "../codegenerator-py" }
+laboneq-scheduler = { path = "../laboneq-scheduler" }
+numeric-array = { path = "../numeric-array", features = ["pyo3"] }
+laboneq-units = { path = "../laboneq-units" }

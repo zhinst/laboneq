@@ -23,6 +23,7 @@ class PulseSchedule(IntervalSchedule):
     section: str
     play_pulse_params: Optional[Dict[str, Any]] = None
     pulse_pulse_params: Optional[Dict[str, Any]] = None
+    pulse_params_id: int | None = None
     is_acquire: bool
     markers: Any = None
     # integration length originally specified by the user in case of acquire

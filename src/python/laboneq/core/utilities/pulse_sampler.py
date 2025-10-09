@@ -274,10 +274,14 @@ def verify_amplitude_no_clipping(
     pulse_id: str | None,
     mixer_type: MixerType | None,
     signals: tuple[str] | None,
+    is_rf_signal: bool,
 ):
     if samples_q is None:
-        samples_q = 0
-    max_amplitude = np.max(np.abs(samples_i + 1j * samples_q))
+        samples_q = 0.0
+    if is_rf_signal:
+        max_amplitude = max(np.max(samples_i), np.max(samples_q))
+    else:
+        max_amplitude = np.max(np.abs(samples_i + 1j * samples_q))
     if mixer_type == MixerType.UHFQA_ENVELOPE:
         max_amplitude /= np.sqrt(2)
     TOLERANCE = 1e-6

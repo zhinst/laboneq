@@ -152,6 +152,7 @@ class ExperimentInfoBuilder:
             global_leader_device=self._device_info.global_leader,
             pulse_defs=sorted(self._pulse_defs.values(), key=lambda s: s.uid),
             chunking=self._chunking_info,
+            src=self._experiment,
         )
         self._resolve_seq_averaging(experiment_info)
         self._resolve_oscillator_modulation_type(experiment_info)
@@ -610,6 +611,11 @@ class ExperimentInfoBuilder:
             isinstance(op, ResetOscillatorPhase) and op.signal is None
             for op in section.children
         ):
+            # Remove any mentions of the split section
+            self._section_operations_to_add.pop()
+            section_uid_map.pop(section.uid)
+            visit_count.pop(section.uid)
+
             self._split_phase_reset_sections(
                 section_info, section, section_uid_map, visit_count
             )
@@ -640,7 +646,6 @@ class ExperimentInfoBuilder:
                 sections_ops.append([])
             else:
                 sections_ops[-1].append(child)
-        section.children.clear()
         signals = set(
             op.signal
             for ops in sections_ops
@@ -726,13 +731,14 @@ class ExperimentInfoBuilder:
                 section.signals.append(signal_info)
             return
         if isinstance(operation, ResetOscillatorPhase):
-            if signal_info.type == SignalInfoType.RF:
-                _logger.warning(
-                    "Resetting the phase of RF signal '%s' in section '%s' is not supported yet.",
-                    signal_info.uid,
-                    section.uid,
+            if (
+                signal_info.type == SignalInfoType.RF
+                and signal_info.oscillator is not None
+                and signal_info.oscillator.is_hardware
+            ):
+                raise LabOneQException(
+                    f"Phase reset on hardware modulated RF signal '{signal_info.uid}' is not supported."
                 )
-                return
             section.pulses.append(
                 SectionSignalPulse(signal=signal_info, reset_oscillator_phase=True)
             )

@@ -734,6 +734,9 @@ class QPUTopology:
             If a strict subset of nodes is at a fixed position, the remaining nodes are
             distributed according to the networkx spring layout.
 
+        !!! version-changed "Changed in version 2.60.0"
+            Changed method to return the Matplotlib axes instead of `None`.
+
         !!! version-changed "Changed in version 2.57.0"
             Changed the default networkx layout from `planar` to `spring`.
             Changed the default value of the `disconnected` argument from `True` to

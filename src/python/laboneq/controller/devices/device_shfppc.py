@@ -15,7 +15,6 @@ from laboneq.controller.attribute_value_tracker import (
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import DeviceBase
 from laboneq.controller.recipe_processor import RecipeData
-from laboneq.core.types.enums import AcquisitionType
 from laboneq.data.calibration import CancellationSource
 from laboneq.data.recipe import Initialization
 
@@ -96,11 +95,9 @@ class DeviceSHFPPC(DeviceBase):
 
     async def apply_initialization(self, recipe_data: RecipeData):
         nc = NodeCollector()
-        initialization = recipe_data.get_initialization(self.uid)
-        ppchannels = {
-            settings["channel"]: settings
-            for settings in initialization.ppchannels or []
-        }
+        device_recipe_data = recipe_data.device_settings.get(self.uid)
+        if device_recipe_data is None:
+            return
 
         def _convert(value):
             if isinstance(value, bool):
@@ -111,13 +108,15 @@ class DeviceSHFPPC(DeviceBase):
         probe_synth_channel = [1, 0, 3, 2]
 
         self._allocated_sweepers.clear()
-        for ch, settings in ppchannels.items():
-            for key, value in settings.items():
+        for ch, ppchannel in device_recipe_data.ppchannels.items():
+            for key, value in ppchannel.settings.items():
                 if key == "channel":
                     continue
                 if key == "probe_on" and value:
-                    probe_channel = ppchannels.get(probe_synth_channel[ch])
-                    if probe_channel is not None and probe_channel["pump_on"]:
+                    probe_channel = device_recipe_data.ppchannels.get(
+                        probe_synth_channel[ch]
+                    )
+                    if probe_channel is not None and probe_channel.settings["pump_on"]:
                         raise LabOneQControllerException(
                             f"{self.dev_repr}: cannot use probe tone on"
                             f" channel {ch} while the pump tone generation is also"
@@ -129,7 +128,10 @@ class DeviceSHFPPC(DeviceBase):
                     else:
                         assert value == CancellationSource.EXTERNAL
                         value = 1
-                        if settings.get("cancellation_source_frequency") is None:
+                        if (
+                            ppchannel.settings.get("cancellation_source_frequency")
+                            is None
+                        ):
                             raise LabOneQControllerException(
                                 f"{self.dev_repr}: Using the external"
                                 f" cancellation source requires specifying the"
@@ -158,14 +160,14 @@ class DeviceSHFPPC(DeviceBase):
                     nc.add(path, value)
         await self.set_async(nc)
 
-    async def start_execution(self, with_pipeliner: bool):
+    async def start_execution(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")
         for channel in sorted(self._allocated_sweepers):
             nc.add(f"ppchannels/{channel}/sweeper/enable", 1, cache=False)
         await self.set_async(nc)
 
     def conditions_for_execution_ready(
-        self, with_pipeliner: bool
+        self, recipe_data: RecipeData
     ) -> dict[str, tuple[Any, str]]:
         conditions = {
             f"/{self.serial}/ppchannels/{channel}/sweeper/enable": (
@@ -177,7 +179,7 @@ class DeviceSHFPPC(DeviceBase):
         return conditions
 
     def conditions_for_execution_done(
-        self, acquisition_type: AcquisitionType, with_pipeliner: bool
+        self, recipe_data: RecipeData
     ) -> dict[str, tuple[Any, str]]:
         conditions = {
             f"/{self.serial}/ppchannels/{sweeper_index}/sweeper/enable": (

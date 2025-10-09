@@ -1,0 +1,18 @@
+[package]
+name = "laboneq-scheduler"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+num-complex = { workspace = true }
+
+laboneq-common = { path = "../laboneq-common" }
+laboneq-units = { path = "../laboneq-units" }
+numeric-array = { path = "../numeric-array" }
+
+[lints]
+workspace = true

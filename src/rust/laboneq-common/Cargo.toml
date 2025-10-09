@@ -1,0 +1,12 @@
+[package]
+name = "laboneq-common"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+string-interner = { workspace = true }
+
+[lints]
+workspace = true

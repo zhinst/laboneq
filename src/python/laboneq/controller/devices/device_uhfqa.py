@@ -4,9 +4,13 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 import logging
 from typing import TYPE_CHECKING, Any, NoReturn
 
+from laboneq.controller.devices.channel_base import ChannelBase
+from laboneq.controller.devices.uhfqa_awg import UHFQAAwg
+from laboneq.controller.utilities.for_each import for_each
 import numpy as np
 
 from laboneq.controller.attribute_value_tracker import (
@@ -41,7 +45,6 @@ from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.data.recipe import (
     IO,
     IntegratorAllocation,
-    TriggeringMode,
 )
 from laboneq.data.scheduled_experiment import ArtifactsCodegen, ScheduledExperiment
 
@@ -67,25 +70,96 @@ class DeviceUHFQA(DeviceBase):
         super().__init__(*args, **kwargs)
         self.dev_type = "UHFQA"
         self.dev_opts = ["AWG", "DIG", "QA"]
+        self._awg_cores: list[UHFQAAwg] = []
         self._channels = 2
         self._integrators = 10
         self._use_internal_clock = True
+
+    def all_channels(self) -> Iterator[ChannelBase]:
+        """Iterable over all awg cores of the device."""
+        return iter(self._awg_cores)
+
+    def _process_dev_opts(self):
+        self._awg_cores = [
+            UHFQAAwg(
+                self._api,
+                self._subscriber,
+                self.uid,
+                self.serial,
+                repr_base=self.dev_repr,
+            )
+        ]
+
+    def is_desktop(self) -> bool:
+        if len(self._uplinks) == 0:
+            raise LabOneQControllerException(
+                f"{self.dev_repr}: UHFQA cannot be configured as leader, ensure correct DIO "
+                f"connection in the device setup"
+            )
+        if len(self._uplinks) > 1:
+            self._error_ambiguous_upstream()
+        upstream = next(iter(self._uplinks))()
+        if upstream is None:
+            self._error_ambiguous_upstream()
+        return upstream.is_leader() and (
+            upstream.device_qualifier.driver.upper() == "HDAWG"
+        )
 
     def validate_scheduled_experiment(self, scheduled_experiment: ScheduledExperiment):
         initialization = get_initialization_by_device_uid(
             scheduled_experiment.recipe, self.uid
         )
-        if initialization is not None:
-            for output in initialization.outputs:
-                if output.port_delay is not None:
-                    if output.port_delay != 0:
-                        raise LabOneQControllerException(
-                            f"{self.dev_repr}'s output does not support port delay"
-                        )
-                    _logger.debug(
-                        "%s's output port delay should be set to None, not 0",
-                        self.dev_repr,
+        if initialization is None:
+            return
+
+        for output in initialization.outputs:
+            self._warn_for_unsupported_param(
+                output.gains is None, "correction_matrix", output.channel
+            )
+            if output.port_delay is not None:
+                if output.port_delay != 0:
+                    raise LabOneQControllerException(
+                        f"{self.dev_repr}'s output does not support port delay"
                     )
+                _logger.debug(
+                    "%s's output port delay should be set to None, not 0",
+                    self.dev_repr,
+                )
+            if output.range is not None:
+                self._validate_range(output, is_out=True)
+
+        for dev_input in initialization.inputs or []:
+            if dev_input.range is None:
+                continue
+            self._validate_range(dev_input, is_out=False)
+
+    def _validate_range(self, io: IO, is_out: bool):
+        if io.range is None:
+            return
+
+        input_ranges = np.concatenate(
+            [np.arange(0.01, 0.1, 0.01), np.arange(0, 1.6, 0.1)]
+        )
+        output_ranges = np.array([0.15, 1.5], dtype=np.float64)
+        range_list = output_ranges if is_out else input_ranges
+        label = "Output" if is_out else "Input"
+
+        if io.range_unit not in (None, "volt"):
+            raise LabOneQControllerException(
+                f"{label} range of device {self.dev_repr} is specified in "
+                f"units of {io.range_unit}. Units must be 'volt'."
+            )
+
+        if not any(np.isclose([io.range] * len(range_list), range_list)):
+            _logger.warning(
+                "%s: %s channel %d range %.1f is not on the list of allowed ranges: %s. Nearest "
+                "allowed range will be used.",
+                self.dev_repr,
+                label,
+                io.channel,
+                io.range,
+                range_list,
+            )
 
     async def disable_outputs(self, outputs: set[int], invert: bool):
         nc = NodeCollector(base=f"/{self.serial}/")
@@ -107,23 +181,10 @@ class DeviceUHFQA(DeviceBase):
         )
 
     def update_clock_source(self, force_internal: bool | None):
-        if len(self._uplinks) == 0:
-            raise LabOneQControllerException(
-                f"{self.dev_repr}: UHFQA cannot be configured as leader, ensure correct DIO "
-                f"connection in the device setup"
-            )
-        if len(self._uplinks) > 1:
-            self._error_ambiguous_upstream()
-        upstream = next(iter(self._uplinks))()
-        if upstream is None:
-            self._error_ambiguous_upstream()
-        is_desktop = upstream.is_leader() and (
-            upstream.device_qualifier.driver.upper() == "HDAWG"
-        )
         # For non-desktop, always use external clock,
         # for desktop - internal is the default (force_internal is None),
         # but allow override to external.
-        self._use_internal_clock = is_desktop and (force_internal is not False)
+        self._use_internal_clock = self.is_desktop() and (force_internal is not False)
 
     def clock_source_control_nodes(self) -> list[NodeControlBase]:
         source = (
@@ -229,17 +290,17 @@ class DeviceUHFQA(DeviceBase):
         nc.add("qas/0/monitor/enable", 1 if enable else 0)
         return nc
 
-    async def start_execution(self, with_pipeliner: bool):
+    async def start_execution(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")
-        for awg_index in self._allocated_awgs:
+        for awg_index in recipe_data.allocated_awgs(self.uid):
             nc.add(f"awgs/{awg_index}/enable", 1, cache=False)
         await self.set_async(nc)
 
     def conditions_for_execution_ready(
-        self, with_pipeliner: bool
+        self, recipe_data: RecipeData
     ) -> dict[str, tuple[Any, str]]:
         conditions: dict[str, tuple[Any, str]] = {}
-        for awg_index in self._allocated_awgs:
+        for awg_index in recipe_data.allocated_awgs(self.uid):
             conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = (
                 1,
                 f"AWG {awg_index} didn't start.",
@@ -247,79 +308,23 @@ class DeviceUHFQA(DeviceBase):
         return conditions
 
     def conditions_for_execution_done(
-        self, acquisition_type: AcquisitionType, with_pipeliner: bool
+        self, recipe_data: RecipeData
     ) -> dict[str, tuple[Any, str]]:
         conditions: dict[str, tuple[Any, str]] = {}
-        for awg_index in self._allocated_awgs:
+        for awg_index in recipe_data.allocated_awgs(self.uid):
             conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = (
                 0,
                 f"AWG {awg_index} didn't stop. Missing start trigger? Check DIO.",
             )
         return conditions
 
-    def _validate_range(self, io: IO, is_out: bool):
-        if io.range is None:
-            return
-
-        input_ranges = np.concatenate(
-            [np.arange(0.01, 0.1, 0.01), np.arange(0, 1.6, 0.1)]
-        )
-        output_ranges = np.array([0.15, 1.5], dtype=np.float64)
-        range_list = output_ranges if is_out else input_ranges
-        label = "Output" if is_out else "Input"
-
-        if io.range_unit not in (None, "volt"):
-            raise LabOneQControllerException(
-                f"{label} range of device {self.dev_repr} is specified in "
-                f"units of {io.range_unit}. Units must be 'volt'."
-            )
-
-        if not any(np.isclose([io.range] * len(range_list), range_list)):
-            _logger.warning(
-                "%s: %s channel %d range %.1f is not on the list of allowed ranges: %s. Nearest "
-                "allowed range will be used.",
-                self.dev_repr,
-                label,
-                io.channel,
-                io.range,
-                range_list,
-            )
-
     async def apply_initialization(self, recipe_data: RecipeData):
-        _logger.debug("%s: Initializing device...", self.dev_repr)
-
-        nc = NodeCollector(base=f"/{self.serial}/")
-
-        initialization = recipe_data.get_initialization(self.uid)
-        outputs = initialization.outputs or []
-        for output in outputs:
-            self._warn_for_unsupported_param(
-                output.gains is None, "correction_matrix", output.channel
-            )
-
-            awg_idx = output.channel // 2
-
-            nc.add(f"sigouts/{output.channel}/on", 1 if output.enable else 0)
-            if output.enable:
-                nc.add(f"sigouts/{output.channel}/imp50", 1)
-            nc.add(f"sigouts/{output.channel}/offset", output.offset)
-
-            nc.add(f"awgs/{awg_idx}/single", 1)
-
-            # the following is needed so that in spectroscopy mode, pulse lengths are correct
-            # TODO(2K): Why 2 enables per sigout, but only one is used?
-            nc.add(f"sigouts/{output.channel}/enables/{output.channel}", 1)
-
-            nc.add(
-                f"awgs/{awg_idx}/outputs/{output.channel}/mode",
-                1 if output.modulation else 0,
-            )
-
-            if output.range is not None:
-                self._validate_range(output, is_out=True)
-                nc.add(f"sigouts/{output.channel}/range", output.range)
-
-        await self.set_async(nc)
+        uhfqa_recipe_data = recipe_data.device_settings[self.uid].uhfqacore
+        await for_each(
+            self.all_channels(),
+            UHFQAAwg.apply_initialization,
+            uhfqa_recipe_data=uhfqa_recipe_data,
+        )
 
     async def _set_nt_step_nodes(
         self, recipe_data: RecipeData, attributes: DeviceAttributesView
@@ -511,38 +516,34 @@ class DeviceUHFQA(DeviceBase):
         for dev_input in inputs or []:
             if dev_input.range is None:
                 continue
-            self._validate_range(dev_input, is_out=False)
             nc.add(f"sigins/{dev_input.channel}/range", dev_input.range)
 
         await self.set_async(nc)
 
     async def configure_trigger(self, recipe_data: RecipeData):
+        device_recipe_data = recipe_data.device_settings[self.uid]
         nc = NodeCollector(base=f"/{self.serial}/")
 
         # Loop over at least AWG instance to cover the case that the instrument is only used as a
         # communication proxy. Some of the nodes on the AWG branch are needed to get proper
         # communication between HDAWG and UHFQA.
-        for awg_index in (
-            self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
-        ):
+        for awg_index in device_recipe_data.allocated_awgs(default_awg=0):
             nc.add(f"awgs/{awg_index}/dio/strobe/index", 16)
             nc.add(f"awgs/{awg_index}/dio/strobe/slope", 0)
             nc.add(f"awgs/{awg_index}/dio/valid/polarity", 2)
             nc.add(f"awgs/{awg_index}/dio/valid/index", 16)
 
-        initialization = recipe_data.get_initialization(self.uid)
-        triggering_mode = initialization.config.triggering_mode
-
-        if triggering_mode == TriggeringMode.DIO_FOLLOWER or triggering_mode is None:
-            nc.add("dios/0/mode", 4)
-            nc.add("dios/0/drive", 0x3)
-            nc.add("dios/0/extclk", 0x2)
-        elif triggering_mode == TriggeringMode.DESKTOP_DIO_FOLLOWER:
+        if self.is_desktop():
             nc.add("dios/0/mode", 0)
             nc.add("dios/0/drive", 0)
             nc.add("dios/0/extclk", 0x2)
             nc.add("awgs/0/auxtriggers/0/channel", 0)
             nc.add("awgs/0/auxtriggers/0/slope", 1)
+        else:
+            nc.add("dios/0/mode", 4)
+            nc.add("dios/0/drive", 0x3)
+            nc.add("dios/0/extclk", 0x2)
+
         for trigger_index in (0, 1):
             nc.add(f"triggers/out/{trigger_index}/delay", 0.0)
             nc.add(f"triggers/out/{trigger_index}/drive", 1)
@@ -550,7 +551,7 @@ class DeviceUHFQA(DeviceBase):
 
         await self.set_async(nc)
 
-    async def on_experiment_begin(self):
+    async def on_experiment_begin(self, recipe_data: RecipeData):
         nodes = [
             *(
                 self._result_node_integrator(result_index)
@@ -560,7 +561,7 @@ class DeviceUHFQA(DeviceBase):
             self._result_node_monitor(1),
         ]
         await _gather(
-            super().on_experiment_begin(),
+            super().on_experiment_begin(recipe_data=recipe_data),
             *(self._subscriber.subscribe(self._api, node) for node in nodes),
         )
 

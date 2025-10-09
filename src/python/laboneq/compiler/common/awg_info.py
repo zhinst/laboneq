@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING
 from laboneq.compiler.common.trigger_mode import TriggerMode
 
 if TYPE_CHECKING:
-    from laboneq.compiler.common.awg_signal_type import AWGSignalType
     from laboneq.compiler.common.device_type import DeviceType
     from laboneq.compiler.common.signal_obj import SignalObj
+    from laboneq.core.types.enums.awg_signal_type import AWGSignalType
 
 
 @dataclass(init=True, repr=True, order=True, frozen=True)

@@ -29,7 +29,7 @@ class ExponentialCompensation:
     Used to compensate for distortions due to LCR elements
     such as inductors, resistors, and capacitors.
 
-    See [Filter Chain Specification](https://docs.zhinst.com/hdawg_user_manual/functional_description/pre_compensation.html#_filter_chain_specification)
+    See [Filter Chain Specification](https://docs.zhinst.com/hdawg_user_manual/functional_description/specific/pre_compensation.html#filter-chain-specification)
     for a description of the filter.
 
     Attributes:
@@ -58,7 +58,7 @@ class HighPassCompensation:
     Used to compensate for distortions due to AC-coupling, DC-blocks and
     Bias-tees.
 
-    See [Filter Chain Specification](https://docs.zhinst.com/hdawg_user_manual/functional_description/pre_compensation.html#_filter_chain_specification)
+    See [Filter Chain Specification](https://docs.zhinst.com/hdawg_user_manual/functional_description/specific/pre_compensation.html#filter-chain-specification)
     for a description of the filter.
 
     Attributes:
@@ -89,7 +89,7 @@ class FIRCompensation:
     The FIR filter performs a convolution of the input signal with
     the kernel specified by the coefficients below.
 
-    See [Filter Chain Specification](https://docs.zhinst.com/hdawg_user_manual/functional_description/pre_compensation.html#_filter_chain_specification)
+    See [Filter Chain Specification](https://docs.zhinst.com/hdawg_user_manual/functional_description/specific/pre_compensation.html#filter-chain-specification)
     for a description of the filter.
 
     Attributes:
@@ -128,7 +128,7 @@ class BounceCompensation:
     signal multiplied by a given amplitude and delayed by a given
     time.
 
-    See [Filter Chain Specification](https://docs.zhinst.com/hdawg_user_manual/functional_description/pre_compensation.html#_filter_chain_specification)
+    See [Filter Chain Specification](https://docs.zhinst.com/hdawg_user_manual/functional_description/specific/pre_compensation.html#filter-chain-specification)
     for a description of the filter.
 
     Attributes:
@@ -178,7 +178,7 @@ class Precompensation:
         it will still be visible in the pulse sheet and when measuring
         the signal by other means (e.g. using an oscilloscope).
 
-        See [Filter Chain Specification](https://docs.zhinst.com/hdawg_user_manual/functional_description/pre_compensation.html#_filter_chain_specification)
+        See [Filter Chain Specification](https://docs.zhinst.com/hdawg_user_manual/functional_description/specific/pre_compensation.html#filter-chain-specification)
         for details on the delays.
 
     !!! note

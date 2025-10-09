@@ -20,7 +20,10 @@ sha1 = { workspace = true }
 md5 = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+rayon = { workspace = true }
 
 interval-calculator = { path = "../interval-calculator" }
 numeric-array = { path = "../numeric-array" }
 laboneq-units = { path = "../laboneq-units" }
+laboneq-common = { path = "../laboneq-common" }
+laboneq-log = { path = "../laboneq-log" }

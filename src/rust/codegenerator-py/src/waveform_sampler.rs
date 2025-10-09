@@ -20,7 +20,8 @@ use codegenerator::waveform_sampler::{
     CompressedWaveformPart, IntegrationKernel, SampleWaveforms, SampledWaveformCollection,
     SampledWaveformSignature, WaveformSamplingCandidate,
 };
-use codegenerator::{Error, Result, Samples};
+use codegenerator::{Error, Result, ir::Samples};
+
 /// Represents a sampled waveform signature that is returned by the Python sampler.
 ///
 /// Some information is read and stored from the Python signature to avoid the
@@ -108,8 +109,8 @@ impl PlaySamplesPy {
 }
 
 #[derive(Debug)]
-pub struct IntegrationWeight<'a> {
-    pub signals: HashSet<&'a str>,
+pub struct IntegrationWeight {
+    pub signals: HashSet<String>,
     pub samples_i: Py<PyAny>,
     pub samples_q: Py<PyAny>,
     pub downsampling_factor: Option<usize>,
@@ -123,27 +124,29 @@ pub struct IntegrationWeight<'a> {
 /// handling of `numpy` arrays in Rust at this point.
 pub struct WaveformSamplerPy<'a> {
     sampler: &'a Py<PyAny>,
+    pulse_parameters: &'a HashMap<PulseParametersId, PulseParameters>,
+}
+
+struct SamplingInfo<'a> {
     sampling_rate: f64,
-    device_kind: &'a DeviceKind,
     rf_signal: bool,
     signal_map: HashMap<&'a str, Arc<Signal>>,
     mixer_type: Option<&'a MixerType>,
     signal_kind: &'a SignalKind,
-    pulse_parameters: &'a HashMap<PulseParametersId, PulseParameters>,
 }
 
 impl<'a> WaveformSamplerPy<'a> {
-    pub fn supports_waveform_sampling(awg: &'a AwgCore) -> bool {
-        awg.signals
-            .iter()
-            .any(|s| s.kind != SignalKind::INTEGRATION)
-    }
-
     pub fn new(
         sampler: &'a Py<PyAny>,
-        awg: &'a AwgCore,
         pulse_parameters: &'a HashMap<PulseParametersId, PulseParameters>,
     ) -> Self {
+        WaveformSamplerPy {
+            sampler,
+            pulse_parameters,
+        }
+    }
+
+    fn make_awg_info<'b>(awg: &'b AwgCore) -> SamplingInfo<'b> {
         let sampling_rate = awg.sampling_rate;
         let rf_signal = awg.kind == AwgKind::SINGLE || awg.kind == AwgKind::DOUBLE;
         let signal_map = awg
@@ -181,28 +184,35 @@ impl<'a> WaveformSamplerPy<'a> {
         );
         let mixer_type = ref_signal.mixer_type.as_ref();
         let signal_kind = &ref_signal.kind;
-        WaveformSamplerPy {
-            sampler,
+        SamplingInfo {
             sampling_rate,
-            device_kind: awg.device_kind(),
             rf_signal,
             signal_map,
             mixer_type,
             signal_kind,
-            pulse_parameters,
         }
     }
 }
 
 impl SampleWaveforms for WaveformSamplerPy<'_> {
     type Signature = SampledWaveformSignaturePy;
+    type IntegrationWeight = IntegrationWeight;
+    type PulseParameters = PulseParameters;
+
+    fn supports_waveform_sampling(awg: &AwgCore) -> bool {
+        awg.signals
+            .iter()
+            .any(|s| s.kind != SignalKind::INTEGRATION)
+    }
 
     fn batch_sample_and_compress(
         &self,
+        awg: &AwgCore,
         waveforms: &[WaveformSamplingCandidate],
     ) -> Result<SampledWaveformCollection<SampledWaveformSignaturePy>> {
-        let sampling_rate = self.sampling_rate;
-        let rf_signal = self.rf_signal;
+        let sampling_info = Self::make_awg_info(awg);
+        let sampling_rate = sampling_info.sampling_rate;
+        let rf_signal = sampling_info.rf_signal;
         let mut sampled_waveforms: SampledWaveformCollection<SampledWaveformSignaturePy> =
             SampledWaveformCollection::new();
         Python::attach(|py| -> Result<()> {
@@ -226,15 +236,15 @@ impl SampleWaveforms for WaveformSamplerPy<'_> {
                 .collect::<std::result::Result<HashMap<_, _>, Error>>()?;
             let sampler = self.sampler.bind(py);
             let device_type: Bound<'_, DeviceTypePy> =
-                DeviceTypePy::from_device_kind(self.device_kind)
+                DeviceTypePy::from_device_kind(awg.device_kind())
                     .into_pyobject(py)
                     .expect("Internal Error: Failed to convert DeviceType");
-            let mixer_type = self.mixer_type.map(|mixer| {
+            let mixer_type = sampling_info.mixer_type.map(|mixer| {
                 MixerTypePy::from_mixer_type(mixer)
                     .into_pyobject(py)
                     .expect("Internal Error: Failed to convert MixerType")
             });
-            let signal_type = SignalTypePy::from_signal_kind(self.signal_kind)
+            let signal_type = SignalTypePy::from_signal_kind(sampling_info.signal_kind)
                 .into_pyobject(py)
                 .expect("Internal Error: Failed to convert SignalType");
             for waveform in waveforms {
@@ -244,7 +254,8 @@ impl SampleWaveforms for WaveformSamplerPy<'_> {
                     .signals
                     .iter()
                     .map(|s| {
-                        self.signal_map
+                        sampling_info
+                            .signal_map
                             .get(s)
                             .expect("Internal error: Signal not found")
                             .as_ref()
@@ -306,6 +317,91 @@ impl SampleWaveforms for WaveformSamplerPy<'_> {
             Ok(())
         })?;
         Ok(sampled_waveforms)
+    }
+
+    /// Samples integration weights for the given kernels using the Python sampler.
+    ///
+    /// This function samples the given integration kernels into integration weights.
+    fn batch_calculate_integration_weights<'a>(
+        &self,
+        awg: &'a AwgCore,
+        kernels: Vec<IntegrationKernel<'_>>,
+    ) -> Result<Vec<Self::IntegrationWeight>> {
+        let integration_signals = awg
+            .signals
+            .iter()
+            .filter(|s| s.kind == SignalKind::INTEGRATION)
+            .collect::<Vec<_>>();
+        let mixer_type = if let Some(ref_signal) = integration_signals.first() {
+            ref_signal.mixer_type.as_ref()
+        } else {
+            if !kernels.is_empty() {
+                return Err(Error::new(
+                    "No integration signals found, but kernels were provided",
+                ));
+            }
+            return Ok(vec![]);
+        };
+        let signal_map: HashMap<&str, &Arc<Signal>> = integration_signals
+            .iter()
+            .map(|s| (s.uid.as_str(), *s))
+            .collect();
+        Python::attach(|py| -> Result<Vec<IntegrationWeight>> {
+            let mixer_type = mixer_type.map(|mixer| {
+                MixerTypePy::from_mixer_type(mixer)
+                    .into_pyobject(py)
+                    .expect("Internal Error: Failed to convert MixerType")
+            });
+            let mut bound_weights: Vec<BoundIntegrationWeight<'a, '_>> =
+                Vec::with_capacity(kernels.len());
+            let sampler = self.sampler.bind(py);
+            for kernel in kernels {
+                let params = kernel
+                    .pulse_parameters_id()
+                    .and_then(|id| self.pulse_parameters.get(&id).map(|p| p.parameters()));
+                let result: Bound<'_, PyAny> = sampler
+                    .call_method(
+                        intern!(py, "sample_integration_weight"),
+                        (
+                            kernel.pulse_id(),
+                            params,
+                            kernel.oscillator_frequency(),
+                            kernel.signals().iter().collect::<Vec<_>>(),
+                            &awg.sampling_rate,
+                            &mixer_type,
+                        ),
+                        None,
+                    )
+                    .map_err(Error::with_error)?;
+                let samples_i_q = result
+                    .downcast::<PyTuple>()
+                    .expect("Internal error: Expected a tuple from Python sampler");
+                let samples_i = samples_i_q.get_item(0).map_err(Error::with_error)?;
+                let samples_q = samples_i_q.get_item(1).map_err(Error::with_error)?;
+                bound_weights.push(
+                    BoundIntegrationWeight::new(
+                        samples_i,
+                        samples_q,
+                        kernel
+                            .signals()
+                            .iter()
+                            .map(|s| {
+                                signal_map
+                                .get(s)
+                                .expect(
+                                    "Internal error: Integration weight on non-integration signal",
+                                )
+                                .uid
+                                .as_str()
+                            })
+                            .collect(),
+                    )
+                    .map_err(Error::with_error)?,
+                );
+            }
+            let out = create_integration_weights(py, bound_weights, awg.device_kind())?;
+            Ok(out)
+        })
     }
 }
 
@@ -490,111 +586,24 @@ impl<'a, 'py> BoundIntegrationWeight<'a, 'py> {
     }
 }
 
-/// Samples integration weights for the given kernels using the Python sampler.
-///
-/// This function samples the given integration kernels into integration weights.
-pub fn batch_calculate_integration_weights<'a>(
-    awg: &'a AwgCore,
-    sampler: &Py<PyAny>,
-    kernels: Vec<IntegrationKernel<'_>>,
-    pulse_parameters: &'a HashMap<PulseParametersId, PulseParameters>,
-) -> Result<Vec<IntegrationWeight<'a>>> {
-    let integration_signals = awg
-        .signals
-        .iter()
-        .filter(|s| s.kind == SignalKind::INTEGRATION)
-        .collect::<Vec<_>>();
-    let mixer_type = if let Some(ref_signal) = integration_signals.first() {
-        ref_signal.mixer_type.as_ref()
-    } else {
-        if !kernels.is_empty() {
-            return Err(Error::new(
-                "No integration signals found, but kernels were provided",
-            ));
-        }
-        return Ok(vec![]);
-    };
-    let signal_map: HashMap<&str, &Arc<Signal>> = integration_signals
-        .iter()
-        .map(|s| (s.uid.as_str(), *s))
-        .collect();
-    Python::attach(|py| -> Result<Vec<IntegrationWeight<'a>>> {
-        let mixer_type = mixer_type.map(|mixer| {
-            MixerTypePy::from_mixer_type(mixer)
-                .into_pyobject(py)
-                .expect("Internal Error: Failed to convert MixerType")
-        });
-        let mut bound_weights: Vec<BoundIntegrationWeight<'a, '_>> =
-            Vec::with_capacity(kernels.len());
-        let sampler = sampler.bind(py);
-        for kernel in kernels {
-            let params = kernel
-                .pulse_parameters_id()
-                .and_then(|id| pulse_parameters.get(&id).map(|p| p.parameters()));
-            let result: Bound<'_, PyAny> = sampler
-                .call_method(
-                    intern!(py, "sample_integration_weight"),
-                    (
-                        kernel.pulse_id(),
-                        params,
-                        kernel.oscillator_frequency(),
-                        kernel.signals().iter().collect::<Vec<_>>(),
-                        &awg.sampling_rate,
-                        &mixer_type,
-                    ),
-                    None,
-                )
-                .map_err(Error::with_error)?;
-            let samples_i_q = result
-                .downcast::<PyTuple>()
-                .expect("Internal error: Expected a tuple from Python sampler");
-            let samples_i = samples_i_q.get_item(0).map_err(Error::with_error)?;
-            let samples_q = samples_i_q.get_item(1).map_err(Error::with_error)?;
-            bound_weights.push(
-                BoundIntegrationWeight::new(
-                    samples_i,
-                    samples_q,
-                    kernel
-                        .signals()
-                        .iter()
-                        .map(|s| {
-                            signal_map
-                                .get(s)
-                                .expect(
-                                    "Internal error: Integration weight on non-integration signal",
-                                )
-                                .uid
-                                .as_str()
-                        })
-                        .collect(),
-                )
-                .map_err(Error::with_error)?,
-            );
-        }
-        let out = create_integration_weights(py, bound_weights, awg.device_kind())?;
-        Ok(out)
-    })
-}
-
 /// Creates GIL unbound integration weights from the bound weights.
 ///
 /// This function evaluates the common downsampling factor for the integration weights
 /// and down-samples the samples if necessary.
-fn create_integration_weights<'a>(
+fn create_integration_weights(
     py: Python,
-    bound_weights: Vec<BoundIntegrationWeight<'a, '_>>,
+    bound_weights: Vec<BoundIntegrationWeight<'_, '_>>,
     device: &DeviceKind,
-) -> Result<Vec<IntegrationWeight<'a>>> {
+) -> Result<Vec<IntegrationWeight>> {
     let common_downsampling_factor = eval_common_downsampling_factor(&bound_weights, device)?;
-    let mut integration_weights: Vec<IntegrationWeight<'a>> =
-        Vec::with_capacity(bound_weights.len());
+    let mut integration_weights: Vec<IntegrationWeight> = Vec::with_capacity(bound_weights.len());
     if let Some(downsampling_factor) = common_downsampling_factor {
         for weight in bound_weights.into_iter() {
             let (samples_i, samples_q) =
                 downsample_samples(py, weight.samples_i, weight.samples_q, downsampling_factor)
                     .map_err(Error::with_error)?;
             let integration_weight = IntegrationWeight {
-                signals: weight.signals.iter().cloned().collect(),
+                signals: weight.signals.iter().map(|s| s.to_string()).collect(),
                 samples_i: samples_i.arr.unbind(),
                 samples_q: samples_q.arr.unbind(),
                 downsampling_factor: Some(downsampling_factor),
@@ -605,7 +614,7 @@ fn create_integration_weights<'a>(
     } else {
         for weight in bound_weights.into_iter() {
             let integration_weight = IntegrationWeight {
-                signals: weight.signals.iter().cloned().collect(),
+                signals: weight.signals.iter().map(|s| s.to_string()).collect(),
                 samples_i: weight.samples_i.arr.unbind(),
                 samples_q: weight.samples_q.arr.unbind(),
                 downsampling_factor: None,

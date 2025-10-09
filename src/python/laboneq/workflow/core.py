@@ -15,12 +15,15 @@ from typing_extensions import ParamSpec
 from laboneq.core.utilities.highlight import pygmentize
 from laboneq.workflow import _utils, exceptions, executor, variable_tracker
 from laboneq.workflow.blocks import (
+    Block,
     BlockBuilderContext,
     TaskBlock,
     WorkflowBlock,
 )
+from laboneq.workflow.task_wrapper import task_
 from laboneq.workflow.graph import WorkflowGraph
 from laboneq.workflow import opts
+from laboneq.workflow.reference import Reference
 from laboneq.workflow.visitors import SpecificBlockTypeCollector
 
 if TYPE_CHECKING:
@@ -234,6 +237,120 @@ class Workflow(Generic[Parameters]):
                     f"type '{self._root.options_type.__name__}', 'dict' or 'None'"
                 )
                 raise TypeError(msg)
+
+    def _replace_task_blocks(
+        self,
+        block: Block,
+        old_task_block_name: str,
+        new_task: task_,
+    ) -> dict[TaskBlock, TaskBlock]:
+        """Recursively replace task blocks with a given name in a block (in-place).
+
+        Arguments:
+            block: The block to operate on.
+            old_task_block_name: The name of the old task block to find and replace.
+            new_task: The new task to use instead.
+
+        Returns:
+            A mapping from old task blocks to their new replacements.
+
+        Raises:
+            ValueError: If `old_task` and `new_task` take a different number of
+                parameters.
+        """
+        new_task_signature = inspect.signature(new_task.func)
+
+        task_block_mapping = {}
+        new_body = []
+        for sub_block in block.iter_child_blocks():
+            if (
+                isinstance(sub_block, TaskBlock)
+                and sub_block.name == old_task_block_name
+            ):
+                new_task_block = TaskBlock(new_task, parameters=sub_block.parameters)
+
+                if len(sub_block.parameters) != len(new_task_signature.parameters):
+                    raise ValueError(
+                        f"Parameter number mismatch. The `old_task` takes "
+                        f"{len(sub_block.parameters)} parameter(s), "
+                        f"whereas the `new_task` takes "
+                        f"{len(new_task_signature.parameters)} parameter(s)."
+                    )
+
+                task_block_mapping[sub_block] = new_task_block
+                new_body.append(new_task_block)
+            else:
+                nested_replacements = self._replace_task_blocks(
+                    sub_block, old_task_block_name, new_task
+                )
+                task_block_mapping.update(nested_replacements)
+                new_body.append(sub_block)
+        block._body = new_body
+
+        return task_block_mapping
+
+    def _update_block_parameters(
+        self, block: Block, task_block_mapping: dict[TaskBlock, TaskBlock]
+    ) -> None:
+        """Recursively update references in block parameters (in-place).
+
+        Arguments:
+            block: The block to operate on.
+            task_block_mapping: The mapping from old task blocks to new task blocks.
+        """
+        for sub_block in block.iter_child_blocks():
+            self._update_block_parameters(sub_block, task_block_mapping)
+
+            new_parameters = {}
+            for key, value in sub_block.parameters.items():
+                if isinstance(value, Reference) and value._ref in task_block_mapping:
+                    new_parameters[key] = task_block_mapping[value._ref].ref
+                else:
+                    new_parameters[key] = value
+            sub_block._parameters = new_parameters
+
+        return None
+
+    def replace_task(self, old_task: task_ | str, new_task: task_) -> None:
+        """Replace a task in a workflow.
+
+        Arguments:
+            old_task: The old task to replace. Either the task object or the name of
+                the task may be provided.
+            new_task: The new task to use instead.
+
+        Raises:
+            TypeError: If `old_task` or `new_task` have invalid types.
+            ValueError: If the `old_task` block is not found in the workflow.
+        """
+
+        if isinstance(old_task, task_):
+            old_task_name = old_task.name
+        elif isinstance(old_task, str):
+            old_task_name = old_task
+        else:
+            raise TypeError(
+                f"The `old_task` argument has invalid type: {type(old_task)}. "
+                f"Expected type: task_ | str."
+            )
+
+        if not isinstance(new_task, task_):
+            raise TypeError(
+                f"The `new_task` argument has invalid type: {type(new_task)}. "
+                f"Expected type: task_."
+            )
+
+        task_block_mapping = self._replace_task_blocks(
+            self._root, old_task_name, new_task
+        )
+
+        if not task_block_mapping:
+            raise ValueError(f"Task block `{old_task_name}` not found in workflow.")
+
+        self._update_block_parameters(self._root, task_block_mapping)
+        self._graph = WorkflowGraph(self._root)
+
+        return None
 
 
 class WorkflowBuilder(Generic[Parameters]):

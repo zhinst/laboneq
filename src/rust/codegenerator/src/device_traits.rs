@@ -1,7 +1,8 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::Samples;
+use crate::ir::Samples;
+use laboneq_common::device_traits as device_traits_common;
 
 /// Device specific traits for code generation
 ///
@@ -42,7 +43,7 @@ pub struct DeviceTraits {
 pub const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
     type_str: "HDAWG",
     sample_multiple: 16,
-    sampling_rate: 2.4e9,
+    sampling_rate: device_traits_common::HDAWG_TRAITS.sampling_rate,
     min_play_wave: 32,
     max_play_zero_hold: (1 << 19) - 16,
     amplitude_register_count: 4,
@@ -66,7 +67,7 @@ pub const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
 pub const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
     type_str: "UHFQA",
     sample_multiple: 8,
-    sampling_rate: 1.8e9,
+    sampling_rate: device_traits_common::UHFQA_TRAITS.sampling_rate,
     min_play_wave: 16,
     max_play_zero_hold: 131056,
     amplitude_register_count: 1,
@@ -90,7 +91,7 @@ pub const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
 pub const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
     type_str: "SHFSG",
     sample_multiple: 16,
-    sampling_rate: 2e9,
+    sampling_rate: device_traits_common::SHFSG_TRAITS.sampling_rate,
     min_play_wave: 32,
     max_play_zero_hold: (1 << 19) - 16,
     amplitude_register_count: 1,
@@ -118,7 +119,7 @@ pub const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
 pub const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
     type_str: "SHFQA",
     sample_multiple: 16,
-    sampling_rate: 2e9,
+    sampling_rate: device_traits_common::SHFQA_TRAITS.sampling_rate,
     min_play_wave: 32,
     max_play_zero_hold: (1 << 19) - 16,
     amplitude_register_count: 1,

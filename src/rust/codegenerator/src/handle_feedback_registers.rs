@@ -221,8 +221,8 @@ impl<'a> FeedbackConfig<'a> {
         self.feedback_sources.keys()
     }
 
-    pub fn into_acquisitions(&mut self) -> Vec<Vec<Acquisition>> {
-        std::mem::take(&mut self.acquisitions)
+    pub fn into_acquisitions(self) -> Vec<Vec<Acquisition>> {
+        self.acquisitions
     }
 }
 

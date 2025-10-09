@@ -11,6 +11,7 @@ from typing import Any, ClassVar, Literal, Optional, Type, Union
 
 import attrs
 
+from laboneq.core.types.enums.awg_signal_type import AWGSignalType
 from laboneq.data.recipe import (
     AWG,
     IO,
@@ -26,7 +27,6 @@ from laboneq.data.recipe import (
     Recipe,
     RefClkType,
     RoutedOutput,
-    SignalType,
     SoftwareVersions,
     TriggeringMode,
 )
@@ -47,12 +47,11 @@ from ._common import (
 # Models for Recipe:
 
 
-class SignalTypeModel(Enum):
+class AWGSignalTypeModel(Enum):
     IQ = "iq"
     SINGLE = "single"
-    INTEGRATION = "integration"
-    MARKER = "marker"
-    _target_class = SignalType
+    DOUBLE = "double"
+    _target_class = AWGSignalType
 
 
 class RefClkTypeModel(Enum):
@@ -119,7 +118,7 @@ class IOModel:
 @attrs.define
 class AWGModel:
     awg: int | str
-    signal_type: SignalTypeModel
+    signal_type: AWGSignalTypeModel
     signals: dict[str, dict[str, str]]
     source_feedback_register: int | Literal["local"] | None
     codeword_bitshift: int | None

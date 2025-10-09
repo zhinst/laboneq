@@ -1,9 +1,10 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
 use std::iter;
 
-use crate::ir::compilation_job::{AwgCore, OscillatorKind, PulseDefKind};
+use crate::ir::compilation_job::{AwgCore, AwgKind, DeviceKind, OscillatorKind, PulseDefKind};
 use crate::ir::{InitAmplitudeRegister, IrNode, NodeKind, ParameterOperation};
 use crate::signature::{PulseSignature, quantize_amplitude_ct, quantize_amplitude_pulse};
 use crate::signature::{quantize_phase_ct, quantize_phase_pulse};
@@ -116,6 +117,53 @@ fn determine_amplitude_register(pulses: &mut Vec<PulseSignature>) -> u16 {
     0
 }
 
+/// Find the maximum amplitude among pulses or, if multiplexed, find the
+/// maximum of the sum of all simultaneous pulses
+fn get_max_combined_amplitude(
+    pulses: &[&mut PulseSignature],
+    sum_per_channel: bool,
+) -> Option<f64> {
+    // Filter relevant pulses
+    let mut all_intervals = HashMap::new();
+    pulses
+        .iter()
+        .filter(|pulse| pulse.length > 0)
+        .for_each(|pulse| {
+            all_intervals
+                .entry(if sum_per_channel { pulse.channel } else { None })
+                .or_insert_with(Vec::new)
+                .push((
+                    pulse.start,
+                    pulse.start + pulse.length,
+                    pulse
+                        .amplitude
+                        .expect("Expected pulse to have an amplitude")
+                        .abs(),
+                ));
+        });
+    if all_intervals.is_empty() {
+        return None;
+    }
+    let mut max_amplitude: f64 = 0.;
+    all_intervals.values_mut().for_each(|intervals| {
+        intervals.sort_by_key(|k| (k.0, k.1));
+        max_amplitude = max_amplitude.max(intervals[0].2);
+        // Sum up all amplitudes where pulses intersect and find the maximum
+        let mut first_active_interval = 0;
+        let mut current_amplitude = intervals[0].2;
+        for i in 1..intervals.len() {
+            let (start, _, amp) = intervals[i];
+            while start >= intervals[first_active_interval].1 {
+                current_amplitude -= intervals[first_active_interval].2;
+                first_active_interval += 1;
+            }
+            current_amplitude += amp;
+            max_amplitude = max_amplitude.max(current_amplitude);
+        }
+    });
+    Some(max_amplitude.min(1.0))
+}
+
 /// Aggregates pulse amplitudes for command table.
 ///
 /// Whenever possible, the waveforms will be sampled at unit
@@ -127,7 +175,7 @@ fn determine_amplitude_register(pulses: &mut Vec<PulseSignature>) -> u16 {
 ///
 /// * Each pulse has an amplitude
 /// * Any of the pulses has a pulse definition that is not of type marker
-fn aggregate_ct_amplitude(pulses: &mut [PulseSignature]) -> Option<f64> {
+fn aggregate_ct_amplitude(pulses: &mut [PulseSignature], sum_per_channel: bool) -> Option<f64> {
     if pulses.iter().any(|pulse| pulse.amplitude.is_none()) || pulses.is_empty() {
         return None;
     }
@@ -141,21 +189,8 @@ fn aggregate_ct_amplitude(pulses: &mut [PulseSignature]) -> Option<f64> {
                 .is_some_and(|p_def| p_def.kind != PulseDefKind::Marker)
         })
         .collect();
-    // Find the maximum amplitude among pulses
-    let ct_amplitude = pulses_filtered
-        .iter()
-        .map(|pulse| {
-            pulse
-                .amplitude
-                .expect("Expected pulse to have an amplitude")
-                .abs()
-        })
-        .collect::<Vec<f64>>()
-        .into_iter()
-        .reduce(f64::max)
-        .unwrap_or(1.0);
-    let ct_amplitude = ct_amplitude.min(1.0);
-    if ct_amplitude != 0.0 {
+    let ct_amplitude = get_max_combined_amplitude(&pulses_filtered, sum_per_channel).unwrap_or(1.0);
+    if ct_amplitude != 0.0 && ct_amplitude != 1.0 {
         for pulse in pulses_filtered {
             if let Some(amp) = &mut pulse.amplitude {
                 *amp /= ct_amplitude;
@@ -234,10 +269,12 @@ fn evaluate_signature_amplitude(
     use_amplitude_increment: bool,
     amplitude_resolution_range: u64,
     amplitude_register_values: &mut AmplitudeRegisterValues,
+    sum_per_channel: bool,
 ) -> (u16, Option<ParameterOperation<f64>>) {
     let amplitude_register = determine_amplitude_register(pulses);
     let mut ct_amplitude = use_command_table.then(|| {
-        let mut ct_amp = ParameterOperation::SET(aggregate_ct_amplitude(pulses).unwrap_or(1.0));
+        let max_combined_amplitude = aggregate_ct_amplitude(pulses, sum_per_channel).unwrap_or(1.0);
+        let mut ct_amp = ParameterOperation::SET(max_combined_amplitude);
         if use_amplitude_increment {
             try_make_ct_amplitude_incremental(
                 &mut ct_amp,
@@ -310,6 +347,7 @@ struct PassContext<'a> {
     phase_resolution_range: u64,
     use_ct_phase: bool,
     in_branch: bool,
+    sum_per_channel: bool,
 }
 
 fn transform_waveforms(node: &mut IrNode, ctx: &mut PassContext) {
@@ -328,6 +366,7 @@ fn transform_waveforms(node: &mut IrNode, ctx: &mut PassContext) {
                 use_amplitude_increment,
                 ctx.amplitude_resolution_range,
                 ctx.amplitude_register_values,
+                ctx.sum_per_channel,
             );
             ob.amplitude_register = amplitude_register;
             ob.amplitude = ct_amp;
@@ -393,6 +432,9 @@ pub fn optimize_signatures(
         phase_resolution_range,
         use_ct_phase: evaluate_use_ct_phase(awg),
         in_branch: false,
+        // Pulse channels for RF signals have a different meaning compared to other signals.
+        // todo: What about multiplexed channels on SHFQAs, may the sum of their amplitudes be larger than 1?
+        sum_per_channel: awg.kind != AwgKind::IQ || awg.device_kind() == &DeviceKind::UHFQA,
     };
     transform_waveforms(node, &mut ctx);
 }
@@ -413,7 +455,7 @@ mod tests {
         PulseSignature {
             start: 0,
             pulse: Some(Arc::new(pulse)),
-            length: 0,
+            length: 1,
             phase: 0.0,
             amplitude: None,
             oscillator_frequency: None,
@@ -472,7 +514,7 @@ mod tests {
             PulseSignature {
                 start: 0,
                 pulse: Some(Arc::new(pulse)),
-                length: 0,
+                length: 1,
                 phase: 0.0,
                 amplitude,
                 oscillator_frequency: None,
@@ -489,7 +531,7 @@ mod tests {
 
         #[test]
         fn test_no_pulses() {
-            assert!(aggregate_ct_amplitude(&mut []).is_none());
+            assert!(aggregate_ct_amplitude(&mut [], true).is_none());
         }
 
         /// Test largest amplitude pulse into command table
@@ -499,7 +541,8 @@ mod tests {
                 make_signature(Some(0.5), PulseDefKind::Pulse),
                 make_signature(Some(0.7), PulseDefKind::Pulse),
             ];
-            let ct_amp = aggregate_ct_amplitude(&mut pulses).unwrap();
+            pulses[1].start = 100;
+            let ct_amp = aggregate_ct_amplitude(&mut pulses, true).unwrap();
             assert_eq!(ct_amp, 0.7);
             assert_eq!(pulses[0].amplitude.unwrap(), 0.5 / 0.7);
             assert_eq!(pulses[1].amplitude.unwrap(), 1.0);
@@ -512,7 +555,7 @@ mod tests {
                 make_signature(None, PulseDefKind::Pulse),
                 make_signature(Some(0.7), PulseDefKind::Pulse),
             ];
-            let ct_amp = aggregate_ct_amplitude(&mut pulses);
+            let ct_amp = aggregate_ct_amplitude(&mut pulses, true);
             assert!(ct_amp.is_none());
         }
 
@@ -523,7 +566,7 @@ mod tests {
                 make_signature(Some(0.5), PulseDefKind::Pulse),
                 make_signature(Some(0.1), PulseDefKind::Marker),
             ];
-            let ct_amp = aggregate_ct_amplitude(&mut pulses);
+            let ct_amp = aggregate_ct_amplitude(&mut pulses, true);
             assert_eq!(ct_amp.unwrap(), 0.5);
         }
 
@@ -533,7 +576,7 @@ mod tests {
         #[test]
         fn test_marker_pulse_ignored() {
             let mut pulses = [make_signature(Some(0.01), PulseDefKind::Marker)];
-            let ct_amp = aggregate_ct_amplitude(&mut pulses).unwrap();
+            let ct_amp = aggregate_ct_amplitude(&mut pulses, true).unwrap();
             assert_eq!(ct_amp, 1.0);
         }
     }
@@ -552,7 +595,7 @@ mod tests {
             PulseSignature {
                 start: 0,
                 pulse: Some(Arc::new(pulse)),
-                length: 0,
+                length: 1,
                 phase: 0.0,
                 amplitude: Some(amplitude),
                 oscillator_frequency: None,
@@ -577,6 +620,7 @@ mod tests {
                 true,
                 1 << 18,
                 &mut amplitude_register_values,
+                true,
             );
             assert_eq!(reg, 0);
             assert_eq!(amp, Some(ParameterOperation::SET(0.5)));
@@ -587,6 +631,7 @@ mod tests {
                 true,
                 1 << 18,
                 &mut amplitude_register_values,
+                true,
             );
             assert_eq!(reg, 0);
             assert_eq!(
@@ -605,6 +650,7 @@ mod tests {
                 true,
                 1 << 18,
                 &mut amplitude_registers,
+                true,
             );
             assert_eq!(amp_reg, 1);
             assert_eq!(ct_amp.unwrap(), ParameterOperation::SET(0.5));
@@ -615,6 +661,7 @@ mod tests {
                 true,
                 1 << 18,
                 &mut amplitude_registers,
+                true,
             );
             assert_eq!(amp_reg, 1);
             assert_eq!(ct_amp.unwrap(), ParameterOperation::INCREMENT(0.0));
@@ -632,6 +679,7 @@ mod tests {
                 true,
                 18,
                 &mut amplitude_registers,
+                true,
             );
             assert_eq!(amp_reg, 1);
             assert_eq!(ct_amp.unwrap(), ParameterOperation::SET(amp0));
@@ -642,6 +690,7 @@ mod tests {
                 true,
                 1 << 18,
                 &mut amplitude_registers,
+                true,
             );
             assert_eq!(amp_reg, 1);
             assert_eq!(
@@ -662,6 +711,7 @@ mod tests {
                 true,
                 1 << 18,
                 &mut amplitude_registers,
+                true,
             );
             assert_eq!(amp_reg, 1);
             assert_eq!(ct_amp.unwrap(), ParameterOperation::SET(amp0));
@@ -672,6 +722,7 @@ mod tests {
                 true,
                 1 << 18,
                 &mut amplitude_registers,
+                true,
             );
             assert_eq!(amp_reg, 1);
             assert_eq!(
@@ -693,6 +744,7 @@ mod tests {
                 false,
                 1 << 18,
                 &mut amplitude_registers,
+                true,
             );
             assert_eq!(ct_amp.unwrap(), ParameterOperation::SET(amp0));
             assert_eq!(amplitude_registers.get(1), Some(amp0));
@@ -708,6 +760,7 @@ mod tests {
                 true,
                 1 << 18,
                 &mut amplitude_registers,
+                true,
             );
             assert_eq!(ct_amp, None);
         }
@@ -727,7 +780,7 @@ mod tests {
             PulseSignature {
                 start: 0,
                 pulse: None,
-                length: 0,
+                length: 1,
                 phase,
                 amplitude: None,
                 oscillator_frequency: None,

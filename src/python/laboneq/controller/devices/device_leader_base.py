@@ -148,7 +148,7 @@ class DeviceLeaderBase(DeviceBase):
             nc.add(f"{reg_selector_base}/index", awg_config.fb_reg_source_index)
         await self.set_async(nc)
 
-    async def start_execution(self, with_pipeliner: bool):
+    async def start_execution(self, recipe_data: RecipeData):
         _logger.debug("Starting execution...")
         nc = NodeCollector(base=f"/{self.serial}/")
 
@@ -194,17 +194,17 @@ class DeviceLeaderBase(DeviceBase):
                     f"{self.dev_repr}: Internal error: Failed to enable synchronization"
                 )
 
-    async def teardown_one_step_execution(self, with_pipeliner: bool):
+    async def teardown_one_step_execution(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")
-        if with_pipeliner:
+        if recipe_data.rt_execution_info.with_pipeliner:
             nc.add("execution/synchronization/enable", 0)
         await self.set_async(nc)
 
     async def configure_trigger(self, recipe_data: RecipeData):
-        initialization = recipe_data.get_initialization(self.uid)
+        device_recipe_data = recipe_data.device_settings[self.uid]
         nc = NodeCollector(base=f"/{self.serial}/")
         nc.add("system/clocks/referenceclock/out/enable", 1)
-        nc.add("execution/repetitions", initialization.config.repetitions)
+        nc.add("execution/repetitions", device_recipe_data.start_trigger_repetitions)
         await self.set_async(nc)
 
     async def reset_to_idle(self):

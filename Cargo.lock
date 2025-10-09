@@ -47,16 +47,19 @@ checksum = "2fd1289c04a9ea8cb22300a459a72a385d7c73d3259e2ed7dcb2af674838cfa9"
 
 [[package]]
 name = "codegenerator"
-version = "2.60.1"
+version = "2.61.0"
 dependencies = [
  "anyhow",
  "indexmap",
  "interval-calculator",
+ "laboneq-common",
+ "laboneq-log",
  "laboneq-units",
  "log",
  "md5",
  "num-complex",
  "numeric-array",
+ "rayon",
  "serde",
  "serde_json",
  "sha1",
@@ -65,20 +68,14 @@ dependencies = [
 
 [[package]]
 name = "codegenerator-py"
-version = "2.60.1"
+version = "2.61.0"
 dependencies = [
  "anyhow",
  "codegenerator",
- "indexmap",
- "log",
  "num-complex",
  "numeric-array",
  "pyo3",
  "pythonize",
- "rayon",
- "sampled-event-handler",
- "seqc-tracker",
- "serde_json",
  "thiserror",
 ]
 
@@ -155,6 +152,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ced73b1dacfc750a6db6c0a0c3a3853c8b41997e2e2c563dc90804ae6867959"
 
 [[package]]
+name = "foldhash"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -166,9 +169,12 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.16.0"
+version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5419bdc4f6a9207fbeba6d11b604d481addf78ecd10c11ad51e76c2f6482748d"
+checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
+dependencies = [
+ "foldhash",
+]
 
 [[package]]
 name = "heck"
@@ -194,7 +200,7 @@ checksum = "f4c7245a08504955605670dbf141fceab975f15ca21570696aebe9d2e71576bd"
 
 [[package]]
 name = "interval-calculator"
-version = "2.60.1"
+version = "2.61.0"
 dependencies = [
  "anyhow",
  "thiserror",
@@ -207,17 +213,50 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a5f13b858c8d314ee3e8f639011f7ccefe71f97f96e50151fb991f267928e2c"
 
 [[package]]
-name = "laboneq-rust"
-version = "2.60.1"
+name = "laboneq-common"
+version = "2.61.0"
 dependencies = [
+ "string-interner",
+]
+
+[[package]]
+name = "laboneq-log"
+version = "2.61.0"
+dependencies = [
+ "log",
+]
+
+[[package]]
+name = "laboneq-rust"
+version = "2.61.0"
+dependencies = [
+ "anyhow",
  "codegenerator-py",
+ "laboneq-common",
+ "laboneq-scheduler",
+ "laboneq-units",
+ "num-complex",
+ "numeric-array",
  "pyo3",
  "pyo3-log",
+ "thiserror",
+]
+
+[[package]]
+name = "laboneq-scheduler"
+version = "2.61.0"
+dependencies = [
+ "anyhow",
+ "laboneq-common",
+ "laboneq-units",
+ "num-complex",
+ "numeric-array",
+ "thiserror",
 ]
 
 [[package]]
 name = "laboneq-units"
-version = "2.60.1"
+version = "2.61.0"
 dependencies = [
  "num-traits",
 ]
@@ -309,7 +348,7 @@ dependencies = [
 
 [[package]]
 name = "numeric-array"
-version = "2.60.1"
+version = "2.61.0"
 dependencies = [
  "num-complex",
  "numpy",
@@ -505,29 +544,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
-name = "sampled-event-handler"
-version = "2.60.1"
-dependencies = [
- "anyhow",
- "codegenerator",
- "indexmap",
- "seqc-tracker",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
-name = "seqc-tracker"
-version = "2.60.1"
-dependencies = [
- "anyhow",
- "codegenerator",
- "indexmap",
- "log",
- "thiserror",
-]
-
-[[package]]
 name = "serde"
 version = "1.0.226"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -588,6 +604,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
+name = "string-interner"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23de088478b31c349c9ba67816fa55d9355232d63c3afea8bf513e31f0f1d2c0"
+dependencies = [
+ "hashbrown",
+ "serde",
+]
+
+[[package]]
 name = "syn"
 version = "2.0.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -606,18 +632,18 @@ checksum = "df7f62577c25e07834649fc3b39fafdc597c0a3527dc1c60129201ccfcbaa50c"
 
 [[package]]
 name = "thiserror"
-version = "2.0.16"
+version = "2.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3467d614147380f2e4e374161426ff399c91084acd2363eaf549172b3d5e60c0"
+checksum = "f63587ca0f12b72a0600bcba1d40081f830876000bb46dd2337a3051618f4fc8"
 dependencies = [
  "thiserror-impl",
 ]
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.16"
+version = "2.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c5e1be1c48b9172ee610da68fd9cd2770e7a4056cb3fc98710ee6906f0c7960"
+checksum = "3ff15c8ecd7de3849db632e14d18d2571fa09dfc5ed93479bc4485c7a517c913"
 dependencies = [
  "proc-macro2",
  "quote",

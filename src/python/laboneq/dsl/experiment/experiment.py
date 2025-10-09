@@ -50,7 +50,7 @@ def _convert_signals(
 
 @final
 @classformatter
-@attrs.define(slots=False)
+@attrs.define
 class Experiment:
     """LabOne Q Experiment.
 
@@ -74,6 +74,11 @@ class Experiment:
         sections (list[Section]):
             Sections defined in the experiment.
             Default: `[]`.
+
+    !!! version-changed "Changed in version 2.61.0"
+
+        Changed the class to be slotted, which prevents the accidental creation of new
+        attributes.
 
     !!! version-removed "Removed in version 2.57.0"
 

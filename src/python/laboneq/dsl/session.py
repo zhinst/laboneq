@@ -26,7 +26,7 @@ from laboneq.dsl.result import Results
 from laboneq.implementation.legacy_adapters.converters_target_setup import (
     convert_dsl_to_target_setup,
 )
-from laboneq.laboneq_logging import initialize_logging
+from laboneq import laboneq_logging
 
 from laboneq.controller import Controller
 
@@ -168,7 +168,7 @@ class Session:
             if not is_testing():
                 # Only initialize logging outside pytest
                 # pytest initializes the logging itself
-                initialize_logging(
+                laboneq_logging.initialize_logging(
                     log_level=log_level,
                     performance_log=performance_log,
                     server_log=server_log,

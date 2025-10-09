@@ -94,6 +94,11 @@ class NodeCollector:
     ):
         self._nodes.append(NodeActionSet(self._base + path, value, cache, filename))
 
+    def add_absolute(
+        self, abs_path: str, value: Any, cache: bool = True, filename: str | None = None
+    ):
+        self._nodes.append(NodeActionSet(abs_path, value, cache, filename))
+
     def add_path(self, path: str):
         self._nodes.append(NodePath(self._base + path))
 

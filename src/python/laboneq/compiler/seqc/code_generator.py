@@ -13,7 +13,6 @@ import numpy as np
 from laboneq._rust import codegenerator as codegen_rs
 from laboneq._rust.codegenerator import SampledWaveform
 from laboneq.compiler.common.awg_info import AWGInfo, AwgKey
-from laboneq.compiler.common.awg_signal_type import AWGSignalType
 from laboneq.compiler.common.compiler_settings import (
     CompilerSettings,
 )
@@ -30,6 +29,7 @@ from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLay
 from laboneq.compiler.ir import IRTree
 from laboneq.compiler.seqc.linker import AwgWeights, SeqCGenOutput, SeqCProgram
 from laboneq.core.types.enums import AcquisitionType
+from laboneq.core.types.enums.awg_signal_type import AWGSignalType
 from laboneq.core.types.enums.wave_type import WaveType
 from laboneq.data.scheduled_experiment import (
     COMPLEX_USAGE,
@@ -225,10 +225,7 @@ class CodeGenerator(ICodeGenerator):
                         self._save_wave_bin(
                             weight.samples_q, None, weight.basename, "_q"
                         )
-            if awg.signal_type in (
-                AWGSignalType.IQ,
-                AWGSignalType.SINGLE,
-            ):
+            if awg.signal_type in (AWGSignalType.IQ, AWGSignalType.SINGLE):
                 for sampled_waveform in self._sampled_waveforms.get(awg.key, []):
                     sampled_signature = sampled_waveform.signature
                     sig_string = sampled_waveform.signature_string

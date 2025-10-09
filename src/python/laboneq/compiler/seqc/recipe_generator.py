@@ -8,23 +8,22 @@ import logging
 import math
 from typing import TYPE_CHECKING, Any, Dict, cast
 
-from sortedcontainers import SortedDict
 import orjson
+from sortedcontainers import SortedDict
 from zhinst.core import __version__ as zhinst_version
 
 from laboneq._utils import ensure_list
 from laboneq._version import get_version
 from laboneq.compiler.common.awg_info import AWGInfo
-from laboneq.compiler.common.awg_signal_type import AWGSignalType
 from laboneq.compiler.common.device_type import (
     DeviceType,
     validate_local_oscillator_frequency,
 )
+from laboneq.compiler.common.integration_times import IntegrationTimes
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
-from laboneq.compiler.seqc.linker import NeartimeStep, CombinedRTOutputSeqC
+from laboneq.compiler.seqc.linker import CombinedRTOutputSeqC, NeartimeStep
 from laboneq.compiler.seqc.measurement_calculator import SignalDelays
-from laboneq.compiler.common.integration_times import IntegrationTimes
 from laboneq.compiler.workflow.on_device_delays import OnDeviceDelayCompensation
 from laboneq.compiler.workflow.precompensation_helpers import (
     precompensation_is_nonzero,
@@ -33,14 +32,15 @@ from laboneq.compiler.workflow.precompensation_helpers import (
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import AcquisitionType
 from laboneq.core.types.enums.acquisition_type import is_spectroscopy
-from laboneq.data.calibration import PortMode, CancellationSource
+from laboneq.core.types.enums.awg_signal_type import AWGSignalType
+from laboneq.data.calibration import CancellationSource, PortMode
 from laboneq.data.compilation_job import (
     DeviceInfo,
     DeviceInfoType,
     ParameterInfo,
-    SignalInfoType,
     PrecompensationInfo,
     SignalInfo,
+    SignalInfoType,
 )
 from laboneq.data.recipe import (
     AWG,
@@ -53,16 +53,15 @@ from laboneq.data.recipe import (
     OscillatorParam,
     RealtimeExecutionInit,
     Recipe,
-    SignalType,
-    TriggeringMode,
     RoutedOutput,
+    TriggeringMode,
 )
 
 if TYPE_CHECKING:
     from laboneq._rust.codegenerator import FeedbackRegisterConfig
     from laboneq.compiler.workflow.compiler import (
-        LeaderProperties,
         IntegrationUnitAllocation,
+        LeaderProperties,
     )
     from laboneq.data.compilation_job import OutputRoute as CompilerOutputRoute
 
@@ -416,14 +415,9 @@ class RecipeGenerator:
         signals: dict[str, dict[str, str]],
         shfppc_sweep_configuration: dict[str, object] | None,
     ):
-        awg_signal_type = {
-            AWGSignalType.SINGLE: SignalType.SINGLE,
-            AWGSignalType.DOUBLE: SignalType.SINGLE,
-            AWGSignalType.IQ: SignalType.IQ,
-        }[signal_type]
         awg = AWG(
             awg=awg_number,
-            signal_type=awg_signal_type,
+            signal_type=signal_type,
             signals=signals,
         )
         if feedback_register_config is not None:

@@ -7,10 +7,14 @@ import logging
 from enum import IntEnum
 from typing import Any, Iterator
 
+from laboneq.controller.devices.channel_base import ChannelBase
+from laboneq.controller.devices.hdawg_core import HDAwgCore
+from laboneq.controller.utilities.for_each import for_each
 import numpy as np
 
 from laboneq.controller.attribute_value_tracker import (
     AttributeName,
+    DeviceAttribute,
     DeviceAttributesView,
 )
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
@@ -19,7 +23,6 @@ from laboneq.controller.devices.device_zi import (
     DeviceBase,
     delay_to_rounded_samples,
 )
-from laboneq.controller.attribute_value_tracker import DeviceAttribute
 from laboneq.controller.devices.node_control import (
     Command,
     Condition,
@@ -29,14 +32,10 @@ from laboneq.controller.devices.node_control import (
     Setting,
     WaitCondition,
 )
-from laboneq.controller.recipe_processor import RecipeData
-from laboneq.controller.utilities.exception import LabOneQControllerException
-from laboneq.core.types.enums.acquisition_type import AcquisitionType
+from laboneq.controller.recipe_processor import AwgSignalType, RecipeData
 from laboneq.data.recipe import (
     Initialization,
     NtStepKey,
-    SignalType,
-    TriggeringMode,
 )
 
 _logger = logging.getLogger(__name__)
@@ -66,25 +65,17 @@ class ReferenceClockSourceHDAWG(IntEnum):
     ZSYNC = 2
 
 
-class ModulationMode(IntEnum):
-    OFF = 0
-    SINE_00 = 1
-    SINE_11 = 2
-    SINE_01 = 3
-    SINE_10 = 4
-    ADVANCED = 5
-    MIXER_CAL = 6
-
-
 class DeviceHDAWG(DeviceBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.dev_type = "HDAWG8"
         self.dev_opts = ["MF", "ME", "SKW"]
+        self._hd_awg_cores: list[HDAwgCore] = []
         self._pipeliner = [
             AwgPipeliner(f"/{self.serial}/awgs/{awg}", f"AWG{awg}") for awg in range(4)
         ]
         self._channels = 8
+        self._cores = 4
         self._multi_freq = True
         self._reference_clock_source = ReferenceClockSourceHDAWG.INTERNAL
         self._sampling_rate = (
@@ -102,6 +93,14 @@ class DeviceHDAWG(DeviceBase):
     def has_pipeliner(self) -> bool:
         return True
 
+    def all_channels(self) -> Iterator[ChannelBase]:
+        """Iterable over all awg cores of the device."""
+        return iter(self._hd_awg_cores)
+
+    def allocated_channels(self, recipe_data: RecipeData) -> Iterator[ChannelBase]:
+        for ch in recipe_data.allocated_awgs(self.uid):
+            yield self._hd_awg_cores[ch]
+
     def pipeliner_prepare_for_upload(self, index: int) -> NodeCollector:
         return self._pipeliner[index].prepare_for_upload()
 
@@ -115,8 +114,10 @@ class DeviceHDAWG(DeviceBase):
         self._check_expected_dev_opts()
         if self.dev_type == "HDAWG8":
             self._channels = 8
+            self._cores = 4
         elif self.dev_type == "HDAWG4":
             self._channels = 4
+            self._cores = 2
         else:
             _logger.warning(
                 "%s: Unknown device type '%s', assuming 4 channels device.",
@@ -124,12 +125,27 @@ class DeviceHDAWG(DeviceBase):
                 self.dev_type,
             )
             self._channels = 4
+            self._cores = 2
 
         self._multi_freq = "MF" in self.dev_opts
+        self._hd_awg_cores = [
+            HDAwgCore(
+                api=self._api,
+                subscriber=self._subscriber,
+                device_uid=self.uid,
+                serial=self.serial,
+                channel=ch,
+                repr_base=self.dev_repr,
+                is_follower=self.is_follower(),
+                is_leader=self.is_leader(),
+                has_precompensation="PC" in self.dev_opts,
+            )
+            for ch in range(self._cores)
+        ]
 
-    def _busy_nodes(self) -> list[str]:
+    def _busy_nodes(self, recipe_data: RecipeData) -> list[str]:
         busy_nodes = []
-        for awg in self._allocated_awgs:
+        for awg in recipe_data.allocated_awgs(self.uid):
             # We check busy always for both channels even if only
             # one channel is used - overhead is minimal.
             busy_nodes.append(f"/{self.serial}/sigouts/{awg * 2}/busy")
@@ -237,45 +253,48 @@ class DeviceHDAWG(DeviceBase):
     async def set_after_awg_upload(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")
 
-        initialization = recipe_data.get_initialization(self.uid)
-        for awg in initialization.awgs or []:
+        device_recipe_data = recipe_data.device_settings[self.uid]
+        for awg_index, awg_config in device_recipe_data.awg_configs.items():
             _logger.debug(
                 "%s: Configure modulation phase depending on IQ enabling on awg %d.",
                 self.dev_repr,
-                awg.awg,
+                awg_index,
             )
             nc.add(
-                f"sines/{awg.awg * 2}/phaseshift",
-                90 if (awg.signal_type == SignalType.IQ) else 0,
+                f"sines/{awg_index * 2}/phaseshift",
+                90 if (awg_config.signal_type == AwgSignalType.IQ) else 0,
             )
-            nc.add(f"sines/{awg.awg * 2 + 1}/phaseshift", 0)
+            nc.add(f"sines/{awg_index * 2 + 1}/phaseshift", 0)
 
         await self.set_async(nc)
 
-    async def _do_start_execution(self, with_pipeliner: bool):
+    async def _do_start_execution(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")
-        for awg_index in self._allocated_awgs:
-            if with_pipeliner:
+        for awg_index in recipe_data.allocated_awgs(self.uid):
+            if recipe_data.rt_execution_info.with_pipeliner:
                 nc.extend(self._pipeliner[awg_index].collect_execution_nodes())
             else:
                 nc.add(f"awgs/{awg_index}/enable", 1, cache=False)
         await self.set_async(nc)
 
-    async def start_execution(self, with_pipeliner: bool):
+    async def start_execution(self, recipe_data: RecipeData):
         # For standalone HDAWG start the execution at the emit_start_trigger stage
         if not self.is_standalone():
-            await self._do_start_execution(with_pipeliner)
+            await self._do_start_execution(recipe_data=recipe_data)
 
-    async def emit_start_trigger(self, with_pipeliner):
+    async def emit_start_trigger(self, recipe_data: RecipeData):
         if self.is_leader() or self.is_standalone():
-            await self._do_start_execution(with_pipeliner)
+            await self._do_start_execution(recipe_data=recipe_data)
 
     def conditions_for_execution_ready(
-        self, with_pipeliner: bool
+        self, recipe_data: RecipeData
     ) -> dict[str, tuple[Any, str]]:
         conditions: dict[str, tuple[Any, str]] = {}
-        for awg_index in self._allocated_awgs:
-            if with_pipeliner and not self.is_standalone():
+        for awg_index in recipe_data.allocated_awgs(self.uid):
+            if (
+                recipe_data.rt_execution_info.with_pipeliner
+                and not self.is_standalone()
+            ):
                 conditions.update(
                     self._pipeliner[awg_index].conditions_for_execution_ready()
                 )
@@ -287,11 +306,11 @@ class DeviceHDAWG(DeviceBase):
         return conditions
 
     def conditions_for_execution_done(
-        self, acquisition_type: AcquisitionType, with_pipeliner: bool
+        self, recipe_data: RecipeData
     ) -> dict[str, tuple[Any, str]]:
         conditions: dict[str, tuple[Any, str]] = {}
-        for awg_index in self._allocated_awgs:
-            if with_pipeliner:
+        for awg_index in recipe_data.allocated_awgs(self.uid):
+            if recipe_data.rt_execution_info.with_pipeliner:
                 conditions.update(
                     self._pipeliner[awg_index].conditions_for_execution_done(
                         with_execution_start=self.is_standalone()
@@ -321,15 +340,15 @@ class DeviceHDAWG(DeviceBase):
             nc.add("system/synchronization/source", 1)  # external
         await self.set_async(nc)
 
-    async def teardown_one_step_execution(self, with_pipeliner: bool):
+    async def teardown_one_step_execution(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")
 
-        if with_pipeliner and not self.is_standalone():
+        if recipe_data.rt_execution_info.with_pipeliner and not self.is_standalone():
             # Deregister this instrument from synchronization via ZSync.
             nc.add("system/synchronization/source", 0)
 
-        if with_pipeliner:
-            for awg_index in self._allocated_awgs:
+        if recipe_data.rt_execution_info.with_pipeliner:
+            for awg_index in recipe_data.allocated_awgs(self.uid):
                 nc.extend(self._pipeliner[awg_index].reset_nodes())
 
         # HACK: HBAR-1427 and HBAR-2165 show that runtime checks generate
@@ -344,120 +363,39 @@ class DeviceHDAWG(DeviceBase):
         self,
         recipe_data: RecipeData,
     ):
-        _logger.debug("%s: Initializing device...", self.dev_repr)
+        device_recipe_data = recipe_data.device_settings[self.uid]
+        if device_recipe_data is None:
+            return
+
+        await for_each(
+            self.all_channels(),
+            HDAwgCore.apply_initialization,
+            device_recipe_data=device_recipe_data,
+        )
+
         nc = NodeCollector(base=f"/{self.serial}/")
 
-        device_recipe_data = recipe_data.device_settings[self.uid]
-        initialization = recipe_data.get_initialization(self.uid)
-        outputs = initialization.outputs or []
-        for output in outputs:
-            awg_idx = output.channel // 2
+        # Configure DIO/ZSync at init (previously was after AWG loading).
+        # This is a prerequisite for passing AWG checks in FW on the pipeliner commit.
+        # Without the pipeliner, these checks are only performed when the AWG is enabled,
+        # therefore DIO could be configured after the AWG loading.
+        if self.is_follower():
+            nc.add("dios/0/mode", DIOMode.QCCS)
+            nc.add("dios/0/drive", 0b1100)
 
-            nc.add(f"sigouts/{output.channel}/on", 1 if output.enable else 0)
+        elif self.is_leader():
+            # For desktop setups (setup with HDAWG and UHFQA only) we recommend
+            # users to connect UHFQA reference clock output to the trigger
+            # input of the first channel on the HDAWG.
+            nc.add("triggers/in/0/level", TRIGGER_INPUT_LEVEL_FOR_DESKTOP_SETUP)
+            # The reference clock output of UHFQA is 50 Ohm. If we don't match
+            # it here, this 'may' cause issue for the user if they are providing the
+            # clock by splitting it and the cable lengths involved are large.
+            nc.add("triggers/in/0/imp50", 1)
 
-            if output.range is not None:
-                if output.range_unit not in (None, "volt"):
-                    raise LabOneQControllerException(
-                        f"The output range of device {self.dev_repr} is specified in "
-                        f"units of {output.range_unit}. Units must be 'volt'."
-                    )
-                if output.range not in (0.2, 0.4, 0.6, 0.8, 1.0, 2.0, 3.0, 4.0, 5.0):
-                    _logger.warning(
-                        "The specified output range %s for device %s is not in the list of "
-                        "supported values. It will be rounded to the next higher allowed value.",
-                        output.range,
-                        self.dev_repr,
-                    )
-                nc.add(f"sigouts/{output.channel}/range", output.range)
-            nc.add(f"awgs/{awg_idx}/single", 1)
-
-            awg_ch = output.channel % 2
-            if awg_idx in device_recipe_data.iq_settings:
-                modulation_mode = (
-                    ModulationMode.MIXER_CAL
-                    if output.modulation
-                    else ModulationMode.OFF
-                )
-            else:
-                modulation_mode = (
-                    (ModulationMode.SINE_00 if awg_ch == 0 else ModulationMode.SINE_11)
-                    if output.modulation
-                    else ModulationMode.OFF
-                )
-
-            nc.add(f"awgs/{awg_idx}/outputs/{awg_ch}/modulation/mode", modulation_mode)
-            precomp_p = f"sigouts/{output.channel}/precompensation/"
-            has_pc = "PC" in self.dev_opts
-            try:
-                precomp = output.precompensation
-                if not precomp:
-                    raise AttributeError  # @IgnoreException
-                if not has_pc:
-                    raise LabOneQControllerException(
-                        f"Precompensation is not supported on device {self.dev_repr}."
-                    )
-                nc.add(precomp_p + "enable", 1)
-                # Exponentials
-                for e in range(8):
-                    exp_p = precomp_p + f"exponentials/{e}/"
-                    try:
-                        exp = precomp["exponential"][e]
-                        nc.add(exp_p + "enable", 1)
-                        nc.add(exp_p + "timeconstant", exp["timeconstant"])
-                        nc.add(exp_p + "amplitude", exp["amplitude"])
-                    except (KeyError, IndexError, TypeError):
-                        nc.add(exp_p + "enable", 0)
-                # Bounce
-                bounce_p = precomp_p + "bounces/0/"
-                try:
-                    bounce = precomp["bounce"]
-                    delay = bounce["delay"]
-                    amp = bounce["amplitude"]
-                    nc.add(bounce_p + "enable", 1)
-                    nc.add(bounce_p + "delay", delay)
-                    nc.add(bounce_p + "amplitude", amp)
-                except (KeyError, TypeError):
-                    nc.add(bounce_p + "enable", 0)
-                # Highpass
-                hp_p = precomp_p + "highpass/0/"
-                try:
-                    hp = precomp["high_pass"]
-                    timeconstant = hp["timeconstant"]
-                    nc.add(hp_p + "enable", 1)
-                    nc.add(hp_p + "timeconstant", timeconstant)
-                    nc.add(hp_p + "clearing/slope", 1)
-                except (KeyError, TypeError):
-                    nc.add(hp_p + "enable", 0)
-                # FIR
-                fir_p = precomp_p + "fir/"
-                try:
-                    fir = np.array(precomp["FIR"]["coefficients"])
-                    if len(fir) > 40:
-                        raise LabOneQControllerException(
-                            "FIR coefficients must be a list of at most 40 doubles"
-                        )
-                    fir = np.concatenate((fir, np.zeros((40 - len(fir)))))
-                    nc.add(fir_p + "enable", 1)
-                    nc.add(fir_p + "coefficients", fir)
-                except (KeyError, IndexError, TypeError):
-                    nc.add(fir_p + "enable", 0)
-            except (KeyError, TypeError, AttributeError):
-                if has_pc:
-                    nc.add(precomp_p + "enable", 0)
-            if output.marker_mode is not None:
-                if output.marker_mode == "TRIGGER":
-                    nc.add(f"triggers/out/{output.channel}/source", output.channel % 2)
-                elif output.marker_mode == "MARKER":
-                    nc.add(
-                        f"triggers/out/{output.channel}/source",
-                        4 + 2 * (output.channel % 2),
-                    )
-                else:
-                    raise ValueError(
-                        f"Maker mode must be either 'MARKER' or 'TRIGGER', but got {output.marker_mode} for output {output.channel} on HDAWG {self.serial}"
-                    )
-                # set trigger delay to 0
-                nc.add(f"triggers/out/{output.channel}/delay", 0.0)
+            # DIO_CODEWORD is mandatory for HDAWG+UHFQA systems to prevent jitter.
+            nc.add("dios/0/mode", DIOMode.DIO_CODEWORD)
+            nc.add("dios/0/drive", 0b1111)
 
         osc_selects = {
             ch: osc.index
@@ -467,13 +405,7 @@ class DeviceHDAWG(DeviceBase):
         for ch, osc_idx in osc_selects.items():
             nc.add(f"sines/{ch}/oscselect", osc_idx)
 
-        # Configure DIO/ZSync at init (previously was after AWG loading).
-        # This is a prerequisite for passing AWG checks in FW on the pipeliner commit.
-        # Without the pipeliner, these checks are only performed when the AWG is enabled,
-        # therefore DIO could be configured after the AWG loading.
-        nc.extend(self._collect_dio_configuration_nodes(initialization))
-
-        await self.set_async(nc)
+        await self._api.set_parallel(nc)
 
     def pre_process_attributes(
         self,
@@ -616,6 +548,15 @@ class DeviceHDAWG(DeviceBase):
                 awg_iq_pair_set.add(awg_idx)
         await self.set_async(nc)
 
+    async def _prepare_artifacts_impl(
+        self,
+        recipe_data: RecipeData,
+        nt_step: NtStepKey,
+        awg_index: int,
+    ):
+        # Artifacts upload for the HDAWG is done in the HDAwgCore class.
+        pass
+
     async def set_before_awg_upload(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")
         nc.add("system/awg/oscillatorcontrol", 1)
@@ -640,70 +581,6 @@ class DeviceHDAWG(DeviceBase):
             break
 
         await self.set_async(nc)
-
-    def _collect_dio_configuration_nodes(
-        self, initialization: Initialization
-    ) -> NodeCollector:
-        _logger.debug("%s: Configuring trigger configuration nodes.", self.dev_repr)
-        nc = NodeCollector(base=f"/{self.serial}/")
-
-        triggering_mode = initialization.config.triggering_mode
-        if triggering_mode == TriggeringMode.ZSYNC_FOLLOWER:
-            _logger.debug(
-                "%s: Configuring DIO mode: ZSync pass-through.", self.dev_repr
-            )
-            _logger.debug("%s: Configuring external clock to ZSync.", self.dev_repr)
-            nc.add("dios/0/mode", DIOMode.QCCS)
-            nc.add("dios/0/drive", 0b1100)
-
-            # Loop over at least one AWG instance to cover the case that the instrument is only used
-            # as a communication proxy. Some of the nodes on the AWG branch are needed to get
-            # proper communication between HDAWG and UHFQA.
-            for awg_index in (
-                self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
-            ):
-                awg_path = f"awgs/{awg_index}"
-                nc.add(f"{awg_path}/dio/strobe/slope", 0)
-                nc.add(f"{awg_path}/dio/valid/polarity", 0)
-
-        elif triggering_mode == TriggeringMode.DESKTOP_LEADER:
-            # For desktop setups (setup with HDAWG and UHFQA only) we recommend
-            # users to connect UHFQA reference clock output to the trigger
-            # input of the first channel on the HDAWG.
-            nc.add("triggers/in/0/level", TRIGGER_INPUT_LEVEL_FOR_DESKTOP_SETUP)
-            # The reference clock output of UHFQA is 50 Ohm. If we don't match
-            # it here, this 'may' cause issue for the user if they are providing the
-            # clock by splitting it and the cable lengths involved are large.
-            nc.add("triggers/in/0/imp50", 1)
-
-            for awg_index in (
-                self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
-            ):
-                nc.add(f"awgs/{awg_index}/auxtriggers/0/slope", 1)
-                nc.add(f"awgs/{awg_index}/auxtriggers/0/channel", 0)
-
-            # DIO_CODEWORD is mandatory for HDAWG+UHFQA systems to prevent jitter.
-            nc.add("dios/0/mode", DIOMode.DIO_CODEWORD)
-            nc.add("dios/0/drive", 0b1111)
-
-            # Loop over at least one AWG instance to cover the case that the instrument is only used
-            # as a communication proxy. Some of the nodes on the AWG branch are needed to get
-            # proper communication between HDAWG and UHFQA.
-            for awg_index in (
-                self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
-            ):
-                nc.add(f"awgs/{awg_index}/dio/strobe/slope", 0)
-                nc.add(f"awgs/{awg_index}/dio/valid/polarity", 2)
-                nc.add(f"awgs/{awg_index}/dio/valid/index", 0)
-                nc.add(f"awgs/{awg_index}/dio/mask/value", 0x3FF)
-                nc.add(f"awgs/{awg_index}/dio/mask/shift", 1)
-
-            # To align execution on all AWG cores on same instrument, enable  HW
-            # synchronization even in absence of pipeliner usage.
-            for awg_index in self._allocated_awgs:
-                nc.add(f"awgs/{awg_index}/synchronization/enable", 1)
-
-        return nc
 
     async def reset_to_idle(self):
         nc = NodeCollector(base=f"/{self.serial}/")

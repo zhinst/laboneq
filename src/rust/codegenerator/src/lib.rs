@@ -2,31 +2,32 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod awg_delays;
-pub mod device_traits;
+mod device_traits;
 mod generate_awg_events;
+pub(crate) mod handle_feedback_registers;
 pub mod ir;
 pub mod node;
 pub(crate) mod passes;
 mod sample_waveforms;
+mod sampled_event_handler;
 mod settings;
 pub mod signature;
 pub mod tinysample;
-pub mod utils;
+mod utils;
 pub(crate) mod virtual_signal;
-pub use awg_delays::{AwgTiming, calculate_awg_delays};
-pub use passes::fanout_awg::fanout_for_awg;
-pub mod handle_feedback_registers;
-pub use generate_awg_events::transform_ir_to_awg_events;
-pub use passes::analyze_measurements;
-pub use passes::{AwgCompilationInfo, analyze_awg_ir};
 pub use settings::CodeGeneratorSettings;
-pub use utils::normalize_phase;
-pub type Samples = i64;
+mod event_list;
+mod generator;
+pub mod result;
+mod triggers;
 
-pub use sample_waveforms::{
-    AwgWaveforms, SampledWaveform, WaveDeclaration, collect_and_finalize_waveforms,
-    collect_integration_kernels,
-};
+pub use generator::generate_code;
+
+// Re-export for easier access
+pub use crate::sampled_event_handler::FeedbackRegister;
+pub use crate::sampled_event_handler::FeedbackRegisterConfig;
+pub use crate::sampled_event_handler::FeedbackRegisterLayout;
+pub use crate::sampled_event_handler::SingleFeedbackRegisterLayoutItem;
 
 pub mod waveform_sampler {
     pub use crate::sample_waveforms::{

@@ -99,10 +99,23 @@ impl IntegrationKernel<'_> {
 
 /// A trait for sampling waveforms.
 pub trait SampleWaveforms {
-    type Signature: SampledWaveformSignature;
+    type Signature: SampledWaveformSignature + Send + Sync;
+    type IntegrationWeight: Send + Sync;
+    type PulseParameters: Sync;
+
+    fn supports_waveform_sampling(awg: &AwgCore) -> bool;
+
+    /// Calculates integration weights for a batch of integration kernels.
+    fn batch_calculate_integration_weights(
+        &self,
+        awg: &AwgCore,
+        kernels: Vec<IntegrationKernel<'_>>,
+    ) -> Result<Vec<Self::IntegrationWeight>>;
+
     /// Samples and compresses a batch of waveform candidates.
     fn batch_sample_and_compress(
         &self,
+        awg: &AwgCore,
         waveforms: &[WaveformSamplingCandidate],
     ) -> Result<SampledWaveformCollection<Self::Signature>>;
 }
@@ -440,10 +453,12 @@ fn generate_output<T: SampledWaveformSignature>(
 /// exists in the IR node after the transformation pass.
 pub fn collect_and_finalize_waveforms<T: SampleWaveforms>(
     node: &mut IrNode,
-    waveform_sampler: T,
+    waveform_sampler: &T,
+    awg: &AwgCore,
 ) -> Result<AwgWaveforms<T::Signature>> {
     let waveforms = collect_waveforms_for_sampling(node)?;
-    let sampled_waveform_signatures = waveform_sampler.batch_sample_and_compress(&waveforms)?;
+    let sampled_waveform_signatures =
+        waveform_sampler.batch_sample_and_compress(awg, &waveforms)?;
     split_compressed_waveforms(node, &sampled_waveform_signatures)?;
     let sampled_waveforms_signatures = collect_sampled_signatures(sampled_waveform_signatures);
     let (sampled_waveforms, wave_declarations) =

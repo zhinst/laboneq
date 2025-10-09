@@ -329,7 +329,6 @@ class DeviceBase(DeviceZI):
         self.dev_opts: list[str] = []
         self._connected = False
         self._voltage_offsets: dict[int, float] = {}
-        self._allocated_awgs: set[int] = set()
         self._pipeliner_reload_tracker: dict[int, PipelinerReloadTracker] = defaultdict(
             PipelinerReloadTracker
         )
@@ -357,8 +356,10 @@ class DeviceBase(DeviceZI):
         return self.options.interface.lower()
 
     def _has_awg_in_use(self, recipe_data: RecipeData):
-        initialization = recipe_data.get_initialization(self.uid)
-        return len(initialization.awgs) > 0
+        device_recipe_data = recipe_data.device_settings.get(self.uid)
+        if device_recipe_data is None:
+            return False
+        return len(device_recipe_data.allocated_awgs()) > 0
 
     async def set_async(self, nodes: NodeCollector | Iterable[NodeCollector]):
         await self._api.set_parallel(NodeCollector.all(nodes))
@@ -367,7 +368,7 @@ class DeviceBase(DeviceZI):
         """Iterable over all channels of the device."""
         return iter([])
 
-    def allocated_channels(self) -> Iterator[ChannelBase]:
+    def allocated_channels(self, recipe_data: RecipeData) -> Iterator[ChannelBase]:
         """Iterable over actually allocated channels of the device."""
         return iter([])
 
@@ -551,20 +552,15 @@ class DeviceBase(DeviceZI):
     def _make_osc_path(self, channel: int, index: int) -> str:
         return f"/{self.serial}/oscs/{index}/freq"
 
-    def _busy_nodes(self) -> list[str]:
+    def _busy_nodes(self, recipe_data: RecipeData) -> list[str]:
         return []
 
-    def allocate_resources(self, recipe_data: RecipeData):
-        self._allocated_awgs.clear()
+    def allocate_resources(self):
         self._pipeliner_reload_tracker.clear()
         self._near_time_artifact_replacement_nodes.clear()
         for_each_sync(self.all_channels(), ChannelBase.allocate_resources)
 
-        for awg_key in recipe_data.awg_configs.keys():
-            if awg_key.device_uid == self.uid:
-                self._allocated_awgs.add(awg_key.awg_index)
-
-    async def on_experiment_begin(self):
+    async def on_experiment_begin(self, recipe_data: RecipeData):
         await _gather(
             *(
                 self._subscriber.subscribe(self._api, path)
@@ -572,7 +568,7 @@ class DeviceBase(DeviceZI):
             ),
             *(
                 self._subscriber.subscribe(self._api, path, get_initial=True)
-                for path in self._busy_nodes()
+                for path in self._busy_nodes(recipe_data=recipe_data)
             ),
         )
 
@@ -658,9 +654,9 @@ class DeviceBase(DeviceZI):
     async def configure_feedback(self, recipe_data: RecipeData):
         pass
 
-    async def emit_start_trigger(self, with_pipeliner: bool):
+    async def emit_start_trigger(self, recipe_data: RecipeData):
         if self.is_leader():
-            await self.start_execution(with_pipeliner=with_pipeliner)
+            await self.start_execution(recipe_data=recipe_data)
 
     def _choose_wf_collector(
         self, elf_nodes: NodeCollector, wf_nodes: NodeCollector
@@ -676,7 +672,7 @@ class DeviceBase(DeviceZI):
         nt_step: NtStepKey,
     ):
         await for_each(
-            self.allocated_channels(),
+            self.allocated_channels(recipe_data=recipe_data),
             ChannelBase.load_awg_program,
             recipe_data=recipe_data,
             nt_step=nt_step,
@@ -688,7 +684,7 @@ class DeviceBase(DeviceZI):
                     nt_step=nt_step,
                     awg_index=awg_index,
                 )
-                for awg_index in self._allocated_awgs
+                for awg_index in recipe_data.allocated_awgs(self.uid)
             )
         )
         await self._apply_near_time_replacements(
@@ -1011,11 +1007,11 @@ class DeviceBase(DeviceZI):
                 f"Errors:\n{failures}"
             )
 
-    async def wait_for_channels_ready(self, timeout_s: float):
+    async def wait_for_channels_ready(self, recipe_data: RecipeData, timeout_s: float):
         await _gather(
             *(
                 self._subscriber.wait_for(path, expected=0, timeout_s=timeout_s)
-                for path in self._busy_nodes()
+                for path in self._busy_nodes(recipe_data=recipe_data)
             )
         )
 
@@ -1024,23 +1020,23 @@ class DeviceBase(DeviceZI):
     ):
         pass
 
-    async def start_execution(self, with_pipeliner: bool):
+    async def start_execution(self, recipe_data: RecipeData):
         pass
 
     def conditions_for_execution_ready(
-        self, with_pipeliner: bool
+        self, recipe_data: RecipeData
     ) -> dict[str, tuple[Any, str]]:
         return {}
 
     def conditions_for_execution_done(
-        self, acquisition_type: AcquisitionType, with_pipeliner: bool
+        self, recipe_data: RecipeData
     ) -> dict[str, tuple[Any, str]]:
         return {}
 
-    async def teardown_one_step_execution(self, with_pipeliner: bool):
+    async def teardown_one_step_execution(self, recipe_data: RecipeData):
         pass
 
-    async def wait_for_execution_ready(self, with_pipeliner: bool, timeout_s: float):
+    async def wait_for_execution_ready(self, recipe_data: RecipeData, timeout_s: float):
         if not self.is_follower():
             # Can't batch everything together, because PQSC/QHUB needs to start execution after HDs
             # otherwise it can finish before AWGs are started, and the trigger is lost.
@@ -1049,10 +1045,10 @@ class DeviceBase(DeviceZI):
             api=self._api, dev_repr=self.dev_repr, timeout_s=timeout_s
         )
         rw.add_with_msg(
-            nodes=self.conditions_for_execution_ready(with_pipeliner=with_pipeliner),
+            nodes=self.conditions_for_execution_ready(recipe_data=recipe_data),
         )
         await rw.prepare()
-        await self.start_execution(with_pipeliner=with_pipeliner)
+        await self.start_execution(recipe_data=recipe_data)
         failed_nodes = await rw.wait()
         if len(failed_nodes) > 0:
             _logger.warning(
@@ -1064,19 +1060,13 @@ class DeviceBase(DeviceZI):
             )
 
     async def make_waiter_for_execution_done(
-        self,
-        acquisition_type: AcquisitionType,
-        with_pipeliner: bool,
-        timeout_s: float,
+        self, recipe_data: RecipeData, timeout_s: float
     ):
         response_waiter = ResponseWaiterAsync(
             api=self._api, dev_repr=self.dev_repr, timeout_s=timeout_s
         )
         response_waiter.add_with_msg(
-            nodes=self.conditions_for_execution_done(
-                acquisition_type=acquisition_type,
-                with_pipeliner=with_pipeliner,
-            ),
+            nodes=self.conditions_for_execution_done(recipe_data=recipe_data),
         )
         await response_waiter.prepare()
         return response_waiter

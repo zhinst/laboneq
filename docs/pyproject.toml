@@ -7,6 +7,7 @@ dependencies = [
   "mkdocs-drawio>=1.8.0",
   "mkdocs-include-markdown-plugin>=7.1.2",
   "mkdocs-zhinst>=0.0.26",
+  "mkdocs-htmlproofer-plugin>=1.3.0",
 ]
 
 [tool.uv.sources]

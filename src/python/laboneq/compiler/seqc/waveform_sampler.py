@@ -283,6 +283,7 @@ class WaveformSampler:
             pulse_id=pulse_def.uid,
             mixer_type=mixer_type,
             signals=tuple(signals),
+            is_rf_signal=False,
         )
         return (iw_samples["samples_i"], iw_samples["samples_q"])
 
@@ -370,6 +371,7 @@ class WaveformSampler:
                 pulse_id=pulse_def.uid,
                 mixer_type=mixer_type,
                 signals=signals,
+                is_rf_signal=rf_signal,
             )
             if sampled_pulse.samples_q is not None and len(
                 sampled_pulse.samples_i
@@ -520,6 +522,7 @@ class WaveformSampler:
             pulse_id=None,
             mixer_type=mixer_type,
             signals=signals,
+            is_rf_signal=rf_signal,
         )
         return sampled_signature
 

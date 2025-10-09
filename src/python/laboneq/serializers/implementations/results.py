@@ -156,4 +156,6 @@ class ResultsSerializer(VersionedClassSerializer[Results]):
         serialized_data: JsonSerializableType,
         options: DeserializationOptions | None = None,
     ) -> Results:
+        # Version 1 stored the compiled experiment, but the Results object no longer has this attribute.
+        del serialized_data["__data__"]["results"]["compiled_experiment"]
         return LabOneQClassicSerializer.from_dict_v1(serialized_data, options)

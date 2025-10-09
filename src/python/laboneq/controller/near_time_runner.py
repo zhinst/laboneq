@@ -123,7 +123,6 @@ class NearTimeRunner(AsyncExecutorBase, Generic[_SessionClass]):
     ):
         self.last_nt_step_result_completed = await self.controller._execute_one_step(
             execution_context=self.execution_context,
-            recipe_data=self.execution_context.recipe_data,
             sweep_params_tracker=self.sweep_params_tracker,
             user_set_nodes=self.user_set_nodes,
             nt_step=self.nt_step(),

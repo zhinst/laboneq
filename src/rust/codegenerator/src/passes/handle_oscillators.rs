@@ -22,7 +22,7 @@ struct SignalPhaseTracker {
 
 struct PhaseTracker {
     trackers: HashMap<String, SignalPhaseTracker>,
-    global_reset_time: Samples,
+    global_reset_time: HashMap<String, Samples>,
 }
 
 impl PhaseTracker {
@@ -39,7 +39,7 @@ impl PhaseTracker {
         }
         PhaseTracker {
             trackers,
-            global_reset_time: 0,
+            global_reset_time: HashMap::new(),
         }
     }
 
@@ -54,16 +54,21 @@ impl PhaseTracker {
         tracker.cumulative += value;
     }
 
-    fn global_reset(&mut self, ts: Samples) {
+    fn global_reset(&mut self, signals: &[Arc<cjob::Signal>], ts: Samples) {
         for tracker in self.trackers.values_mut() {
             tracker.cumulative = 0.0;
         }
-        self.global_reset_time = ts;
+        for signal in signals.iter() {
+            self.global_reset_time.insert(signal.uid.clone(), ts); // Updated to use cloned String
+        }
     }
 
     pub fn phase_now(&self, signal: &cjob::Signal) -> (Samples, f64) {
         let tracker = self.trackers.get(&signal.uid).expect("Unknown signal");
-        let time_ref = max(tracker.reference_time, self.global_reset_time);
+        let time_ref = max(
+            tracker.reference_time,
+            *self.global_reset_time.get(&signal.uid).unwrap_or(&0),
+        );
         let phase = tracker.cumulative;
         (time_ref, phase)
     }
@@ -219,7 +224,7 @@ fn collect_osc_parameters(
         NodeKind::PhaseReset(ob) => {
             if ob.reset_sw_oscillators {
                 if let Some(tracker) = phase_tracker {
-                    tracker.global_reset(node_offset);
+                    tracker.global_reset(&ob.signals, node_offset);
                 }
             }
             Ok(())

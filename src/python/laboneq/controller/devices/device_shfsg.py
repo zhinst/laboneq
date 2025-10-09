@@ -34,7 +34,6 @@ from laboneq.data.recipe import (
     IO,
     Initialization,
     NtStepKey,
-    TriggeringMode,
 )
 
 
@@ -65,8 +64,8 @@ class DeviceSHFSG(DeviceSHFBase):
     def all_channels(self) -> Iterator[ChannelBase]:
         return iter(self._sgchannels)
 
-    def allocated_channels(self) -> Iterator[ChannelBase]:
-        for ch in self._allocated_awgs:
+    def allocated_channels(self, recipe_data: RecipeData) -> Iterator[ChannelBase]:
+        for ch in recipe_data.allocated_awgs(self.uid):
             yield self._sgchannels[ch]
 
     def full_channels(self) -> Iterator[ChannelBase]:
@@ -236,10 +235,13 @@ class DeviceSHFSG(DeviceSHFBase):
     def _make_osc_path(self, channel: int, index: int) -> str:
         return self._sgchannels[channel].nodes.osc_freq[index]
 
-    def _busy_nodes(self) -> list[str]:
+    def _busy_nodes(self, recipe_data: RecipeData) -> list[str]:
         if not self._setup_caps.supports_shf_busy:
             return []
-        return [self._sgchannels[ch].nodes.busy for ch in self._allocated_awgs]
+        return [
+            self._sgchannels[ch].nodes.busy
+            for ch in recipe_data.allocated_awgs(self.uid)
+        ]
 
     async def disable_outputs(self, outputs: set[int], invert: bool):
         await for_each(
@@ -270,22 +272,22 @@ class DeviceSHFSG(DeviceSHFBase):
             nc.add("system/synchronization/source", 1)  # external
         await self.set_async(nc)
 
-    async def start_execution(self, with_pipeliner: bool):
+    async def start_execution(self, recipe_data: RecipeData):
         await for_each(
-            self.allocated_channels(),
+            self.allocated_channels(recipe_data=recipe_data),
             ChannelBase.start_execution,
-            with_pipeliner=with_pipeliner,
+            with_pipeliner=recipe_data.rt_execution_info.with_pipeliner,
         )
 
     def conditions_for_execution_ready(
-        self, with_pipeliner: bool
+        self, recipe_data: RecipeData
     ) -> dict[str, tuple[Any, str]]:
         if not self._wait_for_awgs:
             return {}
 
         conditions: dict[str, tuple[Any, str]] = {}
-        for awg_index in self._allocated_awgs:
-            if with_pipeliner:
+        for awg_index in recipe_data.allocated_awgs(self.uid):
+            if recipe_data.rt_execution_info.with_pipeliner:
                 conditions.update(
                     self._sgchannels[
                         awg_index
@@ -298,18 +300,18 @@ class DeviceSHFSG(DeviceSHFBase):
                 )
         return conditions
 
-    async def emit_start_trigger(self, with_pipeliner: bool):
+    async def emit_start_trigger(self, recipe_data: RecipeData):
         if self._emit_trigger:
             nc = NodeCollector(base=f"/{self.serial}/")
             nc.add("system/internaltrigger/enable", 1, cache=False)
             await self.set_async(nc)
 
     def conditions_for_execution_done(
-        self, acquisition_type: AcquisitionType, with_pipeliner: bool
+        self, recipe_data: RecipeData
     ) -> dict[str, tuple[Any, str]]:
         conditions: dict[str, tuple[Any, str]] = {}
-        for awg_index in self._allocated_awgs:
-            if with_pipeliner:
+        for awg_index in recipe_data.allocated_awgs(self.uid):
+            if recipe_data.rt_execution_info.with_pipeliner:
                 conditions.update(
                     self._sgchannels[
                         awg_index
@@ -322,15 +324,15 @@ class DeviceSHFSG(DeviceSHFBase):
                 )
         return conditions
 
-    async def teardown_one_step_execution(self, with_pipeliner: bool):
+    async def teardown_one_step_execution(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")
         if not self.is_standalone() and not self.is_secondary:
             # Deregister this instrument from synchronization via ZSync.
             # HULK-1707: this must happen before disabling the synchronization of the last AWG
             nc.add("system/synchronization/source", 0)
 
-        if with_pipeliner:
-            for awg_index in self._allocated_awgs:
+        if recipe_data.rt_execution_info.with_pipeliner:
+            for awg_index in recipe_data.allocated_awgs(self.uid):
                 nc.extend(self._sgchannels[awg_index].pipeliner.reset_nodes())
 
         # HACK: HBAR-1427 and HBAR-2165 show that runtime checks generate
@@ -477,9 +479,9 @@ class DeviceSHFSG(DeviceSHFBase):
         )
 
     async def configure_trigger(self, recipe_data: RecipeData):
-        _logger.debug("Configuring triggers...")
-        initialization = recipe_data.get_initialization(self.uid)
-        if initialization.device_type is None:  # dummy initialization
+        device_recipe_data = recipe_data.device_settings[self.uid]
+
+        if not device_recipe_data.is_present:
             # Happens for SHFQC/SG when only QA part is configured
             return
 
@@ -488,54 +490,37 @@ class DeviceSHFSG(DeviceSHFBase):
 
         nc = NodeCollector(base=f"/{self.serial}/")
 
-        for awg_key, awg_config in recipe_data.awg_configs.items():
-            if awg_key.device_uid != self.uid:
-                continue
-
-            if awg_config.source_feedback_register is None:
-                # if it does not have feedback
-                continue
-
+        if device_recipe_data.has_feedback:
             # HACK: HBAR-1427 and HBAR-2165 show that runtime checks generate
             # wrongly detected gaps when enabled during experiments with feedback.
             # Here we ensure that the gap detector is disabled if we are
             # configuring feedback.
             nc.add("raw/system/awg/runtimechecks/enable", 0)
 
+        for awg_index, awg_config in device_recipe_data.awg_configs.items():
+            if awg_config.source_feedback_register is None:
+                # if it does not have feedback
+                continue
+
             global_feedback = not (
                 awg_config.source_feedback_register == "local" and self.is_secondary
             )
 
             if global_feedback:
-                nc.add(
-                    f"sgchannels/{awg_key.awg_index}/awg/diozsyncswitch", 1
-                )  # ZSync Trigger
+                nc.add(f"sgchannels/{awg_index}/awg/diozsyncswitch", 1)  # ZSync Trigger
 
-        triggering_mode = initialization.config.triggering_mode
-        if triggering_mode == TriggeringMode.ZSYNC_FOLLOWER:
-            pass
-        elif triggering_mode in (
-            TriggeringMode.DESKTOP_LEADER,
-            TriggeringMode.INTERNAL_FOLLOWER,
-        ):
-            # standalone SHFSG or SHFQC
+        if self.is_standalone():  # standalone SHFSG or SHFQC
             self._wait_for_awgs = False
             if not self.is_secondary:
                 # otherwise, the QA will initialize the nodes
                 self._emit_trigger = True
                 nc.add("system/internaltrigger/enable", 0)
                 nc.add("system/internaltrigger/repetitions", 1)
-            for awg_index in (
-                self._allocated_awgs if len(self._allocated_awgs) > 0 else range(1)
-            ):
+            for awg_index in device_recipe_data.allocated_awgs(default_awg=0):
                 nc.add(f"sgchannels/{awg_index}/awg/auxtriggers/0/slope", 1)  # Rise
                 nc.add(
                     f"sgchannels/{awg_index}/awg/auxtriggers/0/channel", 8
                 )  # Internal trigger
-        else:
-            raise LabOneQControllerException(
-                f"Unsupported triggering mode: {triggering_mode} for device type SHFSG."
-            )
 
         await self.set_async(nc)
 

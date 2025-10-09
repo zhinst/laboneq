@@ -23,9 +23,10 @@ from laboneq.controller.attribute_value_tracker import (
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
+from laboneq.core.types.enums.awg_signal_type import AWGSignalType
 from laboneq.core.types.enums.wave_type import WaveType
 from laboneq.data.calibration import PortMode as RecipePortMode
-from laboneq.data.recipe import IO, Initialization, Recipe, SignalType
+from laboneq.data.recipe import IO, Initialization, Recipe
 from laboneq.data.scheduled_experiment import (
     ArtifactsCodegen,
     CodegenWaveform,
@@ -81,9 +82,15 @@ class AwgType(Enum):
     SG = auto()
 
 
+class AwgSignalType(Enum):
+    IQ = auto()
+    SINGLE = auto()
+
+
 @dataclass
 class AwgConfig:
     awg_type: AwgType
+    signal_type: AwgSignalType
     signals: set[str]
     # QA
     raw_acquire_length: int | None = None
@@ -99,7 +106,6 @@ class AwgConfig:
     )
     result_length: int | None = None
     acquire_signals: set[str] = field(default_factory=set)
-    target_feedback_register: int | None = None
     # SG
     command_table_match_offset: int | None = None
     source_feedback_register: int | Literal["local"] | None = None
@@ -132,6 +138,53 @@ class AwgConfigs:
             for key, config in self._configs.items()
             if signal_id in config.signals
         )
+
+
+class HWModulation(Enum):
+    NONE = auto()
+    OFF = auto()
+    SINE = auto()
+    IQ = auto()
+
+
+class TrigOutSource(Enum):
+    NONE = auto()
+    AWG_TRIGGER = auto()
+    MARKER_1 = auto()
+
+
+@dataclass
+class HDAWGOutputRecipeData:
+    enable: bool | None = None
+    range: float | None = None
+    hw_modulation: HWModulation = HWModulation.NONE
+    # To keep behavior identical to before, empty dict indicates no precompensation provided,
+    # while None means precompensation explicitly disabled.
+    precompensation: dict[str, dict] | None = field(default_factory=dict)
+    trig_out_source: TrigOutSource = TrigOutSource.NONE
+
+
+@dataclass
+class HDAWGRecipeData:
+    outputs: tuple[HDAWGOutputRecipeData, HDAWGOutputRecipeData] = field(
+        default_factory=lambda: (HDAWGOutputRecipeData(), HDAWGOutputRecipeData())
+    )
+    iq_settings: tuple[int, int] | None = None
+
+
+@dataclass
+class UHFQAOutputRecipeData:
+    enable: bool = False
+    offset: float | None = None
+    hw_modulation: HWModulation = HWModulation.NONE
+    range: float | None = None
+
+
+@dataclass
+class UHFQARecipeData:
+    outputs: tuple[UHFQAOutputRecipeData, UHFQAOutputRecipeData] = field(
+        default_factory=lambda: (UHFQAOutputRecipeData(), UHFQAOutputRecipeData())
+    )
 
 
 @dataclass
@@ -170,6 +223,11 @@ class SGChannelRecipeData:
 
 
 @dataclass
+class PPChannelRecipeData:
+    settings: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class AllocatedOscillator:
     channels: set[int]
     index: int
@@ -180,10 +238,23 @@ class AllocatedOscillator:
 
 @dataclass
 class DeviceRecipeData:
+    is_present: bool = True
+    start_trigger_repetitions: int = 1
     iq_settings: dict[int, tuple[int, int]] = field(default_factory=dict)
     allocated_oscs: list[AllocatedOscillator] = field(default_factory=list)
+    uhfqacore: UHFQARecipeData = field(default_factory=UHFQARecipeData)
+    hdawgcores: dict[int, HDAWGRecipeData] = field(default_factory=dict)
     qachannels: dict[int, QAChannelRecipeData] = field(default_factory=dict)
     sgchannels: dict[int, SGChannelRecipeData] = field(default_factory=dict)
+    ppchannels: dict[int, PPChannelRecipeData] = field(default_factory=dict)
+    awg_configs: dict[int, AwgConfig] = field(default_factory=dict)
+    has_feedback: bool = False
+
+    def allocated_awgs(self, default_awg: int | None = None) -> set[int]:
+        awgs = set(self.awg_configs.keys())
+        if len(awgs) == 0 and default_awg is not None:
+            awgs.add(default_awg)
+        return awgs
 
 
 @dataclass
@@ -298,6 +369,18 @@ class RecipeData:
                 return AwgKey(rt_exec_step.device_id, rt_exec_step.awg_index)
         return None
 
+    def allocated_awgs(
+        self, device_uid: str, default_awg: int | None = None
+    ) -> set[int]:
+        awgs = {
+            awg_key.awg_index
+            for awg_key in self.awg_configs.keys()
+            if awg_key.device_uid == device_uid
+        }
+        if len(awgs) == 0 and default_awg is not None:
+            awgs.add(default_awg)
+        return awgs
+
 
 def _validate_recipe(recipe: Recipe | None) -> Recipe:
     # Recipe is present
@@ -352,7 +435,7 @@ def _pre_process_iq_settings_hdawg(
 
         # Do the outputs form an I/Q pair?
         awg = next((a for a in awgs if a.awg == awg_idx), None)
-        if awg is None or awg.signal_type != SignalType.IQ:
+        if awg is None or awg.signal_type != AWGSignalType.IQ:
             continue
 
         # Determine I and Q output elements for the IQ pair with index awg_idxs.
@@ -404,6 +487,95 @@ def _pre_process_oscillator_allocations(
                 )
             same_id_osc.channels.add(osc_param.channel)
     return allocated_oscs
+
+
+def _pre_process_uhfqa(
+    initialization: Initialization | None,
+) -> UHFQARecipeData:
+    uhfqa_core = UHFQARecipeData()
+    if initialization is None or initialization.device_type != "UHFQA":
+        return uhfqa_core
+
+    outputs = initialization.outputs or []
+    for output in outputs:
+        qa_output = uhfqa_core.outputs[output.channel]
+        qa_output.enable = output.enable is True
+        if isinstance(output.offset, float):
+            qa_output.offset = output.offset
+        else:
+            _logger.warning(
+                f"Parameter 'offset' specified for the device {initialization.device_uid}, channel {output.channel} must be of type 'float'."
+            )
+        qa_output.hw_modulation = (
+            HWModulation.SINE if output.modulation is True else HWModulation.OFF
+        )
+        qa_output.range = output.range
+
+    return uhfqa_core
+
+
+def _pre_process_hd_awgs(
+    initialization: Initialization | None,
+) -> dict[int, HDAWGRecipeData]:
+    if initialization is None or initialization.device_type != "HDAWG":
+        return {}
+
+    awgs: dict[int, HDAWGRecipeData] = {}
+
+    def _get_awg_data(awg_index: int) -> HDAWGRecipeData:
+        awg_data = awgs.get(awg_index)
+        if awg_data is None:
+            awg_data = HDAWGRecipeData()
+            awgs[awg_index] = awg_data
+        return awg_data
+
+    iq_settings = _pre_process_iq_settings_hdawg(initialization)
+
+    outputs = initialization.outputs or []
+    for output in outputs:
+        awg_index = output.channel // 2
+        rel_output = output.channel % 2
+
+        awg_data = _get_awg_data(awg_index)
+        output_data = awg_data.outputs[rel_output]
+        output_data.enable = output.enable
+
+        if awg_index in iq_settings:
+            awg_data.iq_settings = iq_settings[awg_index]
+            hw_modulation = HWModulation.IQ
+        else:
+            hw_modulation = HWModulation.SINE
+        output_data.hw_modulation = (
+            hw_modulation if output.modulation is True else HWModulation.OFF
+        )
+
+        if output.range is not None:
+            if output.range_unit not in (None, "volt"):
+                raise LabOneQControllerException(
+                    f"The output range of device {initialization.device_uid} is specified in "
+                    f"units of {output.range_unit}. Units must be 'volt'."
+                )
+            if output.range not in (0.2, 0.4, 0.6, 0.8, 1.0, 2.0, 3.0, 4.0, 5.0):
+                _logger.warning(
+                    "The specified output range %s for device %s is not in the list of "
+                    "supported values. It will be rounded to the next higher allowed value.",
+                    output.range,
+                    initialization.device_uid,
+                )
+            output_data.range = output.range
+
+        output_data.precompensation = output.precompensation
+
+        if output.marker_mode == "TRIGGER":
+            output_data.trig_out_source = TrigOutSource.AWG_TRIGGER
+        elif output.marker_mode == "MARKER":
+            output_data.trig_out_source = TrigOutSource.MARKER_1
+        elif output.marker_mode is not None:
+            raise ValueError(
+                f"Maker mode must be either 'MARKER' or 'TRIGGER', but got {output.marker_mode} for output {output.channel} on HDAWG {initialization.device_uid}"
+            )
+
+    return awgs
 
 
 def _pre_process_qa_channels(
@@ -488,6 +660,21 @@ def _pre_process_sg_channels(
             # Also enable the router for the source channel, even if no other sources are routing to it,
             # to ensure latency matches between source and destination channels.
             _get_channel_data(route.from_channel).ensure_router_config()
+
+    return channels
+
+
+def _pre_process_pp_channels(
+    initialization: Initialization | None,
+) -> dict[int, PPChannelRecipeData]:
+    if initialization is None or initialization.device_type != "SHFPPC":
+        return {}
+
+    channels = {
+        # TODO(2K): convert ppchannel to proper structure
+        ppchannel["channel"]: PPChannelRecipeData(settings=ppchannel)
+        for ppchannel in initialization.ppchannels or []
+    }
 
     return channels
 
@@ -716,8 +903,12 @@ def _calculate_awg_configs(
         for awg in initialization.awgs or []:
             awg_config = AwgConfig(
                 awg_type=awg_type,
+                signal_type=(
+                    AwgSignalType.IQ
+                    if awg.signal_type == AWGSignalType.IQ
+                    else AwgSignalType.SINGLE
+                ),
                 signals=set(awg.signals.keys()),
-                target_feedback_register=awg.target_feedback_register,
                 source_feedback_register=awg.source_feedback_register,
                 register_selector_shift=awg.codeword_bitshift,
                 register_selector_bitmask=awg.codeword_bitmask,
@@ -876,24 +1067,6 @@ def pre_process_compiled(
     # Mapping of the unique oscillator ids to integer indices for use with the AttributeValueTracker
     oscillator_ids = list(set(o.id for o in recipe.oscillator_params))
 
-    device_settings: dict[DeviceUID, DeviceRecipeData] = {
-        device_uid: DeviceRecipeData(
-            iq_settings=_pre_process_iq_settings_hdawg(
-                get_initialization_by_device_uid(recipe, device_uid)
-            ),
-            allocated_oscs=_pre_process_oscillator_allocations(
-                recipe, oscillator_ids, device_uid
-            ),
-            qachannels=_pre_process_qa_channels(
-                get_initialization_by_device_uid(recipe, device_uid)
-            ),
-            sgchannels=_pre_process_sg_channels(
-                get_initialization_by_device_uid(recipe, device_uid)
-            ),
-        )
-        for device_uid, _ in devices.all
-    }
-
     execution = scheduled_experiment.execution
     assert execution is not None
 
@@ -906,6 +1079,33 @@ def pre_process_compiled(
     awg_configs = _calculate_awg_configs(
         rt_execution_info, scheduled_experiment, recipe, devices
     )
+
+    device_settings: dict[DeviceUID, DeviceRecipeData] = {}
+    for device_uid, _ in devices.all:
+        init = get_initialization_by_device_uid(recipe, device_uid)
+        device_settings[device_uid] = DeviceRecipeData(
+            is_present=init is not None,
+            start_trigger_repetitions=1 if init is None else init.config.repetitions,
+            iq_settings=_pre_process_iq_settings_hdawg(init),
+            allocated_oscs=_pre_process_oscillator_allocations(
+                recipe, oscillator_ids, device_uid
+            ),
+            uhfqacore=_pre_process_uhfqa(init),
+            hdawgcores=_pre_process_hd_awgs(init),
+            qachannels=_pre_process_qa_channels(init),
+            sgchannels=_pre_process_sg_channels(init),
+            ppchannels=_pre_process_pp_channels(init),
+            awg_configs={
+                awg_key.awg_index: awg_config
+                for awg_key, awg_config in awg_configs.items()
+                if awg_key.device_uid == device_uid
+            },
+            has_feedback=any(
+                awg_config.source_feedback_register is not None
+                for awg_key, awg_config in awg_configs.items()
+                if awg_key.device_uid == device_uid
+            ),
+        )
 
     result_shapes = lp.get_result_shapes(
         devices, awg_configs, scheduled_experiment, rt_execution_info

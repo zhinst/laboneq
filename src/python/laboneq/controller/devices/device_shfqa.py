@@ -39,7 +39,6 @@ from laboneq.data.recipe import (
     Initialization,
     IntegratorAllocation,
     NtStepKey,
-    TriggeringMode,
 )
 from laboneq.data.scheduled_experiment import ArtifactsCodegen, ScheduledExperiment
 
@@ -92,8 +91,8 @@ class DeviceSHFQA(DeviceSHFBase):
     def all_channels(self) -> Iterator[ChannelBase]:
         return iter(self._qachannels)
 
-    def allocated_channels(self) -> Iterator[ChannelBase]:
-        for ch in self._allocated_awgs:
+    def allocated_channels(self, recipe_data: RecipeData) -> Iterator[ChannelBase]:
+        for ch in recipe_data.allocated_awgs(self.uid):
             yield self._qachannels[ch]
 
     def pipeliner_prepare_for_upload(self, index: int) -> NodeCollector:
@@ -254,10 +253,13 @@ class DeviceSHFQA(DeviceSHFBase):
     def _result_node_scope(self, ch: int) -> str:
         return f"/{self.serial}/scopes/0/channels/{ch}/wave"
 
-    def _busy_nodes(self) -> list[str]:
+    def _busy_nodes(self, recipe_data: RecipeData) -> list[str]:
         if not self._setup_caps.supports_shf_busy:
             return []
-        return [self._qachannels[ch].nodes.busy for ch in self._allocated_awgs]
+        return [
+            self._qachannels[ch].nodes.busy
+            for ch in recipe_data.allocated_awgs(self.uid)
+        ]
 
     def configure_acquisition(
         self,
@@ -269,11 +271,11 @@ class DeviceSHFQA(DeviceSHFBase):
             recipe_data=recipe_data, pipeliner_job=pipeliner_job
         )
 
-    async def start_execution(self, with_pipeliner: bool):
+    async def start_execution(self, recipe_data: RecipeData):
         await for_each(
-            self.allocated_channels(),
+            self.allocated_channels(recipe_data=recipe_data),
             ChannelBase.start_execution,
-            with_pipeliner=with_pipeliner,
+            with_pipeliner=recipe_data.rt_execution_info.with_pipeliner,
         )
 
     async def setup_one_step_execution(
@@ -289,7 +291,7 @@ class DeviceSHFQA(DeviceSHFBase):
             nc.add("system/synchronization/source", 1)  # external
         await self.set_async(nc)
 
-    async def emit_start_trigger(self, with_pipeliner: bool):
+    async def emit_start_trigger(self, recipe_data: RecipeData):
         if self._emit_trigger:
             nc = NodeCollector(base=f"/{self.serial}/")
             nc.add(
@@ -304,11 +306,11 @@ class DeviceSHFQA(DeviceSHFBase):
             await self.set_async(nc)
 
     def conditions_for_execution_ready(
-        self, with_pipeliner: bool
+        self, recipe_data: RecipeData
     ) -> dict[str, tuple[Any, str]]:
         conditions: dict[str, tuple[Any, str]] = {}
-        for awg_index in self._allocated_awgs:
-            if with_pipeliner:
+        for awg_index in recipe_data.allocated_awgs(self.uid):
+            if recipe_data.rt_execution_info.with_pipeliner:
                 conditions.update(
                     self._qachannels[
                         awg_index
@@ -325,11 +327,11 @@ class DeviceSHFQA(DeviceSHFBase):
         return conditions
 
     def conditions_for_execution_done(
-        self, acquisition_type: AcquisitionType, with_pipeliner: bool
+        self, recipe_data: RecipeData
     ) -> dict[str, tuple[Any, str]]:
         conditions: dict[str, tuple[Any, str]] = {}
-        for awg_index in self._allocated_awgs:
-            if with_pipeliner:
+        for awg_index in recipe_data.allocated_awgs(self.uid):
+            if recipe_data.rt_execution_info.with_pipeliner:
                 conditions.update(
                     self._qachannels[
                         awg_index
@@ -342,7 +344,7 @@ class DeviceSHFQA(DeviceSHFBase):
                 )
         return conditions
 
-    async def teardown_one_step_execution(self, with_pipeliner: bool):
+    async def teardown_one_step_execution(self, recipe_data: RecipeData):
         if not self.is_standalone():
             # Deregister this instrument from synchronization via ZSync.
             # HULK-1707: this must happen before disabling the synchronization of the last AWG
@@ -351,9 +353,9 @@ class DeviceSHFQA(DeviceSHFBase):
             )
 
         await for_each(
-            self.allocated_channels(),
+            self.allocated_channels(recipe_data=recipe_data),
             QAChannel.teardown_one_step_execution,
-            with_pipeliner=with_pipeliner,
+            with_pipeliner=recipe_data.rt_execution_info.with_pipeliner,
         )
 
     def pre_process_attributes(
@@ -463,16 +465,11 @@ class DeviceSHFQA(DeviceSHFBase):
         )
 
     async def configure_trigger(self, recipe_data: RecipeData):
-        _logger.debug("Configuring triggers...")
+        device_recipe_data = recipe_data.device_settings[self.uid]
         self._wait_for_awgs = True
         self._emit_trigger = False
 
-        initialization = recipe_data.get_initialization(self.uid)
-        triggering_mode = initialization.config.triggering_mode
-
-        if triggering_mode == TriggeringMode.ZSYNC_FOLLOWER:
-            pass
-        elif triggering_mode == TriggeringMode.DESKTOP_LEADER:
+        if self.is_standalone():
             self._wait_for_awgs = False
             self._emit_trigger = True
             if self.options.is_qc:
@@ -480,14 +477,9 @@ class DeviceSHFQA(DeviceSHFBase):
                 nc.add("system/internaltrigger/enable", 0)
                 nc.add("system/internaltrigger/repetitions", 1)
                 await self.set_async(nc)
-        else:
-            raise LabOneQControllerException(
-                f"Unsupported triggering mode: {triggering_mode} for device type SHFQA."
-            )
 
         trig_channel = 0
-        if initialization.config.triggering_mode == TriggeringMode.DESKTOP_LEADER:
-            # standalone QA oder QC
+        if self.is_standalone():
             trig_channel = (
                 INTERNAL_TRIGGER_CHANNEL
                 if self.options.is_qc
@@ -495,29 +487,30 @@ class DeviceSHFQA(DeviceSHFBase):
             )
 
         await for_each(
-            self.allocated_channels(),
+            self.allocated_channels(recipe_data=recipe_data),
             QAChannel.configure_trigger,
             trig_channel=trig_channel,
         )
-        if len(self._allocated_awgs) == 0:
-            # TODO(2K): Not clear what this workaround is addressing, original code:
+        if len(device_recipe_data.allocated_awgs()) == 0:
+            # TODO(2K): Purpose of the no-allocated-AWGs case is unclear; kept to maintain original behavior:
             # https://gitlab.zhinst.com/qccs/qccs/-/merge_requests/1303/diffs#6ac44cb93a82be7127f076e9108cf97cf6c8f4b5_809_810
             nc = NodeCollector(base=f"/{self.serial}/qachannels/0/")
             nc.add("markers/0/source", 32)
             nc.add("markers/1/source", 36)
             await self.set_async(nc)
 
-    async def on_experiment_begin(self):
+    async def on_experiment_begin(self, recipe_data: RecipeData):
         subscribe_qa_nodes = [
-            self._qachannels[ch].subscribe_nodes() for ch in self._allocated_awgs
+            self._qachannels[ch].subscribe_nodes()
+            for ch in recipe_data.allocated_awgs(self.uid)
         ]
         subscribe_scope_nodes = NodeCollector()
-        for ch in self._allocated_awgs:
+        for ch in recipe_data.allocated_awgs(self.uid):
             subscribe_scope_nodes.add_path(self._result_node_scope(ch))
 
         nodes = NodeCollector.all([*subscribe_qa_nodes, subscribe_scope_nodes])
         await _gather(
-            super().on_experiment_begin(),
+            super().on_experiment_begin(recipe_data=recipe_data),
             *(self._subscriber.subscribe(self._api, path) for path in nodes.paths()),
         )
 

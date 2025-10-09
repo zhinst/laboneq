@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
 
 @classformatter
-@attrs.define(slots=False)
+@attrs.define
 class DeviceSetup:
     """Data object describing the device setup of a QCCS system.
 
@@ -49,7 +49,13 @@ class DeviceSetup:
         qubits (Optional[dict[str, quantum.QuantumElement]]): Experimental: Qubits of this device setup, by the name of the qubit.
             Qubits are generated from the descriptor `qubits` section.
 
+    !!! version-changed "Changed in version 2.61.0"
+
+        Changed the class to be slotted, which prevents the accidental creation of new
+        attributes.
+
     !!! version-changed "Changed in version 2.54.0"
+
         The following deprecated methods for saving and loading were removed:
             - `save`
             - `load`

@@ -23,6 +23,7 @@ class PulseIR(IntervalIR):
     section: str
     play_pulse_params: Dict[str, Any] | None = None
     pulse_pulse_params: Dict[str, Any] | None = None
+    pulse_params_id: int | None = None
     is_acquire: bool
     markers: Any = None
     integration_length: int | None = None

@@ -35,12 +35,17 @@ if TYPE_CHECKING:
 
 
 @classformatter
-@attrs.define(slots=False)
+@attrs.define
 class Section:
     """Representation of a section. A section is a logical concept that groups multiple operations into a single entity
     that can be though of a container. A section can either contain other sections or a list of operations (but not both
     at the same time). Operations within a section can be aligned in various ways (left, right). Sections can have a offset
     and/or a predefined length, and they can be specified to play after another section.
+
+    !!! version-changed "Changed in version 2.61.0"
+
+        Changed the class to be slotted, which prevents the accidental creation of new
+        attributes.
 
     Attributes:
         uid (str | None):
@@ -597,7 +602,7 @@ class Case(Section):
             of the base [Section][laboneq.dsl.experiment.section.Section].
             type. Sub-classes may not be used.
         """
-        return cls(**section.__dict__, state=state)  # type: ignore
+        return cls(**attrs.asdict(section, recurse=False), state=state)  # type: ignore
 
 
 @validating_allowed_values(

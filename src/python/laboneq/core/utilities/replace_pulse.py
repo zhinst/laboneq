@@ -116,6 +116,7 @@ def _replace_pulse_in_wave(
             pulse_id=pulse_id,
             mixer_type=pwm.mixer_type,
             signals=None,
+            is_rf_signal=pwm.signal_type != "iq",
         )
 
         if "samples_q" in samples and instance.needs_conjugate:
@@ -193,7 +194,7 @@ def calc_wave_replacements(
     for sig_string, pwm in pm.waveforms.items():
         for awg_wave_map in artifacts.wave_indices:
             target_wave = cast(
-                tuple[int, WaveType], awg_wave_map["value"].get(sig_string)
+                tuple[int, WaveType] | None, awg_wave_map["value"].get(sig_string)
             )
             if target_wave is None or len(target_wave) != 2:
                 continue

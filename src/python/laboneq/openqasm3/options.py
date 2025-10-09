@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import attrs
+
 from laboneq.dsl.enums import (
     AcquisitionType,
     AveragingMode,
@@ -89,12 +90,14 @@ class MultiProgramOptions(SingleProgramOptions):
             The execution mode for the sequence of programs. Can be any of the following:
 
             - "nt": The individual programs are dispatched by software.
-            - "pipeline": The individual programs are dispatched by the sequence pipeliner.
+            - "chunking": enable dividing the full experiment into individual chunks along the pseudo-sweep axis of the program list.
+            - "pipeline": Deprecated - use "chunking" instead.
             - "rt": All the programs are combined into a single real-time program.
 
             "rt" offers the fastest execution, but is limited by device memory.
-            In comparison, "pipeline" introduces non-deterministic delays between
-            programs of up to a few 100 microseconds. "nt" is the slowest.
+            In comparison, "chunking" introduces non-deterministic delays between
+            programs of up to a few 100 microseconds but allows more efficient use of instrument restrictions.
+            "nt" is the slowest.
         add_reset:
             If `True`, an active reset operation is added to the beginning of each program.
         add_measurement:
@@ -102,13 +105,19 @@ class MultiProgramOptions(SingleProgramOptions):
         add_measurement_handle:
             A template for the handles of measurements added when `add_measurement` is true.
             Defaults to `{qubit.uid}/result`.
-
         pipeline_chunk_count:
-            The number of pipeline chunks to divide the experiment into.
+            The number of chunks to divide the experiment into.
+        automated_chunking:
+            Whether to enable automated chunking when the compiler hits hardware resource limitations.
 
     !!! version-changed "Changed in version 2.56.0"
         The default value of `repetition_time` was changed from `1e-3` to `None`
         and `None` was added as an allowed value.
+
+    !!! version-changed "Changed in version 2.61.0"
+        Deprecated the "pipeline" option for the batch_execution_mode parameter.
+        Use "chunking" instead.
+        Added the "automated_chunking" parameter.
     """
 
     repetition_time: float | None = attrs.field(
@@ -116,7 +125,8 @@ class MultiProgramOptions(SingleProgramOptions):
         validator=attrs.validators.optional(attrs.validators.instance_of(float)),
     )
     batch_execution_mode: str = attrs.field(
-        default="pipeline", validator=attrs.validators.in_(("pipeline", "nt", "rt"))
+        default="chunking",
+        validator=attrs.validators.in_(("chunking", "pipeline", "nt", "rt")),
     )
     add_reset: bool = attrs.field(
         default=False, validator=attrs.validators.instance_of(bool)
@@ -126,6 +136,9 @@ class MultiProgramOptions(SingleProgramOptions):
     )
     add_measurement_handle: str = attrs.field(default="{qubit.uid}/result")
     pipeline_chunk_count: int | None = attrs.field(
-        default=None,
+        default=1,
         validator=attrs.validators.optional(attrs.validators.instance_of(int)),
+    )
+    automated_chunking: bool = attrs.field(
+        default=False, validator=attrs.validators.instance_of(bool)
     )

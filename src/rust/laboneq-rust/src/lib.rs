@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use pyo3::prelude::*;
+pub mod error;
+mod scheduler;
 
 #[pymodule]
 mod _rust {
@@ -23,6 +25,10 @@ mod _rust {
         modules.set_item(
             "laboneq._rust.codegenerator",
             codegenerator_py::create_py_module(m, "codegenerator")?,
+        )?;
+        modules.set_item(
+            "laboneq._rust.scheduler",
+            scheduler::create_py_module(m, "scheduler")?,
         )?;
         Ok(())
     }

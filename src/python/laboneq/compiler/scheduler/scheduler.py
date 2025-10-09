@@ -85,6 +85,7 @@ from laboneq.data.compilation_job import (
     DeviceInfoType,
 )
 from laboneq.laboneq_logging import get_logger
+from laboneq._rust import scheduler as scheduler_rs
 
 if TYPE_CHECKING:
     from laboneq.compiler.common.signal_obj import SignalObj
@@ -185,6 +186,26 @@ def pairwise(iterator):
     yield from zip(a, b)
 
 
+def _build_rs_experiment(
+    experiment_dao: ExperimentDAO,
+    sampling_rate_tracker: SamplingRateTracker,
+    signal_objects: dict[str, SignalObj],
+) -> scheduler_rs.Experiment:
+    """Builds a Rust representation of the experiment."""
+    signals = [
+        scheduler_rs.Signal(
+            uid=s.uid,
+            sampling_rate=sampling_rate_tracker.sampling_rate_for_device(s.device.uid),
+            awg_key=hash(signal_objects[s.uid].awg.key),
+        )
+        for s in [experiment_dao.signal_info(s) for s in experiment_dao.signals()]
+    ]
+    return scheduler_rs.build_experiment(
+        experiment=experiment_dao.source_experiment,
+        signals=signals,
+    )
+
+
 class Scheduler:
     def __init__(
         self,
@@ -205,36 +226,30 @@ class Scheduler:
         self._root_schedule: IntervalSchedule | None = None
         self._scheduled_sections = {}
         self._max_acquisition_time_per_awg = {}
-
-    def _compute_max_acquisition_time_per_awg(self):
-        def get_length(section_pulse, awg):
-            length = None
-            if section_pulse.length is not None:
-                length = section_pulse.length
-            elif section_pulse.pulse.length is not None:
-                length = section_pulse.pulse.length
-            elif section_pulse.pulse is not None:
-                length = len(section_pulse.pulse.samples) / awg.sampling_rate
-            assert length is not None
-            return length
-
-        for section_id in self._experiment_dao.sections():
-            for signal_id in self._experiment_dao.section_signals(section_id):
-                for section_pulse in self._experiment_dao.section_pulses(
-                    section_id, signal_id
-                ):
-                    if section_pulse.acquire_params is not None:
-                        awg = self._schedule_data.signal_objects[signal_id].awg
-                        length = get_length(section_pulse, awg)
-                        self._max_acquisition_time_per_awg[awg.key] = max(
-                            self._max_acquisition_time_per_awg.get(awg.key, length),
-                            length,
-                        )
+        if not experiment_dao.source_experiment:
+            raise NotImplementedError(
+                "Scheduling without DSL experiment not supported."
+            )
+        # Cached Rust experiment between near-time steps
+        self._experiment_rs: scheduler_rs.Experiment | None = None
 
     def run(self, nt_parameters: ParameterStore[str, float] | None = None):
+        # Build the Rust experiment only once between near-time compilation
+        # runs as it remains unchanged.
+        if self._experiment_rs is None:
+            self._experiment_rs = _build_rs_experiment(
+                self._experiment_dao,
+                self._sampling_rate_tracker,
+                self._schedule_data.signal_objects,
+            )
         if nt_parameters is None:
             nt_parameters = ParameterStore[str, float]()
-        self._compute_max_acquisition_time_per_awg()
+        scheduled_experiment_rs = scheduler_rs.schedule_experiment(
+            experiment=self._experiment_rs
+        )
+        self._max_acquisition_time_per_awg = (
+            scheduled_experiment_rs.max_acquisition_time_per_awg
+        )
         self._schedule_data.reset()
         self._root_schedule = self._schedule_root(nt_parameters)
         for (
@@ -698,8 +713,6 @@ class Scheduler:
                 )
         else:
             # Reset the oscillators on demand at arbitrary points in the schedule
-            if signal_to_reset.type == SignalInfoType.RF:
-                return []
             reset_sw_oscillators = True
             hw_osc_reset_candidates = {signal_to_reset.uid}
             sw_signals = [signal_to_reset.uid]
@@ -1094,7 +1107,11 @@ class Scheduler:
                 length_int = round_to_grid(
                     (
                         self._max_acquisition_time_per_awg[
-                            self._schedule_data.signal_objects[signal_info.uid].awg.key
+                            hash(
+                                self._schedule_data.signal_objects[
+                                    signal_info.uid
+                                ].awg.key
+                            )
                         ]
                     )
                     / TINYSAMPLE,

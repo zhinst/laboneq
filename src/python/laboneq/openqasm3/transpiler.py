@@ -3,10 +3,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
 import logging
 from contextlib import nullcontext
 from itertools import chain
+from typing import Any, Callable
 
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.dsl import enums, parameter, quantum
@@ -14,9 +14,8 @@ from laboneq.dsl.calibration import Calibration
 from laboneq.dsl.experiment import Experiment, Section
 from laboneq.dsl.experiment.experiment_signal import ExperimentSignal
 from laboneq.dsl.quantum.quantum_element import QuantumElement
-from laboneq.openqasm3 import openqasm3_importer
+from laboneq.openqasm3 import device, openqasm3_importer
 from laboneq.openqasm3.options import MultiProgramOptions, SingleProgramOptions
-from laboneq.openqasm3 import device
 
 _logger = logging.getLogger(__name__)
 
@@ -363,6 +362,8 @@ class OpenQASMTranspiler:
 
                 **pipeline_chunk_count**:
                     The number of pipeline chunks to divide the experiment into.
+                **automated_chunking**:
+                    Whether to enable automated chunking when the compiler hits hardware resource limitations.
 
         Returns:
             A LabOne Q Experiment.
@@ -433,9 +434,10 @@ class OpenQASMTranspiler:
             ):
                 sweep_kwargs = {}
                 if batch_execution_mode != "nt":
-                    if batch_execution_mode == "pipeline":
+                    if batch_execution_mode in ("chunking", "pipeline"):
                         # pipelined sweep with specified programs per chunk
                         sweep_kwargs["chunk_count"] = pipeline_chunk_count
+                        sweep_kwargs["auto_chunking"] = options.automated_chunking
                     maybe_rt_sweep = exp.sweep(experiment_index, **sweep_kwargs)
                 else:
                     maybe_rt_sweep = nullcontext()

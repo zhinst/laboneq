@@ -31,6 +31,7 @@ if TYPE_CHECKING:
         PortMode,
     )
     from laboneq.executor.executor import Statement
+    from laboneq.data.experiment_description import Experiment
 
 
 #
@@ -373,6 +374,7 @@ class ExperimentInfo:
     global_leader_device: DeviceInfo | None  # todo: remove
     pulse_defs: list[PulseDef]
     chunking: ChunkingInfo | None
+    src: Experiment | None = field(default=None)
 
 
 @dataclass

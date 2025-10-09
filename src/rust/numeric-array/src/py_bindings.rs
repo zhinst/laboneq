@@ -10,23 +10,23 @@ use num_complex::Complex64;
 use numpy::{PyArray1, PyArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::PyList;
 
 use crate::NumericArray;
 
-fn extract_numeric_array(ob: &Bound<'_, PyAny>) -> Result<NumericArray, PyErr> {
+fn extract_numeric_array(arr: &Bound<'_, PyAny>) -> Result<NumericArray, PyErr> {
     // TODO: Possibly lazy loading in the future?
     // NOTE: Somewhere down the line the input can be `list` instead of `ndarray`,
     // so we will support it for the time begin.
+    let numpy = PyModule::import(arr.py(), "numpy")?;
+    let array_function = numpy.getattr("array")?;
 
-    // Convert PyList to `numpy.array` so that `PyArray1` will handle all the validation.
-    // Numpy should be the standard either way.
-    let py_arr = if ob.is_instance_of::<PyList>() {
-        let numpy = PyModule::import(ob.py(), "numpy")?;
-        let array_function = numpy.getattr("array")?;
-        &array_function.call1((ob,))?
+    // Convert array to `numpy.array` so that `PyArray1` will handle all the validation.
+    // This supports e.g. lists, iterators with valid items and so on.
+    let nd_array = numpy.getattr("ndarray")?;
+    let py_arr = if !arr.is_instance(&nd_array)? {
+        &array_function.call1((arr,))?
     } else {
-        ob
+        arr
     };
     if let Ok(arr) = py_arr.downcast::<PyArray1<f64>>() {
         return Ok(NumericArray::Float64(arr.try_readonly()?.to_vec()?));

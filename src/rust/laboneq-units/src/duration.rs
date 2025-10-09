@@ -207,7 +207,7 @@ impl<U> From<Duration<U, f32>> for f32 {
     }
 }
 
-pub fn seconds<T>(value: T) -> Duration<Seconds, T> {
+pub const fn seconds<T>(value: T) -> Duration<Seconds, T> {
     Duration {
         value,
         unit: Seconds,

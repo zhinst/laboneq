@@ -9,14 +9,6 @@ use std::hash::RandomState;
 use std::sync::Arc;
 use std::vec;
 
-use codegenerator::ir::PpcDevice;
-use codegenerator::ir::PrngSetup;
-use codegenerator::ir::SignalFrequency;
-use codegenerator::ir::compilation_job::AwgKey;
-use codegenerator::ir::compilation_job::Device;
-use codegenerator::ir::compilation_job::{AwgCore, Signal};
-use codegenerator::ir::experiment::{AcquisitionType, Handle, PulseParametersId, UserRegister};
-use codegenerator::tinysample::length_to_samples;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::exceptions::PyValueError;
 use pyo3::intern;
@@ -26,20 +18,29 @@ use pyo3::types::PyList;
 use pyo3::types::PyTuple;
 use pyo3::types::{PyComplex, PyString};
 
-use codegenerator::ir::SectionId;
 use num_complex::Complex;
-use sampled_event_handler::FeedbackRegister;
-use sampled_event_handler::FeedbackRegisterLayout;
-use sampled_event_handler::SingleFeedbackRegisterLayoutItem;
+use numeric_array::NumericArray;
+
+use codegenerator::FeedbackRegister;
+use codegenerator::FeedbackRegisterLayout;
+use codegenerator::SingleFeedbackRegisterLayoutItem;
+use codegenerator::ir;
+use codegenerator::ir::PpcDevice;
+use codegenerator::ir::PrngSetup;
+use codegenerator::ir::SectionId;
+use codegenerator::ir::SignalFrequency;
+use codegenerator::ir::compilation_job as cjob;
+use codegenerator::ir::compilation_job::AwgKey;
+use codegenerator::ir::compilation_job::Device;
+use codegenerator::ir::compilation_job::{AwgCore, Signal};
+use codegenerator::ir::experiment::SectionInfo;
+use codegenerator::ir::experiment::SweepCommand;
+use codegenerator::ir::experiment::{AcquisitionType, Handle, PulseParametersId, UserRegister};
+use codegenerator::node::Node;
+use codegenerator::tinysample::length_to_samples;
 
 use crate::error::Error;
-use crate::ir::experiment::SweepCommand;
 use crate::pulse_parameters::{PulseParameters, create_pulse_parameters};
-use codegenerator::ir;
-use codegenerator::ir::compilation_job as cjob;
-use codegenerator::ir::experiment::SectionInfo;
-use codegenerator::node::Node;
-use numeric_array::NumericArray;
 
 struct Deduplicator<'a> {
     // Signals have an unique UID

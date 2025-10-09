@@ -5,32 +5,28 @@
 //!
 //! This module defines the [`AwgCodeGenerationResultPy`] class, which is used to
 //! represent the result of the code generation process for an AWG.
-use crate::waveform_sampler::IntegrationWeight;
-use crate::waveform_sampler::SampledWaveformSignaturePy;
-use codegenerator::handle_feedback_registers::FeedbackRegisterAllocation;
-use codegenerator::handle_feedback_registers::{Acquisition, FeedbackConfig};
-use codegenerator::ir::PpcDevice;
-use codegenerator::ir::compilation_job::AwgKind;
-use codegenerator::{SampledWaveform, WaveDeclaration, ir};
-use indexmap::IndexMap;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use pythonize::pythonize;
-use sampled_event_handler::FeedbackRegisterConfig;
-use sampled_event_handler::ParameterPhaseIncrement;
-use sampled_event_handler::SHFPPCSweeperConfig;
-use seqc_tracker::wave_index_tracker::SignalType;
-use seqc_tracker::wave_index_tracker::WaveIndex;
-use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+
+use codegenerator::ir::{Samples, compilation_job::AwgKind};
+use codegenerator::result::Acquisition;
+use codegenerator::result::AwgCodeGenerationResult;
+use codegenerator::result::ParameterPhaseIncrement;
+use codegenerator::result::SampledWaveform;
+use codegenerator::result::SeqCGenOutput;
+use codegenerator::result::SignalType;
+
+use crate::waveform_sampler::SampledWaveformSignaturePy;
+use crate::waveform_sampler::WaveformSamplerPy;
 
 #[pyo3::pyclass(name = "FeedbackRegisterConfig")]
 #[derive(Debug, Clone)]
 pub(crate) struct FeedbackRegisterConfigPy {
     #[pyo3(get)]
     local: bool,
-
     // Receiver (SG instruments)
     #[pyo3(get, set)]
     source_feedback_register: Option<i64>,
@@ -42,7 +38,6 @@ pub(crate) struct FeedbackRegisterConfigPy {
     codeword_bitmask: Option<u16>,
     #[pyo3(get)]
     command_table_offset: Option<u32>,
-
     // Transmitter (QA instruments)
     #[pyo3(get, set)]
     target_feedback_register: Option<i64>,
@@ -58,35 +53,6 @@ impl FeedbackRegisterConfigPy {
             && self.codeword_bitmask == other.codeword_bitmask
             && self.command_table_offset == other.command_table_offset
             && self.target_feedback_register == other.target_feedback_register
-    }
-}
-
-#[pyclass(name = "WaveDeclaration")]
-#[derive(Debug)]
-pub struct WaveDeclarationPy {
-    pub obj: WaveDeclaration,
-}
-
-#[pymethods]
-impl WaveDeclarationPy {
-    #[getter]
-    pub fn length(&self) -> i64 {
-        self.obj.length
-    }
-
-    #[getter]
-    pub fn signature_string(&self) -> &str {
-        &self.obj.signature_string
-    }
-
-    #[getter]
-    pub fn has_marker1(&self) -> bool {
-        self.obj.has_marker1
-    }
-
-    #[getter]
-    pub fn has_marker2(&self) -> bool {
-        self.obj.has_marker2
     }
 }
 
@@ -131,11 +97,11 @@ pub struct IntegrationWeightPy {
 
 #[pyclass(name = "SignalIntegrationInfo")]
 #[derive(Debug)]
-pub struct SignalIntegrationInfo {
+pub struct SignalIntegrationInfoPy {
     #[pyo3(get)]
     pub is_play: bool,
     #[pyo3(get)]
-    pub length: ir::Samples,
+    pub length: Samples,
 }
 
 /// Result structure for single AWG code generation.
@@ -154,7 +120,7 @@ pub struct AwgCodeGenerationResultPy {
     #[pyo3(get)]
     signal_delays: HashMap<String, f64>,
     #[pyo3(get)]
-    integration_lengths: HashMap<String, Py<SignalIntegrationInfo>>,
+    integration_lengths: HashMap<String, Py<SignalIntegrationInfoPy>>,
     #[pyo3(get)]
     parameter_phase_increment_map: Option<HashMap<String, Vec<i64>>>,
     #[pyo3(get)]
@@ -164,142 +130,129 @@ pub struct AwgCodeGenerationResultPy {
 impl AwgCodeGenerationResultPy {
     #[allow(clippy::too_many_arguments)]
     pub fn create(
-        seqc: String,
-        wave_indices: IndexMap<String, (WaveIndex, SignalType)>,
-        command_table: Option<Value>,
-        shf_sweeper_config: Option<SHFPPCSweeperConfig>,
-        sampled_waveforms: Vec<SampledWaveform<SampledWaveformSignaturePy>>,
-        integration_weights: Vec<IntegrationWeight>,
-        signal_delays: &HashMap<&str, f64>,
-        integration_lengths: HashMap<String, SignalIntegrationInfo>,
-        ppc_device: Option<&Arc<PpcDevice>>,
-        parameter_phase_increment_map: Option<HashMap<String, Vec<ParameterPhaseIncrement>>>,
-        feedback_register_config: FeedbackRegisterConfig,
-        target_feedback_register: Option<i64>,
-        source_feedback_register: Option<FeedbackRegisterAllocation>,
+        py: Python,
+        result: AwgCodeGenerationResult<WaveformSamplerPy>,
     ) -> PyResult<Self> {
-        Python::attach(|py| {
-            let sampled_waveforms: Vec<Py<SampledWaveformPy>> = sampled_waveforms
-                .into_iter()
-                .map(|sampled| Py::new(py, SampledWaveformPy { obj: sampled }).unwrap())
-                .collect();
-            let integration_weights: Vec<Py<IntegrationWeightPy>> = integration_weights
-                .into_iter()
-                .map(|weight| {
+        let sampled_waveforms: Vec<Py<SampledWaveformPy>> = result
+            .sampled_waveforms
+            .into_iter()
+            .map(|sampled| Py::new(py, SampledWaveformPy { obj: sampled }).unwrap())
+            .collect();
+        let integration_weights: Vec<Py<IntegrationWeightPy>> = result
+            .integration_weights
+            .into_iter()
+            .map(|weight| {
+                Py::new(
+                    py,
+                    IntegrationWeightPy {
+                        signals: weight.signals.iter().map(|s| s.to_string()).collect(),
+                        samples_i: weight.samples_i,
+                        samples_q: weight.samples_q,
+                        downsampling_factor: weight.downsampling_factor,
+                        basename: weight.basename,
+                    },
+                )
+                .unwrap()
+            })
+            .collect();
+        let integration_lengths = result
+            .integration_lengths
+            .into_iter()
+            .map(|(k, v)| {
+                (
+                    k,
                     Py::new(
                         py,
-                        IntegrationWeightPy {
-                            signals: weight.signals.iter().map(|s| s.to_string()).collect(),
-                            samples_i: weight.samples_i,
-                            samples_q: weight.samples_q,
-                            downsampling_factor: weight.downsampling_factor,
-                            basename: weight.basename,
+                        SignalIntegrationInfoPy {
+                            is_play: v.is_play,
+                            length: v.length,
                         },
                     )
-                    .unwrap()
-                })
-                .collect();
-            let integration_lengths = integration_lengths
-                .into_iter()
+                    .unwrap(),
+                )
+            })
+            .collect();
+        let shf_sweeper_config = match result.shf_sweeper_config {
+            Some(mut config) => Some(
+                pythonize(
+                    py,
+                    &config.finalize(Arc::clone(
+                        &result
+                            .ppc_device
+                            .expect("Internal error: PPC device missing"),
+                    )),
+                )?
+                .unbind(),
+            ),
+            None => None,
+        };
+        let parameter_phase_increment_map = result.parameter_phase_increment_map.map(|p| {
+            p.into_iter()
                 .map(|(k, v)| {
                     (
                         k,
-                        Py::new(
-                            py,
-                            SignalIntegrationInfo {
-                                is_play: v.is_play,
-                                length: v.length,
-                            },
-                        )
-                        .unwrap(),
+                        v.iter()
+                            .map(|p| match p {
+                                ParameterPhaseIncrement::Index(i) => *i as i64,
+                                _ => -1, // Convert other types to -1
+                            })
+                            .collect::<Vec<i64>>(),
                     )
                 })
-                .collect();
-            let shf_sweeper_config = match shf_sweeper_config {
-                Some(mut config) => Some(
-                    pythonize(
-                        py,
-                        &config.finalize(Arc::clone(
-                            ppc_device.expect("Internal error: PPC device missing"),
-                        )),
-                    )?
-                    .unbind(),
-                ),
-                None => None,
-            };
-            let parameter_phase_increment_map = parameter_phase_increment_map.map(|p| {
-                p.into_iter()
-                    .map(|(k, v)| {
-                        (
-                            k,
-                            v.iter()
-                                .map(|p| match p {
-                                    ParameterPhaseIncrement::Index(i) => *i as i64,
-                                    _ => -1, // Convert other types to -1
-                                })
-                                .collect::<Vec<i64>>(),
-                        )
-                    })
-                    .collect()
-            });
-            let command_table = match command_table {
-                Some(ct) => Some({
-                    let ct = pythonize(py, &ct)?;
-                    ct.unbind()
-                }),
-                None => None,
-            };
-            let signal_delays = signal_delays
-                .iter()
-                .map(|(k, v)| (k.to_string(), *v))
-                .collect();
-            // We take a detour via a Vec to ensure the order of wave indices is preserved
-            let wave_indices = wave_indices
-                .into_iter()
-                .map(|(k, (v, signal_type))| {
+                .collect()
+        });
+        let command_table = match result.command_table {
+            Some(ct) => Some({
+                let ct = pythonize(py, &ct)?;
+                ct.unbind()
+            }),
+            None => None,
+        };
+        let signal_delays = result.signal_delays;
+        // We take a detour via a Vec to ensure the order of wave indices is preserved
+        let wave_indices = result
+            .wave_indices
+            .into_iter()
+            .map(|(k, (v, signal_type))| {
+                (
+                    k,
                     (
-                        k,
-                        (
-                            v,
-                            match signal_type {
-                                SignalType::COMPLEX => "complex",
-                                SignalType::SIGNAL(s) => match s {
-                                    AwgKind::DOUBLE => "double",
-                                    AwgKind::SINGLE => "single",
-                                    AwgKind::IQ => "iq",
-                                },
-                            }
-                            .to_string(),
-                        ),
-                    )
-                })
-                .collect::<Vec<(String, (u32, String))>>();
-            let feedback_register_config = FeedbackRegisterConfigPy {
-                local: feedback_register_config.local,
-                source_feedback_register: source_feedback_register.map(|sfr| match sfr {
-                    FeedbackRegisterAllocation::Local => -1,
-                    FeedbackRegisterAllocation::Global { register } => register as i64,
-                }),
-                register_index_select: feedback_register_config.register_index_select,
-                codeword_bitshift: feedback_register_config.codeword_bitshift,
-                codeword_bitmask: feedback_register_config.codeword_bitmask,
-                command_table_offset: feedback_register_config.command_table_offset,
-                target_feedback_register,
-            };
-            let output = AwgCodeGenerationResultPy {
-                seqc,
-                wave_indices,
-                command_table,
-                shf_sweeper_config,
-                sampled_waveforms,
-                integration_weights,
-                signal_delays,
-                integration_lengths,
-                parameter_phase_increment_map,
-                feedback_register_config,
-            };
-            Ok(output)
-        })
+                        v,
+                        match signal_type {
+                            SignalType::COMPLEX => "complex",
+                            SignalType::SIGNAL(s) => match s {
+                                AwgKind::DOUBLE => "double",
+                                AwgKind::SINGLE => "single",
+                                AwgKind::IQ => "iq",
+                            },
+                        }
+                        .to_string(),
+                    ),
+                )
+            })
+            .collect::<Vec<(String, (u32, String))>>();
+        let feedback_register_config = FeedbackRegisterConfigPy {
+            local: result.feedback_register_config.local,
+            source_feedback_register: result.feedback_register_config.source_feedback_register,
+            register_index_select: result.feedback_register_config.register_index_select,
+            codeword_bitshift: result.feedback_register_config.codeword_bitshift,
+            codeword_bitmask: result.feedback_register_config.codeword_bitmask,
+            command_table_offset: result.feedback_register_config.command_table_offset,
+            target_feedback_register: result.feedback_register_config.target_feedback_register,
+        };
+        let output = AwgCodeGenerationResultPy {
+            seqc: result.seqc,
+            wave_indices,
+            command_table,
+            shf_sweeper_config,
+            sampled_waveforms,
+            integration_weights,
+            signal_delays,
+            integration_lengths,
+            parameter_phase_increment_map,
+            feedback_register_config,
+        };
+        Ok(output)
     }
 
     pub fn default() -> Self {
@@ -348,20 +301,19 @@ pub struct SeqCGenOutputPy {
 }
 
 impl SeqCGenOutputPy {
-    pub fn new(
-        py: Python,
-        awg_results: Vec<AwgCodeGenerationResultPy>,
-        total_execution_time: f64,
-        mut feedback_register_config: FeedbackConfig,
-    ) -> Self {
-        let awg_results: Vec<Py<AwgCodeGenerationResultPy>> = awg_results
+    pub fn new(py: Python, results: SeqCGenOutput<WaveformSamplerPy>) -> Self {
+        let awg_results: Vec<Py<AwgCodeGenerationResultPy>> = results
+            .awg_results
             .into_iter()
-            .map(|result| Py::new(py, result).expect("Failed to create AwgCodeGenerationResultPy"))
+            .map(|result| {
+                Py::new(py, AwgCodeGenerationResultPy::create(py, result).unwrap())
+                    .expect("Failed to create AwgCodeGenerationResultPy")
+            })
             .collect();
         SeqCGenOutputPy {
             awg_results,
-            total_execution_time,
-            simultaneous_acquires: feedback_register_config.into_acquisitions(),
+            total_execution_time: results.total_execution_time,
+            simultaneous_acquires: results.simultaneous_acquires,
         }
     }
 }

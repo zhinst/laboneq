@@ -3,29 +3,33 @@
 
 from __future__ import annotations
 
-from bisect import bisect_left
 import copy
 import logging
 import math
+from bisect import bisect_left
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+import numpy as np
+
+# reporter import is required to register the CompilationReportGenerator hook
+import laboneq.compiler.workflow.reporter  # noqa: F401
+from laboneq.compiler.common import compiler_settings
+from laboneq.compiler.common.awg_info import AWGInfo, AwgKey
 from laboneq.compiler.common.compiler_settings import TINYSAMPLE
+from laboneq.compiler.common.device_type import DeviceType
+from laboneq.compiler.common.resource_usage import ResourceLimitationError
+from laboneq.compiler.common.signal_obj import SignalObj
+from laboneq.compiler.common.trigger_mode import TriggerMode
+from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.feedback_router.feedback_router import (
     FeedbackRegisterLayout,
     calculate_feedback_register_layout,
 )
-from laboneq.compiler.common import compiler_settings
-from laboneq.compiler.common.awg_info import AWGInfo, AwgKey
-from laboneq.compiler.common.awg_signal_type import AWGSignalType
-from laboneq.compiler.common.resource_usage import ResourceLimitationError
-from laboneq.compiler.common.device_type import DeviceType
-from laboneq.compiler.common.signal_obj import SignalObj
-from laboneq.compiler.common.trigger_mode import TriggerMode
-from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.scheduler.scheduler import Scheduler
+from laboneq.compiler.workflow import on_device_delays
 from laboneq.compiler.workflow.compiler_hooks import (
     GenerateRecipeArgs,
     all_compiler_hooks,
@@ -34,36 +38,31 @@ from laboneq.compiler.workflow.compiler_hooks import (
 from laboneq.compiler.workflow.neartime_execution import (
     NtCompilerExecutor,
 )
-from laboneq.compiler.workflow import on_device_delays
 from laboneq.compiler.workflow.precompensation_helpers import (
     compute_precompensations_and_delays,
 )
 from laboneq.compiler.workflow.realtime_compiler import RealtimeCompiler
 from laboneq.compiler.workflow.rt_linker import CombinedRTCompilerOutputContainer
-
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.core.types.enums.acquisition_type import AcquisitionType, is_spectroscopy
+from laboneq.core.types.enums.awg_signal_type import AWGSignalType
 from laboneq.core.types.enums.mixer_type import MixerType
 from laboneq.data.compilation_job import (
     ChunkingInfo,
     CompilationJob,
     DeviceInfo,
+    DeviceInfoType,
     OscillatorInfo,
+    ParameterInfo,
     PrecompensationInfo,
     ReferenceClockSourceInfo,
     SignalInfo,
     SignalInfoType,
-    DeviceInfoType,
-    ParameterInfo,
 )
 from laboneq.data.recipe import Recipe
 from laboneq.data.scheduled_experiment import ScheduledExperiment
 from laboneq.executor.executor import Statement
-
-# reporter import is required to register the CompilationReportGenerator hook
-import laboneq.compiler.workflow.reporter  # noqa: F401
-import numpy as np
 
 if TYPE_CHECKING:
     from laboneq.compiler.workflow.on_device_delays import OnDeviceDelayCompensation

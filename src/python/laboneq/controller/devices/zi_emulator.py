@@ -1884,6 +1884,15 @@ class KernelSessionEmulator:
     async def set(self, value: MockAnnotatedValue) -> MockAnnotatedValue:
         self._progress_scheduler()
         self._log_for_testing(value)
+        # Mimic actual API behavior: only certain types are supported -
+        # allows to catch some errors in tests with emulation.
+        if not (
+            hasattr(value.value, "complex")  # ShfGeneratorWaveformVectorData
+            or isinstance(
+                value.value, (bool, int, float, complex, str, bytes, np.ndarray)
+            )
+        ):
+            raise ValueError(f"Unsupported data type: {type(value.value)}")
         self._device.set(self.dev_path(value.path), value.value)
         return value
 

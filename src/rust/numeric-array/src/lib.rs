@@ -21,4 +21,20 @@ impl NumericArray {
             NumericArray::Complex64(vec) => vec.get(index).map(|x| x.norm()),
         }
     }
+
+    pub fn len(&self) -> usize {
+        match self {
+            NumericArray::Integer64(vec) => vec.len(),
+            NumericArray::Float64(vec) => vec.len(),
+            NumericArray::Complex64(vec) => vec.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        match self {
+            NumericArray::Integer64(vec) => vec.is_empty(),
+            NumericArray::Float64(vec) => vec.is_empty(),
+            NumericArray::Complex64(vec) => vec.is_empty(),
+        }
+    }
 }

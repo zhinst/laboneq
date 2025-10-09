@@ -3,13 +3,14 @@
 
 from __future__ import annotations
 
+import re
 import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Callable
 
-import re
 import openpulse
 from openpulse import ast
+
 from laboneq.core.path import remove_logical_signal_prefix
 from laboneq.dsl.enums import (
     AcquisitionType,
@@ -18,12 +19,12 @@ from laboneq.dsl.enums import (
 from laboneq.dsl.experiment import Experiment, Section
 from laboneq.dsl.quantum.quantum_element import QuantumElement
 from laboneq.dsl.quantum.quantum_operations import QuantumOperations
+from laboneq.openqasm3 import device
 from laboneq.openqasm3 import options as exp_options
 from laboneq.openqasm3.gate_store import _GateStoreQuantumOperations
 from laboneq.openqasm3.namespace import (
     NamespaceStack,
 )
-from laboneq.openqasm3 import device
 from laboneq.openqasm3.openqasm_error import OpenQasmException
 from laboneq.openqasm3.results import ExternResult
 from laboneq.openqasm3.visitor import TranspilerVisitor
@@ -245,11 +246,11 @@ def exp_from_qasm_list(
     acquisition_type: AcquisitionType = AcquisitionType.INTEGRATION,
     reset_oscillator_phase: bool = False,
     repetition_time: float | None = None,
-    batch_execution_mode: str = "pipeline",
+    batch_execution_mode: str = "chunking",
     do_reset: bool = False,
     add_measurement: bool = True,
     add_measurement_handle: str = "{qubit.uid}",
-    pipeline_chunk_count: int | None = None,
+    pipeline_chunk_count: int | None = 1,
 ) -> Experiment:
     """
     !!! version-changed "Deprecated in version 2.43.0"
@@ -311,7 +312,8 @@ def exp_from_qasm_list(
             The execution mode for the sequence of programs. Can be any of the following:
 
             - "nt": The individual programs are dispatched by software.
-            - "pipeline": The individual programs are dispatched by the sequence pipeliner.
+            - "chunking": enable dividing the full experiment into individual chunks along the pseudo-sweep axis of the program list.
+            - "pipeline": Deprecated - use "chunking" instead.
             - "rt": All the programs are combined into a single real-time program.
 
             "rt" offers the fastest execution, but is limited by device memory.
@@ -325,7 +327,7 @@ def exp_from_qasm_list(
             A template for the handles of measurements added when `add_measurement` is true.
             Defaults to `{qubit.uid}`, i.e. just the qubit UID.
         pipeline_chunk_count:
-            The number of pipeline chunks to divide the experiment into.
+            The number of chunks to divide the experiment into.
 
             The default chunk count is equal to the number of programs, so that there is one
             program per chunk. Future versions of LabOne Q may use a more
@@ -344,6 +346,10 @@ def exp_from_qasm_list(
     !!! version-changed "Changed in version 2.56.0"
         The default value of `repetition_time` was changed from `1e-3` to `None`
         and `None` was added as an allowed value.
+
+    !!! version-changed "Changed in version 2.61.0"
+        Deprecated the "pipeline" option for the batch_execution_mode parameter.
+        Use "chunking" instead.
     """
     warnings.warn(
         "`exp_from_qasm_list()` is deprecated. Use `OpenQASMTranspiler.batch_experiment()` instead.",

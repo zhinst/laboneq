@@ -23,7 +23,6 @@ from laboneq.controller.devices.device_zi import DeviceBase, DeviceZI
 from laboneq.controller.near_time_runner import NearTimeRunner
 from laboneq.controller.recipe_processor import (
     RecipeData,
-    RtExecutionInfo,
     WaveformItem,
     get_execution_time,
     pre_process_compiled,
@@ -39,7 +38,6 @@ from laboneq.controller.versioning import (
     SetupCaps,
 )
 from laboneq.core.exceptions import AbortExecution
-from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.wave_type import WaveType
 from laboneq.core.utilities.async_helpers import AsyncWorker, EventLoopMixIn
 from laboneq.core.utilities.replace_phase_increment import calc_ct_replacement
@@ -177,11 +175,9 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
         if device_errors is not None:
             raise LabOneQControllerException(device_errors)
 
-    async def _wait_execution_to_stop(
-        self,
-        acquisition_type: AcquisitionType,
-        rt_execution_info: RtExecutionInfo,
-    ):
+    async def _wait_execution_to_stop(self, execution_context: ExecutionContext):
+        recipe_data = execution_context.recipe_data
+        rt_execution_info = recipe_data.rt_execution_info
         min_wait_time, guarded_wait_time = get_execution_time(rt_execution_info)
         if min_wait_time > 5:  # Only inform about RT executions taking longer than 5s
             _logger.info("Estimated RT execution time: %.2f s.", min_wait_time)
@@ -192,18 +188,14 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
         response_waiters = await _gather(
             *(
                 device.make_waiter_for_execution_done(
-                    acquisition_type=acquisition_type,
-                    with_pipeliner=rt_execution_info.with_pipeliner,
-                    timeout_s=guarded_wait_time,
+                    recipe_data=recipe_data, timeout_s=guarded_wait_time
                 )
                 for device in target_devs
             )
         )
         await _gather(
             *(
-                device.emit_start_trigger(
-                    with_pipeliner=rt_execution_info.with_pipeliner
-                )
+                device.emit_start_trigger(recipe_data=recipe_data)
                 for device in target_devs
             )
         )
@@ -223,12 +215,13 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
         self,
         *,
         execution_context: ExecutionContext,
-        recipe_data: RecipeData,
         sweep_params_tracker: SweepParamsTracker,
         user_set_nodes: NodeCollector,
         nt_step: NtStepKey,
         timeout_s=5.0,
     ) -> asyncio.Future[None]:
+        recipe_data = execution_context.recipe_data
+
         await self._prepare_nt_step(
             recipe_data=recipe_data,
             sweep_params_tracker=sweep_params_tracker,
@@ -247,7 +240,9 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
 
         try:
             await self._devices.for_each(
-                DeviceBase.wait_for_channels_ready, timeout_s=timeout_s
+                DeviceBase.wait_for_channels_ready,
+                recipe_data=recipe_data,
+                timeout_s=timeout_s,
             )
 
             await self._devices.for_each(
@@ -263,16 +258,13 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
 
             await self._devices.for_each(
                 DeviceBase.wait_for_execution_ready,
-                with_pipeliner=rt_execution_info.with_pipeliner,
+                recipe_data=recipe_data,
                 timeout_s=timeout_s,
             )
-            await self._wait_execution_to_stop(
-                rt_execution_info.acquisition_type,
-                rt_execution_info=rt_execution_info,
-            )
+            await self._wait_execution_to_stop(execution_context=execution_context)
             await self._devices.for_each(
                 DeviceBase.teardown_one_step_execution,
-                with_pipeliner=rt_execution_info.with_pipeliner,
+                recipe_data=recipe_data,
             )
         except (asyncio.TimeoutError, TimeoutError, LabOneQControllerException) as e:
             if not isinstance(e, LabOneQControllerException):
@@ -321,6 +313,8 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
                 disable_runtime_checks=disable_runtime_checks,
             )
         self._last_connect_check_ts = now
+        async with self._devices.capture_logs():
+            await self._devices.for_each(DeviceBase.reset_to_idle)
 
     def disable_outputs(
         self,
@@ -395,9 +389,6 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
                 submission.completion_future.set_exception(e)
 
     async def _execute_compiled_async(self, submission: ControllerSubmission):
-        # Ensure all connect configurations are still valid!
-        await self._connect_async()
-
         recipe_data = pre_process_compiled(
             submission.scheduled_experiment, self._devices
         )
@@ -411,13 +402,13 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
 
         async with self._devices.capture_logs():
             try:
-                await self._devices.for_each(DeviceBase.reset_to_idle)
                 for_each_sync(
                     self._devices.devices.values(),
                     DeviceBase.allocate_resources,
-                    recipe_data,
                 )
-                await self._devices.for_each(DeviceBase.on_experiment_begin)
+                await self._devices.for_each(
+                    DeviceBase.on_experiment_begin, recipe_data=recipe_data
+                )
                 await self._devices.for_each(DeviceBase.init_warning_nodes)
                 await self._devices.for_each(
                     DeviceBase.apply_initialization, recipe_data
@@ -544,18 +535,24 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
     async def _collect_nt_step_results(
         self, nt_step_result_context: NtStepResultContext
     ):
-        if nt_step_result_context.nt_step is None:
-            # Indicates end of the near-time execution.
-            # Resolve the overall submission future with the results.
-            nt_step_result_context.execution_context.submission.completion_future.set_result(
-                nt_step_result_context.execution_context.submission.results
-            )
-        else:
-            await self._read_one_step_results(
-                recipe_data=nt_step_result_context.execution_context.recipe_data,
-                results=nt_step_result_context.execution_context.submission.results,
-                nt_step=nt_step_result_context.nt_step,
-            )
+        try:
+            if nt_step_result_context.nt_step is None:
+                # Indicates end of the near-time execution.
+                # Resolve the overall submission future with the results.
+                nt_step_result_context.execution_context.submission.completion_future.set_result(
+                    nt_step_result_context.execution_context.submission.results
+                )
+            else:
+                await self._read_one_step_results(
+                    recipe_data=nt_step_result_context.execution_context.recipe_data,
+                    results=nt_step_result_context.execution_context.submission.results,
+                    nt_step=nt_step_result_context.nt_step,
+                )
+        except Exception as e:
+            if not nt_step_result_context.execution_context.submission.completion_future.done():
+                nt_step_result_context.execution_context.submission.completion_future.set_exception(
+                    e
+                )
         # Indicate that the results for this step are ready.
         nt_step_result_context.nt_step_result_completed.set_result(None)
 

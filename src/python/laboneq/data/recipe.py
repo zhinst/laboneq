@@ -9,14 +9,9 @@ from typing import Any, Literal
 
 from typing_extensions import TypeAlias
 
+from laboneq.core.types.enums.awg_signal_type import AWGSignalType
+
 ParameterUID: TypeAlias = str
-
-
-class SignalType(Enum):
-    IQ = "iq"
-    SINGLE = "single"
-    INTEGRATION = "integration"
-    MARKER = "marker"
 
 
 class RefClkType(Enum):
@@ -81,7 +76,7 @@ class IO:
 @dataclass
 class AWG:
     awg: int
-    signal_type: SignalType
+    signal_type: AWGSignalType
     # signal id -> channel (cast to str for compat with json) -> port
     signals: dict[str, dict[str, str]] = field(default_factory=dict)
 
@@ -93,6 +88,7 @@ class AWG:
     command_table_match_offset: int | None = None
 
     # transmitter (QA instruments)
+    # TODO(2K): This value is not used by controller, but used in tests. Consider removing it.
     target_feedback_register: int | Literal["local"] | None = None
 
 
