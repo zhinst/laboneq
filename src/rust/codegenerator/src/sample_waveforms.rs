@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::ir::compilation_job::{AwgCore, Signal, SignalKind};
+use crate::ir::compilation_job::{AwgCore, DeviceKind, Signal, SignalKind};
 use crate::ir::experiment::PulseParametersId;
 use crate::ir::{IrNode, NodeKind, PlayAcquire, PlayHold, Samples};
 use crate::signature::{Uid, WaveformSignature};
@@ -442,6 +442,39 @@ fn generate_output<T: SampledWaveformSignature>(
     (ctx.sampled_waveforms, ctx.wave_declarations)
 }
 
+fn validate_waveforms(waveforms: &[&WaveformSamplingCandidate<'_>], awg: &AwgCore) -> Result<()> {
+    if &DeviceKind::SHFQA == awg.device.kind() && waveforms.len() > 1 {
+        let mut signal_to_pulses: HashMap<&str, HashSet<&WaveformSignature>> = HashMap::new();
+        for waveform in waveforms.iter() {
+            for signal in waveform.signals.iter() {
+                signal_to_pulses
+                    .entry(signal)
+                    .or_default()
+                    .insert(waveform.waveform);
+            }
+        }
+        for (signal, waveforms) in signal_to_pulses.iter() {
+            // Ensure that there is only one unique waveform per signal
+            if waveforms.len() > 1 {
+                return Err(Error::new(format!(
+                    "Too many unique pulses on signal '{signal}'. Using more than one unique pulse on a SHFQA generator channel is not supported. \
+                    Sweeping a SHFQA generator channel is not supported in real-time. Ensure each real-time loop uses the same pulse on a given signal.",
+                )));
+            } else if waveforms.len() == 1 {
+                // Ensure that there is only one unique pulse per signal
+                let waveform = waveforms.iter().next().unwrap();
+                if waveform.pulses().iter().len() > 1 {
+                    return Err(Error::new(format!(
+                        "Too many unique pulses on signal '{signal}'. Using more than one unique pulse on a SHFQA generator channel is not supported. \
+                        Sweeping a SHFQA generator channel is not supported in real-time. Ensure each real-time loop uses the same pulse on a given signal.",
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Transformation pass to collect and finalize waveforms based on sampled waveform signatures.
 ///
 /// This function collects waveforms from the IR node, samples them using the provided [`WaveformSampler`],
@@ -457,6 +490,7 @@ pub fn collect_and_finalize_waveforms<T: SampleWaveforms>(
     awg: &AwgCore,
 ) -> Result<AwgWaveforms<T::Signature>> {
     let waveforms = collect_waveforms_for_sampling(node)?;
+    validate_waveforms(&waveforms.iter().collect::<Vec<_>>(), awg)?;
     let sampled_waveform_signatures =
         waveform_sampler.batch_sample_and_compress(awg, &waveforms)?;
     split_compressed_waveforms(node, &sampled_waveform_signatures)?;

@@ -52,7 +52,7 @@ fn collect_handles<'a>(
                     handle_info.global = !ob.local;
                     handle_info.is_feedback = true;
                 } else {
-                    return Err(Error::new(&format!(
+                    return Err(Error::new(format!(
                         "Handle '{handle}' not found for match.",
                     )));
                 }
@@ -137,7 +137,7 @@ fn allocate_feedback_registers<'a>(
                     target_feedback_registers.insert(awg.key(), FeedbackRegisterAllocation::Local);
                 } else {
                     if register >= PQSC_FEEDBACK_REGISTER_COUNT {
-                        return Err(Error::new(&format!(
+                        return Err(Error::new(format!(
                             "Cannot allocate feedback register. \
                             All {PQSC_FEEDBACK_REGISTER_COUNT} registers of the PQSC are already allocated.",
                         )));

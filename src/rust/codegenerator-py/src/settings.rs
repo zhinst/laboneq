@@ -25,14 +25,6 @@ pub(crate) fn code_generator_settings_from_dict(
     let uhfqa_min_playzero_hint = settings_py
         .get_item("UHFQA_MIN_PLAYZERO_HINT")?
         .extract::<u16>()?;
-
-    let shfqa_min_playwave_hint = settings_py
-        .get_item("SHFQA_MIN_PLAYWAVE_HINT")?
-        .extract::<u16>()?;
-    let shfqa_min_playzero_hint = settings_py
-        .get_item("SHFQA_MIN_PLAYZERO_HINT")?
-        .extract::<u16>()?;
-
     let shfsg_min_playwave_hint = settings_py
         .get_item("SHFSG_MIN_PLAYWAVE_HINT")?
         .extract::<u16>()?;
@@ -57,8 +49,6 @@ pub(crate) fn code_generator_settings_from_dict(
     let out = CodeGeneratorSettings::new(
         hdawg_min_playwave_hint,
         hdawg_min_playzero_hint,
-        shfqa_min_playwave_hint,
-        shfqa_min_playzero_hint,
         shfsg_min_playwave_hint,
         shfsg_min_playzero_hint,
         uhfqa_min_playwave_hint,

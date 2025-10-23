@@ -163,6 +163,10 @@ def sample_pulse(
         }
 
     if pulse_function is not None:
+        if pulse_function not in pulse_function_library:
+            raise LabOneQException(
+                f"Function '{pulse_function}' is not registered in the library of pulse functions."
+            )
         samples = pulse_function_library[pulse_function](
             np.linspace(-1, 1, num_samples, endpoint=False),
             length=length,

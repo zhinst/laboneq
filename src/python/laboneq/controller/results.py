@@ -76,6 +76,14 @@ def build_partial_result(
                     result.data[nt_step.indices] = raw_result[raw_result_idx]
                 break
     else:
+        raw_result_len = len(raw_result)
+        mask = np.fromiter(
+            (mapping[i % len(mapping)] == handle for i in range(raw_result_len)),
+            dtype=np.bool,
+            count=raw_result_len,
+        )
+        raw_result_for_handle = raw_result[mask]
+
         if pipeline_job_count:
             # rearrange the data as if it came from a non-chunked experiment
 
@@ -84,7 +92,7 @@ def build_partial_result(
             rt_chunked_axis_index = chunked_axis_index - len(nt_step.indices)
             rt_chunk_shape[rt_chunked_axis_index] //= pipeline_job_count
             # When there are multiple acquires with the same handle, there is an extra dimension
-            # at the end that handles this. Here we we do not care if the last dimension is such
+            # at the end that handles this. Here we do not care if the last dimension is such
             # extra dimension, or is ordinary sweep dimension. However, in the case of extra
             # dimension, there is a known problem where the value of the dimension may be incorrect.
             # This happens when the acquires are in case blocks. To mitigate for this issue, we
@@ -92,19 +100,18 @@ def build_partial_result(
             # dimensions are strict.
             rt_chunk_shape[-1] = -1
 
-            raw_result_chunks = np.reshape(raw_result, (pipeline_job_count, -1))
-            raw_result_chunks_reshaped = [
-                np.reshape(chunk, tuple(rt_chunk_shape)) for chunk in raw_result_chunks
-            ]
-            raw_result = np.ravel(
-                np.concatenate(raw_result_chunks_reshaped, axis=rt_chunked_axis_index)
+            shaped_raw_result_for_handle = np.reshape(
+                raw_result_for_handle, (pipeline_job_count, *rt_chunk_shape)
+            )
+            raw_result_for_handle = np.ravel(
+                np.concatenate(shaped_raw_result_for_handle, axis=rt_chunked_axis_index)
             )
         res_flat = np.ravel(_get_nt_step_result(result, nt_step))
-        res_flat_idx = 0
-        for raw_result_idx in range(len(raw_result)):
-            if mapping[raw_result_idx % len(mapping)] == handle:
-                res_flat[res_flat_idx] = raw_result[raw_result_idx]
-                res_flat_idx += 1
+        # Ideally we should be able to do res_flat[:] here, since the number of items should be the same.
+        # Currently we cannot, because of the known issue of mismatch between expected and actual result
+        # shapes in case of acquisition being inside match-case blocks. TODO(hs): Fix this once result
+        # shaping is overhauled.
+        res_flat[:raw_result_len] = raw_result_for_handle
 
 
 def build_raw_partial_result(

@@ -12,21 +12,24 @@ use super::{
 use crate::ir::compilation_job::{AwgKind, ChannelIndex, DeviceKind};
 use crate::{Result, ir::Samples};
 use anyhow::anyhow;
+use std::cell::RefCell;
 use std::ops::DerefMut;
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::rc::Rc;
+
+pub type SeqCGeneratorRef = Rc<RefCell<SeqCGenerator>>;
+pub type PrngTrackerRef = Rc<RefCell<PRNGTracker>>;
 
 pub struct SeqCTracker {
     deferred_function_calls: SeqCGenerator,
     deferred_phase_changes: SeqCGenerator,
-    loop_stack_generators: Vec<Vec<Arc<RwLock<SeqCGenerator>>>>,
+    loop_stack_generators: Vec<Vec<SeqCGeneratorRef>>,
     sampling_rate: f64,
     device_kind: DeviceKind,
     signal_type: AwgKind,
     emit_timing_comments: bool,
     current_time: Samples,
-    seqc_gen_prng: Option<Arc<RwLock<SeqCGenerator>>>,
-    prng_tracker: Option<Arc<RwLock<PRNGTracker>>>,
+    seqc_gen_prng: Option<SeqCGeneratorRef>,
+    prng_tracker: Option<PrngTrackerRef>,
     automute: Option<OutputMute>,
     active_trigger_outputs: u16,
 }
@@ -44,8 +47,8 @@ impl SeqCTracker {
             seqc_generator_from_device_traits(awg.device_kind.traits(), &awg.signal_kind);
 
         let loop_stack_generators = vec![vec![
-            Arc::new(RwLock::new(init_generator)),
-            Arc::new(RwLock::new(seqc_generator_from_device_traits(
+            Rc::new(RefCell::new(init_generator)),
+            Rc::new(RefCell::new(seqc_generator_from_device_traits(
                 awg.device_kind.traits(),
                 &awg.signal_kind,
             ))),
@@ -77,8 +80,8 @@ impl SeqCTracker {
         self.automute.is_some()
     }
 
-    pub fn current_loop_stack_generator(&self) -> Arc<RwLock<SeqCGenerator>> {
-        Arc::clone(
+    pub fn current_loop_stack_generator(&self) -> SeqCGeneratorRef {
+        Rc::clone(
             self.loop_stack_generators
                 .last()
                 .expect("Loop stack should not be empty")
@@ -98,8 +101,7 @@ impl SeqCTracker {
             if !self.mute_samples(play_zero_samples)? {
                 self.add_timing_comment(self.current_time + play_zero_samples);
                 self.current_loop_stack_generator()
-                    .write()
-                    .expect("Failed to lock generator")
+                    .borrow_mut()
                     .add_play_zero_statement(
                         play_zero_samples,
                         &mut Some(&mut self.deferred_function_calls),
@@ -177,8 +179,7 @@ impl SeqCTracker {
     pub fn flush_deferred_function_calls(&mut self) {
         if self.has_deferred_function_calls() {
             self.current_loop_stack_generator()
-                .write()
-                .expect("Failed to lock generator")
+                .borrow_mut()
                 .append_statements_from(&self.deferred_function_calls);
             self.deferred_function_calls.clear();
         }
@@ -193,8 +194,7 @@ impl SeqCTracker {
     pub fn flush_deferred_phase_changes(&mut self) {
         if self.has_deferred_phase_changes() {
             self.current_loop_stack_generator()
-                .write()
-                .expect("Failed to lock generator")
+                .borrow_mut()
                 .append_statements_from(&self.deferred_phase_changes);
             self.deferred_phase_changes.clear();
         }
@@ -241,8 +241,7 @@ impl SeqCTracker {
     /// Add a comment string to the current generator.
     pub fn add_comment<S: Into<String>>(&mut self, comment: S) {
         self.current_loop_stack_generator()
-            .write()
-            .expect("Failed to lock generator")
+            .borrow_mut()
             .add_comment(comment);
     }
 
@@ -259,8 +258,7 @@ impl SeqCTracker {
                 .add_function_call_statement(name, args, assign_to);
         } else {
             self.current_loop_stack_generator()
-                .write()
-                .expect("Failed to lock generator")
+                .borrow_mut()
                 .add_function_call_statement(name, args, assign_to);
         }
     }
@@ -280,16 +278,14 @@ impl SeqCTracker {
             self.current_time += num_samples;
         }
         self.current_loop_stack_generator()
-            .write()
-            .expect("Failed to lock generator")
+            .borrow_mut()
             .add_play_zero_statement(num_samples, &mut Some(&mut self.deferred_function_calls))
     }
 
     /// Add playHold statement.
     pub fn add_play_hold_statement(&mut self, num_samples: Samples) -> Result<()> {
         self.current_loop_stack_generator()
-            .write()
-            .expect("Failed to lock generator")
+            .borrow_mut()
             .add_play_hold_statement(num_samples, &mut Some(&mut self.deferred_function_calls))
     }
 
@@ -300,8 +296,7 @@ impl SeqCTracker {
         channel: Option<ChannelIndex>,
     ) {
         self.current_loop_stack_generator()
-            .write()
-            .expect("Failed to lock generator")
+            .borrow_mut()
             .add_play_wave_statement(wave_id, channel);
     }
 
@@ -312,14 +307,13 @@ impl SeqCTracker {
         latency: Option<SeqCVariant>, // default: None
         comment: Option<S>,           // default: ""
     ) -> Result<()> {
-        if let Some(SeqCVariant::Integer(lat)) = &latency {
-            if *lat < 31 {
-                return Err(anyhow!("Latency must be >= 31 if specified, was {lat}").into());
-            }
+        if let Some(SeqCVariant::Integer(lat)) = &latency
+            && *lat < 31
+        {
+            return Err(anyhow!("Latency must be >= 31 if specified, was {lat}").into());
         }
         self.current_loop_stack_generator()
-            .write()
-            .expect("Failed to lock generator")
+            .borrow_mut()
             .add_command_table_execution(ct_index, latency, comment);
         Ok(())
     }
@@ -337,8 +331,7 @@ impl SeqCTracker {
         value: SeqCVariant,
     ) {
         self.current_loop_stack_generator()
-            .write()
-            .expect("Failed to lock generator")
+            .borrow_mut()
             .add_variable_assignment(variable_name, value);
     }
 
@@ -349,8 +342,7 @@ impl SeqCTracker {
         value: SeqCVariant,
     ) {
         self.current_loop_stack_generator()
-            .write()
-            .expect("Failed to lock generator")
+            .borrow_mut()
             .add_variable_increment(variable_name, value);
     }
 
@@ -358,7 +350,7 @@ impl SeqCTracker {
         &mut self,
         generator: Option<SeqCGenerator>, // default: None
         always: bool,                     // default: false
-    ) -> Result<Arc<RwLock<SeqCGenerator>>> {
+    ) -> Result<SeqCGeneratorRef> {
         let generator = match generator {
             Some(generator) => generator,
             None => seqc_generator_from_device_traits(self.device_kind.traits(), &self.signal_type),
@@ -370,11 +362,11 @@ impl SeqCTracker {
             || top_of_stack.is_empty()
             || top_of_stack
                 .last()
-                .is_some_and(|g| g.read().expect("Failed to lock generator").num_statements() > 0)
+                .is_some_and(|g| g.borrow().num_statements() > 0)
         {
-            top_of_stack.push(Arc::new(RwLock::new(generator)));
+            top_of_stack.push(Rc::new(RefCell::new(generator)));
         }
-        top_of_stack.last().map(Arc::clone).ok_or_else(|| {
+        top_of_stack.last().map(Rc::clone).ok_or_else(|| {
             anyhow!("Loop stack should not be empty after appending generator").into()
         })
     }
@@ -398,10 +390,9 @@ impl SeqCTracker {
                 .into_iter()
                 .map(|generator| {
                     compress_generator(
-                        Arc::try_unwrap(generator)
+                        Rc::try_unwrap(generator)
                             .expect("Generator still has references")
-                            .into_inner()
-                            .expect("Failed to unwrap RwLock inner value"),
+                            .into_inner(),
                     )
                 })
                 .collect(),
@@ -409,7 +400,7 @@ impl SeqCTracker {
         })
     }
 
-    pub fn top_loop_stack_generators(&self) -> Option<&Vec<Arc<RwLock<SeqCGenerator>>>> {
+    pub fn top_loop_stack_generators(&self) -> Option<&Vec<SeqCGeneratorRef>> {
         self.loop_stack_generators.last()
     }
 
@@ -428,7 +419,7 @@ impl SeqCTracker {
 
         prng_tracker.set_seed(seed);
         prng_tracker.set_range(prng_range);
-        self.prng_tracker = Some(Arc::new(RwLock::new(prng_tracker)));
+        self.prng_tracker = Some(Rc::new(RefCell::new(prng_tracker)));
         Ok(())
     }
 
@@ -438,8 +429,7 @@ impl SeqCTracker {
             self.prng_tracker
                 .as_ref()
                 .expect("PRNG not set up")
-                .read()
-                .expect("Failed to lock PRNG tracker")
+                .borrow()
                 .is_committed(),
             "PRNG not committed"
         );
@@ -457,8 +447,7 @@ impl SeqCTracker {
             .prng_tracker
             .as_mut()
             .expect("PRNG not set up")
-            .try_write()
-            .expect("Failed to lock PRNG tracker");
+            .borrow_mut();
         if tracker.is_committed() {
             return tracker.offset();
         }
@@ -467,8 +456,7 @@ impl SeqCTracker {
             self.seqc_gen_prng
                 .as_mut()
                 .unwrap()
-                .write()
-                .expect("Failed to lock generator")
+                .borrow_mut()
                 .deref_mut(),
         );
         offset
@@ -557,12 +545,9 @@ impl SeqCTracker {
 
 pub fn top_loop_stack_generators_have_statements(seqc_tracker: &SeqCTracker) -> bool {
     let has_statements = if let Some(generators) = seqc_tracker.top_loop_stack_generators() {
-        generators.iter().any(|g| {
-            g.read()
-                .expect("SeqCGenerator is already locked")
-                .num_noncomment_statements()
-                > 0
-        })
+        generators
+            .iter()
+            .any(|g| g.borrow().num_noncomment_statements() > 0)
     } else {
         false
     };

@@ -1,23 +1,28 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::ir::PlayWave;
 use crate::ir::compilation_job::AwgCore;
 use crate::sampled_event_handler::AwgEventList;
 use crate::sampled_event_handler::awg_events::{
-    AwgEvent, ChangeHwOscPhase, EventType, Iterate, MatchEvent, PlayWaveEvent, PrngSetup, PushLoop,
-    QaEvent, TriggerOutputBit,
+    AcquireEvent, AwgEvent, ChangeHwOscPhase, EventType, Iterate, MatchEvent, PlayWaveEvent,
+    PrngSetup, PushLoop, QaEvent, StaticWaveformSignature, TriggerOutputBit,
 };
 use crate::sampled_event_handler::seqc_tracker::awg::HwOscillator;
+use crate::signature::WaveformSignature;
 use crate::triggers::generate_trigger_states;
+use crate::utils::normalize_phase;
 use crate::{Result, ir::IrNode, ir::NodeKind, ir::Samples, ir::SectionId};
 use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 pub fn generate_event_list(node: IrNode, awg: &AwgCore) -> Result<AwgEventList> {
     let mut state = GeneratorState {
         loop_step_starts_added: HashMap::new(),
         loop_step_ends_added: HashMap::new(),
         state: None,
+        waveforms: HashMap::new(),
     };
     let mut awg_events = generate_output_recursive(node, awg, &mut state)?;
     awg_events.sort_by_key(|event| event.start);
@@ -34,6 +39,44 @@ struct GeneratorState {
     pub loop_step_starts_added: HashMap<Samples, HashSet<SectionId>>,
     pub loop_step_ends_added: HashMap<Samples, HashSet<SectionId>>,
     pub state: Option<u16>,
+    pub waveforms: HashMap<u64, Rc<StaticWaveformSignature>>,
+}
+
+fn playwave_to_event(mut ob: PlayWave, awg: &AwgCore, state: &mut GeneratorState) -> PlayWaveEvent {
+    let wave = state.waveforms.entry(ob.waveform.uid()).or_insert_with(|| {
+        let sig_string = ob.waveform.signature_string();
+        Rc::new(StaticWaveformSignature::new(
+            ob.waveform.uid(),
+            ob.waveform,
+            sig_string,
+        ))
+    });
+    let hw_osc = if let Some(osc_name) = ob.oscillator.take() {
+        let index = *awg
+            .osc_allocation
+            .get(&osc_name)
+            .expect("Internal error: Missing hardware oscillator allocation");
+        let out = HwOscillator {
+            uid: osc_name,
+            index,
+        };
+        Some(out)
+    } else {
+        None
+    };
+    PlayWaveEvent {
+        waveform: Rc::clone(wave),
+        state: state.state,
+        hw_oscillator: hw_osc,
+        amplitude_register: ob.amplitude_register,
+        amplitude: ob.amplitude,
+        increment_phase: ob.increment_phase,
+        increment_phase_params: ob.increment_phase_params,
+        channels: ob
+            .signals
+            .first()
+            .map_or_else(Vec::new, |sig| sig.channels.clone()),
+    }
 }
 
 fn generate_output_recursive(
@@ -45,25 +88,13 @@ fn generate_output_recursive(
         NodeKind::PhaseReset(_) => {
             panic!("Internal error: PhaseReset should have been replaced by ResetPhase");
         }
-        NodeKind::PlayWave(mut ob) => {
-            let hw_osc = if let Some(osc_name) = ob.oscillator.take() {
-                let index = *awg
-                    .osc_allocation
-                    .get(&osc_name)
-                    .expect("Internal error: Missing hardware oscillator allocation");
-                let out = HwOscillator {
-                    uid: osc_name,
-                    index,
-                };
-                Some(out)
-            } else {
-                None
-            };
+        NodeKind::PlayWave(ob) => {
             let end = node.offset() + ob.length();
+            let e = playwave_to_event(ob, awg, state);
             let event = AwgEvent {
                 start: *node.offset(),
                 end,
-                kind: EventType::PlayWave(PlayWaveEvent::from_ir(ob, state.state, hw_osc)),
+                kind: EventType::PlayWave(e),
             };
             Ok(vec![event])
         }
@@ -91,23 +122,39 @@ fn generate_output_recursive(
         }
         NodeKind::FrameChange(ob) => {
             let mut hw_osc = None;
-            if awg.device_kind().traits().supports_oscillator_switching {
-                if let Some(osc) = &ob.signal.oscillator {
-                    let out = HwOscillator {
-                        uid: osc.uid.clone(),
-                        index: *awg.osc_allocation.get(&osc.uid).expect("Missing index"),
-                    };
-                    hw_osc = Some(out);
-                }
+            if awg.device_kind().traits().supports_oscillator_switching
+                && let Some(osc) = &ob.signal.oscillator
+            {
+                let out = HwOscillator {
+                    uid: osc.uid.clone(),
+                    index: *awg.osc_allocation.get(&osc.uid).expect("Missing index"),
+                };
+                hw_osc = Some(out);
             }
+            // The `phase_resolution_range` is irrelevant here; for the CT phase a fixed
+            // precision is used.
+            const PHASE_RESOLUTION_CT: f64 = (1 << 24) as f64 / (2.0 * std::f64::consts::PI);
+            let quantized_phase =
+                normalize_phase((ob.phase * PHASE_RESOLUTION_CT).round() / PHASE_RESOLUTION_CT);
+            let waveform = WaveformSignature::Pulses {
+                length: 0,
+                pulses: vec![],
+            };
+            let wf2 = StaticWaveformSignature::new(waveform.uid(), waveform, "".to_string());
+            let signature = PlayWaveEvent {
+                waveform: Rc::new(wf2),
+                state: None,
+                hw_oscillator: hw_osc,
+                amplitude_register: 0,
+                amplitude: None,
+                increment_phase: Some(quantized_phase),
+                increment_phase_params: vec![ob.parameter],
+                channels: vec![],
+            };
             Ok(vec![AwgEvent {
                 start: *node.offset(),
                 end: node.offset() + ob.length,
-                kind: EventType::ChangeHwOscPhase(ChangeHwOscPhase {
-                    phase: ob.phase,
-                    hw_oscillator: hw_osc,
-                    parameter: ob.parameter,
-                }),
+                kind: EventType::ChangeHwOscPhase(ChangeHwOscPhase { signature }),
             }])
         }
         NodeKind::Case(ob) => {
@@ -120,10 +167,26 @@ fn generate_output_recursive(
             Ok(out)
         }
         NodeKind::ResetPrecompensationFilters(ob) => {
+            let waveform = WaveformSignature::Pulses {
+                length: ob.length,
+                pulses: vec![],
+            };
+            let wf2 =
+                StaticWaveformSignature::new(waveform.uid(), waveform, "precomp_reset".to_string());
+            let signature = PlayWaveEvent {
+                hw_oscillator: None,
+                amplitude: None,
+                amplitude_register: 0,
+                increment_phase: None,
+                increment_phase_params: vec![],
+                waveform: Rc::new(wf2),
+                state: None,
+                channels: vec![],
+            };
             let event = AwgEvent {
                 start: *node.offset(),
                 end: *node.offset() + ob.length,
-                kind: EventType::ResetPrecompensationFilters(ob.length),
+                kind: EventType::ResetPrecompensationFilters { signature },
             };
             Ok(vec![event])
         }
@@ -144,10 +207,32 @@ fn generate_output_recursive(
             Ok(vec![start_event, end_event])
         }
         NodeKind::InitAmplitudeRegister(ob) => {
+            let waveform = WaveformSignature::Pulses {
+                length: 0,
+                pulses: vec![],
+            };
+            let wave = state.waveforms.entry(waveform.uid()).or_insert_with(|| {
+                let sig_string = waveform.signature_string();
+                Rc::new(StaticWaveformSignature::new(
+                    waveform.uid(),
+                    waveform,
+                    sig_string,
+                ))
+            });
+            let signature = PlayWaveEvent {
+                waveform: Rc::clone(wave),
+                state: None,
+                hw_oscillator: None,
+                amplitude_register: ob.register,
+                amplitude: Some(ob.value),
+                increment_phase: None,
+                increment_phase_params: vec![],
+                channels: vec![],
+            };
             let event = AwgEvent {
                 start: *node.offset(),
                 end: *node.offset(),
-                kind: EventType::InitAmplitudeRegister(ob),
+                kind: EventType::InitAmplitudeRegister { signature },
             };
             Ok(vec![event])
         }
@@ -268,10 +353,18 @@ fn generate_output_recursive(
         }
         NodeKind::QaEvent(ob) => {
             let length = ob.length();
+            let (acquires, waveforms) = ob.into_parts();
+            let e = QaEvent {
+                acquire_events: acquires.into_iter().map(AcquireEvent::from_ir).collect(),
+                play_wave_events: waveforms
+                    .into_iter()
+                    .map(|wf| playwave_to_event(wf, awg, state))
+                    .collect(),
+            };
             let event = AwgEvent {
                 start: *node.offset(),
                 end: *node.offset() + length,
-                kind: EventType::QaEvent(QaEvent::from_ir(ob)),
+                kind: EventType::QaEvent(e),
             };
             Ok(vec![event])
         }

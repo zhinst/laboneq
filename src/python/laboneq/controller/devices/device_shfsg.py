@@ -25,6 +25,7 @@ from laboneq.controller.devices.device_zi import SequencerPaths
 from laboneq.controller.devices.node_control import NodeControlBase, Setting
 from laboneq.controller.recipe_processor import (
     RecipeData,
+    RtExecutionInfo,
     WaveformItem,
     get_initialization_by_device_uid,
 )
@@ -72,15 +73,6 @@ class DeviceSHFSG(DeviceSHFBase):
         for sgchannel in self._sgchannels:
             if sgchannel.is_full:
                 yield sgchannel
-
-    def pipeliner_prepare_for_upload(self, index: int) -> NodeCollector:
-        return self._sgchannels[index].pipeliner.prepare_for_upload()
-
-    def pipeliner_commit(self, index: int) -> NodeCollector:
-        return self._sgchannels[index].pipeliner.commit()
-
-    def pipeliner_ready_conditions(self, index: int) -> dict[str, Any]:
-        return self._sgchannels[index].pipeliner.ready_conditions()
 
     @property
     def dev_repr(self) -> str:
@@ -199,7 +191,11 @@ class DeviceSHFSG(DeviceSHFBase):
                 range_list,
             )
 
-    def validate_scheduled_experiment(self, scheduled_experiment: ScheduledExperiment):
+    def validate_scheduled_experiment(
+        self,
+        scheduled_experiment: ScheduledExperiment,
+        rt_execution_info: RtExecutionInfo,
+    ):
         initialization = get_initialization_by_device_uid(
             scheduled_experiment.recipe, self.uid
         )
@@ -455,15 +451,6 @@ class DeviceSHFSG(DeviceSHFBase):
             recipe_data=recipe_data,
             attributes=attributes,
         )
-
-    async def _prepare_artifacts_impl(
-        self,
-        recipe_data: RecipeData,
-        nt_step: NtStepKey,
-        awg_index: int,
-    ):
-        # Artifacts upload for the SHFSG is done in the SGChannel class.
-        pass
 
     def prepare_upload_binary_wave(
         self,

@@ -31,22 +31,16 @@ from laboneq.controller.devices.node_control import (
     NodeControlBase,
 )
 from laboneq.controller.recipe_processor import (
-    AwgConfig,
-    AwgKey,
     RecipeData,
     RtExecutionInfo,
+    get_execution_time,
     get_initialization_by_device_uid,
-    get_wave,
-    get_weights_info,
 )
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
-from laboneq.data.recipe import (
-    IO,
-    IntegratorAllocation,
-)
-from laboneq.data.scheduled_experiment import ArtifactsCodegen, ScheduledExperiment
+from laboneq.data.recipe import IO
+from laboneq.data.scheduled_experiment import ScheduledExperiment
 
 if TYPE_CHECKING:
     from laboneq.core.types.numpy_support import NumPyArray
@@ -79,6 +73,10 @@ class DeviceUHFQA(DeviceBase):
         """Iterable over all awg cores of the device."""
         return iter(self._awg_cores)
 
+    def allocated_channels(self, recipe_data: RecipeData) -> Iterator[ChannelBase]:
+        for ch in recipe_data.allocated_awgs(self.uid):
+            yield self._awg_cores[ch]
+
     def _process_dev_opts(self):
         self._awg_cores = [
             UHFQAAwg(
@@ -105,12 +103,21 @@ class DeviceUHFQA(DeviceBase):
             upstream.device_qualifier.driver.upper() == "HDAWG"
         )
 
-    def validate_scheduled_experiment(self, scheduled_experiment: ScheduledExperiment):
+    def validate_scheduled_experiment(
+        self,
+        scheduled_experiment: ScheduledExperiment,
+        rt_execution_info: RtExecutionInfo,
+    ):
         initialization = get_initialization_by_device_uid(
             scheduled_experiment.recipe, self.uid
         )
         if initialization is None:
             return
+
+        if scheduled_experiment.chunk_count is not None:
+            raise LabOneQControllerException(
+                f"{self.dev_repr}: Pipeliner is not supported by the device."
+            )
 
         for output in initialization.outputs:
             self._warn_for_unsupported_param(
@@ -132,6 +139,44 @@ class DeviceUHFQA(DeviceBase):
             if dev_input.range is None:
                 continue
             self._validate_range(dev_input, is_out=False)
+
+        # Validate average count
+        # TODO(2K): Calculation of this_device_has_acquires duplicates the logic in
+        # _validate_scheduled_experiment + _calculate_awg_configs. Cleanup after improving recipe.
+        recipe = scheduled_experiment.recipe
+        assert recipe is not None
+        this_device_signals = {
+            i.signal_id
+            for i in recipe.integrator_allocations
+            if i.device_id == self.uid
+        }
+        this_device_has_acquires = any(
+            (this_device_signals & set(a.keys())) for a in recipe.simultaneous_acquires
+        )
+        averages = rt_execution_info.effective_averages
+        if (
+            this_device_has_acquires
+            and not rt_execution_info.is_raw_acquisition
+            and rt_execution_info.effective_averaging_mode != AveragingMode.SINGLE_SHOT
+        ):
+            if averages > MAX_AVERAGES_RESULT_LOGGER:
+                raise LabOneQControllerException(
+                    f"Number of averages {averages} exceeds the allowed maximum {MAX_AVERAGES_RESULT_LOGGER}"
+                )
+            if averages & (averages - 1):
+                raise LabOneQControllerException(
+                    f"Number of averages {averages} must be a power of 2"
+                )
+        if rt_execution_info.is_raw_acquisition:
+            if averages > MAX_AVERAGES_SCOPE:
+                raise LabOneQControllerException(
+                    f"{self.dev_repr}: Number of averages {averages} exceeds the allowed maximum {MAX_AVERAGES_SCOPE}"
+                )
+            # TODO(2K): Validate this at recipe processing stage (currently in _configure_input_monitor)
+            # if awg_config.raw_acquire_length is None:
+            #     raise LabOneQControllerException(
+            #         f"{self.dev_repr}: Unknown acquire length for RAW acquisition."
+            #     )
 
     def _validate_range(self, io: IO, is_out: bool):
         if io.range is None:
@@ -203,93 +248,6 @@ class DeviceUHFQA(DeviceBase):
             Response(f"/{self.serial}/system/preset/busy", 0),
         ]
 
-    def configure_acquisition(
-        self,
-        recipe_data: RecipeData,
-        awg_index: int,
-        pipeliner_job: int,
-    ) -> NodeCollector:
-        rt_execution_info = recipe_data.rt_execution_info
-        assert not rt_execution_info.with_pipeliner, "Pipelining not supported on UHFQA"
-        awg_config = recipe_data.awg_configs[AwgKey(self.uid, awg_index)]
-        nc = NodeCollector()
-        nc.extend(
-            self._configure_result_logger(
-                awg_config,
-                rt_execution_info.effective_averages,
-                rt_execution_info.effective_averaging_mode,
-                rt_execution_info.acquisition_type,
-            )
-        )
-        nc.extend(
-            self._configure_input_monitor(
-                enable=rt_execution_info.is_raw_acquisition,
-                averages=rt_execution_info.effective_averages,
-                acquire_length=awg_config.raw_acquire_length,
-            )
-        )
-        return nc
-
-    def _configure_result_logger(
-        self,
-        awg_config: AwgConfig,
-        averages: int,
-        averaging_mode: AveragingMode,
-        acquisition_type: AcquisitionType,
-    ) -> NodeCollector:
-        nc = NodeCollector(base=f"/{self.serial}/")
-        if awg_config.result_length is None:
-            return nc  # this instrument is unused for acquiring results
-        enable = acquisition_type != AcquisitionType.RAW
-        if enable:
-            if averaging_mode != AveragingMode.SINGLE_SHOT:
-                if averages > MAX_AVERAGES_RESULT_LOGGER:
-                    raise LabOneQControllerException(
-                        f"Number of averages {averages} exceeds the allowed maximum {MAX_AVERAGES_RESULT_LOGGER}"
-                    )
-                if averages & (averages - 1):
-                    raise LabOneQControllerException(
-                        f"Number of averages {averages} must be a power of 2"
-                    )
-            nc.add("qas/0/result/length", awg_config.result_length)
-            nc.add("qas/0/result/averages", averages)
-            nc.add(
-                "qas/0/result/mode", 0 if averaging_mode == AveragingMode.CYCLIC else 1
-            )
-            nc.add(
-                "qas/0/result/source",
-                # 1 == result source 'threshold'
-                # 2 == result source 'rotation'
-                1 if acquisition_type == AcquisitionType.DISCRIMINATION else 2,
-            )
-            nc.add("qas/0/result/enable", 0)
-            nc.add("qas/0/result/reset", 1, cache=False)
-        _logger.debug("Turning %s result logger...", "on" if enable else "off")
-        nc.barrier()
-        nc.add("qas/0/result/enable", 1 if enable else 0)
-        nc.barrier()
-        return nc
-
-    def _configure_input_monitor(
-        self, enable: bool, averages: int, acquire_length: int | None
-    ) -> NodeCollector:
-        nc = NodeCollector(base=f"/{self.serial}/")
-        if enable:
-            if averages > MAX_AVERAGES_SCOPE:
-                raise LabOneQControllerException(
-                    f"{self.dev_repr}: Number of averages {averages} exceeds the allowed maximum {MAX_AVERAGES_SCOPE}"
-                )
-            if acquire_length is None:
-                raise LabOneQControllerException(
-                    f"{self.dev_repr}: Unknown acquire length for RAW acquisition."
-                )
-            nc.add("qas/0/monitor/length", acquire_length)
-            nc.add("qas/0/monitor/averages", averages)
-            nc.add("qas/0/monitor/enable", 0)  # todo: barrier needed?
-            nc.add("qas/0/monitor/reset", 1, cache=False)
-        nc.add("qas/0/monitor/enable", 1 if enable else 0)
-        return nc
-
     async def start_execution(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")
         for awg_index in recipe_data.allocated_awgs(self.uid):
@@ -353,16 +311,6 @@ class DeviceUHFQA(DeviceBase):
             nc.add("qas/0/delay", measurement_delay_rounded)
 
         await self.set_async(nc)
-
-    def _choose_wf_collector(
-        self, elf_nodes: NodeCollector, wf_nodes: NodeCollector
-    ) -> NodeCollector:
-        return wf_nodes
-
-    def _elf_upload_condition(self, awg_index: int) -> dict[str, Any]:
-        # UHFQA does not yet support upload of ELF and waveforms in a single transaction.
-        ready_node = self.get_sequencer_paths(awg_index).ready
-        return {ready_node: 1}
 
     def _adjust_frequency(self, freq):
         # To make the phase correct on the UHFQA (q leading i channel by 90 degrees)
@@ -451,40 +399,6 @@ class DeviceUHFQA(DeviceBase):
         # https://oldwiki.zhinst.com/wiki/display/~andreac/Complex+multiplication+in+UHFQA)
         nc.add("qas/0/rotations/0", 1 - 1j)
         nc.add("qas/0/rotations/1", -1 - 1j)
-        return nc
-
-    def prepare_upload_all_integration_weights(
-        self,
-        recipe_data: RecipeData,
-        awg_index: int,
-        artifacts: ArtifactsCodegen,
-        integrator_allocations: list[IntegratorAllocation],
-        kernel_ref: str | None,
-    ) -> NodeCollector:
-        nc = NodeCollector(base=f"/{self.serial}/")
-
-        weights_info = get_weights_info(artifacts, kernel_ref)
-        for signal_id, weight_names in weights_info.items():
-            integrator_allocation = next(
-                ia for ia in integrator_allocations if ia.signal_id == signal_id
-            )
-
-            for weight in weight_names:
-                for channel in integrator_allocation.channels:
-                    weight_wave_real = get_wave(weight.id + "_i.wave", artifacts.waves)
-                    weight_wave_imag = get_wave(weight.id + "_q.wave", artifacts.waves)
-                    nc.add(
-                        f"qas/0/integration/weights/{channel}/real",
-                        np.ascontiguousarray(weight_wave_real.samples),
-                        filename=weight.id + "_i.wave",
-                    )
-                    nc.add(
-                        f"qas/0/integration/weights/{channel}/imag",
-                        # Note conjugation here
-                        -np.ascontiguousarray(weight_wave_imag.samples),
-                        filename=weight.id + "_q.wave",
-                    )
-
         return nc
 
     async def set_before_awg_upload(self, recipe_data: RecipeData):
@@ -582,11 +496,9 @@ class DeviceUHFQA(DeviceBase):
             )
 
     async def _get_integrator_measurement_data(
-        self, result_index, num_results, averages_divider: int
+        self, result_index, num_results, averages_divider: int, timeout_s: float
     ):
         result_path = self._result_node_integrator(result_index)
-        # TODO(2K): set timeout based on timeout_s from connect
-        timeout_s = 5.0
         try:
             integrator_result = await self._subscriber.get_result(
                 result_path, timeout_s=timeout_s
@@ -607,11 +519,18 @@ class DeviceUHFQA(DeviceBase):
     async def get_measurement_data(
         self,
         channel: int,
-        rt_execution_info: RtExecutionInfo,
+        recipe_data: RecipeData,
         result_indices: list[int],
         num_results: int,
         hw_averages: int,
     ) -> RawReadoutData:
+        # In the async execution model, result waiting starts as soon as execution begins,
+        # so the execution time must be included when calculating the result retrieval timeout.
+        _, guarded_wait_time = get_execution_time(recipe_data)
+        # TODO(2K): set timeout based on timeout_s from connect
+        timeout_s = 5 + guarded_wait_time
+
+        rt_execution_info = recipe_data.rt_execution_info
         averages_divider = (
             1
             if rt_execution_info.acquisition_type == AcquisitionType.DISCRIMINATION
@@ -620,16 +539,16 @@ class DeviceUHFQA(DeviceBase):
         assert len(result_indices) <= 2
         if len(result_indices) == 1:
             data = await self._get_integrator_measurement_data(
-                result_indices[0], num_results, averages_divider
+                result_indices[0], num_results, averages_divider, timeout_s
             )
             return RawReadoutData(data)
         else:
             in_phase, quadrature = await _gather(
                 self._get_integrator_measurement_data(
-                    result_indices[0], num_results, averages_divider
+                    result_indices[0], num_results, averages_divider, timeout_s
                 ),
                 self._get_integrator_measurement_data(
-                    result_indices[1], num_results, averages_divider
+                    result_indices[1], num_results, averages_divider, timeout_s
                 ),
             )
             return RawReadoutData(
@@ -638,10 +557,10 @@ class DeviceUHFQA(DeviceBase):
                 )
             )
 
-    async def _get_input_monitor_data(self, ch: int, acquire_length: int):
+    async def _get_input_monitor_data(
+        self, ch: int, acquire_length: int, timeout_s: float
+    ):
         result_path = self._result_node_monitor(ch)
-        # TODO(2K): set timeout based on timeout_s from connect
-        timeout_s = 5.0
         try:
             monitor_result = await self._subscriber.get_result(
                 result_path, timeout_s=timeout_s
@@ -660,11 +579,11 @@ class DeviceUHFQA(DeviceBase):
             return np.array([], dtype=np.complex128)
 
     async def get_raw_data(
-        self, channel: int, acquire_length: int, acquires: int | None
+        self, channel: int, acquire_length: int, acquires: int | None, timeout_s: float
     ) -> RawReadoutData:
         ch0, ch1 = await _gather(
-            self._get_input_monitor_data(0, acquire_length),
-            self._get_input_monitor_data(1, acquire_length),
+            self._get_input_monitor_data(0, acquire_length, timeout_s),
+            self._get_input_monitor_data(1, acquire_length, timeout_s),
         )
         return RawReadoutData(
             np.array([[complex(real, imag) for real, imag in zip(ch0, ch1)]])

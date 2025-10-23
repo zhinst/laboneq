@@ -6,13 +6,11 @@ use std::collections::HashMap;
 use super::awg_events::PlayWaveEvent;
 use super::seqc_tracker::wave_index_tracker::WaveIndex;
 use crate::Result;
-use crate::{
-    ir::{
-        ParameterOperation,
-        compilation_job::{AwgKind, DeviceKind},
-    },
-    signature::WaveformSignature,
+use crate::ir::{
+    ParameterOperation,
+    compilation_job::{AwgKind, DeviceKind},
 };
+use crate::sampled_event_handler::awg_events::PulseSource;
 use serde_json::{Map, Value, json};
 
 pub enum ParameterPhaseIncrement {
@@ -126,14 +124,14 @@ impl CommandTableTracker {
                     "index": wave_index
                 }
             })
-        } else if let WaveformSignature::Pulses { length, .. } = signature.waveform
-            && length > 0
+        } else if let PulseSource::Pulses = signature.waveform.kind()
+            && signature.waveform.length() > 0
         {
             json!({
                 "index": index,
                 "waveform": {
                     "playZero": true,
-                    "length": length
+                    "length": signature.waveform.length()
                 }
             })
         } else {
@@ -163,14 +161,14 @@ impl CommandTableTracker {
     ///
     pub fn create_precompensation_clear_entry(
         &mut self,
-        signature: PlayWaveEvent,
+        signature: &PlayWaveEvent,
         wave_index: WaveIndex,
     ) -> usize {
         assert!(signature.hw_oscillator.is_none());
         assert!(signature.increment_phase_params.is_empty());
         assert!(signature.amplitude.is_none());
         assert!(signature.state.is_none());
-        if let Some(idx) = self.lookup_index_by_signature(&signature) {
+        if let Some(idx) = self.lookup_index_by_signature(signature) {
             return idx;
         }
         let index = self.command_table.len();
@@ -182,7 +180,8 @@ impl CommandTableTracker {
             }
         });
         self.command_table.push((index, json));
-        self.table_index_by_signature.insert(signature, index);
+        self.table_index_by_signature
+            .insert(signature.clone(), index);
         index
     }
 

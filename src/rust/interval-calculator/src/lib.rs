@@ -586,4 +586,33 @@ mod tests {
         assert_eq!(*out[1].span(), 50000..51008);
         assert_eq!(*out[2].span(), 52000..53008);
     }
+
+    #[test]
+    /// Test that playZero size hint is enforced at the beginning and end of the cut interval
+    /// and that gaps inside the cut interval are not closed if they are larger than playZero size hint.
+    fn test_play_zero_size_hint() {
+        let ivs = vec![OrderedRange(0..160), OrderedRange(360..520)];
+        let cut_points = vec![0, 192, 576];
+        let granularity = 16;
+        let min_play_wave = 32;
+        let play_wave_size_hint = 32;
+        let play_zero_size_hint = 32;
+        let play_wave_max_hint = None;
+        let ct_intervals = None;
+        let intervals = calculate_intervals(
+            ordered_to_interval(ivs),
+            &cut_points,
+            granularity,
+            min_play_wave,
+            play_wave_size_hint,
+            play_zero_size_hint,
+            play_wave_max_hint,
+            ct_intervals,
+        )
+        .unwrap();
+
+        assert_eq!(intervals.len(), 2);
+        assert_eq!(*intervals[0].span(), 0..160);
+        assert_eq!(*intervals[1].span(), 360..520);
+    }
 }

@@ -70,7 +70,7 @@ pub fn calculate_awg_delays(awg: &AwgCore, delays: &HashMap<&str, Samples>) -> R
             awg.device_kind().traits().sample_multiple.into(),
         );
         if remainder != 0 {
-            return Err(Error::new(&format!(
+            return Err(Error::new(format!(
                 "Internal error: Signal {} has a delay of {} samples, which is not a multiple of the device's sample multiple {}.",
                 signal.uid,
                 signal.delay(),

@@ -51,6 +51,10 @@ class ParameterStore(dict[KT, VT]):
                 tracker.notify(key)
         self._query_trackers = {t for t in self._query_trackers if t() is not None}
 
+    def mark_used(self, key):
+        """Mark a parameter as used without retrieving its value."""
+        self._notify_trackers(key)
+
     def __getitem__(self, item):
         self._notify_trackers(item)
         return super().__getitem__(item)

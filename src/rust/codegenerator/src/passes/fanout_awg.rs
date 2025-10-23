@@ -87,8 +87,7 @@ fn build_awg_ir(node: &IrNode, parent_offset: Samples, ctx: &Context<'_>, nodes:
             if out.is_empty() {
                 return;
             }
-            let data =
-                NodeKind::SetOscillatorFrequency(SetOscillatorFrequency::new(out, ob.iteration()));
+            let data = NodeKind::SetOscillatorFrequency(SetOscillatorFrequency::new(out));
             let new_node = IrNode::new(data, *node.offset() + parent_offset);
             nodes.push(new_node);
         }
@@ -323,6 +322,7 @@ mod tests {
                 }),
                 count: 1,
                 prng_sample: None,
+                parameters: vec![],
             });
             self.enter_stack(IrNode::new(root, 0), f);
         }

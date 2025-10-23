@@ -19,15 +19,11 @@ from laboneq.controller.attribute_value_tracker import (
 from laboneq.controller.devices.async_support import _gather
 from laboneq.controller.devices.device_shf_base import DeviceSHFBase
 from laboneq.controller.devices.device_utils import NodeCollector
-from laboneq.controller.devices.device_zi import (
-    SequencerPaths,
-    RawReadoutData,
-)
+from laboneq.controller.devices.device_zi import SequencerPaths, RawReadoutData
 from laboneq.controller.recipe_processor import (
     RecipeData,
     RtExecutionInfo,
     WaveformItem,
-    Waveforms,
     get_artifacts,
     get_initialization_by_device_uid,
 )
@@ -94,15 +90,6 @@ class DeviceSHFQA(DeviceSHFBase):
     def allocated_channels(self, recipe_data: RecipeData) -> Iterator[ChannelBase]:
         for ch in recipe_data.allocated_awgs(self.uid):
             yield self._qachannels[ch]
-
-    def pipeliner_prepare_for_upload(self, index: int) -> NodeCollector:
-        return self._qachannels[index].pipeliner.prepare_for_upload()
-
-    def pipeliner_commit(self, index: int) -> NodeCollector:
-        return self._qachannels[index].pipeliner.commit()
-
-    def pipeliner_ready_conditions(self, index: int) -> dict[str, Any]:
-        return self._qachannels[index].pipeliner.ready_conditions()
 
     @property
     def dev_repr(self) -> str:
@@ -186,7 +173,11 @@ class DeviceSHFQA(DeviceSHFBase):
                 range_list,
             )
 
-    def validate_scheduled_experiment(self, scheduled_experiment: ScheduledExperiment):
+    def validate_scheduled_experiment(
+        self,
+        scheduled_experiment: ScheduledExperiment,
+        rt_execution_info: RtExecutionInfo,
+    ):
         artifacts = get_artifacts(scheduled_experiment.artifacts, ArtifactsCodegen)
         long_readout_signals = artifacts.requires_long_readout.get(self.uid, [])
         if len(long_readout_signals) > 0:
@@ -260,16 +251,6 @@ class DeviceSHFQA(DeviceSHFBase):
             self._qachannels[ch].nodes.busy
             for ch in recipe_data.allocated_awgs(self.uid)
         ]
-
-    def configure_acquisition(
-        self,
-        recipe_data: RecipeData,
-        awg_index: int,
-        pipeliner_job: int,
-    ) -> NodeCollector:
-        return self._qachannels[awg_index].configure_acquisition(
-            recipe_data=recipe_data, pipeliner_job=pipeliner_job
-        )
 
     async def start_execution(self, recipe_data: RecipeData):
         await for_each(
@@ -413,15 +394,6 @@ class DeviceSHFQA(DeviceSHFBase):
             attributes=attributes,
         )
 
-    async def _prepare_artifacts_impl(
-        self,
-        recipe_data: RecipeData,
-        nt_step: NtStepKey,
-        awg_index: int,
-    ):
-        # Artifacts upload for the SHFQA is done in the QAChannel class.
-        pass
-
     def prepare_upload_binary_wave(
         self,
         awg_index: int,
@@ -431,31 +403,6 @@ class DeviceSHFQA(DeviceSHFBase):
         if is_spectroscopy(acquisition_type):
             return self._qachannels[awg_index].upload_spectroscopy_envelope(wave)
         return self._qachannels[awg_index].upload_generator_wave(wave)
-
-    def prepare_upload_all_binary_waves(
-        self,
-        awg_index: int,
-        waves: Waveforms,
-        acquisition_type: AcquisitionType,
-    ) -> NodeCollector:
-        return self._qachannels[awg_index].prepare_upload_all_binary_waves(
-            waves, acquisition_type
-        )
-
-    def prepare_upload_all_integration_weights(
-        self,
-        recipe_data: RecipeData,
-        awg_index: int,
-        artifacts: ArtifactsCodegen,
-        integrator_allocations: list[IntegratorAllocation],
-        kernel_ref: str | None,
-    ) -> NodeCollector:
-        return self._qachannels[awg_index].prepare_upload_all_integration_weights(
-            recipe_data,
-            artifacts,
-            integrator_allocations,
-            kernel_ref,
-        )
 
     async def set_before_awg_upload(self, recipe_data: RecipeData):
         await for_each(
@@ -524,13 +471,13 @@ class DeviceSHFQA(DeviceSHFBase):
     async def get_measurement_data(
         self,
         channel: int,
-        rt_execution_info: RtExecutionInfo,
+        recipe_data: RecipeData,
         result_indices: list[int],
         num_results: int,
         hw_averages: int,
     ) -> RawReadoutData:
         return await self._qachannels[channel].get_measurement_data(
-            rt_execution_info=rt_execution_info,
+            recipe_data=recipe_data,
             result_indices=result_indices,
             num_results=num_results,
         )
@@ -539,11 +486,9 @@ class DeviceSHFQA(DeviceSHFBase):
         return f"{self.dev_repr}:scope:ch{ch}"
 
     async def get_raw_data(
-        self, channel: int, acquire_length: int, acquires: int | None
+        self, channel: int, acquire_length: int, acquires: int | None, timeout_s: float
     ) -> RawReadoutData:
         result_path = self._result_node_scope(channel)
-        # TODO(2K): set timeout based on timeout_s from connect
-        timeout_s = 5.0
         # Segment lengths are always multiples of 16 samples.
         segment_length = (acquire_length + 0xF) & (~0xF)
         if acquires is None:

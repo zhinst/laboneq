@@ -31,10 +31,7 @@ impl Error {
 
 impl From<Error> for PyErr {
     fn from(error: Error) -> Self {
-        let err_message = match &error {
-            Error::Anyhow(anyhow_err) => create_error_message(anyhow_err),
-        };
-        LabOneQException::new_err(err_message)
+        LabOneQException::new_err(error.to_string())
     }
 }
 
@@ -53,18 +50,18 @@ impl From<PyErr> for Error {
 }
 
 /// Create a formatted error message.
-fn create_error_message(error: &anyhow::Error) -> String {
-    // TODO: Copy paste from code generator, unify
-    let mut causes = error
+pub fn create_error_message<T: Into<Error>>(error: T) -> String {
+    let Error::Anyhow(e) = error.into();
+    let mut causes = e
         .chain()
         .skip(1)
         .map(|cause| format!("{cause}"))
         .collect::<Vec<_>>();
     if causes.is_empty() {
-        return format!("{error}");
+        return format!("{e}");
     }
     // Reverse to show highest-level cause first
     causes.reverse();
     let msg = format!("Caused by:\n  {:}", causes.join("\n  "));
-    format!("{error}\n{msg}")
+    format!("{e}\n{msg}")
 }

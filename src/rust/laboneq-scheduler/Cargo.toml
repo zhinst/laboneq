@@ -9,10 +9,14 @@ publish.workspace = true
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 num-complex = { workspace = true }
+num-integer = { workspace = true }
 
 laboneq-common = { path = "../laboneq-common" }
 laboneq-units = { path = "../laboneq-units" }
 numeric-array = { path = "../numeric-array" }
+
+[dev-dependencies]
+laboneq-common = { path = "../laboneq-common", features = ["test_utils"] }
 
 [lints]
 workspace = true

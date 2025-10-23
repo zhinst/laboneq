@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from itertools import takewhile
 import math
 import random
 
@@ -26,8 +27,14 @@ from laboneq_applications.qpu_types.tunable_transmon import (
 
 
 # to compare version from string versions
-def versiontuple(v):
-    return tuple(map(int, (v.split("."))))
+def versiontuple(v: str) -> tuple[int, int, int]:
+    # In case of a develop version just ignore the last part
+    # E.g. ignores a20251007142609+f07ec007 in 2.62.0a20251007142609+f07ec007
+    # That last part may contain dots
+    (major, minor, patch) = v.split(".")[:3]
+    patch = "".join(takewhile(str.isdigit, patch))
+
+    return (int(major), int(minor), int(patch))
 
 
 # function to create a transmon qubit object from entries in a parameter dictionary

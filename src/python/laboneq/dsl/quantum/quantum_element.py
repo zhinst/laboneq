@@ -168,7 +168,7 @@ class AttrDict(dict):
 
 
 @classformatter
-@attrs.define()
+@attrs.define
 class QuantumElement:
     """A quantum element within a quantum device.
 
@@ -257,9 +257,6 @@ class QuantumElement:
             raise ValueError(
                 f"The parameters must be an instance of {self.PARAMETERS_TYPE!r}"
             )
-
-    def __repr__(self) -> str:
-        return f"<{type(self).__qualname__} uid={self.uid!r}>"
 
     def __rich_repr__(self):
         yield "uid", self.uid

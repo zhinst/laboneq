@@ -9,7 +9,6 @@ import logging
 import math
 import re
 from abc import ABC, abstractmethod
-from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Iterator
@@ -48,7 +47,6 @@ from laboneq.controller.devices.node_control import (
     filter_states,
     filter_wait_conditions,
 )
-from laboneq.controller.pipeliner_reload_tracker import PipelinerReloadTracker
 from laboneq.controller.recipe_processor import (
     AwgConfig,
     AwgConfigs,
@@ -56,23 +54,13 @@ from laboneq.controller.recipe_processor import (
     RecipeData,
     RtExecutionInfo,
     WaveformItem,
-    Waveforms,
-    get_elf,
-    prepare_command_table,
-    prepare_waves,
+    get_execution_time,
 )
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.versioning import SetupCaps
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
-from laboneq.data.recipe import (
-    Initialization,
-    IntegratorAllocation,
-    NtStepKey,
-)
-from laboneq.data.scheduled_experiment import (
-    ArtifactsCodegen,
-    ScheduledExperiment,
-)
+from laboneq.data.recipe import Initialization, NtStepKey
+from laboneq.data.scheduled_experiment import ScheduledExperiment
 
 if TYPE_CHECKING:
     import numpy as np
@@ -257,7 +245,11 @@ class DeviceZI(DeviceAbstract):
     async def set_async(self, nodes: NodeCollector):
         pass
 
-    def validate_scheduled_experiment(self, scheduled_experiment: ScheduledExperiment):
+    def validate_scheduled_experiment(
+        self,
+        scheduled_experiment: ScheduledExperiment,
+        rt_execution_info: RtExecutionInfo,
+    ):
         pass
 
     def validate_recipe_data(self, recipe_data: RecipeData):
@@ -329,9 +321,6 @@ class DeviceBase(DeviceZI):
         self.dev_opts: list[str] = []
         self._connected = False
         self._voltage_offsets: dict[int, float] = {}
-        self._pipeliner_reload_tracker: dict[int, PipelinerReloadTracker] = defaultdict(
-            PipelinerReloadTracker
-        )
         self._sampling_rate: float | None = None
         self._enable_runtime_checks = True
         self._warning_nodes: dict[str, int] = {}
@@ -556,7 +545,6 @@ class DeviceBase(DeviceZI):
         return []
 
     def allocate_resources(self):
-        self._pipeliner_reload_tracker.clear()
         self._near_time_artifact_replacement_nodes.clear()
         for_each_sync(self.all_channels(), ChannelBase.allocate_resources)
 
@@ -593,14 +581,6 @@ class DeviceBase(DeviceZI):
             if prev is not None and value > prev:
                 _logger.warning("%s: %s: %s", self.dev_repr, msg, value - prev)
             self._warning_nodes[node] = value
-
-    def configure_acquisition(
-        self,
-        recipe_data: RecipeData,
-        awg_index: int,
-        pipeliner_job: int,
-    ) -> NodeCollector:
-        return NodeCollector()
 
     def _adjust_frequency(self, freq):
         return freq
@@ -658,14 +638,6 @@ class DeviceBase(DeviceZI):
         if self.is_leader():
             await self.start_execution(recipe_data=recipe_data)
 
-    def _choose_wf_collector(
-        self, elf_nodes: NodeCollector, wf_nodes: NodeCollector
-    ) -> NodeCollector:
-        return elf_nodes
-
-    def _elf_upload_condition(self, awg_index: int) -> dict[str, Any]:
-        return {}
-
     async def prepare_artifacts(
         self,
         recipe_data: RecipeData,
@@ -677,125 +649,9 @@ class DeviceBase(DeviceZI):
             recipe_data=recipe_data,
             nt_step=nt_step,
         )
-        await _gather(
-            *(
-                self._prepare_artifacts_impl(
-                    recipe_data=recipe_data,
-                    nt_step=nt_step,
-                    awg_index=awg_index,
-                )
-                for awg_index in recipe_data.allocated_awgs(self.uid)
-            )
-        )
         await self._apply_near_time_replacements(
             with_pipeliner=recipe_data.rt_execution_info.with_pipeliner
         )
-
-    async def _prepare_artifacts_impl(
-        self,
-        recipe_data: RecipeData,
-        nt_step: NtStepKey,
-        awg_index: int,
-    ):
-        artifacts = recipe_data.get_artifacts(ArtifactsCodegen)
-        rt_execution_info = recipe_data.rt_execution_info
-
-        if rt_execution_info.with_pipeliner and not self.has_pipeliner:
-            raise LabOneQControllerException(
-                f"{self.dev_repr}: Pipeliner is not supported by the device."
-            )
-
-        elf_nodes = NodeCollector()
-        wf_nodes = NodeCollector()
-        wf_eff = self._choose_wf_collector(elf_nodes, wf_nodes)
-        upload_ready_conditions: dict[str, Any] = {}
-
-        if rt_execution_info.with_pipeliner:
-            # enable pipeliner
-            elf_nodes.extend(self.pipeliner_prepare_for_upload(awg_index))
-
-        for pipeliner_job in range(rt_execution_info.pipeliner_jobs):
-            effective_nt_step = (
-                NtStepKey(indices=tuple([*nt_step.indices, pipeliner_job]))
-                if rt_execution_info.with_pipeliner
-                else nt_step
-            )
-            rt_exec_step = next(
-                (
-                    r
-                    for r in recipe_data.recipe.realtime_execution_init
-                    if r.device_id == self.uid
-                    and r.awg_index == awg_index
-                    and r.nt_step == effective_nt_step
-                ),
-                None,
-            )
-
-            if rt_execution_info.with_pipeliner:
-                rt_exec_step = self._pipeliner_reload_tracker[awg_index].calc_next_step(
-                    pipeliner_job=pipeliner_job,
-                    rt_exec_step=rt_exec_step,
-                )
-            # Todo (PW): This currently needlessly reconfigures the acquisition in every
-            #  NT step. The acquisition parameters really are constant across NT steps,
-            #  we only care about re-enabling the result logger.
-            wf_eff.extend(
-                self.configure_acquisition(recipe_data, awg_index, pipeliner_job)
-            )
-
-            if rt_exec_step is None:
-                continue
-
-            seqc_elf = get_elf(artifacts, rt_exec_step.program_ref)
-            if seqc_elf is not None:
-                elf_nodes.extend(
-                    self.prepare_upload_elf(
-                        seqc_elf, awg_index, rt_exec_step.program_ref
-                    )
-                )
-                upload_ready_conditions.update(self._elf_upload_condition(awg_index))
-
-            waves = prepare_waves(artifacts, rt_exec_step.wave_indices_ref)
-            if waves is not None:
-                acquisition_type = rt_execution_info.acquisition_type
-                wf_eff.extend(
-                    self.prepare_upload_all_binary_waves(
-                        awg_index, waves, acquisition_type
-                    )
-                )
-
-            command_table = prepare_command_table(
-                artifacts, rt_exec_step.wave_indices_ref
-            )
-            if command_table is not None:
-                wf_eff.extend(
-                    self.prepare_upload_command_table(awg_index, command_table)
-                )
-
-            wf_eff.extend(
-                # TODO(2K): Cleanup arguments to prepare_upload_all_integration_weights
-                self.prepare_upload_all_integration_weights(
-                    recipe_data,
-                    awg_index,
-                    artifacts,
-                    recipe_data.recipe.integrator_allocations,
-                    rt_exec_step.kernel_indices_ref,
-                )
-            )
-
-            if rt_execution_info.with_pipeliner:
-                # For devices with pipeliner, wf_eff == elf_nodes
-                wf_eff.extend(self.pipeliner_commit(awg_index))
-
-        if rt_execution_info.with_pipeliner:
-            upload_ready_conditions.update(self.pipeliner_ready_conditions(awg_index))
-
-        rw = ResponseWaiterAsync(api=self._api, dev_repr=self.dev_repr, timeout_s=10)
-        rw.add_nodes(upload_ready_conditions)
-        await rw.prepare()
-        await self.set_async(elf_nodes)
-        await rw.wait()
-        await self.set_async(wf_nodes)
 
     async def _apply_near_time_replacements(self, with_pipeliner: bool):
         """Apply near-time user nodes that were collected since the previous real-time execution."""
@@ -805,19 +661,6 @@ class DeviceBase(DeviceZI):
             )
         await self.set_async(self._near_time_artifact_replacement_nodes)
         self._near_time_artifact_replacement_nodes.clear()
-
-    def prepare_upload_elf(
-        self, elf: bytes, awg_index: int, filename: str
-    ) -> NodeCollector:
-        nc = NodeCollector()
-        sequencer_paths = self.get_sequencer_paths(awg_index)
-        nc.add(
-            sequencer_paths.elf,
-            elf,
-            cache=False,
-            filename=filename,
-        )
-        return nc
 
     def add_waveform_replacement(
         self, awg_index: int, wave: WaveformItem, acquisition_type: AcquisitionType
@@ -829,10 +672,11 @@ class DeviceBase(DeviceZI):
         )
 
     def add_command_table_replacement(self, awg_index: int, command_table: dict):
-        self._near_time_artifact_replacement_nodes.extend(
-            self.prepare_upload_command_table(
-                awg_index=awg_index, command_table=command_table
-            )
+        command_table_path = self.command_table_path(awg_index)
+        self._near_time_artifact_replacement_nodes.add(
+            command_table_path + "data",
+            json.dumps(command_table, sort_keys=True),
+            cache=False,
         )
 
     def prepare_upload_binary_wave(
@@ -847,55 +691,6 @@ class DeviceBase(DeviceZI):
             cache=False,
             filename=wave.name,
         )
-
-    def prepare_upload_all_binary_waves(
-        self,
-        awg_index: int,
-        waves: Waveforms,
-        acquisition_type: AcquisitionType,
-    ) -> NodeCollector:
-        # Default implementation for "old" devices, override for newer devices
-        nc = NodeCollector()
-        for wave in waves:
-            nc.extend(
-                self.prepare_upload_binary_wave(
-                    awg_index=awg_index,
-                    wave=wave,
-                    acquisition_type=acquisition_type,
-                )
-            )
-        return nc
-
-    def prepare_upload_command_table(
-        self, awg_index, command_table: dict
-    ) -> NodeCollector:
-        command_table_path = self.command_table_path(awg_index)
-        nc = NodeCollector()
-        nc.add(
-            command_table_path + "data",
-            json.dumps(command_table, sort_keys=True),
-            cache=False,
-        )
-        return nc
-
-    def prepare_upload_all_integration_weights(
-        self,
-        recipe_data: RecipeData,
-        awg_index: int,
-        artifacts: ArtifactsCodegen,
-        integrator_allocations: list[IntegratorAllocation],
-        kernel_ref: str | None,
-    ) -> NodeCollector:
-        return NodeCollector()
-
-    def pipeliner_prepare_for_upload(self, index: int) -> NodeCollector:
-        return NodeCollector()
-
-    def pipeliner_commit(self, index: int) -> NodeCollector:
-        return NodeCollector()
-
-    def pipeliner_ready_conditions(self, index: int) -> dict[str, Any]:
-        return {}
 
     async def configure_trigger(self, recipe_data: RecipeData):
         pass
@@ -1120,11 +915,18 @@ class DeviceBase(DeviceZI):
     ):
         rt_execution_info = recipe_data.rt_execution_info
         if rt_execution_info.acquisition_type == AcquisitionType.RAW:
+            # In the async execution model, result waiting starts as soon as execution begins,
+            # so the execution time must be included when calculating the result retrieval timeout.
+            _, guarded_wait_time = get_execution_time(recipe_data)
+            # TODO(2K): set timeout based on timeout_s from connect
+            timeout_s = 5 + guarded_wait_time
+
             assert awg_config.raw_acquire_length is not None
             raw_results = await self.get_raw_data(
                 channel=awg_key.awg_index,
                 acquire_length=awg_config.raw_acquire_length,
                 acquires=awg_config.result_length,
+                timeout_s=timeout_s,
             )
             # Raw data is per physical port, and is the same for all logical signals of the AWG
             for signal in awg_config.acquire_signals:
@@ -1190,7 +992,7 @@ class DeviceBase(DeviceZI):
         assert awg_config.result_length is not None, "AWG not producing results"
         raw_readout = await self.get_measurement_data(
             awg_key.awg_index,
-            rt_execution_info,
+            recipe_data,
             integrator_allocation.channels,
             awg_config.result_length,
             effective_averages,
@@ -1219,7 +1021,7 @@ class DeviceBase(DeviceZI):
             timestamps[job_id] = v["timestamp"]
 
     async def get_raw_data(
-        self, channel: int, acquire_length: int, acquires: int | None
+        self, channel: int, acquire_length: int, acquires: int | None, timeout_s: float
     ) -> RawReadoutData:
         raise NotImplementedError(
             f"{self.__class__.__name__} does not support result retrieval"
@@ -1228,7 +1030,7 @@ class DeviceBase(DeviceZI):
     async def get_measurement_data(
         self,
         channel: int,
-        rt_execution_info: RtExecutionInfo,
+        recipe_data: RecipeData,
         result_indices: list[int],
         num_results: int,
         hw_averages: int,

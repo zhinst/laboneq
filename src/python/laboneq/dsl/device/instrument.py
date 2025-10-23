@@ -13,9 +13,15 @@ from .connection import Connection
 
 
 @classformatter
-@attrs.define(slots=False)
+@attrs.define
 class Instrument:
-    """Class representing an instrument."""
+    """Class representing an instrument.
+
+    !!! version-changed "Changed in version 2.62.0"
+
+        Changed the class to be slotted, which prevents the accidental creation of new
+        attributes.
+    """
 
     #: Unique identifier.
     uid: str = attrs.field(default=None)

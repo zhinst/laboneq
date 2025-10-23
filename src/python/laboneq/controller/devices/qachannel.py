@@ -30,7 +30,6 @@ from laboneq.controller.recipe_processor import (
     AwgKey,
     DeviceRecipeData,
     RecipeData,
-    RtExecutionInfo,
     WaveformItem,
     Waveforms,
     get_elf,
@@ -850,16 +849,17 @@ class QAChannel(ChannelBase):
 
     async def get_measurement_data(
         self,
-        rt_execution_info: RtExecutionInfo,
+        recipe_data: RecipeData,
         result_indices: list[int],
         num_results: int,
     ) -> RawReadoutData:
         # In the async execution model, result waiting starts as soon as execution begins,
         # so the execution time must be included when calculating the result retrieval timeout.
-        _, guarded_wait_time = get_execution_time(rt_execution_info)
+        _, guarded_wait_time = get_execution_time(recipe_data)
         # TODO(2K): set timeout based on timeout_s from connect
         timeout_s = 5 + guarded_wait_time
 
+        rt_execution_info = recipe_data.rt_execution_info
         if is_spectroscopy(rt_execution_info.acquisition_type):
             return await self._read_all_jobs_result(
                 result_path=self.nodes.spectroscopy_result_wave,

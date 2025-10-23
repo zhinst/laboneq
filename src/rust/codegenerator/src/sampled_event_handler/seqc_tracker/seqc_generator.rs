@@ -1,6 +1,8 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use std::rc::Rc;
+
 use super::seqc_statements::{SeqCStatement, SeqCVariant};
 use super::wave_index_tracker::WaveIndex;
 use crate::device_traits::DeviceTraits;
@@ -16,10 +18,10 @@ type VariableInternal = String;
 static MIN_PLAY_ZERO_HOLD: Samples = 512 + 128;
 
 fn format_comment(comment: &Option<String>) -> String {
-    if let Some(comment) = comment {
-        if !comment.is_empty() {
-            return format!("  // {comment}");
-        }
+    if let Some(comment) = comment
+        && !comment.is_empty()
+    {
+        return format!("  // {comment}");
     }
     String::new()
 }
@@ -84,7 +86,7 @@ pub struct SeqCGenerator {
     device_traits: &'static DeviceTraits,
     dual_channel: bool,
 
-    statements: Vec<SeqCStatement>,
+    statements: Vec<Rc<SeqCStatement>>,
     symbols: std::collections::HashSet<VariableInternal>,
 }
 
@@ -126,7 +128,7 @@ impl SeqCGenerator {
         Self::new(self.device_traits, self.dual_channel)
     }
 
-    pub fn statements(&self) -> &Vec<SeqCStatement> {
+    pub fn statements(&self) -> &Vec<Rc<SeqCStatement>> {
         &self.statements
     }
 
@@ -137,7 +139,7 @@ impl SeqCGenerator {
     pub fn num_noncomment_statements(&self) -> usize {
         self.statements
             .iter()
-            .filter(|s| !matches!(s, SeqCStatement::Comment { .. }))
+            .filter(|s| !matches!(s.as_ref(), SeqCStatement::Comment { .. }))
             .count()
     }
 
@@ -149,17 +151,18 @@ impl SeqCGenerator {
 
     pub fn clear(&mut self) {
         self.statements.clear();
+        self.symbols.clear();
         // TODO: clear symbols? The original implementation does not
     }
 
-    pub fn add_statement(&mut self, statement: SeqCStatement) {
+    pub fn add_statement(&mut self, statement: Rc<SeqCStatement>) {
         self.statements.push(statement);
     }
 
     pub fn add_comment<S: Into<String>>(&mut self, comment: S) {
-        self.statements.push(SeqCStatement::Comment {
+        self.statements.push(Rc::new(SeqCStatement::Comment {
             text: comment.into(),
-        });
+        }));
     }
 
     pub fn add_function_call_statement<S1: Into<String>, S2: Into<String>>(
@@ -168,11 +171,14 @@ impl SeqCGenerator {
         args: Vec<SeqCVariant>,
         assign_to: Option<S2>,
     ) {
-        self.statements.push(SeqCStatement::FunctionCall {
-            name: name.into(),
-            args,
-            assign_to: assign_to.map(|s| s.into()),
-        });
+        self.statements.push(
+            SeqCStatement::FunctionCall {
+                name: name.into(),
+                args,
+                assign_to: assign_to.map(|s| s.into()),
+            }
+            .into(),
+        );
     }
 
     pub fn add_wave_declaration<S: Into<String>>(
@@ -193,12 +199,15 @@ impl SeqCGenerator {
             )
             .into());
         }
-        self.statements.push(SeqCStatement::WaveDeclaration {
-            wave_id: wave_id.into(),
-            length,
-            has_marker1,
-            has_marker2,
-        });
+        self.statements.push(
+            SeqCStatement::WaveDeclaration {
+                wave_id: wave_id.into(),
+                length,
+                has_marker1,
+                has_marker2,
+            }
+            .into(),
+        );
         Ok(())
     }
 
@@ -218,10 +227,13 @@ impl SeqCGenerator {
             )
             .into());
         }
-        self.statements.push(SeqCStatement::ZeroWaveDeclaration {
-            wave_id: wave_id.into(),
-            length,
-        });
+        self.statements.push(
+            SeqCStatement::ZeroWaveDeclaration {
+                wave_id: wave_id.into(),
+                length,
+            }
+            .into(),
+        );
         Ok(())
     }
 
@@ -231,20 +243,26 @@ impl SeqCGenerator {
         value: SeqCVariant,
         comment: Option<S2>,
     ) {
-        self.statements.push(SeqCStatement::Constant {
-            name: name.into(),
-            value,
-            comment: comment.map(|s| s.into()),
-        });
+        self.statements.push(
+            SeqCStatement::Constant {
+                name: name.into(),
+                value,
+                comment: comment.map(|s| s.into()),
+            }
+            .into(),
+        );
     }
 
     pub fn add_repeat(&mut self, num_repeats: u64, body: SeqCGenerator) {
         let complexity = body.estimate_complexity() + 2; // penalty for loop overhead
-        self.statements.push(SeqCStatement::Repeat {
-            num_repeats,
-            body,
-            complexity,
-        });
+        self.statements.push(
+            SeqCStatement::Repeat {
+                num_repeats,
+                body,
+                complexity,
+            }
+            .into(),
+        );
     }
 
     pub fn add_if<S: Into<String>>(
@@ -277,18 +295,21 @@ impl SeqCGenerator {
         }
         let has_else = bodies.len() > conditions.len();
         let else_body = if has_else { bodies.pop() } else { None };
-        self.statements.push(SeqCStatement::DoIf {
-            conditions,
-            bodies,
-            else_body,
-            complexity,
-        });
+        self.statements.push(
+            SeqCStatement::DoIf {
+                conditions,
+                bodies,
+                else_body,
+                complexity,
+            }
+            .into(),
+        );
         Ok(())
     }
 
     pub fn add_function_def<S: Into<String>>(&mut self, text: S) {
         self.statements
-            .push(SeqCStatement::FunctionDef { text: text.into() });
+            .push(SeqCStatement::FunctionDef { text: text.into() }.into());
     }
 
     pub fn is_variable_declared(&self, variable_name: &Variable) -> bool {
@@ -310,10 +331,13 @@ impl SeqCGenerator {
             .into());
         }
         self.symbols.insert(variable_name.clone());
-        self.statements.push(SeqCStatement::VariableDeclaration {
-            variable_name,
-            initial_value,
-        });
+        self.statements.push(
+            SeqCStatement::VariableDeclaration {
+                variable_name,
+                initial_value,
+            }
+            .into(),
+        );
         Ok(())
     }
 
@@ -322,10 +346,13 @@ impl SeqCGenerator {
         variable_name: S,
         value: SeqCVariant,
     ) {
-        self.statements.push(SeqCStatement::VariableAssignment {
-            variable_name: variable_name.into(),
-            value,
-        });
+        self.statements.push(
+            SeqCStatement::VariableAssignment {
+                variable_name: variable_name.into(),
+                value,
+            }
+            .into(),
+        );
     }
 
     pub fn add_variable_increment<S: Into<String>>(
@@ -333,10 +360,13 @@ impl SeqCGenerator {
         variable_name: S,
         value: SeqCVariant,
     ) {
-        self.statements.push(SeqCStatement::VariableIncrement {
-            variable_name: variable_name.into(),
-            value,
-        });
+        self.statements.push(
+            SeqCStatement::VariableIncrement {
+                variable_name: variable_name.into(),
+                value,
+            }
+            .into(),
+        );
     }
 
     pub fn add_assign_wave_index_statement<S: Into<String>>(
@@ -345,11 +375,14 @@ impl SeqCGenerator {
         wave_index: WaveIndex,
         channel: Option<ChannelIndex>,
     ) {
-        self.statements.push(SeqCStatement::AssignWaveIndex {
-            wave_id: wave_id.into(),
-            wave_index,
-            channel,
-        });
+        self.statements.push(
+            SeqCStatement::AssignWaveIndex {
+                wave_id: wave_id.into(),
+                wave_index,
+                channel,
+            }
+            .into(),
+        );
     }
 
     pub fn add_play_wave_statement<S: Into<String>>(
@@ -357,10 +390,13 @@ impl SeqCGenerator {
         wave_id: S,
         channel: Option<ChannelIndex>,
     ) {
-        self.statements.push(SeqCStatement::PlayWave {
-            wave_id: wave_id.into(),
-            channel,
-        });
+        self.statements.push(
+            SeqCStatement::PlayWave {
+                wave_id: wave_id.into(),
+                channel,
+            }
+            .into(),
+        );
     }
 
     pub fn add_command_table_execution<S: Into<String>>(
@@ -369,11 +405,14 @@ impl SeqCGenerator {
         latency: Option<SeqCVariant>,
         comment: Option<S>,
     ) {
-        self.statements.push(SeqCStatement::CommandTableExecution {
-            table_index,
-            latency,
-            comment: comment.map(|s| s.into()),
-        });
+        self.statements.push(
+            SeqCStatement::CommandTableExecution {
+                table_index,
+                latency,
+                comment: comment.map(|s| s.into()),
+            }
+            .into(),
+        );
     }
 
     pub fn add_play_zero_or_hold(
@@ -382,9 +421,9 @@ impl SeqCGenerator {
         hold: bool,
         deferred_calls: &mut Option<&mut SeqCGenerator>,
     ) -> Result<()> {
-        let fname = if hold { "playHold" } else { "playZero" };
         let max_play_zero_hold = self.device_traits.max_play_zero_hold;
         if num_samples % self.device_traits.sample_multiple as Samples != 0 {
+            let fname = if hold { "playHold" } else { "playZero" };
             return Err(anyhow!(
                 "Emitting {function_name}({wave_length}), which is not divisible by \
                     {sample_multiple}, which it should be for {device_name}",
@@ -396,6 +435,7 @@ impl SeqCGenerator {
             .into());
         }
         if num_samples < self.device_traits.min_play_wave.into() {
+            let fname = if hold { "playHold" } else { "playZero" };
             return Err(anyhow!(
                 "Attempting to emit {}({}), which is below the minimum \
                 waveform length {} of device '{}' (sample multiple is {})",
@@ -408,10 +448,13 @@ impl SeqCGenerator {
             .into());
         }
         let add_statement = |_self: &mut SeqCGenerator, n: Samples| {
-            _self.statements.push(SeqCStatement::PlayZeroOrHold {
-                num_samples: n,
-                hold,
-            });
+            _self.statements.push(
+                SeqCStatement::PlayZeroOrHold {
+                    num_samples: n,
+                    hold,
+                }
+                .into(),
+            );
         };
         let flush_deferred_calls =
             |_self: &mut SeqCGenerator, deferred_calls: &mut Option<&mut SeqCGenerator>| {
@@ -478,10 +521,13 @@ impl SeqCGenerator {
                 }
                 n if n > 1 => {
                     let mut loop_body = self.create();
-                    loop_body.add_statement(SeqCStatement::PlayZeroOrHold {
-                        num_samples: max_play_zero_hold,
-                        hold,
-                    });
+                    loop_body.add_statement(
+                        SeqCStatement::PlayZeroOrHold {
+                            num_samples: max_play_zero_hold,
+                            hold,
+                        }
+                        .into(),
+                    );
                     self.add_repeat(num_segments, loop_body);
                 }
                 _ => {}
@@ -530,13 +576,14 @@ impl SeqCGenerator {
     /// The point here is not to be accurate about every statement, but to correctly
     /// gauge the size of loops etc.
     pub fn estimate_complexity(&self) -> u64 {
-        self.statements.iter().map(SeqCStatement::complexity).sum()
+        self.statements.iter().map(|x| x.complexity()).sum()
     }
 
-    pub fn generate_seq_c(&self) -> String {
-        self.statements
-            .iter()
-            .map(|statement| self.emit_statement(statement))
+    pub fn generate_seq_c(&mut self) -> String {
+        let statements = std::mem::take(&mut self.statements);
+        statements
+            .into_iter()
+            .map(|statement| self.emit_statement(statement.as_ref()))
             .collect::<String>()
     }
 
@@ -642,7 +689,7 @@ impl SeqCGenerator {
             SeqCStatement::Repeat {
                 num_repeats, body, ..
             } => {
-                let body = indent(&body.generate_seq_c(), "  ");
+                let body = indent(&body.clone().generate_seq_c(), "  ");
                 format!("repeat ({num_repeats}) {{\n{body}}}\n")
             }
             SeqCStatement::DoIf {
@@ -653,7 +700,7 @@ impl SeqCGenerator {
             } => {
                 let mut text = String::new();
                 for (i, condition) in conditions.iter().enumerate() {
-                    let body = indent(&bodies[i].generate_seq_c(), "  ");
+                    let body = indent(&bodies[i].clone().generate_seq_c(), "  ");
                     if i == 0 {
                         text += &format!("if ({condition}) {{\n{body}}}\n");
                     } else {
@@ -661,7 +708,7 @@ impl SeqCGenerator {
                     }
                 }
                 if let Some(else_body) = else_body {
-                    let body = indent(&else_body.generate_seq_c(), "  ");
+                    let body = indent(&else_body.clone().generate_seq_c(), "  ");
                     text += &format!("else {{\n{body}}}\n");
                 }
                 text

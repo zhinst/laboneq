@@ -127,11 +127,6 @@ fn collect_section_measurements<'a>(
             });
             return Ok(());
         }
-        NodeKind::LoopIteration(ob) => {
-            if ob.shadow {
-                return Ok(());
-            }
-        }
         _ => {}
     }
     if !node.has_children() {
@@ -151,6 +146,9 @@ fn collect_section_measurements<'a>(
                 acquire_operations: vec![],
             });
     }
+    // Check only the first iteration.
+    // Measurements are equal between the iterations.
+    let break_first = matches!(node.data(), NodeKind::Loop(_));
     for child in node.iter_children() {
         collect_section_measurements(
             child,
@@ -159,6 +157,9 @@ fn collect_section_measurements<'a>(
             section_map,
             sampling_rate,
         )?;
+        if break_first {
+            break;
+        }
     }
     Ok(())
 }
@@ -255,7 +256,7 @@ fn insert_ensure_unique_delays(
         if existing.delay_sequencer != delay.delay_sequencer {
             let mut delays = [existing.delay_sequencer, delay.delay_sequencer];
             delays.sort();
-            return Err(Error::new(&format!(
+            return Err(Error::new(format!(
                 "Cannot resolve measure timing on a signal {signal} \
                 as it would result in two different delays: {} and {}",
                 sample_converter.to_seconds(delays[0]),
@@ -264,7 +265,7 @@ fn insert_ensure_unique_delays(
         } else if existing.delay_port != delay.delay_port {
             let mut delays = [existing.delay_port, delay.delay_port];
             delays.sort();
-            return Err(Error::new(&format!(
+            return Err(Error::new(format!(
                 "Cannot resolve measure timing on a signal {signal} \
                 as it would result in two different delays: {} and {}",
                 delays[0], delays[1]
@@ -527,18 +528,18 @@ fn calculate_integration_times(
         }
         for play_op in measurement.play_operations.iter() {
             let play_length = play_op.end() - play_op.start;
-            if let Some(previous) = integration_lengths.get(play_op.signal.uid.as_str()) {
-                if previous.duration != play_length {
-                    let msg = format!(
-                        "Signal '{}' has two different integration lengths: \
+            if let Some(previous) = integration_lengths.get(play_op.signal.uid.as_str())
+                && previous.duration != play_length
+            {
+                let msg = format!(
+                    "Signal '{}' has two different integration lengths: \
                         '{}' from section '{}' and '{}' from earlier section.",
-                        &play_op.signal.uid,
-                        play_length,
-                        measurement.section_info.name,
-                        previous.duration
-                    );
-                    return Err(Error::new(&msg));
-                }
+                    &play_op.signal.uid,
+                    play_length,
+                    measurement.section_info.name,
+                    previous.duration
+                );
+                return Err(Error::new(&msg));
             }
             let integration = IntegrationLength {
                 signal: play_op.signal.uid.to_string(),
@@ -549,18 +550,18 @@ fn calculate_integration_times(
         }
         for acquire_op in measurement.acquire_operations.iter() {
             let length = acquire_op.end() - acquire_op.start;
-            if let Some(previous) = integration_lengths.get(acquire_op.signal.uid.as_str()) {
-                if previous.duration != length {
-                    let msg = format!(
-                        "Signal '{}' has two different integration lengths: \
+            if let Some(previous) = integration_lengths.get(acquire_op.signal.uid.as_str())
+                && previous.duration != length
+            {
+                let msg = format!(
+                    "Signal '{}' has two different integration lengths: \
                         '{}' from section '{}' and '{}' from earlier section.",
-                        acquire_op.signal.uid,
-                        sample_converter.to_seconds(length),
-                        measurement.section_info.name,
-                        sample_converter.to_seconds(previous.duration),
-                    );
-                    return Err(Error::new(&msg));
-                }
+                    acquire_op.signal.uid,
+                    sample_converter.to_seconds(length),
+                    measurement.section_info.name,
+                    sample_converter.to_seconds(previous.duration),
+                );
+                return Err(Error::new(&msg));
             }
             let integration = IntegrationLength {
                 signal: acquire_op.signal.uid.to_string(),

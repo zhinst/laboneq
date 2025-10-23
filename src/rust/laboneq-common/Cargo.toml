@@ -7,6 +7,10 @@ publish.workspace = true
 
 [dependencies]
 string-interner = { workspace = true }
+regex = { workspace = true }
 
 [lints]
 workspace = true
+
+[features]
+test_utils = []

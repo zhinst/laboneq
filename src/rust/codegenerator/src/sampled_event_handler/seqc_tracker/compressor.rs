@@ -6,7 +6,10 @@ use laboneq_log::{log, warn};
 use super::seqc_generator::SeqCGenerator;
 use super::seqc_statements::SeqCStatement;
 use crate::ir::compilation_job::DeviceKind;
-use std::hash::{Hash, Hasher};
+use std::{
+    hash::{Hash, Hasher},
+    rc::Rc,
+};
 
 #[derive(PartialEq, Clone, Debug)]
 enum HashOrRun {
@@ -39,7 +42,7 @@ trait CostFunction {
 }
 
 struct StatementCostFunction<'a> {
-    statement_by_hash: &'a std::collections::HashMap<u64, &'a SeqCStatement>,
+    statement_by_hash: &'a std::collections::HashMap<u64, Rc<SeqCStatement>>,
 }
 impl CostFunction for StatementCostFunction<'_> {
     fn cost_function(&self, run: &Run) -> i64 {
@@ -56,11 +59,11 @@ impl CostFunction for StatementCostFunction<'_> {
             unreachable!();
         };
         let first_statement = self.statement_by_hash.get(&hash).unwrap();
-        if let SeqCStatement::FunctionCall { name, .. } = first_statement {
-            if name == "startQA" {
-                // Never separate startQA from the preceding playWave or playZero (HBAR-2075)
-                return cost + 1_000_000;
-            }
+        if let SeqCStatement::FunctionCall { name, .. } = first_statement.as_ref()
+            && name == "startQA"
+        {
+            // Never separate startQA from the preceding playWave or playZero (HBAR-2075)
+            return cost + 1_000_000;
         }
         cost
     }
@@ -163,18 +166,17 @@ fn compress_hashes_recursive<T: CostFunction>(
             let word = &hashes[index..index + offset];
             let first_hash = to_hash(&word);
             let run = runs.get(&first_hash);
-            if let Some(runs_for_hash) = run {
-                if runs_for_hash.iter().any(|(_, r)| r.word != word) {
-                    panic!("hash collision detected");
-                }
+            if let Some(runs_for_hash) = run
+                && runs_for_hash.iter().any(|(_, r)| r.word != word)
+            {
+                panic!("hash collision detected");
             }
-            if let Some(runs_for_hash) = runs.get(&first_hash) {
-                if runs_for_hash
+            if let Some(runs_for_hash) = runs.get(&first_hash)
+                && runs_for_hash
                     .iter()
                     .any(|(start, run)| *start < index && index <= start + run.span())
-                {
-                    continue;
-                }
+            {
+                continue;
             }
             let mut run_length = 1;
             while index + (run_length + 1) * offset <= hashes.len()
@@ -221,27 +223,27 @@ fn compress_hashes_recursive<T: CostFunction>(
 
 pub fn compress_generator(generator: SeqCGenerator) -> SeqCGenerator {
     let mut statement_hashes: Vec<u64> = Vec::new();
-    let mut statement_by_hash = std::collections::HashMap::<u64, &SeqCStatement>::new();
+    let mut statement_by_hash = std::collections::HashMap::<u64, Rc<SeqCStatement>>::new();
 
     for statement in generator.statements() {
         let hash = statement.to_hash();
-        statement_hashes.push(hash);
-        if let Some(old_value) = statement_by_hash.insert(hash, statement) {
-            if old_value != statement {
-                warn!("hash collision detected, skipping code compression");
-                return generator;
-            }
+        if let Some(old_value) = statement_by_hash.insert(hash, Rc::clone(statement))
+            && &old_value != statement
+        {
+            warn!("hash collision detected, skipping code compression");
+            return generator;
         }
+        statement_hashes.push(hash);
     }
     let mut compressed_gen = generator.create();
-    let compressed_statesments = compress_hashes(
+    let compressed_statements = compress_hashes(
         &statement_hashes,
         &StatementCostFunction {
             statement_by_hash: &statement_by_hash,
         },
         false,
     );
-    match compressed_statesments {
+    match compressed_statements {
         Err(e) => {
             warn!("{e}");
             return generator;
@@ -251,7 +253,7 @@ pub fn compress_generator(generator: SeqCGenerator) -> SeqCGenerator {
                 match cs {
                     HashOrRun::Hash(hash) => {
                         let statement = statement_by_hash.get(&hash).unwrap();
-                        compressed_gen.add_statement((*statement).clone());
+                        compressed_gen.add_statement(Rc::clone(statement));
                     }
                     HashOrRun::Run {
                         count,
@@ -263,7 +265,7 @@ pub fn compress_generator(generator: SeqCGenerator) -> SeqCGenerator {
                                 unreachable!();
                             };
                             let statement = statement_by_hash.get(hash).unwrap();
-                            body.add_statement((*statement).clone());
+                            body.add_statement(Rc::clone(statement));
                         }
                         compressed_gen.add_repeat(count as u64, body);
                     }
@@ -275,7 +277,7 @@ pub fn compress_generator(generator: SeqCGenerator) -> SeqCGenerator {
 }
 
 pub fn merge_generators(
-    generators: &[&SeqCGenerator],
+    generators: Vec<SeqCGenerator>,
     compress: bool, // defaults to True
 ) -> SeqCGenerator {
     let mut compress = compress;
@@ -287,74 +289,78 @@ pub fn merge_generators(
     let mut retval = generators[0].create();
 
     if compress {
-        let mut generator_hashes: Vec<u64> = Vec::new();
+        let mut statement_hashes: Vec<u64> = Vec::new();
         let mut generator_by_hash = std::collections::HashMap::<u64, &SeqCGenerator>::new();
 
-        for generator in generators {
+        for generator in &generators {
             let hash = to_hash(generator);
-            generator_hashes.push(hash);
-            if let Some(old_value) = generator_by_hash.insert(hash, generator) {
-                if &old_value != generator {
-                    compress = false;
-                }
+            if let Some(old_value) = generator_by_hash.insert(hash, generator)
+                && old_value != generator
+            {
+                compress = false;
             }
+            statement_hashes.push(hash);
         }
         if !compress {
             warn!("hash collision detected, skipping code compression");
         } else {
             let compressed_generators = compress_hashes(
-                &generator_hashes,
+                &statement_hashes,
                 &GeneratorCostFunction {
                     generator_by_hash: &generator_by_hash,
                 },
                 false,
             );
-            if compressed_generators.is_err() {
-                warn!("{}", compressed_generators.err().unwrap());
-            } else {
-                let mut did_compress = false;
-                for cg in compressed_generators.unwrap() {
-                    match cg {
-                        HashOrRun::Run {
-                            count,
-                            statements_hashes,
-                        } => {
-                            let body = if statements_hashes.len() == 1 {
-                                let HashOrRun::Hash(first_hash) = &statements_hashes[0] else {
-                                    unreachable!();
-                                };
-                                // TODO: Consider using shared pointers here instead of cloning
-                                (*generator_by_hash.get(first_hash).unwrap()).clone()
-                            } else {
-                                did_compress = true;
-                                let mut body = retval.create();
-                                for gen_hash in statements_hashes {
-                                    let HashOrRun::Hash(hash) = gen_hash else {
+            match compressed_generators {
+                Err(error) => {
+                    warn!("{}", error);
+                }
+                Ok(cgs) => {
+                    let mut did_compress = false;
+                    for cg in cgs {
+                        match cg {
+                            HashOrRun::Run {
+                                count,
+                                statements_hashes,
+                            } => {
+                                let body = if statements_hashes.len() == 1 {
+                                    let HashOrRun::Hash(first_hash) = &statements_hashes[0] else {
                                         unreachable!();
                                     };
-                                    let generator = generator_by_hash.get(&hash).unwrap();
-                                    body.append_statements_from(generator);
-                                }
-                                body
-                            };
-                            retval.add_repeat(count as u64, compress_generator(body));
-                        }
-                        HashOrRun::Hash(hash) => {
-                            retval.append_statements_from(generator_by_hash.get(&hash).unwrap());
+                                    // TODO: Consider using shared pointers here instead of cloning
+                                    (*generator_by_hash.get(first_hash).unwrap()).clone()
+                                } else {
+                                    did_compress = true;
+                                    let mut body = retval.create();
+                                    for gen_hash in statements_hashes {
+                                        let HashOrRun::Hash(hash) = gen_hash else {
+                                            unreachable!();
+                                        };
+                                        let generator = generator_by_hash.get(&hash).unwrap();
+                                        body.append_statements_from(generator);
+                                    }
+                                    body
+                                };
+                                retval.add_repeat(count as u64, compress_generator(body));
+                            }
+                            HashOrRun::Hash(hash) => {
+                                retval
+                                    .append_statements_from(generator_by_hash.get(&hash).unwrap());
+                            }
                         }
                     }
+                    if did_compress {
+                        // 2nd pass on the merged generator, finding patterns that partially span across
+                        // multiple of the original parts.
+                        retval = compress_generator(retval);
+                    }
+                    return retval;
                 }
-                if did_compress {
-                    // 2nd pass on the merged generator, finding patterns that partially span across
-                    // multiple of the original parts.
-                    retval = compress_generator(retval);
-                }
-                return retval;
             }
         }
     }
     for g in generators {
-        retval.append_statements_from(g);
+        retval.append_statements_from(&g);
     }
     retval
 }

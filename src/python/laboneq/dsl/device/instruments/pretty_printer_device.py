@@ -12,13 +12,20 @@ from .zi_standard_instrument import ZIStandardInstrument
 
 
 @classformatter
-@attrs.define(slots=False)
+@attrs.define
 class PRETTYPRINTERDEVICE(ZIStandardInstrument):
-    """Class representing a virtual instrument that pretty prints some info about the experiment."""
+    """Class representing a virtual instrument that pretty prints some info about the experiment.
+
+    !!! version-changed "Changed in version 2.62.0"
+
+        Changed the class to be slotted, which prevents the accidental creation of new
+        attributes.
+    """
+
+    _ports: list[Port] = attrs.field(factory=list)
 
     def __attrs_post_init__(self):
         self.device_class = 0x1
-        self._ports: list[Port] = []
 
     def calc_options(self):
         return {

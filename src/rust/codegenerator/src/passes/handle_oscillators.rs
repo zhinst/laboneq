@@ -222,10 +222,10 @@ fn collect_osc_parameters(
             Ok(())
         }
         NodeKind::PhaseReset(ob) => {
-            if ob.reset_sw_oscillators {
-                if let Some(tracker) = phase_tracker {
-                    tracker.global_reset(&ob.signals, node_offset);
-                }
+            if ob.reset_sw_oscillators
+                && let Some(tracker) = phase_tracker
+            {
+                tracker.global_reset(&ob.signals, node_offset);
             }
             Ok(())
         }
@@ -297,24 +297,36 @@ struct SweepInfo {
     node_id_to_osc_index: HashMap<usize, Vec<OscillatorIteration>>,
 }
 
-fn collect_set_oscillator_frequency_nodes<'a>(node: &'a mut IrNode, out: &mut Vec<&'a mut IrNode>) {
+fn collect_set_oscillator_frequency_nodes<'a>(
+    node: &'a mut IrNode,
+    out: &mut Vec<(usize, &'a mut IrNode)>,
+    iteration: usize,
+) {
     for child in node.iter_children_mut() {
-        if let NodeKind::SetOscillatorFrequency(_) = child.data() {
-            out.push(child);
-        } else {
-            collect_set_oscillator_frequency_nodes(child, out);
+        match child.data() {
+            NodeKind::SetOscillatorFrequency(_) => {
+                out.push((iteration, child));
+            }
+            NodeKind::Loop(_) => {
+                for (i, loop_iteration) in child.iter_children_mut().enumerate() {
+                    collect_set_oscillator_frequency_nodes(loop_iteration, out, i);
+                }
+            }
+            _ => {
+                collect_set_oscillator_frequency_nodes(child, out, iteration);
+            }
         }
     }
 }
 
 fn evaluate_sweep_properties(
-    nodes: &Vec<&mut IrNode>,
+    nodes: &Vec<(usize, &mut IrNode)>,
     osc_allocation: &HashMap<&str, u16>,
 ) -> Result<SweepInfo> {
     let mut node_id_to_osc_index: HashMap<usize, Vec<OscillatorIteration>> = HashMap::new();
     let mut osc_sweep_info = HashMap::new();
 
-    for (node_id, node) in nodes.iter().enumerate() {
+    for (node_id, (iteration, node)) in nodes.iter().enumerate() {
         if let NodeKind::SetOscillatorFrequency(ob) = node.data() {
             let mut osc_frequencies = BTreeMap::new();
             for signal_freq in ob.iter() {
@@ -327,7 +339,6 @@ fn evaluate_sweep_properties(
                 // No hardware oscillators, skip
                 continue;
             }
-            let iteration = ob.iteration();
             for (osc_index, (frequency, signal)) in osc_frequencies {
                 // Keep track of the oscillator index and iteration number for this node
                 node_id_to_osc_index
@@ -335,9 +346,9 @@ fn evaluate_sweep_properties(
                     .or_default()
                     .push(OscillatorIteration {
                         osc_index,
-                        iteration,
+                        iteration: *iteration,
                     });
-                if iteration == 0 {
+                if iteration == &0 {
                     // First iteration, initialize the oscillator frequency info, overwriting any previous values
                     // in case of an nested loop
                     osc_sweep_info.insert(
@@ -354,7 +365,7 @@ fn evaluate_sweep_properties(
                 let sweep_info = osc_sweep_info.get_mut(&osc_index).expect(
                     "Internal error: Hardware oscillator frequencies not ordered by iteration number",
                 );
-                if iteration == 1 {
+                if iteration == &1 {
                     // Second iteration, set the step frequency
                     sweep_info.step_frequency = frequency - sweep_info.start_frequency;
                     sweep_info.current_frequency = frequency;
@@ -362,7 +373,7 @@ fn evaluate_sweep_properties(
                     // For subsequent iterations, check if the step frequency is linear
                     const STEP_ABS_TOLERANCE: f64 = 1e-3; // 1 mHz tolerance for hardware oscillator frequency sweeps
                     let next_step = frequency
-                        - iteration as f64 * sweep_info.step_frequency
+                        - *iteration as f64 * sweep_info.step_frequency
                         - sweep_info.start_frequency;
                     if next_step.abs() > STEP_ABS_TOLERANCE {
                         return Err(Error::new(
@@ -452,7 +463,7 @@ fn check_device_compatibility(device: &DeviceKind, sweep_info: &SweepInfo) -> Re
             .values()
             .any(|info| info.n_iterations > MAX_SWEEP_ITERATIONS_HDAWG)
     {
-        return Err(Error::new(&format!(
+        return Err(Error::new(format!(
             "HDAWG can only handle RT frequency sweeps up to {MAX_SWEEP_ITERATIONS_HDAWG} steps."
         )));
     }
@@ -481,13 +492,17 @@ pub fn handle_oscillator_sweeps(
         return Ok(());
     }
     let mut nodes = vec![];
-    collect_set_oscillator_frequency_nodes(node, &mut nodes);
+    collect_set_oscillator_frequency_nodes(node, &mut nodes, 0);
     if nodes.is_empty() {
         return Ok(());
     }
     let sweep_info = evaluate_sweep_properties(&nodes, signal_osc_index_allocation)?;
     check_device_compatibility(awg.device_kind(), &sweep_info)?;
-    replace_hw_oscillator_sweep_nodes(nodes, &sweep_info, cut_points);
+    replace_hw_oscillator_sweep_nodes(
+        nodes.into_iter().map(|(_, node)| node).collect(),
+        &sweep_info,
+        cut_points,
+    );
     Ok(())
 }
 
@@ -669,8 +684,8 @@ mod tests {
             AwgCore, Device, DeviceKind, Oscillator, OscillatorKind, Signal, SignalKind,
         };
         use crate::ir::{
-            LinearParameterInfo, NodeKind, OscillatorFrequencySweepStep, SetOscillatorFrequency,
-            SignalFrequency,
+            LinearParameterInfo, Loop, LoopIteration, NodeKind, OscillatorFrequencySweepStep,
+            SectionInfo, SetOscillatorFrequency, SignalFrequency,
         };
         use std::sync::Arc;
 
@@ -685,7 +700,7 @@ mod tests {
             }
         }
 
-        fn make_set_oscillator_frequency(values: Vec<(String, f64)>, iteration: usize) -> NodeKind {
+        fn make_set_oscillator_frequency(values: Vec<(String, f64)>) -> NodeKind {
             let values = values
                 .into_iter()
                 .map(|(signal_uid, frequency)| SignalFrequency {
@@ -705,8 +720,29 @@ mod tests {
                     frequency,
                 })
                 .collect();
-            let obj = SetOscillatorFrequency::new(values, iteration);
+            let obj = SetOscillatorFrequency::new(values);
             NodeKind::SetOscillatorFrequency(obj)
+        }
+
+        fn make_loop(count: u64) -> NodeKind {
+            let obj = Loop {
+                length: 0,
+                compressed: false,
+                count,
+                prng_sample: None,
+                section_info: SectionInfo {
+                    name: "".to_string(),
+                    id: 0,
+                }
+                .into(),
+                parameters: vec![],
+            };
+            NodeKind::Loop(obj)
+        }
+
+        fn make_loop_iteration() -> NodeKind {
+            let obj = LoopIteration { length: 0 };
+            NodeKind::LoopIteration(obj)
         }
 
         /// Test that oscillator frequency sweeps are correctly calculated and replaced in the IR tree.
@@ -742,21 +778,32 @@ mod tests {
             let freq_step = 0.5e9;
             let osc_index = 0;
 
-            let mut root = IrNode::new(NodeKind::Nop { length: 0 }, 0);
+            let mut loop_root = IrNode::new(make_loop(n_iterations), 0);
             for i in 0..n_iterations {
-                root.add_child(
-                    i * 32,
-                    make_set_oscillator_frequency(
-                        vec![("test".to_string(), start_freq + (i as f64) * freq_step)],
-                        i.try_into().unwrap(),
-                    ),
+                let mut iteration = IrNode::new(make_loop_iteration(), 0);
+                iteration.add_child(
+                    (i * 32) as Samples,
+                    make_set_oscillator_frequency(vec![(
+                        "test".to_string(),
+                        start_freq + (i as f64) * freq_step,
+                    )]),
                 );
+                loop_root.add_child_node(iteration);
             }
+            let mut root = IrNode::new(NodeKind::Nop { length: 0 }, 0);
+            root.add_child_node(loop_root);
             handle_oscillator_sweeps(&mut root, &awg, &mut HashSet::default()).unwrap();
 
             let children = root.iter_children().collect::<Vec<_>>();
+            let loop_children = children[0].iter_children().collect::<Vec<_>>();
             // Check that the target nodes has been replaced with a SetOscillatorFrequencySweep node
-            let target_first = children.first().unwrap();
+            let target_first = loop_children
+                .first()
+                .unwrap()
+                .iter_children()
+                .take(1)
+                .next()
+                .unwrap();
             let expected_first = SetOscillatorFrequencySweep {
                 length: 0,
                 oscillators: vec![OscillatorFrequencySweepStep {
@@ -769,10 +816,18 @@ mod tests {
                     }),
                 }],
             };
+            // First loop iteration child
             assert_set_oscillator_sweep(target_first.data(), &expected_first);
 
             // Check that the last node has the correct frequency sweep
-            let target_last = children.last().unwrap();
+            let target_last = loop_children
+                .last()
+                .unwrap()
+                .iter_children()
+                .rev()
+                .take(1)
+                .next()
+                .unwrap();
             let expected_last = SetOscillatorFrequencySweep {
                 length: 0,
                 oscillators: vec![OscillatorFrequencySweepStep {
@@ -785,6 +840,7 @@ mod tests {
                     }),
                 }],
             };
+            // Last loop iteration child
             assert_set_oscillator_sweep(target_last.data(), &expected_last);
         }
     }

@@ -153,10 +153,11 @@ struct WaveformSlot {
 }
 
 fn signals_share_hw_oscillator(s0: &cjob::Signal, s1: &cjob::Signal) -> bool {
-    if s0.is_hw_modulated() && s1.is_hw_modulated() {
-        if let (Some(topd), Some(nextd)) = (&s0.oscillator, &s1.oscillator) {
-            return topd == nextd;
-        }
+    if s0.is_hw_modulated()
+        && s1.is_hw_modulated()
+        && let (Some(topd), Some(nextd)) = (&s0.oscillator, &s1.oscillator)
+    {
+        return topd == nextd;
     }
     true
 }
@@ -193,26 +194,26 @@ where
     for next in intervals.iter_mut().skip(1) {
         // No overlap, store oscillator switch points if one
         if top.0.0.end <= next.0.0.start {
-            if let (Some(s0), Some(s1)) = (top.1, next.1) {
-                if !signals_share_hw_oscillator(s0, s1) {
-                    osc_switch_cut_pts.push(next.0.0.start);
-                }
+            if let (Some(s0), Some(s1)) = (top.1, next.1)
+                && !signals_share_hw_oscillator(s0, s1)
+            {
+                osc_switch_cut_pts.push(next.0.0.start);
             }
             top.0.0.end = next.0.0.end;
             top.1 = next.1;
         } else {
             // Overlapping ranges
-            if let (Some(s0), Some(s1)) = (top.1, next.1) {
-                if !signals_share_hw_oscillator(s0, s1) {
-                    let msg = format!(
-                        "Overlapping HW oscillators: '{:}' on signal '{:}' and '{:}' on signal '{:}'",
-                        s0.oscillator.as_ref().unwrap().uid,
-                        s0.uid,
-                        s1.oscillator.as_ref().unwrap().uid,
-                        s1.uid
-                    );
-                    return Err(anyhow!(msg).into());
-                }
+            if let (Some(s0), Some(s1)) = (top.1, next.1)
+                && !signals_share_hw_oscillator(s0, s1)
+            {
+                let msg = format!(
+                    "Overlapping HW oscillators: '{:}' on signal '{:}' and '{:}' on signal '{:}'",
+                    s0.oscillator.as_ref().unwrap().uid,
+                    s0.uid,
+                    s1.oscillator.as_ref().unwrap().uid,
+                    s1.uid
+                );
+                return Err(anyhow!(msg).into());
             }
             if top.0.0.end < next.0.0.end {
                 top.0.0.end = next.0.0.end;
@@ -311,10 +312,10 @@ fn create_waveform_slots(
         }
         match pulse_slot.kind() {
             &ir::NodeKind::FrameChange(_) => {
-                if let Some(current_waveform) = waveform_slots.last() {
-                    if pulse_slot.node.offset() >= &current_waveform.end {
-                        frame_change_cut_point = Some(pulse_slot.node.offset());
-                    }
+                if let Some(current_waveform) = waveform_slots.last()
+                    && pulse_slot.node.offset() >= &current_waveform.end
+                {
+                    frame_change_cut_point = Some(pulse_slot.node.offset());
                 }
             }
             _ => {
@@ -426,6 +427,8 @@ pub fn handle_plays(
             .enumerate()
             .map(|(idx, ob)| Interval::from_range(ob.start..ob.end, vec![idx]))
             .collect();
+        // TODO: Skip interval calculator for SHFQA measure pulses. No need to merge waveforms.
+        // There can be only one waveform per signal.
         let compacted_intervals = calculate_intervals(
             waveform_intervals,
             &cut_points_inp,
@@ -436,7 +439,6 @@ pub fn handle_plays(
             Some(traits.playwave_max_hint.unwrap_or(i64::MAX)),
             Some(&ct_intervals),
         );
-
         let compacted_intervals = match compacted_intervals {
             Err(e) => match e {
                 interval_calculator::Error::MinimumWaveformLengthViolation(_) => {

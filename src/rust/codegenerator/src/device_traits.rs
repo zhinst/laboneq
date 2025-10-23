@@ -42,7 +42,7 @@ pub struct DeviceTraits {
 
 pub const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
     type_str: "HDAWG",
-    sample_multiple: 16,
+    sample_multiple: device_traits_common::HDAWG_TRAITS.sample_multiple,
     sampling_rate: device_traits_common::HDAWG_TRAITS.sampling_rate,
     min_play_wave: 32,
     max_play_zero_hold: (1 << 19) - 16,
@@ -66,7 +66,7 @@ pub const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
 
 pub const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
     type_str: "UHFQA",
-    sample_multiple: 8,
+    sample_multiple: device_traits_common::UHFQA_TRAITS.sample_multiple,
     sampling_rate: device_traits_common::UHFQA_TRAITS.sampling_rate,
     min_play_wave: 16,
     max_play_zero_hold: 131056,
@@ -90,7 +90,7 @@ pub const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
 
 pub const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
     type_str: "SHFSG",
-    sample_multiple: 16,
+    sample_multiple: device_traits_common::SHFSG_TRAITS.sample_multiple,
     sampling_rate: device_traits_common::SHFSG_TRAITS.sampling_rate,
     min_play_wave: 32,
     max_play_zero_hold: (1 << 19) - 16,
@@ -118,7 +118,7 @@ pub const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
 
 pub const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
     type_str: "SHFQA",
-    sample_multiple: 16,
+    sample_multiple: device_traits_common::SHFQA_TRAITS.sample_multiple,
     sampling_rate: device_traits_common::SHFQA_TRAITS.sampling_rate,
     min_play_wave: 32,
     max_play_zero_hold: (1 << 19) - 16,

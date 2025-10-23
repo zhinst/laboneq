@@ -355,8 +355,6 @@ class CodeGenerator(ICodeGenerator):
             "HDAWG_MIN_PLAYZERO_HINT": self._settings.HDAWG_MIN_PLAYZERO_HINT,
             "UHFQA_MIN_PLAYWAVE_HINT": self._settings.UHFQA_MIN_PLAYWAVE_HINT,
             "UHFQA_MIN_PLAYZERO_HINT": self._settings.UHFQA_MIN_PLAYZERO_HINT,
-            "SHFQA_MIN_PLAYWAVE_HINT": self._settings.SHFQA_MIN_PLAYWAVE_HINT,
-            "SHFQA_MIN_PLAYZERO_HINT": self._settings.SHFQA_MIN_PLAYZERO_HINT,
             "SHFSG_MIN_PLAYWAVE_HINT": self._settings.SHFSG_MIN_PLAYWAVE_HINT,
             "SHFSG_MIN_PLAYZERO_HINT": self._settings.SHFSG_MIN_PLAYZERO_HINT,
             "SHF_OUTPUT_MUTE_MIN_DURATION": self._settings.SHF_OUTPUT_MUTE_MIN_DURATION,

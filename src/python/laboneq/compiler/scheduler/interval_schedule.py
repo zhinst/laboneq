@@ -80,6 +80,12 @@ class IntervalSchedule:
     cacheable: bool = True
 
     def __attrs_post_init__(self):
+        # Avoid circular imports
+        from laboneq.compiler.scheduler.acquire_group_schedule import (
+            AcquireGroupSchedule,
+        )
+        from laboneq.compiler.scheduler.pulse_schedule import PulseSchedule
+
         for child in self.children:
             self.grid = lcm(self.grid, child.grid)
             self.sequencer_grid = (
@@ -94,7 +100,9 @@ class IntervalSchedule:
                 else None
             )
             # An acquisition escalates the grid of the containing section
-            if getattr(child, "is_acquire", False):
+            if (isinstance(child, PulseSchedule) and child.is_acquire) or isinstance(
+                child, AcquireGroupSchedule
+            ):
                 self.grid = lcm(self.grid, self.sequencer_grid)
             if not child.cacheable:
                 self.cacheable = False

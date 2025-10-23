@@ -20,8 +20,6 @@ pub struct SanitizationChange {
 pub struct CodeGeneratorSettings {
     hdawg_min_playwave_hint: u16,
     hdawg_min_playzero_hint: u16,
-    shfqa_min_playwave_hint: u16,
-    shfqa_min_playzero_hint: u16,
     shfsg_min_playwave_hint: u16,
     shfsg_min_playzero_hint: u16,
     uhfqa_min_playwave_hint: u16,
@@ -38,8 +36,6 @@ impl CodeGeneratorSettings {
     pub fn new(
         hdawg_min_playwave_hint: u16,
         hdawg_min_playzero_hint: u16,
-        shfqa_min_playwave_hint: u16,
-        shfqa_min_playzero_hint: u16,
         shfsg_min_playwave_hint: u16,
         shfsg_min_playzero_hint: u16,
         uhfqa_min_playwave_hint: u16,
@@ -53,8 +49,6 @@ impl CodeGeneratorSettings {
         CodeGeneratorSettings {
             hdawg_min_playwave_hint,
             hdawg_min_playzero_hint,
-            shfqa_min_playwave_hint,
-            shfqa_min_playzero_hint,
             shfsg_min_playwave_hint,
             shfsg_min_playzero_hint,
             uhfqa_min_playwave_hint,
@@ -90,9 +84,15 @@ impl CodeGeneratorSettings {
     pub fn waveform_size_hints(&self, device: &DeviceKind) -> (u16, u16) {
         let (min_pw, min_pz) = match device {
             DeviceKind::HDAWG => (self.hdawg_min_playwave_hint, self.hdawg_min_playzero_hint),
-            DeviceKind::SHFQA => (self.shfqa_min_playwave_hint, self.shfqa_min_playzero_hint),
             DeviceKind::SHFSG => (self.shfsg_min_playwave_hint, self.shfsg_min_playzero_hint),
             DeviceKind::UHFQA => (self.uhfqa_min_playwave_hint, self.uhfqa_min_playzero_hint),
+            // On SHFQA there is no reason to have hints as there can be only one waveform per signal.
+            // Use the lowest hints possible to ensure no extra padding is added to the waveforms to ensure
+            // that a single waveform is created.
+            DeviceKind::SHFQA => (
+                device.traits().sample_multiple,
+                device.traits().min_play_wave as u16,
+            ),
         };
         (min_pw, min_pz)
     }
@@ -104,11 +104,6 @@ impl CodeGeneratorSettings {
                 "hdawg_min_playwave_hint",
                 &mut self.hdawg_min_playwave_hint,
                 DeviceKind::HDAWG.traits().sample_multiple,
-            ),
-            (
-                "shfqa_min_playwave_hint",
-                &mut self.shfqa_min_playwave_hint,
-                DeviceKind::SHFQA.traits().sample_multiple,
             ),
             (
                 "shfsg_min_playwave_hint",
@@ -138,7 +133,7 @@ impl CodeGeneratorSettings {
 }
 
 fn sanitize_min_playwave_hint(value: u16, sample_multiple: u16) -> Result<u16> {
-    if value % sample_multiple != 0 {
+    if !value.is_multiple_of(sample_multiple) {
         return ceil_to_grid(value.into(), sample_multiple.into())
             .try_into()
             .map_err(|_| {
@@ -168,7 +163,7 @@ mod tests {
         let min_play_wave: u16 = DeviceKind::HDAWG.traits().min_play_wave.try_into().unwrap();
         let pw_original: u16 = min_play_wave + offset;
         let mut settings =
-            CodeGeneratorSettings::new(pw_original, 0, 0, 0, 0, 0, 0, 0, 16, 16, true, true, 0.0);
+            CodeGeneratorSettings::new(pw_original, 0, 0, 0, 0, 0, 16, 16, true, true, 0.0);
         let changes = settings.sanitize().unwrap();
         assert_eq!(
             settings.hdawg_min_playwave_hint,

@@ -19,7 +19,7 @@ def _reference_clock_source_converter(
 
 
 @classformatter
-@attrs.define(slots=False)
+@attrs.define
 class ZIStandardInstrument(Instrument):
     """Base class representing a ZI instrument controlled via a LabOne Data Server.
 
@@ -29,6 +29,11 @@ class ZIStandardInstrument(Instrument):
         device_options: Options of the instruments.
         reference_clock_source: Reference clock source.
             Options: 'internal', 'external'
+
+    !!! version-changed "Changed in version 2.62.0"
+
+        Changed the class to be slotted, which prevents the accidental creation of new
+        attributes.
     """
 
     server_uid: str | None = attrs.field(default=None)

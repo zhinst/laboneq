@@ -43,8 +43,8 @@ pub enum Error {
 }
 
 impl Error {
-    pub fn new(msg: &str) -> Self {
-        Error::Anyhow(anyhow::anyhow!(msg.to_string()))
+    pub fn new<T: Into<String>>(msg: T) -> Self {
+        Error::Anyhow(anyhow::anyhow!(msg.into()))
     }
 
     pub fn with_error<E: Into<anyhow::Error>>(err: E) -> Self {

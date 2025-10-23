@@ -177,8 +177,7 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
 
     async def _wait_execution_to_stop(self, execution_context: ExecutionContext):
         recipe_data = execution_context.recipe_data
-        rt_execution_info = recipe_data.rt_execution_info
-        min_wait_time, guarded_wait_time = get_execution_time(rt_execution_info)
+        min_wait_time, guarded_wait_time = get_execution_time(recipe_data)
         if min_wait_time > 5:  # Only inform about RT executions taking longer than 5s
             _logger.info("Estimated RT execution time: %.2f s.", min_wait_time)
 
@@ -548,10 +547,12 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
                     results=nt_step_result_context.execution_context.submission.results,
                     nt_step=nt_step_result_context.nt_step,
                 )
-        except Exception as e:
+        except Exception as exc:
             if not nt_step_result_context.execution_context.submission.completion_future.done():
+                wrapper = RuntimeError("operation failed")
+                wrapper.__cause__ = exc
                 nt_step_result_context.execution_context.submission.completion_future.set_exception(
-                    e
+                    wrapper
                 )
         # Indicate that the results for this step are ready.
         nt_step_result_context.nt_step_result_completed.set_result(None)

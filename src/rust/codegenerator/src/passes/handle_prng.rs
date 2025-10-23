@@ -17,14 +17,14 @@ fn handle_prng_recursive(
     for child in node.iter_children() {
         match child.data() {
             ir::NodeKind::SetupPrng(data) => {
-                if let Some(ref section_id) = parent_prng_setup_section_here {
-                    if section_id != &data.section_info.id {
-                        return Err(anyhow::anyhow!(
-                            "PRNG setup already exists while processing section {}",
-                            data.section_info.name
-                        )
-                        .into());
-                    }
+                if let Some(ref section_id) = parent_prng_setup_section_here
+                    && section_id != &data.section_info.id
+                {
+                    return Err(anyhow::anyhow!(
+                        "PRNG setup already exists while processing section {}",
+                        data.section_info.name
+                    )
+                    .into());
                 }
                 parent_prng_setup_section_here = Some(data.section_info.id);
                 cut_points.insert(*child.offset());
@@ -55,9 +55,10 @@ fn handle_prng_recursive(
                 }
             }
             ir::NodeKind::Match(data) => {
-                if let Some(sample_name) = &data.prng_sample {
-                    if data.prng_sample != *active_prng_sample {
-                        return Err(anyhow!(
+                if let Some(sample_name) = &data.prng_sample
+                    && data.prng_sample != *active_prng_sample
+                {
+                    return Err(anyhow!(
                         "In section '{}': cannot match PRNG sample '{}' here. The only available PRNG sample is '{}'.",
                         data.section_info.name,
                         sample_name,
@@ -65,7 +66,6 @@ fn handle_prng_recursive(
                             .as_ref()
                             .unwrap_or(&String::from("<empty>")),
                     ).into());
-                    }
                 }
                 handle_prng_recursive(
                     child,

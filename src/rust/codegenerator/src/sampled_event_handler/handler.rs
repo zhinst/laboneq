@@ -19,10 +19,8 @@ use super::{AwgEventList, FeedbackRegisterIndex, Result, Samples, SeqcResults};
 use crate::device_traits::{self};
 use crate::ir::compilation_job::{AwgKey, AwgKind, ChannelIndex, DeviceKind, TriggerMode};
 use crate::ir::experiment::{AcquisitionType, Handle, SweepCommand};
-use crate::ir::{InitAmplitudeRegister, OscillatorFrequencySweepStep, ParameterOperation};
+use crate::ir::{OscillatorFrequencySweepStep, ParameterOperation};
 use crate::sample_waveforms::WaveDeclaration;
-use crate::signature::WaveformSignature;
-use crate::utils::normalize_phase;
 use core::str;
 use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
@@ -47,10 +45,10 @@ fn legacy_ordering(event: &AwgEvent) -> i32 {
         EventType::InitialResetPhase(..) => -5,
         EventType::LoopStepStart(..) => -4,
         EventType::LoopStepEnd(..) => -4,
-        EventType::InitAmplitudeRegister(..) => -3,
+        EventType::InitAmplitudeRegister { .. } => -3,
         EventType::PushLoop(..) => -2,
         EventType::ResetPhase(..) => -1,
-        EventType::ResetPrecompensationFilters(..) => -1,
+        EventType::ResetPrecompensationFilters { .. } => -1,
         EventType::AcquireEvent(..) => -1,
         EventType::Iterate(..) => 2,
         _ => 0,
@@ -59,7 +57,7 @@ fn legacy_ordering(event: &AwgEvent) -> i32 {
 
 fn has_priority(event: &AwgEvent) -> bool {
     match event.kind {
-        EventType::InitAmplitudeRegister(..)
+        EventType::InitAmplitudeRegister { .. }
         | EventType::Match(..)
         | EventType::PlayHold(..)
         | EventType::SetOscillatorFrequency(..)
@@ -78,7 +76,7 @@ fn has_priority(event: &AwgEvent) -> bool {
         | EventType::PushLoop(..)
         | EventType::QaEvent(..)
         | EventType::ResetPhase(..)
-        | EventType::ResetPrecompensationFilters(..)
+        | EventType::ResetPrecompensationFilters { .. }
         | EventType::TriggerOutput(..)
         | EventType::TriggerOutputBit(..) => true,
     }
@@ -190,7 +188,7 @@ fn make_command_table_comment(signature: &PlayWaveEvent) -> String {
         parts.push(ampl_register);
     }
     if !signature.waveform.is_playzero() {
-        parts.push(signature.waveform.signature_string());
+        parts.push(signature.waveform.signature_string().to_string());
     }
     parts.join("; ")
 }
@@ -452,8 +450,7 @@ impl<'a> SampledEventHandler<'a> {
         data: &'a PlayWaveEvent,
     ) -> Result<()> {
         let play_wave_channel = self.awg.play_channels.first().map(|c| c % 2);
-        let sig_string = data.waveform.signature_string();
-        let wave_index = self.get_wave_index(data, &sig_string, play_wave_channel)?;
+        let wave_index = self.get_wave_index(data, play_wave_channel)?;
 
         if let Some(match_parent_event) = self.match_parent_event
             && let EventType::Match(parent_data) = &match_parent_event.kind
@@ -472,12 +469,7 @@ impl<'a> SampledEventHandler<'a> {
                     match_parent_event.start,
                 )?;
             } else if parent_data.user_register.is_some() {
-                self.handle_playwave_for_user_register(
-                    data,
-                    &sig_string,
-                    wave_index,
-                    play_wave_channel,
-                )?;
+                self.handle_playwave_for_user_register(data, wave_index, play_wave_channel)?;
             } else if parent_data.prng_sample {
                 self.handle_playwave_on_prng(
                     start,
@@ -498,14 +490,7 @@ impl<'a> SampledEventHandler<'a> {
                 "Internal error: State without parent match."
             );
 
-            self.handle_regular_playwave(
-                start,
-                end,
-                data,
-                &sig_string,
-                wave_index,
-                play_wave_channel,
-            )?;
+            self.handle_regular_playwave(start, end, data, wave_index, play_wave_channel)?;
         }
         Ok(())
     }
@@ -538,7 +523,6 @@ impl<'a> SampledEventHandler<'a> {
     fn handle_playwave_for_user_register(
         &mut self,
         signature: &PlayWaveEvent,
-        signature_string: &str,
         wave_index: Option<WaveIndex>,
         play_wave_channel: Option<ChannelIndex>,
     ) -> Result<()> {
@@ -565,7 +549,8 @@ impl<'a> SampledEventHandler<'a> {
                 Some(comment),
             );
         } else {
-            branch_generator.add_play_wave_statement(signature_string, play_wave_channel);
+            branch_generator
+                .add_play_wave_statement(signature.waveform.signature_string(), play_wave_channel);
         }
         Ok(())
     }
@@ -598,7 +583,6 @@ impl<'a> SampledEventHandler<'a> {
         start: Samples,
         end: Samples,
         signature: &PlayWaveEvent,
-        signature_string: &str,
         wave_index: Option<WaveIndex>,
         play_wave_channel: Option<ChannelIndex>,
     ) -> Result<()> {
@@ -619,7 +603,7 @@ impl<'a> SampledEventHandler<'a> {
             )?;
         } else {
             self.seqc_tracker
-                .add_play_wave_statement(signature_string, play_wave_channel);
+                .add_play_wave_statement(signature.waveform.signature_string(), play_wave_channel);
         }
         self.seqc_tracker.flush_deferred_function_calls();
         self.seqc_tracker.set_current_time(end);
@@ -640,33 +624,20 @@ impl<'a> SampledEventHandler<'a> {
     fn handle_amplitude_register_init(
         &mut self,
         start: Samples,
-        data: &InitAmplitudeRegister,
+        signature: &PlayWaveEvent,
     ) -> Result<()> {
         self.assert_command_table("Amplitude register init on unsupported device.")?;
-        let signature = PlayWaveEvent {
-            waveform: WaveformSignature::Pulses {
-                length: 0,
-                pulses: vec![],
-            },
-            state: None,
-            hw_oscillator: None,
-            amplitude_register: data.register,
-            amplitude: Some(data.value.clone()),
-            increment_phase: None,
-            increment_phase_params: vec![],
-            channels: vec![],
-        };
         self.seqc_tracker.add_required_playzeros(start)?;
         self.seqc_tracker.flush_deferred_phase_changes();
         let ct_index = self
             .command_table_tracker
-            .lookup_index_by_signature(&signature)
+            .lookup_index_by_signature(signature)
             .unwrap_or_else(|| {
                 self.command_table_tracker
-                    .create_entry(&signature, None, false)
+                    .create_entry(signature, None, false)
                     .unwrap()
             });
-        let comment = make_command_table_comment(&signature);
+        let comment = make_command_table_comment(signature);
         self.seqc_tracker.add_command_table_execution(
             SeqCVariant::Integer(ct_index as i64),
             None,
@@ -705,31 +676,12 @@ impl<'a> SampledEventHandler<'a> {
     }
 
     fn handle_change_hw_oscillator_phase(&mut self, data: &ChangeHwOscPhase) -> Result<()> {
-        // The `phase_resolution_range` is irrelevant here; for the CT phase a fixed
-        // precision is used.
-        const PHASE_RESOLUTION_CT: f64 = (1 << 24) as f64 / (2.0 * std::f64::consts::PI);
-        let quantized_phase =
-            normalize_phase((data.phase * PHASE_RESOLUTION_CT).round() / PHASE_RESOLUTION_CT);
-        let signature = PlayWaveEvent {
-            waveform: WaveformSignature::Pulses {
-                length: 0,
-                pulses: vec![],
-            },
-            state: None,
-            hw_oscillator: data.hw_oscillator.clone(),
-            amplitude_register: 0,
-            amplitude: None,
-            increment_phase: Some(quantized_phase),
-            increment_phase_params: vec![data.parameter.clone()],
-            channels: vec![],
-        };
-
         let ct_index = self
             .command_table_tracker
-            .get_or_create_entry(&signature, None)?;
+            .get_or_create_entry(&data.signature, None)?;
         self.seqc_tracker.add_phase_change(
             SeqCVariant::Integer(ct_index as i64),
-            Some(make_command_table_comment(&signature)),
+            Some(make_command_table_comment(&data.signature)),
         );
         Ok(())
     }
@@ -738,12 +690,12 @@ impl<'a> SampledEventHandler<'a> {
         &mut self,
         start: Samples,
         end: Samples,
-        length: Samples,
+        signature: &PlayWaveEvent,
     ) -> Result<()> {
         self.seqc_tracker.add_required_playzeros(start)?;
         if self.awg.device_kind.traits().supports_command_table {
-            let signature_string = "precomp_reset";
-            let ct_index = self.precomp_reset_ct_index(length)?;
+            let signature_string = signature.waveform.signature_string();
+            let ct_index = self.precomp_reset_ct_index(signature)?;
             self.seqc_tracker.add_command_table_execution(
                 SeqCVariant::Integer(ct_index as i64),
                 None,
@@ -787,14 +739,13 @@ impl<'a> SampledEventHandler<'a> {
             );
         } else {
             let mut skip: bool = false;
-            if let Some(last_event) = &self.last_event {
-                if let EventType::AcquireEvent(..) = last_event.kind {
-                    if last_event.start == start {
-                        // If the last event was an acquire event, we skip this one
-                        // if it has the same start time.
-                        skip = true;
-                    }
-                }
+            if let Some(last_event) = &self.last_event
+                && let EventType::AcquireEvent(..) = last_event.kind
+                && last_event.start == start
+            {
+                // If the last event was an acquire event, we skip this one
+                // if it has the same start time.
+                skip = true;
             }
             if !skip {
                 self.seqc_tracker.add_function_call_statement(
@@ -1009,7 +960,7 @@ impl<'a> SampledEventHandler<'a> {
                 .seqc_tracker
                 .pop_loop_stack_generators()
                 .expect("Internal error: No open loop generators found.");
-            let loop_body = merge_generators(&open_generators.iter().collect::<Vec<_>>(), true);
+            let loop_body = merge_generators(open_generators, true);
             loop_generator.add_repeat(data.num_repeats, loop_body);
             if self.emit_timing_comments {
                 loop_generator.add_comment(format!("Loop for {data:?}"))
@@ -1077,7 +1028,7 @@ impl<'a> SampledEventHandler<'a> {
             generator_channels.extend(play_event.channels.iter());
             let waveform_signature = &play_event.waveform;
             self.wave_indices.add_numbered_wave(
-                waveform_signature.signature_string(),
+                waveform_signature,
                 SignalType::COMPLEX,
                 *play_event.channels.first().unwrap_or(&0) as WaveIndex,
             );
@@ -1157,7 +1108,6 @@ impl<'a> SampledEventHandler<'a> {
     fn get_wave_index(
         &mut self,
         signature: &PlayWaveEvent,
-        sig_string: &str,
         play_wave_channel: Option<ChannelIndex>,
     ) -> Result<Option<WaveIndex>> {
         if signature.waveform.is_playzero() && self.awg.device_kind.traits().supports_command_table
@@ -1165,7 +1115,9 @@ impl<'a> SampledEventHandler<'a> {
             // all-zero pulse is played via play-zero command table entry
             Ok(None)
         } else {
-            let wave_index = self.wave_indices.lookup_index_by_wave_id(sig_string);
+            let wave_index = self
+                .wave_indices
+                .lookup_index_by_wave_id(&signature.waveform);
             match wave_index {
                 Some(index) => Ok(Some(index)),
                 None => {
@@ -1177,9 +1129,9 @@ impl<'a> SampledEventHandler<'a> {
                     let signal_type = SignalType::SIGNAL(self.awg.signal_kind);
                     let new_wave_index = self
                         .wave_indices
-                        .create_index_for_wave(sig_string, signal_type)?;
+                        .create_index_for_wave(&signature.waveform, signal_type)?;
                     self.declarations_generator.add_assign_wave_index_statement(
-                        sig_string,
+                        signature.waveform.signature_string(),
                         new_wave_index,
                         play_wave_channel,
                     );
@@ -1189,30 +1141,23 @@ impl<'a> SampledEventHandler<'a> {
         }
     }
 
-    fn precomp_reset_ct_index(&mut self, length: Samples) -> Result<usize> {
-        let signature = PlayWaveEvent {
-            hw_oscillator: None,
-            amplitude: None,
-            amplitude_register: 0,
-            increment_phase: None,
-            increment_phase_params: vec![],
-            waveform: WaveformSignature::Pulses {
-                length,
-                pulses: vec![],
-            },
-            state: None,
-            channels: vec![],
-        };
-        let signature_string = "precomp_reset";
-        let wave_index = self.wave_indices.lookup_index_by_wave_id(signature_string);
+    fn precomp_reset_ct_index(&mut self, signature: &PlayWaveEvent) -> Result<usize> {
+        let wave_index = self
+            .wave_indices
+            .lookup_index_by_wave_id(&signature.waveform);
         Ok(if wave_index.is_none() {
             assert!(self.awg.device_kind.traits().supports_binary_waves);
 
-            self.declarations_generator
-                .add_zero_wave_declaration(signature_string, length)?;
+            self.declarations_generator.add_zero_wave_declaration(
+                signature.waveform.signature_string(),
+                signature.waveform.length(),
+            )?;
             let wave_index = self
                 .wave_indices
-                .create_index_for_wave(signature_string, SignalType::SIGNAL(self.awg.signal_kind))
+                .create_index_for_wave(
+                    &signature.waveform,
+                    SignalType::SIGNAL(self.awg.signal_kind),
+                )
                 .map_err(|_| {
                     anyhow::anyhow!(
                         "Internal error: Could not create wave index for precompensation reset."
@@ -1220,7 +1165,7 @@ impl<'a> SampledEventHandler<'a> {
                 })?;
             let play_wave_channel = self.awg.play_channels.first().map(|c| c % 2);
             self.declarations_generator.add_assign_wave_index_statement(
-                signature_string,
+                signature.waveform.signature_string(),
                 wave_index,
                 play_wave_channel,
             );
@@ -1229,7 +1174,7 @@ impl<'a> SampledEventHandler<'a> {
                 .create_precompensation_clear_entry(signature, wave_index)
         } else {
             self.command_table_tracker
-                .lookup_index_by_signature(&signature)
+                .lookup_index_by_signature(signature)
                 .expect("Internal error: Command table entry for precompensation reset not found.")
         })
     }
@@ -1540,8 +1485,8 @@ impl<'a> SampledEventHandler<'a> {
                 self.handle_playwave(start, end, data)?;
             }
             EventType::PlayHold() => self.handle_playhold(start, end)?,
-            EventType::InitAmplitudeRegister(ref data) => {
-                self.handle_amplitude_register_init(start, data)?
+            EventType::InitAmplitudeRegister { ref signature } => {
+                self.handle_amplitude_register_init(start, signature)?
             }
             EventType::Match(ref data) => {
                 self.handle_match(data)?;
@@ -1550,8 +1495,8 @@ impl<'a> SampledEventHandler<'a> {
             EventType::ChangeHwOscPhase(ref data) => {
                 self.handle_change_hw_oscillator_phase(data)?
             }
-            EventType::ResetPrecompensationFilters(ref data) => {
-                self.handle_reset_precompensation_filters(start, end, *data)?
+            EventType::ResetPrecompensationFilters { ref signature } => {
+                self.handle_reset_precompensation_filters(start, end, signature)?
             }
             EventType::AcquireEvent() => self.handle_acquire(start)?,
             EventType::PpcSweepStepStart(ref data) => self.handle_ppc_step_start(start, data)?,
@@ -1563,17 +1508,17 @@ impl<'a> SampledEventHandler<'a> {
                 // If multiple phase reset events are scheduled at the same time,
                 // only process the *last* one. This way, RESET_PHASE takes
                 // precedence over INITIAL_RESET_PHASE.
-                if let Some(last_phase_reset) = self.last_phase_reset {
-                    if std::ptr::eq(sampled_event as *const _, last_phase_reset) {
-                        self.handle_reset_phase(start, false)?
-                    }
+                if let Some(last_phase_reset) = self.last_phase_reset
+                    && std::ptr::eq(sampled_event as *const _, last_phase_reset)
+                {
+                    self.handle_reset_phase(start, false)?
                 }
             }
             EventType::InitialResetPhase() => {
-                if let Some(last_phase_reset) = self.last_phase_reset {
-                    if std::ptr::eq(sampled_event as *const _, last_phase_reset) {
-                        self.handle_reset_phase(start, true)?
-                    }
+                if let Some(last_phase_reset) = self.last_phase_reset
+                    && std::ptr::eq(sampled_event as *const _, last_phase_reset)
+                {
+                    self.handle_reset_phase(start, true)?
                 }
             }
             EventType::LoopStepStart() => self.handle_loop_step_start(start)?,
@@ -1649,7 +1594,7 @@ impl<'a> SampledEventHandler<'a> {
             seq_c_generators.extend(part.into_iter().rev());
         }
         seq_c_generators.reverse();
-        let main_generator = merge_generators(&seq_c_generators.iter().collect::<Vec<_>>(), true);
+        let main_generator = merge_generators(seq_c_generators, true);
         let mut seq_c_generator = self.create_seqc_generator();
         if self.function_defs_generator.num_statements() > 0 {
             seq_c_generator.append_statements_from(&self.function_defs_generator);

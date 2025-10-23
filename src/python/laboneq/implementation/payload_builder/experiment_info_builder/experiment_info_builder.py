@@ -929,7 +929,13 @@ class ExperimentInfoBuilder:
             if not isinstance(operation, SignalOperation):
                 continue
             assert operation.signal is not None
-            signal_info = self._signal_infos[operation.signal]
+            try:
+                signal_info = self._signal_infos[operation.signal]
+            except KeyError as e:
+                raise LabOneQException(
+                    f"Signal {operation.signal} not present in experiment."
+                    f" Available signal(s) are: {', '.join(self._signal_infos)}."
+                ) from e
             self._load_ssp(
                 operation,
                 signal_info,
@@ -944,7 +950,7 @@ class ExperimentInfoBuilder:
                 raise LabOneQException(
                     f"Trigger on section {section.uid} played on signal"
                     f" {trigger_signal} not present in experiment."
-                    f" Available signal(s) are {', '.join(self._signal_infos)}."
+                    f" Available signal(s) are: {', '.join(self._signal_infos)}."
                 ) from e
             if signal_info not in section_info.signals:
                 section_info.signals.append(signal_info)
@@ -1285,7 +1291,7 @@ class ExperimentInfoBuilder:
                     f"Section '{parent.uid}' has multiple sweeping subsections."
                     f" This is illegal in sequential averaging mode."
                 )
-            innermost_sweep = this_innermost_sweep
+            innermost_sweep = this_innermost_sweep or innermost_sweep
         if innermost_sweep is not None:
             return innermost_sweep
         if (

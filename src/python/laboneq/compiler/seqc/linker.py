@@ -24,7 +24,8 @@ from laboneq.compiler.seqc.measurement_calculator import (
 )
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums.wave_type import WaveType
-from laboneq.core.utilities.seqc_compile import SeqCCompileItem, awg_compile
+from laboneq.core.utilities import seqc_compile
+from laboneq.core.utilities.seqc_compile import SeqCCompileItem
 from laboneq.data.recipe import NtStepKey
 from laboneq.data.scheduled_experiment import (
     COMPLEX_USAGE,
@@ -385,7 +386,7 @@ class SeqCLinker(ILinker):
             for seqc_program in this.src.values()
             if seqc_program.dev_type is not None
         ]
-        awg_compile(seqc_items)
+        seqc_compile.awg_compile(seqc_items)
         for seqc_item in seqc_items:
             this.src[seqc_item.filename].elf = seqc_item.elf
 

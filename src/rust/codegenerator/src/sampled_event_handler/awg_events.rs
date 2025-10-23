@@ -2,22 +2,79 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 use super::seqc_tracker::awg::HwOscillator;
 use crate::ir::Samples;
 use crate::ir::compilation_job::ChannelIndex;
 use crate::{
     ir::{
-        InitAmplitudeRegister, Match, OscillatorFrequencySweepStep, ParameterOperation,
-        PlayAcquire, PlayWave, QaEvent as QaEventIr,
+        Match, OscillatorFrequencySweepStep, ParameterOperation, PlayAcquire,
         experiment::{Handle, SweepCommand},
     },
     signature::WaveformSignature,
 };
 
+#[derive(Clone, Debug)]
+pub struct StaticWaveformSignature {
+    uid: u64,
+    waveform: WaveformSignature,
+    signature_string: String,
+}
+
+pub enum PulseSource {
+    Pulses,
+    Samples,
+}
+
+impl StaticWaveformSignature {
+    pub fn new(uid: u64, waveform: WaveformSignature, signature_string: String) -> Self {
+        Self {
+            uid,
+            waveform,
+            signature_string,
+        }
+    }
+
+    pub fn kind(&self) -> PulseSource {
+        match self.waveform {
+            WaveformSignature::Pulses { .. } => PulseSource::Pulses,
+            WaveformSignature::Samples { .. } => PulseSource::Samples,
+        }
+    }
+
+    pub fn length(&self) -> Samples {
+        self.waveform.length()
+    }
+
+    pub fn signature_string(&self) -> &str {
+        &self.signature_string
+    }
+
+    pub fn is_playzero(&self) -> bool {
+        self.waveform.is_playzero()
+    }
+
+    pub fn uid(&self) -> u64 {
+        self.uid
+    }
+}
+
+impl PartialEq for StaticWaveformSignature {
+    fn eq(&self, other: &Self) -> bool {
+        self.uid == other.uid
+    }
+}
+impl Eq for StaticWaveformSignature {}
+impl Hash for StaticWaveformSignature {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.uid().hash(state);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlayWaveEvent {
-    pub waveform: WaveformSignature,
+    pub waveform: Rc<StaticWaveformSignature>,
     pub state: Option<u16>,
     pub hw_oscillator: Option<HwOscillator>,
     pub amplitude_register: u16,
@@ -41,28 +98,6 @@ impl Hash for PlayWaveEvent {
     }
 }
 
-impl PlayWaveEvent {
-    pub fn from_ir(
-        event: PlayWave,
-        state: Option<u16>,
-        hw_oscillator: Option<HwOscillator>,
-    ) -> Self {
-        PlayWaveEvent {
-            waveform: event.waveform,
-            state,
-            hw_oscillator,
-            amplitude_register: event.amplitude_register,
-            amplitude: event.amplitude,
-            increment_phase: event.increment_phase,
-            increment_phase_params: event.increment_phase_params,
-            channels: event
-                .signals
-                .first()
-                .map_or_else(Vec::new, |sig| sig.channels.clone()),
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct AcquireEvent {
     pub channels: Vec<u8>,
@@ -72,19 +107,6 @@ impl AcquireEvent {
     pub fn from_ir(event: PlayAcquire) -> Self {
         let channels = event.signal().channels.to_vec();
         AcquireEvent { channels }
-    }
-}
-
-impl QaEvent {
-    pub fn from_ir(event: QaEventIr) -> Self {
-        let (acquires, waveforms) = event.into_parts();
-        QaEvent {
-            acquire_events: acquires.into_iter().map(AcquireEvent::from_ir).collect(),
-            play_wave_events: waveforms
-                .into_iter()
-                .map(|wf| PlayWaveEvent::from_ir(wf, None, None))
-                .collect(),
-        }
     }
 }
 
@@ -111,9 +133,7 @@ impl MatchEvent {
 
 #[derive(Debug)]
 pub struct ChangeHwOscPhase {
-    pub phase: f64,
-    pub hw_oscillator: Option<HwOscillator>,
-    pub parameter: Option<String>,
+    pub signature: PlayWaveEvent,
 }
 
 #[derive(Debug)]
@@ -156,8 +176,8 @@ pub enum EventType {
     PlayHold(),
     Match(MatchEvent),
     ChangeHwOscPhase(ChangeHwOscPhase),
-    InitAmplitudeRegister(InitAmplitudeRegister),
-    ResetPrecompensationFilters(Samples),
+    InitAmplitudeRegister { signature: PlayWaveEvent },
+    ResetPrecompensationFilters { signature: PlayWaveEvent },
     AcquireEvent(),
     PpcSweepStepStart(SweepCommand),
     PpcSweepStepEnd(),

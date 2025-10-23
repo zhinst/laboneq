@@ -16,6 +16,8 @@ def _merge(
         new.program_ref = update.program_ref
     if update.wave_indices_ref is not None:
         new.wave_indices_ref = update.wave_indices_ref
+    if update.kernel_indices_ref is not None:
+        new.kernel_indices_ref = update.kernel_indices_ref
     return new
 
 

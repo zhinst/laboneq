@@ -114,17 +114,17 @@ impl<'a> FrameChangeTracker<'a> {
             // Check for overlapping oscillators
             // If the frame change happens at the start or end of an waveform, that is ok:
             // we can emit a 0-length command table entry.
-            if let Some(cjob::Oscillator { uid, .. }) = &signal.oscillator {
-                if let Some(wf_osc) = wf.osc.as_ref().filter(|&wf_osc| wf_osc != uid) {
-                    if FrameChangeTracker::point_inside_range(&wf_range, offset) {
-                        let msg = format!(
-                            "Cannot increment oscillator '{}' of signal '{}': the line is occupied by '{}'",
-                            uid, signal.uid, wf_osc
-                        );
-                        return Err(anyhow!(msg).into());
-                    } else {
-                        return Ok(false);
-                    }
+            if let Some(cjob::Oscillator { uid, .. }) = &signal.oscillator
+                && let Some(wf_osc) = wf.osc.as_ref().filter(|&wf_osc| wf_osc != uid)
+            {
+                if FrameChangeTracker::point_inside_range(&wf_range, offset) {
+                    let msg = format!(
+                        "Cannot increment oscillator '{}' of signal '{}': the line is occupied by '{}'",
+                        uid, signal.uid, wf_osc
+                    );
+                    return Err(anyhow!(msg).into());
+                } else {
+                    return Ok(false);
                 }
             }
             // Change timing to relative for comparison
@@ -145,13 +145,11 @@ impl<'a> FrameChangeTracker<'a> {
             }
             // Insert the frame change into the last pulse anyways, and rewind its
             // own phase by the same amount.
-            if apply_to_last {
-                if let Some(pulse) = wf.signatures.last_mut() {
-                    *pulse.increment_oscillator_phase.get_or_insert(0.0) += phase;
-                    *pulse.oscillator_phase.get_or_insert(0.0) -= phase;
-                    if let Some(incr_phase_param) = parameter.take() {
-                        pulse.incr_phase_params.push(incr_phase_param);
-                    }
+            if apply_to_last && let Some(pulse) = wf.signatures.last_mut() {
+                *pulse.increment_oscillator_phase.get_or_insert(0.0) += phase;
+                *pulse.oscillator_phase.get_or_insert(0.0) -= phase;
+                if let Some(incr_phase_param) = parameter.take() {
+                    pulse.incr_phase_params.push(incr_phase_param);
                 }
             }
             return Ok(true);

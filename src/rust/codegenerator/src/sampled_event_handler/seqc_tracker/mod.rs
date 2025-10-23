@@ -11,9 +11,3 @@ pub mod tracker;
 pub mod wave_index_tracker;
 
 pub type FeedbackRegisterIndex = u32;
-
-#[derive(thiserror::Error, Debug)]
-pub enum Error {
-    #[error(transparent)]
-    Anyhow(#[from] anyhow::Error),
-}

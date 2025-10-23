@@ -65,8 +65,6 @@ class CompilerSettings:
     HDAWG_MIN_PLAYZERO_HINT: int = 128
     UHFQA_MIN_PLAYWAVE_HINT: int = 64
     UHFQA_MIN_PLAYZERO_HINT: int = 64
-    SHFQA_MIN_PLAYWAVE_HINT: int = 64
-    SHFQA_MIN_PLAYZERO_HINT: int = 64
     SHFSG_MIN_PLAYWAVE_HINT: int = 64
     SHFSG_MIN_PLAYZERO_HINT: int = 64
     SHF_OUTPUT_MUTE_MIN_DURATION: float = 280e-9
@@ -96,17 +94,28 @@ class CompilerSettings:
 
         if "SHFSG_FORCE_COMMAND_TABLE" in settings:
             warnings.warn(
-                "The setting `SHFSG_FORCE_COMMAND_TABLE` is ignored and will be removed in a future version",
+                "The setting `SHFSG_FORCE_COMMAND_TABLE` has no effect and will be removed in a future version",
                 FutureWarning,
                 stacklevel=2,
             )
         if "HDAWG_FORCE_COMMAND_TABLE" in settings:
             warnings.warn(
-                "The setting `HDAWG_FORCE_COMMAND_TABLE` is ignored and will be removed in a future version",
+                "The setting `HDAWG_FORCE_COMMAND_TABLE` has no effect and will be removed in a future version",
                 FutureWarning,
                 stacklevel=2,
             )
-
+        if "SHFQA_MIN_PLAYWAVE_HINT" in settings:
+            warnings.warn(
+                "The setting `SHFQA_MIN_PLAYWAVE_HINT` has no effect.",
+                FutureWarning,
+                stacklevel=2,
+            )
+        if "SHFQA_MIN_PLAYZERO_HINT" in settings:
+            warnings.warn(
+                "The setting `SHFQA_MIN_PLAYZERO_HINT` has no effect.",
+                FutureWarning,
+                stacklevel=2,
+            )
         if ("MAX_EVENTS_TO_PUBLISH" in settings) and ("OUTPUT_EXTRAS" not in settings):
             warnings.warn(
                 "Setting `MAX_EVENTS_TO_PUBLISH` has no effect unless used together with `OUTPUT_EXTRAS=True`.",

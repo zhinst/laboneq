@@ -8,6 +8,36 @@ from rich.console import Console
 from rich.pretty import pprint
 
 
+def _classformatter(cls):
+    """The internals of the `classformatter` decorator.
+
+    !!! note
+        By itself, this decorator does not automatically apply to `attrs` subclasses
+        which are explicitly decorated with `attrs.define`.
+    """
+
+    def __str__(self):
+        f = StringIO()
+        # Here we force jupyter detection to False so that what is printed is
+        # not *also* sent to Jupyter in addition to the specified file.
+        console = Console(file=f, force_jupyter=False)
+        pprint(self, console=console, expand_all=True, indent_guides=True)
+        return f.getvalue()
+
+    def __format__(self, _):
+        return repr(self)
+
+    def repr_pretty(self, p, _cycle):  # noqa: ANN001, ANN202
+        # For Notebooks
+        p.text(str(self))
+
+    cls.__str__ = __str__
+    cls.__format__ = __format__
+    cls._repr_pretty_ = repr_pretty  # pylint: disable=protected-access
+
+    return cls
+
+
 def classformatter(cls):
     """
     A decorator to customize the string representation of class instances using the rich library.
@@ -23,9 +53,13 @@ def classformatter(cls):
     Returns:
         type: The decorated class with modified __str__ and __format__ methods.
 
+    !!! version-changed "Changed in version 2.61.0"
+        Changed the decorator, such that it automatically applies to `attrs` subclasses
+        which are explicitly decorated with `attrs.define`.
+
     Examples:
         @classformatter
-        @dataclasses.dataclass
+        @attrs.define
         class Person:
             name: str
             age: int
@@ -53,25 +87,12 @@ def classformatter(cls):
         │   ]
         )
     """
-    original_repr = cls.__repr__
 
-    def __str__(self):
-        f = StringIO()
-        # Here we force jupyter detection to False so that what is printed is
-        # not *also* sent to Jupyter in addition to the specified file.
-        console = Console(file=f, force_jupyter=False)
-        pprint(self, console=console, expand_all=True, indent_guides=True)
-        return f.getvalue()
+    @classmethod
+    def attrs_init_subclass(subcls):
+        _classformatter(subcls)
 
-    def __format__(self, _):
-        return original_repr(self)
-
-    def repr_pretty(self, p, _cycle):  # noqa: ANN001, ANN202
-        # For Notebooks
-        p.text(str(self))
-
-    cls.__str__ = __str__
-    cls.__format__ = __format__
-    cls._repr_pretty_ = repr_pretty  # pylint: disable=protected-access
+    cls.__attrs_init_subclass__ = attrs_init_subclass
+    _classformatter(cls)
 
     return cls

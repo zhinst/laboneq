@@ -136,10 +136,8 @@ fn py_to_nodekind(ob: &Bound<PyAny>, dedup: &mut Deduplicator) -> Result<ir::Nod
     {
         "PulseIR" => {
             let is_acquire = ob.getattr(intern!(py, "is_acquire"))?.extract::<bool>()?;
-            if is_acquire {
-                if let Some(acquire_pulse) = extract_acquire_pulse(ob, dedup)? {
-                    return Ok(ir::NodeKind::AcquirePulse(acquire_pulse));
-                }
+            if is_acquire && let Some(acquire_pulse) = extract_acquire_pulse(ob, dedup)? {
+                return Ok(ir::NodeKind::AcquirePulse(acquire_pulse));
             }
             Ok(ir::NodeKind::PlayPulse(extract_pulse(ob, dedup)?))
         }
@@ -162,9 +160,7 @@ fn py_to_nodekind(ob: &Bound<PyAny>, dedup: &mut Deduplicator) -> Result<ir::Nod
         }),
         "PPCStepIR" => Ok(ir::NodeKind::PpcSweepStep(extract_ppc_step(ob, dedup)?)),
         "LoopIR" => Ok(ir::NodeKind::Loop(extract_loop(ob, dedup)?)),
-        "LoopIterationIR" => Ok(ir::NodeKind::LoopIteration(extract_loop_iteration(
-            ob, dedup,
-        )?)),
+        "LoopIterationIR" => Ok(ir::NodeKind::LoopIteration(extract_loop_iteration(ob)?)),
         "SectionIR" => Ok(ir::NodeKind::Section(extract_section(ob, dedup)?)),
         _ => {
             let length = ob.getattr(intern!(py, "length"))?.extract::<i64>()?;
@@ -300,21 +296,15 @@ fn extract_set_oscillator_frequency(
     dedup: &Deduplicator,
 ) -> Result<ir::SetOscillatorFrequency, PyErr> {
     // ir.SetOscillatorFrequency
-    let py = ob.py();
-    let iteration = ob.getattr(intern!(py, "iteration"))?.extract::<usize>()?;
-    let values = ob.getattr(intern!(py, "values"))?.try_iter()?;
-    let oscillators = ob.getattr(intern!(py, "oscillators"))?.try_iter()?;
-    let mut osc_values = vec![];
-    for (osc, value) in oscillators.into_iter().zip(values) {
-        let value = value?.extract::<f64>()?;
-        for sig in signals_set_to_signals(&osc?.getattr(intern!(py, "signals"))?, dedup)? {
-            osc_values.push(SignalFrequency {
-                signal: Arc::clone(&sig),
-                frequency: value,
-            });
+    let values = ob.getattr(intern!(ob.py(), "values"))?.try_iter()?;
+    let values = values.into_iter().map(|v| {
+        let (signal, value) = v.unwrap().extract::<(String, f64)>().unwrap();
+        SignalFrequency {
+            signal: dedup.get_signal(&signal).unwrap(),
+            frequency: value,
         }
-    }
-    let out = ir::SetOscillatorFrequency::new(osc_values, iteration);
+    });
+    let out = ir::SetOscillatorFrequency::new(values.collect());
     Ok(out)
 }
 
@@ -333,21 +323,15 @@ fn extract_initial_oscillator_frequency(
     ob: &Bound<'_, PyAny>,
     dedup: &Deduplicator,
 ) -> Result<ir::InitialOscillatorFrequency, PyErr> {
-    // ir.InitialOscillatorFrequency
-    let py = ob.py();
-    let values = ob.getattr(intern!(py, "values"))?.try_iter()?;
-    let oscillators = ob.getattr(intern!(py, "oscillators"))?.try_iter()?;
-    let mut osc_values = vec![];
-    for (osc, value) in oscillators.into_iter().zip(values) {
-        let value = value?.extract::<f64>()?;
-        for signal in signals_set_to_signals(&osc?.getattr(intern!(py, "signals"))?, dedup)? {
-            osc_values.push(SignalFrequency {
-                signal,
-                frequency: value,
-            });
+    let values = ob.getattr(intern!(ob.py(), "values"))?.try_iter()?;
+    let values = values.into_iter().map(|v| {
+        let (signal, value) = v.unwrap().extract::<(String, f64)>().unwrap();
+        SignalFrequency {
+            signal: dedup.get_signal(&signal).unwrap(),
+            frequency: value,
         }
-    }
-    let out = ir::InitialOscillatorFrequency::new(osc_values);
+    });
+    let out = ir::InitialOscillatorFrequency::new(values.collect());
     Ok(out)
 }
 
@@ -617,38 +601,29 @@ fn extract_loop(ob: &Bound<'_, PyAny>, dedup: &mut Deduplicator) -> Result<ir::L
     let prng_sample = first_iteration
         .getattr(intern!(py, "prng_sample"))?
         .extract::<Option<String>>()?;
+    let parameters = ob.getattr(intern!(py, "sweep_parameters"))?;
+    let parameters = parameters
+        .try_iter()?
+        .map(|param| extract_parameter(&param?, dedup))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(ir::Loop {
         length,
         compressed,
         section_info,
         count,
         prng_sample,
+        parameters,
     })
 }
 
 /// Extract loop iteration
-///
-/// Fills the deduplicator with sweep parameters if there are any
-fn extract_loop_iteration(
-    ob: &Bound<'_, PyAny>,
-    dedup: &mut Deduplicator,
-) -> Result<ir::LoopIteration, PyErr> {
+fn extract_loop_iteration(ob: &Bound<'_, PyAny>) -> Result<ir::LoopIteration, PyErr> {
     // ir.LoopIterationIR
     let py = ob.py();
     let length = ob
         .getattr(intern!(py, "length"))?
         .extract::<ir::Samples>()?;
-    let parameters = ob.getattr(intern!(py, "sweep_parameters"))?;
-    let parameters = parameters
-        .try_iter()?
-        .map(|param| extract_parameter(&param?, dedup))
-        .collect::<Result<Vec<_>, _>>()?;
-    let shadow = ob.getattr(intern!(py, "shadow"))?.extract::<bool>()?;
-    Ok(ir::LoopIteration {
-        length,
-        parameters,
-        shadow,
-    })
+    Ok(ir::LoopIteration { length })
 }
 
 /// Extract PPC Sweep Step

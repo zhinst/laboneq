@@ -9,7 +9,6 @@ from typing import Optional, ClassVar
 
 import attrs
 
-from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration import Calibration, Oscillator, SignalCalibration
 from laboneq.dsl.enums import ModulationType
 from laboneq.dsl.quantum.quantum_element import (
@@ -18,7 +17,6 @@ from laboneq.dsl.quantum.quantum_element import (
 )
 
 
-@classformatter
 @attrs.define(kw_only=True)
 class TransmonParameters(QuantumParameters):
     """A class for the parameters of a superconducting, flux-tunable transmon qubit.
@@ -83,7 +81,6 @@ class TransmonParameters(QuantumParameters):
             return None
 
 
-@classformatter
 @attrs.define()
 class Transmon(QuantumElement):
     """A class for a superconducting, flux-tunable Transmon Qubit.

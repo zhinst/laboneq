@@ -20,9 +20,11 @@ class EventListGenerator:
         self,
         id_tracker: Iterator[int] | None = None,
         expand_loops: bool = False,
+        signals: list[ir_mod.SignalIR] | None = None,
     ):
         self.id_tracker = itertools.count() if id_tracker is None else id_tracker
         self.expand_loops = expand_loops
+        self.signals = {s.uid: s for s in signals} if signals is not None else {}
 
     # This is consumed mainly by the PSV and attached to the
     # CompiledExperiment with compiler flag `OUTPUT_EXTRAS`
@@ -137,38 +139,22 @@ class EventListGenerator:
         start: int,
         max_events: int,
     ) -> EventList:
-        assert ir.length is not None
         retval = []
-        for param, osc, value in zip(ir.params, ir.oscillators, ir.values):
-            if not osc.is_hardware:
+        start_id = next(self.id_tracker)
+        for signal, frequency in ir.values:
+            signal_obj = self.signals[signal]
+            if not signal_obj.oscillator.is_hardware:
                 continue
-            start_id = next(self.id_tracker)
-            retval.extend(
-                [
-                    {
-                        "event_type": EventType.SET_OSCILLATOR_FREQUENCY_START,
-                        "time": start,
-                        "parameter": {"id": param},
-                        "iteration": ir.iteration,
-                        "value": value,
-                        "section_name": ir.section,
-                        "device_id": osc.device,
-                        "signal": osc.signals,
-                        "oscillator_id": osc.id,
-                        "id": start_id,
-                        "chain_element_id": start_id,
-                    },
-                ]
-            )
+            out = {
+                "event_type": EventType.SET_OSCILLATOR_FREQUENCY_START,
+                "time": start,
+                "value": frequency,
+                "signal": signal,
+                "id": start_id,
+                "chain_element_id": start_id,
+            }
+            retval.append(out)
         return retval
-
-    def visit_InitialOscillatorFrequencyIR(
-        self,
-        ir: ir_mod.InitialOscillatorFrequencyIR,
-        start: int,
-        max_events: int,
-    ) -> EventList:
-        return []
 
     def visit_RootScheduleIR(
         self,
@@ -300,8 +286,6 @@ class EventListGenerator:
             "nesting_level": 0,
         }
         end = start + loop_iteration_ir.length
-
-        max_events -= len(loop_iteration_ir.sweep_parameters)
         if loop_iteration_ir.iteration == 0:
             max_events -= 1
 
@@ -335,10 +319,6 @@ class EventListGenerator:
                 else []
             ),
         ]
-
-        if loop_iteration_ir.shadow:
-            for e in event_list:
-                e["shadow"] = True
         return event_list
 
     def visit_LoopIterationPreambleIR(
@@ -465,25 +445,6 @@ class EventListGenerator:
             },
         ]
 
-    def visit_PhaseResetIR(
-        self,
-        ir: ir_mod.PhaseResetIR,
-        start: int,
-        max_events: int,
-    ) -> EventList:
-        assert ir.length is not None
-        events = [
-            {
-                "event_type": EventType.RESET_HW_OSCILLATOR_PHASE,
-                "time": start,
-                "section_name": ir.section,
-                "id": next(self.id_tracker),
-                "device_id": device,
-            }
-            for device in ir.hw_osc_devices
-        ]
-        return events
-
     def generate_children_events(
         self,
         ir: ir_mod.IntervalIR,
@@ -553,8 +514,7 @@ def generate_event_list_from_ir(
 ) -> EventList:
     id_tracker = itertools.count()
     event_list = EventListGenerator(
-        id_tracker=id_tracker,
-        expand_loops=expand_loops,
+        id_tracker=id_tracker, expand_loops=expand_loops, signals=ir.signals
     ).run(ir.root, start=0, max_events=max_events)
     for event in event_list:
         if "id" not in event:

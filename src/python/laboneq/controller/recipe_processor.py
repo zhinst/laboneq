@@ -264,7 +264,6 @@ class RtExecutionInfo:
     averaging_mode: AveragingMode
     acquisition_type: AcquisitionType
     pipeliner_job_count: int | None
-    max_step_execution_time: float
 
     @property
     def with_pipeliner(self) -> bool:
@@ -348,6 +347,7 @@ class RecipeData:
     device_settings: dict[DeviceUID, DeviceRecipeData]
     awg_configs: AwgConfigs
     attribute_value_tracker: AttributeValueTracker
+    max_step_execution_time: float
 
     def get_initialization(self, device_uid: DeviceUID) -> Initialization:
         for initialization in self.recipe.initializations:
@@ -382,9 +382,11 @@ class RecipeData:
         return awgs
 
 
-def _validate_recipe(recipe: Recipe | None) -> Recipe:
-    # Recipe is present
-    assert recipe is not None
+def _validate_scheduled_experiment(
+    scheduled_experiment: ScheduledExperiment, devices: DeviceCollection
+) -> tuple[Recipe, Statement]:
+    recipe = scheduled_experiment.recipe
+    assert recipe is not None  # Recipe is present
 
     # Recipe version is correct
     try:
@@ -403,7 +405,19 @@ def _validate_recipe(recipe: Recipe | None) -> Recipe:
             recipe.versions.laboneq,
         )
 
-    return recipe
+    if (
+        scheduled_experiment.device_setup_fingerprint
+        != devices.device_setup_fingerprint
+    ):
+        raise LabOneQControllerException(
+            "The device setup of the compiled experiment is not compatible with the current device setup. "
+            "Please recompile using the current device setup."
+        )
+
+    execution = scheduled_experiment.execution
+    assert execution is not None
+
+    return recipe, execution
 
 
 def _pre_process_iq_settings_hdawg(
@@ -713,9 +727,7 @@ class _LoopsPreprocessor(ExecutorBase):
         self._current_rt_state: _RtExecutionState | None = None
         self._last_rt_state: _RtExecutionState | None = None
 
-    def get_rt_execution_info(
-        self, pipeliner_job_count: int | None, max_step_execution_time: float
-    ) -> RtExecutionInfo:
+    def get_rt_execution_info(self, pipeliner_job_count: int | None) -> RtExecutionInfo:
         if self._last_rt_state is None:
             raise LabOneQControllerException(
                 "No 'acquire_loop_rt' section found in the experiment."
@@ -726,7 +738,6 @@ class _LoopsPreprocessor(ExecutorBase):
             averaging_mode=self._last_rt_state.averaging_mode,
             acquisition_type=self._last_rt_state.acquisition_type,
             pipeliner_job_count=pipeliner_job_count,
-            max_step_execution_time=max_step_execution_time,
         )
 
     def get_result_shapes(
@@ -1050,31 +1061,17 @@ def pre_process_compiled(
     scheduled_experiment: ScheduledExperiment,
     devices: DeviceCollection,
 ) -> RecipeData:
-    for _, device in devices.all:
-        device.validate_scheduled_experiment(scheduled_experiment)
-
-    if (
-        scheduled_experiment.device_setup_fingerprint
-        != devices.device_setup_fingerprint
-    ):
-        raise LabOneQControllerException(
-            "The device setup of the compiled experiment is not compatible with the current device setup. "
-            "Please recompile using the current device setup."
-        )
-
-    recipe = _validate_recipe(scheduled_experiment.recipe)
-
-    # Mapping of the unique oscillator ids to integer indices for use with the AttributeValueTracker
-    oscillator_ids = list(set(o.id for o in recipe.oscillator_params))
-
-    execution = scheduled_experiment.execution
-    assert execution is not None
+    recipe, execution = _validate_scheduled_experiment(scheduled_experiment, devices)
 
     lp = _LoopsPreprocessor()
     lp.run(execution)
-    rt_execution_info = lp.get_rt_execution_info(
-        scheduled_experiment.chunk_count, recipe.max_step_execution_time
-    )
+    rt_execution_info = lp.get_rt_execution_info(scheduled_experiment.chunk_count)
+
+    for _, device in devices.all:
+        device.validate_scheduled_experiment(scheduled_experiment, rt_execution_info)
+
+    # Mapping of the unique oscillator ids to integer indices for use with the AttributeValueTracker
+    oscillator_ids = list(set(o.id for o in recipe.oscillator_params))
 
     awg_configs = _calculate_awg_configs(
         rt_execution_info, scheduled_experiment, recipe, devices
@@ -1122,6 +1119,7 @@ def pre_process_compiled(
         attribute_value_tracker=_pre_process_attributes(
             recipe, devices, oscillator_ids
         ),
+        max_step_execution_time=recipe.max_step_execution_time,
     )
 
     for _, device in devices.all:
@@ -1130,8 +1128,9 @@ def pre_process_compiled(
     return recipe_data
 
 
-def get_execution_time(rt_execution_info: RtExecutionInfo) -> tuple[float, float]:
-    min_wait_time = rt_execution_info.max_step_execution_time
+def get_execution_time(recipe_data: RecipeData) -> tuple[float, float]:
+    rt_execution_info = recipe_data.rt_execution_info
+    min_wait_time = recipe_data.max_step_execution_time
     if rt_execution_info.with_pipeliner:
         pipeliner_reload_worst_case = 1500e-6
         min_wait_time = (

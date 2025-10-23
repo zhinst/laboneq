@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use laboneq_common::named_id::NamedId;
-use laboneq_common::types::DeviceKind as DeviceKindCommon;
 use laboneq_units::duration::{Duration, Seconds};
 use num_complex::Complex64;
 use numeric_array::NumericArray;
@@ -69,7 +68,7 @@ pub enum Value {
     ParameterUid(ParameterUid),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum NumericLiteral {
     Float(f64),
     Int(i64),
@@ -89,7 +88,31 @@ impl TryFrom<Value> for NumericLiteral {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+impl TryInto<RealValue> for NumericLiteral {
+    type Error = &'static str;
+
+    fn try_into(self) -> Result<RealValue, Self::Error> {
+        match self {
+            NumericLiteral::Float(v) => Ok(RealValue::Float(v)),
+            NumericLiteral::Int(v) => Ok(RealValue::Int(v)),
+            _ => Err("Value is not real value"),
+        }
+    }
+}
+
+impl TryInto<f64> for RealValue {
+    type Error = &'static str;
+
+    fn try_into(self) -> Result<f64, Self::Error> {
+        match self {
+            RealValue::Float(v) => Ok(v),
+            RealValue::Int(v) => Ok(v as f64),
+            _ => Err("Value is not a float"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum NumericValue {
     Float(f64),
     Int(i64),
@@ -111,7 +134,7 @@ impl TryFrom<Value> for NumericValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum RealValue {
     Float(f64),
     Int(i64),
@@ -145,52 +168,25 @@ pub struct PulseRef {
     pub length: PulseLength,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum DeviceKind {
-    Hdawg,
-    Shfqa,
-    Shfsg,
-    Uhfqa,
-    PrettyPrinterDevice,
-}
-
-impl From<DeviceKindCommon> for DeviceKind {
-    fn from(kind: DeviceKindCommon) -> Self {
-        match kind {
-            DeviceKindCommon::Hdawg => DeviceKind::Hdawg,
-            DeviceKindCommon::Uhfqa => DeviceKind::Uhfqa,
-            DeviceKindCommon::Shfsg => DeviceKind::Shfsg,
-            DeviceKindCommon::Shfqa => DeviceKind::Shfqa,
-            DeviceKindCommon::PrettyPrinterDevice => DeviceKind::PrettyPrinterDevice,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Device {
-    pub uid: DeviceUid,
-    pub kind: DeviceKind,
-}
-
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum OscillatorKind {
     Hardware,
     Software,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Oscillator {
-    pub uid: OscillatorUid,
-    pub frequency: Option<RealValue>,
+    pub uid: OscillatorUid, // NOTE: Needed for legacy reasons, should be removed in future
+    pub frequency: RealValue,
     pub kind: OscillatorKind,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ExperimentSignal {
     pub uid: SignalUid,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ParameterKind {
     Linear {
         start: NumericLiteral,
@@ -202,7 +198,7 @@ pub enum ParameterKind {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Parameter {
     pub uid: ParameterUid,
     pub kind: ParameterKind,
@@ -210,26 +206,20 @@ pub struct Parameter {
 
 // IR definition
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum SectionAlignment {
     Left,
     Right,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum ExecutionType {
-    RealTime,
-    NearTime,
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum RepetitionMode {
     Fastest,
     Constant { time: f64 },
     Auto,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum AcquisitionType {
     Integration,
     SpectroscopyIq,
@@ -239,19 +229,19 @@ pub enum AcquisitionType {
     Raw,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Trigger {
     pub signal: SignalUid,
     pub state: u16,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum MarkerSelector {
     M1,
     M2,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Marker {
     pub marker_selector: MarkerSelector,
     pub enable: bool,
@@ -260,14 +250,14 @@ pub struct Marker {
     pub pulse_id: Option<PulseUid>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Delay {
     pub signal: SignalUid,
     pub time: RealValue,
     pub precompensation_clear: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PulseParameterValue {
     // External parameter UID points to an arbitrary value
     // resolved at sampling time, in case of the pulse being played
@@ -276,7 +266,7 @@ pub enum PulseParameterValue {
     Parameter(ParameterUid),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PlayPulse {
     pub signal: SignalUid,
     pub pulse: Option<PulseUid>,
@@ -291,7 +281,7 @@ pub struct PlayPulse {
     pub markers: Vec<Marker>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Acquire {
     pub signal: SignalUid,
     pub handle: HandleUid,
@@ -301,7 +291,7 @@ pub struct Acquire {
     pub pulse_parameters: Vec<HashMap<Arc<String>, PulseParameterValue>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Section {
     pub uid: SectionUid,
     pub alignment: SectionAlignment,
@@ -311,51 +301,45 @@ pub struct Section {
     pub on_system_grid: bool,
 }
 
-#[derive(Debug, Clone)]
-pub struct Prng {
+#[derive(Debug, Clone, PartialEq)]
+pub struct PrngSetup {
+    pub uid: SectionUid,
     pub range: u32,
     pub seed: u32,
 }
 
-#[derive(Debug, Clone)]
-pub struct PrngSetup {
-    pub uid: SectionUid,
-    pub prng: Prng,
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PrngLoop {
     pub uid: SectionUid,
-    pub prng: Prng,
     pub count: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Reserve {
     pub signal: SignalUid,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResetOscillatorPhase {
+    /// If None, reset all oscillators within a Section
     pub signal: Option<SignalUid>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Sweep {
     pub uid: SectionUid,
     pub parameters: Vec<ParameterUid>,
     pub alignment: SectionAlignment,
     pub reset_oscillator_phase: bool,
-    pub execution_type: ExecutionType,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Case {
     pub uid: SectionUid,
     pub state: u16,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum MatchTarget {
     Handle(HandleUid),
     UserRegister(UserRegister),
@@ -364,32 +348,34 @@ pub enum MatchTarget {
     SweepParameter(ParameterUid),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Match {
     pub uid: SectionUid,
     pub target: MatchTarget,
     pub local: Option<bool>,
+    pub play_after: Vec<SectionUid>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum AveragingMode {
     Sequential,
     Cyclic,
     SingleShot,
 }
 
-#[derive(Debug, Clone)]
-pub struct AcquireLoopRt {
+#[derive(Debug, Clone, PartialEq)]
+pub struct AveragingLoop {
     pub uid: SectionUid,
     pub count: u32,
     pub acquisition_type: AcquisitionType,
     pub averaging_mode: AveragingMode,
     pub repetition_mode: RepetitionMode,
     pub reset_oscillator_phase: bool,
+    pub alignment: SectionAlignment,
 }
 
-#[derive(Debug, Clone)]
-pub enum IrVariant {
+#[derive(Debug, Clone, PartialEq)]
+pub enum Operation {
     Root,
     Section(Section),
     PrngSetup(PrngSetup),
@@ -399,9 +385,64 @@ pub enum IrVariant {
     PlayPulse(PlayPulse),
     Acquire(Acquire),
     Delay(Delay),
-    AcquireLoopRt(AcquireLoopRt),
+    AveragingLoop(AveragingLoop),
+    RealTimeBoundary,
     Match(Match),
     ResetOscillatorPhase(ResetOscillatorPhase),
     Case(Case),
-    NotYetImplemented,
+    /// Near-time callback is an external function call that is executed between near-time steps.
+    NearTimeCallback,
+    SetNode,
+}
+
+pub struct SectionInfo<'a> {
+    pub uid: &'a SectionUid,
+}
+
+pub struct LoopInfo<'a> {
+    pub uid: &'a SectionUid,
+}
+
+impl Operation {
+    pub fn section_info<'a>(self: &'a Operation) -> Option<SectionInfo<'a>> {
+        match self {
+            Operation::Section(s) => SectionInfo { uid: &s.uid }.into(),
+            Operation::PrngSetup(s) => SectionInfo { uid: &s.uid }.into(),
+            Operation::PrngLoop(s) => SectionInfo { uid: &s.uid }.into(),
+            Operation::Sweep(s) => SectionInfo { uid: &s.uid }.into(),
+            Operation::AveragingLoop(s) => SectionInfo { uid: &s.uid }.into(),
+            Operation::Match(s) => SectionInfo { uid: &s.uid }.into(),
+            Operation::Case(s) => SectionInfo { uid: &s.uid }.into(),
+            Operation::Root
+            | Operation::Reserve(_)
+            | Operation::PlayPulse(_)
+            | Operation::Acquire(_)
+            | Operation::Delay(_)
+            | Operation::ResetOscillatorPhase(_)
+            | Operation::RealTimeBoundary
+            | Operation::NearTimeCallback
+            | Operation::SetNode => None,
+        }
+    }
+
+    pub fn loop_info<'a>(self: &'a Operation) -> Option<LoopInfo<'a>> {
+        match self {
+            Operation::PrngLoop(s) => LoopInfo { uid: &s.uid }.into(),
+            Operation::Sweep(s) => LoopInfo { uid: &s.uid }.into(),
+            Operation::AveragingLoop(s) => LoopInfo { uid: &s.uid }.into(),
+            Operation::Root
+            | Operation::Section(_)
+            | Operation::PrngSetup(_)
+            | Operation::Match(_)
+            | Operation::Case(_)
+            | Operation::Reserve(_)
+            | Operation::PlayPulse(_)
+            | Operation::Acquire(_)
+            | Operation::Delay(_)
+            | Operation::ResetOscillatorPhase(_)
+            | Operation::RealTimeBoundary
+            | Operation::NearTimeCallback
+            | Operation::SetNode => None,
+        }
+    }
 }

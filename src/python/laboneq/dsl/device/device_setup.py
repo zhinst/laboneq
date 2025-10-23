@@ -155,6 +155,8 @@ class DeviceSetup:
             LabOneQException: Connection information is wrong or the given
                 instrument does not support the connection.
         """
+        if not connections:
+            raise LabOneQException("Need at least one connection")
         try:
             for connection in connections:
                 setup_modifier.add_connection(self, instrument, connection)
@@ -198,15 +200,25 @@ class DeviceSetup:
             return
         group_name = path_elements.pop(0)
         calibratable_name = path_elements.pop(0)
-        group = root_collection[group_name]
+        group = root_collection.get(group_name)
+        if not group:
+            raise LabOneQException(
+                f"group '{group_name}' not found. Available groups: {', '.join(root_collection)}"
+            )
         if isinstance(group, LogicalSignalGroup):
-            calibratable = group.logical_signals[calibratable_name]
+            signal = group.logical_signals.get(calibratable_name)
+            if not signal:
+                raise LabOneQException(
+                    f"Logical signal '{calibratable_name}' not found."
+                )
+            signal.calibration = calibration_item
         elif isinstance(group, PhysicalChannelGroup):
-            calibratable = group.channels[calibratable_name]
+            channel = group.channels.get(calibratable_name)
+            if not channel:
+                raise LabOneQException(f"Channel '{calibratable_name}' not found.")
+            channel.calibration = calibration_item
         else:
             raise LabOneQException(f"No calibratable item found at {path}")
-        if calibratable is not None:
-            calibratable.calibration = calibration_item
 
     def set_calibration(self, calibration: Calibration):
         """Set the calibration of the device setup.
@@ -229,7 +241,11 @@ class DeviceSetup:
                 target = self.logical_signal_groups
                 path_elements.insert(0, top_level_element)
             else:
-                continue
+                raise LabOneQException(
+                    f"Unable to set calibration for '{path}', '{top_level_element}' is not known."
+                    f" Available: {qct_path.LogicalSignalGroups_Path}, {qct_path.PhysicalChannelGroups_Path},"
+                    f" {', '.join(self.logical_signal_groups)}"
+                )
 
             self._set_calibration(
                 calibration_item=calibration.calibration_items[path],

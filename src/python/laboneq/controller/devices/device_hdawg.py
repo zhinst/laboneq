@@ -17,7 +17,6 @@ from laboneq.controller.attribute_value_tracker import (
     DeviceAttribute,
     DeviceAttributesView,
 )
-from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
 from laboneq.controller.devices.device_utils import FloatWithTolerance, NodeCollector
 from laboneq.controller.devices.device_zi import (
     DeviceBase,
@@ -71,9 +70,6 @@ class DeviceHDAWG(DeviceBase):
         self.dev_type = "HDAWG8"
         self.dev_opts = ["MF", "ME", "SKW"]
         self._hd_awg_cores: list[HDAwgCore] = []
-        self._pipeliner = [
-            AwgPipeliner(f"/{self.serial}/awgs/{awg}", f"AWG{awg}") for awg in range(4)
-        ]
         self._channels = 8
         self._cores = 4
         self._multi_freq = True
@@ -100,15 +96,6 @@ class DeviceHDAWG(DeviceBase):
     def allocated_channels(self, recipe_data: RecipeData) -> Iterator[ChannelBase]:
         for ch in recipe_data.allocated_awgs(self.uid):
             yield self._hd_awg_cores[ch]
-
-    def pipeliner_prepare_for_upload(self, index: int) -> NodeCollector:
-        return self._pipeliner[index].prepare_for_upload()
-
-    def pipeliner_commit(self, index: int) -> NodeCollector:
-        return self._pipeliner[index].commit()
-
-    def pipeliner_ready_conditions(self, index: int) -> dict[str, Any]:
-        return self._pipeliner[index].ready_conditions()
 
     def _process_dev_opts(self):
         self._check_expected_dev_opts()
@@ -272,7 +259,9 @@ class DeviceHDAWG(DeviceBase):
         nc = NodeCollector(base=f"/{self.serial}/")
         for awg_index in recipe_data.allocated_awgs(self.uid):
             if recipe_data.rt_execution_info.with_pipeliner:
-                nc.extend(self._pipeliner[awg_index].collect_execution_nodes())
+                nc.extend(
+                    self._hd_awg_cores[awg_index]._pipeliner.collect_execution_nodes()
+                )
             else:
                 nc.add(f"awgs/{awg_index}/enable", 1, cache=False)
         await self.set_async(nc)
@@ -296,7 +285,9 @@ class DeviceHDAWG(DeviceBase):
                 and not self.is_standalone()
             ):
                 conditions.update(
-                    self._pipeliner[awg_index].conditions_for_execution_ready()
+                    self._hd_awg_cores[
+                        awg_index
+                    ]._pipeliner.conditions_for_execution_ready()
                 )
             elif not self.is_standalone():
                 conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = (
@@ -312,7 +303,9 @@ class DeviceHDAWG(DeviceBase):
         for awg_index in recipe_data.allocated_awgs(self.uid):
             if recipe_data.rt_execution_info.with_pipeliner:
                 conditions.update(
-                    self._pipeliner[awg_index].conditions_for_execution_done(
+                    self._hd_awg_cores[
+                        awg_index
+                    ]._pipeliner.conditions_for_execution_done(
                         with_execution_start=self.is_standalone()
                     )
                 )
@@ -349,7 +342,7 @@ class DeviceHDAWG(DeviceBase):
 
         if recipe_data.rt_execution_info.with_pipeliner:
             for awg_index in recipe_data.allocated_awgs(self.uid):
-                nc.extend(self._pipeliner[awg_index].reset_nodes())
+                nc.extend(self._hd_awg_cores[awg_index]._pipeliner.reset_nodes())
 
         # HACK: HBAR-1427 and HBAR-2165 show that runtime checks generate
         # wrongly detected gaps when enabled during experiments with feedback.
@@ -548,22 +541,13 @@ class DeviceHDAWG(DeviceBase):
                 awg_iq_pair_set.add(awg_idx)
         await self.set_async(nc)
 
-    async def _prepare_artifacts_impl(
-        self,
-        recipe_data: RecipeData,
-        nt_step: NtStepKey,
-        awg_index: int,
-    ):
-        # Artifacts upload for the HDAWG is done in the HDAwgCore class.
-        pass
-
     async def set_before_awg_upload(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")
         nc.add("system/awg/oscillatorcontrol", 1)
         await self.set_async(nc)
 
     def command_table_path(self, awg_index: int) -> str:
-        return f"/{self.serial}/awgs/{awg_index}/commandtable/"
+        return self._hd_awg_cores[awg_index].nodes.awg_command_table + "/"
 
     async def configure_trigger(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")

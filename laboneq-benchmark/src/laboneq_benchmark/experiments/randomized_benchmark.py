@@ -140,11 +140,11 @@ def rb_parallel(
                             play_after=f"{qubit.uid}_drive_{sequence_sweep}",
                         ):
                             exp_rb.measure(
-                                measure_pulse=readout_pulse,
+                                measure_pulse=readout_pulse(qubit),
                                 measure_signal=f"measure_{qubit.uid}",
                                 acquire_signal=f"acquire_{qubit.uid}",
                                 handle=f"{qubit.uid}_rb_results",
-                                integration_kernel=integration_kernel,
+                                integration_kernel=integration_kernel(qubit),
                                 reset_delay=qubit.parameters.user_defined[
                                     "reset_delay_length"
                                 ],

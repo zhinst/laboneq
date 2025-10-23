@@ -210,10 +210,10 @@ impl AwgCore {
     pub fn oscillator_index_by_signal_uid(&self) -> HashMap<&str, u16> {
         let mut index_map = HashMap::new();
         for signal in self.signals.iter() {
-            if let Some(osc) = &signal.oscillator {
-                if let Some(osc_index) = self.osc_allocation.get(&osc.uid) {
-                    index_map.insert(signal.uid.as_str(), *osc_index);
-                }
+            if let Some(osc) = &signal.oscillator
+                && let Some(osc_index) = self.osc_allocation.get(&osc.uid)
+            {
+                index_map.insert(signal.uid.as_str(), *osc_index);
             }
         }
         index_map

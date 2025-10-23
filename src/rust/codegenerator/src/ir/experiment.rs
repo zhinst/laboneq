@@ -12,6 +12,7 @@ use std::sync::Arc;
 use super::compilation_job::{PulseDef, Samples, Signal};
 pub type IrNode = node::Node<Samples, NodeKind>;
 pub type UserRegister = u16;
+pub type ParameterRef = Arc<cjob::SweepParameter>;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Copy)]
 pub struct PulseParametersId(pub u64);
@@ -132,20 +133,15 @@ impl InitialOscillatorFrequency {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SetOscillatorFrequency {
     values: Vec<SignalFrequency>,
-    iteration: usize,
 }
 
 impl SetOscillatorFrequency {
-    pub fn new(values: Vec<SignalFrequency>, iteration: usize) -> Self {
-        SetOscillatorFrequency { values, iteration }
+    pub fn new(values: Vec<SignalFrequency>) -> Self {
+        SetOscillatorFrequency { values }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &SignalFrequency> {
         self.values.iter()
-    }
-
-    pub fn iteration(&self) -> usize {
-        self.iteration
     }
 }
 
@@ -210,6 +206,8 @@ pub struct Loop {
     pub count: u64,
     /// PRNG sample name to draw from
     pub prng_sample: Option<String>,
+    /// Parameters used in this loop
+    pub parameters: Vec<ParameterRef>,
 }
 
 /// One iteration of an loop.
@@ -217,10 +215,6 @@ pub struct Loop {
 pub struct LoopIteration {
     /// Length of the iteration in samples
     pub length: Samples,
-    /// Parameters used in this iteration
-    pub parameters: Vec<Arc<cjob::SweepParameter>>,
-    // Whether or not the iteration is a shadow of previous iteration.
-    pub shadow: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

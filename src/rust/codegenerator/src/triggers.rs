@@ -155,10 +155,10 @@ pub fn generate_trigger_states(events: &mut Vec<AwgEvent>) {
         }
     }
     *events = processed_events;
-    if let Some(first_state) = state_progression.first() {
-        if first_state.0 != 0 {
-            state_progression.insert(0, (0, 0));
-        }
+    if let Some(first_state) = state_progression.first()
+        && first_state.0 != 0
+    {
+        state_progression.insert(0, (0, 0));
     }
     // When the trigger is raised at the end of the averaging loop (which is not
     // unrolled), things get a bit dicey: the command to reset the trigger signal must

@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-from typing import List
-
 from attrs import asdict, define
 
 from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
@@ -16,7 +14,6 @@ from laboneq.compiler.scheduler.ppc_step_schedule import PPCStepSchedule
 from laboneq.compiler.scheduler.schedule_data import ScheduleData
 from laboneq.compiler.scheduler.section_schedule import SectionSchedule
 from laboneq.compiler.scheduler.utils import ceil_to_grid
-from laboneq.data.compilation_job import ParameterInfo
 
 
 @define(kw_only=True, slots=True)
@@ -73,9 +70,7 @@ class LoopIterationSchedule(SectionSchedule):
     """Schedule of a single iteration of a loop (sweep or average)"""
 
     iteration: int
-    sweep_parameters: List[ParameterInfo]
     num_repeats: int
-    shadow: bool
     prng_sample: str | None
 
     def __attrs_post_init__(self):
@@ -89,8 +84,6 @@ class LoopIterationSchedule(SectionSchedule):
         schedule: SectionSchedule,
         iteration,
         num_repeats,
-        shadow,
-        sweep_parameters,
         prng_sample,
     ):
         """Down-cast from SectionSchedule."""
@@ -98,7 +91,5 @@ class LoopIterationSchedule(SectionSchedule):
             **asdict(schedule, recurse=False),
             iteration=iteration,
             num_repeats=num_repeats,
-            shadow=shadow,
-            sweep_parameters=sweep_parameters,
             prng_sample=prng_sample,
         )
