@@ -1,7 +1,8 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from laboneq.data.compilation_job import ParameterInfo
+from numpy.typing import ArrayLike
+
 from laboneq.data.experiment_description import Experiment
 from laboneq.compiler.common.awg_info import AwgKey
 from laboneq.compiler.scheduler.oscillator_schedule import (
@@ -11,13 +12,14 @@ from laboneq.compiler.scheduler.oscillator_schedule import (
 from laboneq.compiler.scheduler.voltage_offset import InitialOffsetVoltageSchedule
 
 class ExperimentInfo:
-    """Object containing the information about the experiment.
+    """Object containing the information about the experiment."""
 
-    This object cannot be send to threads and must be used in the same thread.
-    """
+class SweepParameter:
+    def __init__(self, uid: str, values: ArrayLike, driven_by: list[str]):
+        """A representation of a sweep parameter."""
 
 class Oscillator:
-    def __init__(self, uid: str, frequency: float | ParameterInfo, is_hardware: bool):
+    def __init__(self, uid: str, frequency: float | SweepParameter, is_hardware: bool):
         """A representation of an oscillator."""
 
 class Signal:
@@ -28,8 +30,8 @@ class Signal:
         awg_key: int,
         device: str,
         oscillator: Oscillator | None,
-        lo_frequency: float | ParameterInfo | None,
-        voltage_offset: float | ParameterInfo | None,
+        lo_frequency: float | SweepParameter | None,
+        voltage_offset: float | SweepParameter | None,
     ):
         """A representation of signal properties."""
 

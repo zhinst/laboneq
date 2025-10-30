@@ -13,6 +13,7 @@ import zhinst.core
 from zhinst.core.errors import CoreError as LabOneCoreError
 
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
+from laboneq.compiler import CompilerSettings
 from laboneq.compiler.common.resource_usage import (
     ResourceUsage,
     ResourceUsageCollector,
@@ -66,13 +67,22 @@ async def seqc_compile_async(item: SeqCCompileItem):
     await loop.run_in_executor(None, seqc_compile_one, item)
 
 
-def _process_errors(messages: list[str]):
+def _process_errors(messages: list[str], settings: CompilerSettings):
     if len(messages) == 0:
         return
-    collector = ResourceUsageCollector()
+    resource_usage_collector = ResourceUsageCollector()
+    other_errors = []
     for msg in messages:
         msg_lower = msg.lower()
-        if any(m in msg_lower for m in ["not fitting", "out of memory", "too large"]):
+        if any(
+            m in msg_lower
+            for m in [
+                "not fitting",
+                "out of memory",
+                "too large",
+                "invalid table index",
+            ]
+        ):
             hint = None
             if (
                 match := re.search(
@@ -90,13 +100,18 @@ def _process_errors(messages: list[str]):
                 excess, max_capacity = float(match.group(1)), float(match.group(2))
                 hint = (max_capacity + excess) / max_capacity
 
-            collector.add(ResourceUsage(msg, hint or UsageClassification.BEYOND_LIMIT))
-    collector.raise_or_pass()
-    all_errors = "\n".join([e for e in messages])
-    raise LabOneQException(f"Compilation failed.\n{all_errors}")
+            resource_usage_collector.add(
+                ResourceUsage(msg, hint or UsageClassification.BEYOND_LIMIT)
+            )
+        else:
+            other_errors.append(msg)
+    resource_usage_collector.raise_or_pass(compiler_settings=settings)
+    if other_errors:
+        combined_messages = "\n".join([e for e in messages])
+        raise LabOneQException(f"Compilation failed.\n{combined_messages}")
 
 
-def awg_compile(awg_data: list[SeqCCompileItem]):
+def awg_compile(awg_data: list[SeqCCompileItem], settings: CompilerSettings):
     # Compile in parallel:
     _logger.debug("Started compilation of AWG programs...")
     max_workers_str = os.environ.get("LABONEQ_AWG_COMPILER_MAX_WORKERS")
@@ -109,5 +124,5 @@ def awg_compile(awg_data: list[SeqCCompileItem]):
             for future in futures
             if future.exception() is not None
         ]
-        _process_errors(error_msgs)
+        _process_errors(error_msgs, settings)
     _logger.debug("Finished compilation.")

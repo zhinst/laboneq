@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from laboneq.compiler import CompilerSettings
 from laboneq.compiler.workflow.compiler_hooks import get_compiler_hooks
 from laboneq.compiler.workflow.compiler_output import (
     CombinedRTCompilerOutputContainer,
@@ -50,6 +51,6 @@ def repeat_previous(
         )
 
 
-def finalize(this: CombinedRTCompilerOutputContainer):
+def finalize(this: CombinedRTCompilerOutputContainer, settings: CompilerSettings):
     for device_class, combined_output in this.combined_output.items():
-        get_compiler_hooks(device_class).linker().finalize(combined_output)
+        get_compiler_hooks(device_class).linker().finalize(combined_output, settings)

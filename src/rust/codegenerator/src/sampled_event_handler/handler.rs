@@ -805,10 +805,10 @@ impl<'a> SampledEventHandler<'a> {
         let counter_variable_name = format!("c_freq_osc_{}", data.osc_index);
         if data.iteration == 0 {
             let tree_variable_name = format!("arg_{osc_id_symbol}");
-            let steps = generate_if_else_tree(data.parameter.count, &tree_variable_name, |i| {
+            let steps = generate_if_else_tree(data.parameter.count(), &tree_variable_name, |i| {
                 format!(
                     "setDouble(osc_node_{osc_id_symbol}, {});",
-                    data.parameter.start + data.parameter.step * i as f64
+                    data.parameter.frequency_at(i)
                 )
             })
             .join("\n  ");
@@ -838,40 +838,75 @@ impl<'a> SampledEventHandler<'a> {
     ) -> Result<()> {
         let osc_id_symbol = format!("freq_osc_{}", data.osc_index);
         let counter_variable_name = format!("c_freq_osc_{}", data.osc_index);
-        if !self
-            .declarations_generator
-            .is_variable_declared(&counter_variable_name)
-        {
-            self.declarations_generator
-                .add_variable_declaration(&counter_variable_name, Some(SeqCVariant::Integer(0)))?;
-            self.declarations_generator.add_constant_definition(
-                &osc_id_symbol,
-                SeqCVariant::Integer(data.osc_index as i64),
-                None::<String>,
-            );
-            self.declarations_generator.add_function_call_statement(
-                "configFreqSweep",
-                vec![
-                    SeqCVariant::String(osc_id_symbol.clone()),
-                    SeqCVariant::Float(data.parameter.start),
-                    SeqCVariant::Float(data.parameter.step),
-                ],
-                None::<String>,
-            );
+
+        match data.parameter.as_ref() {
+            crate::ir::FrequencySweepParameterInfo::Linear(linear_info) => {
+                // Handle linear sweeps using configFreqSweep
+                if !self
+                    .declarations_generator
+                    .is_variable_declared(&counter_variable_name)
+                {
+                    self.declarations_generator.add_variable_declaration(
+                        &counter_variable_name,
+                        Some(SeqCVariant::Integer(0)),
+                    )?;
+                    self.declarations_generator.add_constant_definition(
+                        &osc_id_symbol,
+                        SeqCVariant::Integer(data.osc_index as i64),
+                        None::<String>,
+                    );
+
+                    self.declarations_generator.add_function_call_statement(
+                        "configFreqSweep",
+                        vec![
+                            SeqCVariant::String(osc_id_symbol.clone()),
+                            SeqCVariant::Float(linear_info.start),
+                            SeqCVariant::Float(linear_info.step),
+                        ],
+                        None::<String>,
+                    );
+                }
+
+                if data.iteration == 0 {
+                    self.seqc_tracker
+                        .add_variable_assignment(&counter_variable_name, SeqCVariant::Integer(0));
+                }
+
+                self.seqc_tracker.add_function_call_statement(
+                    "setSweepStep",
+                    vec![
+                        SeqCVariant::String(osc_id_symbol),
+                        SeqCVariant::String(format!("{counter_variable_name}++")),
+                    ],
+                    None::<String>,
+                    true,
+                );
+            }
+            crate::ir::FrequencySweepParameterInfo::NonLinear(_) => {
+                // Handle non-linear sweeps using individual setOscFreq calls (similar to HDAWG)
+                if data.iteration == 0 {
+                    self.declarations_generator.add_variable_declaration(
+                        &counter_variable_name,
+                        Some(SeqCVariant::Integer(0)),
+                    )?;
+                    self.seqc_tracker
+                        .add_variable_assignment(&counter_variable_name, SeqCVariant::Integer(0));
+                }
+
+                // Set the specific frequency for this iteration
+                let current_frequency = data.parameter.frequency_at(data.iteration);
+                self.seqc_tracker.add_function_call_statement(
+                    "setOscFreq",
+                    vec![
+                        SeqCVariant::String(data.osc_index.to_string()),
+                        SeqCVariant::String(current_frequency.to_string()),
+                    ],
+                    None::<String>,
+                    true,
+                );
+            }
         }
-        if data.iteration == 0 {
-            self.seqc_tracker
-                .add_variable_assignment(&counter_variable_name, SeqCVariant::Integer(0));
-        }
-        self.seqc_tracker.add_function_call_statement(
-            "setSweepStep",
-            vec![
-                SeqCVariant::String(osc_id_symbol),
-                SeqCVariant::String(format!("{counter_variable_name}++")),
-            ],
-            None::<String>,
-            true,
-        );
+
         self.seqc_tracker.add_required_playzeros(start)?;
         Ok(())
     }

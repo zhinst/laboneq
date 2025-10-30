@@ -55,7 +55,7 @@ class CodeGenerator(ICodeGenerator):
         self,
         ir: IRTree,
         signals: list[SignalObj],
-        feedback_register_layout: FeedbackRegisterLayout | None = None,
+        feedback_register_layout: FeedbackRegisterLayout,
         settings: CompilerSettings | dict | None = None,
     ):
         if settings is not None:
@@ -87,7 +87,7 @@ class CodeGenerator(ICodeGenerator):
             defaultdict(dict)
         )
         self._simultaneous_acquires: list[dict[str, str]] = []
-        self._feedback_register_layout = feedback_register_layout or {}
+        self._feedback_register_layout = feedback_register_layout
         self._feedback_register_config: dict[
             AwgKey, codegen_rs.FeedbackRegisterConfig
         ] = {}
@@ -421,7 +421,7 @@ class CodeGenerator(ICodeGenerator):
                 self._shfppc_sweep_configs[awg_key]["ppc_channel"] = (
                     awg_code_output.shf_sweeper_config["ppc_channel"]
                 )
-        res_usage_collector.raise_or_pass()
+        res_usage_collector.raise_or_pass(compiler_settings=self._settings)
 
         for awg_key, seqc_program in self._src.items():
             awg_info = self._awgs[awg_key]

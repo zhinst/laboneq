@@ -7,6 +7,8 @@ pub mod ir;
 pub mod parameter_store;
 
 mod analysis;
+mod chunk_ir;
+mod ir_unroll;
 mod lower_experiment;
 mod schedule_info;
 mod scheduled_node;

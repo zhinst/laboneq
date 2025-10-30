@@ -112,7 +112,7 @@ class RealtimeCompiler:
         _logger.debug("lowering IR to code complete")
 
     def run(
-        self, near_time_parameters: ParameterStore[str, float] | None = None
+        self, near_time_parameters: ParameterStore[str, float]
     ) -> RTCompilerOutputContainer:
         time_start = time.perf_counter()
         self._scheduler.run(near_time_parameters)

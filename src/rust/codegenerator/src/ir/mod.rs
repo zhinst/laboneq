@@ -6,10 +6,10 @@ pub mod experiment;
 
 pub use compilation_job::Samples;
 pub use experiment::{
-    AcquirePulse, Case, FrameChange, InitAmplitudeRegister, InitialOscillatorFrequency, IrNode,
-    LinearParameterInfo, Loop, LoopIteration, Match, NodeKind, OscillatorFrequencySweepStep,
-    ParameterOperation, PhaseReset, PlayAcquire, PlayHold, PlayPulse, PlayWave, PpcDevice,
-    PpcSweepStep, PrngSample, PrngSetup, QaEvent, ResetPrecompensationFilters, Section, SectionId,
-    SectionInfo, SetOscillatorFrequency, SetOscillatorFrequencySweep, SignalFrequency,
-    TriggerBitData,
+    AcquirePulse, Case, FrameChange, FrequencySweepParameterInfo, InitAmplitudeRegister,
+    InitialOscillatorFrequency, IrNode, LinearParameterInfo, Loop, LoopIteration, Match, NodeKind,
+    NonLinearParameterInfo, OscillatorFrequencySweepStep, ParameterOperation, PhaseReset,
+    PlayAcquire, PlayHold, PlayPulse, PlayWave, PpcDevice, PpcSweepStep, PrngSample, PrngSetup,
+    QaEvent, ResetPrecompensationFilters, Section, SectionId, SectionInfo, SetOscillatorFrequency,
+    SetOscillatorFrequencySweep, SignalFrequency, TriggerBitData,
 };

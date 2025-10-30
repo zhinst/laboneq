@@ -42,12 +42,14 @@ _logger = logging.getLogger(__name__)
 class ExperimentDAO:
     def __init__(self, experiment, loader=None):
         self.source_experiment: Experiment | None = None
+        self.parameter_parents: dict[str, list[str]] = {}
         if loader is not None:
             assert experiment is None, "Cannot pass both experiment and inject a loader"
             self._loader = loader
             self._uid = "exp_from_injected_loader"
         elif isinstance(experiment, ExperimentInfo):
             self.source_experiment = experiment.src
+            self.parameter_parents = experiment.parameter_parents
             self._loader = self._load_experiment_info(experiment)
             self._uid = experiment.uid
         else:

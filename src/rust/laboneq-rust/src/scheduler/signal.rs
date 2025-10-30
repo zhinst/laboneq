@@ -3,16 +3,16 @@
 
 use laboneq_common::types::{AwgKey, DeviceKind};
 use laboneq_scheduler::experiment::types::SignalUid;
-use pyo3::{intern, prelude::*};
+use pyo3::prelude::*;
 
 use crate::scheduler::experiment::Signal;
 use crate::{
     error::{Error, Result},
     scheduler::py_conversion::{ExperimentBuilder, extract_value},
 };
+use laboneq_scheduler::experiment::sweep_parameter::SweepParameter;
 use laboneq_scheduler::experiment::types::{
-    Oscillator, OscillatorKind, OscillatorUid, Parameter, ParameterKind, ParameterUid, RealValue,
-    Value,
+    Oscillator, OscillatorKind, OscillatorUid, ParameterUid, RealValue, Value,
 };
 use numeric_array::NumericArray;
 
@@ -66,6 +66,25 @@ impl OscillatorPy {
             uid,
             frequency,
             is_hardware,
+        }
+    }
+}
+
+#[pyclass(name = "SweepParameter", frozen)]
+pub struct SweepParameterPy {
+    pub uid: String,
+    pub values: Py<PyAny>,
+    pub driven_by: Vec<String>,
+}
+
+#[pymethods]
+impl SweepParameterPy {
+    #[new]
+    pub fn new(uid: String, values: Py<PyAny>, driven_by: Vec<String>) -> Self {
+        Self {
+            uid,
+            values,
+            driven_by,
         }
     }
 }
@@ -153,62 +172,37 @@ fn extract_maybe_parameter<T: TryFrom<Value>>(
     builder: &mut ExperimentBuilder,
 ) -> Result<Option<T>> {
     let py = obj.py();
-    let parameter_info_type = py
-        .import(intern!(py, "laboneq.data.compilation_job"))?
-        .getattr(intern!(py, "ParameterInfo"))?;
-    if obj.is_instance(&parameter_info_type)? {
-        let parameter_uid = extract_parameter_info(obj, builder)?;
-        let value: T = Value::ParameterUid(parameter_uid)
+    if let Ok(parameter) = obj.downcast::<SweepParameterPy>() {
+        let parameter = parameter.borrow();
+        let uid = ParameterUid(builder.register_uid(&parameter.uid));
+        let value: T = Value::ParameterUid(uid)
             .try_into()
             .map_err(|_| Error::new(format!("Failed to convert parameter: {obj}")))?;
-        Ok(Some(value))
+        if builder.parameters.contains_key(&uid) {
+            return Ok(Some(value));
+        }
+        let values = NumericArray::from_py(parameter.values.bind(py))?;
+        builder
+            .parameters
+            .insert(uid, SweepParameter::new(uid, values));
+        parameter.driven_by.iter().for_each(|p_uid| {
+            let p_uid = ParameterUid(builder.register_uid(p_uid));
+            builder
+                .driving_parameters
+                .entry(p_uid)
+                .or_default()
+                .insert(uid);
+        });
+        return Ok(Some(value));
+    }
+    let val = extract_value(obj, builder)?;
+    let value_out = if let Some(val) = val {
+        let value: T = val
+            .try_into()
+            .map_err(|_| Error::new(format!("Failed to convert parameter: {obj}")))?;
+        value
     } else {
-        let val = extract_value(obj, builder)?;
-        let value_out = if let Some(val) = val {
-            let value: T = val
-                .try_into()
-                .map_err(|_| Error::new(format!("Failed to convert parameter: {obj}")))?;
-            value
-        } else {
-            return Ok(None);
-        };
-        Ok(Some(value_out))
-    }
-}
-
-fn extract_parameter_info(
-    obj: &Bound<'_, PyAny>,
-    builder: &mut ExperimentBuilder,
-) -> Result<ParameterUid> {
-    let py: Python<'_> = obj.py();
-    let uid =
-        ParameterUid(builder.register_uid(obj.getattr(intern!(py, "uid"))?.extract::<&str>()?));
-    if builder.parameters.contains_key(&uid) {
-        return Ok(uid);
-    }
-    // Linear sweep parameter
-    if !obj.getattr("start")?.is_none() {
-        let start = extract_value(&obj.getattr(intern!(py, "start"))?, builder)?;
-        let values = obj.getattr(intern!(py, "values"))?;
-        let count = values.len()?;
-        let stop = extract_value(&values.get_item(count - 1)?, builder)?;
-        let kind = ParameterKind::Linear {
-            start: start.map_or(Err(Error::new("Linear sweep start must be defined")), |v| {
-                v.try_into().map_err(Error::new)
-            })?,
-            stop: stop.map_or(Err(Error::new("Linear sweep stop must be defined")), |v| {
-                v.try_into().map_err(Error::new)
-            })?,
-            count,
-        };
-        let parameter = Parameter { uid, kind };
-        builder.parameters.insert(parameter.uid, parameter);
-        Ok(uid)
-    } else {
-        let values = NumericArray::from_py(&obj.getattr(intern!(py, "values"))?)?;
-        let kind = ParameterKind::Array { values };
-        let parameter = Parameter { uid, kind };
-        builder.parameters.insert(parameter.uid, parameter);
-        Ok(uid)
-    }
+        return Ok(None);
+    };
+    Ok(Some(value_out))
 }

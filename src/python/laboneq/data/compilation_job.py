@@ -374,7 +374,11 @@ class ExperimentInfo:
     global_leader_device: DeviceInfo | None  # todo: remove
     pulse_defs: list[PulseDef]
     chunking: ChunkingInfo | None
+    # Scheduler Rust integration fields
     src: Experiment | None = field(default=None)
+    # A mapping from parameter UIDs to their parent UIDs in case they are derived
+    # and not directly defined in a experiment.
+    parameter_parents: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass

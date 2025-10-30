@@ -1,7 +1,7 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use laboneq_log::{log, warn};
+use laboneq_log::warn;
 
 use super::seqc_generator::SeqCGenerator;
 use super::seqc_statements::SeqCStatement;

@@ -143,6 +143,8 @@ mod tests {
             parameters: vec![],
             alignment: SectionAlignment::Right,
             reset_oscillator_phase: false,
+            count: 0,
+            chunking: None,
         }
     }
 

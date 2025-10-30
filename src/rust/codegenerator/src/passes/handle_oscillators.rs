@@ -6,10 +6,12 @@ use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use laboneq_log::warn;
+
 use crate::ir::compilation_job::{self as cjob, AwgCore, DeviceKind};
 use crate::ir::{
-    IrNode, LinearParameterInfo, NodeKind, OscillatorFrequencySweepStep, Samples,
-    SetOscillatorFrequencySweep,
+    FrequencySweepParameterInfo, IrNode, LinearParameterInfo, NodeKind, NonLinearParameterInfo,
+    OscillatorFrequencySweepStep, Samples, SetOscillatorFrequencySweep,
 };
 use crate::tinysample::TINYSAMPLE;
 use crate::{Error, Result};
@@ -281,10 +283,7 @@ pub fn handle_oscillator_parameters(
 }
 
 struct OscillatorFrequencySweepInfo {
-    start_frequency: f64,
-    current_frequency: f64,
-    step_frequency: f64,
-    n_iterations: usize,
+    frequencies: Vec<f64>, // All frequency values in order
 }
 
 struct OscillatorIteration {
@@ -319,12 +318,46 @@ fn collect_set_oscillator_frequency_nodes<'a>(
     }
 }
 
+/// Check if a sequence of frequencies forms a linear sweep within tolerance
+fn is_linear_sweep(frequencies: &[f64]) -> bool {
+    if frequencies.len() <= 2 {
+        return true; // Single value or two values are always considered linear
+    }
+
+    const STEP_ABS_TOLERANCE: f64 = 1e-3; // 1 mHz tolerance for hardware oscillator frequency sweeps
+    let expected_step = frequencies[1] - frequencies[0];
+
+    for i in 2..frequencies.len() {
+        let actual_step = frequencies[i] - frequencies[i - 1];
+        if (actual_step - expected_step).abs() > STEP_ABS_TOLERANCE {
+            return false;
+        }
+    }
+
+    true
+}
+
 fn evaluate_sweep_properties(
     nodes: &Vec<(usize, &mut IrNode)>,
     osc_allocation: &HashMap<&str, u16>,
 ) -> Result<SweepInfo> {
     let mut node_id_to_osc_index: HashMap<usize, Vec<OscillatorIteration>> = HashMap::new();
     let mut osc_sweep_info = HashMap::new();
+
+    // Precompute maximum iteration index per oscillator to preallocate frequency vectors
+    let mut osc_max_iteration: HashMap<u16, usize> = HashMap::new();
+    for (iteration, node) in nodes.iter() {
+        if let NodeKind::SetOscillatorFrequency(ob) = node.data() {
+            for signal_freq in ob.iter() {
+                if let Some(osc_index) = osc_allocation.get(signal_freq.signal.uid.as_str()) {
+                    let entry = osc_max_iteration.entry(*osc_index).or_insert(0);
+                    if *entry < *iteration {
+                        *entry = *iteration;
+                    }
+                }
+            }
+        }
+    }
 
     for (node_id, (iteration, node)) in nodes.iter().enumerate() {
         if let NodeKind::SetOscillatorFrequency(ob) = node.data() {
@@ -339,54 +372,28 @@ fn evaluate_sweep_properties(
                 // No hardware oscillators, skip
                 continue;
             }
-            for (osc_index, (frequency, signal)) in osc_frequencies {
+            let iteration = *iteration;
+            for (osc_index, (frequency, _signal)) in osc_frequencies {
                 // Keep track of the oscillator index and iteration number for this node
                 node_id_to_osc_index
                     .entry(node_id)
                     .or_default()
                     .push(OscillatorIteration {
                         osc_index,
-                        iteration: *iteration,
+                        iteration,
                     });
-                if iteration == &0 {
-                    // First iteration, initialize the oscillator frequency info, overwriting any previous values
-                    // in case of an nested loop
-                    osc_sweep_info.insert(
-                        osc_index,
-                        OscillatorFrequencySweepInfo {
-                            start_frequency: frequency,
-                            current_frequency: frequency,
-                            step_frequency: 0.0,
-                            n_iterations: 1,
-                        },
-                    );
-                    continue;
-                }
-                let sweep_info = osc_sweep_info.get_mut(&osc_index).expect(
-                    "Internal error: Hardware oscillator frequencies not ordered by iteration number",
-                );
-                if iteration == &1 {
-                    // Second iteration, set the step frequency
-                    sweep_info.step_frequency = frequency - sweep_info.start_frequency;
-                    sweep_info.current_frequency = frequency;
-                } else {
-                    // For subsequent iterations, check if the step frequency is linear
-                    const STEP_ABS_TOLERANCE: f64 = 1e-3; // 1 mHz tolerance for hardware oscillator frequency sweeps
-                    let next_step = frequency
-                        - *iteration as f64 * sweep_info.step_frequency
-                        - sweep_info.start_frequency;
-                    if next_step.abs() > STEP_ABS_TOLERANCE {
-                        return Err(Error::new(
-                            format!(
-                                "Invalid oscillator frequency step on signal '{}': {}",
-                                signal.uid, "Realtime oscillator frequency sweep must be linear."
-                            )
-                            .as_str(),
-                        ));
+                let sweep_info = osc_sweep_info.entry(osc_index).or_insert_with(|| {
+                    let capacity = osc_max_iteration
+                        .get(&osc_index)
+                        .map(|m| m + 1)
+                        .unwrap_or(0);
+                    OscillatorFrequencySweepInfo {
+                        // Pre-size the vector to avoid per-iteration resizing
+                        frequencies: vec![0.0; capacity],
                     }
-                    sweep_info.current_frequency = frequency;
-                }
-                sweep_info.n_iterations += 1;
+                });
+
+                sweep_info.frequencies[iteration] = frequency;
             }
         }
     }
@@ -407,14 +414,31 @@ fn replace_hw_oscillator_sweep_nodes(
         .osc_sweep_info
         .iter()
         .map(|(osc_index, info)| {
-            (
-                *osc_index,
-                Arc::new(LinearParameterInfo {
-                    start: info.start_frequency,
-                    step: info.step_frequency,
-                    count: info.n_iterations,
-                }),
-            )
+            let parameter_info = if is_linear_sweep(&info.frequencies) {
+                let start = info.frequencies[0];
+                let step = if info.frequencies.len() > 1 {
+                    info.frequencies[1] - info.frequencies[0]
+                } else {
+                    0.0
+                };
+                FrequencySweepParameterInfo::Linear(LinearParameterInfo {
+                    start,
+                    step,
+                    count: info.frequencies.len(),
+                })
+            } else {
+                warn!(
+                    "Using non-linear frequency sweep with {} steps for oscillator {}. \
+                     Non-linear frequency sweeps are considerably more demanding on sequencer memory \
+                     compared to linear sweeps.",
+                    info.frequencies.len(),
+                    osc_index
+                );
+                FrequencySweepParameterInfo::NonLinear(NonLinearParameterInfo {
+                    values: Arc::new(info.frequencies.clone()),
+                })
+            };
+            (*osc_index, Arc::new(parameter_info))
         })
         .collect::<HashMap<_, _>>();
     if osc_sweep_infos.is_empty() {
@@ -461,7 +485,7 @@ fn check_device_compatibility(device: &DeviceKind, sweep_info: &SweepInfo) -> Re
         && sweep_info
             .osc_sweep_info
             .values()
-            .any(|info| info.n_iterations > MAX_SWEEP_ITERATIONS_HDAWG)
+            .any(|info| info.frequencies.len() > MAX_SWEEP_ITERATIONS_HDAWG)
     {
         return Err(Error::new(format!(
             "HDAWG can only handle RT frequency sweeps up to {MAX_SWEEP_ITERATIONS_HDAWG} steps."
@@ -809,11 +833,11 @@ mod tests {
                 oscillators: vec![OscillatorFrequencySweepStep {
                     iteration: 0,
                     osc_index,
-                    parameter: Arc::new(LinearParameterInfo {
+                    parameter: Arc::new(FrequencySweepParameterInfo::Linear(LinearParameterInfo {
                         start: start_freq,
                         step: freq_step,
                         count: n_iterations as usize,
-                    }),
+                    })),
                 }],
             };
             // First loop iteration child
@@ -833,11 +857,11 @@ mod tests {
                 oscillators: vec![OscillatorFrequencySweepStep {
                     iteration: 2,
                     osc_index,
-                    parameter: Arc::new(LinearParameterInfo {
+                    parameter: Arc::new(FrequencySweepParameterInfo::Linear(LinearParameterInfo {
                         start: start_freq,
                         step: freq_step,
                         count: n_iterations as usize,
-                    }),
+                    })),
                 }],
             };
             // Last loop iteration child

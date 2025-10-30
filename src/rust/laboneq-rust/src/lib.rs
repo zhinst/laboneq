@@ -24,11 +24,11 @@ mod _rust {
         let modules = py.import("sys")?.getattr("modules")?;
         modules.set_item(
             "laboneq._rust.codegenerator",
-            codegenerator_py::create_py_module(m, "codegenerator")?,
+            codegenerator_py::create_py_module(m.py(), "codegenerator")?,
         )?;
         modules.set_item(
             "laboneq._rust.scheduler",
-            scheduler::create_py_module(m, "scheduler")?,
+            scheduler::create_py_module(m.py(), "scheduler")?,
         )?;
         Ok(())
     }

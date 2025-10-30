@@ -113,6 +113,7 @@ impl SHFPPCSweeperConfig {
             .collect();
 
         serde_json::json!({
+            // Order of the fields matters! FW requires the "header" field to be first.
             "header": {"version": "1.0"},
             "dimensions": swept_field_names(&active_values),
             "flat_list": flat_list,

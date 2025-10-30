@@ -4,8 +4,9 @@
 use laboneq_common::named_id::NamedId;
 use laboneq_units::duration::{Duration, Seconds};
 use num_complex::Complex64;
-use numeric_array::NumericArray;
 use std::{collections::HashMap, sync::Arc};
+
+use crate::error;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct SectionUid(pub NamedId);
@@ -31,6 +32,12 @@ pub struct SignalUid(pub NamedId);
 #[macro_export]
 macro_rules! impl_from_named_id {
     ($t:ty) => {
+        impl From<laboneq_common::named_id::NamedId> for $t {
+            fn from(value: laboneq_common::named_id::NamedId) -> Self {
+                Self(value)
+            }
+        }
+
         impl From<$t> for laboneq_common::named_id::NamedId {
             fn from(value: $t) -> Self {
                 value.0
@@ -84,6 +91,29 @@ impl TryFrom<Value> for NumericLiteral {
             Value::Int(v) => Ok(NumericLiteral::Int(v)),
             Value::Complex(v) => Ok(NumericLiteral::Complex(v)),
             _ => Err("Value is not numeric literal"),
+        }
+    }
+}
+
+impl TryInto<f64> for NumericLiteral {
+    type Error = &'static str;
+    fn try_into(self) -> Result<f64, Self::Error> {
+        match self {
+            NumericLiteral::Float(v) => Ok(v),
+            NumericLiteral::Int(v) => Ok(v as f64),
+            NumericLiteral::Complex(_) => Err("Cannot convert complex to f64"),
+        }
+    }
+}
+
+impl TryInto<Complex64> for NumericLiteral {
+    type Error = &'static str;
+
+    fn try_into(self) -> Result<Complex64, Self::Error> {
+        match self {
+            NumericLiteral::Float(v) => Ok(Complex64::new(v, 0.0)),
+            NumericLiteral::Int(v) => Ok(Complex64::new(v as f64, 0.0)),
+            NumericLiteral::Complex(v) => Ok(v),
         }
     }
 }
@@ -149,6 +179,13 @@ impl TryFrom<Value> for RealValue {
             Value::Float(v) => Ok(RealValue::Float(v)),
             Value::Int(v) => Ok(RealValue::Int(v)),
             Value::ParameterUid(v) => Ok(RealValue::ParameterUid(v)),
+            Value::Complex(v) => {
+                if v.im == 0.0 {
+                    Ok(RealValue::Float(v.re))
+                } else {
+                    Err("Value is not real numeric")
+                }
+            }
             _ => Err("Value is not real numeric"),
         }
     }
@@ -184,24 +221,6 @@ pub struct Oscillator {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExperimentSignal {
     pub uid: SignalUid,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ParameterKind {
-    Linear {
-        start: NumericLiteral,
-        stop: NumericLiteral,
-        count: usize,
-    },
-    Array {
-        values: NumericArray,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Parameter {
-    pub uid: ParameterUid,
-    pub kind: ParameterKind,
 }
 
 // IR definition
@@ -326,17 +345,25 @@ pub struct ResetOscillatorPhase {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum Chunking {
+    Count { count: usize },
+    Auto,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Sweep {
     pub uid: SectionUid,
     pub parameters: Vec<ParameterUid>,
+    pub count: u32,
     pub alignment: SectionAlignment,
     pub reset_oscillator_phase: bool,
+    pub chunking: Option<Chunking>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Case {
     pub uid: SectionUid,
-    pub state: u16,
+    pub state: NumericLiteral,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -401,6 +428,8 @@ pub struct SectionInfo<'a> {
 
 pub struct LoopInfo<'a> {
     pub uid: &'a SectionUid,
+    pub count: u32,
+    pub parameters: &'a [ParameterUid],
 }
 
 impl Operation {
@@ -427,9 +456,24 @@ impl Operation {
 
     pub fn loop_info<'a>(self: &'a Operation) -> Option<LoopInfo<'a>> {
         match self {
-            Operation::PrngLoop(s) => LoopInfo { uid: &s.uid }.into(),
-            Operation::Sweep(s) => LoopInfo { uid: &s.uid }.into(),
-            Operation::AveragingLoop(s) => LoopInfo { uid: &s.uid }.into(),
+            Operation::PrngLoop(s) => LoopInfo {
+                uid: &s.uid,
+                count: s.count,
+                parameters: &[],
+            }
+            .into(),
+            Operation::Sweep(s) => LoopInfo {
+                uid: &s.uid,
+                count: s.count,
+                parameters: &s.parameters,
+            }
+            .into(),
+            Operation::AveragingLoop(s) => LoopInfo {
+                uid: &s.uid,
+                count: s.count,
+                parameters: &[],
+            }
+            .into(),
             Operation::Root
             | Operation::Section(_)
             | Operation::PrngSetup(_)
@@ -443,6 +487,32 @@ impl Operation {
             | Operation::RealTimeBoundary
             | Operation::NearTimeCallback
             | Operation::SetNode => None,
+        }
+    }
+
+    /// Validate if the operation is compatible with real-time execution.
+    pub fn validate_real_time_compatible(&self) -> error::Result<()> {
+        match self {
+            Operation::SetNode => Err(error::Error::new(
+                "Set node is near-time operation and cannot be part of real-time execution.",
+            )),
+            Operation::NearTimeCallback => Err(error::Error::new(
+                "Near-time callback is near-time operation and cannot be part of real-time execution.",
+            )),
+            Operation::Root
+            | Operation::AveragingLoop(_)
+            | Operation::Sweep(_)
+            | Operation::PrngLoop(_)
+            | Operation::Section(_)
+            | Operation::PrngSetup(_)
+            | Operation::Match(_)
+            | Operation::Case(_)
+            | Operation::Reserve(_)
+            | Operation::PlayPulse(_)
+            | Operation::Acquire(_)
+            | Operation::Delay(_)
+            | Operation::ResetOscillatorPhase(_)
+            | Operation::RealTimeBoundary => Ok(()),
         }
     }
 }

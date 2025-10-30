@@ -395,6 +395,37 @@ pub struct LinearParameterInfo {
     pub count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct NonLinearParameterInfo {
+    pub values: Arc<Vec<f64>>,
+}
+
+/// Represents parameter information for frequency sweeps.
+/// Can be either linear (with start/step/count) or non-linear (with arbitrary values).
+#[derive(Debug, Clone, PartialEq)]
+pub enum FrequencySweepParameterInfo {
+    Linear(LinearParameterInfo),
+    NonLinear(NonLinearParameterInfo),
+}
+
+impl FrequencySweepParameterInfo {
+    /// Get the number of steps in the sweep
+    pub fn count(&self) -> usize {
+        match self {
+            FrequencySweepParameterInfo::Linear(info) => info.count,
+            FrequencySweepParameterInfo::NonLinear(info) => info.values.len(),
+        }
+    }
+
+    /// Get the frequency value at a specific iteration
+    pub fn frequency_at(&self, iteration: usize) -> f64 {
+        match self {
+            FrequencySweepParameterInfo::Linear(info) => info.start + iteration as f64 * info.step,
+            FrequencySweepParameterInfo::NonLinear(info) => info.values[iteration],
+        }
+    }
+}
+
 /// Represents a single step in the oscillator frequency sweep.
 /// This is used to sweep the frequency of an oscillator over multiple iterations.
 #[derive(Debug, Clone, PartialEq)]
@@ -404,7 +435,7 @@ pub struct OscillatorFrequencySweepStep {
     /// Oscillator index in the sweep.
     pub osc_index: u16,
     /// Information about the parameter that is being swept.
-    pub parameter: Arc<LinearParameterInfo>,
+    pub parameter: Arc<FrequencySweepParameterInfo>,
 }
 
 /// Represents a set of oscillator frequency sweep steps at a given time.

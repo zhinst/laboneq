@@ -16,3 +16,6 @@ class DeviceNonQC(DeviceBase):
 
     async def reset_to_idle(self):
         pass
+
+    async def fetch_errors(self) -> str | list[str]:
+        return []

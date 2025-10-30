@@ -1,5 +1,5 @@
 [workspace.package]
-version = "2.62.0"
+version = "25.10.0"
 authors = ["Zurich Instruments AG <info@zhinst.com>"]
 edition = "2024"
 publish = false
@@ -13,10 +13,12 @@ resolver = "2"
 
 [workspace.dependencies]
 anyhow = "1.0"
+approx = "0.5.1"
 askama = "0.14.0"
 bitvec = "1.0"
 clap = "4.5.38"
 criterion = "0.7"
+derive_more = "2.0.1"
 indexmap = "2.9"
 log = "0.4.27"
 md5 = "0.8.0"
@@ -24,7 +26,6 @@ num-complex = "0.4.6"
 num-integer = "0.1.46"
 num-traits = "0.2.19"
 numpy = "0.26.0"
-pythonize = "0.26.0"
 pyo3 = { version = "0.26.0", features = [
   "abi3-py310",
   "generate-import-lib",
@@ -34,30 +35,31 @@ pyo3 = { version = "0.26.0", features = [
 ] }
 pyo3-ffi = "0.26.0"
 pyo3-log = "0.13.0"
-string-interner = "0.19.0"
+pythonize = "0.26.0"
+rayon = "1.11.0"
+regex = "1.11.3"
 serde = "1.0"
 serde_json = "1.0"
-regex = "1.11.3"
-thiserror = "2.0"
-uuid = "1.16"
 sha1 = "0.10.6"
-rayon = "1.11.0"
+smallvec = "1.15.1"
+string-interner = "0.19.0"
+thiserror = "2.0"
 
 [workspace.lints.rust]
 ambiguous_negative_literals = "warn"
-unused_qualifications = "warn"
+unused_qualifications = "deny"
 explicit-outlives-requirements = "warn"
 redundant_lifetimes = "warn"
 single-use-lifetimes = "warn"
 
 [workspace.lints.clippy]
-cargo = { level = "deny", priority = -1 }
-complexity = { level = "deny", priority = -1 }
-perf = { level = "deny", priority = -1 }
-style = { level = "deny", priority = -1 }
-suspicious = { level = "deny", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
 clone_on_ref_ptr = "warn"
 missing_assert_message = "allow"               # todo: warn
 multiple_crate_versions = "allow"              # string-interner 0.19 requires hashbrown 0.15, indexmap 2.11 requires hashbrown 0.16
-todo = "deny"
+todo = "warn"
 verbose_file_reads = "warn"

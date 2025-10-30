@@ -241,4 +241,4 @@ class NtCompilerExecutor(ExecutorBase):
         if self._combined_compiler_output is not None:
             for delegate in self._delegates:
                 delegate.after_final_run(self._combined_compiler_output)
-            rt_linker.finalize(self._combined_compiler_output)
+            rt_linker.finalize(self._combined_compiler_output, self._settings)

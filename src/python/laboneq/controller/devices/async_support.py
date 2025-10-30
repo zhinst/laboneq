@@ -41,8 +41,7 @@ from zhinst.comms_schemas.labone.core.errors import NotFoundError
 
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.versioning import (
-    MINIMUM_SUPPORTED_LABONE_VERSION,
-    RECOMMENDED_LABONE_VERSION,
+    RECOMMENDED_MINIMUM_LABONE_VERSION,
     LabOneVersion,
     SetupCaps,
 )
@@ -257,10 +256,10 @@ class DataServerConnection:
                 _logger.warning("Ignoring that %s", err_msg)
             else:
                 raise LabOneQControllerException(err_msg)
-        elif dataserver_version < MINIMUM_SUPPORTED_LABONE_VERSION:
+        elif dataserver_version < RECOMMENDED_MINIMUM_LABONE_VERSION:
             err_msg = (
                 f"Version of LabOne Data Server '{dataserver_version}' is not supported. "
-                f"We recommend {RECOMMENDED_LABONE_VERSION}."
+                f"We recommend {RECOMMENDED_MINIMUM_LABONE_VERSION.show(omit_build=True)}."
             )
             raise LabOneQControllerException(err_msg)
 

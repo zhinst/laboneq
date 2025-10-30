@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 
 from laboneq._rust.codegenerator import FeedbackRegisterConfig
+from laboneq.compiler import CompilerSettings
 from laboneq.compiler.common.awg_info import AwgKey
 from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.iface_compiler_output import (
@@ -372,7 +373,7 @@ class SeqCLinker(ILinker):
         this.total_execution_time += previous.total_execution_time
 
     @staticmethod
-    def finalize(this: CombinedRTOutputSeqC):
+    def finalize(this: CombinedRTOutputSeqC, settings: CompilerSettings):
         seqc_items = [
             SeqCCompileItem(
                 dev_type=seqc_program.dev_type,
@@ -386,7 +387,7 @@ class SeqCLinker(ILinker):
             for seqc_program in this.src.values()
             if seqc_program.dev_type is not None
         ]
-        seqc_compile.awg_compile(seqc_items)
+        seqc_compile.awg_compile(seqc_items, settings)
         for seqc_item in seqc_items:
             this.src[seqc_item.filename].elf = seqc_item.elf
 

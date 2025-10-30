@@ -5,6 +5,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum, auto
+import logging
+
+from laboneq.compiler import CompilerSettings
+
+
+_logger = logging.getLogger(__name__)
 
 
 class UsageClassification(Enum):
@@ -39,6 +45,12 @@ def _gt(a: UsageClassification | float, b: UsageClassification | float) -> bool:
 
 
 class ResourceUsageCollector:
+    """Shared functionality to collect and act on resource usage info/errors.
+
+    Currently, an instance of this class keeps track of the max resource usage submitted to it.
+    This is implementation detail and should not matter for the code that uses this class.
+    """
+
     def __init__(self):
         self._max: ResourceUsage | None = None
 
@@ -47,12 +59,23 @@ class ResourceUsageCollector:
             if self._max is None or _gt(ru.usage, self._max.usage):
                 self._max = ru
 
-    def raise_or_pass(self):
+    def raise_or_pass(self, *, compiler_settings: CompilerSettings):
+        """Raise ResourceLimitationError if any resource limit was violated.
+
+        If IGNORE_RESOURCE_LIMITATION_ERRORS compiler setting is set to True,
+        will not raise even if there is a violation.
+        """
         if self._max is not None and _gt(self._max.usage, 1.0):
-            raise ResourceLimitationError(
-                f"Exceeded resource limitation: {self._max}.\n",
-                self._max.usage if isinstance(self._max.usage, float) else None,
-            )
+            if compiler_settings.IGNORE_RESOURCE_LIMITATION_ERRORS:
+                _logger.warning(
+                    "Ignoring resource limitation error since IGNORE_RESOURCE_LIMITATION_ERRORS is set. "
+                    "Compilation result is incomplete and cannot be executed on hardware."
+                )
+            else:
+                raise ResourceLimitationError(
+                    f"Exceeded resource limitation: {self._max}.\n",
+                    self._max.usage if isinstance(self._max.usage, float) else None,
+                )
 
 
 class ResourceLimitationError(Exception):

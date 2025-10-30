@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import abc
 
+from laboneq.compiler import CompilerSettings
+
 
 class ILinker(abc.ABC):
     @staticmethod
@@ -24,5 +26,5 @@ class ILinker(abc.ABC):
 
     @staticmethod
     @abc.abstractmethod
-    def finalize(this):
+    def finalize(this, settings: CompilerSettings):
         raise NotImplementedError

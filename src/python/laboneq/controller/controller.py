@@ -32,8 +32,7 @@ from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.utilities.for_each import for_each_sync
 from laboneq.controller.utilities.sweep_params_tracker import SweepParamsTracker
 from laboneq.controller.versioning import (
-    MINIMUM_SUPPORTED_LABONE_VERSION,
-    RECOMMENDED_LABONE_VERSION,
+    RECOMMENDED_MINIMUM_LABONE_VERSION,
     LabOneVersion,
     SetupCaps,
 )
@@ -125,8 +124,11 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
         _logger.info("VERSION: laboneq %s", __version__)
 
     def _check_zhinst_core_version_support(self, version: LabOneVersion):
-        if version < MINIMUM_SUPPORTED_LABONE_VERSION:
-            err_msg = f"'zhinst.core' version '{version}' is not supported. We recommend {RECOMMENDED_LABONE_VERSION}."
+        if version < RECOMMENDED_MINIMUM_LABONE_VERSION:
+            err_msg = (
+                f"'zhinst.core' version '{version}' is not supported. "
+                f"We recommend {RECOMMENDED_MINIMUM_LABONE_VERSION.show(omit_build=True)}."
+            )
             raise LabOneQControllerException(err_msg)
 
     @property

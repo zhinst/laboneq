@@ -331,7 +331,8 @@ def get_elf(artifacts: ArtifactsCodegen, seqc_ref: str | None) -> bytes | None:
         seqc = next((s for s in artifacts.src if s["filename"] == seqc_ref), None)
     if seqc is None or "elf" not in seqc or not isinstance(seqc["elf"], bytes):
         raise LabOneQControllerException(
-            f"SeqC program '{seqc_ref}' not found or invalid"
+            "Experiment cannot be executed - compilation artifacts are incomplete. "
+            "Possible cause: the experiment was compiled with the IGNORE_RESOURCE_LIMITATION_ERRORS setting."
         )
 
     return seqc["elf"]

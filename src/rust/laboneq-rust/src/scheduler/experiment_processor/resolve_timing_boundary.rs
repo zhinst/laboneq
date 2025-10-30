@@ -38,9 +38,19 @@ fn resolve_timing_boundary_impl(node: &mut ExperimentNode) -> Result<usize> {
         let mut new_node = ExperimentNode::new(Operation::RealTimeBoundary);
         let children = node.children.remove(*averaging_loop);
         new_node.children.push(children);
+        validate_real_time_boundary_nodes(&new_node)?;
         node.children.push(new_node.into());
     }
     Ok(averaging_loop_count + averaging_loops_indexes.len())
+}
+
+/// Validate that all nodes under a real-time boundary are compatible with real-time execution.
+fn validate_real_time_boundary_nodes(node: &ExperimentNode) -> Result<()> {
+    node.kind.validate_real_time_compatible()?;
+    for child in &node.children {
+        validate_real_time_boundary_nodes(child)?
+    }
+    Ok(())
 }
 
 #[cfg(test)]

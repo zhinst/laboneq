@@ -19,3 +19,4 @@ num-complex = { workspace = true }
 
 [dev-dependencies]
 pyo3-ffi = { workspace = true }
+approx = { workspace = true }

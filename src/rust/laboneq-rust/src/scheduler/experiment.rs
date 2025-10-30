@@ -1,23 +1,32 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+use pyo3::prelude::*;
 
 use crate::scheduler::NamedIdStore;
 use laboneq_common::device_traits::DeviceTraits;
 use laboneq_common::types::{AwgKey, DeviceKind};
 use laboneq_scheduler::SignalInfo;
 use laboneq_scheduler::experiment::ExperimentNode;
+use laboneq_scheduler::experiment::sweep_parameter::SweepParameter;
 use laboneq_scheduler::experiment::types::{
-    Oscillator, Parameter, ParameterUid, PulseRef, PulseUid, RealValue, SignalUid,
+    ExternalParameterUid, Oscillator, ParameterUid, PulseRef, PulseUid, RealValue, SignalUid,
 };
 
-pub struct Experiment {
+pub(crate) struct Experiment {
     pub sections: Vec<ExperimentNode>,
     pub id_store: NamedIdStore,
-    pub parameters: HashMap<ParameterUid, Parameter>,
+    pub parameters: HashMap<ParameterUid, SweepParameter>,
     pub pulses: HashMap<PulseUid, PulseRef>,
+    #[allow(dead_code)]
+    // Signal defined in the experiment
+    pub experiment_signals: HashSet<SignalUid>, // Not yet used except in tests
+    // Resolved signals with full info.
     pub signals: HashMap<SignalUid, Signal>,
+    #[allow(dead_code)] // Not yet used except in tests
+    pub external_parameters: HashMap<ExternalParameterUid, Py<PyAny>>,
 }
 
 pub struct Signal {

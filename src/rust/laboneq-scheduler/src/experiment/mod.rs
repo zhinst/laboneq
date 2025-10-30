@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub mod node;
+pub mod sweep_parameter;
 pub mod types;
 
 pub type ExperimentNode = node::Node<types::Operation>;

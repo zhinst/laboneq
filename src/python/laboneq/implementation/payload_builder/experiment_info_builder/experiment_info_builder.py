@@ -153,6 +153,7 @@ class ExperimentInfoBuilder:
             pulse_defs=sorted(self._pulse_defs.values(), key=lambda s: s.uid),
             chunking=self._chunking_info,
             src=self._experiment,
+            parameter_parents=self._parameter_parents,
         )
         self._resolve_seq_averaging(experiment_info)
         self._resolve_oscillator_modulation_type(experiment_info)

@@ -32,7 +32,7 @@ use crate::tinysample::TINYSAMPLE;
 use crate::waveform_sampler::SampleWaveforms;
 
 use anyhow::Context;
-use laboneq_log::{log, warn};
+use laboneq_log::warn;
 use rayon::prelude::*;
 use std::collections::HashMap;
 

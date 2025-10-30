@@ -122,6 +122,16 @@ class NodeDynamic(NodeBase):
             self.setter(value)
 
 
+class ExcludedTag:
+    pass
+
+
+@dataclass
+class NodeExcluded(NodeBase):
+    def node_value(self) -> Any:
+        return ExcludedTag()
+
+
 class NodeType(Enum):
     FLOAT = NodeFloat
     INT = NodeInt
@@ -131,6 +141,7 @@ class NodeType(Enum):
     VECTOR_STR = NodeVectorStr
     VECTOR_COMPLEX = NodeVectorComplex
     DYNAMIC = NodeDynamic
+    EXCLUDED = NodeExcluded
 
 
 @dataclass
@@ -460,7 +471,7 @@ class DevEmuHW(DevEmu):
                 self._set_val(p, self._make_node(p).value)
         self.schedule(delay=0.001, action=self._preset_loaded)
 
-    def _node_def_common(self) -> dict[str, NodeInfo]:
+    def _node_def_raw_error(self) -> dict[str, NodeInfo]:
         return {
             # TODO(2K): Emulate errors. True response example (without whitespace):
             # {
@@ -516,10 +527,20 @@ class DevEmuHW(DevEmu):
                 read_only=True,
                 default=('{"messages":[]}', {}),
             ),
+        }
+
+    def _node_def_preset(self) -> dict[str, NodeInfo]:
+        return {
             "system/preset/load": NodeInfo(
                 type=NodeType.INT, default=0, handler=self._preset_load
             ),
             "system/preset/busy": NodeInfo(type=NodeType.INT, default=0),
+        }
+
+    def _node_def_common(self) -> dict[str, NodeInfo]:
+        return {
+            **self._node_def_raw_error(),
+            **self._node_def_preset(),
         }
 
 
@@ -1395,7 +1416,10 @@ class DevEmuSHFPPC(DevEmu):
 
 class DevEmuNONQC(DevEmuHW):
     def _node_def(self) -> dict[str, NodeInfo]:
-        return self._node_def_common()
+        nd = self._node_def_preset()
+        # Error-out on attempt to access raw json error on non-QC devices
+        nd["raw/error/json/errors"] = NodeInfo(type=NodeType.EXCLUDED)
+        return nd
 
 
 def _serial_to_device_type(serial: str):
@@ -1915,6 +1939,8 @@ class KernelSessionEmulator:
             _node_logger.debug(f"get {path} -")
         self._log_to_node("get", path, None)
         value = self._device.get(self.dev_path(path))
+        if isinstance(value, ExcludedTag):
+            raise ValueError(f"No value returned for path {path}.")
         return make_annotated_value(path=path, value=value)
 
     def _poll(self):

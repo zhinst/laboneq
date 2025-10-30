@@ -88,11 +88,8 @@ fn generate_code_py(
     })
 }
 
-pub fn create_py_module<'a>(
-    parent: &Bound<'a, PyModule>,
-    name: &str,
-) -> PyResult<Bound<'a, PyModule>> {
-    let m = PyModule::new(parent.py(), name)?;
+pub fn create_py_module<'a>(py: Python<'a>, name: &str) -> PyResult<Bound<'a, PyModule>> {
+    let m = PyModule::new(py, name)?;
     // Common types
     // Move up the compiler stack as we need the common types
     m.add_class::<common_types::SignalTypePy>()?;

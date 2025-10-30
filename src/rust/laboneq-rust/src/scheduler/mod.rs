@@ -9,8 +9,10 @@ use crate::error::{Error, Result, create_error_message};
 use crate::scheduler::experiment::Experiment;
 use crate::scheduler::experiment_processor::process_experiment;
 use crate::scheduler::parameter_store::create_parameter_store;
+use crate::scheduler::py_conversion::ExperimentBuilder;
 use crate::scheduler::py_schedules::PyScheduleCompat;
 use crate::scheduler::py_schedules::generate_py_schedules;
+use crate::scheduler::signal::SweepParameterPy;
 use crate::scheduler::signal::{OscillatorPy, py_signal_to_signal};
 use laboneq_common::named_id::{NamedIdStore, resolve_ids};
 use laboneq_scheduler::ChunkingInfo;
@@ -18,6 +20,9 @@ use laboneq_scheduler::experiment::types::RepetitionMode;
 use laboneq_scheduler::{Experiment as SchedulerExperiment, TinySample, schedule_experiment};
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
+
+#[cfg(test)]
+mod test_py;
 
 mod py_conversion;
 use py_conversion::build_experiment;
@@ -33,12 +38,11 @@ struct ExperimentPy {
     pub inner: Experiment,
 }
 
-#[pyfunction(name = "build_experiment")]
-fn build_experiment_py(
+pub(crate) fn experiment_py_to_experiment(
     experiment: &Bound<'_, PyAny>,
     signals: Vec<Bound<'_, SignalPy>>,
-) -> Result<ExperimentPy> {
-    let mut builder = build_experiment(experiment)?;
+) -> Result<Experiment> {
+    let mut builder = ExperimentBuilder::new(experiment.py());
     let signals = signals
         .into_iter()
         .map(|s| {
@@ -46,14 +50,33 @@ fn build_experiment_py(
             Ok((signal.uid, signal))
         })
         .collect::<Result<_>>()?;
-    let mut experiment = Experiment {
+    build_experiment(experiment, &mut builder)?;
+    Ok(Experiment {
         sections: builder.sections,
         id_store: builder.id_store,
         parameters: builder.parameters,
         pulses: builder.pulses,
+        experiment_signals: builder.signals,
         signals,
-    };
-    process_experiment(&mut experiment)?;
+        external_parameters: builder.external_parameters,
+    })
+}
+
+#[pyfunction(name = "build_experiment")]
+fn build_experiment_py(
+    experiment: &Bound<'_, PyAny>,
+    signals: Vec<Bound<'_, SignalPy>>,
+) -> Result<ExperimentPy> {
+    let mut experiment = experiment_py_to_experiment(experiment, signals).map_err(|e| {
+        // NOTE: The error message here does not resolve IDs, as the experiment's ID store is not yet built.
+        // and `experiment_py_to_experiment` has access to the actual UIDs before interning.
+        let msg = create_error_message(e);
+        Error::new(msg)
+    })?;
+    process_experiment(&mut experiment).map_err(|e| {
+        let msg = create_error_message(e);
+        Error::new(resolve_ids(&msg, &experiment.id_store))
+    })?;
     Ok(ExperimentPy { inner: experiment })
 }
 
@@ -100,7 +123,7 @@ fn schedule_experiment_py(
         SchedulerExperiment {
             sections: experiment.sections.iter().collect(),
             id_store: &experiment.id_store,
-            parameters: &experiment.parameters,
+            parameters: experiment.parameters.clone(),
             pulses: &experiment.pulses,
         },
         &experiment.signals,
@@ -145,15 +168,13 @@ fn schedule_experiment_py(
     Ok(out)
 }
 
-pub fn create_py_module<'a>(
-    parent: &Bound<'a, PyModule>,
-    name: &str,
-) -> Result<Bound<'a, PyModule>> {
-    let m = PyModule::new(parent.py(), name)?;
+pub fn create_py_module<'py>(py: Python<'py>, name: &str) -> Result<Bound<'py, PyModule>> {
+    let m = PyModule::new(py, name)?;
     m.add_function(wrap_pyfunction!(schedule_experiment_py, &m)?)?;
     m.add_function(wrap_pyfunction!(build_experiment_py, &m)?)?;
     // Intermediate migration objects, shall be removed later
     m.add_class::<SignalPy>()?;
     m.add_class::<OscillatorPy>()?;
+    m.add_class::<SweepParameterPy>()?;
     Ok(m)
 }

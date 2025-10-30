@@ -27,6 +27,7 @@ _USER_ENABLED_SETTINGS = [
     "FORCE_IR_ROUNDTRIP",
     "LOG_REPORT",
     "USE_EXPERIMENTAL_ASSEMBLER",
+    "IGNORE_RESOURCE_LIMITATION_ERRORS",
 ]
 
 DEFAULT_HDAWG_LEAD_PQSC: float = 80e-9
@@ -77,6 +78,8 @@ class CompilerSettings:
     LOG_REPORT: bool = True
 
     USE_EXPERIMENTAL_ASSEMBLER: bool = True
+
+    IGNORE_RESOURCE_LIMITATION_ERRORS: bool = False
 
     @classmethod
     def from_dict(cls, settings: dict | None = None):

@@ -18,6 +18,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 
 [[package]]
+name = "approx"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cab112f0a86d568ea0e627cc1d6be74a1e9cd55214684db5561995f6dad897c6"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "arc-swap"
 version = "1.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -56,7 +65,7 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "codegenerator"
-version = "2.62.0"
+version = "25.10.0"
 dependencies = [
  "anyhow",
  "indexmap",
@@ -77,7 +86,7 @@ dependencies = [
 
 [[package]]
 name = "codegenerator-py"
-version = "2.62.0"
+version = "25.10.0"
 dependencies = [
  "anyhow",
  "codegenerator",
@@ -215,7 +224,7 @@ checksum = "f4c7245a08504955605670dbf141fceab975f15ca21570696aebe9d2e71576bd"
 
 [[package]]
 name = "interval-calculator"
-version = "2.62.0"
+version = "25.10.0"
 dependencies = [
  "anyhow",
  "thiserror",
@@ -229,7 +238,7 @@ checksum = "4a5f13b858c8d314ee3e8f639011f7ccefe71f97f96e50151fb991f267928e2c"
 
 [[package]]
 name = "laboneq-common"
-version = "2.62.0"
+version = "25.10.0"
 dependencies = [
  "regex",
  "string-interner",
@@ -237,14 +246,14 @@ dependencies = [
 
 [[package]]
 name = "laboneq-log"
-version = "2.62.0"
+version = "25.10.0"
 dependencies = [
  "log",
 ]
 
 [[package]]
 name = "laboneq-rust"
-version = "2.62.0"
+version = "25.10.0"
 dependencies = [
  "anyhow",
  "codegenerator-py",
@@ -260,7 +269,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-scheduler"
-version = "2.62.0"
+version = "25.10.0"
 dependencies = [
  "anyhow",
  "laboneq-common",
@@ -273,7 +282,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-units"
-version = "2.62.0"
+version = "25.10.0"
 dependencies = [
  "num-traits",
 ]
@@ -365,8 +374,9 @@ dependencies = [
 
 [[package]]
 name = "numeric-array"
-version = "2.62.0"
+version = "25.10.0"
 dependencies = [
+ "approx",
  "num-complex",
  "numpy",
  "pyo3",
@@ -625,6 +635,7 @@ version = "1.0.145"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "402a6f66d8c709116cf22f558eab210f5a50187f702eb4d7e5ef38d9a7f1c79c"
 dependencies = [
+ "indexmap",
  "itoa",
  "memchr",
  "ryu",

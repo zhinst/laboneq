@@ -116,6 +116,7 @@ pub struct IntegrationWeight {
     pub downsampling_factor: Option<usize>,
     pub basename: String,
 }
+
 /// WaveformSamplerPy is a wrapper around Python implementation of waveform sampling.
 ///
 /// The sampler will be used to sample waveforms and compress them into a format that can be played on the target AWG.

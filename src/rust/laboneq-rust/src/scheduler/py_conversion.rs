@@ -12,12 +12,15 @@ use crate::error::{Error, Result};
 use anyhow::Context;
 use laboneq_common::named_id::{NamedId, NamedIdStore};
 use laboneq_scheduler::experiment::ExperimentNode;
+use laboneq_scheduler::experiment::sweep_parameter::SweepParameter;
+use laboneq_scheduler::experiment::types::Chunking;
+use laboneq_scheduler::experiment::types::NumericLiteral;
 use laboneq_scheduler::experiment::types::{
     Acquire, AcquisitionType, AveragingLoop, AveragingMode, Case, Delay, ExternalParameterUid,
-    HandleUid, Marker, MarkerSelector, Match, MatchTarget, NumericValue, Operation, Parameter,
-    ParameterKind, ParameterUid, PlayPulse, PrngLoop, PrngSetup, PulseLength, PulseParameterValue,
-    PulseRef, PulseUid, RepetitionMode, Reserve, ResetOscillatorPhase, Section, SectionAlignment,
-    SectionUid, SignalUid, Sweep, Trigger, Value,
+    HandleUid, Marker, MarkerSelector, Match, MatchTarget, NumericValue, Operation, ParameterUid,
+    PlayPulse, PrngLoop, PrngSetup, PulseLength, PulseParameterValue, PulseRef, PulseUid,
+    RepetitionMode, Reserve, ResetOscillatorPhase, Section, SectionAlignment, SectionUid,
+    SignalUid, Sweep, Trigger, Value,
 };
 use laboneq_units::duration::seconds;
 use num_complex::Complex64;
@@ -30,15 +33,17 @@ pub struct ExperimentBuilder<'py> {
     // List of root sections
     pub sections: Vec<ExperimentNode>,
     pub id_store: NamedIdStore,
-    pub parameters: HashMap<ParameterUid, Parameter>,
+    pub parameters: HashMap<ParameterUid, SweepParameter>,
     pub pulses: HashMap<PulseUid, PulseRef>,
     pub signals: HashSet<SignalUid>,
     pub external_parameters: HashMap<ExternalParameterUid, Py<PyAny>>,
+    // Parameters that drive other parameters
+    pub driving_parameters: HashMap<ParameterUid, HashSet<ParameterUid>>,
     pub dsl_types: DslTypes<'py>,
 }
 
 impl<'py> ExperimentBuilder<'py> {
-    fn new(py: Python<'py>) -> Self {
+    pub fn new(py: Python<'py>) -> Self {
         Self {
             sections: Vec::new(),
             id_store: NamedIdStore::new(),
@@ -47,6 +52,7 @@ impl<'py> ExperimentBuilder<'py> {
             signals: HashSet::new(),
             external_parameters: HashMap::new(),
             dsl_types: DslTypes::new(py).unwrap(),
+            driving_parameters: HashMap::new(),
         }
     }
 
@@ -204,21 +210,22 @@ impl<'a> DslTypes<'a> {
     }
 }
 
-/// Extract an integer.
-///
-/// Any real number is valid and is casted to integer.
-fn extract_integer<T: TryFrom<i64>>(obj: &Bound<'_, PyAny>) -> Result<T> {
-    let py = obj.py();
-    // Real or enforce integral numbers only?
-    let py_numbers_real = PyModule::import(py, "numbers")?.getattr(intern!(py, "Real"))?;
-    if !obj.is_instance(&py_numbers_real)? {
-        return Err(Error::new("Expected a real number"));
+fn extract_numeric_value(obj: &Bound<'_, PyAny>) -> Result<Value> {
+    if let Ok(v) = obj.extract::<i64>() {
+        return Ok(Value::Int(v));
     }
-    let func_int = PyModule::import(py, "builtins")?.getattr(intern!(py, "int"))?;
-    let value = func_int.call1((obj,))?.extract::<i64>()?;
-    value
-        .try_into()
-        .map_err(|_| Error::new("Failed to convert integer"))
+    if let Ok(c) = obj.extract::<Complex64>() {
+        if c.im == 0.0 {
+            return Ok(Value::Float(c.re));
+        }
+        return Ok(Value::Complex(c));
+    }
+    if let Ok(v) = obj.extract::<f64>() {
+        return Ok(Value::Float(v));
+    }
+    Err(Error::new(
+        "Expected a numeric literal (int, float, or complex)",
+    ))
 }
 
 pub fn extract_value(
@@ -229,31 +236,23 @@ pub fn extract_value(
         return Ok(None);
     }
     let py: Python<'_> = obj.py();
-    if obj.is_instance(&py.get_type::<pyo3::types::PyFloat>())? {
-        let value = obj.extract::<f64>()?;
-        Ok(Some(Value::Float(value)))
-    } else if obj.is_instance(&py.get_type::<pyo3::types::PyInt>())? {
-        let value = obj.extract::<i64>()?;
-        Ok(Some(Value::Int(value)))
-    } else if obj.is_instance(&py.get_type::<pyo3::types::PyBool>())? {
-        let value = obj.extract::<bool>()?;
-        Ok(Some(Value::Bool(value)))
-    } else if obj.is_instance(&py.get_type::<pyo3::types::PyComplex>())? {
-        let value = obj.getattr(intern!(py, "real"))?.extract::<f64>()?;
-        let value_imag = obj.getattr(intern!(py, "imag"))?.extract::<f64>()?;
-        Ok(Some(Value::Complex(Complex64::new(value, value_imag))))
-    } else if obj.is_instance(&py.get_type::<PyString>())? {
-        let value = obj.extract::<String>()?;
-        Ok(Some(Value::String(value)))
-    } else if obj.is_instance(builder.dsl_types.laboneq_type(DslType::Parameter))? {
-        let param_uid = &obj.getattr(intern!(py, "uid"))?.extract::<String>()?;
-        let parameter = builder.register_uid(param_uid);
-        Ok(Some(Value::ParameterUid(ParameterUid(parameter))))
-    } else {
-        Err(Error::new(
-            "Expected a numeric literal, string, or parameter",
-        ))
+    if let Ok(value) = extract_numeric_value(obj) {
+        return Ok(Some(value));
     }
+    if let Ok(value) = obj.extract::<bool>() {
+        return Ok(Some(Value::Bool(value)));
+    }
+    if let Ok(value) = obj.extract::<String>() {
+        return Ok(Some(Value::String(value)));
+    }
+    if obj.is_instance(builder.dsl_types.laboneq_type(DslType::Parameter))? {
+        let py_value = obj.getattr(intern!(py, "uid"))?;
+        let parameter = builder.register_uid(py_value.extract::<&str>()?);
+        return Ok(Some(Value::ParameterUid(parameter.into())));
+    }
+    Err(Error::new(
+        "Expected a numeric literal, string, bool or a parameter",
+    ))
 }
 
 fn extract_section_alignment(obj: &Bound<'_, PyAny>) -> Result<SectionAlignment> {
@@ -294,26 +293,60 @@ fn extract_parameter(
     let sweep_parameter_py = builder.dsl_types.laboneq_type(DslType::SweepParameter);
 
     if obj.is_instance(linear_sweep_parameter_py)? {
-        let start = extract_value(&obj.getattr(intern!(py, "start"))?, builder)?;
-        let stop = extract_value(&obj.getattr(intern!(py, "stop"))?, builder)?;
+        let start = extract_value(&obj.getattr(intern!(py, "start"))?, builder)?.unwrap();
+        let stop = extract_value(&obj.getattr(intern!(py, "stop"))?, builder)?.unwrap();
         let count = obj.getattr(intern!(py, "count"))?.extract::<usize>()?;
-        let kind = ParameterKind::Linear {
-            start: start.map_or(Err(Error::new("Linear sweep start must be defined")), |v| {
-                v.try_into().map_err(Error::new)
-            })?,
-            stop: stop.map_or(Err(Error::new("Linear sweep stop must be defined")), |v| {
-                v.try_into().map_err(Error::new)
-            })?,
-            count,
+        let values = match start {
+            Value::Float(start) => {
+                let stop: f64 = TryInto::<NumericLiteral>::try_into(stop)
+                    .map_err(Error::new)?
+                    .try_into()
+                    .map_err(Error::new)?;
+                NumericArray::linspace(start, stop, count)
+            }
+            Value::Int(start) => {
+                let stop: f64 = TryInto::<NumericLiteral>::try_into(stop)
+                    .map_err(Error::new)?
+                    .try_into()
+                    .map_err(Error::new)?;
+                NumericArray::linspace(start as f64, stop, count)
+            }
+            Value::Complex(start) => {
+                let stop: Complex64 = TryInto::<NumericLiteral>::try_into(stop)
+                    .map_err(Error::new)?
+                    .try_into()
+                    .map_err(Error::new)?;
+                NumericArray::linspace_complex(start, stop, count)
+            }
+            _ => {
+                return Err(Error::new("Linear sweep start must be a numeric value"));
+            }
         };
-        let parameter = Parameter { uid, kind };
+        let parameter = SweepParameter::new(uid, values);
         builder.parameters.insert(parameter.uid, parameter);
         return Ok(uid);
     } else if obj.is_instance(sweep_parameter_py)? {
         let values = NumericArray::from_py(&obj.getattr(intern!(py, "values"))?)?;
-        let kind = ParameterKind::Array { values };
-        let parameter = Parameter { uid, kind };
+        let parameter = SweepParameter {
+            uid,
+            values: values.into(),
+        };
         builder.parameters.insert(parameter.uid, parameter);
+        for driving_param in obj.getattr(intern!(py, "driven_by"))?.try_iter()? {
+            let driving_param = driving_param?;
+            let p_uid = ParameterUid(
+                builder.register_uid(
+                    driving_param
+                        .getattr(intern!(py, "uid"))?
+                        .extract::<&str>()?,
+                ),
+            );
+            builder
+                .driving_parameters
+                .entry(p_uid)
+                .or_default()
+                .insert(uid);
+        }
         return Ok(uid);
     }
     Err(Error::new(
@@ -322,22 +355,56 @@ fn extract_parameter(
 }
 
 fn extract_sweep(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> Result<Sweep> {
-    let mut parameters = vec![];
+    let mut parameters = HashSet::new();
     for param in obj.getattr(intern!(obj.py(), "parameters"))?.try_iter()? {
         let param = param?;
         let parameter_uid = extract_parameter(&param, builder)?;
-        parameters.push(parameter_uid);
+        parameters.insert(parameter_uid);
+        // Resolve derived parameters. The derived parameters are registered
+        // to the loop, as they may not exist there by default.
+        if let Some(driving_parameters) = builder.driving_parameters.get(&parameter_uid) {
+            for child in driving_parameters {
+                parameters.insert(*child);
+            }
+        }
     }
-    let uid_py = obj.getattr(intern!(obj.py(), "uid"))?.extract::<String>()?;
+    let uid_py_binding = obj.getattr(intern!(obj.py(), "uid"))?;
+    let uid_py = uid_py_binding.extract::<&str>()?;
+    if parameters.is_empty() {
+        return Err(Error::new(format!(
+            "Sweep '{uid_py}' must have at least one sweep parameter"
+        )));
+    }
     let alignment = extract_section_alignment(&obj.getattr(intern!(obj.py(), "alignment"))?)?;
     let reset_oscillator_phase = obj
         .getattr(intern!(obj.py(), "reset_oscillator_phase"))?
         .extract::<bool>()?;
+    let count = builder
+        .parameters
+        .get(parameters.iter().next().unwrap())
+        .expect("Internal error: Missing sweep parameter")
+        .len();
+    let chunk_count = obj
+        .getattr(intern!(obj.py(), "chunk_count"))?
+        .extract::<usize>()?;
+    let auto_chunking = obj
+        .getattr(intern!(obj.py(), "auto_chunking"))?
+        .extract::<bool>()?;
+    let chunking = if auto_chunking {
+        Some(Chunking::Auto)
+    } else if chunk_count > 1 {
+        // Chunk count 1 is the same no chunking at all.
+        Some(Chunking::Count { count: chunk_count })
+    } else {
+        None
+    };
     let obj = Sweep {
-        uid: SectionUid(builder.register_uid(&uid_py)),
-        parameters,
+        uid: SectionUid(builder.register_uid(uid_py)),
+        parameters: parameters.into_iter().collect(),
         alignment,
         reset_oscillator_phase,
+        count: count as u32,
+        chunking,
     };
     Ok(obj)
 }
@@ -365,8 +432,7 @@ fn extract_delay(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> Res
 
 fn extract_reserve(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> PyResult<Reserve> {
     let py = obj.py();
-    let signal_name = obj.getattr(intern!(py, "signal"))?.extract::<String>()?;
-    let signal_uid = builder.register_uid(&signal_name);
+    let signal_uid = builder.register_uid(obj.getattr(intern!(py, "signal"))?.extract::<&str>()?);
     let out = Reserve {
         signal: SignalUid(signal_uid),
     };
@@ -432,9 +498,6 @@ fn extract_pulse(
 
 fn extract_acquire(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> Result<Acquire> {
     let py = obj.py();
-    let signal_name = obj.getattr(intern!(py, "signal"))?.extract::<String>()?;
-    let handle = obj.getattr(intern!(py, "handle"))?.extract::<String>()?;
-
     let mut kernels = vec![];
     let kernel = obj.getattr(intern!(py, "kernel"))?;
     let mut pulse_parameters = vec![];
@@ -468,8 +531,12 @@ fn extract_acquire(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> R
         parameters.push(pulse_param);
     }
     let out = Acquire {
-        signal: SignalUid(builder.register_uid(&signal_name)),
-        handle: HandleUid(builder.register_uid(&handle)),
+        signal: SignalUid(
+            builder.register_uid(obj.getattr(intern!(py, "signal"))?.extract::<&str>()?),
+        ),
+        handle: HandleUid(
+            builder.register_uid(obj.getattr(intern!(py, "handle"))?.extract::<&str>()?),
+        ),
         kernel: kernels,
         length: length.map(seconds),
         parameters,
@@ -535,7 +602,6 @@ fn extract_play_pulse(
     builder: &mut ExperimentBuilder,
 ) -> Result<PlayPulse> {
     let py = obj.py();
-    let signal = obj.getattr(intern!(py, "signal"))?.extract::<String>()?;
     let maybe_pulse = &obj.getattr(intern!(py, "pulse"))?;
     let pulse = if !maybe_pulse.is_none() {
         Some(extract_pulse(maybe_pulse, builder)?)
@@ -563,7 +629,9 @@ fn extract_play_pulse(
         extract_pulse_parameters(&obj.getattr(intern!(py, "pulse_parameters"))?, builder)?;
     let markers = extract_marker_dict(&obj.getattr(intern!(py, "marker"))?, builder)?;
     let pulse = PlayPulse {
-        signal: SignalUid(builder.register_uid(&signal)),
+        signal: SignalUid(
+            builder.register_uid(obj.getattr(intern!(py, "signal"))?.extract::<&str>()?),
+        ),
         pulse: pulse.as_ref().map(|x| x.0),
         amplitude: amplitude.unwrap_or(NumericValue::Float(1.0)),
         phase: phase.map(|v| v.try_into().expect("Phase must be a real value")),
@@ -587,10 +655,13 @@ fn extract_play_pulse(
 /// Convert `Case`
 fn extract_case(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> Result<Case> {
     let py = obj.py();
-    let uid =
-        SectionUid(builder.register_uid(&obj.getattr(intern!(py, "uid"))?.extract::<String>()?));
-    let state = extract_integer(&obj.getattr(intern!(py, "state"))?)?;
-    let out = Case { uid, state };
+    let uid = SectionUid(builder.register_uid(obj.getattr(intern!(py, "uid"))?.extract::<&str>()?));
+    let state = extract_numeric_value(&obj.getattr(intern!(py, "state"))?)
+        .with_context(|| Error::new("Match case state must be numeric"))?;
+    let out = Case {
+        uid,
+        state: state.try_into().map_err(Error::new)?,
+    };
     Ok(out)
 }
 
@@ -675,8 +746,7 @@ fn extract_play_after(
 /// Convert `Section`
 fn extract_section(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> Result<Section> {
     let py = obj.py();
-    let uid =
-        SectionUid(builder.register_uid(&obj.getattr(intern!(py, "uid"))?.extract::<String>()?));
+    let uid = SectionUid(builder.register_uid(obj.getattr(intern!(py, "uid"))?.extract::<&str>()?));
     let alignment = extract_section_alignment(&obj.getattr(intern!(py, "alignment"))?)?;
     let on_system_grid = obj
         .getattr(intern!(py, "on_system_grid"))?
@@ -691,10 +761,10 @@ fn extract_section(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> R
     let trigger_map = trigger_py.downcast::<PyDict>().map_err(PyErr::from)?;
     let mut triggers = vec![];
     for (signal_uid, trigger) in trigger_map.iter() {
-        let trigger_signal = signal_uid.extract::<String>()?;
+        let trigger_signal = signal_uid.extract::<&str>()?;
         let trigger_state = trigger.get_item("state")?.extract::<u16>()?;
         let trigger = Trigger {
-            signal: SignalUid(builder.register_uid(&trigger_signal)),
+            signal: SignalUid(builder.register_uid(trigger_signal)),
             state: trigger_state,
         };
         triggers.push(trigger)
@@ -771,9 +841,17 @@ fn extract_averaging_loop(
     obj: &Bound<'_, PyAny>,
     builder: &mut ExperimentBuilder,
 ) -> Result<AveragingLoop> {
-    let uid_py = obj.getattr(intern!(obj.py(), "uid"))?.extract::<String>()?;
     // Currently DSL supports `count` to be a floating point number, but it must be integral
-    let count: u32 = extract_integer(&obj.getattr(intern!(obj.py(), "count"))?)?;
+    let count_py = obj.getattr(intern!(obj.py(), "count"))?;
+    let count = if let Ok(count) = count_py.extract::<u32>() {
+        count
+    } else {
+        let count = count_py.extract::<f64>()?;
+        if count.fract() != 0.0 {
+            return Err(Error::new("Sweep 'count' must be a positive integer"));
+        }
+        count as u32
+    };
     let reset_oscillator_phase = obj
         .getattr(intern!(obj.py(), "reset_oscillator_phase"))?
         .extract::<bool>()?;
@@ -788,7 +866,9 @@ fn extract_averaging_loop(
         repetition_time,
     )?;
     let obj = AveragingLoop {
-        uid: SectionUid(builder.register_uid(&uid_py)),
+        uid: SectionUid(
+            builder.register_uid(obj.getattr(intern!(obj.py(), "uid"))?.extract::<&str>()?),
+        ),
         count,
         reset_oscillator_phase,
         acquisition_type,
@@ -923,16 +1003,18 @@ fn traverse_experiment(
     obj: &Bound<'_, PyAny>,
     builder: &mut ExperimentBuilder,
 ) -> Result<ExperimentNode> {
+    let mut children_nodes = vec![];
+    if let Some(children) = obj.getattr_opt(intern!(obj.py(), "children"))? {
+        children_nodes.reserve(children.len()?);
+        for child in children.try_iter()? {
+            let child_value = traverse_experiment(&child?, builder)?;
+            children_nodes.push(child_value.into());
+        }
+    }
     let variant = extract_object(obj, builder)
         .with_context(|| format!("Error while handling object: '{obj}'"))?;
     let mut node = ExperimentNode::new(variant);
-    if let Some(children) = obj.getattr_opt(intern!(obj.py(), "children"))? {
-        node.children.reserve(children.len()?);
-        for child in children.try_iter()? {
-            let child_value = traverse_experiment(&child?, builder)?;
-            node.children.push(child_value.into());
-        }
-    }
+    node.children = children_nodes;
     Ok(node)
 }
 
@@ -942,81 +1024,104 @@ fn extract_experiment_signal(
     builder: &mut ExperimentBuilder,
 ) -> Result<SignalUid> {
     let py = obj.py();
-    let uid = obj.getattr(intern!(py, "uid"))?.extract::<String>()?;
-    let signal = SignalUid(builder.register_uid(&uid));
+    let signal =
+        SignalUid(builder.register_uid(obj.getattr(intern!(py, "uid"))?.extract::<&str>()?));
     Ok(signal)
 }
 
 /// Convert `Experiment` into Rust Scheduler IR.
-pub fn build_experiment<'py>(experiment: &Bound<'py, PyAny>) -> Result<ExperimentBuilder<'py>> {
-    let mut builder = ExperimentBuilder::new(experiment.py());
+pub fn build_experiment<'py>(
+    experiment: &Bound<'py, PyAny>,
+    builder: &mut ExperimentBuilder<'py>,
+) -> Result<()> {
     let signals = experiment.getattr(intern!(experiment.py(), "signals"))?;
     for signal in signals.try_iter()? {
-        let signal_uid = extract_experiment_signal(&signal?, &mut builder)?;
+        let signal_uid = extract_experiment_signal(&signal?, builder)?;
         builder.register_experiment_signal(signal_uid);
     }
     for section in experiment
         .getattr(intern!(experiment.py(), "sections"))?
         .try_iter()?
     {
-        let root_section = traverse_experiment(&section?, &mut builder)?;
+        let root_section = traverse_experiment(&section?, builder)?;
         let mut root = ExperimentNode::new(Operation::Root);
         root.children.push(root_section.into());
         builder.add_root_section(root);
     }
-    Ok(builder)
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use pyo3::ffi::c_str;
-    use std::env;
 
-    #[macro_export]
-    macro_rules! include_py_file {
-        ($path:literal) => {
-            c_str!(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), $path)))
-        };
+    #[pymodule]
+    mod test_funcs {
+        use super::*;
+
+        #[pyfunction]
+        fn test_int(value: Bound<'_, PyAny>) {
+            let value = extract_numeric_value(&value).unwrap();
+            assert_eq!(value, Value::Int(42));
+        }
+
+        #[pyfunction]
+        fn test_float(value: Bound<'_, PyAny>) {
+            let value = extract_numeric_value(&value).unwrap();
+            assert_eq!(value, Value::Float(3.16));
+        }
+
+        #[pyfunction]
+        fn test_complex(value: Bound<'_, PyAny>) {
+            let value = extract_numeric_value(&value).unwrap();
+            assert_eq!(value, Value::Complex(Complex64::new(1.0, 2.0)));
+        }
     }
 
     #[test]
-    /// This test will test that the experiment building works as expected.
-    ///
-    /// The experiment is defined in a Python file (`src/scheduler/test_dsl_experiment`), which is then executed
-    /// and the experiment is then tested.
-    fn test_schedule_experiment() {
-        let py_testfile = include_py_file!("/src/scheduler/test_dsl_experiment.py");
+    fn test_extract_numeric_value() {
+        pyo3::append_to_inittab!(test_funcs);
         Python::attach(|py| {
-            // Load the testfile and import test function
-            let module =
-                PyModule::from_code(py, py_testfile, c_str!("testfile.py"), c_str!("")).unwrap();
-            let run_experiment = module.getattr("run_experiment").unwrap();
-            let experiment = run_experiment.call0().unwrap();
+            Python::run(
+                py,
+                c_str!("import test_funcs; test_funcs.test_int(42)"),
+                None,
+                None,
+            )
+            .unwrap();
+            Python::run(
+                py,
+                c_str!("import test_funcs; test_funcs.test_float(3.16)"),
+                None,
+                None,
+            )
+            .unwrap();
+            Python::run(
+                py,
+                c_str!("import test_funcs; test_funcs.test_complex(1 + 2j)"),
+                None,
+                None,
+            )
+            .unwrap();
 
-            // Test Experiment building
-            let builder = build_experiment(&experiment).unwrap();
-            let id_store = builder.id_store;
-            // Test sweep parameter collection
-            let parameter = builder.parameters.iter().next().unwrap().1;
-            assert_eq!(id_store.resolve(parameter.uid).unwrap(), "sweep_param123");
-            // Test experiment signals
-            let experiment_signals: Vec<&str> = builder
-                .signals
-                .iter()
-                .map(|s| id_store.resolve(*s).unwrap())
-                .collect();
-            assert_eq!(experiment_signals[0], "q0/drive");
-            // Test external pulse parameters
-            // Sweep parameter is not external, therefore not stored
-            assert_eq!(builder.external_parameters.len(), 1);
-            let external_pulse_parameter = builder.external_parameters.values().next().unwrap();
-            assert!(
-                external_pulse_parameter
-                    .bind(py)
-                    .eq((0.5).into_pyobject(py).unwrap())
-                    .unwrap(),
-            );
+            Python::run(
+                py,
+                c_str!("import test_funcs; import numpy as np; test_funcs.test_int(np.int64(42))"),
+                None,
+                None,
+            )
+            .unwrap();
+            Python::run(
+                py,
+                c_str!(
+                    "import test_funcs; import numpy as np; test_funcs.test_float(np.float64(3.16))"
+                ),
+                None,
+                None,
+            )
+            .unwrap();
+            Python::run(py, c_str!("import test_funcs; import numpy as np; test_funcs.test_complex(np.complex128(1 + 2j))"), None, None).unwrap();
         });
     }
 }

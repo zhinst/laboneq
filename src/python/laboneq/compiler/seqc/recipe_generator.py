@@ -457,7 +457,7 @@ class RecipeGenerator:
             for field in shfppc_sweep_configuration["dimensions"]:
                 del ppchannel[field]
             ppchannel["sweep_config"] = orjson.dumps(
-                shfppc_sweep_configuration, option=orjson.OPT_SORT_KEYS
+                shfppc_sweep_configuration
             ).decode()
 
     def add_neartime_execution_step(self, nt_step: NeartimeStep):

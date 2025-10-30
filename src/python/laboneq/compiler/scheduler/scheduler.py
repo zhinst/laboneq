@@ -190,6 +190,16 @@ def _build_rs_experiment(
     signal_objects: dict[str, SignalObj],
 ) -> scheduler_rs.Experiment:
     """Builds a Rust representation of the experiment."""
+
+    def maybe_parameter(value: Any) -> scheduler_rs.SweepParameter | Any:
+        if isinstance(value, ParameterInfo):
+            return scheduler_rs.SweepParameter(
+                uid=value.uid,
+                values=value.values,
+                driven_by=experiment_dao.parameter_parents.get(value.uid, []),
+            )
+        return value
+
     signals = []
     for signal in experiment_dao.signals():
         signal_info = experiment_dao.signal_info(signal)
@@ -197,7 +207,7 @@ def _build_rs_experiment(
         if signal_info.oscillator is not None:
             osc = scheduler_rs.Oscillator(
                 uid=signal_info.oscillator.uid,
-                frequency=signal_info.oscillator.frequency,
+                frequency=maybe_parameter(signal_info.oscillator.frequency),
                 is_hardware=signal_info.oscillator.is_hardware is True,
             )
         s = scheduler_rs.Signal(
@@ -208,8 +218,8 @@ def _build_rs_experiment(
             awg_key=hash(signal_objects[signal].awg.key),
             device=signal_info.device.device_type.name,
             oscillator=osc,
-            lo_frequency=signal_info.lo_frequency,
-            voltage_offset=signal_info.voltage_offset,
+            lo_frequency=maybe_parameter(signal_info.lo_frequency),
+            voltage_offset=maybe_parameter(signal_info.voltage_offset),
         )
         signals.append(s)
     return scheduler_rs.build_experiment(
@@ -255,7 +265,7 @@ class Scheduler:
         self._repetition_info: RepetitionInfo | None = None
         self._scheduled_experiment_rs: scheduler_rs.ScheduledExperiment | None = None
 
-    def run(self, nt_parameters: ParameterStore[str, float] | None = None):
+    def run(self, nt_parameters: ParameterStore[str, float]):
         # Build the Rust experiment only once between near-time compilation
         # runs as it remains unchanged.
         if self._experiment_rs is None:
