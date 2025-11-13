@@ -440,7 +440,7 @@ class DeviceSHFQA(DeviceSHFBase):
         )
         if len(device_recipe_data.allocated_awgs()) == 0:
             # TODO(2K): Purpose of the no-allocated-AWGs case is unclear; kept to maintain original behavior:
-            # https://gitlab.zhinst.com/qccs/qccs/-/merge_requests/1303/diffs#6ac44cb93a82be7127f076e9108cf97cf6c8f4b5_809_810
+            # https://gitlab.zhinst.com/laboneq/laboneq/-/merge_requests/1303/diffs#6ac44cb93a82be7127f076e9108cf97cf6c8f4b5_809_810
             nc = NodeCollector(base=f"/{self.serial}/qachannels/0/")
             nc.add("markers/0/source", 32)
             nc.add("markers/1/source", 36)

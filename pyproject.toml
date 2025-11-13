@@ -36,7 +36,7 @@ dependencies = [
   "flask >= 3.0.2",
   "jsonschema >= 4.21.1",
   "matplotlib >= 3.8.3",
-  "multimethod >= 2.0",
+  "multimethod == 2.0.0",
   "networkx >= 3.4.2",
   "numpy >= 2",
   "openpulse ~= 1.0.1",

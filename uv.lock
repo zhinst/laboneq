@@ -2024,7 +2024,7 @@ requires-dist = [
     { name = "flask", specifier = ">=3.0.2" },
     { name = "jsonschema", specifier = ">=4.21.1" },
     { name = "matplotlib", specifier = ">=3.8.3" },
-    { name = "multimethod", specifier = ">=2.0" },
+    { name = "multimethod", specifier = "==2.0.0" },
     { name = "networkx", specifier = ">=3.4.2" },
     { name = "numpy", specifier = ">=2" },
     { name = "openpulse", specifier = "~=1.0.1" },
