@@ -31,7 +31,7 @@ _converter = make_converter()
 @serializer(types=Experiment, public=True)
 class ExperimentSerializer(VersionedClassSerializer[Experiment]):
     SERIALIZER_ID = "laboneq.serializers.implementations.ExperimentSerializer"
-    VERSION = 3
+    VERSION = 4
 
     @classmethod
     def to_dict(
@@ -59,7 +59,7 @@ class ExperimentSerializer(VersionedClassSerializer[Experiment]):
         }
 
     @classmethod
-    def from_dict_v3(
+    def from_dict_v4(
         cls,
         serialized_data: JsonSerializableType,
         options: DeserializationOptions | None = None,
@@ -83,8 +83,26 @@ class ExperimentSerializer(VersionedClassSerializer[Experiment]):
         )
 
     @classmethod
+    def _add_auto_chunking_v3(cls, section_data: list):
+        for section in section_data:
+            if section["_type"] == "Sweep":
+                section["auto_chunking"] = False
+            if isinstance(children := section.get("children"), list):
+                cls._add_auto_chunking_v3(children)
+
+    @classmethod
+    def from_dict_v3(
+        cls,
+        serialized_data: JsonSerializableType,
+        options: DeserializationOptions | None = None,
+    ):
+        se = serialized_data["__data__"]
+        cls._add_auto_chunking_v3(se["sections"])
+        return cls.from_dict_v4(serialized_data, options)
+
+    @classmethod
     def _replace_acquire_loop_nt_with_sweep_v2(
-        cls, section_data: dict, ctx: dict | None = None
+        cls, section_data: list, ctx: dict | None = None
     ):
         if ctx is None:
             ctx = {"acquire_loop_nt_count": 0}

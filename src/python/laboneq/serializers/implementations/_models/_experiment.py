@@ -510,6 +510,7 @@ class SweepModel(SectionModel):
     parameters: ParameterModel | list[ParameterModel]
     reset_oscillator_phase: bool
     chunk_count: int
+    auto_chunking: bool
     _target_class: ClassVar[Type] = Sweep
 
 

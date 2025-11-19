@@ -250,8 +250,14 @@ class DataServerConnection:
 
         dataserver_version = LabOneVersion.from_version_string(self.fullversion_str)
 
-        if dataserver_version != python_api_version:
-            err_msg = f"Version of LabOne Data Server ({dataserver_version}) and Python API ({python_api_version}) do not match."
+        if python_api_version < dataserver_version:
+            version_spec = f"{dataserver_version.year}.{dataserver_version.month}.{dataserver_version.patch}"
+            err_msg = (
+                f"Version of LabOne Python API ({python_api_version}) is older than "
+                f"LabOne Data Server ({dataserver_version}). "
+                f"You can install a matching or newer version of the LabOne Python API with: "
+                f"pip install --upgrade zhinst-core~={version_spec}"
+            )
             if ignore_version_mismatch:
                 _logger.warning("Ignoring that %s", err_msg)
             else:
